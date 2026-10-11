@@ -11,7 +11,7 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { addAttachment, send } from "@/state/actions";
 import { useBoard } from "@/state/board";
-import { type Mockup, mockupOf, revisedSince } from "@/state/mockup";
+import { type Mockup, mockupOf, revisedSince, takesNotes } from "@/state/mockup";
 import { changeNotes, markedName, markerNumber, mockupNotesOf, type MockupNote, NO_NOTES, notePlacement, notesByScreen, notesMessage, pointIn, sendEnded, takeNotes, useSessionNotes } from "@/state/mockupNotes";
 import { useApp } from "@/state/store";
 
@@ -85,7 +85,7 @@ export function MockupView({ conversationId, active }: { conversationId: string;
   const [zoom, setZoom] = useState<Zoom>("fit");
   const [fitted, setFitted] = useState(100);
   const current = items.find((item) => item.key === picked) ?? items[0] ?? null;
-  const canComment = Boolean(mockup && shown.length && (mockup.status === "ready" || mockup.status === "building") && !sent);
+  const canComment = Boolean(mockup && shown.length && takesNotes(mockup) && !sent);
 
   // A dismissed revision shows the next time the mockup opens: when its tab is back in front,
   // since a tab behind another stays mounted, or when it mounts again.

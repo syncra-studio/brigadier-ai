@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { ArtifactRef, Task } from "@/ipc/generated";
 
-import { mockupOf, revisedSince, shotNumber, shotsOf } from "./mockup";
+import { mockupOf, revisedSince, shotNumber, shotsOf, takesNotes } from "./mockup";
 
 const ref = (name: string, mime = "image/png"): ArtifactRef => ({
   id: `hash-${name}`, title: name, kind: "screenshot", mime, bytes: 1, fileName: name,
@@ -66,4 +66,15 @@ test("notes' revision is there once the worker is done with new screenshots, or 
   assert.equal(revisedSince(at({ state: "running", reworkRounds: 1 }), sent), false, "still working");
   assert.equal(revisedSince(at({ reworkRounds: 1 }), sent), true, "done with the same screenshots");
   assert.equal(revisedSince(at({ outputs: [ref("mockup-1b.png")] }), sent), true, "new screenshots");
+});
+
+const notesTakenAt = (state: Task["state"]) =>
+  takesNotes(mockupOf({ t1: task(1, { mockup: { type: "builds" }, outputs: [ref("mockup-1.png")], state }) })!);
+
+test("notes are taken while the mockup's worker can get them, not once it has ended", () => {
+  assert.equal(notesTakenAt("running"), true, "building");
+  assert.equal(notesTakenAt("reported"), true, "ready");
+  for (const state of ["stopped", "rejected", "failed", "landed", "done"] as const) {
+    assert.equal(notesTakenAt(state), false, `${state}: its screenshots stay, without Comment`);
+  }
 });

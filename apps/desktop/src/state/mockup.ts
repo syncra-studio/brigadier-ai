@@ -22,6 +22,8 @@ export type MockupPair = { number: number; mockup: ArtifactRef | null; live: Art
 
 const WORKING: readonly TaskState[] = ["queued", "starting", "running", "blocked", "paused", "takenOver"];
 const ENDED: readonly TaskState[] = ["rejected", "stopped", "failed"];
+/** Over: the worker is gone and takes no message (`TaskState::is_final`). */
+const FINAL: readonly TaskState[] = ["landed", "done", ...ENDED];
 
 /** The number in `<prefix>-N.<image ext>`, or null. */
 export function shotNumber(name: string, prefix: string): number | null {
@@ -88,4 +90,13 @@ export function mockupOf(tasks: Readonly<Record<string, Task>>): Mockup | null {
 export function revisedSince(mockup: Mockup, sent: { version: number; shots: readonly string[] }): boolean {
   if (WORKING.includes(mockup.task.state)) return false;
   return mockup.shots.map((ref) => ref.id).join() !== sent.shots.join() || mockup.version > sent.version;
+}
+
+/**
+ * Whether the user can mark notes on the mockup: it is built or building, and its worker
+ * hasn't ended, since the notes go back to that worker. An ended one's screenshots stay to
+ * look at.
+ */
+export function takesNotes(mockup: Mockup): boolean {
+  return (mockup.status === "ready" || mockup.status === "building") && !FINAL.includes(mockup.task.state);
 }
