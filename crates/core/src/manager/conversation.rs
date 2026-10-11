@@ -45,8 +45,8 @@ use super::usage::TokenOwner;
 use super::{EventSource, SessionManager};
 use crate::knowledge::RebirthTrigger;
 use crate::model::{
-    ConversationId, ConversationKind, ConversationStatus, DomainEvent, Lifecycle, Mention, Message,
-    MessageRole, ModelChoice, ModelFallback, Notice, Setup, streams,
+    CardId, ConversationId, ConversationKind, ConversationStatus, DomainEvent, Lifecycle, Mention,
+    Message, MessageRole, ModelChoice, ModelFallback, Notice, Setup, streams,
 };
 use crate::routing::TokenMeter;
 use crate::runtime::{is_delta, merge_delta};
@@ -161,6 +161,9 @@ struct ConvState {
     /// put together (a landing's cleanup runs first), each with its request: until the
     /// envelope is in the inbox, the request works and a turn counts the task as running.
     announcing: HashMap<TaskId, Option<String>>,
+    /// Cards the user answered whose answer is not in the inbox yet, each with its request:
+    /// the same for an answer, which is recorded before it is delivered.
+    answering: HashMap<CardId, Option<String>>,
     /// User messages already in the transcript that the next turn carries.
     pending: Vec<Message>,
     /// A turn cut short by a limit, from its end until its messages are back in `pending` (on
@@ -480,6 +483,9 @@ impl ConvLive {
             .announcing
             .retain(|_, of| of.as_deref() != Some(request));
         state
+            .answering
+            .retain(|_, of| of.as_deref() != Some(request));
+        state
             .pending
             .retain(|message| message.request_id.as_deref() != Some(request));
         state.withdrawn.extend(tasks);
@@ -587,6 +593,7 @@ impl ConvLive {
                         .and_then(|over| over.request.clone()),
                 )
                 .chain(state.announcing.values().flatten().cloned())
+                .chain(state.answering.values().flatten().cloned())
                 .collect(),
             outcomes: state.outcomes.clone(),
         }
@@ -1402,6 +1409,32 @@ impl SessionManager {
             .await
             .announcing
             .insert(task.id.clone(), request);
+    }
+
+    /// Marks the answer to `card` as on its way to the orchestrator for `request`: call it
+    /// before the answer is recorded, and [`Self::answer_delivered`] once it is in the inbox
+    /// (or dropped). A settle in between then finds the request working, not ended by a card
+    /// that no longer holds it.
+    pub(crate) async fn answering(
+        &self,
+        id: &ConversationId,
+        card: &CardId,
+        request: Option<String>,
+    ) {
+        if let Ok(conv) = self.conv(id) {
+            conv.state
+                .lock()
+                .await
+                .answering
+                .insert(card.clone(), request);
+        }
+    }
+
+    /// See [`Self::answering`].
+    pub(crate) async fn answer_delivered(&self, id: &ConversationId, card: &CardId) {
+        if let Ok(conv) = self.conv(id) {
+            conv.state.lock().await.answering.remove(card);
+        }
     }
 
     /// The tasks of `request` with an envelope still to come: queued for a later turn, or

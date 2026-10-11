@@ -393,14 +393,30 @@ impl SessionManager {
             question.answers = answers.clone();
         }
         question.answered_at_ms = Some(now_ms());
-        self.core
+        // Recorded before it is delivered: until the answer is in the inbox, the request
+        // counts as carried, or a settle in between would end it (its card answered, nothing
+        // queued) and open its time again with the answer's turn.
+        let delivers = matches!(
+            question.kind,
+            QuestionKind::Orchestrator | QuestionKind::Merge { .. }
+        );
+        if delivers {
+            self.answering(&conversation_id, &card_id, question.request_id.clone())
+                .await;
+        }
+        let recorded = self
+            .core
             .record_conversation(
                 &conversation_id,
                 vec![DomainEvent::QuestionUpdated {
                     question: question.clone(),
                 }],
             )
-            .await?;
+            .await;
+        if let Err(err) = recorded {
+            self.answer_delivered(&conversation_id, &card_id).await;
+            return Err(err);
+        }
         match &question.kind {
             QuestionKind::Orchestrator => {
                 for (item, answer) in round.iter().zip(&answers) {
@@ -493,6 +509,9 @@ impl SessionManager {
                         .await?;
                 }
             }
+        }
+        if delivers {
+            self.answer_delivered(&conversation_id, &card_id).await;
         }
         self.waiters.answer(&card_id, CardAnswer::Answered);
         self.settle_requests(&conversation_id).await;
