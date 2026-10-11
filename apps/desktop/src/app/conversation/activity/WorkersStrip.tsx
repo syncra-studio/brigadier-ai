@@ -67,7 +67,8 @@ const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
 export function useWorkersStrip(conversationId: string): StripView | null {
   const items = useApp((s) => s.threads[conversationId]?.items);
   const hasMore = useApp((s) => s.threads[conversationId]?.hasMore ?? false);
-  const replies = useMemo(() => lastReplies(items ?? []), [items]);
+  const requests = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.requests : undefined));
+  const replies = useMemo(() => lastReplies(items ?? [], requests), [items, requests]);
   const loadedFromMs = useMemo(
     () => (hasMore && items && items.length > 0 ? Math.min(...items.map((message) => message.createdAtMs)) : null),
     [hasMore, items],

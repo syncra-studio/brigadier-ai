@@ -64,6 +64,19 @@ test("with older messages not loaded, a worker that finished before them has its
   assert.equal(workersStrip([task({ requestId: "r1", createdAtMs: 1 })], page, [], 500)?.working, 1);
 });
 
+test("an answer posted under a message steered into the turn answers the turn's workers too", () => {
+  // r2 was steered into r1's running turn: the turn's later replies carry r2, its worker keeps r1.
+  const worker = task({ state: "done", requestId: "r1", updatedAtMs: 400 });
+  const requests = { r1: { steeredInto: null }, r2: { steeredInto: "r1" }, r3: { steeredInto: null } };
+  const answered = lastReplies([reply("r1", 100), reply("r2", 500)], requests);
+  assert.equal(workersStrip([worker], answered, []), null);
+  // A reply before the worker finished isn't its answer, and an unrelated request's never is.
+  assert.equal(workersStrip([worker], lastReplies([reply("r2", 300)], requests), [])?.done, 1);
+  assert.equal(workersStrip([worker], lastReplies([reply("r3", 500)], requests), [])?.done, 1);
+  // A cycle in stored data ends.
+  assert.deepEqual(lastReplies([reply("a", 5)], { a: { steeredInto: "b" }, b: { steeredInto: "a" } }), { a: 5, b: 5 });
+});
+
 test("Stop all shows only while a worker runs or waits to run", () => {
   const landing = task({ state: "landing" });
   const ready = task({ state: "readyToLand" });

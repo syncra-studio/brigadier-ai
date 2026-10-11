@@ -1,5 +1,5 @@
 import { workerDone, workerStoppable, workerWorking } from "@/app/conversation/workerPresentation";
-import type { Message, Task, WorkerStep } from "@/ipc/generated";
+import type { Message, Task, UserRequest, WorkerStep } from "@/ipc/generated";
 
 /** What the Workers strip on the composer shows (THREAD-UX-PLAN.md §3.5). */
 export type StripView = {
@@ -22,12 +22,26 @@ function finishedAtMs(task: Task, steps: readonly WorkerStep[]): number {
   return ends.length > 0 ? Math.max(...ends) : task.updatedAtMs;
 }
 
-/** When the thread last replied for each request, by request id: what hides its finished workers. */
-export function lastReplies(messages: readonly Message[]): Record<string, number> {
+/**
+ * When the thread last replied for each request, by request id: what hides its finished workers.
+ * A message steered into a running turn takes over that turn's later replies, which carry its
+ * request's id while the turn's workers keep theirs; so a reply counts for every request its own
+ * was steered into as well (`requests`: the board's).
+ */
+export function lastReplies(
+  messages: readonly Message[],
+  requests: Readonly<Record<string, Pick<UserRequest, "steeredInto">>> = {},
+): Record<string, number> {
   const replies: Record<string, number> = {};
+  const hopLimit = Object.keys(requests).length;
   for (const message of messages) {
     if (message.role !== "assistant" || message.requestId === null) continue;
-    replies[message.requestId] = Math.max(replies[message.requestId] ?? 0, message.createdAtMs);
+    // A steer chain is short; the bound only guards against a cycle in stored data.
+    let requestId: string | null = message.requestId;
+    for (let hops = 0; requestId !== null && hops <= hopLimit; hops += 1) {
+      replies[requestId] = Math.max(replies[requestId] ?? 0, message.createdAtMs);
+      requestId = requests[requestId]?.steeredInto ?? null;
+    }
   }
   return replies;
 }
