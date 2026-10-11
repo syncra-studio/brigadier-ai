@@ -763,17 +763,6 @@ impl SessionManager {
                 }
             }
         }
-        // Its one review, by the other vendor, starts now and runs on its own.
-        {
-            let manager = self.arc();
-            let (task, from, tip) = (task.clone(), from.clone(), new_tip.clone());
-            match fixed {
-                Some(subject) => {
-                    self.spawn(async move { manager.recheck_fix(&task, &subject, from, tip).await })
-                }
-                None => self.spawn(async move { manager.review_landing(&task, from, tip).await }),
-            }
-        }
         for landed in &tasks {
             let updated = self
                 .update_task(&landed.conversation_id, &landed.id, |t| {
@@ -857,6 +846,18 @@ impl SessionManager {
                     tracing::warn!(task = %landed.id, error = %err, "could not delete the landed task branch");
                 }
             }
+        }
+        // Its one review, by the other vendor, starts now and runs on its own: only after the
+        // landing is recorded and its worktrees are gone, since a review that ends at once
+        // (one already done on the range, or a reviewer that can't start) settles the held
+        // batch, which needs both.
+        let manager = self.arc();
+        let (task, from, tip) = (task.clone(), from.clone(), new_tip.clone());
+        match fixed {
+            Some(subject) => {
+                self.spawn(async move { manager.recheck_fix(&task, &subject, from, tip).await })
+            }
+            None => self.spawn(async move { manager.review_landing(&task, from, tip).await }),
         }
     }
 
