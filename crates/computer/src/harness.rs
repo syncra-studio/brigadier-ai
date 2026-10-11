@@ -152,9 +152,14 @@ pub fn run_script<D: Desktop>(engine: &mut Engine<D>, script: &Value, out: &Path
                 "launched {} pid {} (new process: {}) windows {:?}",
                 o.app.name, o.app.pid, o.new_process, o.new_windows
             );
+            // An app this script started is the script's to drive, a Brigadier build included.
+            if o.new_process {
+                engine.block.launched_pids.insert(o.app.pid);
+            }
             launched = o.new_windows.first().copied();
         } else if let Some(o) = step.get("open_plain") {
             let (pid, window) = open_plain(engine, o)?;
+            engine.block.launched_pids.insert(pid);
             println!("launched {} pid {pid} windows {:?}", o["app"], window);
             launched = window;
         } else if let Some(z) = step.get("zoom") {
