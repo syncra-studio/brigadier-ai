@@ -118,7 +118,7 @@ export function MockupView({ conversationId, active }: { conversationId: string;
       <section data-slot="mockup" aria-label={`Mockup: ${mockup.task.title}`} className="bg-mockup-stage relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <header className="h-mockup-header pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center gap-1.5 p-2">
           {items.length > 1 && <ViewToggle view={view} onChange={setView} />}
-          <FilePill mockup={mockup} items={items} current={view === "focused" ? current : null} onPick={(key) => { setPicked(key); setView("focused"); }} />
+          <FilePill mockup={mockup} version={sent && revised ? sent.version : mockup.version} items={items} current={view === "focused" ? current : null} onPick={(key) => { setPicked(key); setView("focused"); }} />
           <div className="min-w-0 flex-1" />
           {items.length > 0 && <ZoomMenu zoom={zoom} percent={shownZoom} onChange={setZoom} />}
         </header>
@@ -168,8 +168,13 @@ function ViewToggle({ view, onChange }: { view: View; onChange: (view: View) => 
   );
 }
 
-/** The mockup's name, version and state; its menu lists every image to show. */
-function FilePill({ mockup, items, current, onPick }: { mockup: Mockup; items: Item[]; current: Item | null; onPick: (key: string) => void }) {
+/**
+ * The mockup's name, the version of the screenshots shown (an earlier one while notes'
+ * screenshots stay up) and its state; its menu lists every image to show.
+ */
+function FilePill({ mockup, version, items, current, onPick }: {
+  mockup: Mockup; version: number; items: Item[]; current: Item | null; onPick: (key: string) => void;
+}) {
   return (
     <DropdownMenu>
       <Tip label={mockup.task.title}>
@@ -179,7 +184,7 @@ function FilePill({ mockup, items, current, onPick }: { mockup: Mockup; items: I
             <span className="max-w-mockup-pill-text min-w-0 truncate">
               {current ? `${KIND_LABEL[current.kind]} · Screen ${current.screen}` : "Mockup"}
             </span>
-            <span className="text-muted-foreground min-w-0 shrink-[2] truncate">v{mockup.version} · {STATUS_WORDS[mockup.status]}</span>
+            <span className="text-muted-foreground min-w-0 shrink-[2] truncate">v{version} · {STATUS_WORDS[mockup.status]}</span>
             <ChevronDown className="text-muted-foreground size-icon-xs shrink-0" />
           </button>
         </DropdownMenuTrigger>

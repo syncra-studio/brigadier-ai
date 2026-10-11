@@ -222,6 +222,8 @@ function Fixture() {
       });
       at(600, () => {
         seen.revised = document.querySelector('[aria-label="Image editing tools"]')?.textContent;
+        // The notes' screenshots stay up, under their own version.
+        seen.kept = button("File actions for Density toggle mockup")?.textContent;
         button("See latest changes")?.click();
       });
       at(1000, () => {
