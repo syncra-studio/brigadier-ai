@@ -87,6 +87,8 @@ const calls: string[] = [];
 let scans = 0;
 // Set, the next scan is answered only when `release` is called.
 let holdNextScan = false;
+// Set, scans find nothing: no projects, nothing to remove.
+let emptyScans = false;
 let release: (() => void) | null = null;
 mockIPC((command, payload) => {
   if (command === "uninstall_app") return { identifier: "app.brigadier.fixture" };
@@ -95,7 +97,8 @@ mockIPC((command, payload) => {
   switch (req.method) {
     case "scanStorage": {
       scans++;
-      const answer = { method: req.method, report: { ...report, scanId: `scan-${scans}` } };
+      const scanned = emptyScans ? { ...report, projects: [], shared: [], items: [], kept: [] } : report;
+      const answer = { method: req.method, report: { ...scanned, scanId: `scan-${scans}` } };
       if (!holdNextScan) return answer;
       holdNextScan = false;
       return new Promise((resolve) => {
@@ -130,6 +133,16 @@ const button = (name: string, root: ParentNode = document) =>
   all<HTMLButtonElement>("button", root).find(
     (element) => text(element) === name || element.getAttribute("aria-label") === name,
   );
+/** The Choose dialog's lines: each group's, then its items'. */
+const picks = () =>
+  all('[data-slot="storage-pick"]', dialog() ?? document).map((line) => ({
+    label: text(line.querySelector("label > span > span")),
+    state: line.querySelector('button[role="checkbox"]')?.getAttribute("data-state"),
+  }));
+const pickBox = (label: string) =>
+  all('[data-slot="storage-pick"]', dialog() ?? document)
+    .find((line) => text(line.querySelector("label > span > span")) === label)
+    ?.querySelector<HTMLButtonElement>('button[role="checkbox"]');
 const row = (label: string) => all('[data-slot="settings-row"]').find((element) => element.dataset.setting === label);
 
 function Fixture() {
@@ -182,19 +195,21 @@ function Fixture() {
       },
       () => {
         const open = dialog();
-        seen.choose = all('button[role="checkbox"]', open ?? document).map((box) => ({
-          label: text(box.parentElement?.querySelector("label span")),
-          checked: box.getAttribute("data-state") === "checked",
-        }));
-        // Add the folder with unsaved changes.
-        all<HTMLButtonElement>('button[role="checkbox"]', open ?? document)
-          .find((box) => text(box.parentElement?.querySelector("label span")) === "Work folder of “Draft”")
-          ?.click();
+        seen.chooseTitle = text(q("h2", open ?? document));
+        seen.choose = picks();
+        seen.chooseNotes = all('[data-slot="storage-pick"] label > span.text-xs', open ?? document).map(text);
+        seen.chooseStatus = text(q('[role="status"]', open ?? document));
+        seen.reveals = all('[data-slot="storage-pick"] button[aria-label="Reveal in Finder"]', open ?? document).length;
+        // The partly picked group's box picks all of it: the folder with unsaved changes too.
+        pickBox("Finished sessions’ work folders")?.click();
       },
       () => {
-        const remove = all<HTMLButtonElement>("button", dialog() ?? document).find((b) => text(b).startsWith("Remove"));
-        seen.removeButton = text(remove);
-        remove?.click();
+        const open = dialog();
+        seen.groupPicked = picks().slice(0, 3);
+        seen.chooseStatusAfter = text(q('[role="status"]', open ?? document));
+        const review = all<HTMLButtonElement>("button", open ?? document).find((b) => text(b).startsWith("Review"));
+        seen.removeButton = text(review);
+        review?.click();
       },
       () => {
         const open = dialog();
@@ -210,8 +225,34 @@ function Fixture() {
         button("View")?.click();
       },
       () => {
-        seen.usage = all("tbody tr", dialog() ?? document).map((tr) => all("td", tr).map(text));
-        button("Close", dialog() ?? document)?.click();
+        const open = dialog();
+        seen.usageTitle = text(q("h2", open ?? document));
+        seen.usage = all('[data-slot="storage-project"]', open ?? document).map((project) => ({
+          name: text(project.firstElementChild),
+          parts: all("li", project).map(text),
+        }));
+        seen.shared = all('[data-slot="storage-shared"]', open ?? document).map(text);
+        seen.usageButtons = all("button", open ?? document).map((b) => b.getAttribute("aria-label") ?? text(b));
+        button("Done", open ?? document)?.click();
+      },
+      // Scans that find nothing: both dialogs say so.
+      () => {
+        emptyScans = true;
+        button("Refresh")?.click();
+      },
+      () => button("Choose…")?.click(),
+      () => {
+        const open = dialog();
+        seen.chooseEmpty = {
+          text: text(q('[data-slot="storage-empty"]', open ?? document)),
+          review: all<HTMLButtonElement>("button", open ?? document).find((b) => text(b).startsWith("Review"))?.disabled,
+        };
+        button("Cancel", open ?? document)?.click();
+      },
+      () => button("View")?.click(),
+      () => {
+        seen.usageEmpty = text(q('[data-slot="storage-empty"]', dialog() ?? document));
+        button("Done", dialog() ?? document)?.click();
       },
       () => {
         button("Manage")?.click();

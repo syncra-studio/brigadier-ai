@@ -1,7 +1,8 @@
-import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Check, ChevronRight, FolderOpen, Minus } from "@openai/apps-sdk-ui/components/Icon";
+import { Checkbox as CheckboxPrimitive } from "radix-ui";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import { CheckboxRow, ErrorLine, errorText } from "@/app/dialogs/fields";
+import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import {
   ALL_GROUPS,
   action,
@@ -36,9 +37,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { revealPath } from "@/ipc/client";
 import type { CleanItem, CleanReport, SharedPart, StorageReport } from "@/ipc/generated";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, shortPath } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { cleanStorage, openUninstall, scanStorage } from "@/state/storage";
 import { useApp } from "@/state/store";
@@ -279,6 +282,7 @@ export function StorageBody({
           key={choosing ? report.scanId : "closed"}
           open={choosing}
           report={report}
+          scanning={scanning}
           onCancel={() => setChoosing(false)}
           onRemove={(ids) => {
             setChoosing(false);
@@ -573,58 +577,74 @@ function Result({ cleaned, onDone }: { cleaned: CleanReport; onDone: () => void 
 function ChooseDialog({
   open,
   report,
+  scanning,
   onCancel,
   onRemove,
 }: {
   open: boolean;
   report: StorageReport;
+  /** A new scan is on its way: the list starts over when it lands. */
+  scanning: boolean;
   onCancel: () => void;
   onRemove: (ids: Set<string>) => void;
 }) {
   const [chosen, setChosen] = useState(
     () => new Set(report.items.filter((item) => item.checked && item.selectable).map((item) => item.id)),
   );
-  const groups = grouped(
-    report.items.filter((item) => item.selectable),
-    ALL_GROUPS,
-  );
+  const selectable = report.items.filter((item) => item.selectable);
+  const groups = grouped(selectable, ALL_GROUPS);
   const plan = picked(report, chosen);
-  const pick = (id: string, on: boolean) =>
+  const pick = (ids: readonly string[], on: boolean) =>
     setChosen((set) => {
       const next = new Set(set);
-      if (on) next.add(id);
-      else next.delete(id);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
       return next;
     });
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onCancel()}>
       <DialogContent data-slot="storage-choose" className="flex max-h-full max-w-lg flex-col">
         <DialogHeader>
-          <DialogTitle>{STORAGE_ROWS.choose.label}</DialogTitle>
-          <DialogDescription>
-            Everything that can be removed, including what Free up space leaves: work folders with
-            unsaved changes (kept as a commit on their branch first), Brains, models and recordings.
-          </DialogDescription>
+          <DialogTitle>Choose what to remove</DialogTitle>
+          <DialogDescription>Pick what Brigadier may remove. Nothing goes until you confirm.</DialogDescription>
         </DialogHeader>
-        <div className="-mx-1 grid min-h-0 flex-1 gap-4 overflow-y-auto px-1">
-          {groups.length === 0 && <p className="text-foreground/65 text-xs">Nothing can be removed.</p>}
-          {groups.map((group) => (
-            <div key={group.category} className="grid gap-2">
-              <h3 className="text-label font-medium">{group.title}</h3>
-              {group.items.map((item) => (
-                <PickRow key={item.id} item={item} checked={chosen.has(item.id)} onCheckedChange={(on) => pick(item.id, on)} />
-              ))}
-            </div>
-          ))}
+        <div className="-mx-1 grid min-h-0 flex-1 content-start gap-3 overflow-y-auto px-1">
+          {groups.length === 0 ? (
+            <p data-slot="storage-empty" className="text-foreground/65 py-6 text-center text-sm">
+              Nothing can be removed right now.
+            </p>
+          ) : (
+            groups.map((group) => (
+              <PickGroup
+                key={group.category}
+                title={group.title}
+                bytes={group.bytes}
+                items={group.items}
+                chosen={chosen}
+                onPick={pick}
+              />
+            ))
+          )}
         </div>
-        <DialogFooter>
+        <DialogFooter className="items-center">
+          <span role="status" className="text-foreground/65 me-auto flex items-center gap-2 text-xs tabular-nums">
+            {scanning ? (
+              <>
+                <Spinner className="size-icon-sm animate-spin" />
+                Updating…
+              </>
+            ) : (
+              selectable.length > 0 &&
+              `${plan.ids.length} of ${selectable.length} selected · ${formatBytes(plan.bytes)}`
+            )}
+          </span>
           <Button type="button" variant="ghost" onClick={onCancel}>
             Cancel
           </Button>
-          <Button type="button" disabled={plan.ids.length === 0} onClick={() => onRemove(chosen)}>
-            {plan.ids.length === 0
-              ? "Remove"
-              : `Remove ${count(plan.ids.length, "item", "items")} (${formatBytes(plan.bytes)})`}
+          <Button type="button" disabled={plan.ids.length === 0 || scanning} onClick={() => onRemove(chosen)}>
+            {plan.ids.length === 0 ? "Review" : `Review ${count(plan.ids.length, "item", "items")}`}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -632,120 +652,247 @@ function ChooseDialog({
   );
 }
 
-function PickRow({
-  item,
+/** A group of the items to choose from: its own box picks or leaves all of them. */
+function PickGroup({
+  title,
+  bytes,
+  items,
+  chosen,
+  onPick,
+}: {
+  title: string;
+  bytes: number;
+  items: readonly CleanItem[];
+  chosen: ReadonlySet<string>;
+  onPick: (ids: readonly string[], on: boolean) => void;
+}) {
+  const ids = items.map((item) => item.id);
+  const on = ids.filter((id) => chosen.has(id)).length;
+  const state = on === 0 ? false : on === ids.length ? true : "indeterminate";
+  return (
+    <SettingsCard>
+      <PickLine
+        checked={state}
+        label={title}
+        labelClass="font-medium"
+        bytes={bytes}
+        onCheckedChange={(next) => onPick(ids, next)}
+      />
+      {items.map((item) => (
+        <PickLine
+          key={item.id}
+          checked={chosen.has(item.id)}
+          label={item.label}
+          badges={item.badges}
+          note={plainWords(item)}
+          bytes={item.bytes}
+          path={item.path}
+          inset
+          onCheckedChange={(next) => onPick([item.id], next)}
+        />
+      ))}
+    </SettingsCard>
+  );
+}
+
+/** What happens to an item, in plain words: why it can go, and where it goes. */
+function plainWords(item: CleanItem): string {
+  const words = [item.reason.trim()];
+  if (item.badges.some((badge) => badge.type === "hasChanges")) words.push("Its changes are kept as a commit on its branch first.");
+  if (item.toTrash) words.push("Goes to the Trash.");
+  return words.filter(Boolean).join(" ");
+}
+
+const BADGE_WORDS = {
+  hasChanges: () => "Unsaved changes",
+  notMerged: (ahead: number) => `Not merged · ${ahead} ahead`,
+  legacy: () => "Older Brigadier",
+};
+
+/** One line to pick: its box, name and warnings, what it is, its size and where it is. */
+function PickLine({
   checked,
+  label,
+  labelClass,
+  badges = [],
+  note,
+  bytes,
+  path = null,
+  inset = false,
   onCheckedChange,
 }: {
-  item: CleanItem;
-  checked: boolean;
+  checked: boolean | "indeterminate";
+  label: string;
+  labelClass?: string;
+  badges?: readonly CleanItem["badges"][number][];
+  note?: string;
+  bytes: number;
+  path?: string | null;
+  /** An item under its group's line. */
+  inset?: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
+  const id = useId();
   return (
-    <div className="flex items-start gap-3">
-      <div className="min-w-0 flex-1">
-        <CheckboxRow
-          label={item.label}
-          checked={checked}
-          onCheckedChange={onCheckedChange}
-          note={
-            <>
-              {item.badges.map((badge) => (
-                <Badge key={badge.type} variant="warning" className="me-1.5">
-                  {badge.type === "hasChanges"
-                    ? "Unsaved changes"
-                    : badge.type === "notMerged"
-                      ? `Not merged · ${badge.ahead} ahead`
-                      : "Older Brigadier"}
-                </Badge>
-              ))}
-              {item.reason}
-              {item.toTrash && " Goes to the Trash."}
-            </>
-          }
-        />
-      </div>
-      <span className="text-muted-foreground shrink-0 pt-0.5 text-xs tabular-nums">
-        {formatBytes(item.bytes)}
-      </span>
-      {item.path && <RevealButton path={item.path} />}
+    <div data-slot="storage-pick" className={cn("flex items-start gap-3 py-3 pe-2", inset ? "ps-11" : "ps-4")}>
+      <CheckboxPrimitive.Root
+        id={id}
+        checked={checked}
+        // A group partly picked picks all of it.
+        onCheckedChange={(state) => onCheckedChange(state !== false)}
+        className="border-input data-[state=checked]:bg-primary data-[state=checked]:border-primary data-[state=checked]:text-primary-foreground data-[state=indeterminate]:bg-primary data-[state=indeterminate]:border-primary data-[state=indeterminate]:text-primary-foreground rounded-xs mt-0.5 flex size-icon-md shrink-0 items-center justify-center border"
+      >
+        <CheckboxPrimitive.Indicator>
+          {checked === "indeterminate" ? <Minus className="size-icon-xs" /> : <Check className="size-icon-xs" />}
+        </CheckboxPrimitive.Indicator>
+      </CheckboxPrimitive.Root>
+      <label htmlFor={id} className="grid min-w-0 flex-1 gap-0.5">
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={cn("text-label break-words", labelClass)}>{label}</span>
+          {badges.map((badge) => (
+            <Badge key={badge.type} variant="warning">
+              {badge.type === "notMerged" ? BADGE_WORDS.notMerged(badge.ahead) : BADGE_WORDS[badge.type]()}
+            </Badge>
+          ))}
+        </span>
+        {note && <span className="text-foreground/65 text-xs">{note}</span>}
+      </label>
+      <span className="text-label shrink-0 pt-px text-end tabular-nums">{formatBytes(bytes)}</span>
+      <span className="flex w-icon-button-sm shrink-0 justify-center">{path && <RevealIconButton path={path} />}</span>
     </div>
   );
 }
 
-/** Advanced: disk use per project. */
+/** Reveals a path in Finder (or its folder elsewhere), as a small icon with its name on hover. */
+function RevealIconButton({ path }: { path: string }) {
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const name = mac ? "Reveal in Finder" : "Show in folder";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={name}
+          className="text-foreground/65 hover:text-foreground -my-1"
+          onClick={() => void revealPath(path).catch(() => {})}
+        >
+          <FolderOpen />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{name}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Advanced: disk use per project, then what every project shares. */
 function UsageDialog({ open, report, onClose }: { open: boolean; report: StorageReport; onClose: () => void }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent data-slot="storage-usage" className="flex max-h-full max-w-lg flex-col">
         <DialogHeader>
           <DialogTitle>{STORAGE_ROWS.usage.label}</DialogTitle>
-          <DialogDescription>{STORAGE_ROWS.usage.description}</DialogDescription>
+          <DialogDescription>What each project takes up on this computer, largest first.</DialogDescription>
         </DialogHeader>
-        <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+        <div className="-mx-1 grid min-h-0 flex-1 content-start gap-5 overflow-y-auto px-1">
           <Usage report={report} />
         </div>
+        <DialogFooter>
+          <Button type="button" onClick={onClose}>
+            Done
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-/** Disk use per project and for what every project shares. */
+/** A project's parts, in the page bar's colours. */
+function projectParts(project: StorageReport["projects"][number]) {
+  return [
+    { key: "work", label: "Work folders", bytes: project.worktreesBytes, color: "bg-glyph-5" },
+    { key: "conversations", label: "Conversations", bytes: project.blobsBytes, color: "bg-glyph-1" },
+    { key: "brain", label: "Brain", bytes: project.brainBytes, color: "bg-glyph-7" },
+    { key: "scratch", label: "Scratch", bytes: project.scratchBytes, color: "bg-foreground/50" },
+  ].filter((part) => part.bytes > 0);
+}
+
+/** Each project with its total, a bar of its parts and their sizes; then what all share. */
 function Usage({ report }: { report: StorageReport }) {
-  const cell = "py-1 ps-3 text-end tabular-nums";
+  const projects = report.projects
+    .map((project) => ({ project, parts: projectParts(project) }))
+    .map((entry) => ({ ...entry, total: entry.parts.reduce((sum, part) => sum + part.bytes, 0) }))
+    .toSorted((a, b) => b.total - a.total);
+  const largest = Math.max(1, ...projects.map((entry) => entry.total));
   return (
-    <SettingsCard className="gap-1.5 px-4 py-3">
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead className="text-muted-foreground">
-            <tr className="border-border border-b">
-              <th className="py-1 text-start font-normal">Project</th>
-              <th className={`${cell} font-normal`}>Work folders</th>
-              <th className={`${cell} font-normal`}>Brain + index</th>
-              <th className={`${cell} font-normal`}>Conversations</th>
-              <th className={`${cell} font-normal`}>Scratch</th>
-              <th className={`${cell} font-normal`}>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {report.projects.map((project) => (
-              <tr key={project.projectId} className="border-border border-b">
-                <td className="py-1">
-                  {project.name}
-                  {!project.repoFound && (
-                    <span className="text-muted-foreground"> · repository not found</span>
-                  )}
-                </td>
-                <td className={cell}>{formatBytes(project.worktreesBytes)}</td>
-                <td className={cell}>{formatBytes(project.brainBytes)}</td>
-                <td className={cell}>{formatBytes(project.blobsBytes)}</td>
-                <td className={cell}>{formatBytes(project.scratchBytes)}</td>
-                <td className={cell}>
-                  {formatBytes(
-                    project.worktreesBytes +
-                      project.brainBytes +
-                      project.blobsBytes +
-                      project.scratchBytes,
-                  )}
-                </td>
-              </tr>
+    <>
+      <SettingsSection title="Projects">
+        {projects.length === 0 ? (
+          <SettingsCard>
+            <p data-slot="storage-empty" className="text-foreground/65 px-4 py-6 text-center text-sm">
+              No projects yet.
+            </p>
+          </SettingsCard>
+        ) : (
+          <SettingsCard>
+            {projects.map(({ project, parts, total }) => (
+              <div key={project.projectId} data-slot="storage-project" className="grid gap-2 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-label min-w-0 truncate font-medium">{project.name}</span>
+                  {!project.repoFound && <Badge variant="secondary">Repository not found</Badge>}
+                  <span className="text-label ms-auto shrink-0 tabular-nums">{formatBytes(total)}</span>
+                </div>
+                <div aria-hidden className="bg-foreground/8 flex h-1.5 overflow-hidden rounded-full">
+                  <div className="flex h-full" style={{ width: `${(total / largest) * 100}%` }}>
+                    {parts.map((part) => (
+                      <span
+                        key={part.key}
+                        className={`${part.color} h-full min-w-0.5`}
+                        style={{ width: `${(part.bytes / Math.max(1, total)) * 100}%` }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <ul className="text-foreground/65 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                  {parts.map((part) => (
+                    <li key={part.key} className="flex items-center gap-1.5 tabular-nums">
+                      <span aria-hidden className={`${part.color} size-2 rounded-full`} />
+                      {part.label} {formatBytes(part.bytes)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ))}
+          </SettingsCard>
+        )}
+      </SettingsSection>
+      {report.shared.length > 0 && (
+        <SettingsSection title="Shared by all projects">
+          <SettingsCard>
             {report.shared.map((shared) => (
-              <tr key={shared.part} className="border-border border-b last:border-b-0">
-                <td className="text-muted-foreground py-1" colSpan={5}>
-                  {SHARED[shared.part]}
-                </td>
-                <td className={cell}>{formatBytes(shared.bytes)}</td>
-              </tr>
+              <div key={shared.part} data-slot="storage-shared" className="flex items-center gap-3 px-4 py-2.5">
+                <span className="text-label min-w-0 flex-1">{SHARED[shared.part]}</span>
+                <span className="text-label shrink-0 tabular-nums">{formatBytes(shared.bytes)}</span>
+              </div>
             ))}
-          </tbody>
-        </table>
+          </SettingsCard>
+        </SettingsSection>
+      )}
+      <div className="grid gap-2">
+        <p className="text-foreground/65 text-xs">
+          Work folders start as copies of a project’s installed packages and build files. Where the disk
+          allows, the copies share space with the originals, so they may use less than shown.
+        </p>
+        {report.dataDir && (
+          <div className="flex items-center gap-2">
+            <span className="text-foreground/65 min-w-0 flex-1 truncate text-xs" title={report.dataDir}>
+              {shortPath(report.dataDir)}
+            </span>
+            <RevealButton path={report.dataDir} />
+          </div>
+        )}
       </div>
-      <p className="text-muted-foreground text-xs">
-        Work folders start with copies of your project’s installed packages and build files. Where
-        the disk allows, those copies share space with the originals, so they may use less than
-        shown. {report.dataDir}
-      </p>
-    </SettingsCard>
+    </>
   );
 }

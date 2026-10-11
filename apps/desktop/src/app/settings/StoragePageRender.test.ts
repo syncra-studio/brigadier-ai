@@ -43,15 +43,39 @@ test("storage refreshes, reviews, frees up space and chooses items", { timeout: 
     "Freed 9.0 GB.1 item stays, as below.Build files of “Checkout page”Left in place: something is using it now.A process runs in itDoneClose",
   );
   assert.deepEqual(seen.afterDone, { dialog: false, scans: 3 });
-  // By hand: the safe items start picked; the unmerged branch is never offered.
+  // By hand: the safe items start picked, each group's box shows whether all of it is; the
+  // unmerged branch is never offered.
+  assert.equal(seen.chooseTitle, "Choose what to remove");
   assert.deepEqual(seen.choose, [
-    { label: "Work folder of “Fix login”", checked: true },
-    { label: "Work folder of “Draft”", checked: false },
-    { label: "Build files of “Checkout page”", checked: true },
-    { label: "Logs older than 30 days", checked: true },
-    { label: "Speech model (base)", checked: false },
+    { label: "Finished sessions’ work folders", state: "indeterminate" },
+    { label: "Work folder of “Fix login”", state: "checked" },
+    { label: "Work folder of “Draft”", state: "unchecked" },
+    { label: "Build files in idle sessions", state: "checked" },
+    { label: "Build files of “Checkout page”", state: "checked" },
+    { label: "Old logs", state: "checked" },
+    { label: "Logs older than 30 days", state: "checked" },
+    { label: "Downloaded models", state: "unchecked" },
+    { label: "Speech model (base)", state: "unchecked" },
   ]);
-  assert.equal(seen.removeButton, "Remove 4 items (13.4 GB)");
+  // What each item is and what happens to it, in plain words.
+  assert.deepEqual(seen.chooseNotes, [
+    "Its session ended and its branch is merged.",
+    "Has unsaved changes, so it isn't part of the sweep. Its changes are kept as a commit on its branch first.",
+    "Rebuilt when the session runs again.",
+    "Old logs.",
+    "Goes to the Trash.",
+  ]);
+  assert.equal(seen.chooseStatus, "3 of 5 selected · 11.4 GB");
+  assert.equal(seen.reveals, 1);
+  // The group's box picks the rest of it.
+  assert.deepEqual(seen.groupPicked, [
+    { label: "Finished sessions’ work folders", state: "checked" },
+    { label: "Work folder of “Fix login”", state: "checked" },
+    { label: "Work folder of “Draft”", state: "checked" },
+  ]);
+  assert.equal(seen.chooseStatusAfter, "4 of 5 selected · 13.4 GB");
+  // The one button goes to the same confirmation as Free up space.
+  assert.equal(seen.removeButton, "Review 4 items");
   assert.deepEqual(seen.chosenReview, {
     title: "Remove chosen items",
     groups: [
@@ -64,9 +88,26 @@ test("storage refreshes, reviews, frees up space and chooses items", { timeout: 
   });
   // Cancel removes nothing.
   assert.deepEqual(seen.afterCancel, { dialog: false, calls: 1 });
-  assert.deepEqual((seen.usage as string[][])[0], ["storefront-web", "14.0 GB", "1.0 GB", "2.0 GB", "200.0 MB", "17.2 GB"]);
-  assert.deepEqual((seen.usage as string[][])[1]?.[0], "billing-api · repository not found");
-  assert.equal((seen.usage as string[][]).length, 7);
+  // Disk use: each project, largest first, with its total and parts; then what all share.
+  assert.equal(seen.usageTitle, "Disk use per project");
+  assert.deepEqual(seen.usage, [
+    {
+      name: "storefront-web17.2 GB",
+      parts: ["Work folders 14.0 GB", "Conversations 2.0 GB", "Brain 1.0 GB", "Scratch 200.0 MB"],
+    },
+    { name: "billing-apiRepository not found4.8 GB", parts: ["Work folders 4.0 GB", "Conversations 500.0 MB", "Brain 300.0 MB"] },
+  ]);
+  assert.deepEqual(seen.shared, [
+    "Database600.0 MB",
+    "Downloaded models3.0 GB",
+    "Logs900.0 MB",
+    "Personal Brain200.0 MB",
+    "Everything else1.0 GB",
+  ]);
+  assert.deepEqual(seen.usageButtons, ["Reveal in Finder", "Done", "Close"]);
+  // Nothing found: both say so, and nothing can be reviewed.
+  assert.deepEqual(seen.chooseEmpty, { text: "Nothing can be removed right now.", review: true });
+  assert.equal(seen.usageEmpty, "No projects yet.");
   assert.deepEqual(seen.selection, { type: "settings", page: "archived" });
   // Reviewed from scan 1 while scan 2 was out: the clean names scan 1.
   assert.deepEqual(seen.calls, ["clean scan-1 done,build,logs"]);
