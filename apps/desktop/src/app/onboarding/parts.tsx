@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowRight } from "@openai/apps-sdk-ui/components/Icon";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,20 @@ import { useApp } from "@/state/store";
  * What the setup's steps after the welcome share: a centred heading with a line under it, a
  * body, and a footer with Back and the step's one action.
  */
+
+/**
+ * Focuses what it's given a frame after it mounts, where autoFocus would focus it at once: the
+ * setup's focus trap only keeps a focus it saw arrive, and the chat under the setup can take the
+ * focus as it mounts on launch.
+ */
+export function useFocusOnMount<T extends HTMLElement>(): RefObject<T | null> {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => ref.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  return ref;
+}
 
 /** A step's heading: an optional small line over it, then its title and description. */
 export function StepHeader({
@@ -53,6 +67,7 @@ export function StepFooter({
   const mac = useApp((s) => s.info?.platform === "macos");
   const onClick = primary?.onClick;
   const blocked = !primary || primary.disabled === true || primary.busy === true;
+  const primaryRef = useFocusOnMount<HTMLButtonElement>();
 
   useEffect(() => {
     if (!onClick) return;
@@ -76,8 +91,8 @@ export function StepFooter({
         )}
         {primary && (
           <Button
+            ref={primaryRef}
             size="lg"
-            autoFocus
             aria-keyshortcuts={mac ? "Meta+Enter" : "Control+Enter"}
             disabled={primary.disabled || primary.busy}
             onClick={primary.onClick}

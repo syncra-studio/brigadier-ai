@@ -2,6 +2,7 @@ import { ArrowRight } from "@openai/apps-sdk-ui/components/Icon";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
+import { useFocusOnMount } from "@/app/onboarding/parts";
 import { playWelcomeSound, preloadWelcomeSound } from "@/app/onboarding/welcomeSound";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -210,6 +211,7 @@ function NameForm({ name, onName }: { name: string; onName: (name: string) => Pr
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const trimmed = value.trim();
+  const input = useFocusOnMount<HTMLInputElement>();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -234,8 +236,8 @@ function NameForm({ name, onName }: { name: string; onName: (name: string) => Pr
           Your name
         </label>
         <Input
+          ref={input}
           id={`${id}-name`}
-          autoFocus
           autoComplete="given-name"
           placeholder="Your name"
           maxLength={80}
