@@ -2345,28 +2345,51 @@ impl SessionManager {
                     branch.clone(),
                     start.clone(),
                 );
-                blocking(move || {
+                let made = blocking(move || {
                     let repo = git.open(&repo_path).map_err(git_error)?;
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)
                             .map_err(|err| Error::Invalid(err.to_string()))?;
                     }
-                    let spec = match repo.branch_tip(&name).map_err(git_error)? {
-                        Some(_) => WorktreeSpec::Branch { name },
-                        None => WorktreeSpec::NewBranch {
-                            name,
-                            start: match &from {
+                    let (spec, made) = match repo.branch_tip(&name).map_err(git_error)? {
+                        Some(_) => (WorktreeSpec::Branch { name }, None),
+                        None => {
+                            let start = match &from {
                                 Some(commit) => repo.resolve(commit),
                                 None => repo.branch_commit(&base_name),
                             }
-                            .map_err(git_error)?,
-                        },
+                            .map_err(git_error)?;
+                            (
+                                WorktreeSpec::NewBranch {
+                                    name,
+                                    start: start.clone(),
+                                },
+                                Some(start),
+                            )
+                        }
                     };
                     repo.add_worktree(&path, spec).map_err(git_error)?;
                     super::sidecars::stand_in_at(&git, &path);
-                    Ok(())
+                    Ok(made)
                 })
                 .await?;
+                // A merged session's worktree made again: the thread hears it is new and its
+                // own, or it takes it for a leftover of the merge and removes it (bug 5).
+                if let Some(start) = made
+                    && let Ok(board) = self.core.board(conversation_id).await
+                    && board
+                        .orchestrator_steps
+                        .iter()
+                        .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+                    && let Ok(conv) = self.conv(conversation_id)
+                {
+                    conv.note(format!(
+                        "[workspace] A fresh branch `{branch}` from `{base}` at {} was made for this message, in the same folder {}. The merged one is gone; this one is new and yours: work in it, and never remove it.",
+                        &start.0[..start.0.len().min(10)],
+                        worktree.display(),
+                    ))
+                    .await;
+                }
                 if let Some(Setup::Session {
                     repo,
                     permission,

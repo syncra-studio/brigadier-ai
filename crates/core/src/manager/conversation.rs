@@ -1513,7 +1513,7 @@ impl SessionManager {
         let session = conv.kind == ConversationKind::Session;
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
-        let (users, envelopes, request, user_notes) = loop {
+        let (users, envelopes, request, mut user_notes) = loop {
             let mut state = conv.state.lock().await;
             if state.busy
                 || state.closing
@@ -1610,6 +1610,8 @@ impl SessionManager {
             if let Err(err) = self.effective_workspace(&conv.id).await {
                 tracing::warn!(conversation = %conv.id, error = %err, "could not make the session's worktree");
             }
+            // Its `[workspace]` note reaches this turn.
+            user_notes.append(&mut conv.state.lock().await.notes);
         }
         let cli = match self.ensure_cli(&conv).await {
             Ok(cli) => cli,

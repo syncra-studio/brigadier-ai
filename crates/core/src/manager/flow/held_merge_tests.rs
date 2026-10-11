@@ -487,3 +487,63 @@ async fn a_cancel_waits_for_a_merge_under_way_and_finds_it_merged() {
     assert!(held.merged());
     held.flow.stop().await;
 }
+
+/// After the merge, the user's next message makes the session's worktree again, on a fresh
+/// branch from the base; its turn hears so, so it never takes it for a leftover (bug 5).
+#[tokio::test]
+async fn the_message_after_a_merge_hears_of_its_fresh_worktree() {
+    let held = held("held-merge-fresh", Plan::default()).await;
+    writing(&held).await;
+    held.release.store(true, Ordering::SeqCst);
+    held.flow
+        .until("the merge", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+        })
+        .await;
+    held.flow.settled().await;
+    // finish_session said the next message makes a fresh one.
+    assert_eq!(
+        held.logged("the user's next message starts a fresh branch from `main` in the same folder"),
+        1
+    );
+    held.flow.say("Now add a third note.").await;
+    held.flow.settled().await;
+    let input = held
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|line| line.contains("Now add a third note."))
+        .cloned()
+        .unwrap();
+    let tip = git(&held.flow.repo, &["rev-parse", "main"]);
+    assert!(
+        input.contains(&format!(
+            "[workspace] A fresh branch `{}` from `main` at {}",
+            branch_of(&held.flow).await,
+            &tip[..10]
+        )),
+        "{input}"
+    );
+    assert!(input.contains("never remove it"), "{input}");
+    held.flow.stop().await;
+}
+
+async fn branch_of(flow: &Flow) -> String {
+    match flow
+        .manager
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .setup
+    {
+        Some(crate::model::Setup::Session {
+            environment: crate::model::Environment::NewWorktree { branch, .. },
+            ..
+        }) => branch,
+        _ => panic!("a new-worktree session"),
+    }
+}
