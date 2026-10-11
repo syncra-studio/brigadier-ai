@@ -1,5 +1,5 @@
 import { workerDone, workerStoppable, workerWorking } from "@/app/conversation/workerPresentation";
-import type { Task, UserRequest, WorkerStep } from "@/ipc/generated";
+import type { Message, Task, WorkerStep } from "@/ipc/generated";
 
 /** What the Workers strip on the composer shows (THREAD-UX-PLAN.md §3.5). */
 export type StripView = {
@@ -22,19 +22,39 @@ function finishedAtMs(task: Task, steps: readonly WorkerStep[]): number {
   return ends.length > 0 ? Math.max(...ends) : task.updatedAtMs;
 }
 
+/** When the thread last replied for each request, by request id: what hides its finished workers. */
+export function lastReplies(messages: readonly Message[]): Record<string, number> {
+  const replies: Record<string, number> = {};
+  for (const message of messages) {
+    if (message.role !== "assistant" || message.requestId === null) continue;
+    replies[message.requestId] = Math.max(replies[message.requestId] ?? 0, message.createdAtMs);
+  }
+  return replies;
+}
+
 /**
- * The session's workers the strip is about: every worker still running or waiting, and those
- * that finished since the user's last message. `null` when there are none, so it hides.
+ * The session's workers the strip is about (SESSION-FIXES-PLAN.md Q8): every worker still
+ * running or waiting, and those finished whose request's answer isn't posted yet. The answer is
+ * the thread's reply for their request after the last of its workers finished, so the thread's
+ * answer hides them, not a timer; finished workers stay in the side panel. A worker with no
+ * request has no answer to wait for. `null` when there are none, so it hides.
  */
 export function workersStrip(
   tasks: readonly Task[],
-  requests: readonly UserRequest[],
+  replies: Readonly<Record<string, number>>,
   steps: readonly WorkerStep[],
 ): StripView | null {
-  const since = requests.reduce((latest, request) => Math.max(latest, request.startedAtMs), 0);
   const byAge = tasks.toSorted((a, b) => a.createdAtMs - b.createdAtMs || a.number - b.number);
   const live = byAge.filter((task) => !workerDone(task));
-  const finished = byAge.filter((task) => workerDone(task) && finishedAtMs(task, steps) >= since);
+  const busy = new Set(live.map((task) => task.requestId));
+  const lastFinish = new Map<string, number>();
+  for (const task of byAge) {
+    if (task.requestId === null || !workerDone(task)) continue;
+    lastFinish.set(task.requestId, Math.max(lastFinish.get(task.requestId) ?? 0, finishedAtMs(task, steps)));
+  }
+  const unanswered = (requestId: string | null) =>
+    requestId !== null && (busy.has(requestId) || (replies[requestId] ?? -1) <= (lastFinish.get(requestId) ?? 0));
+  const finished = byAge.filter((task) => workerDone(task) && unanswered(task.requestId));
   if (live.length + finished.length === 0) return null;
   const working = live.filter(workerWorking).length;
   const stopped = finished.filter((task) => task.state === "stopped").length;

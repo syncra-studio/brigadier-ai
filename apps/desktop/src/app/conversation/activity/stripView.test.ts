@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { stripWords, workersStrip } from "@/app/conversation/activity/stripView";
+import { lastReplies, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import type { Task, UserRequest, WorkerStep } from "@/ipc/generated";
+import type { Message, Task, WorkerStep } from "@/ipc/generated";
 
 const base = Object.values(night.tasks)[0] as unknown as Task;
 let next = 0;
@@ -11,35 +11,52 @@ const task = (patch: Partial<Task> = {}): Task => {
   next += 1;
   return { ...base, id: `t${next}`, number: next, state: "running", createdAtMs: next * 10, updatedAtMs: next * 10, ...patch };
 };
-const sent = (startedAtMs: number) => ({ startedAtMs }) as UserRequest;
-
-test("the strip is about workers at it and those finished since the user's last message", () => {
-  const older = task({ state: "done", updatedAtMs: 5 });
-  const running = task();
-  const waiting = task({ state: "paused" });
-  const finished = task({ state: "reported", updatedAtMs: 500 });
-  const view = workersStrip([finished, waiting, older, running], [sent(1), sent(100)], []);
-  assert.deepEqual(view, { rows: [running.id, waiting.id, finished.id], working: 1, waiting: 1, done: 1, stopped: 0, stoppable: true });
-  // A new message: what finished before it leaves the strip; nothing left hides it.
-  assert.equal(workersStrip([older, finished], [sent(1_000)], []), null);
-  assert.equal(workersStrip([], [], []), null);
-});
-
 const ended = (taskId: string, atMs: number, kind: WorkerStep["kind"] = "stopped"): WorkerStep =>
   ({ taskId, requestId: null, kind, atMs, position: 0 });
+const reply = (requestId: string | null, createdAtMs: number, role: Message["role"] = "assistant") =>
+  ({ role, requestId, createdAtMs }) as Message;
+
+test("a finished worker stays until its request's answer is posted, not before", () => {
+  const finished = task({ state: "reported", requestId: "r1", updatedAtMs: 500 });
+  const running = task({ requestId: "r2" });
+  // A reply before it finished (the thread's "Starting 2 workers") isn't the answer.
+  const before = lastReplies([reply("r1", 100), reply("r1", 600, "user")]);
+  assert.deepEqual(workersStrip([finished, running], before, [])?.rows, [running.id, finished.id]);
+  // The answer for its request, after it finished, takes it off; the live one stays.
+  const answered = lastReplies([reply("r1", 100), reply("r1", 700)]);
+  assert.deepEqual(workersStrip([finished, running], answered, []), {
+    rows: [running.id], working: 1, waiting: 0, done: 0, stopped: 0, stoppable: true,
+  });
+  // Another request's answer doesn't.
+  assert.equal(workersStrip([finished], lastReplies([reply("r2", 900)]), [])?.done, 1);
+  assert.equal(workersStrip([finished], answered, []), null);
+  assert.equal(workersStrip([], {}, []), null);
+});
+
+test("a live worker always shows, and keeps its request's finished workers in view", () => {
+  const first = task({ state: "done", requestId: "r1", updatedAtMs: 200 });
+  const second = task({ state: "paused", requestId: "r1" });
+  // A progress line after the first landed is no answer while the second still works.
+  const view = workersStrip([first, second], lastReplies([reply("r1", 300)]), []);
+  assert.deepEqual(view, { rows: [second.id, first.id], working: 0, waiting: 1, done: 1, stopped: 0, stoppable: true });
+  // A worker with no request has no answer to wait for.
+  assert.equal(workersStrip([task({ state: "done", requestId: null })], {}, []), null);
+  assert.equal(workersStrip([task({ requestId: null })], {}, [])?.working, 1);
+});
 
 test("a worker counts as finished when it ended, not when it was last updated", () => {
-  // Stopped before the user's last message, its kept patch restored after it: still not new.
-  const restored = task({ state: "stopped", updatedAtMs: 900 });
-  assert.equal(workersStrip([restored], [sent(500)], [ended(restored.id, 100), ended(restored.id, 950, "updated")]), null);
-  assert.equal(workersStrip([restored], [sent(500)], [ended(restored.id, 600)])?.stopped, 1);
+  // Stopped before the answer, its kept patch restored after it: still answered.
+  const restored = task({ state: "stopped", requestId: "r1", updatedAtMs: 900 });
+  const replies = lastReplies([reply("r1", 500)]);
+  assert.equal(workersStrip([restored], replies, [ended(restored.id, 100), ended(restored.id, 950, "updated")]), null);
+  assert.equal(workersStrip([restored], replies, [ended(restored.id, 600)])?.stopped, 1);
 });
 
 test("Stop all shows only while a worker runs or waits to run", () => {
   const landing = task({ state: "landing" });
   const ready = task({ state: "readyToLand" });
-  assert.equal(workersStrip([landing, ready], [], [])?.stoppable, false);
-  assert.equal(workersStrip([landing, task({ state: "queued" })], [], [])?.stoppable, true);
+  assert.equal(workersStrip([landing, ready], {}, [])?.stoppable, false);
+  assert.equal(workersStrip([landing, task({ state: "queued" })], {}, [])?.stoppable, true);
 });
 
 test("the collapsed strip counts in one line, naming workers once", () => {

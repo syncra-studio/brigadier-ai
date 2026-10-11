@@ -1,7 +1,7 @@
 import { ChevronRight, StopCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, memo, useContext, useMemo, useState } from "react";
 
-import { stripWords, workersStrip } from "@/app/conversation/activity/stripView";
+import { lastReplies, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
 import { useAction } from "@/app/conversation/useAction";
 import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
@@ -15,6 +15,7 @@ import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { stopWorkers } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { useApp } from "@/state/store";
 
 /** How long a worker has been at it, ticking each second; nothing once it is done. */
 function Elapsed({ taskId }: { taskId: string }) {
@@ -64,15 +65,17 @@ const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
 });
 
 /**
- * The Workers strip on top of the composer (THREAD-UX-PLAN.md §3.5): while workers run, wait,
- * or finished since the user's last message. Collapsed it counts them; open, one row each, and
- * Stop all. Each worker's progress lives here, not under the thread's live line.
+ * The Workers strip on top of the composer (THREAD-UX-PLAN.md §3.5, SESSION-FIXES-PLAN.md Q8):
+ * while workers run or wait, and until the thread's answer reports those that finished.
+ * Collapsed it counts them; open, one row each, and Stop all. Each worker's progress lives here, not under the thread's live line.
  */
 export const WorkersStrip: FC<{ conversationId: string }> = ({ conversationId }) => {
+  const items = useApp((s) => s.threads[conversationId]?.items);
+  const replies = useMemo(() => lastReplies(items ?? []), [items]);
   const json = useBoard((s) => {
     const board = s.board;
     if (board?.conversationId !== conversationId) return null;
-    const view = workersStrip(Object.values(board.tasks), Object.values(board.requests), board.workerSteps);
+    const view = workersStrip(Object.values(board.tasks), replies, board.workerSteps);
     return view ? JSON.stringify(view) : null;
   });
   const view = useMemo(() => (json ? (JSON.parse(json) as ReturnType<typeof workersStrip>) : null), [json]);
