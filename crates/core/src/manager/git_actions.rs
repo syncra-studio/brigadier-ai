@@ -272,6 +272,12 @@ impl SessionManager {
             let (routed, mut account, why) = self
                 .writer_route(settings.git_writer.as_ref(), project.as_ref(), &exclude)
                 .await?;
+            // The user's model writes it as they set it, Fast included.
+            let fast = why.is_none()
+                && settings
+                    .git_writer
+                    .as_ref()
+                    .is_some_and(|chosen| chosen.fast == Some(true));
             if limited.contains(&(account.clone(), routed.model.clone())) {
                 // Another account of the same model that still has room, else that model is
                 // out until its reset.
@@ -291,7 +297,10 @@ impl SessionManager {
                 }
             }
             runs += 1;
-            match self.run_writer(&routed, &account, &system, &prompt).await? {
+            match self
+                .run_writer(&routed, fast, &account, &system, &prompt)
+                .await?
+            {
                 Some(message) => {
                     let message = clean_message(&message);
                     if message.is_empty() {
@@ -387,11 +396,13 @@ impl SessionManager {
         .unwrap_or_default()
     }
 
-    /// One try of the message writer on `routed`'s model under `account`: its reply, or
-    /// `None` when it hit its usage limit (noted, so routing and the account choice move on).
+    /// One try of the message writer on `routed`'s model (on its fast tier when `fast`) under
+    /// `account`: its reply, or `None` when it hit its usage limit (noted, so routing and the
+    /// account choice move on).
     async fn run_writer(
         &self,
         routed: &Routed,
+        fast: bool,
         account: &AccountRef,
         system: &str,
         prompt: &str,
@@ -406,7 +417,7 @@ impl SessionManager {
             cwd: dir.clone(),
             model: Some(routed.model.clone()),
             effort: routed.effort.clone(),
-            fast: false,
+            fast,
             origin: Origin::New,
             ephemeral: true,
             access: Access::ReadOnly,

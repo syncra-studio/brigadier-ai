@@ -82,6 +82,19 @@ fn writer_specs(flow: &Flow) -> Vec<(ProviderKind, Option<String>, Option<String
         .collect()
 }
 
+/// Whether each of the writer's sessions ran on its model's fast tier, in order.
+fn writer_fast(flow: &Flow) -> Vec<bool> {
+    flow.all_specs()
+        .into_iter()
+        .filter(|(_, spec)| {
+            spec.append_system_prompt
+                .as_deref()
+                .is_some_and(|prompt| prompt.contains(WRITER))
+        })
+        .map(|(_, spec)| spec.fast)
+        .collect()
+}
+
 /// Automatic: routing's git text pick writes it (both fakes list one frontier model, so the
 /// tie goes to Claude), in the repository's style, from its latest subjects.
 #[tokio::test]
@@ -138,7 +151,7 @@ async fn a_writer_at_its_limit_hands_the_message_to_the_other_provider() {
     flow.stop().await;
 }
 
-/// A chosen model writes it at its effort; one that can't run falls back to Automatic, and
+/// A chosen model writes it at its effort and speed; one that can't run falls back to Automatic, and
 /// the commit says so.
 #[tokio::test]
 async fn a_chosen_writer_is_used_and_an_unavailable_one_falls_back_with_a_note() {
@@ -155,7 +168,7 @@ async fn a_chosen_writer_is_used_and_an_unavailable_one_falls_back_with_a_note()
             provider: ProviderKind::Codex,
             model: Some("gpt-6-astra".into()),
             effort: Some("high".into()),
-            fast: None,
+            fast: Some(true),
             account: None,
         });
     })
@@ -174,6 +187,7 @@ async fn a_chosen_writer_is_used_and_an_unavailable_one_falls_back_with_a_note()
             Some("high".into())
         ))
     );
+    assert_eq!(writer_fast(&flow), [true], "on its fast tier, as chosen");
 
     // Made unavailable on the Providers page: Automatic writes it.
     std::fs::write(checkout.join("more.txt"), "more\n").unwrap();
@@ -199,6 +213,11 @@ async fn a_chosen_writer_is_used_and_an_unavailable_one_falls_back_with_a_note()
     assert_eq!(
         writer_specs(&flow).last().map(|spec| spec.0),
         Some(ProviderKind::Claude)
+    );
+    assert_eq!(
+        writer_fast(&flow),
+        [true, false],
+        "Automatic as routing sets it"
     );
     flow.stop().await;
 }
