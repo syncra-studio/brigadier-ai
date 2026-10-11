@@ -129,5 +129,27 @@ async fn a_silent_request_gets_one_status_line_then_one_per_change() {
         .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(due(&inputs).len(), 2);
+    // A restart empties the clock: the last stored reply is where the silence starts again,
+    // not the request's start.
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    *conv.status.lock().unwrap() = Default::default();
+    let page = flow
+        .manager
+        .core
+        .list_messages(flow.conversation.clone(), None, 50)
+        .await
+        .unwrap();
+    let reply = page
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == crate::model::MessageRole::Assistant)
+        .unwrap();
+    let request = reply.request_id.clone().unwrap();
+    flow.manager.status_due(later + 3 * SILENCE_MS).await;
+    assert_eq!(
+        conv.status.lock().unwrap().shown_at(&request),
+        Some(reply.created_at_ms)
+    );
     flow.stop().await;
 }

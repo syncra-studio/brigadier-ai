@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use super::SessionManager;
 use super::conversation::Envelope;
-use crate::model::ConversationKind;
+use crate::model::{ConversationId, ConversationKind, MessageRole};
 use crate::now_ms;
 use crate::work::{InjectionKind, RequestState, Task, TaskState};
 
@@ -30,6 +30,12 @@ impl StatusClock {
     /// The user saw a message of `request`'s at `at_ms`: its silence starts again.
     pub(super) fn shown(&mut self, request: &str, at_ms: i64) {
         self.shown.insert(request.to_owned(), at_ms);
+    }
+
+    /// Tests: when the user last saw something new in `request`.
+    #[cfg(test)]
+    pub(crate) fn shown_at(&self, request: &str) -> Option<i64> {
+        self.shown.get(request).copied()
     }
 }
 
@@ -73,6 +79,25 @@ impl SessionManager {
                 .values()
                 .filter(|request| request.state == RequestState::Working)
             {
+                // After a restart the clock is empty: the request's last reply the user saw,
+                // stored, is where its silence starts, looked up once it would be due.
+                let unknown = {
+                    let clock = conv.status.lock().unwrap();
+                    !clock.shown.contains_key(&request.id)
+                        && now - request.started_at_ms >= SILENCE_MS
+                };
+                if unknown {
+                    let at = self
+                        .last_reply_at(&conv.id, &request.id)
+                        .await
+                        .unwrap_or(request.started_at_ms);
+                    conv.status
+                        .lock()
+                        .unwrap()
+                        .shown
+                        .entry(request.id.clone())
+                        .or_insert(at);
+                }
                 let text = {
                     let mut clock = conv.status.lock().unwrap();
                     let told = clock.told.get(&request.id);
@@ -126,6 +151,22 @@ impl SessionManager {
                 .await;
             }
         }
+    }
+}
+
+impl SessionManager {
+    /// When the thread's last stored reply for `request` was written, among the
+    /// conversation's latest messages.
+    async fn last_reply_at(&self, id: &ConversationId, request: &str) -> Option<i64> {
+        let page = self.core.list_messages(id.clone(), None, 200).await.ok()?;
+        page.messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.role == MessageRole::Assistant
+                    && message.request_id.as_deref() == Some(request)
+            })
+            .map(|message| message.created_at_ms)
     }
 }
 
