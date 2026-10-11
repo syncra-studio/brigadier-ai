@@ -350,10 +350,17 @@ pub struct MergeInputs {
     pub incoming: String,
     /// Its name for the worker and the thread: "`main`", "task-3's work".
     pub label: String,
-    /// The conflicting task's branch tip `incoming` was rebuilt from without its litter, when
-    /// it was: that branch counts as landed at exactly this tip once `incoming` has.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replaces: Option<String>,
+    /// The conflicting task's commits that `incoming` rebuilt without their litter, each with
+    /// its replacement: a task branch at one of them counts as landed once its replacement has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rebuilt: Vec<Rebuilt>,
+}
+
+/// A commit a merge task's start rewrote, and the commit that replaced it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Rebuilt {
+    pub from: String,
+    pub to: String,
 }
 
 /// A structured report, the only part of a worker's work that enters the orchestrator's

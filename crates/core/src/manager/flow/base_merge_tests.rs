@@ -768,9 +768,13 @@ async fn a_conflicting_task_is_merged_by_a_merge_task_on_its_work() {
     let incoming = merge.workspace.as_ref().unwrap().merge.clone().unwrap();
     assert_eq!(incoming.label, "task-1's work");
     // Rebuilt without the log, in place of task-1's branch tip.
-    assert_eq!(
-        incoming.replaces.as_deref(),
-        Some(git(&flow.repo, &["rev-parse", &work_branch]).as_str())
+    let work_tip = git(&flow.repo, &["rev-parse", &work_branch]);
+    assert!(
+        incoming
+            .rebuilt
+            .iter()
+            .any(|r| r.from == work_tip && r.to == incoming.incoming),
+        "{incoming:?}"
     );
     let reply = flow
         .manager

@@ -1304,15 +1304,21 @@ impl Repo {
 
     /// `work`'s commits since `base` rebuilt with `leave_out` as it was at `base` in each
     /// (restored where `base` had a file there, removed otherwise), their messages, authors and
-    /// merged parents kept and a commit left with no change dropped; `work` itself when nothing
-    /// is left out. A
+    /// merged parents kept and a commit left with no change dropped. A commit before the first
+    /// one that changes stays itself, so the merge base does too. Returns the new tip (`work`
+    /// itself when nothing is left out) and each rewritten commit with what replaced it. A
     /// merge task starts from it, so a conflicting task's stray files reach neither the merge
     /// nor the history it lands.
-    pub fn work_without(&self, base: &Oid, work: &Oid, leave_out: &[String]) -> Result<Oid> {
+    pub fn work_without(
+        &self,
+        base: &Oid,
+        work: &Oid,
+        leave_out: &[String],
+    ) -> Result<(Oid, Vec<(Oid, Oid)>)> {
         valid_oid(base)?;
         valid_oid(work)?;
         if leave_out.is_empty() {
-            return Ok(work.clone());
+            return Ok((work.clone(), Vec::new()));
         }
         let range = format!("{}..{}", base.0, work.0);
         let list = self.cmd(
@@ -1326,6 +1332,7 @@ impl Repo {
             true,
         )?;
         let mut tip: Option<Oid> = None;
+        let mut rebuilt = Vec::new();
         for line in parse::text(&list)?.lines() {
             let mut ids = line.split_whitespace().map(|id| Oid(id.to_owned()));
             let (Some(commit), Some(parent)) = (ids.next(), ids.next()) else {
@@ -1335,16 +1342,24 @@ impl Repo {
             };
             // A merge's other parents (the target it merged, say) stay, so its ancestry does.
             let merged: Vec<Oid> = ids.collect();
-            let onto = tip.get_or_insert(parent).clone();
+            let onto = tip.get_or_insert(parent.clone()).clone();
             let tree = self.tree_reverting(&commit, base, leave_out)?;
+            if onto == parent && tree == self.tree_of(&commit.0)? {
+                // Nothing rewritten below it and nothing to leave out: the commit itself.
+                tip = Some(commit);
+                continue;
+            }
             if merged.is_empty() && tree == self.tree_of(&onto.0)? {
+                rebuilt.push((commit, onto));
                 continue;
             }
             let parents: Vec<&Oid> = std::iter::once(&onto).chain(&merged).collect();
             let (message, author) = self.authored(&commit)?;
-            tip = Some(self.commit_tree_with(&tree, &parents, &message, &author)?);
+            let new = self.commit_tree_with(&tree, &parents, &message, &author)?;
+            rebuilt.push((commit, new.clone()));
+            tip = Some(new);
         }
-        Ok(tip.unwrap_or_else(|| work.clone()))
+        Ok((tip.unwrap_or_else(|| work.clone()), rebuilt))
     }
 
     /// A commit's exact message and its author's name, email and date as git environment.
@@ -1745,15 +1760,27 @@ mod tests {
         let repo = git.open(&root).expect("the repository");
         fs::write(root.join("a.txt"), "a\n").unwrap();
         let base = repo.commit_changes("Base", true).unwrap();
-        // The task commits a log with its first step, then a step of its own.
+        // The task commits a clean step, then a log with its next one, then a step of its own.
+        fs::write(root.join("a.txt"), "a2\n").unwrap();
+        let clean = repo.commit_changes("Change a", true).unwrap();
         fs::write(root.join("debug.log"), "scratch\n").unwrap();
         fs::write(root.join("b.txt"), "b\n").unwrap();
-        repo.commit_changes("Add b", true).unwrap();
+        let with_log = repo.commit_changes("Add b", true).unwrap();
         fs::write(root.join("c.txt"), "c\n").unwrap();
         let work = repo.commit_changes("Add c", true).unwrap();
         let leave_out = vec!["debug.log".to_owned()];
 
-        let without = repo.work_without(&base, &work, &leave_out).unwrap();
+        // A rewrite a second later has another committer date, so it would show.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let (without, rebuilt) = repo.work_without(&base, &work, &leave_out).unwrap();
+        // The clean step stays itself, so a merge base on it does; the two after it are
+        // rewritten, each named with what replaced it.
+        assert!(repo.ancestor(&clean, &without).unwrap());
+        assert_eq!(
+            rebuilt.iter().map(|(from, _)| from).collect::<Vec<_>>(),
+            [&with_log, &work]
+        );
+        assert_eq!(rebuilt[1].1, without);
         let paths = repo.paths_at(&without).unwrap();
         assert!(
             paths.contains("b.txt") && paths.contains("c.txt"),
@@ -1767,7 +1794,10 @@ mod tests {
                 true,
             )
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&history), "Add c\nAdd b\n");
+        assert_eq!(
+            String::from_utf8_lossy(&history),
+            "Add c\nAdd b\nChange a\n"
+        );
         let touched = repo
             .cmd(
                 &[
@@ -1793,11 +1823,15 @@ mod tests {
         run(&["checkout", "-q", "-B", "task", &work.0]);
         run(&["merge", "-q", "--no-edit", "target"]);
         let merged = repo.resolve("HEAD").unwrap();
-        let without = repo.work_without(&base, &merged, &leave_out).unwrap();
+        let (without, rebuilt) = repo.work_without(&base, &merged, &leave_out).unwrap();
         assert!(repo.ancestor(&target, &without).unwrap());
         assert!(!repo.paths_at(&without).unwrap().contains("debug.log"));
+        assert_eq!(rebuilt.last(), Some(&(merged, without)));
         // Nothing to leave out: the work itself.
-        assert_eq!(repo.work_without(&base, &work, &[]).unwrap(), work);
+        assert_eq!(
+            repo.work_without(&base, &work, &[]).unwrap(),
+            (work, Vec::new())
+        );
     }
 
     #[test]
