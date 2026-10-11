@@ -360,7 +360,7 @@ function UsageBar({ report }: { report: StorageReport }) {
  * confirmation; after the clean it says what it freed and what stayed.
  */
 function CleanDialog({
-  ask,
+  ask: current,
   cleaning,
   cleaned,
   error,
@@ -374,8 +374,12 @@ function CleanDialog({
   onConfirm: () => void;
   onClose: () => void;
 }) {
+  // While it closes, the dialog keeps showing its last ask instead of shrinking away blank.
+  const [last, setLast] = useState(current);
+  if (current !== null && current !== last) setLast(current);
+  const ask = current ?? last;
   return (
-    <Dialog open={ask !== null} onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={current !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         data-slot="storage-dialog"
         className="flex max-h-full max-w-lg flex-col"
