@@ -428,13 +428,17 @@ impl SessionManager {
             .as_ref()
             .and_then(|w| w.target.clone())
             .unwrap_or_default();
-        let problem = |reason: String, state: TaskState| async move {
-            if on_its_own {
-                self.landing_problem(task, &reason, state).await;
-            } else {
-                self.hand_back(task, state, Some(&reason)).await;
-            }
-            format!("[not landed task-{}] {reason}", task.number)
+        // Boxed, like each merge_again below: each call's future is otherwise made in this
+        // frame, a slot apiece in an unoptimized build.
+        let problem = |reason: String, state: TaskState| {
+            Box::pin(async move {
+                if on_its_own {
+                    self.landing_problem(task, &reason, state).await;
+                } else {
+                    self.hand_back(task, state, Some(&reason)).await;
+                }
+                format!("[not landed task-{}] {reason}", task.number)
+            })
         };
         let text = match moved {
             Moved::Landed {
@@ -554,7 +558,7 @@ impl SessionManager {
             }
             Moved::MergeRefused { text } => {
                 let why = format!("Nothing landed: {text}");
-                match self.merge_again(task, why, None).await {
+                match crate::heap(|| self.merge_again(task, why, None)).await {
                     Ok(()) => format!(
                         "[not landed task-{}] Its merge failed the check: {text} Its worker was sent back with that; its work lands on its own after its next report, and you hear when it has landed.",
                         task.number
@@ -573,7 +577,7 @@ impl SessionManager {
                     "`{target}` moved to {} while you merged, so nothing landed. Merge it in too with `git merge {target}`, resolve any conflict and commit; then build, test and call submit_report again.",
                     short(&tip)
                 );
-                match self.merge_again(task, why, Some(tip.clone())).await {
+                match crate::heap(|| self.merge_again(task, why, Some(tip.clone()))).await {
                     Ok(()) => format!(
                         "`{target}` moved ({}) while task-{} merged, so its worker was sent back to merge it in too; its work lands on its own after its next report, and you hear when it has landed.",
                         short(&tip),

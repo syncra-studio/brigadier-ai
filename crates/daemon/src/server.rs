@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use brigadier_core::heap;
 use brigadier_core::manager::SessionManager;
 use brigadier_core::runtime::{Runtime, StartRaw};
 use brigadier_core::{
@@ -993,6 +994,9 @@ fn internal(err: brigadier_store::Error) -> IpcError {
     IpcError::from(brigadier_core::Error::from(err))
 }
 
+/// Every await here goes through [`heap`]: one frame holds all of them in an unoptimized build,
+/// and before it the dispatch alone took 1.26 MB of a runtime thread's 2 MiB stack, so a
+/// message to a session overflowed it.
 async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Response, IpcError> {
     let core = &daemon.core;
     let sessions = &daemon.sessions;
@@ -1001,24 +1005,24 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             catalog: Box::new(core.visible_catalog()),
         },
         Request::GetActivity => Response::GetActivity {
-            activity: core.activity().await,
+            activity: heap(|| core.activity()).await,
         },
         Request::CreateProject { name, repo } => {
-            let project = core.create_project(name, repo).await?;
-            sessions.project_changed(&project).await;
+            let project = heap(|| core.create_project(name, repo)).await?;
+            heap(|| sessions.project_changed(&project)).await;
             Response::CreateProject {
                 project: Box::new(project),
             }
         }
         Request::UpdateProject { id, patch } => {
-            let project = core.update_project(id, patch).await?;
-            sessions.project_changed(&project).await;
+            let project = heap(|| core.update_project(id, patch)).await?;
+            heap(|| sessions.project_changed(&project)).await;
             Response::UpdateProject {
                 project: Box::new(project),
             }
         }
         Request::SetFolderTrust { id, path, trusted } => Response::SetFolderTrust {
-            report: Box::new(sessions.set_folder_trust(id, path, trusted).await?),
+            report: Box::new(heap(|| sessions.set_folder_trust(id, path, trusted)).await?),
         },
         Request::CreateConversation {
             kind,
@@ -1027,9 +1031,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             setup,
         } => Response::CreateConversation {
             conversation: Box::new(
-                sessions
-                    .create_conversation(kind, project_id, title, setup)
-                    .await?,
+                heap(|| sessions.create_conversation(kind, project_id, title, setup)).await?,
             ),
         },
         Request::ForkConversation {
@@ -1037,13 +1039,15 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             message_id,
             place,
         } => Response::ForkConversation {
-            conversation: Box::new(sessions.fork(conversation_id, message_id, place).await?),
+            conversation: Box::new(
+                heap(|| sessions.fork(conversation_id, message_id, place)).await?,
+            ),
         },
         Request::UpdateSetup { id, setup } => Response::UpdateSetup {
-            conversation: Box::new(sessions.set_setup(id, setup).await?),
+            conversation: Box::new(heap(|| sessions.set_setup(id, setup)).await?),
         },
         Request::GetConversation { id, limit } => Response::GetConversation {
-            view: Box::new(core.conversation_view(id, limit).await?),
+            view: Box::new(heap(|| core.conversation_view(id, limit)).await?),
         },
         Request::SendMessage {
             conversation_id,
@@ -1053,8 +1057,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             steer,
             queue_index,
         } => Response::SendMessage {
-            outcome: match sessions
-                .send_message(
+            outcome: match heap(|| {
+                sessions.send_message(
                     conversation_id,
                     text,
                     attachments,
@@ -1062,7 +1066,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                     steer,
                     queue_index,
                 )
-                .await?
+            })
+            .await?
             {
                 brigadier_core::manager::SendOutcome::Sent(message) => SendOutcome::Sent {
                     message: Box::new(message),
@@ -1078,17 +1083,20 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             mentions,
         } => Response::EditQueued {
             // Through the sessions: a merge being prepared must see the edit.
-            queue: sessions
-                .edit_queued(&conversation_id, &item_id, text, attachments, mentions)
-                .await?,
+            queue: heap(|| {
+                sessions.edit_queued(&conversation_id, &item_id, text, attachments, mentions)
+            })
+            .await?,
         },
         Request::DeleteQueued {
             conversation_id,
             item_id,
         } => {
-            core.take_queued(&conversation_id, &item_id).await?;
+            heap(|| core.take_queued(&conversation_id, &item_id)).await?;
             Response::DeleteQueued {
-                queue: core.conversation_view(conversation_id, 1).await?.queue,
+                queue: heap(|| core.conversation_view(conversation_id, 1))
+                    .await?
+                    .queue,
             }
         }
         Request::MoveQueued {
@@ -1096,10 +1104,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             item_id,
             index,
         } => Response::MoveQueued {
-            queue: core.move_queued(&conversation_id, &item_id, index).await?,
+            queue: heap(|| core.move_queued(&conversation_id, &item_id, index)).await?,
         },
         Request::ResumeQueue { conversation_id } => Response::ResumeQueue {
-            queue: sessions.resume_queue(conversation_id).await?,
+            queue: heap(|| sessions.resume_queue(conversation_id)).await?,
         },
         Request::AddAttachment {
             name,
@@ -1118,22 +1126,22 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 message: format!("the attachment is not valid base64: {err}"),
             })?;
             Response::AddAttachment {
-                attachment: core.add_attachment(name, mime, bytes, pasted).await?,
+                attachment: heap(|| core.add_attachment(name, mime, bytes, pasted)).await?,
             }
         }
         Request::PinDraftAttachments { scope, attachments } => {
-            core.pin_draft_attachments(scope, attachments).await?;
+            heap(|| core.pin_draft_attachments(scope, attachments)).await?;
             Response::PinDraftAttachments
         }
         Request::ReadAttachment { id } => Response::ReadAttachment {
-            data: BASE64.encode(core.read_attachment(&id).await?),
+            data: BASE64.encode(heap(|| core.read_attachment(&id)).await?),
         },
         Request::ListWorkerEvents {
             task_id,
             before,
             limit,
         } => Response::ListWorkerEvents {
-            page: core.list_worker_events(&task_id, before, limit).await?,
+            page: heap(|| core.list_worker_events(&task_id, before, limit)).await?,
         },
         Request::ListComputerActions {
             conversation_id,
@@ -1141,8 +1149,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             before,
             limit,
         } => Response::ListComputerActions {
-            page: core
-                .list_computer_actions(&conversation_id, &task_id, before, limit)
+            page: heap(|| core.list_computer_actions(&conversation_id, &task_id, before, limit))
                 .await?,
         },
         Request::ListOrchestratorLog {
@@ -1150,21 +1157,19 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             before,
             limit,
         } => Response::ListOrchestratorLog {
-            page: core
-                .list_orchestrator_log(&conversation_id, before, limit)
-                .await?,
+            page: heap(|| core.list_orchestrator_log(&conversation_id, before, limit)).await?,
         },
         Request::GetThreadItem {
             conversation_id,
             item_id,
         } => Response::GetThreadItem {
-            item: core.thread_item(&conversation_id, &item_id).await?,
+            item: heap(|| core.thread_item(&conversation_id, &item_id)).await?,
         },
         Request::GetThreadMetrics { conversation_id } => Response::GetThreadMetrics {
-            metrics: daemon.sessions.thread_metrics(&conversation_id).await?,
+            metrics: heap(|| daemon.sessions.thread_metrics(&conversation_id)).await?,
         },
         Request::ReadArtifact { id, offset, limit } => {
-            let (bytes, total_bytes) = core.read_blob_range(id, offset, limit).await?;
+            let (bytes, total_bytes) = heap(|| core.read_blob_range(id, offset, limit)).await?;
             let text = match String::from_utf8(bytes) {
                 Ok(text) => Some(text),
                 // A slice can end inside a character; keep what decodes.
@@ -1186,69 +1191,68 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             }
         }
         Request::SaveArtifact { id, path } => {
-            sessions.save_artifact(id, path).await?;
+            heap(|| sessions.save_artifact(id, path)).await?;
             Response::SaveArtifact
         }
         Request::OpenArtifact { id, file_name } => Response::OpenArtifact {
-            path: sessions
-                .artifact_copy(id, file_name)
+            path: heap(|| sessions.artifact_copy(id, file_name))
                 .await?
                 .display()
                 .to_string(),
         },
         Request::GetBrain { project_id } => Response::GetBrain {
-            overview: Box::new(sessions.brain_overview(project_id).await?),
+            overview: Box::new(heap(|| sessions.brain_overview(project_id)).await?),
         },
         Request::QueryBrain { project_id, query } => Response::QueryBrain {
-            answer: Box::new(sessions.query_brain(project_id, query).await?),
+            answer: Box::new(heap(|| sessions.query_brain(project_id, query)).await?),
         },
         Request::GetBrainGraph { project_id, filter } => Response::GetBrainGraph {
-            graph: Box::new(sessions.brain_graph(project_id, filter).await?),
+            graph: Box::new(heap(|| sessions.brain_graph(project_id, filter)).await?),
         },
         Request::ListMemories => Response::ListMemories {
-            memories: sessions.list_memories().await?,
+            memories: heap(|| sessions.list_memories()).await?,
         },
         Request::ForgetMemory { node_id } => {
-            sessions.forget_memory(node_id).await?;
+            heap(|| sessions.forget_memory(node_id)).await?;
             Response::ForgetMemory
         }
         Request::ExportConventions { project_id, path } => Response::ExportConventions {
-            export: sessions.export_conventions(project_id, path).await?,
+            export: heap(|| sessions.export_conventions(project_id, path)).await?,
         },
         Request::RunBrainJob { project_id, kind } => Response::RunBrainJob {
-            job_id: sessions.run_brain_job(project_id, kind).await?,
+            job_id: heap(|| sessions.run_brain_job(project_id, kind)).await?,
         },
         Request::RebuildIndex { project_id } => {
-            sessions.rebuild_index(project_id).await?;
+            heap(|| sessions.rebuild_index(project_id)).await?;
             Response::RebuildIndex
         }
         Request::GetRepoInfo { path } => Response::GetRepoInfo {
-            repo: sessions.repo_info(path).await?,
+            repo: heap(|| sessions.repo_info(path)).await?,
         },
         Request::FindProjects => Response::FindProjects {
-            candidates: sessions.find_projects().await?,
+            candidates: heap(|| sessions.find_projects()).await?,
         },
         Request::BrowseFolders { path } => Response::BrowseFolders {
-            listing: sessions.browse_folders(path).await?,
+            listing: heap(|| sessions.browse_folders(path)).await?,
         },
         Request::CheckFolder { path } => Response::CheckFolder {
-            check: sessions.check_folder(path).await?,
+            check: heap(|| sessions.check_folder(path)).await?,
         },
         Request::AddProject { path, name, init } => Response::AddProject {
-            project: Box::new(sessions.add_project(path, name, init).await?),
+            project: Box::new(heap(|| sessions.add_project(path, name, init)).await?),
         },
         Request::ListFiles {
             conversation_id,
             query,
         } => {
-            let (files, truncated) = sessions.list_files(&conversation_id, query).await?;
+            let (files, truncated) = heap(|| sessions.list_files(&conversation_id, query)).await?;
             Response::ListFiles { files, truncated }
         }
         Request::ReadFile {
             conversation_id,
             path,
         } => Response::ReadFile {
-            file: sessions.read_file(&conversation_id, path).await?,
+            file: heap(|| sessions.read_file(&conversation_id, path)).await?,
         },
         Request::OpenTerminal { .. }
         | Request::OpenSetupTerminal { .. }
@@ -1269,9 +1273,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             side_chat_id,
         } => Response::OpenSideChat {
             conversation: Box::new(
-                sessions
-                    .open_side_chat(&conversation_id, side_chat_id)
-                    .await?,
+                heap(|| sessions.open_side_chat(&conversation_id, side_chat_id)).await?,
             ),
         },
         Request::WriteTerminal { terminal_id, data } => {
@@ -1295,7 +1297,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             Response::CloseTerminal
         }
         Request::GetComputerAccess => Response::GetComputerAccess {
-            access: computer_access(sessions.computer_permissions().await),
+            access: computer_access(heap(|| sessions.computer_permissions()).await),
         },
         Request::AllowComputerAccess { grant, start_over } => {
             use brigadier_computer::wire::Grant;
@@ -1303,7 +1305,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 ComputerGrant::Accessibility => Grant::Accessibility,
                 ComputerGrant::ScreenRecording => Grant::ScreenRecording,
             };
-            let permissions = sessions.request_computer_permission(wire, start_over).await;
+            let permissions = heap(|| sessions.request_computer_permission(wire, start_over)).await;
             // The pane where the user turns Brigadier Computer Use on.
             #[cfg(target_os = "macos")]
             if permissions.is_ok() {
@@ -1345,53 +1347,53 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             subject,
             rating,
         } => {
-            sessions.rate(&conversation_id, subject, rating).await?;
+            heap(|| sessions.rate(&conversation_id, subject, rating)).await?;
             Response::RateMessage
         }
         Request::GetSessionDiff { id } => Response::GetSessionDiff {
-            stat: sessions.session_diff_stat(&id).await?,
+            stat: heap(|| sessions.session_diff_stat(&id)).await?,
         },
         Request::GetWorkerDiffs { conversation_id } => Response::GetWorkerDiffs {
-            diffs: sessions.worker_diffs(&conversation_id).await?,
+            diffs: heap(|| sessions.worker_diffs(&conversation_id)).await?,
         },
         Request::SteerQueued {
             conversation_id,
             item_id,
         } => {
-            sessions.steer_queued(conversation_id, item_id).await?;
+            heap(|| sessions.steer_queued(conversation_id, item_id)).await?;
             Response::SteerQueued
         }
         Request::Interrupt { conversation_id } => {
-            sessions.interrupt(conversation_id).await?;
+            heap(|| sessions.interrupt(conversation_id)).await?;
             Response::Interrupt
         }
         Request::Resume { conversation_id } => {
-            sessions.resume(conversation_id).await?;
+            heap(|| sessions.resume(conversation_id)).await?;
             Response::Resume
         }
         Request::StopPreview {
             conversation_id,
             preview_id,
         } => {
-            sessions.stop_preview(conversation_id, preview_id).await?;
+            heap(|| sessions.stop_preview(conversation_id, preview_id)).await?;
             Response::StopPreview
         }
         Request::PausePreview {
             conversation_id,
             preview_id,
         } => {
-            sessions.pause_preview(conversation_id, preview_id).await?;
+            heap(|| sessions.pause_preview(conversation_id, preview_id)).await?;
             Response::PausePreview
         }
         Request::ResumePreview {
             conversation_id,
             preview_id,
         } => {
-            sessions.resume_preview(conversation_id, preview_id).await?;
+            heap(|| sessions.resume_preview(conversation_id, preview_id)).await?;
             Response::ResumePreview
         }
         Request::ClearPreviews { conversation_id } => {
-            sessions.clear_previews(conversation_id).await?;
+            heap(|| sessions.clear_previews(conversation_id)).await?;
             Response::ClearPreviews
         }
         Request::PreviewLog {
@@ -1399,17 +1401,16 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             preview_id,
             lines,
         } => {
-            let (tail, url) = sessions
-                .preview_log_tail(conversation_id, preview_id, lines)
-                .await?;
+            let (tail, url) =
+                heap(|| sessions.preview_log_tail(conversation_id, preview_id, lines)).await?;
             Response::PreviewLog { tail, url }
         }
         Request::Compact { conversation_id } => {
-            sessions.compact(conversation_id).await?;
+            heap(|| sessions.compact(conversation_id)).await?;
             Response::Compact
         }
         Request::GetConversationStatus { conversation_id } => Response::GetConversationStatus {
-            status: sessions.conversation_status(conversation_id).await?,
+            status: heap(|| sessions.conversation_status(conversation_id)).await?,
         },
         Request::EditMessage {
             conversation_id,
@@ -1417,23 +1418,21 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             text,
             attachments,
         } => {
-            sessions
-                .edit_message(conversation_id, message_id, text, attachments)
-                .await?;
+            heap(|| sessions.edit_message(conversation_id, message_id, text, attachments)).await?;
             Response::EditMessage
         }
         Request::Regenerate {
             conversation_id,
             request_id,
         } => {
-            sessions.regenerate(conversation_id, request_id).await?;
+            heap(|| sessions.regenerate(conversation_id, request_id)).await?;
             Response::Regenerate
         }
         Request::SwitchBranch {
             conversation_id,
             head,
         } => {
-            sessions.switch_branch(conversation_id, head).await?;
+            heap(|| sessions.switch_branch(conversation_id, head)).await?;
             Response::SwitchBranch
         }
         Request::UndoChanges {
@@ -1441,16 +1440,14 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             request_id,
             reapply,
         } => {
-            sessions
-                .undo_request(conversation_id, request_id, reapply)
-                .await?;
+            heap(|| sessions.undo_request(conversation_id, request_id, reapply)).await?;
             Response::UndoChanges
         }
         Request::GetGitState { conversation_id } => Response::GetGitState {
-            state: sessions.git_state(&conversation_id).await?,
+            state: heap(|| sessions.git_state(&conversation_id)).await?,
         },
         Request::GetPullRequest { conversation_id } => Response::GetPullRequest {
-            pull_request: sessions.pull_request(&conversation_id).await?,
+            pull_request: heap(|| sessions.pull_request(&conversation_id)).await?,
         },
         Request::CommitChanges {
             conversation_id,
@@ -1458,36 +1455,35 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             include_unstaged,
             push,
         } => Response::CommitChanges {
-            outcome: sessions
-                .commit_changes(&conversation_id, message, include_unstaged, push)
-                .await?,
+            outcome: heap(|| {
+                sessions.commit_changes(&conversation_id, message, include_unstaged, push)
+            })
+            .await?,
         },
         Request::PushChanges { conversation_id } => Response::PushChanges {
-            branch: sessions.push_changes(&conversation_id).await?,
+            branch: heap(|| sessions.push_changes(&conversation_id)).await?,
         },
         Request::GetSourceState { conversation_id } => Response::GetSourceState {
-            state: sessions.source_state(&conversation_id).await?,
+            state: heap(|| sessions.source_state(&conversation_id)).await?,
         },
         Request::StageFiles {
             conversation_id,
             paths,
         } => Response::StageFiles {
-            state: sessions.stage_files(&conversation_id, paths).await?,
+            state: heap(|| sessions.stage_files(&conversation_id, paths)).await?,
         },
         Request::UnstageFiles {
             conversation_id,
             paths,
         } => Response::UnstageFiles {
-            state: sessions.unstage_files(&conversation_id, paths).await?,
+            state: heap(|| sessions.unstage_files(&conversation_id, paths)).await?,
         },
         Request::DiscardFiles {
             conversation_id,
             scope,
             paths,
         } => Response::DiscardFiles {
-            state: sessions
-                .discard_files(&conversation_id, scope, paths)
-                .await?,
+            state: heap(|| sessions.discard_files(&conversation_id, scope, paths)).await?,
         },
         Request::GetReviewDiff {
             conversation_id,
@@ -1495,18 +1491,17 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             whole_files,
             ignore_whitespace,
         } => Response::GetReviewDiff {
-            review: sessions
-                .review_diff(&conversation_id, scope, whole_files, ignore_whitespace)
-                .await?,
+            review: heap(|| {
+                sessions.review_diff(&conversation_id, scope, whole_files, ignore_whitespace)
+            })
+            .await?,
         },
         Request::AnswerCard {
             conversation_id,
             card_id,
             decision,
         } => {
-            sessions
-                .answer_card(conversation_id, card_id, decision)
-                .await?;
+            heap(|| sessions.answer_card(conversation_id, card_id, decision)).await?;
             Response::AnswerCard
         }
         Request::AnswerQuestion {
@@ -1514,9 +1509,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             card_id,
             answers,
         } => {
-            sessions
-                .answer_question(conversation_id, card_id, answers)
-                .await?;
+            heap(|| sessions.answer_question(conversation_id, card_id, answers)).await?;
             Response::AnswerQuestion
         }
         Request::DecidePlan {
@@ -1525,9 +1518,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             approve,
             message,
         } => {
-            sessions
-                .decide_plan(conversation_id, card_id, approve, message)
-                .await?;
+            heap(|| sessions.decide_plan(conversation_id, card_id, approve, message)).await?;
             Response::DecidePlan
         }
         Request::ProposeOvernight {
@@ -1537,8 +1528,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             plan,
         } => Response::ProposeOvernight {
             run: Box::new(
-                sessions
-                    .propose_overnight(conversation_id, command_id, words, plan)
+                heap(|| sessions.propose_overnight(conversation_id, command_id, words, plan))
                     .await?,
             ),
         },
@@ -1549,8 +1539,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             revision,
         } => Response::StartOvernight {
             run: Box::new(
-                sessions
-                    .start_overnight(conversation_id, run_id, command_id, revision)
+                heap(|| sessions.start_overnight(conversation_id, run_id, command_id, revision))
                     .await?,
             ),
         },
@@ -1560,9 +1549,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             command_id,
         } => Response::StopOvernight {
             run: Box::new(
-                sessions
-                    .stop_overnight(conversation_id, run_id, command_id)
-                    .await?,
+                heap(|| sessions.stop_overnight(conversation_id, run_id, command_id)).await?,
             ),
         },
         Request::SteerOvernight {
@@ -1572,8 +1559,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             words,
         } => Response::SteerOvernight {
             run: Box::new(
-                sessions
-                    .steer_overnight(conversation_id, run_id, command_id, words)
+                heap(|| sessions.steer_overnight(conversation_id, run_id, command_id, words))
                     .await?,
             ),
         },
@@ -1584,8 +1570,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             words,
         } => Response::ContinueOvernight {
             run: Box::new(
-                sessions
-                    .continue_overnight(conversation_id, run_id, command_id, words)
+                heap(|| sessions.continue_overnight(conversation_id, run_id, command_id, words))
                     .await?,
             ),
         },
@@ -1596,20 +1581,20 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             verified_commit,
         } => Response::MergeOvernight {
             run: Box::new(
-                sessions
-                    .merge_overnight(conversation_id, run_id, command_id, verified_commit)
-                    .await?,
+                heap(|| {
+                    sessions.merge_overnight(conversation_id, run_id, command_id, verified_commit)
+                })
+                .await?,
             ),
         },
         Request::GetRunDiff {
             conversation_id,
             run_id,
         } => Response::GetRunDiff {
-            diff: sessions.run_diff_stat(&conversation_id, &run_id).await?,
+            diff: heap(|| sessions.run_diff_stat(&conversation_id, &run_id)).await?,
         },
         Request::PendingOvernightNotifications => Response::PendingOvernightNotifications {
-            notifications: sessions
-                .pending_overnight_notifications()
+            notifications: heap(|| sessions.pending_overnight_notifications())
                 .await
                 .into_iter()
                 .map(|(conversation_id, run_id, notification)| {
@@ -1627,9 +1612,15 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             notification_id,
             error,
         } => {
-            sessions
-                .fail_overnight_notification(conversation_id, run_id, notification_id, error)
-                .await?;
+            heap(|| {
+                sessions.fail_overnight_notification(
+                    conversation_id,
+                    run_id,
+                    notification_id,
+                    error,
+                )
+            })
+            .await?;
             Response::FailOvernightNotification
         }
         Request::AckOvernightNotification {
@@ -1637,41 +1628,40 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             run_id,
             notification_id,
         } => {
-            sessions
-                .ack_overnight_notification(conversation_id, run_id, notification_id)
+            heap(|| sessions.ack_overnight_notification(conversation_id, run_id, notification_id))
                 .await?;
             Response::AckOvernightNotification
         }
         Request::StopTask { task_id } => {
-            sessions.stop_task(task_id).await?;
+            heap(|| sessions.stop_task(task_id)).await?;
             Response::StopTask
         }
         Request::StopWorkers { conversation_id } => Response::StopWorkers {
-            task_ids: sessions.stop_workers(conversation_id).await?,
+            task_ids: heap(|| sessions.stop_workers(conversation_id)).await?,
         },
         Request::PauseTask { task_id } => {
-            sessions.pause_task(task_id).await?;
+            heap(|| sessions.pause_task(task_id)).await?;
             Response::PauseTask
         }
         Request::ResumeTask { task_id } => {
-            sessions.resume_task(task_id).await?;
+            heap(|| sessions.resume_task(task_id)).await?;
             Response::ResumeTask
         }
         Request::RestoreKeptWork { task_id } => Response::RestoreKeptWork {
-            outcome: sessions.restore_kept_work(task_id).await?,
+            outcome: heap(|| sessions.restore_kept_work(task_id)).await?,
         },
         Request::ResolveWaiting {
             conversation_id,
             id,
         } => {
-            sessions.resolve_waiting(conversation_id, id).await?;
+            heap(|| sessions.resolve_waiting(conversation_id, id)).await?;
             Response::ResolveWaiting
         }
         Request::Hibernate { id } => Response::Hibernate {
-            conversation: Box::new(sessions.hibernate(id).await?),
+            conversation: Box::new(heap(|| sessions.hibernate(id)).await?),
         },
         Request::Archive { ids } => {
-            let outcomes = sessions.archive_all(&ids).await;
+            let outcomes = heap(|| sessions.archive_all(&ids)).await;
             for (id, outcome) in ids.iter().zip(&outcomes) {
                 if outcome.is_ok() {
                     daemon.terminals.close_conversation(&id.0);
@@ -1684,14 +1674,14 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::Restore { ids } => {
             let mut outcomes = Vec::with_capacity(ids.len());
             for id in &ids {
-                outcomes.push(sessions.restore(id.clone()).await.map(Some));
+                outcomes.push(heap(|| sessions.restore(id.clone())).await.map(Some));
             }
             Response::Restore {
                 outcomes: lifecycle_outcomes(ids, outcomes),
             }
         }
         Request::PreviewRemoveProject { id } => Response::PreviewRemoveProject {
-            removal: Box::new(sessions.preview_remove_project(id).await?),
+            removal: Box::new(heap(|| sessions.preview_remove_project(id)).await?),
         },
         Request::RemoveProject {
             id,
@@ -1699,7 +1689,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             keep_brain,
         } => {
             // Refused while one of its conversations works: before its terminals close.
-            if let Some(why) = sessions.preview_remove_project(id.clone()).await?.blocked {
+            if let Some(why) = heap(|| sessions.preview_remove_project(id.clone()))
+                .await?
+                .blocked
+            {
                 return Err(invalid(why));
             }
             for conversation in core.catalog().conversations {
@@ -1708,13 +1701,11 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 }
             }
             Response::RemoveProject {
-                report: sessions
-                    .remove_project(id, delete_branches, keep_brain)
-                    .await?,
+                report: heap(|| sessions.remove_project(id, delete_branches, keep_brain)).await?,
             }
         }
         Request::Delete { ids } => {
-            let outcomes = sessions.delete_all(&ids).await;
+            let outcomes = heap(|| sessions.delete_all(&ids)).await;
             for (id, outcome) in ids.iter().zip(&outcomes) {
                 if outcome.is_ok() {
                     daemon.terminals.close_conversation(&id.0);
@@ -1725,36 +1716,36 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             }
         }
         Request::PreviewDelete { ids } => Response::PreviewDelete {
-            branches: sessions.preview_delete(&ids).await,
+            branches: heap(|| sessions.preview_delete(&ids)).await,
         },
         Request::RenameConversation { id, title } => Response::RenameConversation {
-            conversation: Box::new(core.rename_conversation(id, title).await?),
+            conversation: Box::new(heap(|| core.rename_conversation(id, title)).await?),
         },
         Request::SetPinned { id, pinned } => Response::SetPinned {
-            conversation: Box::new(core.set_pinned(id, pinned).await?),
+            conversation: Box::new(heap(|| core.set_pinned(id, pinned)).await?),
         },
         Request::AppendMessage {
             conversation_id,
             text,
         } => Response::AppendMessage {
-            message: Box::new(core.append_message(conversation_id, text).await?),
+            message: Box::new(heap(|| core.append_message(conversation_id, text)).await?),
         },
         Request::ListMessages {
             conversation_id,
             before,
             limit,
         } => Response::ListMessages {
-            page: core.list_messages(conversation_id, before, limit).await?,
+            page: heap(|| core.list_messages(conversation_id, before, limit)).await?,
         },
         Request::ReadBlobText { hash } => Response::ReadBlobText {
-            text: core.read_blob_text(hash).await?,
+            text: heap(|| core.read_blob_text(hash)).await?,
         },
         Request::UpdateSettings { settings } => {
             let before = core.settings();
-            let settings = core
-                .update_settings(brigadier_core::accounts::edited(&before, *settings))
-                .await?;
-            daemon.awake.apply().await;
+            let settings =
+                heap(|| core.update_settings(brigadier_core::accounts::edited(&before, *settings)))
+                    .await?;
+            heap(|| daemon.awake.apply()).await;
             // New rules or rankings, or an agent or model turned back on, may let work waiting
             // for quota run now.
             if before.accounts != settings.accounts
@@ -1772,22 +1763,20 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 let sessions = daemon.sessions.clone();
                 daemon
                     .supervisor
-                    .spawn(async move { sessions.retry_waiting_work().await });
+                    .spawn(async move { heap(|| sessions.retry_waiting_work()).await });
             }
             Response::UpdateSettings {
                 settings: Box::new(settings),
             }
         }
         Request::GetKeepAwake => Response::GetKeepAwake {
-            status: daemon.awake.apply().await,
+            status: heap(|| daemon.awake.apply()).await,
         },
         Request::SetUpLidClosed => Response::SetUpLidClosed {
-            status: daemon.awake.set_up_lid_closed().await,
+            status: heap(|| daemon.awake.set_up_lid_closed()).await,
         },
         Request::EventsSince { after_seq, limit } => {
-            let events = daemon
-                .store
-                .read_since(after_seq, limit)
+            let events = heap(|| daemon.store.read_since(after_seq, limit))
                 .await
                 .map_err(internal)?;
             Response::EventsSince {
@@ -1798,8 +1787,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetDiagnostics => Response::GetDiagnostics {
             diagnostics: Box::new(Diagnostics {
                 daemon: daemon.info.clone(),
-                metrics: daemon.metrics.sample().await,
-                processes: daemon.metrics.processes().await,
+                metrics: heap(|| daemon.metrics.sample()).await,
+                processes: heap(|| daemon.metrics.processes()).await,
                 budgets: budgets(),
             }),
         },
@@ -1819,7 +1808,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             accounts: daemon.runtime.accounts_view(),
         },
         Request::RemoveAccount { id } => Response::RemoveAccount {
-            settings: Box::new(daemon.sessions.remove_account(&id).await?),
+            settings: Box::new(heap(|| daemon.sessions.remove_account(&id)).await?),
         },
         Request::RefreshAccounts => {
             daemon.runtime.refresh_providers(None);
@@ -1827,17 +1816,17 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             Response::RefreshAccounts
         }
         Request::GetProviders => Response::GetProviders {
-            view: daemon.runtime.view().await,
+            view: heap(|| daemon.runtime.view()).await,
         },
         Request::RefreshProviders { provider } => {
             daemon.runtime.refresh_providers(provider);
             Response::RefreshProviders
         }
         Request::GetUsage { project_id } => Response::GetUsage {
-            usage: Box::new(daemon.sessions.usage_view(project_id).await?),
+            usage: Box::new(heap(|| daemon.sessions.usage_view(project_id)).await?),
         },
         Request::PreviewRoutes { project_id, areas } => Response::PreviewRoutes {
-            routes: daemon.sessions.preview_routes(project_id, areas).await,
+            routes: heap(|| daemon.sessions.preview_routes(project_id, areas)).await,
         },
         Request::GetRankingsRefresh => Response::GetRankingsRefresh {
             refresh: daemon.runtime.registry().rankings_refresh(),
@@ -1848,13 +1837,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .registry()
                 .reset_rankings()
                 .map_err(|error| brigadier_core::Error::Invalid(error.to_string()))?;
-            daemon.runtime.rankings_changed().await;
+            heap(|| daemon.runtime.rankings_changed()).await;
             Response::ResetRankings {
                 refresh: daemon.runtime.registry().rankings_refresh(),
             }
         }
         Request::CheckRegistry => {
-            crate::registry::check(daemon).await;
+            heap(|| crate::registry::check(daemon)).await;
             Response::CheckRegistry {
                 registry: daemon.runtime.registry().info(),
             }
@@ -1875,9 +1864,16 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                     FaultKey::Conversation(conversation_id)
                 }
             };
-            sessions
-                .debug_inject_limit(key, provider, window, reset_in_minutes, after_tool_calls)
-                .await?;
+            heap(|| {
+                sessions.debug_inject_limit(
+                    key,
+                    provider,
+                    window,
+                    reset_in_minutes,
+                    after_tool_calls,
+                )
+            })
+            .await?;
             Response::DebugInjectLimit
         }
         Request::StartRawSession {
@@ -1890,9 +1886,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             record,
         } => Response::StartRawSession {
             session: Box::new(
-                daemon
-                    .runtime
-                    .start_session(StartRaw {
+                heap(|| {
+                    daemon.runtime.start_session(StartRaw {
                         provider,
                         cwd,
                         model,
@@ -1901,21 +1896,22 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                         approvals,
                         record,
                     })
-                    .await?,
+                })
+                .await?,
             ),
         },
         Request::ResumeRawSession { id } => Response::ResumeRawSession {
-            session: Box::new(daemon.runtime.resume_session(id).await?),
+            session: Box::new(heap(|| daemon.runtime.resume_session(id)).await?),
         },
         Request::ForkRawSession { id } => Response::ForkRawSession {
-            session: Box::new(daemon.runtime.fork_session(id).await?),
+            session: Box::new(heap(|| daemon.runtime.fork_session(id)).await?),
         },
         Request::SendRawSession { id, text, steer } => {
-            daemon.runtime.send(&id, text, steer).await?;
+            heap(|| daemon.runtime.send(&id, text, steer)).await?;
             Response::SendRawSession
         }
         Request::InterruptRawSession { id } => {
-            daemon.runtime.interrupt(&id).await?;
+            heap(|| daemon.runtime.interrupt(&id)).await?;
             Response::InterruptRawSession
         }
         Request::AnswerApproval {
@@ -1923,50 +1919,50 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             approval_id,
             decision,
         } => {
-            daemon.runtime.answer(&id, approval_id, decision).await?;
+            heap(|| daemon.runtime.answer(&id, approval_id, decision)).await?;
             Response::AnswerApproval
         }
         Request::StopRawSession { id } => {
-            daemon.runtime.stop_session(&id).await?;
+            heap(|| daemon.runtime.stop_session(&id)).await?;
             Response::StopRawSession
         }
         Request::CloseRawSession { id } => Response::CloseRawSession {
-            session: Box::new(daemon.runtime.close_session(id).await?),
+            session: Box::new(heap(|| daemon.runtime.close_session(id)).await?),
         },
         Request::ListRawEvents { id, before, limit } => Response::ListRawEvents {
-            page: daemon.runtime.transcript(&id, before, limit).await?,
+            page: heap(|| daemon.runtime.transcript(&id, before, limit)).await?,
         },
         Request::ReplayFixture { fixture_id } => Response::ReplayFixture {
-            session: Box::new(daemon.runtime.replay(&fixture_id).await?),
+            session: Box::new(heap(|| daemon.runtime.replay(&fixture_id)).await?),
         },
         #[cfg(debug_assertions)]
         Request::SimulateUsageLimit { provider } => Response::SimulateUsageLimit {
-            session: Box::new(daemon.runtime.simulate_usage_limit(provider).await?),
+            session: Box::new(heap(|| daemon.runtime.simulate_usage_limit(provider)).await?),
         },
         Request::GetDaemonActivity => Response::GetDaemonActivity {
             activity: DaemonActivity {
                 // The asking connection is one of them.
                 clients: u32::try_from(daemon.metrics.clients().saturating_sub(1))
                     .unwrap_or(u32::MAX),
-                running: idle::running(daemon).await,
+                running: heap(|| idle::running(daemon)).await,
                 overnight: daemon.sessions.overnight_active(),
             },
         },
         Request::ScanStorage => Response::ScanStorage {
-            report: Box::new(daemon.storage.scan(daemon).await.map_err(invalid)?),
+            report: Box::new(
+                heap(|| daemon.storage.scan(daemon))
+                    .await
+                    .map_err(invalid)?,
+            ),
         },
         Request::CleanStorage { scan_id, items } => Response::CleanStorage {
-            report: daemon
-                .storage
-                .clean(daemon, &scan_id, items)
+            report: heap(|| daemon.storage.clean(daemon, &scan_id, items))
                 .await
                 .map_err(invalid)?,
         },
         Request::PreviewUninstall { app } => Response::PreviewUninstall {
             plan: Box::new(
-                daemon
-                    .uninstall
-                    .preview(daemon, app)
+                heap(|| daemon.uninstall.preview(daemon, app))
                     .await
                     .map_err(invalid)?,
             ),
@@ -1976,11 +1972,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             keep_data,
             delete_branches,
         } => Response::Uninstall {
-            report: daemon
-                .uninstall
-                .run(daemon, &plan_id, keep_data, delete_branches)
-                .await
-                .map_err(invalid)?,
+            report: heap(|| {
+                daemon
+                    .uninstall
+                    .run(daemon, &plan_id, keep_data, delete_branches)
+            })
+            .await
+            .map_err(invalid)?,
         },
         Request::Subscribe { .. }
         | Request::SetMetricsStreaming { .. }
@@ -2070,5 +2068,19 @@ mod tests {
         let access = computer_access(Err("it didn't answer in time".into()));
         assert!(!access.accessibility && !access.screen_recording && !access.restarting);
         assert_eq!(access.problem.as_deref(), Some("it didn't answer in time"));
+    }
+
+    /// Every await of `handle_request` goes through [`heap`]: an unoptimized build keeps all
+    /// of a function's awaited futures in its stack frame at once, and before that the
+    /// dispatch's frame took 1.26 MB of a runtime thread's 2 MiB stack, so a message to a
+    /// session overflowed it. Its future was 35 KB then and is under 2 KB now; one past 4 KB
+    /// means an engine future is awaited around it again.
+    #[test]
+    fn the_request_dispatch_keeps_its_futures_on_the_heap() {
+        fn future_size<R>(_: fn(&'static Arc<Daemon>, Request) -> R) -> usize {
+            std::mem::size_of::<R>()
+        }
+        let size = future_size(handle_request);
+        assert!(size <= 4 << 10, "handle_request's future is {size} bytes");
     }
 }

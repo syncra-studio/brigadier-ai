@@ -67,10 +67,10 @@ impl SessionManager {
                 // In plan mode a lead may outline the work (it stops at its outline); nothing
                 // merges.
                 if args.kind.writes() {
-                    self.check_overnight_proposal(id).await?;
+                    crate::heap(|| self.check_overnight_proposal(id)).await?;
                 }
                 if args.kind == TaskKind::Merge {
-                    self.check_plan_mode(id).await?;
+                    crate::heap(|| self.check_plan_mode(id)).await?;
                 }
                 let role = match (args.kind, args.role) {
                     (TaskKind::Implement, None) => Some(WorkerRole::Lead),
@@ -97,7 +97,7 @@ impl SessionManager {
                         ));
                     }
                     (Some(reference), kind) => {
-                        let subject = self.find_task(id, reference).await?;
+                        let subject = crate::heap(|| self.find_task(id, reference)).await?;
                         // A merge is finished by its own worker.
                         if kind == TaskKind::Merge && subject.kind == TaskKind::Merge {
                             return Err(Error::Invalid(super::landing::merge_of_merge(
@@ -181,8 +181,8 @@ impl SessionManager {
                     ));
                 }
                 if let Some(phase) = args.phase {
-                    let request = self.request_for(id, None).await;
-                    self.phase_step(id, request, phase).await?;
+                    let request = crate::heap(|| self.request_for(id, None)).await;
+                    crate::heap(|| self.phase_step(id, request, phase)).await?;
                 }
                 let effort = match args.effort.trim().to_lowercase().as_str() {
                     effort @ ("low" | "medium" | "high") => effort.to_owned(),
@@ -208,7 +208,8 @@ impl SessionManager {
                 } else {
                     Vec::new()
                 };
-                let attachments = self.find_attachments(id, &args.attachments).await?;
+                let attachments =
+                    crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
                 let avoid = subject
                     .as_ref()
                     .filter(|_| args.kind == TaskKind::Review)
@@ -216,8 +217,8 @@ impl SessionManager {
                         provider: s.route.choice.provider,
                         model: s.route.choice.model.clone(),
                     });
-                let task = self
-                    .create_task_as(
+                let task = crate::heap(|| {
+                    self.create_task_as(
                         id,
                         args.title,
                         args.kind,
@@ -239,19 +240,22 @@ impl SessionManager {
                             ..Default::default()
                         },
                     )
-                    .await?;
+                })
+                .await?;
                 // A lead of a phase takes it over (a new lead redoes it).
                 if let Some(phase) = args.phase
                     && role == Some(WorkerRole::Lead)
                 {
-                    self.assign_phase(&task, phase).await?;
+                    crate::heap(|| self.assign_phase(&task, phase)).await?;
                 }
-                self.orchestrator_step(
-                    id,
-                    OrchestratorStepKind::Created {
-                        task_id: task.id.clone(),
-                    },
-                )
+                crate::heap(|| {
+                    self.orchestrator_step(
+                        id,
+                        OrchestratorStepKind::Created {
+                            task_id: task.id.clone(),
+                        },
+                    )
+                })
                 .await;
                 if let Some(wait) = &task.quota_wait {
                     return Ok(format!(
@@ -278,44 +282,52 @@ impl SessionManager {
                 ))
             }
             OrchestratorCall::MessageWorker(args) => {
-                let mut task = self.find_task(id, &args.task).await?;
+                let mut task = crate::heap(|| self.find_task(id, &args.task)).await?;
                 // A later request's turn hands the worker its question: the report that
                 // answers it, and the reply after it, belong to the request that asked.
                 if !task.state.is_final()
-                    && let Some(later) = self.later_request_for(id, &task).await
+                    && let Some(later) = crate::heap(|| self.later_request_for(id, &task)).await
                 {
-                    task = self
-                        .update_task(id, &task.id, |task| task.request_id = Some(later))
-                        .await?;
-                    self.settle_requests(id).await;
+                    task = crate::heap(|| {
+                        self.update_task(id, &task.id, |task| task.request_id = Some(later))
+                    })
+                    .await?;
+                    crate::heap(|| self.settle_requests(id)).await;
                 }
-                let (reply, answered) = self
-                    .message_worker(id, &task, args.text.clone(), "the orchestrator")
-                    .await?;
+                let (reply, answered) = crate::heap(|| {
+                    self.message_worker(id, &task, args.text.clone(), "the orchestrator")
+                })
+                .await?;
                 let text = super::brains::cut(args.text.trim(), crate::work::STEP_TEXT_MAX);
-                self.update_task(id, &task.id, |task| messaged(task, args.text, answered))
-                    .await?;
-                self.orchestrator_step(
-                    id,
-                    OrchestratorStepKind::Messaged {
-                        task_id: task.id,
-                        text: Some(text),
-                    },
-                )
+                crate::heap(|| {
+                    self.update_task(id, &task.id, |task| messaged(task, args.text, answered))
+                })
+                .await?;
+                crate::heap(|| {
+                    self.orchestrator_step(
+                        id,
+                        OrchestratorStepKind::Messaged {
+                            task_id: task.id,
+                            text: Some(text),
+                        },
+                    )
+                })
                 .await;
                 Ok(reply)
             }
             OrchestratorCall::AnswerWorker(args) => {
-                let task = self.find_task(id, &args.task).await?;
-                let reply = self
-                    .answer_worker(&task, args.answer.clone(), args.why)
-                    .await?;
-                self.update_task(id, &task.id, |task| messaged(task, args.answer, true))
-                    .await?;
+                let task = crate::heap(|| self.find_task(id, &args.task)).await?;
+                let reply =
+                    crate::heap(|| self.answer_worker(&task, args.answer.clone(), args.why))
+                        .await?;
+                crate::heap(|| {
+                    self.update_task(id, &task.id, |task| messaged(task, args.answer, true))
+                })
+                .await?;
                 Ok(reply)
             }
             OrchestratorCall::RouteFollowUp(args) => {
-                self.route_follow_up(id, &args.follow_up, args.joins).await
+                crate::heap(|| self.route_follow_up(id, &args.follow_up, args.joins)).await
             }
             OrchestratorCall::StopWorker(args) => {
                 let reason = super::brains::one_line(&args.reason, STOP_REASON_MAX);
@@ -326,18 +338,20 @@ impl SessionManager {
                             .into(),
                     ));
                 }
-                let task = self.find_task(id, &args.task).await?;
-                self.stop_worker(id, &task, reason).await?;
+                let task = crate::heap(|| self.find_task(id, &args.task)).await?;
+                crate::heap(|| self.stop_worker(id, &task, reason)).await?;
                 Ok(format!("Stopped task-{}.", task.number))
             }
             OrchestratorCall::AskUser(args) => {
                 let items = ask_round(args.questions)?;
                 let task_id = match &args.task {
-                    Some(reference) => Some(self.find_task(id, reference).await?.id),
+                    Some(reference) => {
+                        Some(crate::heap(|| self.find_task(id, reference)).await?.id)
+                    }
                     None => None,
                 };
                 let asked = items.len();
-                self.open_round(id, task_id, QuestionKind::Orchestrator, items)
+                crate::heap(|| self.open_round(id, task_id, QuestionKind::Orchestrator, items))
                     .await?;
                 Ok(format!(
                     "Asked the user {} on one card. Reply with exactly {} now. The answers arrive as an [answer] message in this request; carry on with anything that doesn't depend on them.",
@@ -350,7 +364,7 @@ impl SessionManager {
                 ))
             }
             OrchestratorCall::ReadReport(args) => {
-                let (task, here) = self.find_report(id, &args.task).await?;
+                let (task, here) = crate::heap(|| self.find_report(id, &args.task)).await?;
                 let report = task.report.as_ref().ok_or_else(|| {
                     Error::Invalid(format!("task-{} has not reported yet", task.number))
                 })?;
@@ -366,15 +380,15 @@ impl SessionManager {
                         ),
                     }
                 };
-                self.orchestrator_step(id, step).await;
+                crate::heap(|| self.orchestrator_step(id, step)).await;
                 Ok(text)
             }
             OrchestratorCall::ReadArtifact(args) => {
                 // A trimmed command output of this conversation's (`out-<id>`), or a report's
                 // artifact of this project.
-                let output = self.output_blob(id, args.id.trim()).await?;
+                let output = crate::heap(|| self.output_blob(id, args.id.trim())).await?;
                 if output.is_none() {
-                    self.check_artifact(id, &args.id).await?;
+                    crate::heap(|| self.check_artifact(id, &args.id)).await?;
                 }
                 let limit = args
                     .limit
@@ -384,7 +398,8 @@ impl SessionManager {
                 let blob = output
                     .as_ref()
                     .map_or_else(|| args.id.clone(), |(blob, _)| blob.clone());
-                let (bytes, total) = self.core.read_blob_range(blob, offset, limit).await?;
+                let (bytes, total) =
+                    crate::heap(|| self.core.read_blob_range(blob, offset, limit)).await?;
                 let text = match std::str::from_utf8(&bytes) {
                     Ok(text) => text.to_owned(),
                     // A page may end inside a character.
@@ -398,10 +413,12 @@ impl SessionManager {
                 if offset == 0 {
                     let name = match output {
                         Some((_, name)) => name,
-                        None => self.artifact_name(id, &args.id).await,
+                        None => crate::heap(|| self.artifact_name(id, &args.id)).await,
                     };
-                    self.orchestrator_step(id, OrchestratorStepKind::ReadArtifact { name })
-                        .await;
+                    crate::heap(|| {
+                        self.orchestrator_step(id, OrchestratorStepKind::ReadArtifact { name })
+                    })
+                    .await;
                 }
                 Ok(format!(
                     "[artifact {} bytes {offset}–{end} of {total}]\n{text}{}",
@@ -414,59 +431,72 @@ impl SessionManager {
                 ))
             }
             OrchestratorCall::QueryBrain(args) => {
-                self.query_brain_tool(
-                    id,
-                    args.query,
-                    args.history.unwrap_or(false),
-                    args.page,
-                    false,
-                )
+                crate::heap(|| {
+                    self.query_brain_tool(
+                        id,
+                        args.query,
+                        args.history.unwrap_or(false),
+                        args.page,
+                        false,
+                    )
+                })
                 .await
             }
-            OrchestratorCall::Remember(args) => self.remember_tool(id, args).await,
-            OrchestratorCall::SearchTranscript(args) => self.search_transcript_tool(id, args).await,
-            OrchestratorCall::PlanPhases(args) => self.plan_phases(id, args).await,
-            OrchestratorCall::ProposePlan(args) => self.propose_plan(id, args).await,
-            OrchestratorCall::ApproveOutline(args) => self.approve_outline(id, args).await,
+            OrchestratorCall::Remember(args) => crate::heap(|| self.remember_tool(id, args)).await,
+            OrchestratorCall::SearchTranscript(args) => {
+                crate::heap(|| self.search_transcript_tool(id, args)).await
+            }
+            OrchestratorCall::PlanPhases(args) => crate::heap(|| self.plan_phases(id, args)).await,
+            OrchestratorCall::ProposePlan(args) => {
+                crate::heap(|| self.propose_plan(id, args)).await
+            }
+            OrchestratorCall::ApproveOutline(args) => {
+                crate::heap(|| self.approve_outline(id, args)).await
+            }
             OrchestratorCall::StartVerifier(args) => {
                 // A verifier changes code: in plan mode nothing does.
-                self.check_plan_mode(id).await?;
-                self.verify_task(id, args).await
+                crate::heap(|| self.check_plan_mode(id)).await?;
+                crate::heap(|| self.verify_task(id, args)).await
             }
             OrchestratorCall::RequestApproval(args) => {
-                self.open_approval(
-                    id,
-                    None,
-                    ApprovalSubject::Action {
-                        action: args.action,
-                        details: args.details,
-                        live: false,
-                    },
-                )
+                crate::heap(|| {
+                    self.open_approval(
+                        id,
+                        None,
+                        ApprovalSubject::Action {
+                            action: args.action,
+                            details: args.details,
+                            live: false,
+                        },
+                    )
+                })
                 .await?;
                 Ok("Asked the user. The decision arrives later as a message.".into())
             }
             OrchestratorCall::LandPhase(args) => {
-                self.check_plan_mode(id).await?;
-                let task = self.find_task(id, &args.task).await?;
-                self.land_phase(id, task).await
+                crate::heap(|| self.check_plan_mode(id)).await?;
+                let task = crate::heap(|| self.find_task(id, &args.task)).await?;
+                crate::heap(|| self.land_phase(id, task)).await
             }
             OrchestratorCall::FinishSession(args) => {
-                self.check_plan_mode(id).await?;
-                self.finish_session(id, &args.user_words, args.message)
-                    .await
+                crate::heap(|| self.check_plan_mode(id)).await?;
+                crate::heap(|| self.finish_session(id, &args.user_words, args.message)).await
             }
             OrchestratorCall::ProposeMerge(args) => {
-                self.check_plan_mode(id).await?;
-                self.propose_merge(id, args.note).await
+                crate::heap(|| self.check_plan_mode(id)).await?;
+                crate::heap(|| self.propose_merge(id, args.note)).await
             }
-            OrchestratorCall::NoteForUser(args) => self.note_for_user(id, args).await,
+            OrchestratorCall::NoteForUser(args) => {
+                crate::heap(|| self.note_for_user(id, args)).await
+            }
             OrchestratorCall::SuggestFullAccess(args) => {
-                self.suggest_full_access(id, &args.reason).await
+                crate::heap(|| self.suggest_full_access(id, &args.reason)).await
             }
-            OrchestratorCall::SettleStep(args) => self.settle_step(id, args).await,
-            OrchestratorCall::EndRun(args) => self.end_run_now(id, args).await,
-            OrchestratorCall::ProposeOvernight(args) => self.interpret_overnight(id, args).await,
+            OrchestratorCall::SettleStep(args) => crate::heap(|| self.settle_step(id, args)).await,
+            OrchestratorCall::EndRun(args) => crate::heap(|| self.end_run_now(id, args)).await,
+            OrchestratorCall::ProposeOvernight(args) => {
+                crate::heap(|| self.interpret_overnight(id, args)).await
+            }
             // What the thread finds in the index counts as its own search (`super::reads`).
             OrchestratorCall::CodeSearch(args) => {
                 let search = FileSearch {
@@ -482,14 +512,13 @@ impl SessionManager {
                         .map(|language| format!("language:{language}")),
                     hits: Vec::new(),
                 };
-                let (text, hits) = self.code_search_tool(id, args).await?;
-                self.looked_in_index(id, FileSearch { hits, ..search })
-                    .await;
+                let (text, hits) = crate::heap(|| self.code_search_tool(id, args)).await?;
+                crate::heap(|| self.looked_in_index(id, FileSearch { hits, ..search })).await;
                 Ok(text)
             }
             OrchestratorCall::CodeRefs(args) => {
                 let symbol = args.symbol.clone();
-                let (text, hits) = self.code_refs_tool(id, args).await?;
+                let (text, hits) = crate::heap(|| self.code_refs_tool(id, args)).await?;
                 let search = FileSearch {
                     kind: SearchKind::Content,
                     pattern: Some(symbol),
@@ -497,44 +526,53 @@ impl SessionManager {
                     glob: None,
                     hits,
                 };
-                self.looked_in_index(id, search).await;
+                crate::heap(|| self.looked_in_index(id, search)).await;
                 Ok(text)
             }
-            OrchestratorCall::ProjectMap => self.project_map_tool(id).await,
-            OrchestratorCall::ReviewPlan(args) => self.review_thread_plan(id, args).await,
+            OrchestratorCall::ProjectMap => crate::heap(|| self.project_map_tool(id)).await,
+            OrchestratorCall::ReviewPlan(args) => {
+                crate::heap(|| self.review_thread_plan(id, args)).await
+            }
             OrchestratorCall::Run(args) => {
-                self.run_tool(
-                    id,
-                    &args.command,
-                    args.workdir.as_deref(),
-                    args.timeout_secs,
-                    false,
-                )
+                crate::heap(|| {
+                    self.run_tool(
+                        id,
+                        &args.command,
+                        args.workdir.as_deref(),
+                        args.timeout_secs,
+                        false,
+                    )
+                })
                 .await
             }
             // Codex let it through: under Approve for me its auto-reviewer approved it, under
             // Ask for approval the user did.
             OrchestratorCall::RunUnsandboxed(args) => {
-                self.run_tool(
-                    id,
-                    &args.command,
-                    args.workdir.as_deref(),
-                    args.timeout_secs,
-                    true,
-                )
+                crate::heap(|| {
+                    self.run_tool(
+                        id,
+                        &args.command,
+                        args.workdir.as_deref(),
+                        args.timeout_secs,
+                        true,
+                    )
+                })
                 .await
             }
-            OrchestratorCall::RunCheck(args) => self.run_check_tool(id, None, args).await,
-            OrchestratorCall::StartPreview(args) => self.start_preview(id, args).await,
+            OrchestratorCall::RunCheck(args) => {
+                crate::heap(|| self.run_check_tool(id, None, args)).await
+            }
+            OrchestratorCall::StartPreview(args) => {
+                crate::heap(|| self.start_preview(id, args)).await
+            }
             OrchestratorCall::StopPreview(args) => {
-                self.stop_preview_tool(id, args.id.as_deref()).await
+                crate::heap(|| self.stop_preview_tool(id, args.id.as_deref())).await
             }
             OrchestratorCall::PreviewLog(args) => {
-                self.preview_log(id, args.id.as_deref(), args.tail_lines)
-                    .await
+                crate::heap(|| self.preview_log(id, args.id.as_deref(), args.tail_lines)).await
             }
             OrchestratorCall::ListTasks => {
-                let tasks = self.core.tasks(id).await?;
+                let tasks = crate::heap(|| self.core.tasks(id)).await?;
                 if tasks.is_empty() {
                     return Ok("No tasks yet.".into());
                 }
@@ -1068,5 +1106,24 @@ mod tests {
         // Recommending the blank one recommends nothing: the thread is asked to say which.
         let blank = round(options, 0).unwrap_err().to_string();
         assert!(blank.contains("recommend"), "{blank}");
+    }
+
+    /// Every await of `run_orchestrator_call` goes through [`crate::heap`]: an unoptimized
+    /// build keeps all of a function's awaited futures in its stack frame at once, and before
+    /// that this dispatch's frame took 0.9 MB of a runtime thread's 2 MiB stack. Its future
+    /// was 44 KB then and is 12 KB now (its locals); one past 16 KB means an engine future is
+    /// awaited around it again.
+    #[test]
+    fn the_orchestrator_tools_dispatch_keeps_its_futures_on_the_heap() {
+        fn future_size<R>(
+            _: fn(&'static SessionManager, &'static ConversationId, OrchestratorCall) -> R,
+        ) -> usize {
+            std::mem::size_of::<R>()
+        }
+        let size = future_size(SessionManager::run_orchestrator_call);
+        assert!(
+            size <= 16 << 10,
+            "run_orchestrator_call's future is {size} bytes"
+        );
     }
 }

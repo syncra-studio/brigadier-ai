@@ -1754,8 +1754,8 @@ impl SessionManager {
             .await?;
         let from = live.generation().await;
         if self.worker_over_handoff(live, &task.id).await {
-            self.hand_over(live, &task, from, None, Some(text), Handover::Size)
-                .await?;
+            // Boxed: unboxed it added its 18 KB to every future that can send a worker work.
+            Box::pin(self.hand_over(live, &task, from, None, Some(text), Handover::Size)).await?;
         } else {
             self.launch_worker(
                 live,

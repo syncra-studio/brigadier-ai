@@ -52,6 +52,16 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// `make`'s future, made inside this call and polled from the heap: the caller keeps a pointer
+/// to it, not the future. For a dispatching `match` whose arms await engine futures of tens of
+/// KB: an unoptimized build gives every `.await` of a function its own stack slots, all of them
+/// at once, and the IPC dispatch had grown past 1.2 MB of a runtime thread's 2 MiB stack. A
+/// `Box::pin` at the await shrinks the caller's future but still makes the future in the
+/// caller's frame.
+pub fn heap<F: std::future::Future>(make: impl FnOnce() -> F) -> std::pin::Pin<Box<F>> {
+    Box::pin(make())
+}
+
 /// Milliseconds since the Unix epoch.
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()

@@ -428,6 +428,22 @@ async fn an_outline_gets_its_go_ahead_at_once_and_a_plan_review_in_the_backgroun
     flow.stop().await;
 }
 
+/// [`reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebase`] in 1.25 MiB of
+/// stack, of the 2 MiB a runtime thread has: a debug build keeps every future a function
+/// awaits in its stack frame at once, so a big unboxed await grows each frame on the way (the
+/// thread's tool call, its land_phase, the landing). Before the tool dispatch's awaits went
+/// through [`crate::heap`] this flow needed over 1.5 MiB; it now fits in about 0.9.
+#[test]
+fn a_landing_flow_fits_well_inside_a_runtime_threads_stack() {
+    std::thread::Builder::new()
+        .name("landing flow in 1.25 MiB".into())
+        .stack_size(1280 << 10)
+        .spawn(reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebase)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// Two workers on disjoint files commit their own steps (one also commits a stray log). The
 /// orchestrator lands each report with land_phase: the first fast-forwards; the second finds
 /// the branch moved, is rebased, runs a quick self-check and lands on its own. No cards, no
