@@ -675,6 +675,13 @@ Brigadier's own briefs, and used where a live look settles a question.
   - The helper log shows no action on `/Applications/Brigadier.app`.
 
 ### REA for study tasks (added 2026-10-11)
+**Outcome (2026-10-11): measured and dropped.** REA was built on its own branch and its measured study question run
+with Q6's A/B rules (`docs/evidence/2026-10-11-rea-study.md`). It missed the gate: with REA the worker used 1.12× the
+tokens of the worker without it (6.29M against 5.60M raw; the gate is ≤ 0.5×), took 667 s against 520 s, and a
+blind reviewer judged its answer further from the written findings. Its analysis crashed twice on the 567 MB bundle.
+REA is not shipped: the branch is never merged, and nothing below is built. The section stays as the record of what
+was weighed.
+
 The user's ask: offer REA (`github.com/morluto/rea`, MIT, npm `rea-agents`) to tasks that study an app without its
 source. In B, each "study the reference app" worker spent 6–12M tokens reading the app by hand.
 
@@ -1201,7 +1208,7 @@ integration branch `session-fixes` (§7). Each "done when" also includes:
 | Q5 (rebirth at 400k, briefing, cold rebirth above 150k) | 2.3 |
 | Q7 (review status by the thread) | 3.2 daemon, 5.4 UI |
 | Q6 (tokens, Brain-first, measured) | 3.1, 3.3–3.8 |
-| REA for study tasks | 3.7 |
+| REA for study tasks | 3.7 (measured and dropped) |
 | Q3 (merge consent hold) | 4.1 daemon, 5.1 pill |
 | Q1 (CI watch) | 4.2 daemon, 5.1 pill |
 | Q9 (no silences) | 4.3 daemon, 5.6 UI |
@@ -1231,7 +1238,7 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 - **Workers** resumed by Q4 or Q6.1 get the same notes in their resume input.
 - **Every phase that changes instructions** ships its revision in the same commit. The test: a session told at
   revision N−1 resumes at N with exactly the new note, and one at N hears nothing. This applies to phases 1 (bug 8's
-  worker line, Q4's interrupted note), 3 (Q6, Q7's `record_findings`, REA), 4 (Q1, Q3, Q9, bugs 4–7, computer use)
+  worker line, Q4's interrupted note), 3 (Q6, Q7's `record_findings`), 4 (Q1, Q3, Q9, bugs 4–7, computer use)
   and 6 (the mockup offer).
 
 ### Phase 1: engine safety (worker kills, the test environment, ownership, worker resume, merges)
@@ -1322,9 +1329,9 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 4. Q6.2 and Q6.3: prompt changes for checks and code reading; the Codex reading line.
 5. Q6.4: worker handoff at 200k.
 6. Q6.5: the article settings, each checked against the installed CLI's docs.
-7. REA for study tasks: the install from the reviewed manifest and lockfile (`npm ci --ignore-scripts`); the server
-   for study tasks only, under Brigadier's sandbox wrapper; the guidance; its measured study question, with and
-   without.
+7. REA for study tasks: built on its own branch and measured with its study question, with and without. **Dropped:**
+   1.12× the tokens without it against the ≤ 0.5× gate, slower, and judged further from the findings
+   (`docs/evidence/2026-10-11-rea-study.md`). Nothing of it ships but the evidence.
 8. Q6.6: Brain facts in the pack, the "Brain first" steer, `learned` write-back, per-worker Brain metrics on the row
    and in the Inspector.
 9. The "after" run, verified independently, written to `docs/evidence/<date>-session-fixes-tokens.md`.
@@ -1334,7 +1341,8 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 - Q6's "Measured" criteria hold on the fixed task, with both arms passing the frozen checks and the independent
   review: worker tokens ≤ 0.6× before; no provider's total above before, and the sum ≤ 0.75×; elapsed ≤ 1.25×;
   ≥ 1 Brain query per worker; ≥ 1 Brain fact in each brief; 0 extra review-fix tasks; `run_check` calls halved.
-- REA's measured study question: worker tokens with REA ≤ 0.5× without, and both reach the written findings.
+- REA's measured study question is answered and written down. It missed its gate (≤ 0.5× the tokens without REA, both
+  reaching the written findings), so REA is dropped.
 - Q7's daemon tests pass. The Brain counters show on the worker rows.
 
 **Risks.**
@@ -1343,7 +1351,7 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
   version and dropped if it isn't listed.
 - A landed worker's session files are now kept until its batch settles. They are small, and the session's merge or
   deletion releases them all.
-- **REA's supply chain:** one maintainer and a fast release pace. Ship a reviewed manifest and lockfile with every
+- **REA's supply chain** (moot: REA was dropped): one maintainer and a fast release pace. Ship a reviewed manifest and lockfile with every
   dependency's integrity, require provenance, install with `npm ci --ignore-scripts`, never `npx`, never `rea setup`
   or `rea update`. A new version is a reviewed code change.
 
