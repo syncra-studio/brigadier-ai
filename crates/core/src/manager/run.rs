@@ -308,10 +308,8 @@ pub(super) fn seatbelt_policy(access: &Access, workdir: &Path) -> brigadier_sand
         }
         Access::ReadOnly | Access::Full => (Vec::new(), false, Vec::new()),
     };
-    let writable_roots = writable_roots
-        .into_iter()
-        .filter(|root| root.exists())
-        .collect();
+    // A root that doesn't exist yet stays: a ref's `.lock` or `packed-refs.lock` is made only
+    // as git takes it, and Seatbelt resolves its existing folders, granting nothing more.
     brigadier_sandbox::SandboxPolicy {
         writable_roots,
         network,
@@ -641,6 +639,90 @@ mod tests {
         assert!(!passes.take(&a, "sh script.sh", None));
         assert!(!passes.take(&a, "sh script.sh", Some("other")));
         assert!(passes.take(&a, "sh script.sh", Some("app")));
+    }
+
+    /// A scoped Claude thread in a linked worktree: its branch's `.lock` and the shared
+    /// `packed-refs.lock` don't exist until git takes them, and are granted all the same, so
+    /// its commit works and prints no git error; `packed-refs` itself is never granted.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_scoped_thread_commits_in_its_linked_worktree() {
+        let root =
+            Temp(std::env::temp_dir().join(format!("brigadier-commit-{}", uuid::Uuid::new_v4())));
+        let (repo, worktree, scratch) = (root.join("repo"), root.join("ws"), root.join("orch"));
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "Start"]);
+        let path = worktree.display().to_string();
+        git(
+            &repo,
+            &["worktree", "add", "-q", "-b", "brigadier/aa/session", &path],
+        );
+        let opened = brigadier_git::Git::new("git".into(), Vec::new())
+            .open(&worktree)
+            .unwrap();
+        let mut writable_roots = vec![scratch.clone(), worktree.clone()];
+        writable_roots.extend(super::super::workers::commit_roots(
+            &opened,
+            Some("brigadier/aa/session"),
+            true,
+        ));
+        let access = Access::Scoped {
+            write_cwd: true,
+            writable_roots,
+            network: false,
+            deny_read: Vec::new(),
+            unix_sockets: Vec::new(),
+        };
+        let policy = seatbelt_policy(&access, &worktree);
+        let common = opened.common_dir().to_owned();
+        assert!(
+            policy
+                .writable_roots
+                .contains(&common.join("packed-refs.lock"))
+        );
+        assert!(
+            policy
+                .writable_roots
+                .contains(&common.join("refs/heads/brigadier/aa/session.lock"))
+        );
+        assert!(!policy.writable_roots.contains(&common.join("packed-refs")));
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("platform")),
+        })
+        .unwrap();
+        let spec = brigadier_sandbox::SpawnSpec {
+            program: PathBuf::from(SHELL),
+            args: vec![
+                "-c".into(),
+                "echo a > f && git add f && git -c user.name=t -c user.email=t@example.invalid commit -q -m Work"
+                    .into(),
+            ],
+            cwd: Some(worktree.clone()),
+            ..Default::default()
+        };
+        let spec = platform.sandbox().confine(spec, &policy).unwrap();
+        let out = std::process::Command::new(&spec.program)
+            .args(&spec.args)
+            .current_dir(&worktree)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success() && stderr.is_empty(), "{stderr}");
     }
 
     #[test]

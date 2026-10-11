@@ -907,7 +907,8 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      so a deny that would cover the session's own ref (`refs/heads/brigadier` for a worker) is left out: its grant
      never covered those refs anyway. It matters for a thread on the user's own checkout, which is writable whole.
    - Codex needs no deny list: no writable root covers a protected path.
-   - Brigadier's own Seatbelt for `run` and `run_check` uses the same roots.
+   - Brigadier's own Seatbelt for `run` and `run_check` uses the same roots, a `.lock` that doesn't exist yet
+     included (its existing folders resolved, nothing more granted).
    - A ref update writes `<ref>.lock` and renames it over the ref. If a CLI's sandbox can't grant a path that
      doesn't exist yet, each task branch gets a folder of its own (`brigadier/<short>/task-N/work`) and that folder
      is granted. Phase 1 decides this by test.
