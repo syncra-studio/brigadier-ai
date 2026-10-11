@@ -221,6 +221,10 @@ async fn findings_go_back_to_the_resumed_worker_and_its_fix_is_rechecked_only_wh
     for high in [true, false] {
         let (flow, seen) = fixed_once("review-hold", high, false).await;
         let first = settled(&flow).await;
+        // The re-check starts once the fix's landing is recorded and cleaned up.
+        if high {
+            super::eventually("the re-check", || seen.lock().unwrap().reviews.len() == 2).await;
+        }
         let board = flow.settled().await;
         let seen = std::mem::take(&mut *seen.lock().unwrap());
         assert_eq!(
