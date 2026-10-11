@@ -445,32 +445,32 @@ pub(crate) const REVISIONS: &[Revision] = &[
         worker: "",
     },
     Revision {
-        number: 8,
+        number: 10,
         thread: "From now on, an event that arrives after your answer (a review, a landing, a report's addendum) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), never the ending again. Otherwise reply [quiet].",
         worker: "",
     },
     Revision {
-        number: 9,
+        number: 11,
         thread: "From now on, \"merge it when done\" said while workers write is the user's consent: call finish_session with those words; it holds the merge ([merge held]) and merges nothing yet. propose_merge is refused while a worker writes. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.",
         worker: "",
     },
     Revision {
-        number: 10,
+        number: 12,
         thread: "You now have ci_status and watch_ci. After your own `git push`, call ci_status and do what it says (ask once to watch, say in one line that CI can't be watched from here, or say nothing). On [ci … failed], fix it, push to the same branch and call watch_ci again without asking: the user's yes to watching covers that, nothing else.",
         worker: "",
     },
     Revision {
-        number: 11,
+        number: 13,
         thread: "From now on, even while work runs, write one line for: a failure of what you started (a preview, a dev app, a build, a check you awaited), in the same turn, with its key error line and what you do about it; work the user didn't ask for, before it starts (\"Starting 3 fixes from the review; about 20 min.\"); and [status due] (30 minutes with nothing new for the user): what runs, why, roughly what's left. A preview that stops on its own now reaches you at once as [preview ended: …]. Never say something compiles or runs without checking its process, or having a worker look.",
         worker: "",
     },
     Revision {
-        number: 12,
+        number: 14,
         thread: "You now have clean_up: Brigadier cleans up after you; use clean_up only if the user asks. Never delete branches, worktrees or temp folders by hand: \"Operation not permitted\" on another session's branch or folder is Brigadier protecting it, so leave it.",
         worker: "From now on, never delete a branch, worktree or temp folder: Brigadier cleans up after you, and \"Operation not permitted\" on one is Brigadier protecting it.",
     },
     Revision {
-        number: 13,
+        number: 15,
         thread: if cfg!(target_os = "macos") {
             "From now on, remember that on this Mac every worker can open an app, look at it and use it with the computer tools, and you can't: a visible UI change, however small, goes to a worker whose \"done when\" includes \"check it in the running dev build with the computer tools\", and a GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. Screenshots go in the chat only if the user asked; a worker's live check is evidence in its report."
         } else {
@@ -1584,9 +1584,9 @@ mod tests {
             assert!(!checks_live(task), "{:?}", task.kind);
         }
         assert!(!worker_brief(&backend, "", "").contains("Checking it live"));
-        // Open sessions hear it as revision 13, on a Mac only.
-        let thread = revision_note(12, false).unwrap_or_default();
-        let worker = revision_note(12, true).unwrap_or_default();
+        // Open sessions hear it as revision 15, on a Mac only.
+        let thread = revision_note(14, false).unwrap_or_default();
+        let worker = revision_note(14, true).unwrap_or_default();
         if cfg!(target_os = "macos") {
             assert!(thread.contains("every worker can open an app, look at it and use it"));
             assert!(thread.contains("a visible UI change, however small, goes to a worker"));
