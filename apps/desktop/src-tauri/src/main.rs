@@ -16,6 +16,7 @@ mod documents;
 #[allow(unsafe_code)]
 mod browser_ui;
 mod launcher;
+mod login_item;
 mod overnight_notifications;
 mod shell;
 mod smoke;
@@ -699,6 +700,9 @@ fn main() {
             notification_permission,
             ask_notification_permission,
             open_notification_settings,
+            login_item::login_item,
+            login_item::set_login_item,
+            login_item::open_login_items,
             app_ready,
             startup_finished,
             smoke_finish,
