@@ -107,7 +107,12 @@ fn generate(codex: &Path, version: &str, schema_dir: &Path) -> Result<String, Er
         // With its experimental fields: a command's `additionalPermissions`, which the adapter
         // opts into (`InitializeCapabilities::experimental_api`) so Brigadier's reviewer reads
         // the whole request.
-        .args(["app-server", "generate-json-schema", "--experimental", "--out"])
+        .args([
+            "app-server",
+            "generate-json-schema",
+            "--experimental",
+            "--out",
+        ])
         .arg(schema_dir)
         .status()?;
     if !status.success() {
