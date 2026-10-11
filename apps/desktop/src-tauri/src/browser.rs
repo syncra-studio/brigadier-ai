@@ -4,15 +4,18 @@
 //! bridge, init scripts and custom protocols, and a web page must get none of that. This one
 //! has no app IPC bridge or custom protocols. Its metadata-only handler accepts a bounded PNG
 //! favicon for this tab, with no commands or access to the app. `NO_CAPTURE` takes the
-//! microphone, camera and speech APIs away; it keeps its cookies and
-//! storage in memory only, separate from the app's own webview; it opens only web pages, sends
-//! popups to the system browser, and on macOS denies the page the camera and microphone (wry's
-//! own delegate would grant them; see `browser_ui`). It is made when the tab first loads a page and dropped
-//! when the tab closes. Linux has no embedded page (Tauri's window there is a GTK box a child
-//! can't be laid over); its tab opens pages in the system browser.
+//! microphone, camera and speech APIs away. Every tab keeps its cookies and site data in one
+//! saved store of its own, apart from the app's own webview and kept per Brigadier data folder
+//! (macOS: a WebKit data store named from the folder; Windows: a WebView2 folder in it), so
+//! sign-ins last like in any browser. It opens only web pages, sends popups to the system
+//! browser, and on macOS denies the page the camera and microphone (wry's own delegate would
+//! grant them; see `browser_ui`). It is made when the tab first loads a page and dropped when
+//! the tab closes. Linux has no embedded page (Tauri's window there is a GTK box a child can't
+//! be laid over); its tab opens pages in the system browser.
 
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use brigadier_ipc::app::{BrowserBounds, BrowserEvent, BrowserOptions};
 use brigadier_ipc::protocol::{ErrorCode, IpcError};
@@ -260,24 +263,28 @@ mod embedded {
         );
         let limit = Arc::new(Mutex::new(FaviconLimit::default()));
         let load_limit = limit.clone();
-        // Windows keeps even a private page's browser process data in a folder; give this tab
-        // its own, apart from the app's webview.
+        let saved = super::data_dir();
+        // Windows: the browser's folder in Brigadier's data folder, apart from the app's webview.
         #[cfg(target_os = "windows")]
-        let mut context = wry::WebContext::new(
-            app.path()
-                .app_local_data_dir()
-                .ok()
-                .map(|dir| dir.join("BrowserTab")),
-        );
+        let mut context = wry::WebContext::new(saved.map(|dir| dir.join("webview2")));
         #[cfg(target_os = "windows")]
         let builder = WebViewBuilder::new_with_web_context(&mut context);
         #[cfg(not(target_os = "windows"))]
         let builder = WebViewBuilder::new();
+        #[cfg(target_os = "macos")]
+        let builder = match saved {
+            Some(dir) => {
+                use wry::WebViewBuilderExtDarwin;
+                builder.with_data_store_identifier(super::store_identifier(dir))
+            }
+            None => builder,
+        };
         let builder = builder
             .with_url(&url)
             .with_bounds(rect(bounds))
             .with_visible(false)
-            .with_incognito(true)
+            // Without a data folder (never in the app) nothing is kept.
+            .with_incognito(saved.is_none())
             .with_initialization_script_for_main_only(NO_CAPTURE, false)
             .with_initialization_script_for_main_only(FAVICON, true)
             .with_ipc_handler(move |request| {
@@ -444,6 +451,32 @@ mod embedded {
     pub fn close_all() {}
 }
 
+/// The built-in browser's own folder in Brigadier's data folder, set once at start: its saved
+/// store is named from it, and its history kept in it.
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Keeps the browser's saved data with Brigadier's data folder `data_dir`.
+pub fn set_data_dir(data_dir: &Path) {
+    let _ = DATA_DIR.set(data_dir.join("browser"));
+}
+
+/// The browser's folder, once the app has set it.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn data_dir() -> Option<&'static Path> {
+    DATA_DIR.get().map(PathBuf::as_path)
+}
+
+/// The WebKit data store that holds the pages' cookies and site data for the browser folder
+/// `dir`: the same folder always gets the same store, and another (a test app's) never shares it.
+#[cfg(any(target_os = "macos", test))]
+pub fn store_identifier(dir: &Path) -> [u8; 16] {
+    let mut hasher = blake3::Hasher::new_derive_key("brigadier browser data store");
+    hasher.update(dir.as_os_str().as_encoded_bytes());
+    let mut id = [0; 16];
+    id.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
+    id
+}
+
 /// Whether the built-in browser exists (Settings › Browser): on until the app says otherwise.
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
@@ -534,7 +567,7 @@ pub fn close_all() {
     embedded::close_all();
 }
 
-/// The tab closed: its page and everything it stored go.
+/// The tab closed: its page goes (what it saved stays in the browser's store).
 #[tauri::command]
 pub fn browser_close(id: String) {
     embedded::close(&id);
@@ -543,6 +576,16 @@ pub fn browser_close(id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_data_folder_has_its_own_lasting_store() {
+        let real = store_identifier(Path::new("/Users/u/Library/Application Support/x/browser"));
+        assert_eq!(
+            real,
+            store_identifier(Path::new("/Users/u/Library/Application Support/x/browser"))
+        );
+        assert_ne!(real, store_identifier(Path::new("/tmp/scratch/browser")));
+    }
 
     #[test]
     fn nothing_opens_while_the_browser_is_off() {

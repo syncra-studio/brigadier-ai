@@ -16,6 +16,7 @@ cc = "=1.4.7"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
+blake3.workspace = true
 brigadier-core.workspace = true
 brigadier-ipc.workspace = true
 brigadier-sandbox.workspace = true

@@ -602,6 +602,7 @@ fn main() {
                     );
                 }
             }
+            browser::set_data_dir(&platform.paths().data_dir);
             let launcher = Launcher::new(platform.clone(), daemon_env);
             let bridge = Bridge::start(
                 platform.clone() as Arc<dyn Platform>,

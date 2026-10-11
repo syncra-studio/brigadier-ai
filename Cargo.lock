@@ -522,6 +522,7 @@ dependencies = [
 name = "brigadier-desktop"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "block2",
  "brigadier-core",
  "brigadier-ipc",
