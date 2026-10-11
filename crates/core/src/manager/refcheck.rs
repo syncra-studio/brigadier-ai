@@ -4,9 +4,9 @@
 //! Workers and the thread commit outside the engine, so the check tells their moves from
 //! damage: the caller's own branch and any forward move are recorded; a protected branch
 //! deleted or rewound is restored, and its thread told; the base is never touched, only
-//! reported. The check runs under the repository's ref lock, which every landing and branch
-//! delete takes, and the engine forgets a branch before it deletes it, so the check never
-//! undoes the engine's own move.
+//! reported. The check reads the records and runs under the repository's ref lock, which
+//! every landing and branch delete takes, and the engine forgets a branch before it deletes
+//! it, so the check never undoes the engine's own move.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -109,98 +109,137 @@ pub(crate) fn judge(
     }
 }
 
-/// The check itself, on one repository, under its ref lock. `live`: the tasks whose worker
-/// is live. Restores what it must and returns what each thread is told.
-pub(crate) fn check_repo(
+/// The check on the repository of `repo` for `caller`, its records read and written back
+/// under the repository's ref lock: a branch the engine forgot and deleted a moment earlier
+/// (a landing's, a removal's) is never recreated from a copy taken before. `live`: the tasks
+/// whose worker is live. Restores what it must and returns what each thread is told.
+pub(crate) fn check_recorded(
+    repo: &Repo,
+    store: &RefRecords,
+    caller: &Caller,
+    live: &HashSet<TaskId>,
+) -> Vec<Told> {
+    repo.with_ref_lock(|| {
+        let common = repo.common_dir().to_owned();
+        let mut records = store.with(&common, |records| records.clone());
+        if records.branches.is_empty() && records.bases.is_empty() {
+            return Vec::new();
+        }
+        // The folders the protected refs live in, which packing may have pruned.
+        for branch in records.branches.keys() {
+            for folder in ["refs/heads", "logs/refs/heads"] {
+                if let Some(parent) = common.join(folder).join(branch).parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+            }
+        }
+        let told = check_locked(repo, &mut records, caller, live);
+        // Recorded tips the check moved; a branch forgotten or recorded meanwhile is left be.
+        store.with(&common, |now| {
+            for (branch, recorded) in records.branches {
+                if let Some(entry) = now.branches.get_mut(&branch)
+                    && entry.task == recorded.task
+                {
+                    entry.tip = recorded.tip;
+                }
+            }
+            for (base, value) in records.bases {
+                now.bases.insert(base, value);
+            }
+        });
+        told
+    })
+}
+
+/// The check itself, on `records` of one repository, its ref lock held by the caller.
+fn check_locked(
     repo: &Repo,
     records: &mut RepoRecords,
     caller: &Caller,
     live: &HashSet<TaskId>,
 ) -> Vec<Told> {
-    repo.with_ref_lock(|| {
-        let mut told = Vec::new();
-        for (branch, recorded) in &mut records.branches {
-            let current = match repo.branch_tip(branch) {
-                Ok(current) => current,
-                Err(err) => {
-                    tracing::warn!(branch = %branch, error = %err, "the ref check could not read a branch");
-                    continue;
-                }
-            };
-            let forward = current
-                .as_ref()
-                .is_some_and(|tip| repo.ancestor(&recorded.tip, tip).unwrap_or(false));
-            let owner_live = recorded.task.as_ref().is_some_and(|id| live.contains(id));
-            match judge(recorded, current.as_ref(), forward, caller, owner_live) {
-                Verdict::Unchanged => {}
-                Verdict::Record(tip) => recorded.tip = tip,
-                Verdict::RecordRewrite(tip) => {
-                    tracing::info!(branch = %branch, old = %recorded.tip.0, new = %tip.0, "a branch was rewritten while its worker ran");
-                    told.push(Told {
-                        conversation: recorded.conversation.clone(),
-                        text: format!(
-                            "[{branch} was rewritten while its worker ran: {} → {}]",
-                            short(&recorded.tip),
-                            short(&tip)
-                        ),
-                    });
-                    recorded.tip = tip;
-                }
-                Verdict::Restore => {
-                    let restored = match &current {
-                        None => repo.create_branch(branch, &recorded.tip),
-                        Some(now) => repo.reset_branch(branch, &recorded.tip, now),
-                    };
-                    let how = if current.is_none() {
-                        "it was deleted outside Brigadier"
-                    } else {
-                        "it was moved back outside Brigadier"
-                    };
-                    let text = match restored {
-                        Ok(()) => {
-                            tracing::warn!(branch = %branch, tip = %recorded.tip.0, "the ref check restored a branch");
-                            format!("[restored {branch}: {how}]")
-                        }
-                        Err(err) => format!(
-                            "[{branch} could not be restored at {} ({how}): {err}]",
-                            short(&recorded.tip)
-                        ),
-                    };
-                    told.push(Told {
-                        conversation: recorded.conversation.clone(),
-                        text,
-                    });
-                }
-            }
-        }
-        // The base is the user's branch: never restored, only reported.
-        for (base, (conversation, tip)) in &mut records.bases {
-            // A base that can't be read (the checkout moved away) is no news.
-            let Ok(current) = repo.branch_tip(base) else {
+    let mut told = Vec::new();
+    for (branch, recorded) in &mut records.branches {
+        let current = match repo.branch_tip(branch) {
+            Ok(current) => current,
+            Err(err) => {
+                tracing::warn!(branch = %branch, error = %err, "the ref check could not read a branch");
                 continue;
-            };
-            let forward = current
-                .as_ref()
-                .is_some_and(|now| now == tip || repo.ancestor(tip, now).unwrap_or(false));
-            if !forward {
+            }
+        };
+        let forward = current
+            .as_ref()
+            .is_some_and(|tip| repo.ancestor(&recorded.tip, tip).unwrap_or(false));
+        let owner_live = recorded.task.as_ref().is_some_and(|id| live.contains(id));
+        match judge(recorded, current.as_ref(), forward, caller, owner_live) {
+            Verdict::Unchanged => {}
+            Verdict::Record(tip) => recorded.tip = tip,
+            Verdict::RecordRewrite(tip) => {
+                tracing::info!(branch = %branch, old = %recorded.tip.0, new = %tip.0, "a branch was rewritten while its worker ran");
                 told.push(Told {
-                    conversation: conversation.clone(),
-                    text: match &current {
-                        None => format!("[{base}, this session's base, was deleted outside Brigadier. Tell the user; Brigadier doesn't restore it]"),
-                        Some(now) => format!(
-                            "[{base}, this session's base, was moved back outside Brigadier ({} → {}). Tell the user; Brigadier doesn't restore it]",
-                            short(tip),
-                            short(now)
-                        ),
-                    },
+                    conversation: recorded.conversation.clone(),
+                    text: format!(
+                        "[{branch} was rewritten while its worker ran: {} → {}]",
+                        short(&recorded.tip),
+                        short(&tip)
+                    ),
+                });
+                recorded.tip = tip;
+            }
+            Verdict::Restore => {
+                let restored = match &current {
+                    None => repo.create_branch(branch, &recorded.tip),
+                    Some(now) => repo.reset_branch(branch, &recorded.tip, now),
+                };
+                let how = if current.is_none() {
+                    "it was deleted outside Brigadier"
+                } else {
+                    "it was moved back outside Brigadier"
+                };
+                let text = match restored {
+                    Ok(()) => {
+                        tracing::warn!(branch = %branch, tip = %recorded.tip.0, "the ref check restored a branch");
+                        format!("[restored {branch}: {how}]")
+                    }
+                    Err(err) => format!(
+                        "[{branch} could not be restored at {} ({how}): {err}]",
+                        short(&recorded.tip)
+                    ),
+                };
+                told.push(Told {
+                    conversation: recorded.conversation.clone(),
+                    text,
                 });
             }
-            if let Some(now) = current {
-                *tip = now;
-            }
         }
-        told
-    })
+    }
+    // The base is the user's branch: never restored, only reported.
+    for (base, (conversation, tip)) in &mut records.bases {
+        // A base that can't be read (the checkout moved away) is no news.
+        let Ok(current) = repo.branch_tip(base) else {
+            continue;
+        };
+        let forward = current
+            .as_ref()
+            .is_some_and(|now| now == tip || repo.ancestor(tip, now).unwrap_or(false));
+        if !forward {
+            told.push(Told {
+                conversation: conversation.clone(),
+                text: match &current {
+                    None => format!("[{base}, this session's base, was deleted outside Brigadier. Tell the user; Brigadier doesn't restore it]"),
+                    Some(now) => format!(
+                        "[{base}, this session's base, was moved back outside Brigadier ({} → {}). Tell the user; Brigadier doesn't restore it]",
+                        short(tip),
+                        short(now)
+                    ),
+                },
+            });
+        }
+        if let Some(now) = current {
+            *tip = now;
+        }
+    }
+    told
 }
 
 fn short(oid: &Oid) -> &str {
@@ -330,44 +369,16 @@ impl SessionManager {
             return;
         };
         let live: HashSet<TaskId> = self.tasks_lock().keys().cloned().collect();
-        let common = repo.common_dir().to_owned();
-        let mut records = self.ref_records.with(&common, |records| records.clone());
-        if records.branches.is_empty() && records.bases.is_empty() {
-            return;
-        }
-        // The folders the protected refs live in, which packing may have pruned.
-        for branch in records.branches.keys() {
-            for folder in ["refs/heads", "logs/refs/heads"] {
-                if let Some(parent) = common.join(folder).join(branch).parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-            }
-        }
-        let (told, records) = match super::blocking(move || {
-            let told = check_repo(&repo, &mut records, &caller, &live);
-            Ok((told, records))
-        })
-        .await
+        let store = self.ref_records.clone();
+        let told = match super::blocking(move || Ok(check_recorded(&repo, &store, &caller, &live)))
+            .await
         {
-            Ok(done) => done,
+            Ok(told) => told,
             Err(err) => {
                 tracing::warn!(error = %err, "the ref check failed");
                 return;
             }
         };
-        // Recorded tips the check moved; a branch forgotten or recorded meanwhile is left be.
-        self.ref_records.with(&common, |now| {
-            for (branch, recorded) in records.branches {
-                if let Some(entry) = now.branches.get_mut(&branch)
-                    && entry.task == recorded.task
-                {
-                    entry.tip = recorded.tip;
-                }
-            }
-            for (base, value) in records.bases {
-                now.bases.insert(base, value);
-            }
-        });
         for Told { conversation, text } in told {
             self.tell_guard(&conversation, text).await;
         }
@@ -467,6 +478,16 @@ mod tests {
             records.bases.insert("main".into(), (conv("c"), at("main")));
             records
         }
+    }
+
+    /// The check on `records` alone, under the repository's ref lock.
+    fn check_repo(
+        repo: &Repo,
+        records: &mut RepoRecords,
+        caller: &Caller,
+        live: &HashSet<TaskId>,
+    ) -> Vec<Told> {
+        repo.with_ref_lock(|| check_locked(repo, records, caller, live))
     }
 
     fn run(cwd: &Path, args: &[&str]) -> String {
@@ -660,6 +681,37 @@ mod tests {
             &HashSet::new(),
         );
         assert_eq!(s.tip("brigadier/aa/session"), Some(last));
+    }
+
+    /// A check that starts while a landing forgets and deletes its merged branch reads the
+    /// records only once it holds the ref lock: the branch stays deleted.
+    #[test]
+    fn a_check_waiting_on_a_landing_never_recreates_the_branch_it_deleted() {
+        let s = Scratch::new();
+        let store = std::sync::Arc::new(RefRecords::default());
+        let common = s.repo.common_dir().to_owned();
+        store.with(&common, |records| *records = s.records());
+        let tip = s.tip("brigadier/aa/task-2").unwrap();
+        // The landing holds the ref lock: it forgets the branch, then deletes it.
+        s.repo
+            .with_ref_lock(|| {
+                let checker = {
+                    let (repo, store) = (s.repo.clone(), store.clone());
+                    std::thread::spawn(move || {
+                        check_recorded(&repo, &store, &Caller::Thread(conv("c")), &HashSet::new())
+                    })
+                };
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                store.with(&common, |records| {
+                    records.branches.remove("brigadier/aa/task-2");
+                });
+                s.git(&["update-ref", "-d", "refs/heads/brigadier/aa/task-2", &tip.0]);
+                checker
+            })
+            .join()
+            .map(|told| assert!(told.is_empty(), "{told:?}"))
+            .unwrap();
+        assert_eq!(s.tip("brigadier/aa/task-2"), None);
     }
 
     #[test]

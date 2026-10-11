@@ -963,7 +963,9 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
    - **Serialized with landings.** Every move the engine makes (a landing's fast-forward or rebase, a merge into
      the base, a branch it creates or deletes) and the check itself run under one per-repository ref lock in the
      engine, and the engine updates its recorded tip inside that same critical section. So the check never sees
-     the engine's own move as foreign, and a restore can't undo a landing that ran a moment earlier.
+     the engine's own move as foreign, and a restore can't undo a landing that ran a moment earlier. The check
+     reads its records only once it holds that lock, so a branch the engine forgot and deleted just before is
+     never recreated from an older copy.
    - This also covers platforms whose sandbox can't express allow-all-but rules (Linux and Windows today).
 6. **A `clean_up` tool** (plumbing) for the thread:
    - It lists and removes only what the ledger records under this conversation's owners (`session:`, `task:`,
