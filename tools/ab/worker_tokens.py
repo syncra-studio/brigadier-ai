@@ -184,7 +184,8 @@ def main():
         })
     workers = [w for w in workers if w["calls"] or w["tokens"]["turns"]]
 
-    # The request: the first one started at or after the window's start, to its answer.
+    # The request: the first one started at or after the window's start, to its answer within
+    # the window.
     request = None
     for (payload,) in events.execute(
             "SELECT payload FROM events WHERE stream = ? AND kind = 'request.updated' ORDER BY seq",
@@ -192,7 +193,8 @@ def main():
         r = json.loads(payload)["request"]
         if request is None and r["startedAtMs"] >= start - 2000:
             request = {"id": r["id"], "started_ms": r["startedAtMs"], "answer_ms": None}
-        if request and r["id"] == request["id"] and r.get("endedAtMs"):
+        # An answer after the window's end is outside what was measured.
+        if request and r["id"] == request["id"] and r.get("endedAtMs") and r["endedAtMs"] <= end:
             request["answer_ms"] = r["endedAtMs"]
     if request and request["answer_ms"]:
         request["elapsed_s"] = round((request["answer_ms"] - request["started_ms"]) / 1000, 1)
