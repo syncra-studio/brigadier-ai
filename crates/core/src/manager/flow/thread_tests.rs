@@ -2089,6 +2089,36 @@ async fn the_thread_suggests_full_access_once_and_never_at_full_access() {
     flow.stop().await;
 }
 
+/// Logs `count` provider notices to the thread's orchestrator log, as a busy turn's events
+/// would (a busy thread logs hundreds between two CLI starts).
+async fn log_busy(flow: &Flow, count: usize) {
+    for index in 0..count {
+        flow.manager
+            .log_provider(
+                &flow.conversation,
+                ProviderKind::Claude,
+                brigadier_providers::ProviderEvent::Notice {
+                    level: brigadier_providers::NoticeLevel::Info,
+                    message: format!("busy {index}"),
+                },
+            )
+            .await;
+    }
+}
+
+/// The session's permission level changes to `level` (between turns).
+async fn set_level(flow: &Flow, level: PermissionLevel) {
+    let mut setup = flow.core.conversation(&flow.conversation).unwrap().setup;
+    let Some(Setup::Session { permission, .. }) = &mut setup else {
+        panic!("a session");
+    };
+    *permission = level;
+    flow.manager
+        .set_setup(flow.conversation.clone(), setup.unwrap())
+        .await
+        .unwrap();
+}
+
 /// The native id the thread's first CLI session started with, from the log.
 async fn first_native_id(flow: &Flow) -> String {
     flow.manager
@@ -2159,6 +2189,50 @@ async fn a_busy_thread_resumes_its_session_past_a_thousand_logged_events() {
         specs[1].1.origin,
         Origin::Resume { native_id: native },
         "the same session resumes"
+    );
+    assert_eq!(rebirth_count(&flow).await, 0, "no rebirth");
+    flow.stop().await;
+}
+
+/// Bug 3: Approve for me → Full access on a busy thread resumes the same session between
+/// turns, with the permission note, and no rebirth.
+#[tokio::test]
+async fn a_permission_change_on_a_busy_thread_resumes_with_the_note() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "busy-level",
+        Options {
+            permission: PermissionLevel::ApproveForMe,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("First.").await;
+    flow.settled().await;
+    let native = first_native_id(&flow).await;
+    log_busy(&flow, 1_000).await;
+    set_level(&flow, PermissionLevel::FullAccess).await;
+
+    flow.say("Second.").await;
+    flow.until("the second turn", |_| inputs.lock().unwrap().len() >= 2)
+        .await;
+    flow.settled().await;
+    let specs = flow.thread_specs();
+    assert_eq!(specs.len(), 2, "one start and one restart");
+    assert_eq!(specs[1].1.origin, Origin::Resume { native_id: native });
+    assert_eq!(specs[1].1.access, Access::Full);
+    let second = inputs.lock().unwrap()[1].clone();
+    assert!(
+        second.contains("[settings] The user changed the permission level."),
+        "{second}"
     );
     assert_eq!(rebirth_count(&flow).await, 0, "no rebirth");
     flow.stop().await;
