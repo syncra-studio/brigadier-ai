@@ -565,6 +565,8 @@ async fn held_consent_does_not_cover_an_unrelated_merge_parent() {
     conflict(&flow, "merge it").await;
     let branch = branch(&flow);
     let session = git(&flow.repo, &["rev-parse", &branch]);
+    // The session's work is under review: until it ends, the held merge waits for it instead.
+    review_ended(&flow, &session).await;
     let common = git(&flow.repo, &["merge-base", &branch, "main"]);
     let tree = git(&flow.repo, &["rev-parse", &format!("{session}^{{tree}}")]);
     let unrelated = git(
