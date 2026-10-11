@@ -417,6 +417,8 @@ struct Tracked {
     status: String,
     conclusion: String,
     url: String,
+    /// The listing's attempt: a re-run that ended between two polls bumps it.
+    attempt: u64,
     jobs: Vec<Job>,
     /// `run view` said completed: its jobs are final.
     settled: bool,
@@ -438,6 +440,8 @@ struct ListedRun {
     head_sha: String,
     #[serde(rename = "headBranch", default)]
     head_branch: String,
+    #[serde(default)]
+    attempt: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -523,7 +527,7 @@ async fn list_runs(
                 "--branch",
                 branch,
                 "--json",
-                "databaseId,workflowName,status,conclusion,url,headSha,headBranch,event",
+                "databaseId,workflowName,status,conclusion,url,headSha,headBranch,event,attempt",
                 "--limit",
                 &limit_arg,
             ],
@@ -632,13 +636,19 @@ async fn poll(
             status: String::new(),
             conclusion: String::new(),
             url: run.url.clone(),
+            attempt: run.attempt,
             jobs: Vec::new(),
             settled: false,
         });
-        // A run that was re-run goes back to in progress.
-        if run.status != "completed" {
+        // A run that was re-run goes back to in progress, or ended again between two polls
+        // under the same id with a new attempt or result.
+        if run.status != "completed"
+            || run.attempt != entry.attempt
+            || (entry.settled && run.conclusion != entry.conclusion)
+        {
             entry.settled = false;
         }
+        entry.attempt = run.attempt;
         if !entry.settled {
             entry.status = run.status;
             entry.conclusion = run.conclusion;
@@ -974,7 +984,14 @@ impl super::SessionManager {
         let url = if remote.contains("://") || remote.contains('@') {
             remote.to_owned()
         } else {
-            git(vec!["remote".into(), "get-url".into(), remote.into()]).await?
+            // Where `git push` sends it: a pushurl or pushInsteadOf may differ from the fetch URL.
+            git(vec![
+                "remote".into(),
+                "get-url".into(),
+                "--push".into(),
+                remote.into(),
+            ])
+            .await?
         };
         let sha = git(vec![
             "rev-parse".into(),
@@ -1017,7 +1034,7 @@ impl super::SessionManager {
     ) -> Result<String> {
         let (dir, url, sha) = self.ci_push(id, &push).await?;
         let gh = self.gh();
-        let (Probe::Watchable { repo, .. }, Some(gh)) =
+        let (Probe::Watchable { repo, host }, Some(gh)) =
             (probe(&dir, &url, &sha, gh.as_ref()).await, gh)
         else {
             return Err(Error::Invalid(
@@ -1062,8 +1079,11 @@ impl super::SessionManager {
                         .await;
                 }
             };
+            // `HOST/OWNER/REPO`, so a GH_HOST set to another host doesn't send the run
+            // commands where the probe didn't look (gh 2.101.0 `--repo [HOST/]OWNER/REPO`).
+            let target = format!("{host}/{repo}");
             let outcome = async {
-                watch(&gh, &repo, &branch, &sha, timing, move |progress| {
+                watch(&gh, &target, &branch, &sha, timing, move |progress| {
                     let _ = tx.send(progress.clone());
                 })
                 .await
@@ -1124,6 +1144,41 @@ impl super::SessionManager {
             .unwrap()
             .push(watching.abort_handle());
         Ok(reply)
+    }
+
+    /// Ends the conversation's CI watches when it closes, or after a restart cut them off:
+    /// their tasks stop, and a row still checking reads "stopped", so no watch is left that
+    /// never ends.
+    pub(crate) async fn stop_ci_watches(&self, id: &crate::model::ConversationId) {
+        if let Ok(conv) = self.conv(id) {
+            for watch in conv.ci_watches.lock().unwrap().drain(..) {
+                watch.abort();
+            }
+        }
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        let open: Vec<crate::work::OrchestratorStepKind> = board
+            .orchestrator_steps
+            .iter()
+            .filter(|step| {
+                matches!(
+                    step.kind,
+                    crate::work::OrchestratorStepKind::CiWatch { result: None, .. }
+                )
+            })
+            .map(|step| step.kind.clone())
+            .collect();
+        for mut kind in open {
+            if let crate::work::OrchestratorStepKind::CiWatch {
+                waiting, result, ..
+            } = &mut kind
+            {
+                *waiting = false;
+                *result = Some("stopped".into());
+            }
+            self.orchestrator_step(id, kind).await;
+        }
     }
 
     /// Files or updates the push's `CiWatch` row.
@@ -1575,6 +1630,34 @@ exit "$code"
                 .filter(|c| c.starts_with("run view 1 "))
                 .count();
             assert_eq!(views_of_1, 1);
+        }
+
+        #[tokio::test]
+        async fn a_rerun_that_ends_between_two_polls_replaces_the_first_result() {
+            let fake = FakeGh::new("rerun");
+            let attempt = |n: u32, conclusion: &str| {
+                listed(1, "CI", "completed", conclusion).replace(
+                    r#""event":"push""#,
+                    &format!(r#""event":"push","attempt":{n}"#),
+                )
+            };
+            fake.answer("list-20.1", &list(&[attempt(1, "failure")]))
+                // Re-run and ended again before the next poll: still completed, same id.
+                .answer("list-20.2", &list(&[attempt(2, "success")]))
+                .answer(
+                    "view-1.1",
+                    &view("completed", "failure", &[("test", "completed", "failure")]),
+                )
+                .answer(
+                    "view-1.2",
+                    &view("completed", "success", &[("test", "completed", "success")]),
+                );
+            let timing = Timing {
+                settle: Duration::from_millis(500),
+                ..timing()
+            };
+            let (outcome, _) = run_watch(&fake, timing).await;
+            assert!(matches!(outcome, Outcome::Passed { .. }), "{outcome:?}");
         }
 
         #[tokio::test]

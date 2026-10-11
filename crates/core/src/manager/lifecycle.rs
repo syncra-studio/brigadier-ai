@@ -181,6 +181,8 @@ impl SessionManager {
             self.recover_reviews(&conversation.id).await;
             // So are its previews (the sweep above ended any a crash left running).
             self.recover_previews(&conversation.id).await;
+            // And its CI watches (SESSION-FIXES-PLAN.md Q1): the user can ask to watch again.
+            self.stop_ci_watches(&conversation.id).await;
             // A held merge whose writers ended while Brigadier was down is stopped, waits or
             // is due now (SESSION-FIXES-PLAN.md Q3).
             self.check_held_merge(&conversation.id).await;
@@ -583,11 +585,7 @@ impl SessionManager {
             owners.push(previews);
         }
         self.stop_reviews(id);
-        if let Ok(conv) = self.conv(id) {
-            for watch in conv.ci_watches.lock().unwrap().drain(..) {
-                watch.abort();
-            }
-        }
+        self.stop_ci_watches(id).await;
         let session_worktree_goes = self.keep_session_changes(conversation).await;
         if session_worktree_goes {
             owners.push(format!("session:{id}"));
