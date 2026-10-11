@@ -1,9 +1,9 @@
-import soundUrl from "@/app/onboarding/welcome-sound.m4a";
-
 /*
  * The first launch's welcome sound (scripts/render-welcome-sound.mjs). It plays through Web
  * Audio rather than an <audio> element, so it doesn't show in the system's Now Playing. The
  * window plays it without waiting for a click (the webview is made with autoplay allowed).
+ * It comes inlined in a chunk of its own, loaded only for the first launch: the app's
+ * content security policy doesn't let it fetch its own files.
  */
 
 /** How loud it plays. */
@@ -18,9 +18,9 @@ export function preloadWelcomeSound(): Promise<{ context: AudioContext; buffer: 
   loading ??= (async () => {
     const context = new AudioContext();
     try {
-      const response = await fetch(soundUrl);
-      if (!response.ok) throw new Error(`the welcome sound didn't load (${response.status})`);
-      const buffer = await context.decodeAudioData(await response.arrayBuffer());
+      const { default: dataUrl } = await import("@/app/onboarding/welcome-sound.m4a?inline");
+      const bytes = Uint8Array.from(atob(dataUrl.slice(dataUrl.indexOf(",") + 1)), (c) => c.charCodeAt(0));
+      const buffer = await context.decodeAudioData(bytes.buffer);
       return { context, buffer };
     } catch (error) {
       void context.close().catch(() => {});
