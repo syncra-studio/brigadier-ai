@@ -9,15 +9,20 @@ import { useApp } from "@/state/store";
 export type ChartSeries = { id: string; title: string; samples: readonly QuotaSample[] };
 
 /*
- * Each window's line keeps its colour in a fixed order; the third and fourth are dashed and
- * dotted too, so no two lines are told apart by colour alone.
+ * Each window's line keeps its colour in a fixed order; from the third on they are dashed or
+ * dotted too, so no two lines are told apart by colour alone. An account with more windows than
+ * this (several metered buckets) starts the list again: every window is still drawn and named.
  */
 const STYLES = [
   { stroke: "stroke-chart-2", mark: "fill-chart-2", swatch: "border-chart-2", dash: undefined },
   { stroke: "stroke-chart-1", mark: "fill-chart-1", swatch: "border-chart-1", dash: undefined },
   { stroke: "stroke-chart-3", mark: "fill-chart-3", swatch: "border-chart-3 border-dashed", dash: "4 3" },
   { stroke: "stroke-foreground/60", mark: "fill-foreground/60", swatch: "border-foreground/60 border-dotted", dash: "1 3" },
+  { stroke: "stroke-chart-4", mark: "fill-chart-4", swatch: "border-chart-4 border-dotted", dash: "1 3" },
+  { stroke: "stroke-chart-5", mark: "fill-chart-5", swatch: "border-chart-5 border-dashed", dash: "4 3" },
 ] as const;
+
+const style = (index: number) => STYLES[index % STYLES.length]!;
 
 const TICKS = [0, 50, 100];
 const X_TICKS = 4;
@@ -75,12 +80,12 @@ export function UsageChart({
     () => series.map((entry) => ({ ...entry, samples: entry.samples.toSorted((a, b) => a.atMs - b.atMs) })),
     [series],
   );
-  const shown = sorted.slice(0, STYLES.length);
-  const lines = shown.map((entry) =>
-    entry.samples
-      .filter((sample) => sample.atMs >= startMs && sample.atMs <= endMs)
-      .map((sample, index) => `${index === 0 ? "M" : "L"}${x(sample.atMs)},${y(sample.usedPercent)}`)
-      .join(""),
+  const shown = sorted;
+  const inRange = shown.map((entry) =>
+    entry.samples.filter((sample) => sample.atMs >= startMs && sample.atMs <= endMs),
+  );
+  const lines = inRange.map((samples) =>
+    samples.map((sample, index) => `${index === 0 ? "M" : "L"}${x(sample.atMs)},${y(sample.usedPercent)}`).join(""),
   );
   const ticks = Array.from({ length: X_TICKS }, (_, index) => startMs + (span * index) / (X_TICKS - 1));
   const hovered =
@@ -150,16 +155,29 @@ export function UsageChart({
                 {tickDate.format(at)}
               </text>
             ))}
-            {lines.map((line, index) => (
-              <path
-                key={shown[index]!.id}
-                d={line}
-                strokeDasharray={STYLES[index]!.dash}
-                className={cn(STYLES[index]!.stroke, "fill-none stroke-2")}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-              />
-            ))}
+            {lines.map((line, index) =>
+              // A single reading (just after an account's first check) is a dot; a path of one
+              // point paints nothing.
+              inRange[index]!.length === 1 ? (
+                <circle
+                  key={shown[index]!.id}
+                  data-slot="usage-chart-point"
+                  cx={x(inRange[index]![0]!.atMs)}
+                  cy={y(inRange[index]![0]!.usedPercent)}
+                  r={unit * 0.75}
+                  className={style(index).mark}
+                />
+              ) : (
+                <path
+                  key={shown[index]!.id}
+                  d={line}
+                  strokeDasharray={style(index).dash}
+                  className={cn(style(index).stroke, "fill-none stroke-2")}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                />
+              ),
+            )}
             {hoverMs !== null && (
               <>
                 <line
@@ -177,7 +195,7 @@ export function UsageChart({
                         cx={x(hoverMs)}
                         cy={y(value)}
                         r={unit}
-                        className={cn(STYLES[index]!.mark, "stroke-card stroke-2")}
+                        className={cn(style(index).mark, "stroke-card stroke-2")}
                       />
                     ),
                 )}
@@ -213,5 +231,5 @@ export function UsageChart({
 
 /** A series' mark in the legend and the hover card. */
 function Swatch({ index }: { index: number }) {
-  return <span aria-hidden className={cn("w-3 shrink-0 border-t-2", STYLES[index]!.swatch)} />;
+  return <span aria-hidden className={cn("w-3 shrink-0 border-t-2", style(index).swatch)} />;
 }

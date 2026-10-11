@@ -153,9 +153,10 @@ function activity(days: number): { sinceMs: number; accounts: AccountActivity[] 
       history: windows.map(({ window }, line) => ({
         windowId: window.id,
         label: window.label,
-        samples: samples(window.windowMinutes!, 70 + 15 * line - 10 * index, index * 3 + line).filter(
-          (sample) => sample.atMs >= sinceMs,
-        ),
+        // The Codex account was read once so far: a single reading per window.
+        samples: samples(window.windowMinutes!, 70 + 15 * line - 10 * index, index * 3 + line)
+          .filter((sample) => sample.atMs >= sinceMs)
+          .slice(ref === OWN_CODEX ? -1 : 0),
       })),
       tokens: ref === OWN_CODEX ? { byModel: [], byConversation: [] } : tokens(days === 30 ? 4 : 1),
     })),
@@ -296,6 +297,7 @@ function Fixture() {
       () => {
         const card = tooltip();
         seen.tooltip = card ? all(":scope > span", card).map(text) : null;
+        seen.points = all('[data-slot="usage-chart-point"]').length;
         all<HTMLButtonElement>('[aria-label="Range"] button').find((button) => text(button) === "30 days")?.click();
         return () => text(document.querySelector('[data-slot="usage-tokens"] > p')).includes("30 days");
       },

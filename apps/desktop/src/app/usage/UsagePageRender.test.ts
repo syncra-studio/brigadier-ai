@@ -53,6 +53,7 @@ test("Usage shows a card per account, their activity, and a Refresh that waits f
     ["5-hour", "Weekly", "Weekly · Fable"],
   );
   // Over 30 days the 5-hour window draws each day's peak, the weekly ones every reading.
+  assert.equal(seen.points, 2, "the Codex account's single readings show as dots");
   assert.deepEqual(seen.range30, {
     range: "30 days",
     tokens: "Brigadier used 6.2M tokens in the last 30 days",
