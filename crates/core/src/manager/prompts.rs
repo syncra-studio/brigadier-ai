@@ -371,6 +371,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, a landed worker's session is kept until its review's findings settle. Send the findings you record as open back to that worker, all in one fix task (role fix, subject the landed task): it resumes the worker's own session, in its worktree made again. A fix's landing gets no review of its own, only one re-check of the findings you record with `high`; what is still open after that goes to the user as a list in your answer, never to another fix round.",
         worker: "From now on, after your work lands, its review's findings may come back to you in this same session as a new task: fix them in the worktree it names, commit, and report as usual.",
     },
+    Revision {
+        number: 6,
+        thread: "",
+        worker: "From now on, while you work, run only the checks your changes affect (run_check with no command lists them), and the full suite once, right before submit_report. Find code with query_brain first, then code_search or code_refs, then read only the lines you need with one ranged read per file, never `cd` and then `cat`.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -760,11 +765,15 @@ const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, 
 
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
-- To find code, use the Brigadier tools first: query_brain (what earlier work found: modules, decisions, conventions), code_search (definitions and files by name), code_refs (where a symbol is defined and used) and project_map (the repository at a glance). They are instant and return less than grepping or reading whole files. Then read only the lines you need (a line range, not the whole file): your context is precious.";
+- Before you read code, ask the Brain: query_brain (what earlier work found: modules, decisions, conventions). Then find the code with code_search (definitions and files by name), code_refs (where a symbol is defined and used) or project_map (the repository at a glance), never by shell listings and greps first. Then read only the lines you need (a line range, not the whole file): your context is precious.";
+
+/// How a Codex worker reads files: one ranged read each, not a shell walk (Codex has no file
+/// tool of its own; SESSION-FIXES-PLAN.md Q6.3).
+const CODEX_READING: &str = "\n- Read a file with one `sed -n 'a,bp' <full path>` for the lines you need (several ranges in one call when you need them), never `cd` and then `cat` a whole file.";
 
 /// How every worker runs its checks (THREAD-PLAN.md Q8 lever 3).
 const WORKER_CHECKS: &str = "
-- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell: call it first with no command for the checks your changes affect, then run those. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss.";
+- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell. While you work, run only the checks your changes affect (run_check with no command lists them); run the full suite once, right before submit_report. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss.";
 
 /// How implement and merge workers write code (PLAN.md §7; after ponytail's rules, see
 /// THIRD_PARTY_NOTICES.md).
@@ -842,6 +851,11 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
             "operate: use apps on this Mac through the computer tools (apps, launch, observe, act, zoom) to reach the end state named below."
         }
     };
+    let reading = if task.route.choice.provider == brigadier_providers::ProviderKind::Codex {
+        CODEX_READING
+    } else {
+        ""
+    };
     let write_rules = if task.kind.writes() {
         // A merge worker merges and commits with git itself; Brigadier only checks it and moves
         // the target (SESSION-FIXES-PLAN.md Q2).
@@ -865,15 +879,16 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
             )
         };
         format!(
-            "\n- Work only inside this worktree, on its branch.{commits} Don't switch branches or touch other checkouts. {leftovers}{listed}\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own work: format, lint, build, and the tests of what you touched.{role}",
+            "\n- Work only inside this worktree, on its branch.{commits} Don't switch branches or touch other checkouts. {leftovers}{listed}\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own work: format, lint, build, and the full test suite, once.{reading}{role}",
             role = match task.role {
                 Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => LEAD_STEPS,
                 _ => "",
             }
         )
     } else {
-        "\n- Don't change files in the repository. Your scratch folder is yours for notes."
-            .to_owned()
+        format!(
+            "\n- Don't change files in the repository. Your scratch folder is yours for notes.{reading}"
+        )
     };
     // A gate member has no one to ask (see `Role::Worker`).
     let alone = if task.gate_link.is_some() {
@@ -1214,6 +1229,42 @@ mod tests {
     /// What a worker reads before it starts: its system prompt, then its first message.
     fn worker(task: &Task) -> String {
         format!("{}\n\n{}", worker_system(""), worker_brief(task, "", ""))
+    }
+
+    /// SESSION-FIXES-PLAN.md Q6.2 and Q6.3: focused checks while working and the full suite
+    /// once before the report; the Brain and the index before shell reads; a Codex worker
+    /// reads with one ranged read per file. Open workers hear it as revision 6.
+    #[test]
+    fn workers_check_focused_read_from_the_index_and_codex_reads_ranges() {
+        let claude = worker(&task("claude", Some("lead")));
+        assert!(claude.contains("While you work, run only the checks your changes affect (run_check with no command lists them); run the full suite once, right before submit_report."));
+        assert!(claude.contains("the full test suite, once."));
+        let brain = claude
+            .find("Before you read code, ask the Brain: query_brain")
+            .unwrap();
+        let index = claude.find("Then find the code with code_search").unwrap();
+        assert!(brain < index);
+        assert!(!claude.contains("sed -n"));
+        let codex = worker(&task("codex", Some("lead")));
+        assert!(codex.contains("one `sed -n 'a,bp' <full path>`"));
+        assert!(codex.contains("never `cd` and then `cat` a whole file"));
+        let mut scout = task("codex", None);
+        scout.kind = TaskKind::Scout;
+        assert!(worker(&scout).contains("never `cd` and then `cat` a whole file"));
+        let added = REVISIONS
+            .iter()
+            .find(|revision| {
+                revision
+                    .worker
+                    .contains("run only the checks your changes affect")
+            })
+            .expect("the checks and reading revision");
+        assert!(added.thread.is_empty());
+        assert!(
+            revision_note(added.number - 1, true)
+                .unwrap()
+                .contains(added.worker)
+        );
     }
 
     #[test]
@@ -1768,11 +1819,16 @@ mod environment_tests {
         assert_eq!(current_told.revision, Some(revision()));
         assert!(notes(&current_told, &now).is_empty());
 
+        // The thread told the revision before the newest with a thread note hears that note.
+        let newest = REVISIONS
+            .iter()
+            .rev()
+            .find(|revision| !revision.thread.is_empty())
+            .unwrap();
         let mut older = current_told.clone();
-        older.revision = Some(revision() - 1);
+        older.revision = Some(newest.number - 1);
         let sent = notes(&older, &now);
         assert_eq!(labels(&sent), vec![REVISION_LABEL]);
-        let newest = REVISIONS.last().unwrap();
         assert_eq!(sent[0].text, format!("[instructions] {}", newest.thread));
         // Once heard, nothing more.
         let mut heard = sent[0].told.clone();
