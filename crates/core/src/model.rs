@@ -594,6 +594,39 @@ pub enum KeepAwake {
     Always,
 }
 
+/// The key that sends what the composer holds; Shift+Enter always starts a new line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SendShortcut {
+    /// Enter sends; ⌘/Ctrl+Enter sends the other way while an answer works.
+    #[default]
+    Enter,
+    /// ⌘/Ctrl+Enter sends and Enter starts a new line; ⇧⌘/Ctrl+Shift+Enter sends the other way.
+    ModEnter,
+}
+
+/// What a message sent while an answer works does by default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum FollowUp {
+    /// It waits its turn: a Chat queues it, a session's orchestrator sorts it.
+    #[default]
+    Queue,
+    /// It goes into the running answer now.
+    Steer,
+}
+
+/// When a desktop notification says a request is finished.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum NotifyFinished {
+    /// Only while no Brigadier window is in front.
+    #[default]
+    Background,
+    Always,
+    Never,
+}
+
 /// Where a kind of web link opens.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -658,6 +691,17 @@ pub struct Settings {
     /// While kept awake, closing the lid doesn't sleep the computer either (macOS: sleep is
     /// disabled system-wide, then restored).
     pub keep_awake_lid_closed: bool,
+    /// The key that sends a message (Settings › General › Composer).
+    pub send_shortcut: SendShortcut,
+    /// What a message sent while an answer works does; the send shortcut's other key does
+    /// the opposite for one message.
+    pub follow_up: FollowUp,
+    /// When a finished request raises a desktop notification. Overnight runs tell the user
+    /// with their report's notification instead.
+    pub notify_finished: NotifyFinished,
+    /// Approvals and questions waiting for the user raise a desktop notification.
+    #[serde(default = "default_true")]
+    pub notify_needs_you: bool,
     /// The user's routing rules, global and per project. They always win over the router's
     /// scores and quota balancing.
     pub routing_overrides: Vec<OverrideRule>,
@@ -814,6 +858,10 @@ impl Default for Settings {
             onboarded: false,
             keep_awake: KeepAwake::default(),
             keep_awake_lid_closed: false,
+            send_shortcut: SendShortcut::default(),
+            follow_up: FollowUp::default(),
+            notify_finished: NotifyFinished::default(),
+            notify_needs_you: true,
             routing_overrides: Vec::new(),
             routing_rankings: Vec::new(),
             disabled_providers: Vec::new(),

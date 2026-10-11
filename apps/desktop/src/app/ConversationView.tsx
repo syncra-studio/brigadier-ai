@@ -39,6 +39,7 @@ import {
 } from "@/app/conversation/SidePanel";
 import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
 import { BlobAttachmentAdapter } from "@/app/conversation/attachments";
+import { sendLane } from "@/app/conversation/composerKeys";
 import {
   type Block,
   type BoardDigest,
@@ -562,7 +563,7 @@ export function ConversationView({
     setError(cause instanceof Error ? cause.message : String(cause));
   }, []);
   const submit = useCallback(
-    (message: AppendMessage, lane: SendLane) => {
+    (message: AppendMessage, lane: SendLane | "followUp") => {
       const text = textOf(message);
       const refs = attachments.messageRefs(text, message.attachments ?? []);
       // A queued message pulled out to edit goes back to its slot, unless steered in now.
@@ -570,8 +571,7 @@ export function ConversationView({
       if (!text && refs.length === 0) return;
       setError(null);
       const known = [...mentions.known(), ...(slot?.mentions ?? [])];
-      // An edited queued message goes back to its slot; only an explicit steer sends it in now.
-      const into = slot && lane === "auto" ? "queue" : lane;
+      const into = sendLane(lane, { pulled: !!slot, followUp: useApp.getState().settings.followUp });
       send(
         { text, attachments: refs, mentions: mentionsIn(text, targets, known) },
         draftTarget ?? undefined,
@@ -598,8 +598,10 @@ export function ConversationView({
     return {
       items: states,
       steerItems: [],
-      enqueue: (message) => submit(message, message.steer === false ? "queue" : "auto"),
-      steer: (message) => submit(message, message.steer ? "steer" : "auto"),
+      // Sent with nothing running, or the follow-up's other way when steering is the default.
+      enqueue: (message) => submit(message, "auto"),
+      // Sent while an answer works: the default way, unless the other key asked to steer.
+      steer: (message) => submit(message, message.steer ? "steer" : "followUp"),
       move: (id, placement) => {
         if (!conversationId) return;
         if (placement.lane === "steer") {

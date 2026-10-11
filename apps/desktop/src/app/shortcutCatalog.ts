@@ -6,6 +6,8 @@
  * first key, and shortcutCatalog.test.ts checks the two agree.
  */
 
+import type { FollowUp, SendShortcut } from "@/ipc/generated";
+
 export type ShortcutArea =
   | "General"
   | "Conversations"
@@ -101,8 +103,17 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "review", name: "Review changes", line: "Open the session's changes for review", area: "Tabs and panes", keys: ["⌃⇧G"], menu: "review" },
 
   // Composer
+  // Send, New line and the follow-up's other way as with the defaults; `shortcutsFor` gives
+  // them the keys chosen in Settings › General › Composer.
   { id: "send", name: "Send", line: "Send the message", area: "Composer", keys: ["⏎"] },
   { id: "new-line", name: "New line", line: "Start a new line in the message", area: "Composer", keys: ["⇧⏎"] },
+  {
+    id: "follow-up-other",
+    name: "Steer",
+    line: "While an answer works, send the message into it now",
+    area: "Composer",
+    keys: ["⌘⏎"],
+  },
   {
     id: "history",
     name: "Earlier prompts",
@@ -132,9 +143,40 @@ export const SHORTCUTS: readonly Shortcut[] = [
 /** The built-in browser's shortcuts, gone while it is off (Settings › Browser). */
 export const BROWSER_SHORTCUTS: ReadonlySet<string> = new Set(["new-browser", "address"]);
 
-/** The shortcuts this platform has, with the browser's only while it is on. */
-export function shortcutsFor(mac: boolean, browser = true): Shortcut[] {
-  return SHORTCUTS.filter((shortcut) => (mac || !shortcut.macOnly) && (browser || !BROWSER_SHORTCUTS.has(shortcut.id)));
+/** How the composer sends, as Settings › General › Composer sets it. */
+export type ComposerKeys = { sendShortcut: SendShortcut; followUp: FollowUp };
+
+const DEFAULT_COMPOSER_KEYS: ComposerKeys = { sendShortcut: "enter", followUp: "queue" };
+
+/** The composer's entries with the keys chosen for sending and the follow-up's other way. */
+function withComposerKeys(shortcut: Shortcut, { sendShortcut, followUp }: ComposerKeys): Shortcut {
+  const mod = sendShortcut === "modEnter";
+  switch (shortcut.id) {
+    case "send":
+      return { ...shortcut, keys: [mod ? "⌘⏎" : "⏎"] };
+    case "new-line":
+      return { ...shortcut, keys: mod ? ["⏎", "⇧⏎"] : ["⇧⏎"] };
+    case "follow-up-other":
+      return {
+        ...shortcut,
+        ...(followUp === "queue"
+          ? { name: "Steer", line: "While an answer works, send the message into it now" }
+          : { name: "Queue", line: "While an answer works, send the message to wait its turn" }),
+        keys: [mod ? "⇧⌘⏎" : "⌘⏎"],
+      };
+    default:
+      return shortcut;
+  }
+}
+
+/**
+ * The shortcuts this platform has, with the browser's only while it is on and the composer's
+ * keys as chosen.
+ */
+export function shortcutsFor(mac: boolean, browser = true, composer = DEFAULT_COMPOSER_KEYS): Shortcut[] {
+  return SHORTCUTS.filter(
+    (shortcut) => (mac || !shortcut.macOnly) && (browser || !BROWSER_SHORTCUTS.has(shortcut.id)),
+  ).map((shortcut) => withComposerKeys(shortcut, composer));
 }
 
 export type Stroke = { ctrl: boolean; alt: boolean; shift: boolean; cmd: boolean; key: string };
