@@ -13,6 +13,7 @@ import { openSettings } from "@/state/actions";
 import {
   counted,
   doneToast,
+  doneTone,
   importBrowser,
   importedBadge,
   importSources,
@@ -94,7 +95,7 @@ export function BrowserImportPage() {
       .then((outcome) => {
         if (outcome.type === "done") {
           setFlow(null);
-          toast(doneToast(source.name, outcome.record));
+          toast(doneToast(source.name, outcome.record), { tone: doneTone(outcome.record) });
           if (outcome.historyError) toast(`${source.name}: ${outcome.historyError}`, { tone: "error" });
           return;
         }

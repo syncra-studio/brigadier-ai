@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { ImportRecord, ImportSource } from "@/ipc/generated";
 import {
   doneToast,
+  doneTone,
   domainsText,
   importedBadge,
   opensDialog,
@@ -91,6 +92,10 @@ test("the toast after an import says what came over", () => {
   assert.equal(doneToast("Dia", record({ imported: 1, history: 120 })), "Imported 1 cookie and 120 pages of history from Dia");
   assert.equal(doneToast("Firefox", record({ imported: 0, history: 3 })), "Imported 3 pages of history from Firefox");
   assert.equal(doneToast("Arc", record({ imported: 0 })), "No cookies were imported from Arc");
+  assert.deepEqual(
+    [record(), record({ imported: 0, history: 3 }), record({ imported: 0 })].map(doneTone),
+    ["success", "success", "neutral"],
+  );
 });
 
 test("failures a person can put right open a dialog; the rest end in a toast", () => {

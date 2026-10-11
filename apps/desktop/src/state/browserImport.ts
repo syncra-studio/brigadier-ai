@@ -131,6 +131,11 @@ export function doneToast(name: string, record: ImportRecord): string {
   return `No cookies were imported from ${name}`;
 }
 
+/** That toast's tone: plain when nothing came over, as nothing went wrong but nothing was done. */
+export function doneTone(record: ImportRecord): "success" | "neutral" {
+  return record.imported > 0 || record.history > 0 ? "success" : "neutral";
+}
+
 /** Failures that open a dialog to put right (the rest end in an error toast). */
 export function opensDialog(reason: ImportFailure): boolean {
   return reason === "running" || reason === "needsFullDiskAccess" || reason === "needsKeychainAccess" || reason === "noKeychainKey";

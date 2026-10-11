@@ -132,14 +132,14 @@ test("import browser data: rows, picker, importing, access, blocked, toasts, rec
     buttons: ["Close", "I've quit it"],
     closable: true,
   });
-  assert.deepEqual((seen.quit as { toasts: unknown[] }).toasts.at(-1), toast("success", "No cookies were imported from Helium"));
+  assert.deepEqual((seen.quit as { toasts: unknown[] }).toasts.at(-1), toast("neutral", "No cookies were imported from Helium"));
   // A read that fails ends in an error toast, with no dialog.
   assert.deepEqual(seen.readFailed, {
     dialog: null,
     toasts: [
       toast("success", `Imported ${n(3994)} cookies from Dia`),
       toast("success", "Imported 12 cookies and 340 pages of history from Safari"),
-      toast("success", "No cookies were imported from Helium"),
+      toast("neutral", "No cookies were imported from Helium"),
       toast("error", "Arc: Arc's cookies couldn't be read (database disk image is malformed)."),
     ],
   });

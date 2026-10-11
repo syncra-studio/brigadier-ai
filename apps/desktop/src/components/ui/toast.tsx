@@ -1,4 +1,4 @@
-import { CheckCircle, Warning, X } from "@openai/apps-sdk-ui/components/Icon";
+import { CheckCircle, InfoCircle, Warning, X } from "@openai/apps-sdk-ui/components/Icon";
 import { Toast as ToastPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
@@ -8,7 +8,7 @@ import { dismissToast, type Toast, useToasts } from "@/state/toasts";
 const DURATION_MS = 4000;
 
 function ToastItem({ toast }: { toast: Toast }) {
-  const success = toast.tone === "success";
+  const Icon = toast.tone === "success" ? CheckCircle : toast.tone === "error" ? Warning : InfoCircle;
   return (
     <ToastPrimitive.Root
       data-slot="toast"
@@ -20,14 +20,12 @@ function ToastItem({ toast }: { toast: Toast }) {
         "bg-popover rounded-thread min-h-control-md flex max-w-lg items-center gap-2 border py-1 ps-3 pe-1.5 text-sm",
         "data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:slide-in-from-top-2",
         "data-[state=closed]:animate-out data-[state=closed]:fade-out motion-reduce:animate-none",
-        success ? "border-success/30 text-success" : "border-destructive/30 text-destructive",
+        toast.tone === "success" && "border-success/30 text-success",
+        toast.tone === "error" && "border-destructive/30 text-destructive",
+        toast.tone === "neutral" && "text-foreground",
       )}
     >
-      {success ? (
-        <CheckCircle aria-hidden className="size-icon-sm shrink-0" />
-      ) : (
-        <Warning aria-hidden className="size-icon-sm shrink-0" />
-      )}
+      <Icon aria-hidden className={cn("size-icon-sm shrink-0", toast.tone === "neutral" && "text-muted-foreground")} />
       <ToastPrimitive.Title className="min-w-0">{toast.text}</ToastPrimitive.Title>
       {toast.actions.map((action) => (
         <ToastPrimitive.Action
