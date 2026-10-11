@@ -1,9 +1,9 @@
 import { Reload } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { type Revealed } from "@/app/providers/AccountRows";
+import { useRevealedEmails } from "@/app/providers/AccountRows";
 import { ProviderCard } from "@/app/providers/ProviderCard";
 import { learnedKey, ModelRow, ProjectPicker } from "@/app/routing/models";
 import { RANKINGS_ROWS, RatingsSection } from "@/app/routing/RankingsSection";
@@ -116,23 +116,6 @@ const ADVANCED_LABELS: readonly string[] = [
   PROVIDERS_ROWS.ratings.label,
 ];
 
-/** The account rows showing their email, kept only while the page is open. */
-function useRevealed(): Revealed {
-  const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set());
-  return useMemo(
-    () => ({
-      has: (key: string) => shown.has(key),
-      toggle: (key: string) =>
-        setShown((current) => {
-          const next = new Set(current);
-          if (!next.delete(key)) next.add(key);
-          return next;
-        }),
-    }),
-    [shown],
-  );
-}
-
 /**
  * Settings › Providers: the switch for moving chats between accounts, then each agent (how it
  * stands and its switch, its accounts, its models), then who does each kind of work. Where the
@@ -150,7 +133,7 @@ export function ProvidersPage() {
   // Names of every model (a rule may name one that isn't available).
   const groups = useModelGroups();
   const rankings = useRankingsRefresh();
-  const revealed = useRevealed();
+  const revealed = useRevealedEmails();
   const now = useNow(30_000);
   const refresh = useAction();
   useEffect(() => {

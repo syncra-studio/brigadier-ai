@@ -1,5 +1,5 @@
 import { DotsHorizontal, Eye, EyeOff, Plus } from "@openai/apps-sdk-ui/components/Icon";
-import { type ReactNode, useCallback, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
@@ -34,6 +34,23 @@ const SIGN_IN_SLACK_MS = 2000;
 
 /** Which account rows show their email: the page's own state, so leaving it hides them again. */
 export type Revealed = { has: (key: string) => boolean; toggle: (key: string) => void };
+
+/** The account rows showing their email, kept only while the page showing them is open. */
+export function useRevealedEmails(): Revealed {
+  const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set());
+  return useMemo(
+    () => ({
+      has: (key: string) => shown.has(key),
+      toggle: (key: string) =>
+        setShown((current) => {
+          const next = new Set(current);
+          if (!next.delete(key)) next.add(key);
+          return next;
+        }),
+    }),
+    [shown],
+  );
+}
 
 /** The key a row's reveal goes by: the account's id, or the provider's own login. */
 export function revealKey(view: AccountView): string {
@@ -107,6 +124,13 @@ export function ProviderAccounts({
     }
     void refreshAccounts().catch(() => {});
   };
+  // Leaving with a sign-in under way (another page, the setup closing) cancels it as closing
+  // its row does, so a new account that never signed in doesn't stay behind.
+  const cancel = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    cancel.current = active ? close : null;
+  });
+  useEffect(() => () => cancel.current?.(), []);
 
   return (
     <SettingsCard>
