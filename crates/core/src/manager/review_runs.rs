@@ -1128,8 +1128,11 @@ impl SessionManager {
     /// the context card shows it, and finish_session's answer says it.
     pub(super) async fn tell_review(&self, review: &ReviewRun, text: Option<&str>) {
         self.tell_review_now(review, text).await;
-        // A merge held for the review's end looks again (SESSION-FIXES-PLAN.md Q3).
-        self.check_held_merge(&review.conversation_id).await;
+        // A merge held for the review's end looks again (SESSION-FIXES-PLAN.md Q3), on its
+        // own: a review that fails at once ends inside finish_session, which holds the merge
+        // lock this takes.
+        let (manager, id) = (self.arc(), review.conversation_id.clone());
+        self.spawn(async move { manager.check_held_merge(&id).await });
     }
 
     async fn tell_review_now(&self, review: &ReviewRun, text: Option<&str>) {

@@ -303,11 +303,12 @@ async fn resolve(flow: &Flow) -> String {
     let landed = task.landed.clone().unwrap();
     assert_merged(flow, &landed, &session_tip, &base_tip);
     assert_eq!(git(&flow.repo, &["rev-parse", &branch(flow)]), landed);
-    flow.until("the merge's review", |board| {
-        board
-            .reviews
-            .values()
-            .any(|review| review.task_id.as_ref() == Some(&task.id))
+    // A held merge waits for it to end (SESSION-FIXES-PLAN.md Q3).
+    flow.until("the merge's review to end", |board| {
+        board.reviews.values().any(|review| {
+            review.task_id.as_ref() == Some(&task.id)
+                && review.state != crate::work::ReviewState::Running
+        })
     })
     .await;
     flow.settled().await;

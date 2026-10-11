@@ -1485,6 +1485,13 @@ impl SessionManager {
                     self.stop_held_merge(id, &conv, held, &reason).await;
                     return Err(Error::Invalid(stopped_text(&reason)));
                 }
+                // A review of the session's work still runs: an open finding it brings
+                // would stop the merge, so it waits for the review's end.
+                Gate::Wait(new) if new.is_empty() => {
+                    return Err(Error::Invalid(
+                        "[not merged] A review of the session's work still runs, and the user's held merge waits for it: Brigadier tells you [merge due] when it ends, or [merge stopped]. Nothing was merged; reply [quiet] meanwhile.".into(),
+                    ));
+                }
                 Gate::Wait(_) | Gate::Due => {}
             }
         }

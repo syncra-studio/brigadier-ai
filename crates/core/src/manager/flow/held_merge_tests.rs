@@ -31,12 +31,16 @@ struct Plan {
     finds: bool,
     /// What the thread records the finding as ("open", "fixed"), or nothing.
     records: Option<&'static str>,
+    /// Task-2's review runs until [`Held::review`] is set.
+    slow_review: bool,
 }
 
 struct Held {
     flow: Flow,
     /// The workers write once it is set.
     release: Arc<AtomicBool>,
+    /// A slow review ends once it is set.
+    review: Arc<AtomicBool>,
     /// The thread's inputs and what its finish_session calls answered, in order.
     log: Arc<Mutex<Vec<String>>>,
 }
@@ -85,22 +89,36 @@ fn finding_id(input: &str) -> Option<String> {
 /// again on `[merge due]`.
 async fn held(name: &str, plan: Plan) -> Held {
     let release = Arc::new(AtomicBool::new(false));
+    let review = Arc::new(AtomicBool::new(false));
     let log: Arc<Mutex<Vec<String>>> = Arc::default();
-    let (gate, said) = (release.clone(), log.clone());
+    let (gate, said, review_gate) = (release.clone(), log.clone(), review.clone());
     let flow = Flow::start(
         name,
         Options {
-            reviews: Some(script(move |turn| async move {
-                let base = turn
-                    .input
-                    .split("git diff ")
-                    .nth(1)
-                    .and_then(|rest| rest.split("...").next());
-                let changed = base.map(|base| turn.git(&["diff", "--name-only", base, "HEAD"]));
-                if plan.finds && changed.is_some_and(|files| files.contains("B.md")) {
-                    Reply::text(ONE_MEDIUM)
-                } else {
-                    Reply::text("No findings.")
+            reviews: Some(script(move |turn| {
+                let review_gate = review_gate.clone();
+                async move {
+                    let base = turn
+                        .input
+                        .split("git diff ")
+                        .nth(1)
+                        .and_then(|rest| rest.split("...").next());
+                    let changed = base.map(|base| turn.git(&["diff", "--name-only", base, "HEAD"]));
+                    if plan.slow_review
+                        && changed.as_ref().is_some_and(|files| files.contains("B.md"))
+                    {
+                        for _ in 0..3000 {
+                            if review_gate.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                    }
+                    if plan.finds && changed.is_some_and(|files| files.contains("B.md")) {
+                        Reply::text(ONE_MEDIUM)
+                    } else {
+                        Reply::text("No findings.")
+                    }
                 }
             })),
             ..Options::default()
@@ -201,7 +219,12 @@ async fn held(name: &str, plan: Plan) -> Held {
     )
     .await;
     flow.say("Add two notes, and merge it when done.").await;
-    Held { flow, release, log }
+    Held {
+        flow,
+        release,
+        review,
+        log,
+    }
 }
 
 async fn writing(held: &Held) {
@@ -329,6 +352,7 @@ async fn an_open_finding_stops_the_held_merge_at_medium_severity() {
         Plan {
             finds: true,
             records: Some("open"),
+            ..Plan::default()
         },
     )
     .await;
@@ -361,6 +385,7 @@ async fn an_unrecorded_finding_holds_the_merge_until_recorded() {
         Plan {
             finds: true,
             records: None,
+            ..Plan::default()
         },
     )
     .await;
@@ -477,6 +502,56 @@ async fn the_held_merge_survives_a_restart() {
     let pending = pending_merge(&held.flow.board().await).expect("still held");
     assert_eq!(pending.condition, MergeCondition::WorkersFinish);
     held.release.store(true, Ordering::SeqCst);
+    held.flow
+        .until("the merge", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+        })
+        .await;
+    assert!(held.merged());
+    held.flow.stop().await;
+}
+
+/// The last writer landed, but its review still runs: the held merge waits for it even when
+/// the thread calls finish_session early, since the review may bring an open finding.
+#[tokio::test]
+async fn a_held_merge_waits_for_the_last_landings_review_even_when_called_early() {
+    let held = held(
+        "held-merge-review-runs",
+        Plan {
+            slow_review: true,
+            ..Plan::default()
+        },
+    )
+    .await;
+    writing(&held).await;
+    held.release.store(true, Ordering::SeqCst);
+    held.flow
+        .until("both to land with task-2's review running", |board| {
+            board
+                .tasks
+                .values()
+                .filter(|task| task.state == TaskState::Landed)
+                .count()
+                == 2
+                && crate::manager::landing::findings_now(board).running
+        })
+        .await;
+    let refused = held
+        .flow
+        .manager
+        .finish_session(&held.flow.conversation, "", None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("A review of the session's work still runs"),
+        "{refused}"
+    );
+    assert!(!held.merged());
+    held.review.store(true, Ordering::SeqCst);
     held.flow
         .until("the merge", |board| {
             board
