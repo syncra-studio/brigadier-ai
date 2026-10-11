@@ -474,7 +474,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <SideChatTab conversationId={conversationId} tab={tab} />
               ) : tab.kind === "terminal" ? (
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
-              ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} />
+              ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
                 : <DocumentTabView conversationId={conversationId} tab={tab} active={shown} />}
             </Suspense>
           </div>

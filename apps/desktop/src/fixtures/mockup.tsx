@@ -15,7 +15,7 @@ import type { ArtifactRef, Conversation, Request, Task } from "@/ipc/generated";
 import { tokenColor } from "@/lib/tokens";
 import { emptyBoard, useBoard } from "@/state/board";
 import { changeNotes, mockupNotesOf } from "@/state/mockupNotes";
-import { closeTab, MOCKUP_TAB, selectTab, sessionTabs, useSessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
+import { CHAT_TAB, closeTab, MOCKUP_TAB, selectTab, sessionTabs, useSessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const id = "mockup-fixture";
@@ -183,14 +183,22 @@ function Fixture() {
     });
     at(2800, () => { type(document.querySelector<HTMLInputElement>('[data-slot="mockup-note"] input')!, "Taller footer band"); });
     at(3000, () => { button("Add comment")?.click(); });
+    const command = () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }));
     at(3200, () => {
       seen.markers = [...document.querySelectorAll('[aria-label^="Edit comment"]')].map((marker) => marker.textContent);
       seen.count = document.querySelector('[aria-label="Image editing tools"]')?.textContent;
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }));
+      // With Chat in front, the mockup's panel is mounted but unseen: ⌘↩ there sends nothing.
+      selectTab(id, CHAT_TAB);
     });
+    at(3400, () => { command(); });
+    at(3600, () => {
+      seen.hiddenSend = calls.some((call) => call.method === "addAttachment" || call.method === "sendMessage");
+      selectTab(id, MOCKUP_TAB);
+    });
+    at(3800, () => { command(); });
     // Marking and sending decode and encode images, which take real time: wait for the send.
     const until = (done: () => boolean, then: () => void, tries = 400) => at(50, () => (done() || tries === 0 ? then() : until(done, then, tries - 1)));
-    at(3300, () => until(() => calls.some((call) => call.method === "sendMessage"), () => {
+    at(4000, () => until(() => calls.some((call) => call.method === "sendMessage"), () => {
       seen.attachments = calls.filter((call) => call.method === "addAttachment").map((call) => call.method === "addAttachment" && call.name);
       const sent = calls.find((call) => call.method === "sendMessage");
       seen.message = sent?.method === "sendMessage" ? sent.text : null;

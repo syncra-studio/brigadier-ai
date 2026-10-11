@@ -53,7 +53,7 @@ const CAPSULE = "bg-popover/90 text-popover-foreground shadow-mockup-control rou
  * notes, sent in one batch to the worker that made them; then, once the real work is built,
  * the live captures beside them. It is the page of the session's Mockup tab.
  */
-export function MockupView({ conversationId }: { conversationId: string }) {
+export function MockupView({ conversationId, active }: { conversationId: string; active: boolean }) {
   const tasks = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.tasks : null));
   const mockup = useMemo(() => (tasks ? mockupOf(tasks) : null), [tasks]);
   const stored = useSessionNotes(conversationId);
@@ -94,7 +94,8 @@ export function MockupView({ conversationId }: { conversationId: string }) {
 
   const { sendNotes, sending, failed } = useSendNotes(conversationId, mockup, items);
   useEffect(() => {
-    if (!commenting) return;
+    // Only the tab in front sends: one behind another stays mounted, its notes unseen.
+    if (!commenting || !active) return;
     const onKey = (event: KeyboardEvent) => {
       const typing = event.target instanceof HTMLElement && event.target.closest("input, textarea, [contenteditable]");
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !typing) {
@@ -104,7 +105,7 @@ export function MockupView({ conversationId }: { conversationId: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [commenting, sendNotes]);
+  }, [commenting, active, sendNotes]);
 
   if (!mockup) {
     return <Centered>No mockup in this session yet.</Centered>;
