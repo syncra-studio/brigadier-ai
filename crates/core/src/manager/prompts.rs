@@ -2409,6 +2409,16 @@ mod environment_tests {
         assert_eq!(revision_note(MOCKUP_REVISION, true), None);
     }
 
+    /// Revisions are numbered 1, 2, 3… with no gap or repeat, so a told number names exactly
+    /// the notes a session has heard.
+    #[test]
+    fn revisions_are_numbered_from_one_without_gaps_or_repeats() {
+        let numbers: Vec<u32> = REVISIONS.iter().map(|revision| revision.number).collect();
+        let expected: Vec<u32> = (1..=REVISIONS.len() as u32).collect();
+        assert_eq!(numbers, expected);
+        assert_eq!(revision(), REVISIONS.len() as u32);
+    }
+
     /// The thread's own instructions carry the offer that the note tells open threads.
     #[test]
     fn the_threads_instructions_offer_a_mockup_before_a_visible_ui_change() {
