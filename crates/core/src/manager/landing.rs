@@ -2026,7 +2026,25 @@ pub(super) fn merged_findings(board: &crate::board::Board) -> String {
     {
         return " Its review still runs; if it finds anything, you hear it as a [review …] message: record its findings and tell the user then.".into();
     }
+    // A review stored before findings were items has a count and no items: its findings were
+    // never recorded one by one, so they can't count as fixed.
+    let untracked: u32 = reviews
+        .iter()
+        .filter(|review| review.items.is_empty())
+        .filter_map(|review| match review.state {
+            ReviewState::Findings { count } => Some(count),
+            _ => None,
+        })
+        .sum();
+    let untracked = match untracked {
+        0 => String::new(),
+        1 => " A review from before findings were recorded found 1 thing, never recorded: tell the user it may still be open.".into(),
+        n => format!(" A review from before findings were recorded found {n} things, never recorded: tell the user they may still be open."),
+    };
     let items: Vec<_> = reviews.iter().flat_map(|review| &review.items).collect();
+    if items.is_empty() && !untracked.is_empty() {
+        return untracked;
+    }
     if items.is_empty() {
         return if reviews
             .iter()
@@ -2068,6 +2086,7 @@ pub(super) fn merged_findings(board: &crate::board::Board) -> String {
     if text.is_empty() {
         text.push_str(" Its review's findings are all fixed or dismissed, as you recorded them.");
     }
+    text.push_str(&untracked);
     text
 }
 

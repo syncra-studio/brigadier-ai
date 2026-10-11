@@ -1578,6 +1578,20 @@ mod tests {
             super::super::landing::merged_findings(&board),
             " Its review's findings are all fixed or dismissed, as you recorded them."
         );
+        // A review stored before findings were items is never reported clean.
+        let mut legacy = review("legacy", ReviewKind::Code, "c", "d");
+        legacy.started_at_ms = 40;
+        legacy.state = ReviewState::Findings { count: 2 };
+        board.reviews.insert(legacy.id.clone(), legacy.clone());
+        assert_eq!(
+            super::super::landing::merged_findings(&board),
+            " Its review's findings are all fixed or dismissed, as you recorded them. A review from before findings were recorded found 2 things, never recorded: tell the user they may still be open."
+        );
+        board.reviews.retain(|id, _| id == "legacy");
+        assert_eq!(
+            super::super::landing::merged_findings(&board),
+            " A review from before findings were recorded found 2 things, never recorded: tell the user they may still be open."
+        );
     }
 
     #[test]
