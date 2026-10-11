@@ -1250,6 +1250,7 @@ impl SessionManager {
                 })
                 .await?;
             let mut text = super::review_hold::workspace_line(
+                task.number,
                 &workspace
                     .worktree
                     .as_ref()
@@ -1260,7 +1261,8 @@ impl SessionManager {
                     .base
                     .as_ref()
                     .expect("a fix's workspace has a base"),
-                &workspace.scratch.display().to_string(),
+                &workspace.scratch,
+                &test_data_dir(&task.id),
             );
             text.push_str("\n\n");
             text.push_str(&task.spec);

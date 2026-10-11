@@ -236,11 +236,23 @@ async fn findings_go_back_to_the_resumed_worker_and_its_fix_is_rechecked_only_wh
         assert_eq!(fix_worktree, worktree);
         assert_eq!(head, first.landed.clone().unwrap());
         assert!(input.starts_with("[workspace]"), "{input}");
+        // Its new task's folders, not the landed task's.
+        let fix = Flow::task(&board, 2);
+        let scratch = fix.workspace.as_ref().unwrap().scratch.clone();
+        assert!(input.contains("this is a new one, task-2."), "{input}");
+        assert!(
+            input.contains(&format!("your outputs folder {scratch}/outputs")),
+            "{input}"
+        );
+        let test_dir = crate::manager::workers::test_data_dir(&fix.id);
+        assert!(
+            input.contains(&format!("your test data folder {}.", test_dir.display())),
+            "{input}"
+        );
         assert!(
             input.contains("Fix R1.1 (old notes load) and R1.2 (trailing space)."),
             "{input}"
         );
-        let fix = Flow::task(&board, 2);
         assert_eq!(fix.route.choice.provider, first.route.choice.provider);
         assert_eq!(fix.route.choice.model, first.route.choice.model);
         // No follow-up fix tasks, and the fix's landing got no review of its own: a re-check

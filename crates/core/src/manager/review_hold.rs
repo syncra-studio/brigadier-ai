@@ -8,7 +8,7 @@
 //! when the session is merged, archived or deleted: then the files go, and the branch with them
 //! while it is still merged.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use brigadier_git::{Oid, WorktreeSpec};
 use brigadier_providers::Artifact;
@@ -46,10 +46,20 @@ pub(crate) fn fixes_held(fix: &Task, subject: &Task) -> bool {
 }
 
 /// The line a resumed fix worker reads before its findings.
-pub(crate) fn workspace_line(worktree: &str, branch: &str, tip: &Oid, scratch: &str) -> String {
+pub(crate) fn workspace_line(
+    number: u32,
+    worktree: &str,
+    branch: &str,
+    tip: &Oid,
+    scratch: &Path,
+    test_dir: &Path,
+) -> String {
     format!(
-        "[workspace] Your work landed. Your worktree was made again at {worktree}, on your branch `{branch}` moved up to the session's tip {} (your landed work and what landed after it). Your scratch folder is new: {scratch}. Your earlier task is done; this is a new one.",
-        &tip.0[..tip.0.len().min(10)]
+        "[workspace] Your work landed. Your earlier task is done; this is a new one, task-{number}. Your worktree was made again at {worktree}, on your branch `{branch}` moved up to the session's tip {} (your landed work and what landed after it). Your earlier task's folders are gone: your scratch folder is now {}, your outputs folder {}, and your test data folder {}.",
+        &tip.0[..tip.0.len().min(10)],
+        scratch.display(),
+        super::outputs::outputs_dir(scratch).display(),
+        test_dir.display(),
     )
 }
 
