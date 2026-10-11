@@ -325,7 +325,8 @@ function PowerSection() {
 /**
  * Open at login, as the system has it: read when the page opens and whenever the window comes
  * back to the front (the user may have allowed or removed it in the system's settings). Not
- * shown where there is no way (a development build on macOS).
+ * shown where there is no way (a development build on macOS). Waiting for the user's approval
+ * reads as on, so turning it off takes the request back.
  */
 function OpenAtLoginRow() {
   const [state, setState] = useState<LoginItem | null>(null);
@@ -358,7 +359,7 @@ function OpenAtLoginRow() {
       )}
       <SettingsSwitch
         label={GENERAL_ROWS.openAtLogin.label}
-        checked={state === "on"}
+        checked={state === "on" || state === "needsApproval"}
         onCheckedChange={(on) => save.run(async () => setState(await setLoginItem(on)))}
       />
     </SettingsRow>

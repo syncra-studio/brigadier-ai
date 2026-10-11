@@ -11,6 +11,7 @@ type Rendering = {
   sendMenu: string[][];
   followUpHelper: string;
   followUp: string[];
+  loginBefore: string;
   loginOn: string;
   loginOff: string;
   licenses: { title: string; mentions: boolean };
@@ -95,5 +96,8 @@ test("General: notifications off point to System Settings, and Open at login wai
     seen.rows.find((row) => row.setting === "Open at login")?.helper,
     "Allow Brigadier in System Settings › Login Items to finish turning this on",
   );
+  // Waiting for approval reads as on, so the switch can take the request back.
+  assert.equal(seen.loginBefore, "true");
+  assert.equal(seen.calls.find((call) => call.startsWith("setLoginItem")), "setLoginItem false");
   assert.ok(seen.calls.includes("openNotificationSettings"));
 });

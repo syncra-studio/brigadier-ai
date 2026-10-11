@@ -122,6 +122,7 @@ function Fixture() {
           dimmed: item.classList.contains("opacity-50"),
         }));
         seen.version = text(row("Version")?.querySelector("span.tabular-nums"));
+        seen.loginBefore = control("Open at login")?.getAttribute("aria-checked");
         press(control("Send shortcut"));
       },
       () => {
