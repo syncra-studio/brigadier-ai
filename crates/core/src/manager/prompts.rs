@@ -172,7 +172,7 @@ pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a
 
 /// Where the thread sends a live look at an app (SESSION-FIXES-PLAN.md "Computer use"): to the
 /// workers, which have the computer tools, so screenshots stay out of its own context.
-const COMPUTER_ROUTING: &str = "\n- On this Mac every worker can open an app, look at it and use it with the computer tools. A visible UI change's \"done when\" includes \"check it in the running dev build with the computer tools\"; a GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
+const COMPUTER_ROUTING: &str = "\n- On this Mac every worker can open an app, look at it and use it with the computer tools; you can't. So a visible UI change, however small, goes to a worker whose \"done when\" includes \"check it in the running dev build with the computer tools\"; a GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
 
 /// How the thread interviews the user: rounds of question cards over a tree of decisions.
 const GRILLING: &str = "
@@ -472,7 +472,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: 13,
         thread: if cfg!(target_os = "macos") {
-            "From now on, remember that on this Mac every worker can open an app, look at it and use it with the computer tools: a visible UI change's \"done when\" includes \"check it in the running dev build with the computer tools\", and a GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. Screenshots go in the chat only if the user asked; a worker's live check is evidence in its report."
+            "From now on, remember that on this Mac every worker can open an app, look at it and use it with the computer tools, and you can't: a visible UI change, however small, goes to a worker whose \"done when\" includes \"check it in the running dev build with the computer tools\", and a GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. Screenshots go in the chat only if the user asked; a worker's live check is evidence in its report."
         } else {
             ""
         },
@@ -1589,6 +1589,7 @@ mod tests {
         let worker = revision_note(12, true).unwrap_or_default();
         if cfg!(target_os = "macos") {
             assert!(thread.contains("every worker can open an app, look at it and use it"));
+            assert!(thread.contains("a visible UI change, however small, goes to a worker"));
             assert!(thread.contains("a worker's live check is evidence in its report"));
             assert!(worker.contains("check it live with the computer tools on the build you made"));
         } else {
@@ -1923,7 +1924,7 @@ mod environment_tests {
             // It routes live looks to the workers (computer use).
             assert!(text.contains("screenshots in the chat only if the user asked; a worker's live check is evidence in its report"));
             assert_eq!(
-                text.contains("A visible UI change's \"done when\" includes \"check it in the running dev build with the computer tools\""),
+                text.contains("a visible UI change, however small, goes to a worker whose \"done when\" includes \"check it in the running dev build with the computer tools\""),
                 cfg!(target_os = "macos")
             );
             assert!(!text.contains("write the ending again"));
