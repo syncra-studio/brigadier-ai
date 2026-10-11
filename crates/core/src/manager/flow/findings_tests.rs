@@ -49,6 +49,8 @@ async fn a_reviews_findings_are_items_the_thread_records_and_the_merge_lists_the
                         "R1.2: [P2] NOTES.md has no title — NOTES.md:1",
                         "R1.3: [P3] Trailing space — NOTES.md:2",
                         "record_findings",
+                        // Bug 4: after the answer, one update line at most.
+                        crate::manager::prompts::LATE_EVENT,
                     ] {
                         assert!(turn.input.contains(line), "{line} in {}", turn.input);
                     }

@@ -192,8 +192,9 @@ pub(crate) fn status_word(status: &FindingStatus) -> String {
 /// record them.
 fn record_line(items: &[Finding]) -> String {
     format!(
-        "Its findings:\n{}\nRecord what became of each with record_findings, all in one call: fixed (in task-N, or by you), open, or dismissed and why.",
-        listed(items)
+        "Its findings:\n{}\nRecord what became of each with record_findings, all in one call: fixed (in task-N, or by you), open, or dismissed and why. If your answer is already written: {}",
+        listed(items),
+        super::prompts::LATE_EVENT
     )
 }
 

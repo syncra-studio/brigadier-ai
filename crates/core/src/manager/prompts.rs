@@ -104,7 +104,7 @@ How to talk to the user:
 - The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
 - When the request's work is done, write one final answer: at most about five short lines of what changed and what to know. Then, if any, one line "To check: …" for what nobody could check and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_merge, propose_plan), never in text.
-- A late review's fix that lands after your answer: write the ending again, updated; the user sees only the newest. Never repeat a closing or ask the merge again.
+- {LATE_EVENT} Never repeat a closing or ask the merge again.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
 - {AUTHORITY}{short}{code_rules}{preferences}"#,
@@ -157,6 +157,10 @@ fn callable(text: &str, provider: ProviderKind) -> String {
     out.push_str(rest);
     out
 }
+
+/// What the thread does with an event that arrives after its answer (bug 4): an update line
+/// only when the user must know, never a rewritten ending.
+pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a landing, a report's addendum) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), never a new ending. Otherwise reply [quiet].";
 
 /// How the thread interviews the user: rounds of question cards over a tree of decisions.
 const GRILLING: &str = "
@@ -426,6 +430,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: 9,
         thread: "From now on, call Brigadier's tools by the exact names your tool list shows (with its mcp__brigadier__ prefix where it has one): a short name that isn't in the list doesn't exist.",
+        worker: "",
+    },
+    Revision {
+        number: 8,
+        thread: "From now on, an event that arrives after your answer (a review, a landing, a report's addendum) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), never the ending again. Otherwise reply [quiet].",
         worker: "",
     },
 ];
@@ -1198,8 +1207,8 @@ pub(crate) fn late_findings_envelope(task: &Task, shown: &str) -> String {
     format!(
         "[report task-{} · addendum] The worker wrote this after its report, which left it out; \
          it is kept with the report:\n{shown}\n[/report] If it changes nothing you told the user \
-         or the work still to do, reply exactly {QUIET}. If your answer is already written and it \
-         changes it, write the ending again, updated.",
+         or the work still to do, reply exactly {QUIET}. If your answer is already written: \
+         {LATE_EVENT}",
         task.number
     )
 }
@@ -1256,6 +1265,10 @@ mod tests {
     /// answer stays the request's ending rather than a line about the note.
     #[test]
     fn a_note_after_a_report_that_changes_nothing_is_answered_quietly() {
+        // Bug 4: a late event gets one update line at most, never a rewritten ending.
+        assert!(LATE_EVENT.ends_with(&format!("Otherwise reply {QUIET}.")));
+        assert!(LATE_EVENT.contains("one short update line"));
+        assert!(LATE_EVENT.contains("never a new ending"));
         let envelope = late_findings_envelope(&task("claude", None), "All 4 tests pass.");
         assert!(
             envelope.starts_with("[report task-1 · addendum]"),
@@ -1270,7 +1283,7 @@ mod tests {
             "{envelope}"
         );
         assert!(
-            envelope.contains("write the ending again, updated"),
+            envelope.contains(LATE_EVENT) && !envelope.contains("write the ending again"),
             "{envelope}"
         );
     }
@@ -1769,7 +1782,8 @@ mod environment_tests {
             assert!(text.contains("\"To check: …\""));
             assert!(text.contains("\"You'll need to: …\""));
             assert!(text.contains("`### Details`, shown folded"));
-            assert!(text.contains("write the ending again, updated"));
+            assert!(text.contains(LATE_EVENT));
+            assert!(!text.contains("write the ending again"));
             assert!(!text.contains("kind waiting"));
             assert!(!text.contains("Waiting on you"));
         }
@@ -1787,8 +1801,9 @@ mod environment_tests {
         // Every byte is paid for on every call: it stays near 12 KiB, code rules included
         // (the old orchestrator's 11,371 bytes, the interview the user wanted built in, and
         // the suggest_full_access hint of the sandboxed levels, bug 8's check prefixes, and
-        // the review findings the thread records and sends back to their worker, Q7 and Q6.1).
-        assert!(codex.len() < 12_750, "{}", codex.len());
+        // the review findings the thread records and sends back to their worker, Q7 and Q6.1,
+        // and bug 4's late-event rule).
+        assert!(codex.len() < 12_900, "{}", codex.len());
     }
 
     #[test]
