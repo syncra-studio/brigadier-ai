@@ -212,6 +212,29 @@ sessions, answer their approval requests, simulate a usage-limit event and repla
 Recordings are scrubbed of personal data as they are written. The fixtures in
 `crates/providers/fixtures/` ship with the app.
 
+## Settings
+
+Configurations, Providers, Usage and Storage are covered where they come up above. A few more
+pages:
+
+- **Browser.** A switch turns Brigadier's own embedded browser on or off; off, it's absent
+  everywhere and agents are told. On: where to open web links (default: your own browser) and
+  local dev URLs (default: Brigadier's browser); Show full URL in the address bar; Import…
+  (cookies and history from Safari and Chromium- or Gecko-based browsers, once; needs Keychain
+  access for Safari's cookies and Full Disk Access for a Firefox-family profile macOS keeps from
+  other apps); Clear browsing data by time range; Browsing history, filterable by who opened the
+  page (All, an agent, or you); Downloads (save location, or ask each time, and a download
+  history); and, under Advanced, per-site camera and microphone choices (Ask, Allow, Block). Data
+  lives in a WebKit store per data folder, plus `<data>/browser/browser.sqlite` for history,
+  downloads and site choices.
+- **Git.** Which CLI writes commits, commit-message instructions (follow the repository's own
+  style, Conventional Commits, or custom instructions), pull-request instructions, the branch
+  prefix Brigadier uses for its own branches, and a switch to leave out AI co-author lines.
+- **Voice.** Microphone, dictation language, the voice used for playback, a custom word list, and
+  the local speech-recognition model's download and status.
+- **Keyboard shortcuts.** A read-only list of the app's shortcuts.
+- **Archived chats.** The chats you've archived, to reopen or delete for good.
+
 ## Sessions
 
 A session is one orchestrator (Claude or Codex) with no built-in tools except the Brigadier MCP
