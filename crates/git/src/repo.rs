@@ -1302,24 +1302,72 @@ impl Repo {
         }
     }
 
-    /// `work` with `leave_out` as it was at `base` (restored where `base` had a file there,
-    /// removed otherwise), committed on top of it with `message`; `work` itself when nothing is
-    /// left out. A merge task starts from it, so a conflicting task's stray files don't reach
-    /// the merge.
-    pub fn work_without(
-        &self,
-        base: &Oid,
-        work: &Oid,
-        leave_out: &[String],
-        message: &str,
-    ) -> Result<Oid> {
+    /// `work`'s commits since `base` rebuilt with `leave_out` as it was at `base` in each
+    /// (restored where `base` had a file there, removed otherwise), their messages and authors
+    /// kept and a commit left with no change dropped; `work` itself when nothing is left out. A
+    /// merge task starts from it, so a conflicting task's stray files reach neither the merge
+    /// nor the history it lands.
+    pub fn work_without(&self, base: &Oid, work: &Oid, leave_out: &[String]) -> Result<Oid> {
         valid_oid(base)?;
         valid_oid(work)?;
         if leave_out.is_empty() {
             return Ok(work.clone());
         }
-        let tree = self.tree_reverting(work, base, leave_out)?;
-        self.commit_tree(&tree, &[work], message, false)
+        let range = format!("{}..{}", base.0, work.0);
+        let list = self.cmd(
+            &[
+                "rev-list",
+                "--reverse",
+                "--first-parent",
+                "--parents",
+                &range,
+            ],
+            true,
+        )?;
+        let mut tip: Option<Oid> = None;
+        for line in parse::text(&list)?.lines() {
+            let mut ids = line.split_whitespace().map(|id| Oid(id.to_owned()));
+            let (Some(commit), Some(parent)) = (ids.next(), ids.next()) else {
+                return Err(Error::Invalid(
+                    "the work holds a commit without a parent".into(),
+                ));
+            };
+            let onto = tip.get_or_insert(parent).clone();
+            let tree = self.tree_reverting(&commit, base, leave_out)?;
+            if tree == self.tree_of(&onto.0)? {
+                continue;
+            }
+            let (message, author) = self.authored(&commit)?;
+            tip = Some(self.commit_tree_with(&tree, &[&onto], &message, &author)?);
+        }
+        Ok(tip.unwrap_or_else(|| work.clone()))
+    }
+
+    /// A commit's exact message and its author's name, email and date as git environment.
+    pub(crate) fn authored(&self, commit: &Oid) -> Result<(String, Vec<(OsString, OsString)>)> {
+        let raw = self.cmd(&["cat-file", "commit", &commit.0], true)?;
+        let raw = parse::text(&raw)?;
+        let (headers, message) = raw
+            .split_once("\n\n")
+            .unwrap_or((raw.strip_suffix('\n').unwrap_or(raw), ""));
+        let author = headers
+            .lines()
+            .find_map(|l| l.strip_prefix("author "))
+            .ok_or_else(|| Error::Parse("commit without an author".into()))?;
+        let (ident, date) = author
+            .rsplit_once('>')
+            .ok_or_else(|| Error::Parse("malformed commit author".into()))?;
+        let (name, email) = ident
+            .split_once('<')
+            .ok_or_else(|| Error::Parse("malformed commit author".into()))?;
+        let env = [
+            ("GIT_AUTHOR_NAME", name.trim_end()),
+            ("GIT_AUTHOR_EMAIL", email),
+            ("GIT_AUTHOR_DATE", date.trim()),
+        ]
+        .map(|(key, value)| (key.into(), value.into()))
+        .into();
+        Ok((message.to_owned(), env))
     }
 
     /// Every file path in `commit`'s tree.
@@ -1683,6 +1731,55 @@ mod tests {
         assert_ne!(tree(&first), tree(&changed));
         // A tree is not a commit.
         assert!(repo.tree_of(&tree(&first).0).is_err());
+    }
+
+    #[test]
+    fn work_without_its_litter_keeps_it_out_of_every_commit() {
+        let (dir, git) = test_git("without");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        fs::write(root.join("a.txt"), "a\n").unwrap();
+        let base = repo.commit_changes("Base", true).unwrap();
+        // The task commits a log with its first step, then a step of its own.
+        fs::write(root.join("debug.log"), "scratch\n").unwrap();
+        fs::write(root.join("b.txt"), "b\n").unwrap();
+        repo.commit_changes("Add b", true).unwrap();
+        fs::write(root.join("c.txt"), "c\n").unwrap();
+        let work = repo.commit_changes("Add c", true).unwrap();
+        let leave_out = vec!["debug.log".to_owned()];
+
+        let without = repo.work_without(&base, &work, &leave_out).unwrap();
+        let paths = repo.paths_at(&without).unwrap();
+        assert!(
+            paths.contains("b.txt") && paths.contains("c.txt"),
+            "{paths:?}"
+        );
+        assert!(!paths.contains("debug.log"), "{paths:?}");
+        // No commit it carries holds the log, and each keeps its message.
+        let history = repo
+            .cmd(
+                &["log", "--format=%s", &format!("{}..{}", base.0, without.0)],
+                true,
+            )
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&history), "Add c\nAdd b\n");
+        let touched = repo
+            .cmd(
+                &[
+                    "log",
+                    "--format=%H",
+                    &format!("{}..{}", base.0, without.0),
+                    "--",
+                    "debug.log",
+                ],
+                true,
+            )
+            .unwrap();
+        assert!(touched.is_empty(), "{}", String::from_utf8_lossy(&touched));
+        assert!(repo.ancestor(&base, &without).unwrap());
+        // Nothing to leave out: the work itself.
+        assert_eq!(repo.work_without(&base, &work, &[]).unwrap(), work);
     }
 
     #[test]

@@ -7,7 +7,6 @@ use crate::{
 };
 use std::{
     collections::BTreeSet,
-    ffi::OsString,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -430,7 +429,7 @@ impl Worktree {
             match self.repo.replay_tree(&parent, &tip, &source)? {
                 TreeMerge::Conflicts(paths) => return Ok(SeriesOutcome::Conflicts { paths }),
                 TreeMerge::Ready(tree) => {
-                    let (message, author) = self.authored(&commit)?;
+                    let (message, author) = self.repo.authored(&commit)?;
                     tip = self
                         .repo
                         .commit_tree_with(&tree, &[&tip], &message, &author)?;
@@ -471,33 +470,6 @@ impl Worktree {
                 })
             }
         }
-    }
-
-    /// A commit's exact message and its author's name, email and date as git environment.
-    fn authored(&self, commit: &Oid) -> Result<(String, Vec<(OsString, OsString)>)> {
-        let raw = self.repo.cmd(&["cat-file", "commit", &commit.0], true)?;
-        let raw = parse::text(&raw)?;
-        let (headers, message) = raw
-            .split_once("\n\n")
-            .unwrap_or((raw.strip_suffix('\n').unwrap_or(raw), ""));
-        let author = headers
-            .lines()
-            .find_map(|l| l.strip_prefix("author "))
-            .ok_or_else(|| Error::Parse("commit without an author".into()))?;
-        let (ident, date) = author
-            .rsplit_once('>')
-            .ok_or_else(|| Error::Parse("malformed commit author".into()))?;
-        let (name, email) = ident
-            .split_once('<')
-            .ok_or_else(|| Error::Parse("malformed commit author".into()))?;
-        let env = [
-            ("GIT_AUTHOR_NAME", name.trim_end()),
-            ("GIT_AUTHOR_EMAIL", email),
-            ("GIT_AUTHOR_DATE", date.trim()),
-        ]
-        .map(|(key, value)| (key.into(), value.into()))
-        .into();
-        Ok((message.to_owned(), env))
     }
 
     /// [`Repo::clean_ai_coauthors`] on the commits from `base` to `tip`, which must be HEAD:

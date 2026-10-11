@@ -892,7 +892,7 @@ impl SessionManager {
 
     /// A merge task with a subject starts from the conflicting task's work, kept as a WIP
     /// commit: the target's tip (where its merge starts) and that work, without the files the
-    /// landing's litter guard would leave out, so they don't reach the merge.
+    /// landing's litter guard would leave out, so they reach neither the merge nor its history.
     pub(crate) async fn merge_start(&self, subject: &Task, target: &str) -> Result<(Oid, Oid)> {
         let workspace = subject
             .workspace
@@ -920,7 +920,6 @@ impl SessionManager {
             .unwrap_or_default();
         let (git, target) = (self.git.clone(), target.to_owned());
         let wip = format!("WIP: task-{} before merging", subject.number);
-        let without = format!("WIP: task-{}'s work to merge", subject.number);
         blocking(move || {
             let worktree = git.open_worktree(&path).map_err(git_error)?;
             let leave_out: Vec<String> =
@@ -937,7 +936,7 @@ impl SessionManager {
             // The subject's own checkout, so the commit uses the identity its WIP commit did.
             let repo = git.open(&path).map_err(git_error)?;
             let work = repo
-                .work_without(&base, &work, &leave_out, &without)
+                .work_without(&base, &work, &leave_out)
                 .map_err(git_error)?;
             let onto = repo
                 .branch_tip(&target)
