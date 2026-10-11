@@ -906,6 +906,11 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      doesn't widen to the shared git folder as it does for a cwd that is a linked worktree. Codex 0.162.1's
      profile does the same. `git pack-refs` prunes a packed ref's emptied folder, which a sandboxed git can't make
      again: the engine makes it whenever it grants the roots (a CLI's start, each ref check).
+   - Found live (2026-10-11): that grant holds only if the files aren't also given as `--add-dir`. A not-yet-existing
+     `.lock` given as an added folder can't be made in the sandbox at all, so every commit of a Claude thread or
+     worker below Full access failed with "Unable to create '…/<branch>.lock': Operation not permitted" (and the
+     workers retried with the sandbox off). The CLI now gets as `--add-dir` only the roots that are folders; the
+     ref, its `.lock`, its reflog and `packed-refs.lock` stay in `allowWrite` alone. Nothing is widened.
    - Claude also gets the protected set as `filesystem.denyWrite`, plus `Edit`/`Write`/`NotebookEdit` deny rules, as
      already done for `hooks` and `config` (`P/claude/mod.rs:614-627`): its file tools work outside the OS sandbox.
      A deny wins over every allow in Claude's sandbox (sandbox-runtime 0.0.79 writes the denies after the allows),
@@ -916,7 +921,7 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      included (its existing folders resolved, nothing more granted).
    - A ref update writes `<ref>.lock` and renames it over the ref. If a CLI's sandbox can't grant a path that
      doesn't exist yet, each task branch gets a folder of its own (`brigadier/<short>/task-N/work`) and that folder
-     is granted. Phase 1 decides this by test.
+     is granted. Phase 1 decided by test: not needed (both CLIs grant a listed path that doesn't exist yet).
 3. **At Full access: the thread only** (revised 2026-10-11, the Delegator's decision after a test). A Seatbelt
    profile can't nest: inside one, `sandbox-exec` fails with `sandbox_apply: Operation not permitted` (exit 71).
    Wrapping every Full-access process would break whatever applies its own sandbox: `swift build` (its manifest

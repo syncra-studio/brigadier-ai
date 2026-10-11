@@ -330,9 +330,13 @@ impl Claude {
         // a symlink (`/tmp` → `/private/tmp`): Claude matches the path as a tool was given it.
         // `--add-dir <directories...>` is variadic (claude --help, 2.1.292): only flags follow
         // it here, and turns go on stdin, so no positional argument is taken for a folder.
+        // A writable root that isn't a folder (a branch's ref, its `.lock`, `packed-refs.lock`)
+        // is granted by the sandbox's `allowWrite` alone: given as `--add-dir`, a `.lock` not
+        // there yet can't be made in the sandbox at all (2.1.296, checked by hand), so no
+        // commit takes its branch's lock.
         let mut dirs: Vec<&PathBuf> = spec.add_dirs.iter().collect();
         for root in spec.access.writable_roots() {
-            if !dirs.contains(&root) {
+            if root.is_dir() && !dirs.contains(&root) {
                 dirs.push(root);
             }
         }
@@ -2142,6 +2146,59 @@ mod tests {
             ..thread(Access::Full, false)
         };
         assert!(read_only.access_with_dirs().writable_roots().is_empty());
+    }
+
+    #[test]
+    fn only_a_writable_root_that_is_a_folder_is_added_as_one() {
+        let cwd = Temp::new();
+        let git = cwd.path().join("repo/.git");
+        let objects = git.join("objects");
+        let refs = git.join("refs/heads/brigadier/aa");
+        std::fs::create_dir_all(&objects).expect("objects");
+        std::fs::create_dir_all(&refs).expect("refs");
+        let own = refs.join("task-1");
+        std::fs::write(&own, "0000000000000000000000000000000000000000\n").expect("ref");
+        let lock = refs.join("task-1.lock");
+        let spec = SessionSpec {
+            access: Access::Scoped {
+                write_cwd: true,
+                writable_roots: vec![objects.clone(), own.clone(), lock.clone()],
+                network: true,
+                deny_read: Vec::new(),
+                unix_sockets: Vec::new(),
+            },
+            ..spec(cwd.path(), &["claude-sonnet-5"])
+        };
+        let args = Claude::session_args(
+            &spec,
+            cwd.path(),
+            "00000000-0000-4000-8000-000000000000",
+            false,
+        )
+        .expect("args");
+        let added: Vec<&String> = args
+            .windows(2)
+            .filter(|pair| pair[0] == "--add-dir")
+            .map(|pair| &pair[1])
+            .collect();
+        assert!(added.contains(&&objects.display().to_string()), "{added:?}");
+        for file in [&own, &lock] {
+            let real = resolved(file).display().to_string();
+            assert!(
+                !added
+                    .iter()
+                    .any(|dir| **dir == file.display().to_string() || **dir == real),
+                "{added:?}"
+            );
+        }
+        let settings = settings(&spec, cwd.path(), &SubAgents::Any, false);
+        let allow = settings["sandbox"]["filesystem"]["allowWrite"]
+            .as_array()
+            .expect("allowWrite");
+        assert!(
+            allow.contains(&json!(resolved(&lock).display().to_string())),
+            "{allow:?}"
+        );
     }
 
     /// Only a thread gets the output hook: one command after every `Bash` call, successful or
