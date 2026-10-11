@@ -2226,6 +2226,7 @@ impl SessionManager {
             }
             let repo = git.open(&repo_path).map_err(git_error)?;
             repo.add_worktree(&path, spec).map_err(git_error)?;
+            super::sidecars::stand_in_at(&git, &path);
             let mut copied = Vec::new();
             if warm {
                 let started = std::time::Instant::now();
@@ -2357,9 +2358,9 @@ impl SessionManager {
                             .map_err(git_error)?,
                         },
                     };
-                    repo.add_worktree(&path, spec)
-                        .map(|_| ())
-                        .map_err(git_error)
+                    repo.add_worktree(&path, spec).map_err(git_error)?;
+                    super::sidecars::stand_in_at(&git, &path);
+                    Ok(())
                 })
                 .await?;
                 if let Some(Setup::Session {

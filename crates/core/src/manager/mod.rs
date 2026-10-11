@@ -69,6 +69,7 @@ mod routing;
 mod run;
 mod secrets;
 mod side_chat;
+mod sidecars;
 mod takeover;
 mod thread;
 mod thread_metrics;

@@ -827,6 +827,7 @@ impl SessionManager {
                 .map_err(git_error)?
                 .add_worktree(&path, WorktreeSpec::Detached { at })
                 .map_err(git_error)?;
+            super::sidecars::stand_in_at(&git, &path);
             Ok(())
         })
         .await

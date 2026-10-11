@@ -254,3 +254,79 @@ async fn a_prefix_that_changes_nothing_still_answers_from_the_cache() {
     assert_eq!(commands[1..4], ["echo checked"; 3]);
     flow.stop().await;
 }
+
+/// A Tauri app's build wants its sidecar programs beside its config, and they are git-ignored:
+/// a task's fresh worktree gets an empty stand-in for each, so `cargo clippy` runs there, and
+/// git still sees nothing to commit.
+#[tokio::test]
+async fn a_task_worktree_gets_a_stand_in_for_each_ignored_sidecar() {
+    let seen: Arc<Mutex<Option<(u64, String)>>> = Arc::default();
+    let log = seen.clone();
+    let flow = Flow::start(
+        "sidecars",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.input.contains("[report task-1") {
+                        let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("Noted.");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Note the app", "kind": "implement",
+                                   "spec": "Add notes.txt.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                let sidecar = turn.cwd.join(format!(
+                    "app/src-tauri/binaries/helper-{}{}",
+                    super::super::sidecars::host_triple(),
+                    std::env::consts::EXE_SUFFIX
+                ));
+                let size = std::fs::metadata(&sidecar).map_or(u64::MAX, |meta| meta.len());
+                *log.lock().unwrap() =
+                    Some((size, turn.git(&["status", "--porcelain"]).trim().to_owned()));
+                turn.write("notes.txt", "notes\n");
+                turn.git(&["add", "notes.txt"]);
+                turn.git(&["commit", "-qm", "Add notes"]);
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Added notes.txt.", "changes": ["notes.txt"]}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    let app = flow.repo.join("app/src-tauri");
+    std::fs::create_dir_all(&app).unwrap();
+    std::fs::write(
+        app.join("tauri.conf.json"),
+        r#"{"bundle": {"externalBin": ["binaries/helper"]}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        flow.repo.join(".gitignore"),
+        "*.log\n/app/src-tauri/binaries/\n",
+    )
+    .unwrap();
+    super::git(&flow.repo, &["add", "-A"]);
+    super::git(&flow.repo, &["commit", "-q", "-m", "Add the app"]);
+    flow.say("Add notes.txt.").await;
+    flow.until("the worker's look", |_| seen.lock().unwrap().is_some())
+        .await;
+    flow.settled().await;
+    let (size, status) = seen.lock().unwrap().clone().unwrap();
+    assert_eq!(size, 0, "an empty stand-in");
+    assert_eq!(status, "", "nothing to commit");
+    flow.stop().await;
+}

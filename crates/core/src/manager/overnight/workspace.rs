@@ -89,6 +89,7 @@ impl SessionManager {
                 },
             };
             repo.add_worktree(&worktree, spec).map_err(git_error)?;
+            crate::manager::sidecars::stand_in_at(&git, &worktree);
             Ok(base_commit)
         })
         .await?;
