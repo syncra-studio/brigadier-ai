@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::awake::Awake;
-use crate::dictation::Dictation;
+use crate::dictation::{Dictation, Started};
 use crate::idle;
 use crate::metrics::Metrics;
 use crate::storage::Storage;
@@ -192,7 +192,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         terminals: HashSet::new(),
         worker_terminals: HashMap::new(),
         dictation_feed: None,
-        dictations: HashSet::new(),
+        dictations: Started::new(daemon.dictation.clone()),
         late_tx,
         late,
     };
@@ -222,8 +222,9 @@ struct Session {
     worker_terminals: HashMap<u32, (u16, u16)>,
     /// Dictation updates, once this connection dictated or downloaded the speech model.
     dictation_feed: Option<broadcast::Receiver<DictationUpdate>>,
-    /// The dictations this connection started: only their text is forwarded.
-    dictations: HashSet<String>,
+    /// The dictations this connection started: only their text is forwarded, and the ones
+    /// still taking audio are dropped when it ends.
+    dictations: Started,
     /// Answers to slow requests (clones), which run beside the others, by request id.
     late_tx: mpsc::Sender<(u32, Result<Response, IpcError>)>,
     late: mpsc::Receiver<(u32, Result<Response, IpcError>)>,

@@ -11,7 +11,7 @@
 //! blocking work runs off the async runtime (a blocking task, or the helper process), and how
 //! they go reaches the app as [`DictationUpdate`]s.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
@@ -283,6 +283,41 @@ impl Dictation {
     pub fn stop_all(&self) {
         lock(&self.live).clear();
         self.cancel_download();
+    }
+}
+
+/// The dictations one connection started. It goes with the connection and drops any of them
+/// still taking audio, so a client that goes away mid-dictation leaves no helper running and
+/// the speech model no longer looks in use.
+pub struct Started {
+    dictation: Arc<Dictation>,
+    ids: HashSet<String>,
+}
+
+impl Started {
+    pub fn new(dictation: Arc<Dictation>) -> Self {
+        Self {
+            dictation,
+            ids: HashSet::new(),
+        }
+    }
+
+    pub fn insert(&mut self, id: String) {
+        self.ids.insert(id);
+    }
+
+    /// Whether the connection started it (it's forgotten either way).
+    pub fn remove(&mut self, id: &str) -> bool {
+        self.ids.remove(id)
+    }
+}
+
+impl Drop for Started {
+    fn drop(&mut self) {
+        // A finished one has already left `live`, so this only drops the ones still taking audio.
+        for id in self.ids.drain() {
+            self.dictation.cancel(&id);
+        }
     }
 }
 
@@ -590,6 +625,41 @@ fn transcribe(job: &Transcription) -> std::result::Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A dictation taking audio, with `cat` standing in for the helper.
+    fn take_audio(dictation: &Dictation, id: &str) {
+        let mut child = tokio::process::Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        lock(&dictation.live).insert(
+            id.to_owned(),
+            Live {
+                child,
+                stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
+                received: 0,
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_goes_away_drops_the_dictation_it_left_running() {
+        let dictation = Arc::new(Dictation::new(PathBuf::from("/nonexistent")));
+        take_audio(&dictation, "d1");
+        let mut theirs = Started::new(dictation.clone());
+        theirs.insert("d1".into());
+        // Another connection, with a dictation that finished: going away touches nothing else.
+        let mut other = Started::new(dictation.clone());
+        other.insert("d0".into());
+        drop(other);
+        assert_eq!(dictation.work(), vec!["dictation".to_owned()]);
+        drop(theirs);
+        assert!(dictation.work().is_empty());
+        assert!(lock(&dictation.live).is_empty());
+    }
 
     fn args(list: &[&str]) -> impl Iterator<Item = std::ffi::OsString> {
         list.iter()
