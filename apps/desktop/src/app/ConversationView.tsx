@@ -273,6 +273,7 @@ function useItems(
       }
       // The answer, not an update line under it.
       const answerId = (block.texts.findLast((text) => !text.update) ?? block.texts.at(-1))?.messageId ?? null;
+      const forkId = block.texts.at(-1)?.messageId ?? null;
       const rating = (answerId && ratings[answerId]) || null;
       const sig = signature(block, picked, session, rework, rating);
       const texts = block.texts.map((text) => text.text);
@@ -308,6 +309,7 @@ function useItems(
           requestId: block.key,
           requestIds: block.requestIds,
           answerId,
+          forkId,
         };
         cache.set(node.id, {
           item: { id: node.id, parentId: node.parentId, kind: "block", block, meta, texts, rating },

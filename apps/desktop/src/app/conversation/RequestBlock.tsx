@@ -117,8 +117,10 @@ export type BlockMeta = {
   requestId: string;
   /** It and the requests steered into it. */
   requestIds: string[];
-  /** The message the user rates: the block's last reply. */
+  /** The message the user rates: the block's answer, not an update line under it. */
   answerId: string | null;
+  /** The message a fork starts from: the block's last reply, an update line included. */
+  forkId: string | null;
 };
 
 /** Now, ticking each second while `live`. */
@@ -601,10 +603,11 @@ export const RequestBlock: FC = () => {
           session={meta.session}
           rework={meta.rework}
           atMs={meta.endedAtMs}
-          answerId={meta.answerId}
+          shown={answer === null ? null : [answer, ...updates]}
+          forkId={meta.forkId}
         />
       )}
-      <ContinuedFrom answerId={meta.answerId} />
+      <ContinuedFrom forkId={meta.forkId} />
       {meta.compactions
         .filter((compaction) => !compaction.inTurn)
         .map((compaction) => (
@@ -662,19 +665,24 @@ const ModelChanged: FC<{ model: ModelChoice | null; picked: ModelChoice | null }
 /**
  * Under the answer: copy it, rate it and, in a Chat, ask for another answer and move between
  * answers (a session's answers have neither). The latest answer always shows them, an older one
- * on hover or focus; when it came shows on hover.
+ * on hover or focus; when it came shows on hover. Copy and Read aloud take the text `shown`
+ * (the answer and its update lines, by part), or else the last part.
  */
 const AnswerActions: FC<{
   session: boolean;
   rework: boolean;
   atMs: number | null;
-  answerId: string | null;
-}> = ({ session, rework, atMs, answerId }) => {
+  shown: number[] | null;
+  forkId: string | null;
+}> = ({ session, rework, atMs, shown, forkId }) => {
   const conversation = useViewConversation();
   const answer = useAuiState((s) => {
     const parts = s.message.parts;
-    const part = parts[parts.length - 1];
-    return part?.type === "text" ? part.text : "";
+    return (shown ?? [parts.length - 1])
+      .map((index) => parts[index])
+      .map((part) => (part?.type === "text" ? part.text : ""))
+      .filter((text) => text !== "")
+      .join("\n\n");
   });
   const rated = useAuiState((s) => {
     const type = s.message.metadata.submittedFeedback?.type;
@@ -717,8 +725,8 @@ const AnswerActions: FC<{
         </ActionBarPrimitive.Reload>
       )}
       {!session && <BranchPicker />}
-      {conversation && answerId && (
-        <ForkMenu conversationId={conversation.id} kind={conversation.kind} messageId={answerId} />
+      {conversation && forkId && (
+        <ForkMenu conversationId={conversation.id} kind={conversation.kind} messageId={forkId} />
       )}
       {atMs !== null && (
         <span className="ps-1 text-xs tabular-nums opacity-0 group-hover/answer:opacity-100 group-focus-within/answer:opacity-100">
@@ -746,10 +754,10 @@ const ReadAloud: FC<{ text: string }> = ({ text }) => {
 };
 
 /** "⑂ Continued from chat" under the answer a fork was made from: back to where it came from. */
-const ContinuedFrom: FC<{ answerId: string | null }> = ({ answerId }) => {
+const ContinuedFrom: FC<{ forkId: string | null }> = ({ forkId }) => {
   const origin = useViewConversation()?.forkedFrom ?? null;
   const source = useApp((s) => (origin ? s.conversations[origin.conversationId] : undefined));
-  if (!origin || !answerId || origin.messageId !== answerId) return null;
+  if (!origin || !forkId || origin.messageId !== forkId) return null;
   return (
     <div className="text-muted-foreground flex items-center gap-3 py-2 text-sm">
       <span className="bg-border h-px flex-1" />
