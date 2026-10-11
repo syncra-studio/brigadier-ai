@@ -1570,7 +1570,10 @@ the mockup in it, and of the final side-by-side. A thread open since phase 5 off
   provider. The Codex thread prompt grew to 15,038 bytes; its cap went from 14,600 to 15,100.
 - **Codex review** of the integrated phase: five findings, all fixed with a test each. They were a folder swapped
   for a link during a write, ⌘↩ sending from a tab behind, notes editable while sending, the pill's version, and a
-  dismissed revision not coming back.
+  dismissed revision not coming back. The verifier's review found three more, also fixed with a test each:
+  - a send in flight is the session's, so a tab opened again mid-send can't resend or lose notes;
+  - each write of a worker's file gets its own temporary name;
+  - no Comment on a mockup whose worker has ended (its notes would have nowhere to go).
 - **Live, on dev builds driven by Brigadier's own `brigadier-computer`:**
   - **Continuity:** a session opened on a c4fa9116 build was told revision 15. Reopened on this tree, its next
     message went to the same native session with one `[instructions]` note (revision 16's text, no new role
