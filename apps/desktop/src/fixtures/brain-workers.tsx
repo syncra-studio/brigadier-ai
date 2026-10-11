@@ -1,0 +1,136 @@
+/**
+ * The Inspector's Brain tab, opened in Settings from a session with no Brain picked before, over
+ * the IPC mock. No daemon.
+ *
+ * ?from=session (the default) | chat | other: Settings opened from a session of the project, a
+ * chat, or a session of another project. ?pick=<key>: a Brain picked before (calc, other or
+ * personal).
+ * ?drive=1 records what the tab shows, sends a task update and a reconnect, and writes what it
+ * saw to #brain-workers-result (BrainWorkersRender.test.ts reads it).
+ */
+import { mockIPC } from "@tauri-apps/api/mocks";
+import { useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+
+import { BrainTab } from "@/app/inspector/brain/BrainTab";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { BrainOverview, BrainUse, Conversation, EventEnvelope, Project, Request, Task } from "@/ipc/generated";
+import { openSettings } from "@/state/actions";
+import { applyBrainEvents, selectBrain } from "@/state/brain";
+import { useApp } from "@/state/store";
+
+const params = new URLSearchParams(location.search);
+const from = params.get("from") ?? "session";
+
+function project(id: string, name: string): Project {
+  return { id, name, createdAtMs: 0, repos: [{ path: `/tmp/${name}`, name }], trust: [] } as unknown as Project;
+}
+
+function conversation(id: string, projectId: string | null): Conversation {
+  return { id, kind: projectId ? "session" : "chat", projectId, title: id, pinnedAtMs: null, createdAtMs: 0,
+    updatedAtMs: 0, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+    setup: null } as unknown as Conversation;
+}
+
+function task(id: string, number: number, title: string, brain: BrainUse | undefined, updatedAtMs: number): Task {
+  return { id, conversationId: "session", number, title, brain, createdAtMs: 0, updatedAtMs } as unknown as Task;
+}
+
+const overview: BrainOverview = {
+  projectId: "calc",
+  stats: { nodes: 10, edges: 2, stale: 0, updatedMs: null, unembedded: 0, kinds: [], transcriptEntries: 0, bytesOnDisk: 1024 },
+  index: null,
+  embedder: { model: "fixture-model", modelBytes: 0, dimensions: 512, state: { type: "loaded" } },
+  jobs: [],
+};
+
+useApp.setState({
+  projects: { calc: project("calc", "calc"), other: project("other", "other") },
+  conversations: {
+    session: conversation("session", "calc"),
+    chat: conversation("chat", null),
+    elsewhere: conversation("elsewhere", "other"),
+  },
+  connection: { status: "connected", daemon: null, reason: null },
+  selection: { type: "conversation", id: from === "chat" ? "chat" : from === "other" ? "elsewhere" : "session" },
+});
+const pick = params.get("pick");
+if (pick) selectBrain(pick);
+// Opening Settings remembers the session it was opened from (no Brain picked before).
+openSettings("inspector");
+
+const calls: string[] = [];
+mockIPC((command, payload) => {
+  if (command !== "ipc_request") return null;
+  const req = (payload as { request: Request }).request;
+  switch (req.method) {
+    case "getBrain":
+      calls.push(`getBrain ${req.projectId ?? "personal"}`);
+      return { method: req.method, overview: { ...overview, projectId: req.projectId } };
+    case "getConversation":
+      calls.push(`getConversation ${req.id}`);
+      return {
+        method: req.method,
+        view: {
+          tasks: [
+            task("t1", 1, "Add mul", { queries: 3, factsIn: 2, factsOut: 1, calls: 40 }, 10),
+            task("t2", 2, "Long refactor", { queries: 0, factsIn: 0, factsOut: 0, calls: 80 }, 10),
+            task("t3", 3, "Before counters", undefined, 10),
+          ],
+        },
+      };
+    default:
+      return { method: req.method };
+  }
+});
+
+const picker = () => document.querySelector('button[aria-label="Brain"]')?.textContent?.trim();
+const section = () =>
+  [...document.querySelectorAll("section")].find((s) => s.querySelector("h2")?.textContent === "Workers in this session");
+const rows = () =>
+  [...(section()?.querySelectorAll("li") ?? [])].map((li) => ({
+    name: li.querySelector("span")?.textContent,
+    low: !!li.querySelector('[data-slot="badge"]'),
+    use: li.querySelector("p")?.textContent,
+  }));
+
+function Fixture() {
+  const [result, setResult] = useState("");
+  useEffect(() => {
+    if (!params.has("drive")) return;
+    const seen: Record<string, unknown> = {};
+    const at = (ms: number, run: () => void) => setTimeout(run, ms);
+    const timers = [
+      at(600, () => {
+        seen.first = { picker: picker(), rows: rows() };
+        const updated = task("t1", 1, "Add mul", { queries: 4, factsIn: 2, factsOut: 2, calls: 45 }, 20);
+        const stale = task("t2", 2, "Long refactor", { queries: 9, factsIn: 9, factsOut: 9, calls: 9 }, 5);
+        const elsewhere = { ...task("t9", 9, "Other session", { queries: 1, factsIn: 0, factsOut: 0, calls: 1 }, 20), conversationId: "chat" };
+        applyBrainEvents(
+          [updated, stale, elsewhere].map(
+            (t, i) => ({ seq: 100 + i, stream: `conversation:${t.conversationId}`, streamSeq: i, atMs: 0, event: { type: "taskUpdated", task: t } }) as EventEnvelope,
+          ),
+        );
+      }),
+      at(900, () => {
+        seen.updated = rows();
+        useApp.setState({ connection: { status: "disconnected", daemon: null, reason: "fixture" } });
+      }),
+      at(1200, () => useApp.setState({ connection: { status: "connected", daemon: null, reason: null } })),
+      at(1600, () => {
+        seen.calls = calls;
+        setResult(JSON.stringify(seen));
+      }),
+    ];
+    return () => timers.forEach(clearTimeout);
+  }, []);
+  return (
+    <TooltipProvider>
+      <main className="bg-background text-foreground flex h-screen flex-col overflow-hidden">
+        <BrainTab />
+      </main>
+      {result && <pre id="brain-workers-result">{result}</pre>}
+    </TooltipProvider>
+  );
+}
+createRoot(document.getElementById("root")!).render(<Fixture />);
