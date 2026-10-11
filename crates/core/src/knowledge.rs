@@ -199,9 +199,9 @@ pub fn cache_lifetime(provider: ProviderKind) -> Option<std::time::Duration> {
     }
 }
 
-/// Below this context a cold resume costs less than a rebirth's briefing (about 25k tokens
-/// written, plus its checkpoint): the orchestrator just resumes.
-const COLD_REBIRTH_MIN_TOKENS: i64 = 60_000;
+/// Below this context an orchestrator whose cache expired just resumes: re-caching it is
+/// cheap enough, and it keeps its whole context (SESSION-FIXES-PLAN Q5, the user's answer).
+const COLD_REBIRTH_MIN_TOKENS: i64 = 150_000;
 
 /// The least context at which an orchestrator on `provider` is reborn for an expired cache:
 /// below the size threshold, of course. A debug build takes `BRIGADIER_COLD_REBIRTH_TOKENS`,
@@ -374,5 +374,27 @@ mod tests {
         // Codex compacts on its own at 90%: its lower shares stay.
         assert_eq!(at(ProviderKind::Codex, Some(1_000_000)), (150_000, 190_000));
         assert_eq!(at(ProviderKind::Codex, Some(200_000)), (130_000, 160_000));
+    }
+
+    #[test]
+    fn a_cold_rebirth_needs_150k_and_never_more_than_a_rebirth() {
+        if std::env::var_os("BRIGADIER_REBIRTH_TOKENS").is_some()
+            || std::env::var_os("BRIGADIER_COLD_REBIRTH_TOKENS").is_some()
+        {
+            return;
+        }
+        assert_eq!(
+            cold_rebirth_min_tokens(ProviderKind::Claude, Some(1_000_000)),
+            150_000
+        );
+        assert_eq!(
+            cold_rebirth_min_tokens(ProviderKind::Claude, Some(200_000)),
+            150_000
+        );
+        // A small window's rebirth comes first.
+        assert_eq!(
+            cold_rebirth_min_tokens(ProviderKind::Claude, Some(100_000)),
+            75_000
+        );
     }
 }

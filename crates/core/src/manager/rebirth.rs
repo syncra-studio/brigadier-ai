@@ -179,6 +179,26 @@ impl RebirthPrep {
     }
 }
 
+#[cfg(test)]
+impl RebirthPrep {
+    /// A checkpoint whose fork wrote `note` at `at_ms`, for the session `old_native_id`.
+    pub(crate) fn written(note: &str, old_native_id: &str, at_ms: i64) -> Arc<Self> {
+        let (_, note) = watch::channel(Some(Some(note.to_owned())));
+        Arc::new(Self {
+            id: uuid::Uuid::now_v7().to_string(),
+            started_at_ms: at_ms,
+            at_tokens: 0,
+            window: None,
+            old_native_id: Some(old_native_id.to_owned()),
+            due: AtomicBool::new(false),
+            ready_at_ms: AtomicI64::new(at_ms),
+            note,
+            after_close: std::sync::Mutex::new(None),
+            waits_for_close: false,
+        })
+    }
+}
+
 /// How the next CLI session of a conversation starts over.
 pub(crate) struct BriefingPlan {
     pub trigger: RebirthTrigger,

@@ -2237,3 +2237,114 @@ async fn a_permission_change_on_a_busy_thread_resumes_with_the_note() {
     assert_eq!(rebirth_count(&flow).await, 0, "no rebirth");
     flow.stop().await;
 }
+
+/// A thread idle past its cache's lifetime, with a checkpoint covering its last request, at
+/// `context` tokens of a 1M window, its CLI closed meanwhile: the first session's id, the
+/// thread's settled decisions and every input the thread got.
+async fn cold_turn(name: &str, context: i64) -> (Flow, String, Vec<String>, Vec<String>) {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        name,
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("First.").await;
+    flow.settled().await;
+    let native = first_native_id(&flow).await;
+    // Thirty settled decisions with long bodies: far past the briefing's old 4k-token budget
+    // for them.
+    let decisions: Vec<String> = (0..30)
+        .map(|n| {
+            format!(
+                "Decision {n}: {}",
+                format!("keep part {n} as it is; ").repeat(40)
+            )
+        })
+        .collect();
+    let kept = flow
+        .manager
+        .keep_note_decisions(&flow.conversation, decisions.clone(), 0)
+        .await
+        .unwrap();
+    assert_eq!(kept, 30);
+    let now = crate::now_ms();
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    conv.set_cache_mark(crate::manager::cold::CacheMark {
+        native_id: native.clone(),
+        provider: ProviderKind::Claude,
+        at_ms: now - 2 * 3_600_000,
+        context,
+        window: Some(1_000_000),
+    })
+    .await;
+    conv.set_checkpoint(crate::manager::rebirth::RebirthPrep::written(
+        "Goal: the first ask.\nWhat to do next: the second.",
+        &native,
+        now - 2 * 3_600_000 + 60_000,
+    ))
+    .await;
+    conv.close_cli().await;
+
+    flow.say("Second.").await;
+    flow.until("the second turn", |_| inputs.lock().unwrap().len() >= 2)
+        .await;
+    flow.settled().await;
+    let inputs = inputs.lock().unwrap().clone();
+    (flow, native, decisions, inputs)
+}
+
+/// Q5: a thread under 150k whose cache expired resumes its session.
+#[tokio::test]
+async fn a_cold_thread_under_150k_resumes() {
+    if std::env::var_os("BRIGADIER_COLD_REBIRTH_TOKENS").is_some() {
+        return;
+    }
+    let (flow, native, _, _) = cold_turn("cold-small", 120_000).await;
+    let specs = flow.thread_specs();
+    assert_eq!(specs[1].1.origin, Origin::Resume { native_id: native });
+    assert_eq!(rebirth_count(&flow).await, 0);
+    flow.stop().await;
+}
+
+/// Q5: a bigger one is reborn from its checkpoint, with every decision whole in the briefing.
+#[tokio::test]
+async fn a_cold_thread_over_150k_is_reborn_with_every_decision_whole() {
+    if std::env::var_os("BRIGADIER_COLD_REBIRTH_TOKENS").is_some() {
+        return;
+    }
+    let (flow, _, decisions, inputs) = cold_turn("cold-big", 200_000).await;
+    let specs = flow.thread_specs();
+    assert_eq!(specs[1].1.origin, Origin::New, "reborn");
+    let records: Vec<_> = flow
+        .core
+        .list_orchestrator_log(&flow.conversation, None, brigadier_store::MAX_PAGE)
+        .await
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            crate::work::OrchestratorEntry::Rebirth { record } => Some(record),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].trigger,
+        crate::knowledge::RebirthTrigger::CacheExpired
+    );
+    assert_eq!(records[0].decisions, 30);
+    assert_eq!(records[0].decisions_in_full, 30);
+    let briefing = &inputs[1];
+    for line in &decisions {
+        assert!(briefing.contains(line.as_str()), "a decision cut: {line}");
+    }
+    flow.stop().await;
+}
