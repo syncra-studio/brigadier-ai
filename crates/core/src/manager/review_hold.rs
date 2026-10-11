@@ -45,6 +45,10 @@ pub(crate) fn fixes_held(fix: &Task, subject: &Task) -> bool {
         && subject.review_hold.is_some()
 }
 
+/// Why a fix of landed work's findings can't ask for a review: it gets none of its own, only
+/// the targeted re-check of a finding the thread marked high, after it lands (Q6.1).
+pub(crate) const NO_FIX_REVIEW: &str = "A fix of landed work's review findings gets no review of its own: once it lands, the orchestrator has each finding it marked high re-checked. Don't call review_code; run the checks your fix affects and call submit_report.";
+
 /// The line a resumed fix worker reads before its findings.
 pub(crate) fn workspace_line(
     number: u32,
@@ -55,7 +59,7 @@ pub(crate) fn workspace_line(
     test_dir: &Path,
 ) -> String {
     format!(
-        "[workspace] Your work landed. Your earlier task is done; this is a new one, task-{number}. Your worktree was made again at {worktree}, on your branch `{branch}` moved up to the session's tip {} (your landed work and what landed after it). Your earlier task's folders are gone: your scratch folder is now {}, your outputs folder {}, and your test data folder {}.",
+        "[workspace] Your work landed. Your earlier task is done; this is a new one, task-{number}. Your worktree was made again at {worktree}, on your branch `{branch}` moved up to the session's tip {} (your landed work and what landed after it). Your earlier task's folders are gone: your scratch folder is now {}, your outputs folder {}, and your test data folder {}. {NO_FIX_REVIEW}",
         &tip.0[..tip.0.len().min(10)],
         scratch.display(),
         super::outputs::outputs_dir(scratch).display(),

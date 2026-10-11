@@ -31,7 +31,7 @@ use crate::model::{ConversationId, DomainEvent};
 use crate::routing::TokenMeter;
 use crate::work::{
     Finding, FindingStatus, InjectionKind, OrchestratorStepKind, ReviewFor, ReviewKind, ReviewRun,
-    ReviewState, Task, TaskId, TaskKind, TaskState,
+    ReviewState, Task, TaskId, TaskKind, TaskState, WorkerRole,
 };
 use crate::{Error, Result, now_ms};
 
@@ -502,6 +502,17 @@ impl SessionManager {
         }
         if self.held_by_plan_mode(&task).await {
             return Err(Error::Invalid(super::phases::PLAN_MODE_HOLD.into()));
+        }
+        // A resumed lead still has its old instructions to ask for one (SESSION-FIXES-PLAN.md
+        // Q6.1): its fix's landing has the high findings re-checked instead.
+        if task.role == Some(WorkerRole::Fix)
+            && let Some(subject) = &task.subject
+            && self
+                .task_by_id(conversation_id, subject)
+                .await
+                .is_ok_and(|subject| subject.landed.is_some())
+        {
+            return Err(Error::Invalid(super::review_hold::NO_FIX_REVIEW.into()));
         }
         if !matches!(task.state, TaskState::Starting | TaskState::Running) {
             return Err(Error::Invalid(format!(
