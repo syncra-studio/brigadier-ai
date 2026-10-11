@@ -312,6 +312,12 @@ async fn the_merge_is_asked_on_a_card_once_and_its_merge_is_the_users_consent() 
     )
     .await;
     flow.say("Add notes.").await;
+    // Answered once the turn that asked has made its calls: an answer before its second
+    // propose_merge would refuse it as "Not yet", not as "already open".
+    flow.until("the asking turn's calls", |_| {
+        calls.lock().unwrap().len() >= 3
+    })
+    .await;
     let board = flow
         .until("the merge card", |board| open_card(board, true).is_some())
         .await;
