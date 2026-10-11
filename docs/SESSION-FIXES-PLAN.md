@@ -1554,8 +1554,8 @@ the mockup in it, and of the final side-by-side. A thread open since phase 5 off
 - **Briefs:** `WORKER_MOCKUP` builds a preview from the real components with fake data and reports `mockup-N.png`.
   `WORKER_MOCKUP_MATCH` matches it, captures `live-N.png` with `observe save_as`, and reports `compare-N.png`.
 - **Thread:** the `MOCKUPS` paragraph is the offer ("Want a mockup first?", Yes or Skip), never a setting. Open
-  threads and workers hear it as **revision 16** (`MOCKUP_REVISION`, after Phase 5's 15), in the same commit.
-  `CONTRACT` is unchanged.
+  threads and workers hear it as **revision 16** (`MOCKUP_REVISION`, after Phase 4's 15; Phase 5 added none), in
+  the same commit. `CONTRACT` is unchanged.
 - **The Mockup tab** in the titlebar's strip (the user's decision):
   - It is added when the mockup task starts, without taking the front. Its icon is the running spinner while the
     mockup is built or built for real.
