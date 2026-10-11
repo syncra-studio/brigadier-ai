@@ -1091,6 +1091,9 @@ fn requested_permissions(asked: &p::AdditionalPermissionProfile) -> Vec<String> 
     {
         lines.push("network".into());
     }
+    // codex-cli 0.162.1 names each path both in the legacy lists and in `entries`.
+    let mut seen = std::collections::HashSet::new();
+    lines.retain(|line| seen.insert(line.clone()));
     lines
 }
 
@@ -1397,6 +1400,7 @@ mod tests {
             "threadId": "t1", "turnId": "u1",
             "additionalPermissions": {
                 "fileSystem": { "write": ["/other/wt"], "entries": [
+                    { "access": "write", "path": { "type": "path", "path": "/other/wt" } },
                     { "access": "read", "path": { "type": "path", "path": "/data" } },
                 ]},
                 "network": { "enabled": true },
