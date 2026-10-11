@@ -376,6 +376,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "",
         worker: "From now on, while you work, run only the checks your changes affect (run_check with no command lists them), and the full suite once, right before submit_report. Find code with query_brain first, then code_search or code_refs, then read only the lines you need with one ranged read per file, never `cd` and then `cat`.",
     },
+    Revision {
+        number: 7,
+        thread: "From now on, a worker's brief carries what the Brain knows about its task, and a report's `Brain: +N facts` line counts what its worker taught the Brain (its decisions and what it learned).",
+        worker: "From now on, a first message may start with what the Brain knows about the task: start from it. In submit_report, list under `learned` what the next worker in this area should know that the code doesn't say plainly, one per line; each is kept in the project's Brain.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -765,7 +770,7 @@ const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, 
 
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
-- Before you read code, ask the Brain: query_brain (what earlier work found: modules, decisions, conventions). Then find the code with code_search (definitions and files by name), code_refs (where a symbol is defined and used) or project_map (the repository at a glance), never by shell listings and greps first. Then read only the lines you need (a line range, not the whole file): your context is precious.";
+- Your first message may start with what the Brain knows about your task: start from it. Before you read code, ask the Brain: query_brain (what earlier work found: modules, decisions, conventions). Then find the code with code_search (definitions and files by name), code_refs (where a symbol is defined and used) or project_map (the repository at a glance), never by shell listings and greps first. Then read only the lines you need (a line range, not the whole file): your context is precious.";
 
 /// How a Codex worker reads files: one ranged read each, not a shell walk (Codex has no file
 /// tool of its own; SESSION-FIXES-PLAN.md Q6.3).
@@ -820,7 +825,7 @@ Rules:
 - Never push, publish, deploy or open pull requests, unless the task says the user asked for exactly that: list such steps under needs user instead. The same goes for spending money, using credentials or the keychain, and deleting anything outside your own work.
 - If you start subagents, never use a Fable model, and never raise reasoning effort above high.
 - Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
-- The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
+- The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
     )
 }
 
@@ -1057,6 +1062,23 @@ pub(crate) fn report_envelope(task: &Task, report: &Report, route: &str) -> Stri
         "Needs the user (say it in your answer)"
     };
     list(needs_user, &report.needs_user, &mut text);
+    // What it taught the Brain: its decisions and what it learned, by count only
+    // (SESSION-FIXES-PLAN.md Q6.6). A review's report isn't kept.
+    let facts = report
+        .decisions
+        .iter()
+        .chain(&report.learned)
+        .filter(|item| !item.trim().is_empty())
+        .count();
+    if facts > 0 && task.kind != TaskKind::Review {
+        let when = if task.kind.writes() {
+            " (kept once it lands)"
+        } else {
+            ""
+        };
+        let noun = if facts == 1 { "fact" } else { "facts" };
+        text.push_str(&format!("\nBrain: +{facts} {noun}{when}"));
+    }
     if let Some(verdict) = report.verdict {
         text.push_str(&format!("\nVerdict: {verdict:?}"));
     }
@@ -1229,6 +1251,58 @@ mod tests {
     /// What a worker reads before it starts: its system prompt, then its first message.
     fn worker(task: &Task) -> String {
         format!("{}\n\n{}", worker_system(""), worker_brief(task, "", ""))
+    }
+
+    /// SESSION-FIXES-PLAN.md Q6.6: workers start from the brief's Brain section and write back
+    /// what they learned; the report counts it for the thread. Open sessions hear it as a
+    /// revision.
+    #[test]
+    fn workers_start_from_the_brain_and_their_reports_count_what_they_taught_it() {
+        let worker = worker(&task("claude", None));
+        assert!(worker.contains(
+            "Your first message may start with what the Brain knows about your task: start from it."
+        ));
+        assert!(worker.contains("learned (what the next worker in this area should know"));
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.worker.contains("under `learned`"))
+            .expect("the Brain-first revision");
+        for worker in [false, true] {
+            let text = if worker { added.worker } else { added.thread };
+            assert!(
+                revision_note(added.number - 1, worker)
+                    .unwrap()
+                    .starts_with(&format!("[instructions] {text}"))
+            );
+        }
+
+        let report = Report {
+            summary: "Found it.".into(),
+            decisions: vec!["Keep the flag off by default.".into()],
+            learned: vec![
+                "Flags live in config/flags.rs.".into(),
+                " ".into(),
+                "Run the tests with TMPDIR=/tmp.".into(),
+            ],
+            ..serde_json::from_value(serde_json::json!({
+                "summary": "", "changes": [], "decisions": [], "verification": [],
+                "openQuestions": [], "verdict": null, "artifacts": [], "submittedAtMs": 0
+            }))
+            .unwrap()
+        };
+        let mut scout = task("claude", None);
+        scout.kind = TaskKind::Scout;
+        let envelope = report_envelope(&scout, &report, "Claude");
+        assert!(envelope.contains("\nBrain: +3 facts\n"), "{envelope}");
+        assert!(!envelope.contains("Flags live in"), "{envelope}");
+        let envelope = report_envelope(&task("claude", None), &report, "Claude");
+        assert!(
+            envelope.contains("\nBrain: +3 facts (kept once it lands)\n"),
+            "{envelope}"
+        );
+        let mut review = task("claude", None);
+        review.kind = TaskKind::Review;
+        assert!(!report_envelope(&review, &report, "Codex").contains("Brain:"));
     }
 
     /// SESSION-FIXES-PLAN.md Q6.2 and Q6.3: focused checks while working and the full suite

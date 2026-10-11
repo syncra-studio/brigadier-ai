@@ -9,6 +9,11 @@ import type { ReviewVerdict } from "./ReviewVerdict";
  */
 export type Report = { summary: string, changes: Array<string>, decisions: Array<string>, 
 /**
+ * What the next worker in this area should know, each kept as a Brain fact
+ * (SESSION-FIXES-PLAN.md Q6.6).
+ */
+learned: Array<string>, 
+/**
  * What the worker verified and how.
  */
 verification: Array<string>, 

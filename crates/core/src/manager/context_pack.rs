@@ -9,14 +9,20 @@
 //! Files are shown as they are in the worker's own worktree when it starts (the thread may
 //! have read an older version), numbered like a file read. Files outside the thread's
 //! workspace, and files the worktree doesn't have, are left out.
+//!
+//! Before the pack, the brief carries what the project's Brain knows about the task
+//! (SESSION-FIXES-PLAN.md Q6.6): the Brain is asked about its title, spec and named files, and
+//! the best matches go in one line each, with their node ids.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use brigadier_brain::{BrainCaps, BrainHit, BrainQuery, NodeKind, NodeState};
 use brigadier_index::SymbolHit;
 
 use super::SessionManager;
+use super::brains::{brain_error, cut};
 use super::reads::ThreadReads;
 use crate::work::Task;
 
@@ -37,6 +43,23 @@ const SEARCHES_MAX: usize = 20;
 /// Bytes of the searches at most, and of one search's line.
 const SEARCHES_BYTES: usize = 4 * 1024;
 const ONE_SEARCH_MAX: usize = 512;
+
+/// The heading of the brief's Brain section; `tools/ab/worker_tokens.py` counts the `- ` lines
+/// under it as the facts a brief carried.
+pub(crate) const BRAIN_HEADING: &str = "## What the Brain knows about this";
+/// Bytes of the Brain section at most (about 3k tokens).
+const BRAIN_MAX: usize = 12 * 1024;
+/// Bytes of one fact's line at most.
+const BRAIN_FACT_MAX: usize = 800;
+/// Bytes of the spec that go into the Brain's question; the Brain weighs only its first words.
+const BRAIN_QUESTION_SPEC: usize = 2 * 1024;
+/// How many matches of each kind the section holds at most.
+const BRAIN_CAPS: BrainCaps = BrainCaps {
+    facts: 8,
+    entities: 4,
+    passages: 3,
+    body: BRAIN_FACT_MAX as u32,
+};
 
 impl SessionManager {
     /// The task's context pack for its first message, or `None` when the thread read nothing
@@ -79,6 +102,114 @@ impl SessionManager {
             }
         }
     }
+}
+
+impl SessionManager {
+    /// The brief's Brain section, and how many facts it holds: the project Brain's best
+    /// matches for the task's title, the files its spec names in `worktree`, and its spec.
+    /// `None` without a project, or when the Brain has nothing on it. Best effort: a Brain
+    /// that can't be read leaves the section out.
+    pub(crate) async fn brain_section(
+        &self,
+        task: &Task,
+        worktree: Option<&Path>,
+    ) -> Option<(String, u32)> {
+        let project = self
+            .core
+            .conversation(&task.conversation_id)
+            .ok()?
+            .project_id?;
+        let brain = match self.project_brain(&project).await {
+            Ok(project) => project.brain.clone(),
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "no Brain section: the project's Brain");
+                return None;
+            }
+        };
+        let (title, spec, worktree) = (
+            task.title.clone(),
+            task.spec.clone(),
+            worktree.map(Path::to_owned),
+        );
+        let found = super::blocking(move || {
+            let named = worktree
+                .as_deref()
+                .map(|worktree| named_files(&spec, worktree))
+                .unwrap_or_default();
+            let text = format!(
+                "{title}\n{}\n{}",
+                named.join(" "),
+                cut(&spec, BRAIN_QUESTION_SPEC)
+            );
+            brain
+                .query(&BrainQuery {
+                    text,
+                    kinds: Vec::new(),
+                    limit: None,
+                    max_tokens: None,
+                    files: false,
+                    history: false,
+                    caps: Some(BRAIN_CAPS),
+                    page: None,
+                })
+                .map_err(brain_error)
+        })
+        .await;
+        match found {
+            Ok(answer) => brain_lines(&answer.hits),
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "no Brain section");
+                None
+            }
+        }
+    }
+}
+
+/// The Brain section for `hits`, best first, one line each and at most [`BRAIN_MAX`] bytes,
+/// with the number of lines; `None` without hits.
+fn brain_lines(hits: &[BrainHit]) -> Option<(String, u32)> {
+    let mut text = format!(
+        "{BRAIN_HEADING}\n\nWhat earlier work in this project found and decided that matches your task, best match first. Start from it; `query_brain <node id>` gives a node in full, and `query_brain` answers more.\n\n"
+    );
+    let mut count = 0;
+    for hit in hits {
+        let node = &hit.node;
+        if matches!(node.state, NodeState::Superseded { .. }) {
+            continue;
+        }
+        let kind = match node.kind {
+            NodeKind::Module => "module",
+            NodeKind::Service => "service",
+            NodeKind::FileSummary => "file",
+            NodeKind::Decision => "decision",
+            NodeKind::Convention => "convention",
+            NodeKind::Preference => "preference",
+            NodeKind::Task => "task",
+            NodeKind::Report => "report",
+            NodeKind::Research => "research",
+            NodeKind::Contract => "contract",
+        };
+        let stale = match &node.state {
+            NodeState::Stale { reason, .. } => format!(" (may be out of date: {reason})"),
+            _ => String::new(),
+        };
+        // A kept report is its task's spec, then its answer: the title names the task, and the
+        // answer is what was found.
+        let body = node
+            .body
+            .split_once("\n\nAnswer: ")
+            .map_or(node.body.as_str(), |(_, answer)| answer);
+        let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        let title = node.title.split_whitespace().collect::<Vec<_>>().join(" ");
+        let line = cut(&format!("- {kind}: {title}{stale}. {body}"), BRAIN_FACT_MAX);
+        let line = format!("{line} (node {})\n", node.id);
+        if text.len() + line.len() > BRAIN_MAX {
+            break;
+        }
+        text.push_str(&line);
+        count += 1;
+    }
+    (count > 0).then(|| (text.trim_end().to_owned(), count))
 }
 
 const HEADER: &str = "# Context pack\n\nWhat the orchestrator already looked at for this task, so you don't search for it again. It is all here; read more of the files where you need it.\n\n";
@@ -557,6 +688,77 @@ mod tests {
         assert_eq!(
             named_files(spec, &root),
             ["apps/ui/sidebar.tsx", "README.md"]
+        );
+    }
+
+    /// A Brain node as a query returns it, as JSON for brevity.
+    fn hit(id: &str, kind: &str, title: &str, body: &str, state: serde_json::Value) -> BrainHit {
+        serde_json::from_value(serde_json::json!({
+            "node": {
+                "id": id, "kind": kind, "key": null, "title": title, "body": body, "state": state,
+                "provenance": {"origin": "report", "sessionId": null, "taskId": null, "jobId": null,
+                               "worker": null, "commit": null, "recordedAtMs": 0},
+                "files": [], "createdAtMs": 0, "updatedAtMs": 0, "expiresAtMs": null, "embedded": false
+            },
+            "score": 1.0,
+            "linked": false
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_brain_section_holds_one_line_per_current_fact_and_a_reports_answer() {
+        let fresh = serde_json::json!({"type": "fresh"});
+        let hits = [
+            hit(
+                "n1",
+                "decision",
+                "Flags are off by default",
+                "Every new flag starts off.\nThe user turns it on.",
+                fresh.clone(),
+            ),
+            hit(
+                "n2",
+                "task",
+                "task-4 Add the flag",
+                "Task: Add the flag\nYou build it.\n\nAnswer: Flags live in config/flags.rs.\nChanges:\n- config/flags.rs",
+                fresh.clone(),
+            ),
+            hit(
+                "n3",
+                "convention",
+                "Old rule",
+                "Gone.",
+                serde_json::json!({"type": "superseded", "by": "n1", "reason": "newer"}),
+            ),
+            hit(
+                "n4",
+                "module",
+                "crates/config",
+                "Reads the flags.",
+                serde_json::json!({"type": "stale", "reason": "flags.rs changed", "sinceMs": 0}),
+            ),
+        ];
+        let (text, count) = brain_lines(&hits).unwrap();
+        assert_eq!(count, 3);
+        assert!(text.starts_with(&format!("{BRAIN_HEADING}\n\n")));
+        let lines: Vec<&str> = text.lines().filter(|line| line.starts_with("- ")).collect();
+        assert_eq!(
+            lines,
+            [
+                "- decision: Flags are off by default. Every new flag starts off. The user turns it on. (node n1)",
+                "- task: task-4 Add the flag. Flags live in config/flags.rs. Changes: - config/flags.rs (node n2)",
+                "- module: crates/config (may be out of date: flags.rs changed). Reads the flags. (node n4)",
+            ]
+        );
+        assert_eq!(brain_lines(&hits[2..3]), None);
+        // A long body is cut, its node id kept.
+        let long = [hit("n5", "report", "Notes", &"word ".repeat(400), fresh)];
+        let (text, _) = brain_lines(&long).unwrap();
+        let line = text.lines().last().unwrap();
+        assert!(
+            line.ends_with("… (node n5)") && line.len() < BRAIN_FACT_MAX + 20,
+            "{line}"
         );
     }
 }

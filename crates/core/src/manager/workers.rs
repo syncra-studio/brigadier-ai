@@ -183,6 +183,10 @@ struct TaskLiveState {
     held_messages: Vec<String>,
     /// The terminal its session is open in: what its tool calls run with.
     terminal: Option<ToolAccess>,
+    /// Tool calls and commands it finished that its task's Brain counters don't hold yet.
+    brain_calls: u32,
+    /// Whether it needs the Brain-first steer was decided (SESSION-FIXES-PLAN.md Q6.6).
+    brain_steer_decided: bool,
 }
 
 /// What a worker's tool calls that run commands (`run_check`) run with: its headless CLI's, or
@@ -283,6 +287,23 @@ impl TaskLive {
     /// Its model's context window, when its CLI said.
     pub(crate) async fn window(&self) -> Option<i64> {
         self.state.lock().await.window
+    }
+
+    /// Counts a finished tool call or command: the calls its task's counters don't hold yet,
+    /// and whether the Brain-first steer is still to be decided.
+    pub(crate) async fn count_call(&self) -> (u32, bool) {
+        let mut state = self.state.lock().await;
+        state.brain_calls += 1;
+        (state.brain_calls, !state.brain_steer_decided)
+    }
+
+    pub(crate) async fn brain_steer_decided(&self) {
+        self.state.lock().await.brain_steer_decided = true;
+    }
+
+    /// The counted calls its task's counters don't hold yet; they are added now.
+    pub(crate) async fn take_calls(&self) -> u32 {
+        std::mem::take(&mut self.state.lock().await.brain_calls)
     }
 
     /// Whether to ask the worker, now, to end its turn with a handoff note: once per turn,
@@ -1122,6 +1143,7 @@ impl SessionManager {
             told_revision,
             deaths: Vec::new(),
             review_hold: None,
+            brain: Default::default(),
             resuming: false,
             takeover: None,
             trial_slot: waits && trial_slot,
@@ -1263,16 +1285,31 @@ impl SessionManager {
                 }
             }
         }
-        // What the thread already read goes with its first message (THREAD-PLAN.md Q8 lever 1).
+        // What the Brain knows about the task, then what the thread already read, go with its
+        // first message (SESSION-FIXES-PLAN.md Q6.6, THREAD-PLAN.md Q8 lever 1).
+        let brain = self
+            .brain_section(&task, workspace.worktree.as_deref())
+            .await;
         let pack = match &workspace.worktree {
             Some(worktree) => self.context_pack(&task, worktree).await,
             None => None,
         };
-        // Instructions the orchestrator sent while the task waited to start go with it.
-        let mut text = match pack {
-            Some(pack) => format!("{pack}\n\nStart the task."),
-            None => String::from("Start the task."),
-        };
+        let mut text = String::new();
+        if let Some((section, facts)) = &brain {
+            text.push_str(section);
+            text.push_str("\n\n");
+            let facts = *facts;
+            self.update_task(&conversation_id, &task.id, |task| {
+                task.brain.facts_in = facts;
+            })
+            .await
+            .ok();
+        }
+        if let Some(pack) = pack {
+            text.push_str(&pack);
+            text.push_str("\n\n");
+        }
+        text.push_str("Start the task.");
         // A fix of landed work whose session can't be resumed starts from its worker's report.
         if let Some(fixed) = subject
             .as_ref()
@@ -1284,6 +1321,7 @@ impl SessionManager {
                 fixed.number, report.summary
             ));
         }
+        // Instructions the orchestrator sent while the task waited to start go with it.
         if !task.messages.is_empty() {
             text.push_str("\n\nLater instructions from the orchestrator, oldest first:\n");
             for message in &task.messages {
@@ -2657,6 +2695,11 @@ impl SessionManager {
             }
             _ => {}
         }
+        let finished_call = matches!(
+            &event,
+            ProviderEvent::ToolCall { status, .. } | ProviderEvent::Command { status, .. }
+                if *status != brigadier_providers::ItemStatus::InProgress
+        );
         let completed = match &event {
             ProviderEvent::TurnCompleted { status, .. } => Some(*status),
             _ => None,
@@ -2695,7 +2738,11 @@ impl SessionManager {
             .await
             .ok();
         }
+        if finished_call {
+            self.note_worker_call(live, cli).await;
+        }
         if let Some(status) = completed {
+            self.save_worker_calls(live).await;
             // What its Codex auto-reviews used, which its own totals leave out.
             self.meter_child_threads(cli, TokenOwner::Task(&live.conversation_id, &live.id))
                 .await;
@@ -3184,6 +3231,7 @@ impl SessionManager {
             + [
                 &input.changes,
                 &input.decisions,
+                &input.learned,
                 &input.verification,
                 &input.done_when,
                 &input.open_questions,
@@ -3202,6 +3250,7 @@ impl SessionManager {
         // Everything it names is stored now, before its folders can go.
         let texts: Vec<String> = std::iter::once(&input.summary)
             .chain(&input.decisions)
+            .chain(&input.learned)
             .chain(&input.verification)
             .chain(&input.done_when)
             .chain(&input.open_questions)
@@ -3263,6 +3312,7 @@ impl SessionManager {
             summary: self.redact_for(&live, &input.summary).await,
             changes: input.changes.clone(),
             decisions: self.redact_all(&live, &input.decisions).await,
+            learned: self.redact_all(&live, &input.learned).await,
             verification: self.redact_all(&live, &input.verification).await,
             done_when: self.redact_all(&live, &input.done_when).await,
             open_questions: self.redact_all(&live, &input.open_questions).await,
@@ -5285,6 +5335,7 @@ mod tests {
             summary: "Fixed.".into(),
             changes: Vec::new(),
             decisions: Vec::new(),
+            learned: Vec::new(),
             verification: Vec::new(),
             done_when: Vec::new(),
             open_questions: Vec::new(),
@@ -5473,6 +5524,7 @@ mod tests {
                     summary: "Approve.".into(),
                     changes: Vec::new(),
                     decisions: Vec::new(),
+                    learned: Vec::new(),
                     verification: Vec::new(),
                     done_when: Vec::new(),
                     open_questions: Vec::new(),

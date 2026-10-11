@@ -1181,7 +1181,7 @@ impl SessionManager {
             })
             .collect();
         let task_id = task.id.0.clone();
-        let decisions: Vec<NewNode> = report
+        let decisions = report
             .decisions
             .iter()
             .filter(|decision| !decision.trim().is_empty())
@@ -1193,12 +1193,34 @@ impl SessionManager {
                 provenance: provenance.clone(),
                 files: files.clone(),
                 expires_at_ms: None,
-            })
-            .collect();
+            });
+        // What it says the next worker here should know (SESSION-FIXES-PLAN.md Q6.6), linked
+        // like its decisions to the report and the modules it touched.
+        let learned = report
+            .learned
+            .iter()
+            .filter(|item| !item.trim().is_empty())
+            .map(|item| NewNode {
+                kind: NodeKind::Convention,
+                key: Some(format!("task:{}:learned:{}", task.id.0, blake_key(item))),
+                title: one_line(item, 240),
+                body: format!("{item}\n(learned in task-{}: {})", task.number, task.title),
+                provenance: provenance.clone(),
+                files: files.clone(),
+                expires_at_ms: None,
+            });
+        let facts: Vec<NewNode> = decisions.into_iter().chain(learned).collect();
+        let kept = facts.len() as u32;
         let modules = modules_of(&project, &paths).await;
         let brain = project.brain.clone();
-        blocking(move || record_report_nodes(&brain, &task_id, node, parts, decisions, modules))
-            .await
+        blocking(move || record_report_nodes(&brain, &task_id, node, parts, facts, modules))
+            .await?;
+        self.update_task(&task.conversation_id, &task.id, |task| {
+            task.brain.facts_out = kept;
+        })
+        .await
+        .ok();
+        Ok(())
     }
 
     /// A report's findings files as Brain parts: the text a worker left in artifacts rather

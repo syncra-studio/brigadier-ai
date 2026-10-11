@@ -371,6 +371,10 @@ pub struct Report {
     pub summary: String,
     pub changes: Vec<String>,
     pub decisions: Vec<String>,
+    /// What the next worker in this area should know, each kept as a Brain fact
+    /// (SESSION-FIXES-PLAN.md Q6.6).
+    #[serde(default)]
+    pub learned: Vec<String>,
     /// What the worker verified and how.
     pub verification: Vec<String>,
     /// Each "done when" criterion with its status and evidence ("[met] … ").
@@ -837,6 +841,9 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub review_hold: Option<String>,
+    /// What it took from and gave to the project's Brain (SESSION-FIXES-PLAN.md Q6.6).
+    #[serde(default)]
+    pub brain: BrainUse,
     /// While its CLI session starts again after it was interrupted.
     #[serde(default)]
     pub resuming: bool,
@@ -850,6 +857,22 @@ pub struct Task {
     pub trial_slot: bool,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+/// A worker's use of the project's Brain, shown on its row and in the Inspector
+/// (SESSION-FIXES-PLAN.md Q6.6).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainUse {
+    /// Its `query_brain` calls.
+    pub queries: u32,
+    /// The Brain facts its brief carried.
+    pub facts_in: u32,
+    /// The facts it wrote back (`learned` and decisions), counted once the Brain kept them.
+    pub facts_out: u32,
+    /// Its tool calls and commands: a long task with no query and no write-back shows "low
+    /// Brain use".
+    pub calls: u32,
 }
 
 /// What happened to a task's unfinished changes when its worktree was removed.

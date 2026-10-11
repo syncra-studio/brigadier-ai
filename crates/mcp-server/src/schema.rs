@@ -184,6 +184,7 @@ mod tests {
         let properties = &schema["properties"];
         for field in [
             "decisions",
+            "learned",
             "verification",
             "done_when",
             "open_questions",

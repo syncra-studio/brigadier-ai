@@ -1522,6 +1522,8 @@ mod accounts_tests;
 #[cfg(test)]
 mod base_merge_tests;
 #[cfg(test)]
+mod brain_first_tests;
+#[cfg(test)]
 mod card_tests;
 #[cfg(test)]
 mod checks_tests;

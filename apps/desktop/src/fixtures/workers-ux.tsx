@@ -12,7 +12,7 @@ const board = useBoard.getState().board!;
 const base = Object.values(board.tasks)[0]!;
 const report: Report = {
   summary: "Completed a read-only inspection of all **43 files** in the project. Read every file completely and verified the Git objects. No inaccessible files or symlinks were found. Final Git status is clean on `main`.\n\nThe project is a collection of independent Python functions, a JavaScript assignment, and a text greeting.\n\n### Project files\n\n| File | Size | Summary |\n| --- | --- | --- |\n| `m1.py` | 30 bytes | Returns 1. |\n| `m2.py` | 30 bytes | Returns 2. |\n| `src/b.js` | 4 bytes | Assigns 1 to x. |",
-  changes: ["No source files changed."], decisions: ["Inspected the Git metadata as requested."],
+  changes: ["No source files changed."], decisions: ["Inspected the Git metadata as requested."], learned: [],
   verification: ["Read all 43 files and checked Git status."], doneWhen: ["[met] Every file has a summary."],
   openQuestions: [], risks: ["There is no test suite in the project."], needsUser: ["Choose a license before publishing the project."],
   verdict: null, checks: null, artifacts: [], submittedAtMs: now - 60000,

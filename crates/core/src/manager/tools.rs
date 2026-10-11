@@ -781,6 +781,7 @@ impl SessionManager {
             }
             WorkerCall::ReviewCode => self.review_code(&conversation_id, &task_id).await,
             WorkerCall::QueryBrain(args) => {
+                self.note_brain_query(&conversation_id, &task_id).await;
                 self.query_brain_tool(
                     &conversation_id,
                     args.query,

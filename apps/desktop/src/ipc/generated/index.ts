@@ -31,6 +31,7 @@ export type { BrainMetrics } from "./BrainMetrics";
 export type { BrainOverview } from "./BrainOverview";
 export type { BrainQuery } from "./BrainQuery";
 export type { BrainStats } from "./BrainStats";
+export type { BrainUse } from "./BrainUse";
 export type { BranchChoice } from "./BranchChoice";
 export type { BranchInfo } from "./BranchInfo";
 export type { BridgeEvent } from "./BridgeEvent";

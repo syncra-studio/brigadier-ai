@@ -17,6 +17,7 @@
 
 mod accounts;
 mod add_project;
+mod brain_first;
 mod brain_jobs;
 mod brains;
 mod branches;

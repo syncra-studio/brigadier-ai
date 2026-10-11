@@ -905,6 +905,12 @@ pub struct SubmitReport {
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "String", extend("default" = ""))]
     pub decisions: Vec<String>,
+    /// What the next worker in this area should know that the code doesn't say plainly (a
+    /// trap, a command that works, where something lives), one per line. Each is kept in the
+    /// project's Brain.
+    #[serde(default, deserialize_with = "lines")]
+    #[schemars(with = "String", extend("default" = ""))]
+    pub learned: Vec<String>,
     /// Exactly what was verified and how (commands run and their results), one item per line.
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "String", extend("default" = ""))]

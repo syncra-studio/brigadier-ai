@@ -3,6 +3,7 @@ import type { Area } from "./Area";
 import type { ArtifactRef } from "./ArtifactRef";
 import type { AttachmentRef } from "./AttachmentRef";
 import type { Attempt } from "./Attempt";
+import type { BrainUse } from "./BrainUse";
 import type { Candidate } from "./Candidate";
 import type { Capability } from "./Capability";
 import type { CardId } from "./CardId";
@@ -138,6 +139,10 @@ messages: Array<string>,
  * message from the orchestrator).
  */
 reworkRounds: number, 
+/**
+ * What it took from and gave to the project's Brain (SESSION-FIXES-PLAN.md Q6.6).
+ */
+brain: BrainUse, 
 /**
  * While its CLI session starts again after it was interrupted.
  */
