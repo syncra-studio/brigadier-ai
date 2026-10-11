@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
-import { glance, percentLeft, usageLevel, usageTone } from "@/lib/quota";
+import { glance, left, leftTone, percentLeft, usageLevel, usageTone, windowTitle } from "@/lib/quota";
 
 function window(id: string, usedPercent: number, windowMinutes: number | null): QuotaWindow {
   return { id, label: id, usedPercent, resetsAtMs: null, windowMinutes, bucket: null, model: null };
@@ -52,4 +52,19 @@ test("a place keeps its own normal look, and shares the warning and danger ones"
   );
   // Shown as "% left": 15% left is 85% used.
   assert.equal(usageTone(100 - 15).level, "warning");
+});
+
+test("what is left shows amber at 20% or less and red at 10% or less", () => {
+  assert.deepEqual(
+    [21, 20, 11, 10, 0].map((share) => leftTone(share).level),
+    ["normal", "warning", "warning", "danger", "danger"],
+  );
+  assert.equal(leftTone(80, { limitReached: true }).level, "danger");
+  assert.equal(left(window("w", 82, null)), 18);
+});
+
+test("a window's title folds in what it is limited to", () => {
+  assert.equal(windowTitle({ ...window("w", 10, null), label: "Weekly (Fable)" }), "Weekly · Fable");
+  assert.equal(windowTitle({ ...window("w", 10, null), label: "Weekly", bucket: "gpt-6-luna" }), "Weekly · gpt-6-luna");
+  assert.equal(windowTitle({ ...window("w", 10, null), label: "5-hour" }), "5-hour");
 });
