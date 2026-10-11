@@ -1577,6 +1577,11 @@ impl SessionManager {
                     sent_queued = true;
                     continue;
                 }
+                // A held merge that waited on a message the user wrote looks again once the
+                // thread has read it (SESSION-FIXES-PLAN.md Q3).
+                if session {
+                    self.check_held_merge(&conv.id).await;
+                }
                 return;
             }
             let request = match users.last() {

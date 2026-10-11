@@ -821,8 +821,14 @@ impl SessionManager {
         if task.state != was {
             self.settle_requests(conversation_id).await;
         }
-        // The last writer ending may make a held merge due (SESSION-FIXES-PLAN.md Q3).
-        if task.kind.writes() && task.state.is_final() && !was.is_final() {
+        // The last writer ending may make a held merge due (SESSION-FIXES-PLAN.md Q3). A
+        // landing looks again once its review has run (landing.rs), since that review starts
+        // only after the landing is recorded.
+        if task.kind.writes()
+            && task.state.is_final()
+            && !was.is_final()
+            && task.state != TaskState::Landed
+        {
             self.check_held_merge(conversation_id).await;
         }
         Ok(Some(task))

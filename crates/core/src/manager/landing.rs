@@ -862,12 +862,15 @@ impl SessionManager {
         // batch, which needs both.
         let manager = self.arc();
         let (task, from, tip) = (task.clone(), from.clone(), new_tip.clone());
-        match fixed {
-            Some(subject) => {
-                self.spawn(async move { manager.recheck_fix(&task, &subject, from, tip).await })
+        // Then a held merge looks again (SESSION-FIXES-PLAN.md Q3): before, no review of this
+        // landing was running yet, and it would have come due without one.
+        self.spawn(async move {
+            match fixed {
+                Some(subject) => manager.recheck_fix(&task, &subject, from, tip).await,
+                None => manager.review_landing(&task, from, tip).await,
             }
-            None => self.spawn(async move { manager.review_landing(&task, from, tip).await }),
-        }
+            manager.check_held_merge(&task.conversation_id).await;
+        });
     }
 
     /// What a reviewer reads about the work it reviews: the task, what the worker was told
@@ -1731,6 +1734,9 @@ impl SessionManager {
                         new.join(", ")
                     )
                 }
+                // A message the user wrote since waits to be read: it decides first, and the
+                // thread's turn on it looks again when it ends.
+                Gate::Due if wrote_since(&board, held.consented_at_ms) => return,
                 Gate::Due => {
                     // Their words since took it back: it stops rather than come due.
                     if let Ok(Some(why)) = self.taken_back(id, &board, &held).await {
@@ -1873,9 +1879,7 @@ impl SessionManager {
         if spent(&board, &held.asked_in) {
             return Err(refused);
         }
-        if board.queue.items.iter().any(|item| {
-            item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= held.consented_at_ms
-        }) {
+        if wrote_since(&board, held.consented_at_ms) {
             return Err(not_consented(
                 "the user wrote again since (it waits in the queue): read it first".into(),
             ));
@@ -2208,6 +2212,15 @@ pub(super) struct PendingMerge {
     pub tip: String,
     /// When it was held.
     pub at_ms: i64,
+}
+
+/// Whether a message the user wrote at or after `at_ms` still waits in the queue.
+fn wrote_since(board: &crate::board::Board, at_ms: i64) -> bool {
+    board
+        .queue
+        .items
+        .iter()
+        .any(|item| item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= at_ms)
 }
 
 /// The pending merge, if any: the latest `MergeHeld` whose consent isn't spent.
