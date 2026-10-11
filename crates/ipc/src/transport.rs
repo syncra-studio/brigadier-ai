@@ -231,6 +231,24 @@ pub fn connect_blocking(
     Ok(stream)
 }
 
+/// [`connect_blocking`], tried again until `wait` has passed. A daemon that starts resumes the
+/// sessions a restart cut off before it listens, and their CLIs start `brigadierd mcp` at
+/// once: the bridge waits for it rather than leave the session without its tools.
+pub fn connect_blocking_within(
+    paths: &AppPaths,
+    first: &ClientFrame,
+    wait: Duration,
+) -> Result<interprocess::local_socket::Stream, Error> {
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match connect_blocking(paths, first) {
+            Ok(stream) => return Ok(stream),
+            Err(err) if std::time::Instant::now() >= deadline => return Err(err),
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
 /// Reads one length-prefixed frame from a blocking reader; `None` when the peer closed the
 /// connection before it.
 pub fn read_frame_blocking<T: DeserializeOwned>(
@@ -317,5 +335,44 @@ fn remove_stale_socket(path: &std::path::Path) -> io::Result<()> {
         )),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// The bridge started while the daemon is still starting reaches it once it listens.
+    #[test]
+    fn a_connect_waits_for_a_daemon_that_starts_listening_late() {
+        let dir = std::env::temp_dir().join(format!("brig-ipc-{}", std::process::id()));
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.clone()),
+        })
+        .unwrap();
+        let first = ClientFrame::Mcp {
+            grant: "grant".into(),
+        };
+        assert!(
+            connect_blocking(platform.paths(), &first).is_err(),
+            "nothing listens yet"
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let late = {
+            let platform = platform.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(700));
+                let _guard = runtime.enter();
+                let listener = Listener::bind(&*platform).unwrap();
+                std::thread::sleep(Duration::from_secs(3));
+                drop(listener);
+            })
+        };
+        assert!(connect_blocking_within(platform.paths(), &first, Duration::from_secs(5)).is_ok());
+        late.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

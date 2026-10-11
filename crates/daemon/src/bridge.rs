@@ -21,6 +21,11 @@ use interprocess::local_socket::traits::Stream as _;
 /// Codex's default environment filter would drop).
 pub const GRANT_ENV: &str = "BRIGADIER_MCP_GRANT";
 
+/// How long the bridge waits for a daemon that is still starting (it resumes sessions before it
+/// listens). Under the CLIs' own wait for an MCP server to start: Claude Code's `MCP_TIMEOUT`
+/// is 30 s by default (2.1.296).
+const CONNECT_WAIT: std::time::Duration = std::time::Duration::from_secs(25);
+
 /// Runs the bridge with the arguments after `mcp`.
 pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     let mut data_dir: Option<PathBuf> = None;
@@ -54,14 +59,17 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let stream =
-        match brigadier_ipc::connect_blocking(platform.paths(), &ClientFrame::Mcp { grant }) {
-            Ok(stream) => stream,
-            Err(err) => {
-                eprintln!("brigadierd mcp: cannot reach brigadierd: {err}");
-                return ExitCode::from(1);
-            }
-        };
+    let stream = match brigadier_ipc::connect_blocking_within(
+        platform.paths(),
+        &ClientFrame::Mcp { grant },
+        CONNECT_WAIT,
+    ) {
+        Ok(stream) => stream,
+        Err(err) => {
+            eprintln!("brigadierd mcp: cannot reach brigadierd: {err}");
+            return ExitCode::from(1);
+        }
+    };
     let (mut from_daemon, mut to_daemon) = stream.split();
 
     // The CLI closing stdin ends the session; closing the socket tells the daemon.
