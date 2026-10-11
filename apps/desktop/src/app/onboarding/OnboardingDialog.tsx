@@ -48,6 +48,7 @@ export function OnboardingDialog() {
   const revealed = useRevealed();
   const open = revealed && catalogLoaded && !smoke && (!onboarded || reopened);
   const [confirmSkip, setConfirmSkip] = useState(false);
+  const keepGoing = useRef<HTMLButtonElement>(null);
   // Takes Escape first when a step has something of its own to close.
   const escape = useRef<(() => boolean) | null>(null);
   const onEscape = useCallback((handler: (() => boolean) | null) => {
@@ -87,7 +88,16 @@ export function OnboardingDialog() {
         >
           {open && <Onboarding onEscape={onEscape} onSkip={() => setConfirmSkip(true)} />}
           <Dialog open={confirmSkip} onOpenChange={setConfirmSkip}>
-            <DialogContent showCloseButton={false} className="max-w-xs">
+            <DialogContent
+              showCloseButton={false}
+              className="max-w-xs"
+              // Keep going takes the focus, so Enter doesn't skip the setup (the dialog would
+              // otherwise focus Skip, its first button).
+              onOpenAutoFocus={(event) => {
+                event.preventDefault();
+                keepGoing.current?.focus();
+              }}
+            >
               <DialogHeader>
                 <DialogTitle>Skip setup?</DialogTitle>
                 <DialogDescription>You can run it again from Settings.</DialogDescription>
@@ -102,7 +112,7 @@ export function OnboardingDialog() {
                 >
                   Skip
                 </Button>
-                <Button autoFocus onClick={() => setConfirmSkip(false)}>
+                <Button ref={keepGoing} onClick={() => setConfirmSkip(false)}>
                   Keep going
                 </Button>
               </DialogFooter>
