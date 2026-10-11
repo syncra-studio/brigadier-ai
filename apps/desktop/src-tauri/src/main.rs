@@ -702,7 +702,9 @@ fn main() {
             browser::browser_history,
             browser::browser_history_remove,
             browser::browser_clear,
-            browser::browser_site_count
+            browser::browser_site_count,
+            browser::browser_downloads,
+            browser::browser_downloads_remove
         ])
         .build(context)
         .unwrap_or_else(|err| {

@@ -83,9 +83,11 @@ pub enum BrowserEvent {
     Title { title: String },
     /// A small PNG for the page's tab icon, safe under the app's image CSP.
     Favicon { url: String, data_url: String },
-    /// A navigation or download the tab refused (not a web page, or a file to save); the tab
-    /// offers the system browser instead.
+    /// A navigation the tab refused (not a web page); the tab offers the system browser
+    /// instead.
     Blocked { url: String },
+    /// A download finished (`ok`) or failed, saved at `path`.
+    Downloaded { path: String, ok: bool },
 }
 
 /// The user's Settings › Browser choices the shell acts on itself, sent at start and on every

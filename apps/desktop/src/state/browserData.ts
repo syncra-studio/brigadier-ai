@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { BrowserClear, BrowserVisit, HistoryFilter } from "@/ipc/generated";
+import type { BrowserClear, BrowserDownload, BrowserVisit, HistoryFilter } from "@/ipc/generated";
 
 /*
  * What the built-in browser remembers (its history, downloads and site choices, kept by the
@@ -21,6 +21,15 @@ export function browserHistory(
 
 export function removeHistory(ids: number[]): Promise<void> {
   return invoke("browser_history_remove", { ids });
+}
+
+export function browserDownloads(query: string): Promise<BrowserDownload[]> {
+  return invoke<BrowserDownload[]>("browser_downloads", { query });
+}
+
+/** Forgets downloads (the files stay): `ids`, or every finished one. */
+export function removeDownloads(ids: number[] | null): Promise<void> {
+  return invoke("browser_downloads_remove", { ids });
 }
 
 /** A page's site as the lists show it: its host without "www.". */

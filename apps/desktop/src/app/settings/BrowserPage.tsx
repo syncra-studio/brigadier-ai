@@ -3,6 +3,7 @@ import { Globe } from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
+import { BrowserDownloads } from "@/app/settings/BrowserDownloads";
 import { BrowserHistory } from "@/app/settings/BrowserHistory";
 import { ClearBrowsingDataDialog } from "@/app/settings/ClearBrowsingDataDialog";
 import {
@@ -15,7 +16,9 @@ import {
   SettingsSwitch,
   SwitchSetting,
 } from "@/app/settings/parts";
+import { pickFolder } from "@/ipc/client";
 import type { LinkTarget } from "@/ipc/generated";
+import { shortPath } from "@/lib/format";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
@@ -45,6 +48,18 @@ export const BROWSER_ROWS = {
     label: "Browsing history",
     description: "View and remove pages you visited in the built-in browser.",
   },
+  location: {
+    label: "Location",
+    description: "Where files you download in the built-in browser are saved.",
+  },
+  askDownloads: {
+    label: "Ask where to save downloads",
+    description: "Choose the folder and name for each download.",
+  },
+  downloads: {
+    label: "Download history",
+    description: "View the files you downloaded in the built-in browser.",
+  },
 } as const;
 
 const PAGE_DESCRIPTION = "The built-in browser, where links open, and what it keeps.";
@@ -60,7 +75,7 @@ export function BrowserPage() {
   const on = useApp((s) => s.settings.browserEnabled);
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
-  const [view, setView] = useState<"page" | "history">("page");
+  const [view, setView] = useState<"page" | "history" | "downloads">("page");
   const [clearing, setClearing] = useState(false);
   const [cleared, setCleared] = useState(0);
   const clearDialog = (
@@ -71,6 +86,7 @@ export function BrowserPage() {
       onCleared={() => setCleared((count) => count + 1)}
     />
   );
+  if (on && embedded && view === "downloads") return <BrowserDownloads onBack={() => setView("page")} />;
   if (on && embedded && view === "history") {
     return (
       <>
@@ -102,8 +118,46 @@ export function BrowserPage() {
           </SettingsCard>
         </SettingsSection>
       )}
+      {on && embedded && (
+        <SettingsSection title="Downloads">
+          <SettingsCard>
+            <LocationRow />
+            {mac && <SwitchSetting setting="browserAskDownloads" row={BROWSER_ROWS.askDownloads} />}
+            <SettingsRow label={BROWSER_ROWS.downloads.label} description={BROWSER_ROWS.downloads.description}>
+              <SettingsButton onClick={() => setView("downloads")}>Manage</SettingsButton>
+            </SettingsRow>
+          </SettingsCard>
+        </SettingsSection>
+      )}
       {clearDialog}
     </SettingsPage>
+  );
+}
+
+/** Downloads' folder: the system's Downloads folder until another is chosen. */
+function LocationRow() {
+  const dir = useApp((s) => s.settings.browserDownloadsDir);
+  const save = useAction();
+  const change = () =>
+    save.run(async () => {
+      const picked = await pickFolder(dir || undefined);
+      if (picked) await setSetting("browserDownloadsDir", picked);
+    });
+  return (
+    <SettingsRow
+      label={BROWSER_ROWS.location.label}
+      description={dir ? <span title={dir}>{shortPath(dir)}</span> : "Your Downloads folder"}
+      error={save.error}
+    >
+      <div className="flex items-center gap-2">
+        {dir && (
+          <SettingsButton onClick={() => save.run(() => setSetting("browserDownloadsDir", ""))}>
+            Use Downloads
+          </SettingsButton>
+        )}
+        <SettingsButton onClick={change}>Change…</SettingsButton>
+      </div>
+    </SettingsRow>
   );
 }
 

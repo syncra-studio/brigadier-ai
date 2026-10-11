@@ -6,7 +6,7 @@
 //! tab's webview gets this delegate instead: it denies media capture, sends popups
 //! (`window.open`, `target=_blank`) to the system browser, and leaves the file picker to wry's
 //! delegate as before. It also reaches the browser's saved WebKit data store (clearing it,
-//! counting its sites). Talking to WebKit through objc2 needs `unsafe`; every use says why it
+//! counting its sites) and asks where to save a download. Talking to WebKit through objc2 needs `unsafe`; every use says why it
 //! holds.
 
 use std::cell::RefCell;
@@ -16,6 +16,7 @@ use block2::{DynBlock, RcBlock};
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
+use objc2_app_kit::{NSModalResponseOK, NSSavePanel};
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSDate, NSObjectProtocol, NSSet, NSString, NSURL, NSUUID,
 };
@@ -248,4 +249,25 @@ pub fn count_sites(identifier: [u8; 16], done: impl FnOnce(Option<usize>) + 'sta
         data_store(identifier, mtm)
             .fetchDataRecordsOfTypes_completionHandler(&data_types(true, false), &block);
     }
+}
+
+/// Asks where to save a download, starting at `suggested` (its folder and name): the path
+/// chosen, or `None` when the user cancels. Modal; on the main thread only (`None` elsewhere).
+pub fn save_path(suggested: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mtm = MainThreadMarker::new()?;
+    let panel = NSSavePanel::savePanel(mtm);
+    panel.setCanCreateDirectories(true);
+    if let Some(dir) = suggested.parent() {
+        panel.setDirectoryURL(Some(&NSURL::fileURLWithPath(&NSString::from_str(
+            &dir.to_string_lossy(),
+        ))));
+    }
+    if let Some(name) = suggested.file_name() {
+        panel.setNameFieldStringValue(&NSString::from_str(&name.to_string_lossy()));
+    }
+    if panel.runModal() != NSModalResponseOK {
+        return None;
+    }
+    let path = panel.URL()?.path()?;
+    Some(std::path::PathBuf::from(path.to_string()))
 }

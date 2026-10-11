@@ -18,7 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use brigadier_ipc::app::{
-    BrowserBounds, BrowserClear, BrowserEvent, BrowserOptions, BrowserVisit, HistoryFilter,
+    BrowserBounds, BrowserClear, BrowserDownload, BrowserEvent, BrowserOptions, BrowserVisit,
+    HistoryFilter,
 };
 use brigadier_ipc::protocol::{ErrorCode, IpcError};
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
@@ -216,6 +217,47 @@ impl Visit {
     }
 }
 
+/// `name` in `dir`, or with " (2)", " (3)"… before its extension while `taken` says that one is.
+fn free_name(dir: &Path, name: &std::ffi::OsStr, taken: impl Fn(&Path) -> bool) -> PathBuf {
+    let first = dir.join(name);
+    if !taken(&first) {
+        return first;
+    }
+    let name = Path::new(name);
+    let stem = name.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = name
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    (2..)
+        .map(|n| dir.join(format!("{stem} ({n}){extension}")))
+        .find(|path| !taken(path))
+        .unwrap_or(first)
+}
+
+/// Where a download goes, given where WebKit or WebView2 would put it (`suggested`, in the
+/// system's Downloads folder): the user's folder when one is set and there, and with "Ask where
+/// to save" (macOS) where they pick, `None` when they cancel.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn download_target(suggested: &Path) -> Option<PathBuf> {
+    let options = DOWNLOADS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let name = suggested.file_name()?;
+    let chosen = options
+        .as_ref()
+        .map(|options| PathBuf::from(&options.downloads_dir))
+        .filter(|dir| dir.is_absolute() && dir.is_dir());
+    let dir = chosen.or_else(|| suggested.parent().map(Path::to_path_buf))?;
+    let target = free_name(&dir, name, Path::exists);
+    #[cfg(target_os = "macos")]
+    if options.is_some_and(|options| options.ask_downloads) {
+        return crate::browser_ui::save_path(&target);
+    }
+    Some(target)
+}
+
 /// Whether `url` is a web page, which the system browser may open.
 fn web_page(url: &str) -> bool {
     let scheme = url
@@ -227,7 +269,9 @@ fn web_page(url: &str) -> bool {
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod embedded {
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
+    use std::path::PathBuf;
+    use std::rc::Rc;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
@@ -246,6 +290,9 @@ mod embedded {
         web_page,
     };
     use crate::shell::MAIN_WINDOW;
+
+    /// A tab's downloads under way, by address: their history entries and where they go.
+    type Downloads = HashMap<String, VecDeque<(Option<i64>, PathBuf)>>;
 
     /// A tab's page.
     struct Tab {
@@ -299,6 +346,8 @@ mod embedded {
             events.clone(),
             events,
         );
+        let downloads: Rc<RefCell<Downloads>> = Rc::default();
+        let finished = downloads.clone();
         let limit = Arc::new(Mutex::new(FaviconLimit::default()));
         let visit = Arc::new(Mutex::new(Visit::default()));
         let title_visit = visit.clone();
@@ -369,9 +418,38 @@ mod embedded {
                 }
                 ok
             })
-            .with_download_started_handler(move |url, _path| {
-                let _ = on_download.send(BrowserEvent::Blocked { url });
-                false
+            .with_download_started_handler(move |url, path| {
+                let Some(target) = super::download_target(path) else {
+                    return false;
+                };
+                let now = crate::browser_store::now_ms();
+                let id = crate::browser_store::with(|store| {
+                    store.download_started(&url, &target.to_string_lossy(), now)
+                });
+                path.clone_from(&target);
+                downloads
+                    .borrow_mut()
+                    .entry(url)
+                    .or_default()
+                    .push_back((id, target));
+                true
+            })
+            .with_download_completed_handler(move |url, _path, ok| {
+                // macOS never says where it saved; it's where the start was told to.
+                let Some((id, path)) = finished
+                    .borrow_mut()
+                    .get_mut(&url)
+                    .and_then(VecDeque::pop_front)
+                else {
+                    return;
+                };
+                if let Some(id) = id {
+                    crate::browser_store::with(|store| store.download_finished(id, ok));
+                }
+                let _ = on_download.send(BrowserEvent::Downloaded {
+                    path: path.to_string_lossy().into_owned(),
+                    ok,
+                });
             })
             .with_on_page_load_handler(move |event, url| {
                 let loading = matches!(event, PageLoadEvent::Started);
@@ -624,6 +702,19 @@ pub fn browser_history_remove(ids: Vec<i64>) -> Result<(), IpcError> {
         .ok_or_else(|| failed("the browser's history can't be changed now"))
 }
 
+/// The browser's downloads, newest first, whose address or file holds `query`.
+#[tauri::command]
+pub fn browser_downloads(query: String) -> Vec<BrowserDownload> {
+    browser_store::with(|store| store.downloads(&query)).unwrap_or_default()
+}
+
+/// Forgets downloads (the files stay): `ids`, or every finished one with none.
+#[tauri::command]
+pub fn browser_downloads_remove(ids: Option<Vec<i64>>) -> Result<(), IpcError> {
+    browser_store::with(|store| store.remove_downloads(ids.as_deref(), None))
+        .ok_or_else(|| failed("the download history can't be changed now"))
+}
+
 /// Runs `action` with the browser's data store on the main thread, and waits for its answer.
 #[cfg(target_os = "macos")]
 async fn on_store<T: Send + 'static>(
@@ -723,6 +814,24 @@ mod tests {
             store_identifier(Path::new("/Users/u/Library/Application Support/x/browser"))
         );
         assert_ne!(real, store_identifier(Path::new("/tmp/scratch/browser")));
+    }
+
+    #[test]
+    fn a_download_takes_a_free_name_in_its_folder() {
+        let dir = Path::new("/d");
+        let taken = |names: &'static [&'static str]| {
+            move |path: &Path| names.iter().any(|name| Path::new("/d").join(name) == path)
+        };
+        let name = std::ffi::OsStr::new("report.pdf");
+        assert_eq!(free_name(dir, name, taken(&[])), Path::new("/d/report.pdf"));
+        assert_eq!(
+            free_name(dir, name, taken(&["report.pdf", "report (2).pdf"])),
+            Path::new("/d/report (3).pdf")
+        );
+        assert_eq!(
+            free_name(dir, std::ffi::OsStr::new("notes"), taken(&["notes"])),
+            Path::new("/d/notes (2)")
+        );
     }
 
     #[test]

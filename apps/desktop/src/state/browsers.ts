@@ -1,7 +1,9 @@
 import { create } from "zustand";
 
-import { browserClose, browserNavigate, browserOpen } from "@/ipc/client";
+import { browserClose, browserNavigate, browserOpen, revealPath } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
+import { useApp } from "@/state/store";
+import { toast } from "@/state/toasts";
 
 /**
  * The Browser tabs' pages as the app knows them, one per conversation: what each shows, heard
@@ -80,6 +82,7 @@ export async function openPage(
       else if (event.type === "favicon") {
         if (faviconFits(useBrowsers.getState().pages[id], event.url)) update(id, { favicon: event.dataUrl });
       }
+      else if (event.type === "downloaded") downloaded(event.path, event.ok);
       else update(id, { blocked: event.url, loading: false });
     });
     if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }
@@ -89,6 +92,19 @@ export async function openPage(
     update(id, { loading: false });
     throw error;
   }
+}
+
+/** A download finished or failed: a toast says so, and finds the file. */
+function downloaded(path: string, ok: boolean): void {
+  const name = path.split(/[\\/]/).pop() || path;
+  if (!ok) {
+    toast(`Couldn't download ${name}`, { tone: "error" });
+    return;
+  }
+  const mac = useApp.getState().info?.platform === "macos";
+  toast(`Downloaded ${name}`, {
+    actions: [{ label: mac ? "Reveal in Finder" : "Show in folder", run: () => void revealPath(path) }],
+  });
 }
 
 export function dismissBlocked(id: string): void {
