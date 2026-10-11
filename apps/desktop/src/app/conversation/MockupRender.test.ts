@@ -27,6 +27,7 @@ test("a mockup gets its own session tab, busy while it builds, takes comments, s
   assert.match(String(seen.revised), /See latest changes/);
   assert.match(String(seen.kept), /v1 · Ready/);
   assert.match(String(seen.after), /v2 · Ready/);
+  assert.match(String(seen.backTools), /Comment/);
   assert.deepEqual(seen.closed, { tab: false, active: "chat" });
   assert.deepEqual(seen.compared, { tab: true, name: "Mockup", busy: false });
 });

@@ -87,8 +87,13 @@ export function MockupView({ conversationId, active }: { conversationId: string;
   const current = items.find((item) => item.key === picked) ?? items[0] ?? null;
   const canComment = Boolean(mockup && shown.length && (mockup.status === "ready" || mockup.status === "building") && !sent);
 
+  // A dismissed revision shows the next time the mockup opens: when its tab is back in front,
+  // since a tab behind another stays mounted, or when it mounts again.
+  const dismissed = Boolean(sent?.dismissed);
+  useEffect(() => {
+    if (!active && dismissed) changeNotes(conversationId, () => ({ sent: null }));
+  }, [conversationId, active, dismissed]);
   useEffect(() => () => {
-    // A dismissed revision shows the next time the mockup opens.
     if (mockupNotesOf(conversationId).sent?.dismissed) changeNotes(conversationId, () => ({ sent: null }));
   }, [conversationId]);
 

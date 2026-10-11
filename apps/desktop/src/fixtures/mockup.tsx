@@ -224,13 +224,17 @@ function Fixture() {
         seen.revised = document.querySelector('[aria-label="Image editing tools"]')?.textContent;
         // The notes' screenshots stay up, under their own version.
         seen.kept = button("File actions for Density toggle mockup")?.textContent;
-        button("See latest changes")?.click();
+        button("Dismiss latest changes")?.click();
       });
-      at(1000, () => {
+      // Dismissed, then Chat and back: the revision shows, ready for comments.
+      at(800, () => { selectTab(id, CHAT_TAB); });
+      at(1000, () => { selectTab(id, MOCKUP_TAB); });
+      at(1200, () => {
         seen.after = button("File actions for Density toggle mockup")?.textContent;
+        seen.backTools = document.querySelector('[aria-label="Image editing tools"]')?.textContent;
         closeTab(id, MOCKUP_TAB);
       });
-      at(1300, () => {
+      at(1500, () => {
         seen.closed = { tab: Boolean(mockupTab()), active: sessionTabs(id).active };
         // The real work is built and compared with the mockup: the tab comes back.
         const board = useBoard.getState().board!;
@@ -238,7 +242,7 @@ function Fixture() {
           "task-2": task(2, { title: "Compact density toggle", mockup: { type: "matches", task: "task-1" }, state: "reported",
             outputs: [1, 2].flatMap((screen) => [ref(`live-${screen}.png`, `live-${screen}`), ref(`compare-${screen}.png`, `compare-${screen}`)]) }) } } });
       });
-      at(1700, () => {
+      at(1900, () => {
         seen.compared = { tab: Boolean(mockupTab()), ...tabState() };
         setResult(JSON.stringify(seen));
       });
