@@ -735,24 +735,30 @@ impl SessionManager {
         }
         let tasks = self.landed_with(task).await;
         // The session's own landing on a held merge's branch is covered by its consent.
-        if let Ok(board) = self.core.board(&task.conversation_id).await
-            && let Some(held) = pending_merge(&board)
-            && held.branch == target
-            && held.tip == from.0
-        {
-            self.orchestrator_step(
-                &task.conversation_id,
-                OrchestratorStepKind::MergeHeld {
-                    branch: held.branch,
-                    base: held.base,
-                    asked_in: held.asked_in,
-                    consented_at_ms: held.consented_at_ms,
-                    condition: held.condition,
-                    waiting: held.waiting,
-                    tip: new_tip.0.clone(),
-                },
-            )
-            .await;
+        if let Ok(conv) = self.conv(&task.conversation_id) {
+            let mut moves = conv.held_moves.lock().await;
+            if let Ok(board) = self.core.board(&task.conversation_id).await
+                && let Some(held) = pending_merge(&board)
+                && held.branch == target
+            {
+                moves.insert(from.0.clone(), new_tip.0.clone());
+                let tip = advance_tip(&held.tip, &mut moves);
+                if tip != held.tip {
+                    self.orchestrator_step(
+                        &task.conversation_id,
+                        OrchestratorStepKind::MergeHeld {
+                            branch: held.branch,
+                            base: held.base,
+                            asked_in: held.asked_in,
+                            consented_at_ms: held.consented_at_ms,
+                            condition: held.condition,
+                            waiting: held.waiting,
+                            tip,
+                        },
+                    )
+                    .await;
+                }
+            }
         }
         // A fix of landed work's review findings gets no review of its own, only the
         // targeted re-check of a finding the thread marked high (SESSION-FIXES-PLAN.md Q6.1).
@@ -2319,6 +2325,16 @@ pub(super) enum Gate {
     Due,
 }
 
+/// A held merge's tip moved on along the session's own landings, each `from` → `to`, in
+/// whatever order they were told; the moves it follows are spent.
+fn advance_tip(tip: &str, moves: &mut HashMap<String, String>) -> String {
+    let mut tip = tip.to_owned();
+    while let Some(next) = moves.remove(&tip) {
+        tip = next;
+    }
+    tip
+}
+
 /// A landing's review not stored yet, counted on its conversation until dropped.
 struct ReviewDue(std::sync::Arc<super::conversation::ConvLive>);
 
@@ -2713,6 +2729,21 @@ fn keep_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_held_tip_follows_landings_told_out_of_order() {
+        let mut moves = HashMap::new();
+        // H1 → H2 is told first, while the tip is still H0: it waits.
+        moves.insert("h1".to_owned(), "h2".to_owned());
+        assert_eq!(advance_tip("h0", &mut moves), "h0");
+        // H0 → H1 joins them up.
+        moves.insert("h0".to_owned(), "h1".to_owned());
+        assert_eq!(advance_tip("h0", &mut moves), "h2");
+        assert!(moves.is_empty());
+        // A move that starts elsewhere is not followed.
+        moves.insert("x0".to_owned(), "x1".to_owned());
+        assert_eq!(advance_tip("h2", &mut moves), "h2");
+    }
 
     #[test]
     fn a_tip_lands_as_its_last_rebuild() {

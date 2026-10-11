@@ -291,6 +291,10 @@ pub(crate) struct ConvLive {
     /// Landings whose review isn't stored yet: the landed task is final before its review
     /// starts, so a held merge waits for these as for a running review.
     pub(super) reviews_due: std::sync::atomic::AtomicUsize,
+    /// The session's own landings on a held merge's branch, `from` → `to`, until the held tip
+    /// moves along them: two landings may record theirs out of order. Held while the tip is
+    /// read and moved on.
+    pub(super) held_moves: tokio::sync::Mutex<HashMap<String, String>>,
     /// The CI watches it runs (`watch_ci`), ended when it closes.
     pub(super) ci_watches: std::sync::Mutex<Vec<tokio::task::AbortHandle>>,
     /// When each request last showed the user something, and was last told `[status due]`.
@@ -333,6 +337,7 @@ impl ConvLive {
             merge_lock: tokio::sync::Mutex::new(()),
             merge_told: std::sync::Mutex::new(None),
             reviews_due: std::sync::atomic::AtomicUsize::new(0),
+            held_moves: tokio::sync::Mutex::new(HashMap::new()),
             ci_watches: std::sync::Mutex::new(Vec::new()),
             status: std::sync::Mutex::default(),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
