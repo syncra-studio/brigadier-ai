@@ -240,6 +240,24 @@ export function openNotificationSettings(): Promise<void> {
   return invoke<void>("open_notification_settings");
 }
 
+/** Whether Brigadier opens at login, as the system says (not where it has no way, or a
+ * development build on macOS). */
+export type LoginItem = "unsupported" | "off" | "on" | "needsApproval";
+
+export function loginItem(): Promise<LoginItem> {
+  return invoke<LoginItem>("login_item");
+}
+
+/** Turns opening at login on or off, and answers how it stands then. */
+export function setLoginItem(on: boolean): Promise<LoginItem> {
+  return invoke<LoginItem>("set_login_item", { on });
+}
+
+/** Opens the system's login items, where macOS asks the user to allow Brigadier. */
+export function openLoginItems(): Promise<void> {
+  return invoke<void>("open_login_items");
+}
+
 /** Rust chooses and remembers the destination; this call never accepts a write path. `choose`
  * asks for a destination even when one is remembered (Save As). */
 export function saveDocument(id: string, text: string, directory: string | null, name: string, choose = false): Promise<string | null> {

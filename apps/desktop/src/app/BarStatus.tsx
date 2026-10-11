@@ -303,7 +303,7 @@ export function KeepAwakeMenu() {
             fill
             onChange={(value) => run(() => setKeepAwake(value))}
           />
-          <p className="text-muted-foreground text-xs">{option?.hint}.</p>
+          <p className="text-muted-foreground text-xs">{option?.hint}</p>
         </div>
 
         {status && status.lidClosed !== "unsupported" && (
@@ -314,7 +314,7 @@ export function KeepAwakeMenu() {
               </span>
               <span id={`${lidId}-hint`} className="text-muted-foreground text-xs">
                 {keepAwake === "off" && !status.forRun
-                  ? "Takes effect once keeping awake is on."
+                  ? "Takes effect once keeping awake is on"
                   : lidClosedHint(status, settingUp)}
               </span>
             </span>
