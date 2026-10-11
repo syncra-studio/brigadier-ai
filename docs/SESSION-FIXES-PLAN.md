@@ -317,6 +317,9 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
    - The decisions part is exempt from every cut: all bodies in full, with `DECISIONS_BUDGET` removed.
    - Over the cap, the transcript excerpts (`recent`) shrink first, down to `MIN_EXCHANGES_OVERFLOW`. Then the Brain
      digest shrinks.
+   - The cap gives way only to what the briefing must carry: framing, handoff and state (each within its own
+     budget), every decision whole, and the newest `MIN_EXCHANGES_OVERFLOW` exchanges. The recent part's note then
+     says by how much (`~T tokens past the cap of 25000, for what it must carry`).
    - The handoff note's "Decisions not kept yet" is already kept as nodes (`:276-283`).
 4. **Cold-cache rebirth stays, only above about 150k** (the user's answer, grill Q12). After the cache lifetime
    (about an hour idle), `M/cold.rs` reborns a thread from its checkpoint instead of resuming at the cache-write
@@ -974,7 +977,8 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      the folders and network asked for (`additionalPermissions`). A refusal under this rule is always declined to
      the model with the reason. Any other refusal, or no verdict (as for a user with Codex alone), is the user's card
      with the reviewer's word, or declined with the reason while an overnight run has nobody to ask (the
-     Delegator's decision, 2026-10-11). `extra_policy` is no longer set.
+     Delegator's decision, 2026-10-11). The review runs while the CLI waits; a CLI that ended meanwhile (taken over,
+     retired) gets no card, since its answer would have nowhere to go. `extra_policy` is no longer set.
    - Whatever the approver, the rule binds a model, not the OS. An approver that ignores it still lets the command
      through.
 4. **Why git can't get around it.** Git's files backend takes the loose `<ref>.lock` for every update or delete of a
