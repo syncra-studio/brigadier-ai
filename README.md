@@ -234,8 +234,8 @@ Usage and Storage are covered where they come up above. A few more pages:
 - **Git.** Which CLI writes commits, commit-message instructions (follow the repository's own
   style, Conventional Commits, or custom instructions), pull-request instructions, the branch
   prefix Brigadier uses for its own branches, and a switch to leave out AI co-author lines.
-- **Voice.** Microphone, dictation language, the voice used for playback, a custom word list, and
-  the local speech-recognition model's download and status.
+- **Voice.** Microphone, dictation language, a custom word list, and the local
+  speech-recognition model's download and status. Read aloud speaks in the system's default voice.
 - **Keyboard shortcuts.** A read-only list of the app's shortcuts.
 - **Archived chats.** The chats you've archived, to reopen or delete for good.
 

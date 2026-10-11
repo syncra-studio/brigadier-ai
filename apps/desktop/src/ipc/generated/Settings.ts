@@ -151,10 +151,6 @@ dictationWords: Array<string>,
  */
 dictationMicrophone: string, 
 /**
- * The system voice Read aloud speaks with (its voice URI). Empty: the system's default.
- */
-readAloudVoice: string, 
-/**
  * Brigadier's built-in browser exists (Settings › Browser). Off, there is no Browser tab,
  * shortcut or menu item, links open in the default browser, and sessions are told.
  */

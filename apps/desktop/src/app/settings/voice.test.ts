@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cleanWords, languageChoices, microphoneChoices, voiceChoices } from "@/app/settings/voice";
+import { cleanWords, languageChoices, microphoneChoices } from "@/app/settings/voice";
 
 test("languages: auto-detect first, then the engine's by name", () => {
   const choices = languageChoices([
@@ -39,25 +39,6 @@ test("microphones: system default, each input numbered until named, an unplugged
       ["", "System default"],
       ["a", "MacBook Pro Microphone"],
       ["gone", "Not connected"],
-    ],
-  );
-});
-
-test("voices: system default, the app's language first, a missing choice kept", () => {
-  const voices = [
-    { voiceURI: "fr.thomas", name: "Thomas", lang: "fr-FR" },
-    { voiceURI: "en.samantha", name: "Samantha", lang: "en-US" },
-    { voiceURI: "en.daniel", name: "Daniel", lang: "en-GB" },
-  ];
-  const choices = voiceChoices(voices, "gone", "en-US");
-  assert.deepEqual(
-    choices.map((choice) => [choice.value, choice.label, choice.hint]),
-    [
-      ["", "System default", undefined],
-      ["en.daniel", "Daniel", "British English"],
-      ["en.samantha", "Samantha", "American English"],
-      ["fr.thomas", "Thomas", "French (France)"],
-      ["gone", "Not installed", "The system default is used meanwhile."],
     ],
   );
 });

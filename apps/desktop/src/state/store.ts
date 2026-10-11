@@ -225,7 +225,6 @@ export const useApp = create<AppState>()(() => ({
     dictationLanguage: "",
     dictationWords: [],
     dictationMicrophone: "",
-    readAloudVoice: "",
     browserEnabled: true,
     webLinksIn: "system",
     localLinksIn: "brigadier",

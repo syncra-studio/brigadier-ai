@@ -690,8 +690,6 @@ pub struct Settings {
     /// The microphone dictation records from (the webview's device id). Empty: the system's
     /// default.
     pub dictation_microphone: String,
-    /// The system voice Read aloud speaks with (its voice URI). Empty: the system's default.
-    pub read_aloud_voice: String,
     /// Brigadier's built-in browser exists (Settings › Browser). Off, there is no Browser tab,
     /// shortcut or menu item, links open in the default browser, and sessions are told.
     pub browser_enabled: bool,
@@ -826,7 +824,6 @@ impl Default for Settings {
             dictation_language: String::new(),
             dictation_words: Vec::new(),
             dictation_microphone: String::new(),
-            read_aloud_voice: String::new(),
             browser_enabled: true,
             web_links_in: LinkTarget::System,
             local_links_in: LinkTarget::Brigadier,
@@ -2111,5 +2108,21 @@ mod tests {
         assert!(settings.review_work);
         let settings: Settings = serde_json::from_str(r#"{"reviewWork":false}"#).unwrap();
         assert!(!settings.review_work);
+    }
+
+    #[test]
+    fn saved_settings_that_name_a_read_aloud_voice_still_load() {
+        // Read aloud speaks in the system's default voice now; a voice an earlier version
+        // saved is ignored, and is gone once the settings are saved again.
+        let settings: Settings = serde_json::from_str(
+            r#"{"readAloudVoice":"com.apple.voice.daniel","dictationLanguage":"de"}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.dictation_language, "de");
+        assert!(
+            !serde_json::to_string(&settings)
+                .unwrap()
+                .contains("readAloudVoice")
+        );
     }
 }

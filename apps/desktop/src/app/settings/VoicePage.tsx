@@ -1,5 +1,5 @@
 import { Plus, Trash } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import {
@@ -10,7 +10,7 @@ import {
   SettingsSection,
   SettingsSelect,
 } from "@/app/settings/parts";
-import { cleanWords, languageChoices, microphoneChoices, voiceChoices } from "@/app/settings/voice";
+import { cleanWords, languageChoices, microphoneChoices } from "@/app/settings/voice";
 import { formatBytes } from "@/lib/format";
 import {
   cancelSpeechModelDownload,
@@ -18,7 +18,6 @@ import {
   refreshSpeechModel,
   useSpeechModel,
 } from "@/state/dictation";
-import { sayInVoice } from "@/state/readAloud";
 import { setSetting } from "@/state/settings";
 import { removeSpeechModel } from "@/state/storage";
 import { useApp } from "@/state/store";
@@ -27,17 +26,14 @@ import { useApp } from "@/state/store";
 export const VOICE_ROWS = {
   microphone: { label: "Microphone", description: "Used for dictation." },
   language: { label: "Language", description: "The language you dictate in." },
-  voice: { label: "Voice", description: "The voice Read aloud speaks answers with." },
   words: { label: "Word list", description: "Names and terms dictation should recognise." },
   model: { label: "Speech model", description: "Dictation runs on this computer with this model." },
 } as const;
 
-/** The line Read aloud says when a voice is picked. */
-const SAMPLE = "This is how answers sound when they are read aloud.";
-
 /**
- * Settings › Voice: the microphone and language dictation uses, the voice Read aloud speaks
- * with, words dictation should recognise, and the speech model (downloaded, or not yet).
+ * Settings › Voice: the microphone and language dictation uses, words dictation should
+ * recognise, and the speech model (downloaded, or not yet). Read aloud speaks in the system's
+ * default voice, so it has nothing to set here.
  */
 export function VoicePage() {
   return (
@@ -46,11 +42,6 @@ export function VoicePage() {
         <SettingsCard>
           <MicrophoneRow />
           <LanguageRow />
-        </SettingsCard>
-      </SettingsSection>
-      <SettingsSection title="Read aloud">
-        <SettingsCard>
-          <VoiceRow />
         </SettingsCard>
       </SettingsSection>
       <SettingsSection title="Dictation">
@@ -124,52 +115,6 @@ function LanguageRow() {
         options={choices}
         disabled={!status}
         onChange={(next) => save.run(() => setSetting("dictationLanguage", next))}
-      />
-    </SettingsRow>
-  );
-}
-
-const noVoices: SpeechSynthesisVoice[] = [];
-
-/** The system's voices; they may arrive after the page opens. */
-function useVoices(): SpeechSynthesisVoice[] {
-  return useSyncExternalStore(
-    (changed) => {
-      if (typeof speechSynthesis === "undefined") return () => {};
-      speechSynthesis.addEventListener("voiceschanged", changed);
-      return () => speechSynthesis.removeEventListener("voiceschanged", changed);
-    },
-    () => (typeof speechSynthesis === "undefined" ? noVoices : voicesSnapshot()),
-  );
-}
-
-// getVoices() returns a new array each call: keep one per set of voices.
-let lastVoices: SpeechSynthesisVoice[] = noVoices;
-function voicesSnapshot(): SpeechSynthesisVoice[] {
-  const voices = speechSynthesis.getVoices();
-  const same =
-    voices.length === lastVoices.length && voices.every((voice, index) => voice.voiceURI === lastVoices[index]?.voiceURI);
-  if (!same) lastVoices = voices;
-  return lastVoices;
-}
-
-function VoiceRow() {
-  const chosen = useApp((s) => s.settings.readAloudVoice);
-  const voices = useVoices();
-  const save = useAction();
-  const choices = voiceChoices(voices, chosen, navigator.language);
-  return (
-    <SettingsRow label={VOICE_ROWS.voice.label} description={VOICE_ROWS.voice.description} error={save.error}>
-      <SettingsSelect
-        label={VOICE_ROWS.voice.label}
-        value={chosen}
-        options={choices}
-        onChange={(value) =>
-          save.run(async () => {
-            await setSetting("readAloudVoice", value);
-            sayInVoice(SAMPLE);
-          })
-        }
       />
     </SettingsRow>
   );

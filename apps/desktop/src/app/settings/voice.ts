@@ -31,33 +31,6 @@ export function microphoneChoices(devices: readonly Pick<MediaDeviceInfo, "kind"
   return choices;
 }
 
-/** System default, then the system's voices: those in the app's language first, then by name. */
-export function voiceChoices(
-  voices: readonly Pick<SpeechSynthesisVoice, "voiceURI" | "name" | "lang">[],
-  chosen: string,
-  language: string,
-): VoiceChoice[] {
-  const names = typeof Intl.DisplayNames === "function" ? new Intl.DisplayNames(["en"], { type: "language" }) : null;
-  const languageName = (tag: string) => {
-    try {
-      return names?.of(tag) ?? tag;
-    } catch {
-      return tag;
-    }
-  };
-  const base = language.split("-")[0]?.toLowerCase() ?? "";
-  const mine = (voice: { lang: string }) => voice.lang.split(/[-_]/)[0]?.toLowerCase() === base;
-  const sorted = voices.toSorted((a, b) => Number(mine(b)) - Number(mine(a)) || a.name.localeCompare(b.name));
-  const choices: VoiceChoice[] = [
-    { value: "", label: "System default" },
-    ...sorted.map((voice) => ({ value: voice.voiceURI, label: voice.name, hint: languageName(voice.lang.replace("_", "-")) })),
-  ];
-  if (chosen && !voices.some((voice) => voice.voiceURI === chosen)) {
-    choices.push({ value: chosen, label: "Not installed", hint: "The system default is used meanwhile." });
-  }
-  return choices;
-}
-
 /** The word list as saved: trimmed, no empty or repeated entries. */
 export function cleanWords(words: readonly string[]): string[] {
   const seen = new Set<string>();

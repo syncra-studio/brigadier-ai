@@ -11,9 +11,9 @@ import { readAloud } from "@/state/readAloud";
 import { useApp } from "@/state/store";
 
 /*
- * ?drive=1 picks a microphone, a language and a voice, edits the word list, downloads (and
- * cancels) and removes the speech model, reads an answer aloud and opens an unplugged
- * microphone, then writes what it saw to #voice-result (VoicePageRender.test.ts reads it).
+ * ?drive=1 picks a microphone and a language, edits the word list, downloads (and cancels) and
+ * removes the speech model, reads an answer aloud (in the system's default voice, whatever an
+ * older version saved) and opens an unplugged microphone, then writes what it saw to #voice-result (VoicePageRender.test.ts reads it).
  */
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
@@ -175,15 +175,7 @@ function Fixture() {
         seen.languages = menuItems();
         pickMenu("German");
       },
-      () => openMenu("Voice"),
-      () => {
-        seen.voices = menuItems();
-        pickMenu("Daniel");
-      },
-      () => {
-        seen.sample = spoken.at(-1);
-        button("Add word")?.click();
-      },
+      () => button("Add word")?.click(),
       () => {
         seen.focused = document.activeElement === words()[0];
         type(words()[0], "  Brigadier ");
@@ -236,6 +228,10 @@ function Fixture() {
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 200));
         seen.removed = modelLine();
+        // Settings saved by an earlier version still name a voice: Read aloud leaves it be.
+        useApp.setState((state) => ({
+          settings: { ...state.settings, readAloudVoice: "com.apple.voice.daniel" } as typeof state.settings,
+        }));
         readAloud("answer-1", "**Done.** See [the docs](https://example.com).");
         seen.readAloud = spoken.at(-1);
         await openMicrophone("gone");
@@ -245,7 +241,6 @@ function Fixture() {
         seen.settings = {
           microphone: settings().dictationMicrophone,
           language: settings().dictationLanguage,
-          voice: settings().readAloudVoice,
         };
         seen.calls = calls;
         setResult(JSON.stringify(seen));
