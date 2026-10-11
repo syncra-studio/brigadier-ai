@@ -274,8 +274,16 @@ pub struct ConventionsExport {
 /// The context window assumed when a CLI has not said its model's.
 const DEFAULT_WINDOW: i64 = 200_000;
 
+/// A Claude window that holds the big thresholds below (SESSION-FIXES-PLAN Q5).
+const BIG_WINDOW: i64 = 500_000;
+/// On a big window a Claude orchestrator prepares its rebirth here …
+const BIG_PREPARE_TOKENS: i64 = 400_000;
+/// … and swaps here.
+const BIG_SWAP_TOKENS: i64 = 450_000;
+
 /// When an orchestrator on `provider` with a `window`-token model prepares its rebirth and when
-/// it must happen (PLAN.md §6 Phase 4: at about 150–200k tokens).
+/// it must happen: on a Claude window of 500k or more at 400k and 450k (SESSION-FIXES-PLAN
+/// Q5), otherwise at about 150–190k tokens or a share of a smaller window (PLAN.md §6 Phase 4).
 ///
 /// Claude's auto-compact is off for orchestrators, so only the window bounds the swap. Codex
 /// compacts on its own at 90% of the window whatever it is told, so a Codex orchestrator is
@@ -289,8 +297,15 @@ pub fn rebirth_thresholds(provider: ProviderKind, window: Option<i64>) -> Rebirt
         ProviderKind::Claude => (0.75, 0.90),
         ProviderKind::Codex => (0.65, 0.80),
     };
-    let mut prepare_tokens = 150_000.min((size as f64 * prepare_share) as i64);
-    let mut swap_tokens = 190_000.min((size as f64 * swap_share) as i64);
+    let (mut prepare_tokens, mut swap_tokens) =
+        if provider == ProviderKind::Claude && size >= BIG_WINDOW {
+            (BIG_PREPARE_TOKENS, BIG_SWAP_TOKENS)
+        } else {
+            (
+                150_000.min((size as f64 * prepare_share) as i64),
+                190_000.min((size as f64 * swap_share) as i64),
+            )
+        };
     if cfg!(debug_assertions)
         && let Some(tokens) = std::env::var("BRIGADIER_REBIRTH_TOKENS")
             .ok()
@@ -336,5 +351,28 @@ mod tests {
         assert_eq!(worker_handoff_tokens(None), 140_000);
         // No limit on how many: a successor that started small hands over again.
         assert!(worker_handoff_due(300_000, Some(30_000), 300_000));
+    }
+
+    #[test]
+    fn a_claude_thread_on_a_big_window_is_reborn_at_400k() {
+        if std::env::var_os("BRIGADIER_REBIRTH_TOKENS").is_some() {
+            return;
+        }
+        let at = |provider, window| {
+            let thresholds = rebirth_thresholds(provider, window);
+            (thresholds.prepare_tokens, thresholds.swap_tokens)
+        };
+        assert_eq!(
+            at(ProviderKind::Claude, Some(1_000_000)),
+            (400_000, 450_000)
+        );
+        assert_eq!(at(ProviderKind::Claude, Some(500_000)), (400_000, 450_000));
+        // A window that doesn't hold them keeps the shares.
+        assert_eq!(at(ProviderKind::Claude, Some(200_000)), (150_000, 180_000));
+        assert_eq!(at(ProviderKind::Claude, Some(400_000)), (150_000, 190_000));
+        assert_eq!(at(ProviderKind::Claude, None), (150_000, 180_000));
+        // Codex compacts on its own at 90%: its lower shares stay.
+        assert_eq!(at(ProviderKind::Codex, Some(1_000_000)), (150_000, 190_000));
+        assert_eq!(at(ProviderKind::Codex, Some(200_000)), (130_000, 160_000));
     }
 }
