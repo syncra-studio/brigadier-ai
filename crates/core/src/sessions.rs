@@ -2035,7 +2035,12 @@ impl Core {
 /// The name the user asked to be called, as kept: without surrounding spaces, at most
 /// [`MAX_USER_NAME_CHARS`] long.
 fn user_name(name: &str) -> String {
-    name.trim().chars().take(MAX_USER_NAME_CHARS).collect::<String>().trim_end().to_owned()
+    name.trim()
+        .chars()
+        .take(MAX_USER_NAME_CHARS)
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
 }
 
 /// The deleted conversation `stream` belongs to (its transcript, orchestrator or draft).
