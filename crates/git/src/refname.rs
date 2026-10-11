@@ -74,7 +74,11 @@ pub fn branch_prefix_problem(prefix: &str) -> Option<String> {
     ]
     .iter()
     .find_map(|rest| branch_name_problem(&format!("{prefix}{rest}")))
-    .map(|problem| problem.replace("A branch name", "The prefix"))
+    .map(|problem| {
+        problem
+            .replace("A branch name", "The prefix")
+            .replace("a branch name", "the prefix")
+    })
 }
 
 #[cfg(test)]
