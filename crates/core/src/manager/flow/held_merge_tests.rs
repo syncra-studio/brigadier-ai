@@ -245,6 +245,21 @@ async fn writing(held: &Held) {
         .await;
 }
 
+/// Waits for the stopped merge and for the thread's turn on its `[merge stopped]`: the step is
+/// stored before the thread hears it, and no request works in between.
+async fn stopped(held: &Held) {
+    held.flow
+        .until("the merge to stop and the thread to hear it", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, OrchestratorStepKind::MergeStopped { .. }))
+                && held.logged("[merge stopped]") > 0
+        })
+        .await;
+    held.flow.settled().await;
+}
+
 #[tokio::test]
 async fn merge_when_done_with_two_writers_merges_once_they_land_without_asking_again() {
     let held = held("held-merge", Plan::default()).await;
@@ -293,15 +308,7 @@ async fn a_stopped_writer_stops_the_held_merge() {
     let task2 = Flow::task(&held.flow.board().await, 2).id.clone();
     held.flow.manager.stop_task(task2).await.unwrap();
     held.release.store(true, Ordering::SeqCst);
-    held.flow
-        .until("the merge to stop", |board| {
-            board
-                .orchestrator_steps
-                .iter()
-                .any(|step| matches!(step.kind, OrchestratorStepKind::MergeStopped { .. }))
-        })
-        .await;
-    held.flow.settled().await;
+    stopped(&held).await;
     assert_eq!(held.logged("[merge stopped] task-2 was stopped"), 1);
     assert_eq!(held.logged("[merge due] The workers"), 0);
     assert!(!held.merged());
@@ -317,15 +324,7 @@ async fn a_wait_written_while_held_stops_the_merge() {
     writing(&held).await;
     held.flow.say("Wait, I want to look at it first.").await;
     held.release.store(true, Ordering::SeqCst);
-    held.flow
-        .until("the merge to stop", |board| {
-            board
-                .orchestrator_steps
-                .iter()
-                .any(|step| matches!(step.kind, OrchestratorStepKind::MergeStopped { .. }))
-        })
-        .await;
-    held.flow.settled().await;
+    stopped(&held).await;
     assert_eq!(
         held.logged(
             "[merge stopped] The user wrote since they consented, and their message says \"wait\"."
@@ -358,15 +357,7 @@ async fn an_open_finding_stops_the_held_merge_at_medium_severity() {
     .await;
     writing(&held).await;
     held.release.store(true, Ordering::SeqCst);
-    held.flow
-        .until("the merge to stop", |board| {
-            board
-                .orchestrator_steps
-                .iter()
-                .any(|step| matches!(step.kind, OrchestratorStepKind::MergeStopped { .. }))
-        })
-        .await;
-    held.flow.settled().await;
+    stopped(&held).await;
     assert_eq!(
         held.logged(&format!(
             "[merge stopped] {} is open: The second note has no title",
