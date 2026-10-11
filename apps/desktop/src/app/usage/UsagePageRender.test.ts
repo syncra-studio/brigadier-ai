@@ -52,7 +52,12 @@ test("Usage shows a card per account, their activity, and a Refresh that waits f
     seen.tooltip.slice(1).map((line: string) => line.replace(/\d+% used$/, "")),
     ["5-hour", "Weekly", "Weekly · Fable"],
   );
-  assert.deepEqual(seen.range30, { range: "30 days", tokens: "Brigadier used 6.2M tokens in the last 30 days" });
+  // Over 30 days the 5-hour window draws each day's peak, the weekly ones every reading.
+  assert.deepEqual(seen.range30, {
+    range: "30 days",
+    tokens: "Brigadier used 6.2M tokens in the last 30 days",
+    legend: ["5-hour · daily peak", "Weekly", "Weekly · Fable"],
+  });
 
   assert.deepEqual(seen.pressed, { spinning: "true", disabled: true });
   // A check that began before Refresh doesn't end it.

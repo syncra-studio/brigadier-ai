@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
-import { glance, left, leftTone, percentLeft, usageLevel, usageTone, windowTitle } from "@/lib/quota";
+import {
+  dailyPeaks,
+  drawsDailyPeak,
+  glance,
+  left,
+  leftTone,
+  percentLeft,
+  usageLevel,
+  usageTone,
+  windowTitle,
+} from "@/lib/quota";
 
 function window(id: string, usedPercent: number, windowMinutes: number | null): QuotaWindow {
   return { id, label: id, usedPercent, resetsAtMs: null, windowMinutes, bucket: null, model: null };
@@ -67,4 +77,29 @@ test("a window's title folds in what it is limited to", () => {
   assert.equal(windowTitle({ ...window("w", 10, null), label: "Weekly (Fable)" }), "Weekly · Fable");
   assert.equal(windowTitle({ ...window("w", 10, null), label: "Weekly", bucket: "gpt-6-luna" }), "Weekly · gpt-6-luna");
   assert.equal(windowTitle({ ...window("w", 10, null), label: "5-hour" }), "5-hour");
+});
+
+const day = (offset: number, hour: number) => new Date(2026, 9, 1 + offset, hour).getTime();
+
+test("over 30 days a window shorter than a day draws each day's peak, held across the day", () => {
+  assert.equal(drawsDailyPeak(window("five_hour", 0, 300), 30), true);
+  assert.equal(drawsDailyPeak(window("five_hour", 0, 300), 7), false);
+  assert.equal(drawsDailyPeak(window("seven_day", 0, 10_080), 30), false);
+  assert.equal(drawsDailyPeak(window("other", 0, null), 30), false);
+
+  const start = day(0, 12);
+  const end = day(2, 9);
+  const samples = [
+    { atMs: day(0, 6), usedPercent: 99 }, // before the range
+    { atMs: day(0, 13), usedPercent: 40 },
+    { atMs: day(0, 18), usedPercent: 85 },
+    { atMs: day(0, 23), usedPercent: 5 },
+    { atMs: day(2, 8), usedPercent: 30 }, // no reading on the 2nd
+  ];
+  assert.deepEqual(dailyPeaks(samples, start, end), [
+    { atMs: start, usedPercent: 85 },
+    { atMs: day(1, 0) - 1, usedPercent: 85 },
+    { atMs: day(2, 0), usedPercent: 30 },
+    { atMs: end, usedPercent: 30 },
+  ]);
 });

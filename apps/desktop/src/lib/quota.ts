@@ -1,4 +1,4 @@
-import type { QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
+import type { QuotaSample, QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
 
 /** Share of a window used, as a whole percent from 0 to 100. */
 export function used(window: QuotaWindow): number {
@@ -111,4 +111,36 @@ export function tone(percent: number): { text: string; fill: string } {
 export function percentLeft(quota: QuotaSnapshot | null): number | null {
   if (!quota || quota.windows.length === 0) return null;
   return 100 - Math.max(...glance(quota).map(used));
+}
+
+/** A window shorter than this resets several times a day, too often to draw over a month. */
+const DAY_MINUTES = 24 * 60;
+
+/** Whether a range of `days` draws `window` as each day's peak rather than every reading. */
+export function drawsDailyPeak(window: QuotaWindow, days: number): boolean {
+  return days > 7 && window.windowMinutes !== null && window.windowMinutes < DAY_MINUTES;
+}
+
+/**
+ * Samples in `startMs`..`endMs` as each local day's highest reading, held flat across that
+ * day: over a month, a window that resets every few hours reads as how close each day came to
+ * its limit instead of a dense sawtooth. Days with no reading are left out.
+ */
+export function dailyPeaks(samples: readonly QuotaSample[], startMs: number, endMs: number): QuotaSample[] {
+  const days = new Map<number, number>();
+  for (const sample of samples) {
+    if (sample.atMs < startMs || sample.atMs > endMs) continue;
+    const day = new Date(sample.atMs).setHours(0, 0, 0, 0);
+    days.set(day, Math.max(days.get(day) ?? 0, sample.usedPercent));
+  }
+  return [...days.entries()]
+    .toSorted(([a], [b]) => a - b)
+    .flatMap(([day, peak]) => {
+      const next = new Date(day);
+      next.setDate(next.getDate() + 1);
+      return [
+        { atMs: Math.max(day, startMs), usedPercent: peak },
+        { atMs: Math.min(next.getTime() - 1, endMs), usedPercent: peak },
+      ];
+    });
 }

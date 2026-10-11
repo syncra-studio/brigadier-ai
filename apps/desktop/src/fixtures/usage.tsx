@@ -303,6 +303,7 @@ function Fixture() {
         seen.range30 = {
           range: text(document.querySelector('[aria-label="Range"] [data-state="on"]')),
           tokens: text(document.querySelector('[data-slot="usage-tokens"] > p')),
+          legend: all("li", document.querySelector('[data-slot="usage-chart"]')?.previousElementSibling ?? undefined).map(text),
         };
         openTab("Limits");
         return () => all('[data-slot="usage-checked"]').length === 3;

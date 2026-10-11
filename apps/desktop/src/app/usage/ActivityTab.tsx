@@ -10,7 +10,7 @@ import type { ModelGroup } from "@/components/assistant-ui/elements/model-select
 import { useNow } from "@/hooks/use-now";
 import type { AccountActivity, AccountTokens, AccountUsage, ProviderUsage, WindowState } from "@/ipc/generated";
 import { formatCountdown, formatTokens } from "@/lib/format";
-import { windowTitle } from "@/lib/quota";
+import { dailyPeaks, drawsDailyPeak, windowTitle } from "@/lib/quota";
 import { byLength, formatResetAt } from "@/lib/routing";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { openConversation } from "@/state/actions";
@@ -91,11 +91,11 @@ function AccountActivityCard({
   const states = (usage.quota?.windows ?? []).toSorted((a, b) => byLength(a.window, b.window));
   const series = (activity?.history ?? []).map((history) => {
     const state = states.find((entry) => entry.window.id === history.windowId);
-    return {
-      id: history.windowId,
-      title: state ? windowTitle(state.window) : history.label,
-      samples: history.samples,
-    };
+    const title = state ? windowTitle(state.window) : history.label;
+    // Over 30 days a 5-hour window draws each day's peak; every reading would be a sawtooth.
+    return state && drawsDailyPeak(state.window, days)
+      ? { id: history.windowId, title: `${title} · daily peak`, samples: dailyPeaks(history.samples, since, now) }
+      : { id: history.windowId, title, samples: history.samples };
   });
   const read = series.some((entry) => entry.samples.length > 0);
   const estimates = states
