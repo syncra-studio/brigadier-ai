@@ -555,6 +555,55 @@ async fn a_held_merge_waits_for_the_last_landings_review_even_when_called_early(
     held.flow.stop().await;
 }
 
+/// The last writer is landed, so final, a moment before its review is stored: a merge in that
+/// moment waits for the review as for a running one.
+#[tokio::test]
+async fn a_held_merge_waits_for_a_landings_review_not_started_yet() {
+    let held = held("held-merge-review-due", Plan::default()).await;
+    writing(&held).await;
+    // The first landing's review starts; the second's waits at the pause.
+    let conv = held.flow.manager.conv(&held.flow.conversation).unwrap();
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *conv.review_pause.lock().unwrap() = Some((1, reached.clone(), release.clone()));
+    held.release.store(true, Ordering::SeqCst);
+    reached.notified().await;
+    held.flow
+        .until("both landed, no review running", |board| {
+            board
+                .tasks
+                .values()
+                .filter(|task| task.state == TaskState::Landed)
+                .count()
+                == 2
+                && !crate::manager::landing::findings_now(board).running
+        })
+        .await;
+    let refused = held
+        .flow
+        .manager
+        .finish_session(&held.flow.conversation, "", None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("A review of the session's work still runs"),
+        "{refused}"
+    );
+    assert!(!held.merged());
+    release.notify_one();
+    held.flow
+        .until("the merge", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+        })
+        .await;
+    assert!(held.merged());
+    held.flow.stop().await;
+}
+
 /// A Cancel racing the due merge: whichever takes the landing lock first wins.
 #[tokio::test]
 async fn a_cancel_waits_for_a_merge_under_way_and_finds_it_merged() {

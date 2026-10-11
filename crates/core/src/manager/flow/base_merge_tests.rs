@@ -303,16 +303,21 @@ async fn resolve(flow: &Flow) -> String {
     let landed = task.landed.clone().unwrap();
     assert_merged(flow, &landed, &session_tip, &base_tip);
     assert_eq!(git(&flow.repo, &["rev-parse", &branch(flow)]), landed);
-    // A held merge waits for it to end (SESSION-FIXES-PLAN.md Q3).
-    flow.until("the merge's review to end", |board| {
-        board.reviews.values().any(|review| {
-            review.task_id.as_ref() == Some(&task.id)
-                && review.state != crate::work::ReviewState::Running
-        })
+    review_ended(flow, &landed).await;
+    landed
+}
+
+/// Waits for the review of the landing at `tip` to end: a held merge waits for it
+/// (SESSION-FIXES-PLAN.md Q3).
+async fn review_ended(flow: &Flow, tip: &str) {
+    flow.until("the landing's review to end", |board| {
+        board
+            .reviews
+            .values()
+            .any(|review| review.tip == tip && review.state != crate::work::ReviewState::Running)
     })
     .await;
     flow.settled().await;
-    landed
 }
 
 async fn finish(flow: &Flow, words: &str) {
@@ -474,7 +479,7 @@ async fn a_merge_with_markers_is_refused_and_lands_after_a_fix_on_top() {
     let merge = git(&flow.repo, &["rev-parse", &format!("{landed}^")]);
     assert_merged(&flow, &merge, &session_tip, &base_tip);
     assert_eq!(git(&flow.repo, &["rev-parse", &branch(&flow)]), landed);
-    flow.settled().await;
+    review_ended(&flow, &landed).await;
     // The fix on top is still the merge the held consent covers.
     finish(&flow, "merge it").await;
     assert_eq!(
@@ -633,7 +638,7 @@ async fn a_merge_whose_target_moved_goes_back_to_the_same_worker_and_lands_both(
         git(&flow.repo, &["show", &format!("{landed}:README.md")]),
         "# Session and Base, again"
     );
-    flow.settled().await;
+    review_ended(&flow, &landed).await;
     // The consent held over didn't cover the other work: the user's fresh yes does.
     let error = flow
         .manager

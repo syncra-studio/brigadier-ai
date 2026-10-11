@@ -726,6 +726,8 @@ impl SessionManager {
     }
 
     async fn landed(&self, task: &Task, target: &str, from: &Oid, new_tip: &Oid, commits: u32) {
+        // Counted before the task is final, until its review is stored: a held merge waits.
+        let review_due = self.conv(&task.conversation_id).ok().map(ReviewDue::new);
         // The thread's own commits below the landing get their review; the landing has its own.
         if let Ok(repo) = self.task_repo(task) {
             self.thread_branch_landed(&task.conversation_id, &repo, target, from, new_tip)
@@ -865,10 +867,31 @@ impl SessionManager {
         // Then a held merge looks again (SESSION-FIXES-PLAN.md Q3): before, no review of this
         // landing was running yet, and it would have come due without one.
         self.spawn(async move {
+            #[cfg(test)]
+            if let Some(conv) = review_due.as_ref().map(|due| due.0.clone()) {
+                let pause = {
+                    let mut pause = conv.review_pause.lock().unwrap();
+                    match pause.as_mut() {
+                        Some((0, ..)) => {
+                            pause.take().map(|(_, reached, release)| (reached, release))
+                        }
+                        Some((skip, ..)) => {
+                            *skip -= 1;
+                            None
+                        }
+                        None => None,
+                    }
+                };
+                if let Some((reached, release)) = pause {
+                    reached.notify_one();
+                    release.notified().await;
+                }
+            }
             match fixed {
                 Some(subject) => manager.recheck_fix(&task, &subject, from, tip).await,
                 None => manager.review_landing(&task, from, tip).await,
             }
+            drop(review_due);
             manager.check_held_merge(&task.conversation_id).await;
         });
     }
@@ -1480,7 +1503,7 @@ impl SessionManager {
             ));
         }
         if let Some(held) = &pending {
-            match held_gate(held, &tasks, &board) {
+            match held_gate(held, &tasks, &board, &conv) {
                 Gate::Stop(reason) => {
                     self.stop_held_merge(id, &conv, held, &reason).await;
                     return Err(Error::Invalid(stopped_text(&reason)));
@@ -1727,7 +1750,7 @@ impl SessionManager {
                 *told = Some((held.asked_in.clone(), kind));
                 again
             };
-            match held_gate(&held, &tasks, &board) {
+            match held_gate(&held, &tasks, &board, &conv) {
                 Gate::Stop(reason) => {
                     self.stop_held_merge(id, &conv, &held, &reason).await;
                     stopped_text(&reason)
@@ -2296,8 +2319,32 @@ pub(super) enum Gate {
     Due,
 }
 
+/// A landing's review not stored yet, counted on its conversation until dropped.
+struct ReviewDue(std::sync::Arc<super::conversation::ConvLive>);
+
+impl ReviewDue {
+    fn new(conv: std::sync::Arc<super::conversation::ConvLive>) -> Self {
+        conv.reviews_due
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(conv)
+    }
+}
+
+impl Drop for ReviewDue {
+    fn drop(&mut self) {
+        self.0
+            .reviews_due
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// [`Gate`] of `held` with every write task final.
-pub(super) fn held_gate(held: &PendingMerge, tasks: &[Task], board: &crate::board::Board) -> Gate {
+pub(super) fn held_gate(
+    held: &PendingMerge,
+    tasks: &[Task],
+    board: &crate::board::Board,
+    conv: &super::conversation::ConvLive,
+) -> Gate {
     let ended = tasks.iter().find(|task| {
         task.kind.writes()
             && (held.waiting.contains(&task.id) || task.created_at_ms >= held.at_ms)
@@ -2323,7 +2370,9 @@ pub(super) fn held_gate(held: &PendingMerge, tasks: &[Task], board: &crate::boar
             .collect();
         return Gate::Stop(format!("{}.", open.join("; ")));
     }
-    if findings.running || !findings.new.is_empty() {
+    // A landing whose review isn't stored yet waits like a running review.
+    let review_due = conv.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0;
+    if findings.running || review_due || !findings.new.is_empty() {
         return Gate::Wait(findings.new);
     }
     Gate::Due

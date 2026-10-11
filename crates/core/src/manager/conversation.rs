@@ -262,6 +262,11 @@ enum Unanswered {
 /// a worktree in between).
 const UNANSWERED_GRACE: Duration = Duration::from_secs(10);
 
+/// Tests: landings to let through, then the pause's reached and release signals.
+#[cfg(test)]
+pub(super) type ReviewPause =
+    std::sync::Mutex<Option<(usize, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>;
+
 /// A conversation's live state.
 pub(crate) struct ConvLive {
     pub id: ConversationId,
@@ -283,6 +288,9 @@ pub(crate) struct ConvLive {
     /// What the thread was last told of the held merge (its consent's `asked_in`, and
     /// "due" or "waiting"), so each is said once.
     pub(super) merge_told: std::sync::Mutex<Option<(String, &'static str)>>,
+    /// Landings whose review isn't stored yet: the landed task is final before its review
+    /// starts, so a held merge waits for these as for a running review.
+    pub(super) reviews_due: std::sync::atomic::AtomicUsize,
     /// The CI watches it runs (`watch_ci`), ended when it closes.
     pub(super) ci_watches: std::sync::Mutex<Vec<tokio::task::AbortHandle>>,
     /// When each request last showed the user something, and was last told `[status due]`.
@@ -294,6 +302,10 @@ pub(crate) struct ConvLive {
     #[cfg(test)]
     pub(super) merge_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// Tests: how many landings' reviews start first, then what the next one's start waits
+    /// for.
+    #[cfg(test)]
+    pub(super) review_pause: ReviewPause,
     /// Tests: what a limited turn's end waits for before its hand-over is chosen.
     #[cfg(test)]
     pub(super) hand_over_pause:
@@ -320,11 +332,14 @@ impl ConvLive {
             full_access_notice: tokio::sync::Mutex::new(()),
             merge_lock: tokio::sync::Mutex::new(()),
             merge_told: std::sync::Mutex::new(None),
+            reviews_due: std::sync::atomic::AtomicUsize::new(0),
             ci_watches: std::sync::Mutex::new(Vec::new()),
             status: std::sync::Mutex::default(),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            review_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             hand_over_pause: std::sync::Mutex::new(None),
         }
