@@ -329,6 +329,8 @@ impl Store {
     }
 
     /// The site `origin` asked for `device`: it is listed from now on. Returns the choice.
+    // Only macOS's WebKit asks for camera and microphone through Brigadier.
+    #[cfg(any(target_os = "macos", test))]
     pub fn site_asked(
         &self,
         origin: &str,
@@ -392,6 +394,7 @@ impl Store {
 
 /// The answer to a page asking for several devices at once: blocked if any is, allowed only if
 /// all are, else the system asks.
+#[cfg(any(target_os = "macos", test))]
 pub fn combined(choices: &[SitePermission]) -> SitePermission {
     if choices.contains(&SitePermission::Block) || choices.is_empty() {
         SitePermission::Block
