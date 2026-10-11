@@ -41,7 +41,9 @@ use crate::work::{ApprovalSubject, CardState, OrchestratorEntry, PlanState, Task
 const BYTES_PER_TOKEN: usize = 4;
 /// The briefing aims at this many tokens …
 const BRIEFING_TARGET: usize = 20_000 * BYTES_PER_TOKEN;
-/// … and never passes this unless the decisions alone need it (they are never cut).
+/// … and passes this only when what it must carry needs more: the framing, the handoff note
+/// and the state (each within its own budget), every decision whole, and the newest
+/// [`MIN_EXCHANGES_OVERFLOW`] exchanges, however long ([`fit`]).
 const BRIEFING_MAX: usize = 25_000 * BYTES_PER_TOKEN;
 
 /// A verbatim exchange: a user message and what followed it.
@@ -495,8 +497,21 @@ impl SessionManager {
             brain.truncated = true;
             brain.note = Some("cut to fit the briefing".into());
         }
-        let overflow_note = (taken < MIN_EXCHANGES.min(total_exchanges))
-            .then(|| format!("overflow: {taken} exchanges carried instead of {MIN_EXCHANGES}"));
+        let mut overflow = Vec::new();
+        if taken < MIN_EXCHANGES.min(total_exchanges) {
+            overflow.push(format!(
+                "{taken} exchanges carried instead of {MIN_EXCHANGES}"
+            ));
+        }
+        if fit.over > 0 {
+            overflow.push(format!(
+                "~{} tokens past the cap of {}, for what it must carry",
+                fit.over.div_ceil(BYTES_PER_TOKEN),
+                max / BYTES_PER_TOKEN
+            ));
+        }
+        let overflow_note =
+            (!overflow.is_empty()).then(|| format!("overflow: {}", overflow.join("; ")));
         let mut chosen: Vec<&Exchange> = exchanges[..taken].iter().collect();
         chosen.reverse();
         let mut recent = Part::new(
@@ -1168,13 +1183,16 @@ struct Fit {
     taken: usize,
     /// Bytes of the Brain digest kept.
     brain: usize,
+    /// Bytes the briefing passes the cap by: what it must carry needs them.
+    over: usize,
 }
 
 /// Fits a briefing of `fixed` bytes that are never cut (the framing, handoff note, decisions,
 /// state), a Brain digest of `brain` bytes and the verbatim `exchanges` (their sizes, newest
 /// first) into `(target, max)`. As many exchanges as the target leaves room for, at least six.
 /// Over the cap the exchanges shrink first, down to three, and then the Brain digest
-/// (SESSION-FIXES-PLAN Q5). Only the fixed parts can still pass the cap.
+/// (SESSION-FIXES-PLAN Q5). What it must carry, the fixed parts and those three exchanges
+/// (an exchange holds several messages and may be long), can still pass the cap: by `over`.
 fn fit(fixed: usize, brain: usize, exchanges: &[usize], (target, max): (usize, usize)) -> Fit {
     let mut taken = 0;
     let mut recent = 0;
@@ -1190,9 +1208,11 @@ fn fit(fixed: usize, brain: usize, exchanges: &[usize], (target, max): (usize, u
         taken -= 1;
         recent -= exchanges[taken];
     }
+    let brain = brain.min(max.saturating_sub(fixed + recent));
     Fit {
         taken,
-        brain: brain.min(max.saturating_sub(fixed + recent)),
+        brain,
+        over: (fixed + brain + recent).saturating_sub(max),
     }
 }
 
@@ -1313,7 +1333,8 @@ mod tests {
             fit(300, 100, &[50; 6], budget),
             Fit {
                 taken: 6,
-                brain: 100
+                brain: 100,
+                over: 0
             }
         );
         // Over the cap: exchanges go first, down to three, and the digest stays whole.
@@ -1321,7 +1342,8 @@ mod tests {
             fit(500, 200, &[100; 8], budget),
             Fit {
                 taken: 3,
-                brain: 200
+                brain: 200,
+                over: 0
             }
         );
         // Still over with three: only then is the digest cut.
@@ -1329,13 +1351,37 @@ mod tests {
             fit(500, 400, &[100; 8], budget),
             Fit {
                 taken: 3,
-                brain: 200
+                brain: 200,
+                over: 0
             }
         );
-        // Decisions alone past the cap: never cut; the rest goes as far as it can.
+        // Decisions alone past the cap: never cut, and the newest three exchanges still go.
         assert_eq!(
             fit(1_200, 400, &[100; 8], budget),
-            Fit { taken: 3, brain: 0 }
+            Fit {
+                taken: 3,
+                brain: 0,
+                over: 500
+            }
+        );
+        // The decisions fit, but the newest three exchanges are long: they all go, the digest
+        // doesn't, and the briefing passes the cap by what they need.
+        assert_eq!(
+            fit(400, 100, &[300, 300, 300, 50], budget),
+            Fit {
+                taken: 3,
+                brain: 0,
+                over: 300
+            }
+        );
+        // Fewer exchanges than three: all of them.
+        assert_eq!(
+            fit(900, 100, &[200], budget),
+            Fit {
+                taken: 1,
+                brain: 0,
+                over: 100
+            }
         );
     }
 }
