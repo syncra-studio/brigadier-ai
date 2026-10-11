@@ -1,7 +1,8 @@
 /**
  * The session's Mockup tab (SESSION-FIXES-PLAN.md Q10) on synthetic board data; no daemon.
  * Screenshots are drawn here; `stage=building|ready|compared|stopped`, `chat=1` (Chat stays in
- * front), `comment=1` (two notes made), `drive=1` (the rendering test's flow, its result in
+ * front), `comment=1` (two notes made), `long=1` (a long session title; with `measure=1` the
+ * tabs' widths go in #mockup-result), `drive=1` (the rendering test's flow, its result in
  * #mockup-result).
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
@@ -93,7 +94,8 @@ setTasks(tasks);
 // A fresh page each load, whatever an earlier one left in storage.
 useSessionTabs.setState({ sessions: {} });
 const conversation: Conversation = {
-  id, kind: "session", projectId: "fixture-project", title: "Density toggle",
+  id, kind: "session", projectId: "fixture-project",
+  title: params.has("long") ? "What does this repository build? Answer in two sentences, no workers." : "Density toggle",
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
   forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
 };
@@ -135,6 +137,17 @@ const type = (input: HTMLInputElement, value: string) => {
 
 const mockupTab = () => document.querySelector('[data-tab-id="mockup"]');
 
+/** The width a tab shows: its box cut to the strip that scrolls it, and to the tab list. */
+function shownWidth(selector: string) {
+  const tab = document.querySelector(selector);
+  if (!tab) return 0;
+  const box = tab.getBoundingClientRect();
+  const clips = [tab.closest(".overflow-x-auto"), tab.closest('[role="tablist"]')].flatMap((clip) => (clip ? [clip.getBoundingClientRect()] : []));
+  const left = Math.max(box.left, ...clips.map((clip) => clip.left));
+  const right = Math.min(box.right, ...clips.map((clip) => clip.right));
+  return Math.max(0, right - left);
+}
+
 function Fixture() {
   const [result, setResult] = useState("");
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
@@ -142,6 +155,14 @@ function Fixture() {
   const added = tabs.some((tab) => tab.id === MOCKUP_TAB);
   // Clicking the tab opens the mockup; the fixture does it for its screenshots.
   useEffect(() => { if (added && !params.has("chat") && !params.has("drive")) selectTab(id, MOCKUP_TAB); }, [added]);
+  useEffect(() => {
+    if (!params.has("measure")) return;
+    const timer = setTimeout(() => {
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      setResult(JSON.stringify({ rem, chat: shownWidth('[data-tab-id="chat"]'), mockup: shownWidth('[data-tab-id="mockup"]') }));
+    }, 800);
+    return () => clearTimeout(timer);
+  }, []);
   useEffect(() => {
     if (!params.has("drive")) return;
     const seen: Record<string, unknown> = {};

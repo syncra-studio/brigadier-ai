@@ -31,3 +31,10 @@ test("a mockup gets its own session tab, busy while it builds, takes comments, s
   assert.deepEqual(seen.closed, { tab: false, active: "chat" });
   assert.deepEqual(seen.compared, { tab: true, name: "Mockup", busy: false });
 });
+
+test("a long session title leaves the Mockup tab its room in the strip", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "mockup.html?chat=1&long=1&measure=1", "mockup-result", 30000)) as { rem: number; chat: number; mockup: number };
+  // --spacing-session-tab-max (15rem) and --spacing-session-tab-min (5.625rem).
+  assert.ok(seen.chat <= 15 * seen.rem + 0.5, `the session's tab is at most 15rem: ${JSON.stringify(seen)}`);
+  assert.ok(seen.mockup >= 5.625 * seen.rem - 0.5, `the Mockup tab keeps its least width: ${JSON.stringify(seen)}`);
+});

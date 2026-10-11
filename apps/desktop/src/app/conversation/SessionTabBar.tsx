@@ -81,7 +81,7 @@ export function tabTitle(tab: SessionTab): string {
 
 /** Tabs share the available row, then scroll once they reach their minimum width. */
 const TAB =
-  "session-tab group/tab relative flex h-7 items-center gap-1 rounded-lg ps-2 pe-1 text-sm select-none";
+  "session-tab group/tab relative flex h-7 min-w-0 items-center gap-1 rounded-lg ps-2 pe-1 text-sm select-none";
 
 /** Mouse down with the middle button would start autoscroll. */
 function noAutoscroll(event: ReactMouseEvent): void {
