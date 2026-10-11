@@ -13,6 +13,9 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 export PATH="$HOME/.cargo/bin:$PATH"
+# Three preview tests make a BRIGADIER_DATA_DIR in their temp folder, which a preview
+# accepts only under /tmp.
+export TMPDIR=/tmp
 
 cross=false
 for arg in "$@"; do
