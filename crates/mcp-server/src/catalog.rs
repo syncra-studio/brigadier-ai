@@ -4,7 +4,7 @@
 use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
-    AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
+    AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CiPush, CodeRefs, CodeSearch,
     DelegateTask, EndRun, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser,
     OrchestratorCall, PlanPhases, PreviewLog, ProposeMerge, ProposeOvernight, ProposePlan,
     QueryBrain, ReadArtifact, RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval,
@@ -182,6 +182,15 @@ during an overnight run only, something only the user can do (a key, a sign-in, 
 push), in one line, for the run's \"Waiting on you\" list; outside a run it is refused: say it \
 in your answer instead. Brigadier lists its own decisions and, in a run, the workers' needs_user \
 items itself: don't repeat them. Returns at once.";
+
+const CI_STATUS: &str = "After a push of yours (`git push`), say which commit and branch went \
+to which remote: it answers at once whether this repository's CI can be watched from here \
+(GitHub Actions, gh signed in), can't be (another CI, or gh missing or signed out; with a link \
+when there is one), or has no CI, and what to tell the user.";
+
+const WATCH_CI: &str = "Watch the GitHub Actions runs of a push, once the user said yes to \
+watching it: it returns at once, the user sees the runs live, and the result comes later as a \
+[ci <sha> · passed|failed|no runs …] message with each failing job and its log lines.";
 
 const RECORD_FINDINGS: &str = "Record what became of a code review's findings, every one, in \
 one call, after its [review …] message: by the id the message lists (R3.2), fixed (with the task \
@@ -413,6 +422,8 @@ fn orchestrator_tools() -> Vec<Tool> {
             RECORD_FINDINGS,
             input_schema::<RecordFindings>(),
         ),
+        tool("ci_status", CI_STATUS, input_schema::<CiPush>()),
+        tool("watch_ci", WATCH_CI, input_schema::<CiPush>()),
         tool(
             "suggest_full_access",
             SUGGEST_FULL_ACCESS,
@@ -544,6 +555,8 @@ pub fn parse_call(
                 "propose_merge" => OrchestratorCall::ProposeMerge(args(name, arguments)?),
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
                 "record_findings" => OrchestratorCall::RecordFindings(args(name, arguments)?),
+                "ci_status" => OrchestratorCall::CiStatus(args(name, arguments)?),
+                "watch_ci" => OrchestratorCall::WatchCi(args(name, arguments)?),
                 "suggest_full_access" => {
                     OrchestratorCall::SuggestFullAccess(args(name, arguments)?)
                 }

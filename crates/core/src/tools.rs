@@ -684,6 +684,18 @@ pub struct FindingRecord {
     pub high: Option<bool>,
 }
 
+/// `ci_status` and `watch_ci`: the push to look at (SESSION-FIXES-PLAN.md Q1).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CiPush {
+    /// The remote the push went to: its name ("origin") or URL.
+    pub remote: String,
+    /// The branch pushed, as named on the remote.
+    pub branch: String,
+    /// The commit pushed (a full or short sha).
+    pub sha: String,
+}
+
 /// `record_findings`: what became of a review's findings, each one, in one call.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -797,6 +809,8 @@ pub enum OrchestratorCall {
     ProposeMerge(ProposeMerge),
     NoteForUser(NoteForUser),
     RecordFindings(RecordFindings),
+    CiStatus(CiPush),
+    WatchCi(CiPush),
     SuggestFullAccess(SuggestFullAccess),
     ListTasks,
     SettleStep(SettleStep),
@@ -838,6 +852,8 @@ pub const THREAD_TOOLS: &[&str] = &[
     "propose_merge",
     "note_for_user",
     "record_findings",
+    "ci_status",
+    "watch_ci",
     "suggest_full_access",
     "list_tasks",
     "settle_step",
@@ -880,6 +896,8 @@ impl OrchestratorCall {
             Self::ProposeMerge(_) => "propose_merge",
             Self::NoteForUser(_) => "note_for_user",
             Self::RecordFindings(_) => "record_findings",
+            Self::CiStatus(_) => "ci_status",
+            Self::WatchCi(_) => "watch_ci",
             Self::SuggestFullAccess(_) => "suggest_full_access",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",

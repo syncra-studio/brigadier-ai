@@ -50,6 +50,7 @@ export type { Catalog } from "./Catalog";
 export type { CheckStatus } from "./CheckStatus";
 export type { CheckoutFile } from "./CheckoutFile";
 export type { ChecksResult } from "./ChecksResult";
+export type { CiRun } from "./CiRun";
 export type { CleanBadge } from "./CleanBadge";
 export type { CleanCategory } from "./CleanCategory";
 export type { CleanFailure } from "./CleanFailure";

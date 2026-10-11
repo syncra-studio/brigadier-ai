@@ -527,6 +527,8 @@ impl SessionManager {
             OrchestratorCall::RecordFindings(args) => {
                 crate::heap(|| self.record_findings(id, args)).await
             }
+            OrchestratorCall::CiStatus(args) => crate::heap(|| self.ci_status(id, args)).await,
+            OrchestratorCall::WatchCi(args) => crate::heap(|| self.watch_ci(id, args)).await,
             OrchestratorCall::SuggestFullAccess(args) => {
                 crate::heap(|| self.suggest_full_access(id, &args.reason)).await
             }

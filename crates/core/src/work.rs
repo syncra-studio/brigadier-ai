@@ -1671,6 +1671,36 @@ pub enum OrchestratorStepKind {
     /// The held merge stopped without merging (a writer failed or was stopped, or a finding
     /// is open): its consent is spent, and the thread asks the user.
     MergeStopped { asked_in: String, reason: String },
+    /// The CI watch of a push (`watch_ci`, SESSION-FIXES-PLAN.md Q1), as it goes: one row per
+    /// push, updated in place, "Checking CI…" while `result` is none.
+    CiWatch {
+        /// `owner/name` on GitHub.
+        repo: String,
+        branch: String,
+        sha: String,
+        /// No run has started yet: "Waiting for CI to start…".
+        waiting: bool,
+        runs: Vec<CiRun>,
+        /// How it ended: "passed", "failed", "no runs" or "stopped" (gh went away, or the
+        /// session closed).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        result: Option<String>,
+    },
+}
+
+/// One GitHub Actions run of a watched push.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CiRun {
+    pub workflow: String,
+    /// `queued`, `in_progress`, `completed`.
+    pub status: String,
+    /// Once completed: `success`, `failure`, …
+    pub conclusion: String,
+    pub url: String,
+    pub jobs_done: u32,
+    pub jobs_total: u32,
 }
 
 /// One step of the orchestrator, where it happened in the conversation.

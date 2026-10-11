@@ -283,6 +283,8 @@ pub(crate) struct ConvLive {
     /// What the thread was last told of the held merge (its consent's `asked_in`, and
     /// "due" or "waiting"), so each is said once.
     pub(super) merge_told: std::sync::Mutex<Option<(String, &'static str)>>,
+    /// The CI watches it runs (`watch_ci`), ended when it closes.
+    pub(super) ci_watches: std::sync::Mutex<Vec<tokio::task::AbortHandle>>,
     /// The CLI session a turn on each provider resumes, as [`SessionManager::last_native_id`]
     /// last found it in the log, kept up to date as sessions start and reset.
     native_ids: std::sync::Mutex<NativeIds>,
@@ -316,6 +318,7 @@ impl ConvLive {
             full_access_notice: tokio::sync::Mutex::new(()),
             merge_lock: tokio::sync::Mutex::new(()),
             merge_told: std::sync::Mutex::new(None),
+            ci_watches: std::sync::Mutex::new(Vec::new()),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),

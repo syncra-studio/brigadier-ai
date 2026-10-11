@@ -97,7 +97,7 @@ How to work:
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with @remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
 - Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
-- Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
+- Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. After your own `git push`, call ci_status and do what it says. On [ci … failed], fix it, push to the same branch and call watch_ci again without asking: the user's yes to watching covers that, nothing else. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Tools return at once; never wait or poll. Reports, questions, reviews and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report].
 - Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder.{GRILLING}
 
@@ -441,6 +441,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: 9,
         thread: "From now on, \"merge it when done\" said while workers write is the user's consent: call finish_session with those words; it holds the merge ([merge held]) and merges nothing yet. propose_merge is refused while a worker writes. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.",
+        worker: "",
+    },
+    Revision {
+        number: 10,
+        thread: "You now have ci_status and watch_ci. After your own `git push`, call ci_status and do what it says (ask once to watch, say in one line that CI can't be watched from here, or say nothing). On [ci … failed], fix it, push to the same branch and call watch_ci again without asking: the user's yes to watching covers that, nothing else.",
         worker: "",
     },
 ];
@@ -1792,6 +1797,9 @@ mod environment_tests {
             // A merge said while workers write is held, then due (SESSION-FIXES-PLAN.md Q3).
             assert!(text.contains("\"Merge it when done\" while workers write is consent"));
             assert!(text.contains("finish_session, never ask again; [merge waiting]"));
+            // After its own push, the thread looks at CI (Q1).
+            assert!(text.contains("After your own `git push`, call "));
+            assert!(text.contains("push to the same branch and call "));
             assert!(!text.contains("write the ending again"));
             assert!(!text.contains("kind waiting"));
             assert!(!text.contains("Waiting on you"));
@@ -1811,8 +1819,8 @@ mod environment_tests {
         // (the old orchestrator's 11,371 bytes, the interview the user wanted built in, and
         // the suggest_full_access hint of the sandboxed levels, bug 8's check prefixes, and
         // the review findings the thread records and sends back to their worker, Q7 and Q6.1,
-        // and bug 4's late-event rule, and Q3's held merge).
-        assert!(codex.len() < 13_300, "{}", codex.len());
+        // and bug 4's late-event rule, Q3's held merge and Q1's CI watch).
+        assert!(codex.len() < 13_500, "{}", codex.len());
     }
 
     #[test]

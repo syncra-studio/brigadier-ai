@@ -250,6 +250,15 @@ impl Board {
                     known.kind = step.kind;
                     return;
                 }
+                // A CI watch's updates stay where it started.
+                if let crate::work::OrchestratorStepKind::CiWatch { sha, branch, .. } = &step.kind
+                    && let Some(known) = self.orchestrator_steps.iter_mut().find(|known| {
+                        matches!(&known.kind, crate::work::OrchestratorStepKind::CiWatch { sha: s, branch: b, .. } if s == sha && b == branch)
+                    })
+                {
+                    known.kind = step.kind;
+                    return;
+                }
                 step.position = stream_seq;
                 self.orchestrator_steps.push(step);
             }

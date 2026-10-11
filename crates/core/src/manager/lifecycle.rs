@@ -583,6 +583,11 @@ impl SessionManager {
             owners.push(previews);
         }
         self.stop_reviews(id);
+        if let Ok(conv) = self.conv(id) {
+            for watch in conv.ci_watches.lock().unwrap().drain(..) {
+                watch.abort();
+            }
+        }
         let session_worktree_goes = self.keep_session_changes(conversation).await;
         if session_worktree_goes {
             owners.push(format!("session:{id}"));
