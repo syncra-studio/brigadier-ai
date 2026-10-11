@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "./tokens.css";
 @import "./splash.css";
+@import "./onboarding.css";
 
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 /* macOS draws the traffic lights over the window content (overlay title bar). */

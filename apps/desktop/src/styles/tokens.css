@@ -90,6 +90,9 @@
  *                                             Inspector)
  *               max-w-setup, h-setup          the first-run setup sheet (near full window, capped)
  *               setup-card                    a setup card's minimum width in its auto-filled grid
+ *               max-w-onboarding{,-agents,-detail}  the first-run setup's headings, its two
+ *                                             agent columns, an agent's own page
+ *               size-agent-mark               an agent's large logo tile in the setup
  *   Radii       rounded-control (buttons, inputs), rounded-surface (menus, popovers),
  *               rounded-dialog, rounded-thread (message bubbles), rounded-composer (the composer
  *               card), rounded-rail (the rail's top corners), rounded-menu (menus), rounded-tooltip,
@@ -368,6 +371,7 @@
   --browser-toolbar-columns: minmax(var(--spacing-browser-controls), 1fr) minmax(0, var(--spacing-browser-address)) minmax(var(--spacing-browser-controls), 1fr);
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;
+  --spacing-agent-mark: 6.5rem;
   --spacing-user-message: 22.5rem;
   /* Placeholder height for off-screen messages skipped by content-visibility. */
 
@@ -377,6 +381,9 @@
   --container-md: 28rem;
   --container-lg: 32rem;
   --container-setup: min(68rem, calc(100vw - 2rem));
+  --container-onboarding: 45rem;
+  --container-onboarding-agents: 39rem;
+  --container-onboarding-detail: 44rem;
   --container-thread: 52rem;
   --container-settings: 60rem;
   --container-settings-wide: 80rem;
@@ -844,4 +851,38 @@
   /* When "Still starting…" appears (lib/splash.ts gives up waiting at the same time). */
   --splash-late-after: 10s;
   --splash-foot-gap: 1.25rem;
+}
+
+/* ── First launch ───────────────────────────────────────────────────────────────────────────
+   The welcome intro and the setup after it (styles/onboarding.css, app/onboarding). The
+   intro's beats match the welcome sound's (scripts/render-welcome-sound.mjs: LAND, HEADING,
+   CONTINUE) and the spin's start in Welcome.tsx. */
+:root {
+  /* The strokes gather from here, staggered from the middle out; the core lands at --intro-land. */
+  --intro-strokes-at: 0.25s;
+  --intro-stroke-in: 1.3s;
+  --intro-stroke-stagger: 90ms;
+  --intro-stroke-rise: 2.75rem;
+  --intro-land: 2.2s;
+  --intro-core-in: 0.45s;
+  /* After its turn, the mark rises and shrinks to sit above the heading. */
+  --intro-rise-at: 3.6s;
+  --intro-rise: 0.9s;
+  --intro-heading: 4.2s;
+  --intro-word-stagger: 80ms;
+  --intro-line-at: 4.9s;
+  --intro-continue: 5.8s;
+  --intro-text-in: 0.7s;
+  --intro-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --intro-mark-size: 7.5rem;
+  /* The mark's resting size above the heading and the name field, as a scale of the above. */
+  --intro-mark-rest: 0.5;
+  --intro-glow: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --intro-glow-size: 34rem;
+  /* A step of the setup coming in: its lines rise this far, this far apart. */
+  --onboarding-step-in: 0.35s;
+  --onboarding-rise: 0.5rem;
+  --onboarding-stagger: 50ms;
+  --onboarding-heading: clamp(1.75rem, 3vw, 2.5rem);
+  --onboarding-heading-tracking: -0.035em;
 }
