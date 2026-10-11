@@ -23,7 +23,7 @@ export function StepHeader({
   description: ReactNode;
 }) {
   return (
-    <header className="mx-auto flex max-w-onboarding shrink-0 flex-col items-center px-6 text-center">
+    <header className="mx-auto flex max-w-onboarding shrink-0 flex-col items-center px-6 pt-8 text-center">
       {eyebrow && <p className="text-muted-foreground mb-3 text-sm">{eyebrow}</p>}
       <DialogTitle asChild>
         <h1 className="onboarding-heading text-balance">{title}</h1>
