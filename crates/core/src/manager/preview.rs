@@ -611,7 +611,7 @@ impl SessionManager {
                         label: format!("preview {}", preview.id),
                         task_id: None,
                         text: format!(
-                            "[preview ended: {status}] {} \"{}\" stopped on its own; it is not running now.{}\nTell the user in this turn what failed, with its key error line, and what you do about it.",
+                            "[preview ended: {status}] {} \"{}\" stopped on its own; it is not running now.{}\nTell the user in this turn what failed, with its key error line, and what you do about it; if you already told them, reply [quiet].",
                             preview.id,
                             preview.name,
                             if last.is_empty() {

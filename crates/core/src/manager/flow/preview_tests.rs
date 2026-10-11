@@ -350,7 +350,8 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
         "{ended}"
     );
     assert!(
-        ended.contains("Tell the user in this turn what failed"),
+        ended.contains("Tell the user in this turn what failed")
+            && ended.contains("if you already told them, reply [quiet]"),
         "{ended}"
     );
     flow.say("And now?").await;
