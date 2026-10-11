@@ -6,7 +6,11 @@
  * Query: `view=running` (default: the second request works, three approvals wait) or
  * `view=done` (it finished, with a final answer and what waits on the user); `approvals=0`
  * (none wait); `worker=1` (the lead's own thread open in the Workers panel); `sidebar=0`;
- * `density=compact`. `window.flow` holds the stores for probes.
+ * `density=compact`. Composer slot and review line (SESSION-FIXES-PLAN.md phase 5): `slot=1`
+ * (a second worker, a CI watch and a held merge over the composer); `reviews=before` or
+ * `reviews=after` (two reviews whose findings the thread recorded, before or after the merge);
+ * `update=1` (with `view=done`: a late event's update line under the answer). `window.flow`
+ * holds the stores for probes.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -29,6 +33,7 @@ import type {
   ProviderEvent,
   RawEntry,
   Request,
+  ReviewRun,
   Task,
   UserRequest,
   WaitingItem,
@@ -123,6 +128,10 @@ if (done) {
       ago(15),
     ),
   );
+}
+
+if (done && query.get("update") === "1") {
+  messages.push(message(32, "assistant", "r2", "Update: the review’s two fixes landed; nothing is open.", ago(5)));
 }
 
 const requests: Record<string, UserRequest> = {
@@ -360,9 +369,52 @@ export const leadTranscript: RawEntry[] = [
   entry({ type: "command", itemId: "x8", command: "/bin/zsh -lc 'pnpm test settings'", cwd: "/tmp/flow-fixture", status: "inProgress", exitCode: null, output: null, durationMs: null }, ago(3)),
 ];
 
+// The composer's slot: a second worker, a push's CI watch, and the user's merge held for both.
+if (query.get("slot") === "1") {
+  tasks["t5"] = task({ id: "t5", number: 5, title: "Theme icons", state: "running", requestId: "r2", position: 17, role: null, createdAtMs: ago(50), updatedAtMs: ago(1) });
+  orchestratorSteps.push(
+    step(18, "r2", {
+      type: "ciWatch",
+      repo: "acme/settings-app",
+      branch: BRANCH,
+      sha: "97c298d5aa11bb22",
+      waiting: false,
+      runs: [
+        { workflow: "CI", status: "in_progress", conclusion: "", url: "https://github.com/acme/settings-app/actions/runs/1", jobsDone: 2, jobsTotal: 4 },
+        { workflow: "Lint", status: "completed", conclusion: "success", url: "https://github.com/acme/settings-app/actions/runs/2", jobsDone: 1, jobsTotal: 1 },
+      ],
+    }, ago(40)),
+    step(19, "r2", { type: "mergeHeld", branch: BRANCH, base: "main", askedIn: "m10", consentedAtMs: ago(20), condition: "workersFinish", waiting: ["t2", "t5"], tip: "d4e5f6a" }, ago(20)),
+  );
+}
+
+// Two reviews of the session's work, each finding as the thread recorded it.
+const reviewsAt = query.get("reviews");
+const reviews: Record<string, ReviewRun> = {};
+if (reviewsAt === "before" || reviewsAt === "after") {
+  const review = (n: number, at: number, items: ReviewRun["items"]): ReviewRun => ({
+    id: `rv${n}`, conversationId: id, requestId: "r2", taskId: "t2", kind: "code", base: "a1b2c3d", tip: "d4e5f6a",
+    author: "claude", reviewer: "codex", reviewerModel: "gpt-6.1-sol", notify: { type: "orchestrator" },
+    state: { type: "findings", count: items.length }, startedAtMs: at, endedAtMs: at + 60_000, findings: null, number: n, items,
+  });
+  reviews.rv1 = review(1, ago(900), [
+    { id: "R1.1", severity: "P1", title: "The theme flashes light before the first paint", location: "src/main.tsx:12", status: { type: "fixed", task: "task-4", why: null }, high: true },
+    { id: "R1.2", severity: "P2", title: "The switch has no accessible name", location: "src/app/settings/Appearance.tsx:88", status: { type: "fixed", task: "task-4", why: null }, high: false },
+    { id: "R1.3", severity: "P3", title: "A test name says “colour”", location: "src/state/settings.test.ts:41", status: { type: "dismissed", why: "the project writes British English" }, high: false },
+  ]);
+  reviews.rv2 = review(2, ago(400), [
+    { id: "R2.1", severity: "P2", title: "System mode ignores a change made while the app is open", location: "src/state/theme.ts:30", status: { type: "open", why: "needs a listener the user asked to leave out" }, high: false },
+    { id: "R2.2", severity: "P3", title: "The Dark option’s preview swatch sits a pixel off", location: null, status: { type: "new" }, high: false },
+  ]);
+  if (reviewsAt === "after") {
+    orchestratorSteps.push(step(29, "r2", { type: "merged", branch: BRANCH, base: "main", commits: 3, askedIn: "m10" }, ago(30)));
+  }
+}
+
 useBoard.setState({
   board: {
     ...emptyBoard(id),
+    reviews,
     tasks,
     plans: { p1: plan },
     requests,
