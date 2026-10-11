@@ -3,13 +3,9 @@ import type { ConversationTokens } from "./ConversationTokens";
 import type { TokenCount } from "./TokenCount";
 
 /**
- * Brigadier's own use of a provider in one of its usage windows (since the window began).
+ * Brigadier's own use of an account over the Usage page's Activity range.
  */
-export type WindowTokens = { 
-/**
- * The window (`QuotaWindow::id`).
- */
-windowId: string, 
+export type AccountTokens = { 
 /**
  * Tokens by model, most first.
  */

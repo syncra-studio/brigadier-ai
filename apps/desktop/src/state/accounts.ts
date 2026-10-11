@@ -15,9 +15,13 @@ export async function loadAccounts(): Promise<void> {
   useApp.setState({ accounts });
 }
 
-/** Checks every account's login and quota again; results arrive as events. */
-export async function refreshAccounts(): Promise<void> {
-  await request({ method: "refreshAccounts" });
+/**
+ * Checks every account's login and quota again; results arrive as events. Answers the check
+ * generation each account reaches once checked afresh (`AccountView.checkedGeneration`).
+ */
+export async function refreshAccounts(): Promise<number> {
+  const { generation } = await request({ method: "refreshAccounts" });
+  return generation;
 }
 
 /** Sign-ins being opened, by what they open. */

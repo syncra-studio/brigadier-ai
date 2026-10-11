@@ -1,25 +1,29 @@
 //! The Usage page's read and the Inspector's routing preview (PLAN.md §6 Phase 5).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use brigadier_providers::ProviderKind;
 use brigadier_router::{Area, Heat, TaskCategory};
 
 use super::SessionManager;
 use super::routing::{Ask, Trial};
+use crate::accounts::AccountRef;
 use crate::model::{
-    ConversationId, ConversationTokens, ModelChoice, ProjectId, ProviderUsage, RoutePreview,
-    RoutePreviewOutcome, RoutingActivity, TokenCount, UsageView, WindowHistory, WindowTokens,
+    AccountActivity, AccountTokens, AccountUsage, ConversationId, ConversationTokens, ModelChoice,
+    ProjectId, ProviderUsage, RoutePreview, RoutePreviewOutcome, RoutingActivity, TokenCount,
+    UsageActivity, UsageView, WindowHistory,
 };
+use crate::routing::TurnUsage;
 use crate::work::AttemptEnd;
 use crate::{Result, now_ms};
 
 /// Hand-offs this recent are listed.
 const ACTIVITY_MS: i64 = 7 * 24 * 60 * 60 * 1000;
-/// Conversations listed per window, most tokens first.
+/// Conversations listed per account, most tokens first.
 const TOP_CONVERSATIONS: usize = 5;
-/// A window with no known length is taken as weekly.
-const DEFAULT_WINDOW_MINUTES: i64 = 7 * 24 * 60;
+/// The longest range the Usage page's Activity shows, in days (what the history keeps).
+const ACTIVITY_DAYS_MAX: u32 = 31;
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 impl SessionManager {
     /// Everything the Usage page shows. `project`: whose outcomes to show what routing learned
@@ -35,13 +39,29 @@ impl SessionManager {
             }
             (None, None) => Vec::new(),
         };
-        let mut providers = Vec::new();
-        for state in &inputs.providers {
-            providers.push(
-                self.provider_usage_view(state, &inputs.providers, now)
-                    .await,
-            );
-        }
+        let working = self.working_accounts().await;
+        let providers = inputs
+            .providers
+            .iter()
+            .map(|state| ProviderUsage {
+                provider: state.provider,
+                accounts: self
+                    .runtime
+                    .account_candidates(state.provider)
+                    .into_iter()
+                    .map(|candidate| AccountUsage {
+                        working: working.contains(&candidate.account),
+                        quota: self.runtime.account_usage(&candidate.account, now),
+                        read_at_ms: self.runtime.monitor().read_at(&candidate.account),
+                        account: candidate.account,
+                    })
+                    .collect(),
+                balancing: state
+                    .quota
+                    .as_ref()
+                    .and_then(|quota| balancing(state.provider, quota, &inputs.providers)),
+            })
+            .collect();
         Ok(UsageView {
             providers,
             activity: self.routing_activity(now).await,
@@ -49,117 +69,118 @@ impl SessionManager {
             learned,
             project_id: project,
             registry: self.runtime.registry().info(),
-            at_ms: now,
         })
     }
 
-    /// One provider on the Usage page: its windows, their samples over each window's span, and
-    /// Brigadier's own tokens in each.
-    async fn provider_usage_view(
-        &self,
-        state: &brigadier_router::ProviderState,
-        all: &[brigadier_router::ProviderState],
-        now: i64,
-    ) -> ProviderUsage {
-        let provider = state.provider;
-        // The provider's quota is its lead account's: only that account's use moved it.
-        let account = self.runtime.monitor().lead(provider);
-        let quota = state.quota.clone();
-        let windows: Vec<_> = quota
-            .as_ref()
-            .map(|quota| {
-                quota
-                    .windows
+    /// The Usage page's Activity over the last `days`: each account's windows' samples, and
+    /// Brigadier's own tokens on it, by model and by conversation.
+    pub async fn usage_activity(&self, days: u32) -> UsageActivity {
+        let now = now_ms();
+        let since_ms = now - i64::from(days.clamp(1, ACTIVITY_DAYS_MAX)) * DAY_MS;
+        let mut accounts = Vec::new();
+        for provider in ProviderKind::ALL {
+            let turns = match self.runtime.routing_store() {
+                Some(store) => store
+                    .turns_since(provider, since_ms)
+                    .await
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
+            for candidate in self.runtime.account_candidates(provider) {
+                let account = candidate.account;
+                let mut windows = candidate
+                    .quota
+                    .map(|quota| quota.windows)
+                    .unwrap_or_default();
+                windows.sort_by_key(|window| window.window_minutes.unwrap_or(i64::MAX));
+                let history = windows
+                    .into_iter()
+                    .map(|window| WindowHistory {
+                        samples: self
+                            .runtime
+                            .monitor()
+                            .history(&account, &window.id, since_ms),
+                        window_id: window.id,
+                        label: window.label,
+                    })
+                    .collect();
+                let own: Vec<&TurnUsage> = turns
                     .iter()
-                    .map(|window| window.window.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let history = windows
-            .iter()
-            .map(|window| WindowHistory {
-                window_id: window.id.clone(),
-                samples: self.runtime.monitor().history(
-                    &account,
-                    &window.id,
-                    window_start(window, now),
-                ),
-            })
-            .collect();
-        let earliest = windows
-            .iter()
-            .map(|window| window_start(window, now))
-            .min()
-            .unwrap_or(now);
-        let turns = match self.runtime.routing_store() {
-            Some(store) => store
-                .turns_since(provider, earliest)
-                .await
-                .unwrap_or_default()
+                    .filter(|turn| turn.account == account.account)
+                    .collect();
+                accounts.push(AccountActivity {
+                    tokens: self.account_tokens(&own),
+                    history,
+                    account,
+                });
+            }
+        }
+        UsageActivity { since_ms, accounts }
+    }
+
+    /// The accounts a chat's turn or a worker runs on now.
+    async fn working_accounts(&self) -> HashSet<AccountRef> {
+        let convs: Vec<_> = self.convs_lock().values().cloned().collect();
+        let tasks: Vec<_> = self.tasks_lock().values().cloned().collect();
+        let mut working = HashSet::new();
+        for conv in convs {
+            if let Some(cli) = conv.working_cli().await {
+                working.insert(cli.account.clone());
+            }
+        }
+        for task in tasks {
+            if let Some(cli) = task.cli().await {
+                working.insert(cli.account.clone());
+            }
+        }
+        working
+    }
+
+    /// Brigadier's tokens in `turns`, by model and by conversation, most first.
+    fn account_tokens(&self, turns: &[&TurnUsage]) -> AccountTokens {
+        let mut by_model: HashMap<&str, TokenCount> = HashMap::new();
+        let mut by_conversation: HashMap<&str, (Option<&str>, i64)> = HashMap::new();
+        for turn in turns {
+            let tokens = turn.input + turn.cached_input + turn.output;
+            let count = by_model.entry(&turn.model).or_insert_with(|| TokenCount {
+                model: turn.model.clone(),
+                tokens: 0,
+                output_tokens: 0,
+                turns: 0,
+            });
+            count.tokens += tokens;
+            count.output_tokens += turn.output;
+            count.turns += 1;
+            if let Some(conversation) = &turn.conversation_id {
+                let entry = by_conversation
+                    .entry(conversation)
+                    .or_insert((turn.project_id.as_deref(), 0));
+                entry.1 += tokens;
+            }
+        }
+        let mut by_model: Vec<TokenCount> = by_model.into_values().collect();
+        by_model.sort_by_key(|count| std::cmp::Reverse(count.tokens));
+        let mut by_conversation: Vec<(&str, (Option<&str>, i64))> =
+            by_conversation.into_iter().collect();
+        by_conversation.sort_by_key(|(_, (_, tokens))| std::cmp::Reverse(*tokens));
+        AccountTokens {
+            by_model,
+            by_conversation: by_conversation
                 .into_iter()
-                .filter(|turn| turn.account == account.account)
-                .collect(),
-            None => Vec::new(),
-        };
-        let tokens = windows
-            .iter()
-            .map(|window| {
-                let since = window_start(window, now);
-                let mut by_model: HashMap<&str, TokenCount> = HashMap::new();
-                let mut by_conversation: HashMap<&str, (Option<&str>, i64)> = HashMap::new();
-                for turn in turns.iter().filter(|turn| turn.at_ms >= since) {
-                    let tokens = turn.input + turn.cached_input + turn.output;
-                    let count = by_model.entry(&turn.model).or_insert_with(|| TokenCount {
-                        model: turn.model.clone(),
-                        tokens: 0,
-                        output_tokens: 0,
-                        turns: 0,
-                    });
-                    count.tokens += tokens;
-                    count.output_tokens += turn.output;
-                    count.turns += 1;
-                    if let Some(conversation) = &turn.conversation_id {
-                        let entry = by_conversation
-                            .entry(conversation)
-                            .or_insert((turn.project_id.as_deref(), 0));
-                        entry.1 += tokens;
+                .take(TOP_CONVERSATIONS)
+                .map(|(id, (project, tokens))| {
+                    let id = ConversationId(id.to_owned());
+                    ConversationTokens {
+                        title: self
+                            .core
+                            .conversation(&id)
+                            .map_or_else(|_| "A removed conversation".into(), |c| c.title),
+                        conversation_id: id,
+                        project_id: project.map(|project| ProjectId(project.to_owned())),
+                        tokens,
                     }
-                }
-                let mut by_model: Vec<TokenCount> = by_model.into_values().collect();
-                by_model.sort_by_key(|count| std::cmp::Reverse(count.tokens));
-                let mut by_conversation: Vec<(&str, (Option<&str>, i64))> =
-                    by_conversation.into_iter().collect();
-                by_conversation.sort_by_key(|(_, (_, tokens))| std::cmp::Reverse(*tokens));
-                WindowTokens {
-                    window_id: window.id.clone(),
-                    by_model,
-                    by_conversation: by_conversation
-                        .into_iter()
-                        .take(TOP_CONVERSATIONS)
-                        .map(|(id, (project, tokens))| {
-                            let id = ConversationId(id.to_owned());
-                            ConversationTokens {
-                                title: self
-                                    .core
-                                    .conversation(&id)
-                                    .map_or_else(|_| "A removed conversation".into(), |c| c.title),
-                                conversation_id: id,
-                                project_id: project.map(|project| ProjectId(project.to_owned())),
-                                tokens,
-                            }
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
-        ProviderUsage {
-            provider,
-            balancing: quota
-                .as_ref()
-                .and_then(|quota| balancing(provider, quota, all)),
-            quota,
-            history,
-            tokens,
+                })
+                .collect(),
         }
     }
 
@@ -281,12 +302,6 @@ impl SessionManager {
         }
         previews
     }
-}
-
-/// When a window's current span began.
-fn window_start(window: &brigadier_providers::QuotaWindow, now: i64) -> i64 {
-    let span = window.window_minutes.unwrap_or(DEFAULT_WINDOW_MINUTES) * 60 * 1000;
-    window.resets_at_ms.map_or(now - span, |reset| reset - span)
 }
 
 /// What balancing does about a hot provider, when another can take its work.

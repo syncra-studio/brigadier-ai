@@ -21,7 +21,7 @@ use brigadier_core::{
     QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, RepoInfo,
     RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup, SetupRequest,
     SourceScope, SourceState, TaskId, ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView,
-    UsageView, WorkerDiff, WorkerPage,
+    UsageActivity, UsageView, WorkerDiff, WorkerPage,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -839,7 +839,8 @@ pub enum Request {
     RemoveAccount {
         id: String,
     },
-    /// Checks every account's login and quota again; results arrive as `accountsChecked`.
+    /// Checks every provider and every account's login and quota again; results arrive as
+    /// `accountsChecked`. Answers the check generation every account reaches once checked afresh.
     RefreshAccounts,
     /// Providers (login, models, quota), raw sessions and replayable fixtures.
     GetProviders,
@@ -855,6 +856,11 @@ pub enum Request {
     GetUsage {
         #[serde(default)]
         project_id: Option<ProjectId>,
+    },
+    /// The Usage page's Activity: each account's windows over the last `days` (at most 31), and
+    /// Brigadier's own use of it then.
+    GetUsageActivity {
+        days: u32,
     },
     /// What routing would choose for each task category right now, with its explanation, for
     /// a task in `projectId` touching `areas`. Starts nothing.
@@ -1319,13 +1325,18 @@ pub enum Response {
     RemoveAccount {
         settings: Box<Settings>,
     },
-    RefreshAccounts,
+    RefreshAccounts {
+        generation: u32,
+    },
     GetProviders {
         view: ProvidersView,
     },
     RefreshProviders,
     GetUsage {
         usage: Box<UsageView>,
+    },
+    GetUsageActivity {
+        activity: UsageActivity,
     },
     PreviewRoutes {
         routes: Vec<RoutePreview>,

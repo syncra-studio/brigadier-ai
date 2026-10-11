@@ -74,6 +74,33 @@ export function usageTone(
   return { level, ...(level === "normal" ? { ...NORMAL_TONE, ...normal } : USAGE_TONES[level]) };
 }
 
+/**
+ * A window's name with what it is limited to folded in: "Weekly · Fable" for Claude's
+ * "Weekly (Fable)", "Weekly · gpt-6-luna" for a Codex bucket's window.
+ */
+export function windowTitle(window: QuotaWindow): string {
+  const named = /^(.*) \((.+)\)$/.exec(window.label);
+  if (named) return `${named[1]} · ${named[2]}`;
+  const scope = window.model ?? window.bucket;
+  return scope ? `${window.label} · ${scope}` : window.label;
+}
+
+/** Share of a window left, as a whole percent from 0 to 100. */
+export function left(window: QuotaWindow): number {
+  return 100 - used(window);
+}
+
+/**
+ * Usage's colours by how much is left: normal above 20% left, warning at 20% or less, danger
+ * at 10% or less (the same thresholds as 80% and 90% used) or once its limit is reached.
+ */
+export function leftTone(
+  share: number,
+  options: { limitReached?: boolean; normal?: Partial<UsageTone> } = {},
+): UsageTone & { level: UsageLevel } {
+  return usageTone(100 - share, options);
+}
+
 /** How full a window looks: its text and bar colours. */
 export function tone(percent: number): { text: string; fill: string } {
   const { text, fill } = usageTone(percent);

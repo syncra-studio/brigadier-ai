@@ -85,6 +85,7 @@ export function account(
     quotaAtMs: null,
     checkedAtMs: Date.now(),
     checking: false,
+    checkedGeneration: 0,
     error: null,
     ...fields,
   };

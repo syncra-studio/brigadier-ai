@@ -784,6 +784,9 @@ pub struct AccountView {
     pub checking: bool,
     /// What went wrong when last checked.
     pub error: Option<String>,
+    /// The check generation its last finished check began in: a refresh answers a generation,
+    /// and the account is checked afresh for it once this reaches it.
+    pub checked_generation: u32,
 }
 
 /// An extra account of a CLI: a home of its own under the data directory
@@ -1347,12 +1350,10 @@ pub struct UpdatesView {
     pub checked_at_ms: Option<i64>,
 }
 
-/// Brigadier's own use of a provider in one of its usage windows (since the window began).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+/// Brigadier's own use of an account over the Usage page's Activity range.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct WindowTokens {
-    /// The window (`QuotaWindow::id`).
-    pub window_id: String,
+pub struct AccountTokens {
     /// Tokens by model, most first.
     pub by_model: Vec<TokenCount>,
     /// Tokens by conversation, most first (the top few).
@@ -1477,11 +1478,12 @@ pub struct ConversationTokens {
     pub tokens: i64,
 }
 
-/// A window's samples over its current span, for the Usage page's chart.
+/// A window's samples over a span, for the Usage page's chart.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowHistory {
     pub window_id: String,
+    pub label: String,
     /// Oldest first.
     pub samples: Vec<QuotaSample>,
 }
@@ -1491,13 +1493,43 @@ pub struct WindowHistory {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderUsage {
     pub provider: ProviderKind,
-    /// Absent until the first read.
-    pub quota: Option<ProviderQuota>,
-    pub history: Vec<WindowHistory>,
-    pub tokens: Vec<WindowTokens>,
+    /// Its accounts: the user's own login first, then the extra ones as added.
+    pub accounts: Vec<AccountUsage>,
     /// What balancing does about it now ("New scouting and research go to Codex while
     /// Claude's weekly window runs hot").
     pub balancing: Option<String>,
+}
+
+/// One account on the Usage page: its own windows, read from that account alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsage {
+    pub account: crate::accounts::AccountRef,
+    /// A chat's turn or a worker runs on it now.
+    pub working: bool,
+    /// Its windows with their estimates; absent until its first read.
+    pub quota: Option<ProviderQuota>,
+    /// When its quota was last read or reported; absent before the first.
+    pub read_at_ms: Option<i64>,
+}
+
+/// The Usage page's Activity: each account's windows over the last days, and Brigadier's own
+/// use of it then.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageActivity {
+    /// Where the range starts.
+    pub since_ms: i64,
+    pub accounts: Vec<AccountActivity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountActivity {
+    pub account: crate::accounts::AccountRef,
+    /// Its windows' samples since the range's start, the shortest window first.
+    pub history: Vec<WindowHistory>,
+    pub tokens: AccountTokens,
 }
 
 /// Something routing did that the user may want to know about.
@@ -1549,7 +1581,6 @@ pub struct UsageView {
     pub learned: Vec<Learned>,
     pub project_id: Option<ProjectId>,
     pub registry: RegistryInfo,
-    pub at_ms: i64,
 }
 
 /// What routing would choose for one category right now, for the next task submitted (the

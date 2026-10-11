@@ -97,6 +97,7 @@ function account(provider: ProviderKind, id: string | undefined, fields: Partial
     quotaAtMs: Date.now(),
     checkedAtMs: Date.now(),
     checking: false,
+    checkedGeneration: 0,
     error: null,
     ...fields,
   };

@@ -349,6 +349,12 @@ impl ConvLive {
         self.state.lock().await.cli.clone()
     }
 
+    /// The CLI session while it runs a turn.
+    pub(crate) async fn working_cli(&self) -> Option<Arc<Cli>> {
+        let state = self.state.lock().await;
+        if state.busy { state.cli.clone() } else { None }
+    }
+
     /// The CLI session while it runs no turn and isn't being closed.
     pub(crate) async fn idle_cli(&self) -> Option<Arc<Cli>> {
         let state = self.state.lock().await;

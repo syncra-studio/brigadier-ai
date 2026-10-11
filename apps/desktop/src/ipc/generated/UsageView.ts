@@ -21,4 +21,4 @@ models: Array<MergedModel>,
 /**
  * What outcomes taught routing in `project_id` (every project when absent).
  */
-learned: Array<Learned>, projectId: ProjectId | null, registry: RegistryInfo, atMs: number, };
+learned: Array<Learned>, projectId: ProjectId | null, registry: RegistryInfo, };

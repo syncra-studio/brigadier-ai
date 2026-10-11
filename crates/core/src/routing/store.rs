@@ -17,9 +17,9 @@ use rusqlite_migration::{M, Migrations};
 
 use crate::{Error, Result};
 
-/// Samples and turns older than this are dropped: the longest window is a week, and its rate
-/// looks back a day.
-pub const HISTORY_MS: i64 = 8 * 24 * 60 * 60 * 1000;
+/// Samples and turns older than this are dropped: the Usage page's Activity looks back 30 days
+/// (the longest window is a week, and its rate looks back a day).
+pub const HISTORY_MS: i64 = 31 * 24 * 60 * 60 * 1000;
 
 fn migrations() -> Migrations<'static> {
     Migrations::from_iter([

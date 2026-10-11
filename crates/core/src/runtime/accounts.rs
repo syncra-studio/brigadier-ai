@@ -23,6 +23,10 @@ pub(super) struct AccountLive {
     pub status: Option<ProviderStatus>,
     pub checked_at_ms: Option<i64>,
     pub checking: bool,
+    /// Asked to be checked while a check ran: checked once more after it.
+    pub again: bool,
+    /// The refresh generation its last finished check began in.
+    pub checked_generation: u32,
     pub error: Option<String>,
 }
 
@@ -126,6 +130,8 @@ impl Runtime {
                             status: None,
                             checked_at_ms: None,
                             checking: false,
+                            again: false,
+                            checked_generation: 0,
                             error: None,
                         },
                     );
@@ -177,16 +183,24 @@ impl Runtime {
             let Some(live) = accounts.get_mut(&id) else {
                 return;
             };
+            // One running began before this was asked: it is checked again after it.
             if live.checking {
+                live.again = true;
                 return;
             }
             live.checking = true;
         }
         let runtime = self.clone();
         self.spawn(async move {
-            runtime.check_account(&id).await;
-            runtime.update_leads().await;
-            runtime.publish_accounts().await;
+            loop {
+                let generation = runtime.generation();
+                let again = runtime.check_account(&id, generation).await;
+                runtime.update_leads().await;
+                runtime.publish_accounts().await;
+                if !again {
+                    break;
+                }
+            }
         });
     }
 
@@ -198,13 +212,15 @@ impl Runtime {
         }
     }
 
-    async fn check_account(&self, id: &str) {
+    /// Checks an extra account's login, then its quota, as of the refresh `generation`;
+    /// answers whether it was asked to be checked again meanwhile.
+    async fn check_account(&self, id: &str, generation: u32) -> bool {
         let Some((provider, kind)) = self
             .accounts()
             .get(id)
             .map(|live| (live.provider.clone(), live.entry.provider))
         else {
-            return;
+            return false;
         };
         let status = provider.status().await;
         let mut error = None;
@@ -220,12 +236,15 @@ impl Runtime {
                 Err(err) => error = Some(format!("quota: {err}")),
             }
         }
-        if let Some(live) = self.accounts().get_mut(id) {
+        self.accounts().get_mut(id).is_some_and(|live| {
             live.status = Some(status);
             live.checked_at_ms = Some(now_ms());
-            live.checking = false;
+            live.checked_generation = generation;
             live.error = error;
-        }
+            let again = std::mem::take(&mut live.again);
+            live.checking = again;
+            again
+        })
     }
 
     /// Reads the quota of every signed-in extra account (the poller's turn).
@@ -444,6 +463,7 @@ impl Runtime {
                     .and_then(|overview| overview.checked_at_ms),
                 checking,
                 error: overview.and_then(|overview| overview.error),
+                checked_generation: self.checked_generation(kind),
                 account: own,
             });
             let live = self.accounts();
@@ -463,6 +483,7 @@ impl Runtime {
                     checked_at_ms: live.and_then(|live| live.checked_at_ms),
                     checking: live.is_some_and(|live| live.checking),
                     error: live.and_then(|live| live.error.clone()),
+                    checked_generation: live.map_or(0, |live| live.checked_generation),
                     account,
                 });
             }

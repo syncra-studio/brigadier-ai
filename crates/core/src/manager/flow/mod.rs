@@ -407,6 +407,8 @@ pub(crate) struct FakeBehavior {
     /// The next CLI start signals the first and waits for the second before it records
     /// anything.
     pub hold_start: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// The next login check of an extra account signals the first and waits for the second.
+    pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 /// Files a scripted CLI keeps in its own home, even when a session is shared.
@@ -469,6 +471,14 @@ impl Provider for FakeCli {
 
     fn status(&self) -> BoxFuture<'_, ProviderStatus> {
         Box::pin(async move {
+            let held = self
+                .account
+                .as_ref()
+                .and_then(|_| self.behavior.hold_status.lock().unwrap().take());
+            if let Some((reached, release)) = held {
+                reached.notify_one();
+                release.notified().await;
+            }
             ProviderStatus {
                 provider: self.kind,
                 path: Some("/fake".into()),
@@ -1542,3 +1552,5 @@ mod thread_tests;
 mod trim_tests;
 #[cfg(test)]
 mod trust_tests;
+#[cfg(test)]
+mod usage_tests;

@@ -1860,11 +1860,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::RemoveAccount { id } => Response::RemoveAccount {
             settings: Box::new(daemon.sessions.remove_account(&id).await?),
         },
-        Request::RefreshAccounts => {
-            daemon.runtime.refresh_providers(None);
-            daemon.runtime.refresh_accounts();
-            Response::RefreshAccounts
-        }
+        Request::RefreshAccounts => Response::RefreshAccounts {
+            generation: daemon.runtime.refresh_all(),
+        },
         Request::GetProviders => Response::GetProviders {
             view: daemon.runtime.view().await,
         },
@@ -1874,6 +1872,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         }
         Request::GetUsage { project_id } => Response::GetUsage {
             usage: Box::new(daemon.sessions.usage_view(project_id).await?),
+        },
+        Request::GetUsageActivity { days } => Response::GetUsageActivity {
+            activity: daemon.sessions.usage_activity(days).await,
         },
         Request::PreviewRoutes { project_id, areas } => Response::PreviewRoutes {
             routes: daemon.sessions.preview_routes(project_id, areas).await,

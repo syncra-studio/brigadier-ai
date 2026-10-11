@@ -58,6 +58,7 @@ const view = (name: string, email: string): AccountView => ({
   quotaAtMs: null,
   checkedAtMs: null,
   checking: false,
+  checkedGeneration: 0,
   error: null,
 });
 
