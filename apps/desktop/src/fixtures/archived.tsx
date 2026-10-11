@@ -15,6 +15,7 @@ import { useApp } from "@/state/store";
  * saw to #archived-result (ArchivedPageRender.test.ts reads it).
  */
 const params = new URLSearchParams(location.search);
+document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
 // Driven, nothing animates or blurs: an exit animation never ends in Chrome's virtual time, so a
 // closed menu or dialog would stay mounted, and the single-process headless Chrome can crash on
 // exit (SIGTRAP) after painting the dialog's backdrop blur.

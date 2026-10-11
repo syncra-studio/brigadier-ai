@@ -14,6 +14,7 @@ import { useApp } from "@/state/store";
  * reads it). Without it, the page stays as it opens, for screenshots.
  */
 const params = new URLSearchParams(location.search);
+document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
 // Driven, nothing animates or blurs (see the archived chats fixture).
 if (params.has("drive")) {
   const still = document.createElement("style");
