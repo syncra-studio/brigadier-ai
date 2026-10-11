@@ -4,6 +4,7 @@
 use brigadier_providers::ProviderKind;
 
 use crate::model::{Conversation, Environment, PermissionLevel, Project, Setup};
+use crate::tools::THREAD_TOOLS;
 use crate::work::{
     ArtifactRef, ContextInjection, InjectionKind, Report, Task, TaskKind, Told, WorkerRole,
 };
@@ -72,7 +73,7 @@ pub(crate) fn thread(
         ProviderKind::Codex => CODEX_COMMANDS,
         ProviderKind::Claude => CLAUDE_COMMANDS,
     };
-    format!(
+    let text = format!(
         r#"{THREAD_OPENING}. Today is {today}.
 Project: {project}. Repository: {repo}.
 {environment}
@@ -93,7 +94,7 @@ How to work:
 - Land finished work with land_phase (no phase needed). Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
 - Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
-- Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
+- Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with @remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
 - Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
 - Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Tools return at once; never wait or poll. Reports, questions, reviews and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report].
@@ -118,7 +119,43 @@ How to talk to the user:
         },
         code_rules = WORKER_CODE_RULES,
         preferences = preference_lines(preferences),
-    )
+    );
+    callable(&text, provider)
+}
+
+/// A Brigadier tool's name as `provider`'s CLI calls it (bug 7): Claude prefixes an MCP
+/// server's tools with `mcp__<server>__`, Codex names them bare.
+pub(crate) fn tool(name: &str, provider: ProviderKind) -> String {
+    match provider {
+        ProviderKind::Claude => format!("mcp__brigadier__{name}"),
+        ProviderKind::Codex => name.to_owned(),
+    }
+}
+
+/// `text` with each Brigadier tool it names written as `provider` calls it: a name with an
+/// underscore wherever it stands alone, `@run` and `@remember` where marked.
+fn callable(text: &str, provider: ProviderKind) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len() + 1024);
+    let mut rest = text;
+    while let Some(start) = rest.find(|c: char| c == '@' || c.is_ascii_lowercase()) {
+        let (before, from) = rest.split_at(start);
+        out.push_str(before);
+        let marked = from.starts_with('@');
+        let body = if marked { &from[1..] } else { from };
+        let end = body.find(|c: char| !word(c)).unwrap_or(body.len());
+        let name = &body[..end];
+        let stands_alone = !out.ends_with(word);
+        let is_tool = THREAD_TOOLS.contains(&name) && (marked || name.contains('_'));
+        if is_tool && stands_alone {
+            out.push_str(&tool(name, provider));
+        } else {
+            out.push_str(&from[..end + usize::from(marked)]);
+        }
+        rest = &body[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// How the thread interviews the user: rounds of question cards over a tree of decisions.
@@ -131,13 +168,13 @@ pub(crate) const THREAD_OPENING: &str = "You lead a Brigadier session";
 
 /// How a Codex thread runs long commands: through `run`, whose long output is trimmed
 /// (its built-in shell's isn't, THREAD-PLAN.md Q4).
-const CODEX_COMMANDS: &str = "\n- Use run for builds, tests, logs and long listings: an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it. Under Ask for approval, run_unsandboxed runs a command the sandbox blocked once the user allows it.";
+const CODEX_COMMANDS: &str = "\n- Use @run for builds, tests, logs and long listings: an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it. Under Ask for approval, run_unsandboxed runs a command the sandbox blocked once the user allows it.";
 
 /// How a Claude thread runs long commands: through `run` too, whose output Brigadier keeps
 /// whole, a failure's included; where its own shell starts (its CLI runs in its scratch
 /// folder, so a workspace change can resume the same session) and what that shell's long
 /// output looks like (its output hook trims it).
-const CLAUDE_COMMANDS: &str = "\n- Use run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it, a failure's too. Below Full access, when the sandbox blocks a command, run_unsandboxed runs it outside once it is approved for you.\n- Your own shell starts in a scratch folder, not in your workspace: run a command there as `cd <your workspace> && …`. Its output over 8 KB comes back as a digest too; a failing command's output comes as the CLI's own excerpt.";
+const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix: the name without it doesn't exist.\n- Use @run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it, a failure's too. Below Full access, when the sandbox blocks a command, run_unsandboxed runs it outside once it is approved for you.\n- Your own shell starts in a scratch folder, not in your workspace: run a command there as `cd <your workspace> && …`. Its output over 8 KB comes back as a digest too; a failing command's output comes as the CLI's own excerpt.";
 
 /// How the thread shows the user something running (THREAD-PLAN.md Q6): its previews outlive
 /// its CLI, and in Brigadier's own repository they never touch the installed app's data.
@@ -385,6 +422,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: 8,
         thread: "",
         worker: "From now on, a handoff note lists the checks that passed and the commit each passed at, and a fresh session that continues a task doesn't rerun what passed before it: its hand-off's checks.md lists each check that passed and the files changed since, so it reruns only the checks those changes cover.",
+    },
+    Revision {
+        number: 9,
+        thread: "From now on, call Brigadier's tools by the exact names your tool list shows (with its mcp__brigadier__ prefix where it has one): a short name that isn't in the list doesn't exist.",
+        worker: "",
     },
 ];
 
@@ -1523,7 +1565,7 @@ mod environment_tests {
             &[],
             None,
             None,
-            ProviderKind::Claude,
+            ProviderKind::Codex,
             false,
         );
         assert!(text.contains("Delegate early: at most a quick query_brain or code_search"));
@@ -1532,6 +1574,62 @@ mod environment_tests {
         // Screenshots in a brief only when the user asked (they cost a T1 run minutes).
         assert!(text.contains("(screenshots only if the user asked)"));
         assert!(!text.contains("you or the Brain found"));
+    }
+
+    /// Bug 7: a Claude thread's instructions name each Brigadier tool as Claude calls it, and
+    /// say so; a Codex thread's name them bare.
+    #[test]
+    fn a_claude_thread_names_brigadiers_tools_as_it_calls_them() {
+        for permission in ["askForApproval", "approveForMe", "fullAccess"] {
+            for run in [None, Some(&workspace())] {
+                let prompt = |provider| {
+                    thread(
+                        &session(permission),
+                        None,
+                        &[],
+                        run,
+                        Some("/work/session @ brigadier/flow"),
+                        provider,
+                        true,
+                    )
+                };
+                let claude = prompt(ProviderKind::Claude);
+                let codex = prompt(ProviderKind::Codex);
+                assert!(claude.contains(
+                    "with their mcp__brigadier__ prefix: the name without it doesn't exist"
+                ));
+                assert!(claude.contains("mcp__brigadier__delegate_task calls in one message"));
+                assert!(claude.contains("Use mcp__brigadier__run for builds"));
+                assert!(claude.contains("keep it with mcp__brigadier__remember ("));
+                assert!(codex.contains("several delegate_task calls in one message"));
+                assert!(codex.contains("Use run for builds"));
+                assert!(!codex.contains("mcp__brigadier__"));
+                assert!(!claude.contains("@run") && !claude.contains("@remember"));
+                // No tool with an underscore is named bare in Claude's.
+                for name in THREAD_TOOLS.iter().filter(|name| name.contains('_')) {
+                    let bare = claude.match_indices(name).filter(|(at, _)| {
+                        let before = claude[..*at].chars().next_back();
+                        let after = claude[at + name.len()..].chars().next();
+                        let word = |c: Option<char>| {
+                            c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+                        };
+                        !word(before) && !word(after)
+                    });
+                    assert_eq!(bare.count(), 0, "{name} named bare for Claude");
+                }
+            }
+        }
+        assert_eq!(
+            callable(
+                "a@run, @remember: run and remember; x_query_brain, @gmail",
+                ProviderKind::Claude
+            ),
+            "a@run, mcp__brigadier__remember: run and remember; x_query_brain, @gmail"
+        );
+        assert_eq!(
+            callable("@run query_brain", ProviderKind::Codex),
+            "run query_brain"
+        );
     }
 
     #[test]
@@ -1590,7 +1688,7 @@ mod environment_tests {
                     assert!(prompt.contains("How to write code:"));
                     assert!(prompt.contains("a tip already reviewed isn't reviewed again"));
                     assert!(prompt.contains("none of it is a fixed step"));
-                    for tool in [
+                    for name in [
                         "delegate_task",
                         "answer_worker",
                         "message_worker",
@@ -1606,13 +1704,13 @@ mod environment_tests {
                         "note_for_user",
                         "route_follow_up",
                     ] {
-                        assert!(prompt.contains(tool), "{tool}");
+                        assert!(prompt.contains(&tool(name, provider)), "{name}");
                     }
                     // The user is asked only on cards, in rounds; the merge too.
-                    assert!(
-                        prompt
-                            .contains("only with ask_user (a card, never a question in your text)")
-                    );
+                    assert!(prompt.contains(&format!(
+                        "only with {} (a card, never a question in your text)",
+                        tool("ask_user", provider)
+                    )));
                     assert!(prompt.contains("Interview the user when they invite questions"));
                     assert!(prompt.contains("one short opening line"));
                     assert!(!prompt.contains("in your reply, or with ask_user"));
@@ -1658,7 +1756,9 @@ mod environment_tests {
             ProviderKind::Claude,
             true,
         );
-        assert!(claude.contains("Use run for builds, tests, logs and long listings"));
+        assert!(
+            claude.contains("Use mcp__brigadier__run for builds, tests, logs and long listings")
+        );
         assert!(claude.contains("run_unsandboxed"));
         assert!(claude.contains("a failing command's output comes as the CLI's own excerpt"));
         assert!(claude.contains("Your workspace: (none yet)"));
@@ -1986,7 +2086,7 @@ mod environment_tests {
             &[],
             None,
             Some("/work/session @ brigadier/flow"),
-            ProviderKind::Claude,
+            ProviderKind::Codex,
             true,
         );
         assert!(prompt.contains("Record what became of each finding with record_findings"));

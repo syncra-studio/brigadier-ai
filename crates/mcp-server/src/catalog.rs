@@ -978,6 +978,24 @@ mod tests {
         }
     }
 
+    /// Bug 7: the thread's instructions write every tool it has with its callable name, so
+    /// the list they use names exactly the thread's tools.
+    #[test]
+    fn the_thread_tool_list_is_the_catalogs() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::WithEscalation,
+        };
+        let mut names: Vec<&str> = tools_for(&thread)
+            .iter()
+            .map(|tool| tool.name.as_ref())
+            .collect();
+        let mut listed = brigadier_core::tools::THREAD_TOOLS.to_vec();
+        names.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(names, listed);
+    }
+
     #[test]
     fn a_gate_member_cannot_ask_the_orchestrator() {
         let names = |role: &Role| -> Vec<String> {

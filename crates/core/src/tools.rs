@@ -813,6 +813,47 @@ pub enum OrchestratorCall {
     PreviewLog(PreviewLog),
 }
 
+/// Every tool a thread may call, by name (the catalog's tests hold it to the catalog). Its
+/// instructions write each as the thread's CLI calls it (`prompts::tool`).
+pub const THREAD_TOOLS: &[&str] = &[
+    "delegate_task",
+    "message_worker",
+    "answer_worker",
+    "route_follow_up",
+    "stop_worker",
+    "ask_user",
+    "read_report",
+    "read_artifact",
+    "query_brain",
+    "remember",
+    "search_transcript",
+    "plan_phases",
+    "propose_plan",
+    "approve_outline",
+    "start_verifier",
+    "request_approval",
+    "land_phase",
+    "finish_session",
+    "propose_merge",
+    "note_for_user",
+    "record_findings",
+    "suggest_full_access",
+    "list_tasks",
+    "settle_step",
+    "end_run",
+    "propose_overnight",
+    "code_search",
+    "code_refs",
+    "project_map",
+    "review_plan",
+    "run",
+    "run_unsandboxed",
+    "run_check",
+    "start_preview",
+    "stop_preview",
+    "preview_log",
+];
+
 impl OrchestratorCall {
     /// The MCP tool name.
     pub fn name(&self) -> &'static str {
