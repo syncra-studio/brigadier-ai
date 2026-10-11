@@ -946,6 +946,22 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      Below Full access every worker stays inside its CLI's sandbox (step 2).
    - The Full-access description in Settings says so in one clause: the lead can't change other sessions' branches
      and folders or Brigadier's own data.
+   - **Trade-off, accepted (2026-10-11, the Delegator's decision):** inside the thread's Full-access profile Apple
+     Events to other apps fail (`osascript` returns -10004 under any Seatbelt profile, even `(allow default)(allow
+     appleevent-send)`; reproduced by hand), while `open -g -a` works. Computer use goes through its own helper,
+     not the thread's shell, so it isn't affected. A thread that needs Apple Events gives them to a worker.
+   - **An approver refuses the protected set** (found live 2026-10-11, the Delegator's decision). Below Full access a
+     command that leaves the sandbox reaches everything, so whoever approves it decides (LLM judges, the engine
+     plumbs; no command parsing). At Approve for me a Codex reviewer approved an escalated `git worktree remove
+     --force` of another session's worktree. Every approver Brigadier configures now gets the session's protected
+     list as a rule to refuse, unconditionally (a cleanup the user asked for included). The list is the paths,
+     patterns and own exceptions of `SessionSpec::protection`, plus every checkout whose git folder is under them
+     (`approver_rule`, `P/model.rs`). Claude's auto mode gets it as an `autoMode.hard_deny` entry after
+     `"$defaults"` (read from `--settings`: docs/en/auto-mode-config; `claude auto-mode config` lists it). Codex's
+     auto-review gets it as `auto_review.extra_policy` (Codex config reference, codex-cli 0.162.1). Brigadier's own
+     reviewer for a Claude thread's `run_unsandboxed` gets it in its prompt. At Ask for approval the user decides,
+     as before. The gap left: the rule binds a model, not the OS. An approver that ignores it still lets the
+     command through, and then the ref check (step 5) restores branches but not folders.
 4. **Why git can't get around it.** Git's files backend takes the loose `<ref>.lock` for every update or delete of a
    ref, packed or not. So `git branch -D`, `git update-ref -d`, `git push . :ref`, `git worktree remove` and `rm -rf`
    on a protected path fail with "Operation not permitted".

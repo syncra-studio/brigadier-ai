@@ -1006,6 +1006,62 @@ impl SessionSpec {
     }
 }
 
+/// The rule every approver of a session's requests to leave its sandbox gets (Claude's auto
+/// mode, Codex's auto-review, Brigadier's own reviewer): a command run outside the sandbox
+/// reaches what [`SessionSpec::protection`] keeps from it, so the approver must refuse it.
+/// `None` when nothing is protected.
+#[must_use]
+pub fn approver_rule(protection: &brigadier_sandbox::Protection) -> Option<String> {
+    if protection.deny.is_empty() && protection.deny_patterns.is_empty() {
+        return None;
+    }
+    let quoted = |paths: &[PathBuf]| {
+        paths
+            .iter()
+            .map(|path| format!("`{}`", path.display()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut rule = String::from(
+        "Never allow a command, even one the user asked for (a cleanup included), that deletes, \
+         moves, empties, resets or writes another session's work or Brigadier's own, however it \
+         is written (`rm`, `mv`, `find -delete`, `git worktree remove`, `git worktree prune`, \
+         `git branch -D`, `git update-ref`, `git reset`, `git push --delete`, a script): ",
+    );
+    if !protection.deny.is_empty() {
+        rule.push_str(&format!(
+            "these paths and everything under them: {}",
+            quoted(&protection.deny)
+        ));
+    }
+    if !protection.deny_patterns.is_empty() {
+        if !protection.deny.is_empty() {
+            rule.push_str("; ");
+        }
+        rule.push_str(&format!(
+            "the paths these regular expressions match: {}",
+            protection
+                .deny_patterns
+                .iter()
+                .map(|pattern| format!("`{pattern}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    rule.push_str(
+        "; and every checkout (worktree) of a repository whose git folder is under one of those \
+         paths, its files included.",
+    );
+    if !protection.allow.is_empty() {
+        rule.push_str(&format!(
+            " Only these inside them are the session's own: {}.",
+            quoted(&protection.allow)
+        ));
+    }
+    rule.push_str(" Brigadier removes the others itself once their sessions are done.");
+    Some(rule)
+}
+
 /// The models a worker's own sub-agents may run on (PLAN.md §7): the router's eligible set for
 /// its task, in its CLI's exact model ids.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1093,6 +1149,34 @@ pub enum Artifact {
 #[cfg(test)]
 mod input_tests {
     use super::*;
+
+    #[test]
+    fn an_approver_rule_names_every_protected_path_and_the_session_s_own() {
+        assert_eq!(
+            approver_rule(&brigadier_sandbox::Protection::default()),
+            None
+        );
+        let protection = brigadier_sandbox::Protection {
+            deny: vec![
+                PathBuf::from("/repo/.git/refs/heads/brigadier"),
+                PathBuf::from("/repo/.git/worktrees"),
+            ],
+            deny_patterns: vec!["^/tmp/brigadier-[0-9a-f]{12}(/|$)".into()],
+            allow: vec![PathBuf::from("/repo/.git/worktrees/session-aa")],
+            keep: Vec::new(),
+        };
+        let rule = approver_rule(&protection).expect("rule");
+        for part in [
+            "`/repo/.git/refs/heads/brigadier`",
+            "`/repo/.git/worktrees`",
+            "`^/tmp/brigadier-[0-9a-f]{12}(/|$)`",
+            "own: `/repo/.git/worktrees/session-aa`",
+            "git worktree remove",
+            "even one the user asked for",
+        ] {
+            assert!(rule.contains(part), "{part} in {rule}");
+        }
+    }
 
     #[test]
     fn handoff_follow_up_precedes_file_notes_in_the_same_text_part() {

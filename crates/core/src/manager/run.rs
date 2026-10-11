@@ -173,8 +173,14 @@ impl SessionManager {
             .map(|workspace| workspace.path.clone());
         let workdir = run_workdir(workdir, workspace.as_deref(), &scratch)?;
         if reviewed {
-            self.decide_escalation(id, command, &workdir, workspace.as_deref())
-                .await?;
+            self.decide_escalation(
+                id,
+                command,
+                &workdir,
+                workspace.as_deref(),
+                &launch.protection,
+            )
+            .await?;
         }
         let timeout = timeout_secs
             .map_or(RUN_TIMEOUT_DEFAULT, Duration::from_secs)

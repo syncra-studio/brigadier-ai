@@ -56,9 +56,10 @@ impl SessionManager {
         command: &str,
         workdir: &Path,
         workspace: Option<&Path>,
+        protection: &brigadier_sandbox::Protection,
     ) -> Result<()> {
         let verdict = self
-            .review_escalation(id, command, workdir, workspace)
+            .review_escalation(id, command, workdir, workspace, protection)
             .await;
         let why = match verdict {
             Ok(verdict) if verdict.allow => {
@@ -119,6 +120,7 @@ impl SessionManager {
         command: &str,
         workdir: &Path,
         workspace: Option<&Path>,
+        protection: &brigadier_sandbox::Protection,
     ) -> std::result::Result<Verdict, String> {
         let counted_as = TaskId(format!("{ESCALATION_OWNER}{}", uuid::Uuid::now_v7()));
         let owner = counted_as.0.clone();
@@ -162,11 +164,16 @@ impl SessionManager {
                 session,
                 mut events,
             }) => {
-                let prompt = format!(
+                let mut prompt = format!(
                     "The project's folder: {}\nThe command runs in: {}\nThe command:\n```\n{command}\n```",
                     workspace.map_or_else(|| "(none)".into(), |path| path.display().to_string()),
                     workdir.display()
                 );
+                // What the session's sandbox keeps it from (PLAN bug 6), which a command
+                // outside it would reach.
+                if let Some(rule) = brigadier_providers::approver_rule(protection) {
+                    prompt.push_str(&format!("\n\n{rule}"));
+                }
                 let turn = async {
                     session
                         .send(TurnInput::text(prompt))

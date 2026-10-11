@@ -735,6 +735,15 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
     if let Some(hooks) = output_hooks(spec) {
         settings["hooks"] = hooks;
     }
+    // In auto mode Claude's classifier settles a command that leaves the sandbox: it refuses
+    // what the protection keeps out, whatever the user said. `hard_deny` rules block whatever
+    // the user intends, and `$defaults` keeps the built-in ones; the classifier reads `autoMode`
+    // from `--settings` (docs/en/auto-mode-config, 2.1.296).
+    if permission_mode(spec) == "auto"
+        && let Some(rule) = crate::approver_rule(&spec.protection)
+    {
+        settings["autoMode"] = json!({ "hard_deny": ["$defaults", rule] });
+    }
     // Full access is the user's own choice in Brigadier, so its terminal ("Open in terminal")
     // doesn't ask again with Claude's bypass-mode warning, whose default answer exits. Flag
     // settings count as consent (2.1.294 reads the key from user, local, flag and policy
@@ -2199,6 +2208,38 @@ mod tests {
             allow.contains(&json!(resolved(&lock).display().to_string())),
             "{allow:?}"
         );
+    }
+
+    #[test]
+    fn only_auto_mode_tells_its_classifier_never_to_allow_the_protected_paths() {
+        let cwd = Temp::new();
+        let protection = brigadier_sandbox::Protection {
+            deny: vec![cwd.path().join("repo/.git/worktrees")],
+            ..Default::default()
+        };
+        let session = |auto_review: bool| SessionSpec {
+            access: Access::Scoped {
+                write_cwd: true,
+                writable_roots: Vec::new(),
+                network: true,
+                deny_read: Vec::new(),
+                unix_sockets: Vec::new(),
+            },
+            auto_review,
+            protection: protection.clone(),
+            ..spec(cwd.path(), &["claude-sonnet-5"])
+        };
+        let auto = settings(&session(true), cwd.path(), &SubAgents::Any, false);
+        let hard_deny = auto["autoMode"]["hard_deny"].as_array().expect("hard_deny");
+        assert_eq!(hard_deny[0], json!("$defaults"), "the built-in rules stay");
+        let rule = hard_deny[1].as_str().expect("rule");
+        let worktrees = cwd.path().join("repo/.git/worktrees");
+        assert!(
+            rule.contains(&format!("`{}`", worktrees.display())),
+            "{rule}"
+        );
+        let asks = settings(&session(false), cwd.path(), &SubAgents::Any, false);
+        assert!(asks.get("autoMode").is_none(), "{asks}");
     }
 
     /// Only a thread gets the output hook: one command after every `Bash` call, successful or
