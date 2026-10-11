@@ -1543,6 +1543,15 @@ impl SessionManager {
             (TaskKind::Merge, None) => self.base_merge_brief(task, &workspace).await,
             _ => String::new(),
         };
+        // A change that shows in an app is checked live with the computer tools
+        // (SESSION-FIXES-PLAN.md "Computer use").
+        if cfg!(target_os = "macos") && prompts::checks_live(task) {
+            let dev_app = workspace
+                .worktree
+                .as_deref()
+                .and_then(super::context_pack::dev_app_command);
+            extra.push_str(&prompts::worker_computer(dev_app.as_deref()));
+        }
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
         if omit_ai_coauthors && provider == ProviderKind::Codex && task.kind.writes() {
             extra.push_str("\n\n");
