@@ -381,6 +381,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, a worker's brief carries what the Brain knows about its task, and a report's `Brain: +N facts` line counts what its worker taught the Brain (its decisions and what it learned).",
         worker: "From now on, a first message may start with what the Brain knows about the task: start from it. In submit_report, list under `learned` what the next worker in this area should know that the code doesn't say plainly, one per line; each is kept in the project's Brain.",
     },
+    Revision {
+        number: 8,
+        thread: "",
+        worker: "From now on, a handoff note lists the checks that passed and the commit each passed at, and a fresh session that continues a task doesn't rerun what passed before it: its hand-off's checks.md lists each check that passed and the files changed since, so it reruns only the checks those changes cover.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -778,7 +783,7 @@ const CODEX_READING: &str = "\n- Read a file with one `sed -n 'a,bp' <full path>
 
 /// How every worker runs its checks (THREAD-PLAN.md Q8 lever 3).
 const WORKER_CHECKS: &str = "
-- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell. While you work, run only the checks your changes affect (run_check with no command lists them); run the full suite once, right before submit_report. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss.";
+- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell. While you work, run only the checks your changes affect (run_check with no command lists them); run the full suite once, right before submit_report. Continuing a task in a fresh session, don't rerun what passed before it: its hand-off's checks.md lists each check that passed and the files changed since, so rerun only the checks those changes cover. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss.";
 
 /// How implement and merge workers write code (PLAN.md §7; after ponytail's rules, see
 /// THIRD_PARTY_NOTICES.md).
@@ -1333,6 +1338,25 @@ mod tests {
                     .contains("run only the checks your changes affect")
             })
             .expect("the checks and reading revision");
+        assert!(added.thread.is_empty());
+        assert!(
+            revision_note(added.number - 1, true)
+                .unwrap()
+                .contains(added.worker)
+        );
+    }
+
+    /// SESSION-FIXES-PLAN.md Q6.4: a fresh session that continues a task reruns only the checks
+    /// the changes since cover, from its hand-off's checks.md. Open workers hear it as a
+    /// revision.
+    #[test]
+    fn a_fresh_session_reruns_only_the_checks_the_changes_since_cover() {
+        let worker = worker(&task("claude", Some("lead")));
+        assert!(worker.contains("Continuing a task in a fresh session, don't rerun what passed before it: its hand-off's checks.md lists each check that passed and the files changed since, so rerun only the checks those changes cover."));
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.worker.contains("checks.md"))
+            .expect("the hand-off checks revision");
         assert!(added.thread.is_empty());
         assert!(
             revision_note(added.number - 1, true)

@@ -1917,6 +1917,123 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
     flow.stop().await;
 }
 
+/// SESSION-FIXES-PLAN.md Q6.4: a fresh session that continues a worker learns which checks
+/// passed and what changed since each, so it reruns only those the changes cover: the hand-off's
+/// checks.md lists the latest passing run of each check, never a failing one.
+#[tokio::test]
+async fn a_fresh_session_hears_which_checks_passed_and_what_changed_since() {
+    let checks_md: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+    let seen = checks_md.clone();
+    let flow = Flow::start(
+        "handoff-checks",
+        Options::default(),
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if let Some(n) = reports_in(&turn.input).first() {
+                        let reply = turn
+                            .call("land_phase", json!({"task": format!("task-{n}")}))
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("Both files are in.");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Add two files", "kind": "implement",
+                                   "spec": "Create a.txt and b.txt.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                const NOTE: &str = "Goal and where it stands: a.txt is committed.\nChecks that \
+                    passed: echo one.\nNext steps: write b.txt.";
+                if turn.input.contains("[Brigadier] Your context is now about") {
+                    return Reply::text(NOTE);
+                }
+                if turn
+                    .input
+                    .contains("You are continuing task-1 in a fresh session")
+                {
+                    assert!(turn.input.contains("checks.md ("), "{}", turn.input);
+                    let dir = turn
+                        .input
+                        .split("Its hand-off is in ")
+                        .nth(1)
+                        .and_then(|rest| rest.split(": ").next())
+                        .expect("the hand-off folder");
+                    *seen.lock().unwrap() =
+                        std::fs::read_to_string(std::path::Path::new(dir).join("checks.md")).ok();
+                    turn.git(&["add", "b.txt"]);
+                    turn.git(&["commit", "-qm", "Add b.txt"]);
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "Added a.txt and b.txt.",
+                                   "changes": ["a.txt", "b.txt"]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reported.");
+                }
+                // The first session: one check passes, another fails until a.txt is
+                // committed, a third only fails; then b.txt is written, and the session grows
+                // past the size.
+                turn.report_context(20_000).await;
+                let check = async |command: &str, rerun: bool| {
+                    let reply = turn
+                        .call("run_check", json!({"command": command, "rerun": rerun}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    reply.text
+                };
+                assert!(check("echo one", false).await.starts_with("[exit 0]"));
+                assert!(!check("test -f a.txt", false).await.starts_with("[exit 0]"));
+                assert!(!check("test -f c.txt", false).await.starts_with("[exit 0]"));
+                turn.write("a.txt", "a\n");
+                turn.git(&["add", "a.txt"]);
+                turn.git(&["commit", "-qm", "Add a.txt"]);
+                assert!(check("test -f a.txt", true).await.starts_with("[exit 0]"));
+                turn.write("b.txt", "b\n");
+                Reply {
+                    text: NOTE.into(),
+                    context_tokens: Some(310_000),
+                    ..Reply::default()
+                }
+            }
+        }),
+    )
+    .await;
+    flow.say("Add a.txt and b.txt.").await;
+    let board = flow.settled().await;
+    assert_eq!(Flow::task(&board, 1).state, TaskState::Landed);
+    let checks = checks_md.lock().unwrap().clone().expect("checks.md");
+    let line = |command: &str| {
+        checks
+            .lines()
+            .find(|line| line.starts_with(&format!("- `{command}`")))
+            .unwrap_or_else(|| panic!("{command} in {checks}"))
+            .to_owned()
+    };
+    assert!(
+        line("echo one").ends_with("changed since: `a.txt`, `b.txt`."),
+        "{checks}"
+    );
+    assert!(
+        line("test -f a.txt").ends_with("changed since: `b.txt`."),
+        "{checks}"
+    );
+    assert!(
+        !checks.contains("c.txt"),
+        "a failing check isn't listed: {checks}"
+    );
+    // Newest first.
+    assert!(checks.find("test -f a.txt").unwrap() < checks.find("echo one").unwrap());
+    flow.stop().await;
+}
+
 /// A request of one phase whose lead outlines it keeps a plan of its own: one phase with its
 /// outline and stage (the app's "Phase 1 / 1" pill), landed like any phase. Only a small
 /// request without an outline has no plan and no pill.

@@ -11,13 +11,16 @@
 //!   spec.md, progress.md and diff.patch as a fallback hand-off writes them, and transcript.md,
 //!   every message, command and tool call of the task in full, as Brigadier recorded them. The
 //!   fresh session gets the note and the last messages word for word, and searches the rest.
+//! - **No checks run twice.** checks.md lists each check whose latest run passed and the files
+//!   changed since the tree it passed on, so the fresh session reruns only the checks those
+//!   changes cover (SESSION-FIXES-PLAN.md Q6.4).
 //! - **Same model, same attempt.** It is not a reroute: the task keeps its model, attempt and
 //!   access. A limit or error hand-on still wins when both are due.
 //! - **Stalls too.** The stall watchdog ([`super::watchdog`]) hands a worker that went silent
 //!   mid-turn, and didn't answer a nudge, over the same way, closing its stuck turn.
 
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use brigadier_providers::{ItemStatus, NoticeLevel, ProviderEvent, Role, TurnInput};
@@ -51,8 +54,8 @@ someone with no memory of this session can carry on. Write it in plain text unde
 headings: Goal and where it stands; Done (with commit hashes); In progress (exact files and \
 state, and anything uncommitted); Next steps (ordered and concrete); Decisions and approvals \
 already given (including the orchestrator's answers and go-aheads, so they aren't asked again); \
-Gotchas learned (versions, commands that work, traps); How to verify (the exact commands and \
-what passing looks like). Include anything you found or ruled out that isn't in the code. At \
+Gotchas learned (versions, commands that work, traps); Checks that passed (each command \
+and the commit it passed at); How to verify (the exact commands and what passing looks like). Include anything you found or ruled out that isn't in the code. At \
 most about 800 words. Don't call submit_report for this.",
         tokens / 1_000
     )
@@ -239,15 +242,24 @@ impl SessionManager {
         }
         let (dir, has_diff) = self.write_handoff_files(&task).await?;
         let (transcript, tail) = self.worker_transcript(&task.id).await;
+        let checks = self.passed_checks(&task).await;
         // A turn that ended before the ask reached it has no note: its last message is in the
         // tail anyway.
         let note = note.filter(|note| note.to_lowercase().contains("next steps"));
+        let has_checks = !checks.is_empty();
         {
             let (dir, note) = (dir.clone(), note.clone());
             super::blocking(move || {
                 let io =
                     |err: std::io::Error| Error::Invalid(format!("writing the hand-off: {err}"));
                 std::fs::write(dir.join("transcript.md"), transcript).map_err(io)?;
+                if has_checks {
+                    std::fs::write(dir.join("checks.md"), checks_text(&checks)).map_err(io)?;
+                } else if let Err(err) = std::fs::remove_file(dir.join("checks.md"))
+                    && err.kind() != std::io::ErrorKind::NotFound
+                {
+                    return Err(io(err));
+                }
                 match note {
                     Some(note) => std::fs::write(dir.join("note.md"), note).map_err(io)?,
                     None => match std::fs::remove_file(dir.join("note.md")) {
@@ -270,6 +282,7 @@ impl SessionManager {
                 tokens,
                 has_note: note.is_some(),
                 has_diff,
+                has_checks,
             },
             &tail,
             pending,
@@ -340,6 +353,90 @@ impl SessionManager {
             first,
         )
         .await
+    }
+
+    /// The checks the task's workers ran whose latest result passed, newest first, each with
+    /// the files changed since the tree it passed on (`None` when git can't tell).
+    async fn passed_checks(&self, task: &Task) -> Vec<PassedCheck> {
+        let mut latest: Vec<(String, String, String, Option<String>)> = Vec::new();
+        let mut before = None;
+        loop {
+            let page = self
+                .core
+                .store()
+                .read_stream(
+                    streams::conversation(&task.conversation_id),
+                    StreamPage {
+                        before,
+                        kinds: vec!["check.ran".into()],
+                        limit: EVENTS_PAGE,
+                    },
+                )
+                .await
+                .unwrap_or_default();
+            let Some(oldest) = page.last() else {
+                break;
+            };
+            before = Some(oldest.stream_seq);
+            let full = page.len() == EVENTS_PAGE as usize;
+            for stored in &page {
+                let Ok(DomainEvent::CheckRan {
+                    task_id: Some(ran_for),
+                    tree,
+                    command,
+                    workdir,
+                    status,
+                    ..
+                }) = serde_json::from_str::<DomainEvent>(stored.payload.get())
+                else {
+                    continue;
+                };
+                // Newest first: an older run of the same check is superseded.
+                if ran_for != task.id
+                    || latest
+                        .iter()
+                        .any(|(c, w, _, _)| *c == command && *w == workdir)
+                {
+                    continue;
+                }
+                latest.push((command, workdir, status, tree));
+            }
+            if !full {
+                break;
+            }
+        }
+        let passed: Vec<(String, String, String)> = latest
+            .into_iter()
+            .filter_map(|(command, workdir, status, tree)| {
+                (status == "exit 0").then_some((command, workdir, tree?))
+            })
+            .collect();
+        let worktree = task
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.worktree.clone());
+        let git = self.git.clone();
+        super::blocking(move || {
+            let worktree = worktree.and_then(|path| git.open_worktree(Path::new(&path)).ok());
+            Ok(passed
+                .into_iter()
+                .map(|(command, workdir, tree)| {
+                    let changed = worktree.as_ref().and_then(|worktree| {
+                        worktree
+                            .paths_changed_since(&brigadier_git::Oid(tree.clone()))
+                            .ok()
+                    });
+                    PassedCheck {
+                        command,
+                        workdir,
+                        tree,
+                        changed,
+                    }
+                })
+                .collect())
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// Every recorded event of the task's workers, in full, oldest first, and their last
@@ -464,6 +561,62 @@ fn transcript_entry(text: &mut String, event: &ProviderEvent) {
     }
 }
 
+/// A check whose latest run passed, for the fresh session's `checks.md`.
+struct PassedCheck {
+    command: String,
+    /// Where it ran, relative to the repository's root ("" for the root).
+    workdir: String,
+    /// The git tree of the files it passed on.
+    tree: String,
+    /// The files changed since it passed; `None` when git can't tell.
+    changed: Option<Vec<String>>,
+}
+
+/// The paths of a changed list `checks.md` names before it sums up the rest.
+const CHANGED_SHOWN: usize = 30;
+
+/// `checks.md`: each check that passed, and what changed since.
+fn checks_text(checks: &[PassedCheck]) -> String {
+    let mut text = String::from(
+        "# Checks that passed\n\nEach check this task ran whose latest run passed (exit 0), \
+         newest first, with the files changed since the files it passed on. Rerun only a check \
+         whose changed files it covers; one with nothing changed passed on these same files, \
+         and run_check answers it from its cache.\n",
+    );
+    for check in checks {
+        let place = if check.workdir.is_empty() {
+            String::new()
+        } else {
+            format!(" (in `{}`)", check.workdir)
+        };
+        let _ = write!(
+            text,
+            "\n- `{}`{place}, passed on tree {}: ",
+            check.command,
+            &check.tree[..check.tree.len().min(12)]
+        );
+        match &check.changed {
+            None => text.push_str("git can't tell what changed since.\n"),
+            Some(changed) if changed.is_empty() => text.push_str("nothing changed since.\n"),
+            Some(changed) => {
+                let shown: Vec<String> = changed
+                    .iter()
+                    .take(CHANGED_SHOWN)
+                    .map(|path| format!("`{path}`"))
+                    .collect();
+                let more = changed.len().saturating_sub(CHANGED_SHOWN);
+                let more = if more > 0 {
+                    format!(" and {more} more")
+                } else {
+                    String::new()
+                };
+                let _ = writeln!(text, "changed since: {}{more}.", shown.join(", "));
+            }
+        }
+    }
+    text
+}
+
 /// Why a worker continues in a fresh session of the same model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Handover {
@@ -482,6 +635,8 @@ struct HandoverFacts {
     tokens: Option<i64>,
     has_note: bool,
     has_diff: bool,
+    /// `checks.md` lists the checks that passed.
+    has_checks: bool,
 }
 
 /// The fresh session's first message.
@@ -497,6 +652,7 @@ fn handover_text(
         tokens,
         has_note,
         has_diff,
+        has_checks,
     } = facts;
     let why = match why {
         Handover::Size => {
@@ -535,6 +691,12 @@ fn handover_text(
          short log of what it did) and transcript.md (the whole transcript, word for word: search \
          it with rg for any detail instead of redoing work)",
     );
+    if has_checks {
+        text.push_str(
+            ", checks.md (the checks that passed and the files changed since each one: rerun only \
+             those the changes since cover, not the whole suite again)",
+        );
+    }
     if task.kind.writes() {
         text.push_str(if has_diff {
             ", and diff.patch (the changes so far, as the worktree holds them). Keep the work \
@@ -682,6 +844,37 @@ mod tests {
         ];
         events.reverse();
         assert_eq!(session_sizes(&events, false), (Some(61_000), Some(28_000)));
+    }
+
+    #[test]
+    fn the_handoff_lists_each_passed_check_with_what_changed_since() {
+        assert!(
+            wrap_up_prompt(210_000)
+                .contains("Checks that passed (each command and the commit it passed at)")
+        );
+        let check = |command: &str, workdir: &str, changed: Option<Vec<String>>| PassedCheck {
+            command: command.into(),
+            workdir: workdir.into(),
+            tree: "0123456789abcdef0123".into(),
+            changed,
+        };
+        let many: Vec<String> = (0..CHANGED_SHOWN + 2).map(|n| format!("f{n}.rs")).collect();
+        let text = checks_text(&[
+            check("cargo test", "", Some(Vec::new())),
+            check("pnpm test", "apps/desktop", None),
+            check("cargo clippy", "", Some(many)),
+        ]);
+        assert!(
+            text.contains(
+                "\n- `cargo test`, passed on tree 0123456789ab: nothing changed since.\n"
+            )
+        );
+        assert!(text.contains(
+            "\n- `pnpm test` (in `apps/desktop`), passed on tree 0123456789ab: git can't tell what \
+             changed since.\n"
+        ));
+        assert!(text.contains("`f29.rs` and 2 more.\n"), "{text}");
+        assert!(!text.contains("`f30.rs`"));
     }
 
     fn notice(message: String) -> ProviderEvent {

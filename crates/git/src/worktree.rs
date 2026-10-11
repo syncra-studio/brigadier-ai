@@ -60,6 +60,16 @@ impl Worktree {
         Ok(tree)
     }
 
+    /// Every path that differs between `tree` (a [`Self::checkout_tree`] from earlier) and the
+    /// checkout's files as they stand, rename sources included, sorted.
+    pub fn paths_changed_since(&self, tree: &Oid) -> Result<Vec<String>> {
+        let (_, now) = self.repo.capture()?;
+        let (_, mut paths) = self.repo.diff_scope(tree, &now)?;
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
     fn untracked(&self) -> Result<BTreeSet<String>> {
         Ok(self.repo.status(false)?.untracked())
     }
@@ -915,6 +925,21 @@ mod tests {
         assert_ne!(added, edited);
         // The real index is untouched.
         assert_eq!(text(repo, &["write-tree"]), index);
+    }
+
+    #[test]
+    fn the_paths_changed_since_a_checkout_tree_count_commits_edits_and_new_files() {
+        let f = fixture("changed-since");
+        let repo = &f.wt.repo;
+        let then = f.wt.checkout_tree().expect("a tree");
+        assert!(f.wt.paths_changed_since(&then).expect("paths").is_empty());
+        commit(repo, "Add a", &[("a.rs", "a\n")]);
+        fs::write(repo.root().join("shared.txt"), "edited\n").expect("an edit");
+        fs::write(repo.root().join("new.rs"), "new\n").expect("a new file");
+        assert_eq!(
+            f.wt.paths_changed_since(&then).expect("paths"),
+            ["a.rs", "new.rs", "shared.txt"]
+        );
     }
 
     #[test]
