@@ -110,7 +110,7 @@ function refreshStatus(): void {
   request({ method: "getDictation" })
     .then(({ dictation }) => {
       set({ status: dictation });
-      if (!dictation.downloading && before && snapshot.model === before) set({ model: null });
+      if (snapshot.status?.downloading === false && before && snapshot.model === before) set({ model: null });
     })
     .catch((error: unknown) => console.error("dictation status failed", error));
 }
