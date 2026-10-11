@@ -205,6 +205,8 @@ export const useApp = create<AppState>()(() => ({
     enrichBrain: true,
     shortReplies: true,
     onboarded: false,
+    introSeen: false,
+    userName: "",
     keepAwake: "agents",
     keepAwakeLidClosed: false,
     sendShortcut: "enter",

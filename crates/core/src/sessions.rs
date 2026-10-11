@@ -24,6 +24,8 @@ use crate::work::{
 use crate::{Error, Result, now_ms};
 
 const MAX_NAME_CHARS: usize = 200;
+/// The longest name the user can ask to be called.
+const MAX_USER_NAME_CHARS: usize = 80;
 /// Messages longer than this keep only a preview inline; the full text goes to the blob store.
 const INLINE_TEXT_BYTES: usize = 64 * 1024;
 const PREVIEW_BYTES: usize = 4 * 1024;
@@ -1885,7 +1887,8 @@ impl Core {
 
     /// Writes settings a client sent: the models recorded as known since it read its copy
     /// stay known ([`crate::routing::availability::rebase`]).
-    pub async fn update_settings(&self, settings: Settings) -> Result<Settings> {
+    pub async fn update_settings(&self, mut settings: Settings) -> Result<Settings> {
+        settings.user_name = user_name(&settings.user_name);
         if let Some(problem) = brigadier_git::branch_prefix_problem(&settings.branch_prefix) {
             return Err(Error::Invalid(problem));
         }
@@ -2027,6 +2030,12 @@ impl Core {
         }
         Ok(stored.iter().map(|event| event.stream_seq).collect())
     }
+}
+
+/// The name the user asked to be called, as kept: without surrounding spaces, at most
+/// [`MAX_USER_NAME_CHARS`] long.
+fn user_name(name: &str) -> String {
+    name.trim().chars().take(MAX_USER_NAME_CHARS).collect::<String>().trim_end().to_owned()
 }
 
 /// The deleted conversation `stream` belongs to (its transcript, orchestrator or draft).
