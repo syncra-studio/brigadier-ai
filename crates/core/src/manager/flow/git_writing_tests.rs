@@ -84,7 +84,7 @@ fn writer_specs(flow: &Flow) -> Vec<(ProviderKind, Option<String>, Option<String
 
 /// Whether each of the writer's sessions ran on its model's fast tier, in order.
 fn writer_fast(flow: &Flow) -> Vec<bool> {
-    flow.all_specs()
+    flow.specs()
         .into_iter()
         .filter(|(_, spec)| {
             spec.append_system_prompt
