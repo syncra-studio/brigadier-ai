@@ -24,10 +24,14 @@ const NAMED_BRANCHES = 3;
  */
 export function DeleteDialog() {
   const ids = useDeleteAsk((s) => s.ids);
+  // The last ask stays in the box while it animates out, so the text doesn't vanish before the
+  // box does; each ask gets a fresh form.
+  const [shown, setShown] = useState<{ ids: string[]; ask: number } | null>(null);
+  if (ids !== null && ids !== shown?.ids) setShown({ ids, ask: (shown?.ask ?? 0) + 1 });
   return (
     <Dialog open={ids !== null} onOpenChange={(open) => !open && closeDeleteAsk()}>
       <DialogContent className="max-w-md">
-        {ids && <DeleteForm key={ids.join(" ")} ids={ids} onClose={closeDeleteAsk} />}
+        {shown && <DeleteForm key={shown.ask} ids={shown.ids} onClose={closeDeleteAsk} />}
       </DialogContent>
     </Dialog>
   );

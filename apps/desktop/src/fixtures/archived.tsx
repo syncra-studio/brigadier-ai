@@ -217,7 +217,15 @@ function Fixture() {
       },
       () => {
         seen.deleteAll = dialog();
+        // Closing, the box keeps its text until its exit animation ends: hold that animation.
+        const hold = document.createElement("style");
+        hold.textContent =
+          '[role="dialog"][data-state="closed"] { animation: hold 1s paused !important; } @keyframes hold { to { opacity: 0.5; } }';
+        document.head.append(hold);
         button("Cancel", q('[role="dialog"]') ?? document)?.click();
+      },
+      () => {
+        seen.closing = text(q('[role="dialog"][data-state="closed"]'));
       },
       () => {
         seen.calls = calls;
