@@ -1,4 +1,11 @@
-import { Check, ChevronDown, ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
+import {
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  MagnifyingGlassSearch,
+  XCircleFilled,
+} from "@openai/apps-sdk-ui/components/Icon";
 import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui";
 import { useId, useState, type ComponentProps, type ReactNode } from "react";
 
@@ -36,6 +43,7 @@ export function SettingsPage({
   title,
   description,
   actions,
+  back,
   wide = false,
   scrollable = true,
   children,
@@ -43,6 +51,8 @@ export function SettingsPage({
   title: string;
   description?: ReactNode;
   actions?: ReactNode;
+  /** A page inside another: its name over the title goes back to it. */
+  back?: { label: string; onBack: () => void };
   /** A wider column, for a data page (tables, charts, panes). */
   wide?: boolean;
   /** Disable page scrolling when the content owns its bounded scroll areas. */
@@ -66,6 +76,16 @@ export function SettingsPage({
             scrollable ? "pb-12" : "min-h-0 flex-1",
           )}
         >
+          {back && (
+            <button
+              type="button"
+              onClick={back.onBack}
+              className="text-foreground/65 hover:text-foreground text-label -ms-1 flex w-fit items-center gap-0.5"
+            >
+              <ChevronLeft aria-hidden className="size-icon-sm" />
+              {back.label}
+            </button>
+          )}
           <header className="flex shrink-0 items-start gap-4 py-3">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <h1 className="text-page-title font-medium">{title}</h1>
@@ -397,5 +417,48 @@ export function SettingsButton({
       )}
       {...props}
     />
+  );
+}
+
+/** A search field over a list; Esc empties it before it leaves Settings. */
+export function SettingsSearch({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="rounded-capsule border-foreground/16 bg-foreground/8 flex h-8 min-w-0 flex-1 items-center gap-2 border px-2.5">
+      <MagnifyingGlassSearch aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
+      <input
+        type="search"
+        value={value}
+        placeholder={label}
+        aria-label={label}
+        spellCheck={false}
+        autoComplete="off"
+        className="placeholder:text-foreground/50 min-w-0 flex-1 bg-transparent text-sm outline-none [&::-webkit-search-cancel-button]:hidden"
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && value) {
+            event.stopPropagation();
+            onChange("");
+          }
+        }}
+      />
+      {value && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          className="text-foreground/50 hover:text-foreground flex shrink-0 items-center"
+          onClick={() => onChange("")}
+        >
+          <XCircleFilled className="size-icon-sm" />
+        </button>
+      )}
+    </label>
   );
 }

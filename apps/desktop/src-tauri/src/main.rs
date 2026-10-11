@@ -8,6 +8,7 @@
 
 mod bridge;
 mod browser;
+mod browser_store;
 mod documents;
 // WebKit's narrow unsafe boundary (the workspace denies it): see its header and the README.
 #[cfg(target_os = "macos")]
@@ -697,7 +698,9 @@ fn main() {
             browser::browser_navigate,
             browser::browser_place,
             browser::browser_go,
-            browser::browser_close
+            browser::browser_close,
+            browser::browser_history,
+            browser::browser_history_remove
         ])
         .build(context)
         .unwrap_or_else(|err| {

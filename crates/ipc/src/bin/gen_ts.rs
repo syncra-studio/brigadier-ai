@@ -6,8 +6,9 @@
 use std::path::PathBuf;
 
 use brigadier_ipc::app::{
-    AppInfo, BridgeEvent, BrowserBounds, BrowserEvent, BrowserOptions, RunningChat, SmokeReport,
-    UiMeasurements,
+    AppInfo, BridgeEvent, BrowserBounds, BrowserClear, BrowserDownload, BrowserEvent,
+    BrowserOptions, BrowserSite, BrowserVisit, DownloadState, HistoryFilter, RunningChat,
+    SitePermission, SmokeReport, UiMeasurements,
 };
 use brigadier_ipc::metrics::Diagnostics;
 use brigadier_ipc::protocol::{ClientFrame, ServerFrame};
@@ -39,6 +40,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     BrowserEvent::export_all(&config)?;
     BrowserBounds::export_all(&config)?;
     BrowserOptions::export_all(&config)?;
+    BrowserVisit::export_all(&config)?;
+    HistoryFilter::export_all(&config)?;
+    BrowserDownload::export_all(&config)?;
+    DownloadState::export_all(&config)?;
+    BrowserSite::export_all(&config)?;
+    SitePermission::export_all(&config)?;
+    BrowserClear::export_all(&config)?;
     RunningChat::export_all(&config)?;
     AppInfo::export_all(&config)?;
     UiMeasurements::export_all(&config)?;

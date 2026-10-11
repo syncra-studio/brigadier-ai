@@ -101,6 +101,89 @@ pub struct BrowserOptions {
     pub ask_downloads: bool,
 }
 
+/// Which pages Settings › Browser › Browsing history lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum HistoryFilter {
+    All,
+    /// Pages in tabs opened from something an agent gave: a link in its reply, a preview.
+    Agent,
+    /// Everything else: pages the user opened, and imported history.
+    Other,
+}
+
+/// A page the built-in browser showed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserVisit {
+    pub id: i64,
+    pub url: String,
+    /// Empty when the page had none.
+    pub title: String,
+    /// When, in ms since the Unix epoch.
+    pub at_ms: i64,
+    pub agent: bool,
+}
+
+/// How a download of the built-in browser went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum DownloadState {
+    Running,
+    Done,
+    Failed,
+}
+
+/// A file the built-in browser downloaded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserDownload {
+    pub id: i64,
+    pub url: String,
+    /// Where it was saved.
+    pub path: String,
+    /// When it started, in ms since the Unix epoch.
+    pub at_ms: i64,
+    pub state: DownloadState,
+}
+
+/// What a site may use without asking each time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SitePermission {
+    /// The page's request shows the system's own question (the default).
+    Ask,
+    Allow,
+    Block,
+}
+
+/// A site that asked the built-in browser for the camera or microphone, and the user's choices.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserSite {
+    /// `scheme://host[:port]`.
+    pub origin: String,
+    pub camera: SitePermission,
+    pub microphone: SitePermission,
+    /// When it last asked, in ms since the Unix epoch.
+    pub asked_ms: i64,
+}
+
+/// What Settings › Browser's Clear browsing data removes, and from when on.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserClear {
+    /// Only what changed since then (ms since the Unix epoch); none: everything.
+    pub since_ms: Option<i64>,
+    pub history: bool,
+    /// Cookies and every other kind of site data (storage, databases, service workers).
+    pub cookies: bool,
+    pub cache: bool,
+    pub downloads: bool,
+    /// Camera and microphone choices per site.
+    pub sites: bool,
+}
+
 /// Where the Browser tab's page sits in the window, in CSS pixels from its top left.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

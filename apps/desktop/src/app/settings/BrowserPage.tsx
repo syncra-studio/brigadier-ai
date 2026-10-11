@@ -1,7 +1,11 @@
 import { Globe } from "@openai/apps-sdk-ui/components/Icon";
 
+import { useState } from "react";
+
 import { useAction } from "@/app/conversation/useAction";
+import { BrowserHistory } from "@/app/settings/BrowserHistory";
 import {
+  SettingsButton,
   SettingsCard,
   SettingsPage,
   SettingsRow,
@@ -32,6 +36,10 @@ export const BROWSER_ROWS = {
     label: "Show full URL",
     description: "Include the path, query, and fragment in the address bar.",
   },
+  history: {
+    label: "Browsing history",
+    description: "View and remove pages you visited in the built-in browser.",
+  },
 } as const;
 
 const PAGE_DESCRIPTION = "The built-in browser, where links open, and what it keeps.";
@@ -46,6 +54,8 @@ const TARGETS = [
 export function BrowserPage() {
   const on = useApp((s) => s.settings.browserEnabled);
   const embedded = useApp((s) => s.info?.platform !== "linux");
+  const [view, setView] = useState<"page" | "history">("page");
+  if (on && embedded && view === "history") return <BrowserHistory onBack={() => setView("page")} />;
   return (
     <SettingsPage title="Browser" description={PAGE_DESCRIPTION}>
       <SettingsSection>
@@ -60,6 +70,9 @@ export function BrowserPage() {
             <LinkRow setting="webLinksIn" row={BROWSER_ROWS.webLinks} />
             <LinkRow setting="localLinksIn" row={BROWSER_ROWS.localLinks} />
             <SwitchSetting setting="browserFullUrl" row={BROWSER_ROWS.fullUrl} />
+            <SettingsRow label={BROWSER_ROWS.history.label} description={BROWSER_ROWS.history.description}>
+              <SettingsButton onClick={() => setView("history")}>Manage</SettingsButton>
+            </SettingsRow>
           </SettingsCard>
         </SettingsSection>
       )}

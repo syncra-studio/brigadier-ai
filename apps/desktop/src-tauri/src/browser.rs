@@ -17,11 +17,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use brigadier_ipc::app::{BrowserBounds, BrowserEvent, BrowserOptions};
+use brigadier_ipc::app::{
+    BrowserBounds, BrowserEvent, BrowserOptions, BrowserVisit, HistoryFilter,
+};
 use brigadier_ipc::protocol::{ErrorCode, IpcError};
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
+
+use crate::browser_store;
 
 fn failed(message: impl Into<String>) -> IpcError {
     IpcError {
@@ -180,6 +184,38 @@ impl FaviconLimit {
     }
 }
 
+/// A tab's latest page in the browser's history: the page that finished loading, and the title
+/// it showed meanwhile, which may come before or after.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[derive(Default)]
+struct Visit {
+    id: Option<i64>,
+    title: String,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl Visit {
+    fn load(&mut self, url: &str, loading: bool, agent: bool) {
+        if loading {
+            self.title.clear();
+            return;
+        }
+        if !web_page(url) {
+            return;
+        }
+        let (last, title) = (self.id, &self.title);
+        let now = crate::browser_store::now_ms();
+        self.id = crate::browser_store::with(|store| store.visit(last, url, title, agent, now));
+    }
+
+    fn titled(&mut self, title: &str) {
+        self.title = title.to_owned();
+        if let Some(id) = self.id {
+            crate::browser_store::with(|store| store.titled(id, title));
+        }
+    }
+}
+
 /// Whether `url` is a web page, which the system browser may open.
 fn web_page(url: &str) -> bool {
     let scheme = url
@@ -206,7 +242,8 @@ mod embedded {
     use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder};
 
     use super::{
-        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, allowed, failed, favicon_data, web_page,
+        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, Visit, allowed, failed, favicon_data,
+        web_page,
     };
     use crate::shell::MAIN_WINDOW;
 
@@ -245,6 +282,7 @@ mod embedded {
         id: String,
         url: String,
         bounds: BrowserBounds,
+        agent: bool,
         events: Channel<BrowserEvent>,
     ) -> Result<(), IpcError> {
         if BROWSERS.with_borrow(|browsers| browsers.contains_key(&id)) {
@@ -262,6 +300,8 @@ mod embedded {
             events,
         );
         let limit = Arc::new(Mutex::new(FaviconLimit::default()));
+        let visit = Arc::new(Mutex::new(Visit::default()));
+        let title_visit = visit.clone();
         let load_limit = limit.clone();
         let saved = super::data_dir();
         // Windows: the browser's folder in Brigadier's data folder, apart from the app's webview.
@@ -339,9 +379,12 @@ mod embedded {
                 if loading {
                     held.reset();
                 }
+                drop(held);
+                visit.lock().expect("visit lock").load(&url, loading, agent);
                 let _ = on_load.send(BrowserEvent::Load { url, loading });
             })
             .with_document_title_changed_handler(move |title| {
+                title_visit.lock().expect("visit lock").titled(&title);
                 let _ = on_title.send(BrowserEvent::Title { title });
             });
         // macOS: `browser_ui`'s delegate takes the popups instead.
@@ -429,6 +472,7 @@ mod embedded {
         _id: String,
         _url: String,
         _bounds: BrowserBounds,
+        _agent: bool,
         _events: Channel<BrowserEvent>,
     ) -> Result<(), IpcError> {
         Err(failed("pages open in the system browser on this platform"))
@@ -461,7 +505,6 @@ pub fn set_data_dir(data_dir: &Path) {
 }
 
 /// The browser's folder, once the app has set it.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn data_dir() -> Option<&'static Path> {
     DATA_DIR.get().map(PathBuf::as_path)
 }
@@ -528,18 +571,19 @@ fn web_page_only(url: &str) -> Result<(), IpcError> {
 }
 
 /// Makes the tab `id`'s webview showing `url` at `bounds`; its page events arrive on
-/// `events`. For a tab that has one, it goes to `url` (see `browser_navigate`).
+/// `events`. `agent`: the tab was opened from something an agent gave (its history says so). For a tab that has one, it goes to `url` (see `browser_navigate`).
 #[tauri::command]
 pub fn browser_open(
     app: tauri::AppHandle,
     id: String,
     url: String,
     bounds: BrowserBounds,
+    agent: Option<bool>,
     events: Channel<BrowserEvent>,
 ) -> Result<(), IpcError> {
     enabled()?;
     web_page_only(&url)?;
-    embedded::open(&app, id, url, bounds, events)
+    embedded::open(&app, id, url, bounds, agent.unwrap_or(false), events)
 }
 
 /// Shows `url` in the tab `id`'s webview, at `bounds`.
@@ -560,6 +604,24 @@ pub fn browser_place(id: String, bounds: Option<BrowserBounds>) -> Result<(), Ip
 #[tauri::command]
 pub fn browser_go(id: String, action: String) -> Result<(), IpcError> {
     embedded::go(&id, &action)
+}
+
+/// The built-in browser's history, newest first: `before_ms` pages through it.
+#[tauri::command]
+pub fn browser_history(
+    query: String,
+    filter: HistoryFilter,
+    before_ms: Option<i64>,
+    limit: u32,
+) -> Vec<BrowserVisit> {
+    browser_store::with(|store| store.history(&query, filter, before_ms, limit)).unwrap_or_default()
+}
+
+/// Removes pages from the browser's history.
+#[tauri::command]
+pub fn browser_history_remove(ids: Vec<i64>) -> Result<(), IpcError> {
+    browser_store::with(|store| store.remove_visits(&ids))
+        .ok_or_else(|| failed("the browser's history can't be changed now"))
 }
 
 /// Drops every tab's page (on the main thread): the app's own page started again.

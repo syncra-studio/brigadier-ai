@@ -53,11 +53,12 @@ export function faviconFits(page: Pick<BrowserPage, "url" | "loading"> | undefin
   }
 }
 
-/** Opens `url` in the conversation's Browser tab, over `bounds`. */
+/** Opens `url` in the Browser tab `id`, over `bounds`; `agent`: an agent gave the tab its page. */
 export async function openPage(
   id: string,
   url: string,
   bounds: BrowserBounds,
+  agent = false,
 ): Promise<void> {
   const page = useBrowsers.getState().pages[id];
   useBrowsers.setState(({ pages }) => ({
@@ -71,7 +72,7 @@ export async function openPage(
       await browserNavigate(id, url, bounds);
       return;
     }
-    await browserOpen(id, url, bounds, (event) => {
+    await browserOpen(id, url, bounds, agent, (event) => {
       if (event.type === "load")
         update(id, { url: event.url, loading: event.loading,
           ...(event.url !== useBrowsers.getState().pages[id]?.url ? { favicon: null } : {}) });

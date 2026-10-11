@@ -90,12 +90,15 @@ function openOutside(url: string) {
 export function BrowserTab({
   conversationId,
   initialUrl,
+  agent = false,
   active,
   children,
   onNavigate,
 }: {
   conversationId: string;
   initialUrl?: string | undefined;
+  /** Opened from something an agent gave; its pages count as the agent's in the history. */
+  agent?: boolean | undefined;
   active: boolean;
   children?: ReactNode;
   onNavigate?: ((url: string) => void) | undefined;
@@ -112,10 +115,10 @@ export function BrowserTab({
   const browserOn = useBrowserOn();
   useEffect(() => {
     if (!browserOn || !embedded || !active || !initialUrl || made || !area.current) return;
-    void openPage(conversationId, initialUrl, pageBounds(area.current)).catch(
+    void openPage(conversationId, initialUrl, pageBounds(area.current), agent).catch(
       failed,
     );
-  }, [conversationId, initialUrl, made, active, embedded, browserOn]);
+  }, [conversationId, initialUrl, agent, made, active, embedded, browserOn]);
 
   // Keep the page over this tab's area, and hide it when the tab goes or is covered.
   useEffect(() => {
@@ -192,7 +195,7 @@ export function BrowserTab({
     }
     if (onNavigate) { onNavigate(url); return; }
     if (!area.current) return;
-    openPage(conversationId, url, pageBounds(area.current)).catch(failed);
+    openPage(conversationId, url, pageBounds(area.current), agent).catch(failed);
   };
   const act = (action: Parameters<typeof browserGo>[1]) => {
     browserGo(conversationId, action).catch(failed);

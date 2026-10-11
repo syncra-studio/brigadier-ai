@@ -171,16 +171,17 @@ export async function openFolder(path: string, app?: string): Promise<void> {
 
 /**
  * Makes the Browser tab `id`'s page, showing `url` over `bounds`; `onEvent` hears that page
- * until it is closed.
+ * until it is closed. `agent`: the tab came from something an agent gave (its history says so).
  */
 export async function browserOpen(
   id: string,
   url: string,
   bounds: BrowserBounds,
+  agent: boolean,
   onEvent: (event: BrowserEvent) => void,
 ): Promise<void> {
   try {
-    await invoke("browser_open", { id, url, bounds, events: new Channel<BrowserEvent>(onEvent) });
+    await invoke("browser_open", { id, url, bounds, agent, events: new Channel<BrowserEvent>(onEvent) });
   } catch (error) {
     throw isIpcError(error) ? new RequestError(error) : error;
   }
@@ -217,7 +218,7 @@ export function browserConfigure(options: BrowserOptions): Promise<void> {
   return invoke("browser_configure", { options });
 }
 
-/** Drops the Browser tab's page and all it stored. */
+/** Drops the Browser tab's page (what it saved stays in the browser's store). */
 export function browserClose(id: string): Promise<void> {
   return invoke("browser_close", { id });
 }

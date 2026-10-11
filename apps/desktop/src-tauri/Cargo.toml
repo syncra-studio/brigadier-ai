@@ -20,6 +20,7 @@ blake3.workspace = true
 brigadier-core.workspace = true
 brigadier-ipc.workspace = true
 brigadier-sandbox.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11.6", features = ["tray-icon", "image-png", "macos-private-api"] }

@@ -470,7 +470,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                   <NewTabTools conversationId={conversationId} tabId={tab.id} />
                 </div>
               ) : tab.kind === "newTab" || tab.kind === "browser" ? (
-                <BrowserTab conversationId={tab.id} initialUrl={tab.kind === "browser" ? tab.url : undefined} active={shown}
+                <BrowserTab conversationId={tab.id} initialUrl={tab.kind === "browser" ? tab.url : undefined} agent={tab.kind === "browser" && tab.agent} active={shown}
                   onNavigate={tab.kind === "newTab" ? (url) => replaceNewTab(conversationId, tab.id, "browser", null, url) : undefined}>
                   {tab.kind === "newTab" ? <NewTabTools conversationId={conversationId} tabId={tab.id} /> : null}
                 </BrowserTab>

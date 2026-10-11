@@ -6,10 +6,8 @@ import {
   DotsHorizontal,
   Filter,
   Folder,
-  MagnifyingGlassSearch,
   Trash,
   Unarchive,
-  XCircleFilled,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -26,7 +24,7 @@ import {
   shownIds,
   SORT_CHOICES,
 } from "@/app/settings/archived";
-import { SettingsButton, SettingsCard, SettingsPage, selectTrigger } from "@/app/settings/parts";
+import { SettingsButton, SettingsCard, SettingsPage, SettingsSearch, selectTrigger } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -110,7 +108,8 @@ export function ArchivedPage() {
         {archived.length > 0 && (
           <div className="bg-background sticky top-0 z-10 -mt-5 flex flex-col gap-3 pt-5 pb-2">
             <div className="flex items-center gap-2">
-              <SearchField
+              <SettingsSearch
+                label="Search archived chats"
                 value={filter.query}
                 onChange={(query) => setFilter((f) => ({ ...f, query }))}
               />
@@ -267,42 +266,6 @@ function DeleteButton(props: ComponentProps<typeof Button>) {
       {...props}
       className="bg-destructive/10 hover:bg-destructive/20 text-destructive border-transparent"
     />
-  );
-}
-
-/** The search field over the list: every word must be in the title. */
-function SearchField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="rounded-capsule border-foreground/16 bg-foreground/8 flex h-8 min-w-0 flex-1 items-center gap-2 border px-2.5">
-      <MagnifyingGlassSearch aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
-      <input
-        type="search"
-        value={value}
-        placeholder="Search archived chats"
-        aria-label="Search archived chats"
-        spellCheck={false}
-        autoComplete="off"
-        className="placeholder:text-foreground/50 min-w-0 flex-1 bg-transparent text-sm outline-none [&::-webkit-search-cancel-button]:hidden"
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Escape" && value) {
-            // Esc clears the search before it leaves Settings.
-            event.stopPropagation();
-            onChange("");
-          }
-        }}
-      />
-      {value && (
-        <button
-          type="button"
-          aria-label="Clear search"
-          className="text-foreground/50 hover:text-foreground flex shrink-0 items-center"
-          onClick={() => onChange("")}
-        >
-          <XCircleFilled className="size-icon-sm" />
-        </button>
-      )}
-    </label>
   );
 }
 
