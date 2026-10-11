@@ -114,7 +114,11 @@ mockIPC((command, payload) => {
   const req = (payload as { request: Request }).request;
   calls.push(req);
   if (req.method === "readAttachment") return { method: req.method, data: images[req.id] ?? "" };
-  if (req.method === "addAttachment") return { method: req.method, attachment: { id: `att-${req.name}`, name: req.name, mime: req.mime, bytes: req.data.length, pasted: false, inline: null } };
+  // An upload takes a moment, so the drive can act while notes are sending.
+  if (req.method === "addAttachment") {
+    const attachment = { id: `att-${req.name}`, name: req.name, mime: req.mime, bytes: req.data.length, pasted: false, inline: null };
+    return new Promise((resolve) => setTimeout(() => resolve({ method: req.method, attachment }), 400));
+  }
   if (req.method === "sendMessage") return { method: req.method, outcome: { type: "queued", item: { id: "q1", text: req.text, attachments: req.attachments, mentions: [], createdAtMs: now } } };
   return { method: req.method };
 });
@@ -196,6 +200,12 @@ function Fixture() {
       selectTab(id, MOCKUP_TAB);
     });
     at(3800, () => { command(); });
+    // While the notes go, the screenshot takes no new note.
+    at(3900, () => {
+      pointer(surface(), "pointerdown", 0.5, 0.5);
+      pointer(surface(), "pointerup", 0.5, 0.5);
+    });
+    at(4000, () => { seen.noteWhileSending = Boolean(document.querySelector('[data-slot="mockup-note"]')); });
     // Marking and sending decode and encode images, which take real time: wait for the send.
     const until = (done: () => boolean, then: () => void, tries = 400) => at(50, () => (done() || tries === 0 ? then() : until(done, then, tries - 1)));
     at(4000, () => until(() => calls.some((call) => call.method === "sendMessage"), () => {

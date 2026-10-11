@@ -93,6 +93,8 @@ export function MockupView({ conversationId, active }: { conversationId: string;
   }, [conversationId]);
 
   const { sendNotes, sending, failed } = useSendNotes(conversationId, mockup, items);
+  // Notes are frozen while they go, so none is made or changed after the send took them.
+  const editable = commenting && !sending;
   useEffect(() => {
     // Only the tab in front sends: one behind another stays mounted, its notes unseen.
     if (!commenting || !active) return;
@@ -125,10 +127,10 @@ export function MockupView({ conversationId, active }: { conversationId: string;
             ? <Centered><span className="shimmer">Building the mockup…</span><span className="text-muted-foreground text-xs">Its screenshots show here when its worker reports.</span></Centered>
             : <Centered>The mockup stopped before it had screenshots.</Centered>
         ) : view === "canvas" ? (
-          <Canvas conversationId={conversationId} items={items} zoom={zoom === "fit" ? 100 : zoom} commenting={commenting}
+          <Canvas conversationId={conversationId} items={items} zoom={zoom === "fit" ? 100 : zoom} commenting={editable}
             onZoom={setZoom} onFocus={(key) => { setPicked(key); setView("focused"); }} />
         ) : current && (
-          <Focused conversationId={conversationId} item={current} zoom={zoom} commenting={commenting && current.kind === "mockup"}
+          <Focused conversationId={conversationId} item={current} zoom={zoom} commenting={editable && current.kind === "mockup"}
             onFitted={setFitted} onZoom={setZoom} />
         )}
         <Toolbar conversationId={conversationId} notes={notes} commenting={commenting} canComment={canComment}
@@ -521,7 +523,7 @@ function Toolbar({ conversationId, notes, commenting, canComment, working, revis
         <Tip label={mac ? "Send ⌘↩" : "Send Ctrl+↩"}>
           <Button size="sm" className="rounded-capsule h-9" disabled={!notes.length || sending} onClick={onSend}>Send</Button>
         </Tip>
-        <Button variant="ghost" size="icon" aria-label="Cancel" onClick={() => changeNotes(conversationId, () => ({ notes: [], commenting: false }))}>
+        <Button variant="ghost" size="icon" aria-label="Cancel" disabled={sending} onClick={() => changeNotes(conversationId, () => ({ notes: [], commenting: false }))}>
           <X />
         </Button>
       </div>

@@ -16,6 +16,7 @@ test("a mockup gets its own session tab, busy while it builds, takes comments, s
   assert.deepEqual(seen.markers, ["1", "2"]);
   assert.match(String(seen.count), /2 comments.*Send/);
   assert.equal(seen.hiddenSend, false, "⌘↩ with the tab behind Chat sends nothing");
+  assert.equal(seen.noteWhileSending, false, "no note is made while the notes go");
   assert.deepEqual(seen.attachments, ["mockup-1-notes.png"]);
   assert.equal(seen.sentTo, "mockup-fixture");
   assert.equal(seen.message,
