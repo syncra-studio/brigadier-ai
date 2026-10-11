@@ -99,10 +99,14 @@ pub(crate) fn discover(home: &Path, app_dirs: &[&Path]) -> Vec<Profile> {
         folders.sort();
         for folder in folders {
             let app = existing_app(app_dirs, &format!("{folder}.app"));
+            let mut key = key_for(&folder);
+            if KNOWN.iter().any(|known| known.key == key) {
+                key.push_str("-firefox");
+            }
             profiles.extend(root_profiles(
                 &support.join(&folder),
-                &folder,
-                &key_for(&folder),
+                &format!("{folder} (Firefox)"),
+                &key,
                 app,
             ));
         }
@@ -310,6 +314,22 @@ pub(crate) fn read_cookies(dir: &Path, now_unix: i64) -> Result<Cookies, Error> 
         });
     }
     Ok(out)
+}
+
+/// How many cookies a profile's store holds outside containers, private windows and
+/// partitions, the ones an import can bring.
+pub(crate) fn count_cookies(dir: &Path) -> Result<usize, Error> {
+    let conn = open_copy(&dir.join("cookies.sqlite"))?;
+    let cols = columns(&conn, "moz_cookies")?;
+    let mut sql = "SELECT COUNT(*) FROM moz_cookies WHERE 1".to_owned();
+    if cols.contains("originAttributes") {
+        sql.push_str(" AND originAttributes = ''");
+    }
+    if cols.contains("isPartitionedAttributeSet") {
+        sql.push_str(" AND isPartitionedAttributeSet = 0");
+    }
+    let count: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
+    Ok(usize::try_from(count).unwrap_or(0))
 }
 
 pub(crate) fn read_history(dir: &Path, limit: usize) -> Result<Vec<Visit>, Error> {

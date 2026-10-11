@@ -6,7 +6,9 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 
-use brigadier_browser_data::{Error, Family, discover_in, read_cookies, read_history};
+use brigadier_browser_data::{
+    Error, Family, count_cookies, discover_in, read_cookies, read_history,
+};
 use common::*;
 
 fn safari_home() -> tempfile::TempDir {
@@ -100,6 +102,8 @@ fn binarycookies_flags_domains_and_expiry() {
             .all(|c| c.expires_unix == Some(NOW + 3600))
     );
     assert!(out.cookies.iter().all(|c| c.same_site.is_none()));
+    // The count takes every record, expired ones too.
+    assert_eq!(count_cookies(safari).unwrap(), 4);
 }
 
 #[test]
@@ -187,6 +191,10 @@ fn an_unopenable_cookie_file_is_permission_denied() {
     assert!(!safari.readable);
     assert!(matches!(
         read_cookies(safari, None, NOW),
+        Err(Error::PermissionDenied(_))
+    ));
+    assert!(matches!(
+        count_cookies(safari),
         Err(Error::PermissionDenied(_))
     ));
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();

@@ -17,6 +17,7 @@ mod chromium;
 mod gecko;
 mod running;
 mod safari;
+mod sources;
 mod sqlite;
 
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub use running::running;
+pub use sources::{Source, browser_rank, sources, sources_in};
 
 /// Seconds between 1601-01-01 (the Windows/WebKit epoch Chromium uses) and the Unix epoch.
 pub const WEBKIT_EPOCH_OFFSET_SECS: i64 = 11_644_473_600;
@@ -120,6 +122,8 @@ pub struct Cookies {
     /// Skipped because they could not be decrypted, failed their integrity check or were
     /// malformed.
     pub unreadable: usize,
+    /// The domains of the unreadable cookies whose domain could be read, one per cookie.
+    pub unreadable_domains: Vec<String>,
 }
 
 /// One visit to a page.
@@ -181,13 +185,22 @@ pub enum Error {
     Format(String),
 }
 
+/// Where macOS keeps apps: the shared and the user's Applications folders, then the system's
+/// (Safari lives in the last).
+pub fn app_dirs(home: &Path) -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/Applications"),
+        home.join("Applications"),
+        PathBuf::from("/System/Applications"),
+        PathBuf::from("/System/Cryptexes/App/System/Applications"),
+    ]
+}
+
 /// Lists the browser profiles found under `home` (the user's home directory), sorted by
-/// browser then profile name. Apps are looked up in `/Applications` and `home/Applications`.
+/// browser then profile name. Apps are looked up in [`app_dirs`].
 pub fn discover(home: &Path) -> Vec<Profile> {
-    discover_in(
-        home,
-        &[Path::new("/Applications"), &home.join("Applications")],
-    )
+    let dirs = app_dirs(home);
+    discover_in(home, &dirs.iter().map(PathBuf::as_path).collect::<Vec<_>>())
 }
 
 /// [`discover`] with explicit folders to look for app bundles in, so tests and callers with
@@ -219,6 +232,16 @@ pub fn read_cookies(
         Family::Chromium => chromium::read_cookies(&profile.dir, chromium_password, now_unix),
         Family::Gecko => gecko::read_cookies(&profile.dir, now_unix),
         Family::Safari => safari::read_cookies(profile, now_unix),
+    }
+}
+
+/// How many cookies a profile keeps, read without decrypting them (and so without asking the
+/// Keychain). A running browser's store is read as it stands, unflushed changes included.
+pub fn count_cookies(profile: &Profile) -> Result<usize, Error> {
+    match profile.family {
+        Family::Chromium => chromium::count_cookies(&profile.dir),
+        Family::Gecko => gecko::count_cookies(&profile.dir),
+        Family::Safari => safari::count_cookies(profile),
     }
 }
 
@@ -271,6 +294,29 @@ pub fn chromium_password(service: &str, account: Option<&str>) -> Result<Vec<u8>
             _ => None,
         })
         .ok_or(Error::Keychain(KeychainError::NotFound))
+}
+
+/// Whether the login Keychain holds a Chromium browser's cookie encryption password, looked up
+/// by its attributes only, so macOS never asks the user. `Ok(false)` when it isn't there.
+#[cfg(target_os = "macos")]
+pub fn chromium_password_exists(service: &str, account: Option<&str>) -> Result<bool, Error> {
+    use security_framework::item::{ItemClass, ItemSearchOptions};
+
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+    let mut search = ItemSearchOptions::new();
+    search
+        .class(ItemClass::generic_password())
+        .service(service)
+        .load_attributes(true)
+        .limit(1i64);
+    if let Some(account) = account {
+        search.account(account);
+    }
+    match search.search() {
+        Ok(found) => Ok(!found.is_empty()),
+        Err(err) if err.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(false),
+        Err(err) => Err(Error::Keychain(KeychainError::Other(err.to_string()))),
+    }
 }
 
 /// Whether a URL is one the built-in browser can open again.

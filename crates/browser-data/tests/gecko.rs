@@ -2,7 +2,9 @@
 
 mod common;
 
-use brigadier_browser_data::{Cookies, Family, SameSite, read_cookies, read_history};
+use brigadier_browser_data::{
+    Cookies, Family, SameSite, count_cookies, read_cookies, read_history,
+};
 use common::*;
 
 /// name, host, path, expiry, secure, httponly, sameSite, originAttributes
@@ -131,6 +133,9 @@ fn reads_while_a_wal_holds_unflushed_rows() {
         NOW,
     );
     check(&out.unwrap(), 1);
+    // Counted from the same unflushed state, containers and partitioned cookies left out.
+    let profile = profile("f/wal", Family::Gecko, dir.path().to_owned());
+    assert_eq!(count_cookies(&profile).unwrap(), 4);
     drop(conn);
 }
 

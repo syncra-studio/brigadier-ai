@@ -165,6 +165,12 @@ pub(crate) fn read_cookies(profile: &Profile, now_unix: i64) -> Result<Cookies, 
     parse_binarycookies(&data, now_unix)
 }
 
+/// How many cookies a profile's file holds, expired ones included.
+pub(crate) fn count_cookies(profile: &Profile) -> Result<usize, Error> {
+    let read = read_cookies(profile, i64::MIN)?;
+    Ok(read.cookies.len() + read.expired)
+}
+
 fn u32_be(data: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_be_bytes(
         data.get(at..at.checked_add(4)?)?.try_into().ok()?,

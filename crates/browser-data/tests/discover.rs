@@ -4,7 +4,7 @@ mod common;
 
 use std::path::Path;
 
-use brigadier_browser_data::{Family, Profile, discover_in};
+use brigadier_browser_data::{Family, Profile, discover_in, sources_in};
 use common::*;
 
 /// An app bundle in `apps` whose Info.plist registers `schemes`.
@@ -60,12 +60,17 @@ fn fixture_home(home: &Path, elsewhere: &Path) {
     touch(&opera.join("Cookies"));
 
     // An unknown Chromium browser, found by shape.
-    let helium = support.join("Helium");
+    let comet = support.join("Comet");
     local_state(
-        &helium,
+        &comet,
         r#"{"profile":{"info_cache":{"Default":{"name":"Me"}}}}"#,
     );
-    touch(&helium.join("Default/History"));
+    touch(&comet.join("Default/History"));
+    touch(&comet.join("Default/Cookies"));
+
+    // Helium, known, in its bundle-id folder.
+    let helium = support.join("net.imput.helium");
+    local_state(&helium, "{}");
     touch(&helium.join("Default/Cookies"));
 
     // Look-alikes that must be skipped.
@@ -155,7 +160,7 @@ fn finds_exactly_the_fixture_profiles() {
     let apps = tempfile::tempdir().unwrap();
     mkdirs(&apps.path().join("Dia.app"));
     mkdirs(&apps.path().join("Safari.app"));
-    app(apps.path(), "Helium", &["http", "https"]);
+    app(apps.path(), "Comet", &["http", "https"]);
     app(apps.path(), "Chatty", &["chatty"]);
     fixture_home(home.path(), elsewhere.path());
 
@@ -163,13 +168,14 @@ fn finds_exactly_the_fixture_profiles() {
     assert_eq!(
         summary(&profiles),
         [
+            ("comet/Default", "Comet (Chromium)", "Me"),
             ("dia/Default", "Dia", "Default"),
             ("firefox/abcd.default-release", "Firefox", "default-release"),
             ("firefox/efgh.work", "Firefox", "Work"),
             ("chrome/Default", "Google Chrome", "Person 1"),
             ("chrome/Profile 1", "Google Chrome", "Work"),
-            ("helium/Default", "Helium", "Me"),
-            ("mercury/m.default", "Mercury", "default"),
+            ("helium/Default", "Helium", "Default"),
+            ("mercury/m.default", "Mercury (Firefox)", "default"),
             ("opera/Default", "Opera", "Default"),
             ("safari/default", "Safari", "Default"),
             ("safari/BBBB-2222", "Safari", "Profile 2"),
@@ -209,16 +215,22 @@ fn finds_exactly_the_fixture_profiles() {
     let work = get("chrome/Profile 1");
     assert!(work.has_cookies && !work.has_history && work.is_default);
 
+    let comet = get("comet/Default");
+    assert_eq!(
+        comet.keychain_service.as_deref(),
+        Some("Comet Safe Storage")
+    );
+    assert_eq!(comet.keychain_account.as_deref(), Some("Comet"));
+    assert_eq!(
+        comet.app_path.as_deref(),
+        Some(apps.path().join("Comet.app").as_path())
+    );
     let helium = get("helium/Default");
     assert_eq!(
         helium.keychain_service.as_deref(),
-        Some("Helium Safe Storage")
+        Some("Helium Storage Key")
     );
     assert_eq!(helium.keychain_account.as_deref(), Some("Helium"));
-    assert_eq!(
-        helium.app_path.as_deref(),
-        Some(apps.path().join("Helium.app").as_path())
-    );
 
     let opera = get("opera/Default");
     assert_eq!(
@@ -294,4 +306,53 @@ fn a_gecko_browser_whose_folder_macos_keeps_locked_is_listed_unreadable() {
     let firefox = &profiles[0];
     assert_eq!(firefox.family, Family::Gecko);
     assert!(firefox.has_cookies && firefox.has_history && !firefox.readable && firefox.is_default);
+}
+
+#[test]
+fn sources_are_the_installed_browsers_in_settings_order() {
+    let home = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let apps = tempfile::tempdir().unwrap();
+    // Installed: Dia, Safari, Comet, Firefox, Helium. Chrome, Opera, Zen and Mercury leave
+    // folders behind without an app.
+    for bundle in ["Dia.app", "Safari.app", "Firefox.app", "Helium.app"] {
+        mkdirs(&apps.path().join(bundle));
+    }
+    app(apps.path(), "Comet", &["http", "https"]);
+    fixture_home(home.path(), elsewhere.path());
+
+    let sources = sources_in(home.path(), &[apps.path()]);
+    let listed: Vec<(&str, &str, Vec<&str>)> = sources
+        .iter()
+        .map(|source| {
+            (
+                source.key.as_str(),
+                source.name.as_str(),
+                source.profiles.iter().map(|p| p.name.as_str()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("helium", "Helium", vec!["Default"]),
+            ("dia", "Dia", vec!["Default"]),
+            // The install default first.
+            ("firefox", "Firefox", vec!["Work", "default-release"]),
+            ("safari", "Safari", vec!["Default", "Profile 2", "Work"]),
+            ("comet", "Comet (Chromium)", vec!["Me"]),
+        ]
+    );
+    assert_eq!(sources[1].app_path, apps.path().join("Dia.app"));
+    assert_eq!(sources[2].family, Family::Gecko);
+}
+
+#[test]
+fn leftover_folders_without_an_app_list_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let apps = tempfile::tempdir().unwrap();
+    fixture_home(home.path(), elsewhere.path());
+    assert!(!discover_in(home.path(), &[apps.path()]).is_empty());
+    assert!(sources_in(home.path(), &[apps.path()]).is_empty());
 }

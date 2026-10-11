@@ -78,6 +78,13 @@ const KNOWN: &[Known] = &[
         "Chromium",
         "Chromium.app",
     ),
+    known(
+        "net.imput.helium",
+        "Helium",
+        "helium",
+        "Helium",
+        "Helium.app",
+    ),
     known("Arc/User Data", "Arc", "arc", "Arc", "Arc.app"),
     known("Dia/User Data", "Dia", "dia", "Dia", "Dia.app"),
     known(
@@ -159,6 +166,8 @@ const fn known(
         b"Vivaldi" => "Vivaldi Safe Storage",
         b"Opera" => "Opera Safe Storage",
         b"Thor" => "Thor Safe Storage",
+        // Helium names its entry differently from the other Chromium builds.
+        b"Helium" => "Helium Storage Key",
         _ => panic!("add the Keychain service for this account"),
     };
     Known {
@@ -237,10 +246,16 @@ pub(crate) fn discover(home: &Path, app_dirs: &[&Path]) -> Vec<Profile> {
             else {
                 continue;
             };
+            // Named for its folder and engine, and keyed apart from a known browser of the
+            // same name.
+            let mut key = key_for(&folder);
+            if KNOWN.iter().any(|known| known.key == key) {
+                key.push_str("-chromium");
+            }
             let root = Root {
                 dir: dir.clone(),
-                browser: folder.clone(),
-                key: key_for(&folder),
+                browser: format!("{folder} (Chromium)"),
+                key,
                 service: format!("{folder} Safe Storage"),
                 account: folder.clone(),
                 app_path: Some(app),
@@ -470,6 +485,7 @@ pub(crate) fn read_cookies(
             version,
         ) else {
             out.unreadable += 1;
+            out.unreadable_domains.push(host);
             continue;
         };
         let same_site = match row.get::<_, Option<i64>>(8)?.unwrap_or(-1) {
@@ -493,6 +509,13 @@ pub(crate) fn read_cookies(
         });
     }
     Ok(out)
+}
+
+/// How many cookies a profile's store holds, without decrypting any.
+pub(crate) fn count_cookies(dir: &Path) -> Result<usize, Error> {
+    let conn = open_copy(&cookies_path(dir))?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM cookies", [], |row| row.get(0))?;
+    Ok(usize::try_from(count).unwrap_or(0))
 }
 
 /// The cookie store's schema version from its `meta` table, 0 when absent.

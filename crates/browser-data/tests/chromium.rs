@@ -2,7 +2,7 @@
 
 mod common;
 
-use brigadier_browser_data::{Family, SameSite, read_cookies, read_history};
+use brigadier_browser_data::{Family, SameSite, count_cookies, read_cookies, read_history};
 use common::*;
 
 fn by_name<'a>(
@@ -143,7 +143,32 @@ fn wrong_or_missing_password_counts_encrypted_cookies_unreadable() {
         assert_eq!(out.cookies.len(), 1, "{password:?}");
         assert_eq!(out.cookies[0].name, "plain");
         assert_eq!((out.expired, out.partitioned, out.unreadable), (1, 1, 3));
+        assert_eq!(
+            out.unreadable_domains,
+            [".example.com", "app.example.com", ".example.com"]
+        );
     }
+}
+
+#[test]
+fn counts_every_cookie_without_a_password_even_mid_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = chromium_cookies_db(&dir.path().join("Network/Cookies"), 24);
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;")
+        .unwrap();
+    fill(&conn, true);
+    let open = profile("t/Default", Family::Chromium, dir.path().to_owned());
+    // `conn` stays open, so the rows live only in Cookies-wal: they are counted all the same.
+    assert_eq!(count_cookies(&open).unwrap(), 6);
+    drop(conn);
+    assert!(matches!(
+        count_cookies(&profile(
+            "t/Gone",
+            Family::Chromium,
+            dir.path().join("gone")
+        )),
+        Err(brigadier_browser_data::Error::NotFound(_))
+    ));
 }
 
 #[test]
