@@ -122,11 +122,10 @@ export function StoragePage() {
     look();
   };
 
-  const clean = (ids: string[]) => {
-    if (!report) return;
+  const clean = (scanId: string, ids: string[]) => {
     setCleaning(true);
     setCleanError(null);
-    cleanStorage(report.scanId, ids).then(
+    cleanStorage(scanId, ids).then(
       (done) => {
         setCleaning(false);
         setCleaned(done);
@@ -172,8 +171,11 @@ export function StoragePage() {
   );
 }
 
-/** What a dialog asks to remove: the sweep (Review) or items chosen by hand. */
-type Ask = { title: string; plan: Sweep };
+/**
+ * What a dialog asks to remove: the sweep (Review) or items chosen by hand, with the scan they
+ * came from (a Refresh that lands while the dialog is open gives the items other ids).
+ */
+type Ask = { title: string; plan: Sweep; scanId: string };
 
 /** The page for one scan: what is used, freeing up space, Advanced. */
 export function StorageBody({
@@ -194,7 +196,7 @@ export function StorageBody({
   cleaned: CleanReport | null;
   cleanError: string | null;
   onRefresh: () => void;
-  onClean: (ids: string[]) => void;
+  onClean: (scanId: string, ids: string[]) => void;
   /** The dialog closed after a clean or a failed one. */
   onDone: () => void;
 }) {
@@ -240,7 +242,7 @@ export function StorageBody({
           >
             <SettingsButton
               disabled={!report || cleaning}
-              onClick={() => plan && setAsk({ title: "Free up space", plan })}
+              onClick={() => report && plan && setAsk({ title: "Free up space", plan, scanId: report.scanId })}
             >
               Review
             </SettingsButton>
@@ -277,7 +279,7 @@ export function StorageBody({
           onCancel={() => setChoosing(false)}
           onRemove={(ids) => {
             setChoosing(false);
-            setAsk({ title: "Remove chosen items", plan: picked(report, ids) });
+            setAsk({ title: "Remove chosen items", plan: picked(report, ids), scanId: report.scanId });
           }}
         />
       )}
@@ -287,7 +289,7 @@ export function StorageBody({
         cleaning={cleaning}
         cleaned={cleaned}
         error={cleanError}
-        onConfirm={() => ask && onClean(ask.plan.ids)}
+        onConfirm={() => ask && onClean(ask.scanId, ask.plan.ids)}
         onClose={() => {
           if (cleaning) return;
           setAsk(null);

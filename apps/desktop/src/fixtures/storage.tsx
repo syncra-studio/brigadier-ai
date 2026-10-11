@@ -84,14 +84,23 @@ useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as type
 
 const calls: string[] = [];
 let scans = 0;
+// Set, the next scan is answered only when `release` is called.
+let holdNextScan = false;
+let release: (() => void) | null = null;
 mockIPC((command, payload) => {
   if (command === "uninstall_app") return { identifier: "app.brigadier.fixture" };
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
-    case "scanStorage":
+    case "scanStorage": {
       scans++;
-      return { method: req.method, report: { ...report, scanId: `scan-${scans}` } };
+      const answer = { method: req.method, report: { ...report, scanId: `scan-${scans}` } };
+      if (!holdNextScan) return answer;
+      holdNextScan = false;
+      return new Promise((resolve) => {
+        release = () => resolve(answer);
+      });
+    }
     case "cleanStorage":
       calls.push(`clean ${req.scanId} ${req.items.join(",")}`);
       return {
@@ -133,12 +142,16 @@ function Fixture() {
         seen.legend = all("main ul li").map(text);
         seen.freeRow = text(row("Free up space"));
         seen.scansAtOpen = scans;
+        holdNextScan = true;
         button("Refresh")?.click();
       },
       () => {
         seen.scansAfterRefresh = scans;
+        // Review while that scan is out; it lands with the dialog open and gives the items other
+        // ids, so freeing up must name the scan the dialog shows.
         button("Review")?.click();
       },
+      () => release?.(),
       () => {
         const open = dialog();
         seen.reviewWidth = Math.round(open?.getBoundingClientRect().width ?? 0);

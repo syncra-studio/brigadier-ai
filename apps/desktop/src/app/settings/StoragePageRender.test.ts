@@ -67,5 +67,6 @@ test("storage refreshes, reviews, frees up space and chooses items", { timeout: 
   assert.deepEqual((seen.usage as string[][])[1]?.[0], "billing-api · repository not found");
   assert.equal((seen.usage as string[][]).length, 7);
   assert.deepEqual(seen.selection, { type: "settings", page: "archived" });
-  assert.deepEqual(seen.calls, ["clean scan-2 done,build,logs"]);
+  // Reviewed from scan 1 while scan 2 was out: the clean names scan 1.
+  assert.deepEqual(seen.calls, ["clean scan-1 done,build,logs"]);
 });
