@@ -1460,6 +1460,52 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 **Risks.** Three stacked rows crowd a small window. Cap at three rows, and let the slot collapse to one line with a
 count when the window is narrow.
 
+**Outcome (2026-10-11): built as below; the bold-header live check is still open**
+- **The composer slot** (`ComposerStatusSlot.tsx`, its rules in `activity/slotView.ts`):
+  - It stacks the Workers strip, one CI pill for every active watch, and the held merge's pill, newest last.
+  - The merge pill reads "Merging after N workers finish", then "Merging after the review", then "Merging…". Its
+    Cancel calls `cancelMerge`.
+  - Under a 28rem slot, more than one row folds to a count, the newest row's words and "· N more".
+- **The strip** (`stripView.ts`):
+  - A finished worker stays until a reply for its request comes after the last of that request's workers
+    finished. A worker with no request drops when it finishes.
+  - When older messages aren't loaded, a worker that finished before the oldest loaded one counts as answered.
+- **The side panel's Workers tab** reads "Workers · N done".
+- **The review line** (`reviewStatus.ts`):
+  - It counts the findings the thread recorded: "Review: N open · M new" before a merge, and "Merged · review
+    clean" or "Merged · N open (not fixed)" after. It never adds across merges.
+  - A click lists each finding with its status and location.
+- **Update rows:**
+  - A reply starting "Update:" after the answer is a small row with a left rule, not a new answer.
+  - Rating stays on the answer.
+  - Fork starts from the request's last reply, since the daemon forks only from that.
+  - Copy and Read aloud take the answer with its update lines.
+- **Q9.4:** a request stays Working, its span open, while only its worker runs. A flow test covers it; no UI change
+  was needed.
+- **CI re-push under Approve for me** (the user's addition):
+  - A watch carries the user's consent (`CiWatch.consent`): the card they answered Watch on.
+  - The consent lives until a watch on that repository and branch passes, sees no runs or stops, or the user writes
+    again. A message queued for the running turn counts as writing.
+  - The escalation reviewer is shown the consent, its question and answer, and the folder's push remotes; it alone
+    judges. A refused push's reason says only that a push needs the user's yes.
+  - No thread or worker instruction changed, so there is no revision note; `CONTRACT` is unchanged.
+- **Live, on a dev build (W34) with Brigadier's own `brigadier-computer`** (cmux computer use was down all day):
+  - Phase 4's late "Update:" line was seen. A review that came in late found two findings; the user kept the code;
+    the thread wrote an "Update:" row under its answer.
+  - CI re-push: red → fix → re-push went through with no card. Once the watch passed, the next push raised a card.
+  - The slot was seen in Normal, Compact, at 900 pt (both rows fit) and folded ("2 Merging… · 1 more") in the
+    thread beside the side panel. Cancel was clicked in the app.
+- **`brigadier-computer run`:** a script may drive an app it opens itself, a Brigadier build included.
+- **Open:**
+  - Phase 4's bold-header check:
+    - A worker drove `Brigadier Dev.app` with computer use, but the window froze behind the trust dialog. An occluded
+      WKWebView never ends a dialog's exit animation.
+    - `backgroundThrottling: "disabled"` (tauri-utils 2.9.3) doesn't change that. A closed dialog stayed mounted
+      until the window came to the front.
+    - Fix ideas: skip exit animations while the window is hidden, or let `computer/launch` front the window for a
+      moment. A data-folder field for `launch` is still the follow-up.
+  - Two identical "open this app" cards were pending at once for one worker.
+
 ### Phase 6: opt-in mockup previews (Q10)
 **Scope:**
 1. The thread's offer (instruction plus an `ask_user` card shape).
