@@ -262,22 +262,35 @@ impl SessionManager {
         let prompt = format!("Write the commit message for this diff:\n\n{shown}{cut}");
         let mut exclude: Vec<Exclusion> = Vec::new();
         let mut limited: Vec<(AccountRef, String)> = Vec::new();
-        let mut note = None;
-        for attempt in 0..WRITE_ATTEMPTS {
-            let (routed, account, why) = self
+        let mut runs = 0;
+        // Each pass either runs the writer or rules a model out, and routing runs out of
+        // models; the cap only guards against a pick that ignores its exclusions.
+        for _ in 0..WRITE_ATTEMPTS * 4 {
+            if runs == WRITE_ATTEMPTS {
+                break;
+            }
+            let (routed, mut account, why) = self
                 .writer_route(settings.git_writer.as_ref(), project.as_ref(), &exclude)
                 .await?;
-            if attempt == 0 {
-                note = why;
-            }
             if limited.contains(&(account.clone(), routed.model.clone())) {
-                // The same account again: that model is out until its reset.
-                exclude.push(Exclusion {
-                    provider: routed.provider,
-                    model: Some(routed.model.clone()),
-                });
-                continue;
+                // Another account of the same model that still has room, else that model is
+                // out until its reset.
+                match self
+                    .runtime
+                    .switch_target(&account, Some(&routed.model))
+                    .filter(|next| !limited.contains(&(next.clone(), routed.model.clone())))
+                {
+                    Some(next) => account = next,
+                    None => {
+                        exclude.push(Exclusion {
+                            provider: routed.provider,
+                            model: Some(routed.model.clone()),
+                        });
+                        continue;
+                    }
+                }
             }
+            runs += 1;
             match self.run_writer(&routed, &account, &system, &prompt).await? {
                 Some(message) => {
                     let message = clean_message(&message);
@@ -285,7 +298,8 @@ impl SessionManager {
                         tracing::warn!(conversation = %id, "the message writer's reply was empty");
                         return Err(Error::Provider("the message writer replied nothing".into()));
                     }
-                    return Ok((message, note));
+                    // Why the user's model didn't write it, of the pass that did.
+                    return Ok((message, why));
                 }
                 None => {
                     tracing::info!(conversation = %id, model = %routed.model, "the message writer hit its usage limit");

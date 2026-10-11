@@ -463,3 +463,118 @@ async fn a_working_worker_hears_a_switch_at_once() {
     );
     flow.stop().await;
 }
+
+/// The writer's turns as their CLIs saw them: vendor and account.
+type Accounts = Arc<Mutex<Vec<(ProviderKind, Option<String>)>>>;
+
+/// A thread that only answers, and a writer that logs vendor and account of each turn and
+/// answers `reply` (by both).
+fn writing_on(log: &Accounts, reply: fn(ProviderKind, Option<&str>) -> Reply) -> Script {
+    let log = log.clone();
+    script(move |turn| {
+        let log = log.clone();
+        async move {
+            if turn.prompt.contains(WRITER) {
+                log.lock()
+                    .unwrap()
+                    .push((turn.provider, turn.account.clone()));
+                return reply(turn.provider, turn.account.as_deref());
+            }
+            Reply::text("Hello.")
+        }
+    })
+}
+
+/// A chosen writer naming an account at its limit moves to another account of the same
+/// model, not to another model: the user's model still writes it, with no note.
+#[tokio::test]
+async fn a_chosen_writers_account_at_its_limit_hands_it_to_another_account() {
+    let log = Accounts::default();
+    let flow = Flow::start(
+        "git-writer-account",
+        Options::default(),
+        writing_on(&log, |provider, account| match (provider, account) {
+            (ProviderKind::Claude, None) => Reply::limited(),
+            _ => Reply::text("Add the notes"),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    staged_change(&flow).await;
+    edit_settings(&flow, |settings| {
+        settings.git_writer = Some(ModelChoice {
+            provider: ProviderKind::Claude,
+            model: Some("claude-opus-5-5".into()),
+            effort: None,
+            fast: None,
+            account: Some(crate::accounts::OWN.into()),
+        });
+    })
+    .await;
+    let outcome = flow
+        .manager
+        .commit_changes(&flow.conversation, None, false, false)
+        .await
+        .unwrap();
+    assert_eq!(outcome.message, "Add the notes");
+    assert_eq!(outcome.note, None);
+    assert_eq!(
+        log.lock().unwrap().clone(),
+        [
+            (ProviderKind::Claude, None),
+            (ProviderKind::Claude, Some("acct-b".into()))
+        ]
+    );
+    assert!(
+        writer_specs(&flow)
+            .iter()
+            .all(|spec| spec.1.as_deref() == Some("claude-opus-5-5")),
+        "{:?}",
+        writer_specs(&flow)
+    );
+    flow.stop().await;
+}
+
+/// A chosen writer at its limit with no other account: Automatic writes it, and the note
+/// names the model that did, not the one that failed.
+#[tokio::test]
+async fn a_chosen_writer_at_its_limit_notes_the_model_that_wrote_it() {
+    let log = Accounts::default();
+    let flow = Flow::start(
+        "git-writer-limit-note",
+        Options::default(),
+        writing_on(&log, |provider, _| match provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Add the notes"),
+        }),
+    )
+    .await;
+    staged_change(&flow).await;
+    edit_settings(&flow, |settings| {
+        settings.git_writer = Some(ModelChoice {
+            provider: ProviderKind::Claude,
+            model: Some("claude-opus-5-5".into()),
+            effort: None,
+            fast: None,
+            account: None,
+        });
+    })
+    .await;
+    let outcome = flow
+        .manager
+        .commit_changes(&flow.conversation, None, false, false)
+        .await
+        .unwrap();
+    assert_eq!(outcome.message, "Add the notes");
+    let last = writer_specs(&flow).last().cloned().unwrap();
+    assert_eq!(last.0, ProviderKind::Codex);
+    assert_eq!(
+        outcome.note,
+        Some(format!(
+            "Claude Code claude-opus-5-5 isn't available now, so Automatic wrote the message with Codex {}.",
+            last.1.unwrap()
+        ))
+    );
+    flow.stop().await;
+}
