@@ -10,31 +10,45 @@ use brigadier_sandbox::Protection;
 use super::SessionManager;
 use crate::model::{ConversationId, Environment, Setup};
 
-/// Where every engine-made branch lives: other sessions' task and session branches.
-const ENGINE_BRANCHES: &str = "brigadier";
+/// Where every engine-made branch lives: other sessions' task and session branches, and
+/// overnight runs' branches.
+const ENGINE_BRANCHES: [&str; 2] = ["brigadier", "overnight"];
 
 /// The refs a session on `own` may not move in the repository whose shared git folder is
 /// `common`: every engine branch but its own, and each of `targets` (the branches its work
 /// lands on, which only the engine moves). Below Full access `packed-refs` is protected too;
 /// at Full access it stays writable, so the user's own branch work isn't broken, and the
 /// ref check catches a hand edit.
+///
+/// Every other checkout's own git folder (`<common>/worktrees/<name>`: its HEAD and index) is
+/// protected as well, `own_git_dir` given back: `git worktree remove` deletes it even when
+/// the worktree's files can't be, and `git worktree prune` then drops it, which leaves that
+/// session's worktree no repository.
 pub(crate) fn ref_protection(
     common: &Path,
+    own_git_dir: Option<&Path>,
     own: Option<&str>,
     targets: &[String],
     full: bool,
 ) -> Protection {
     let heads = common.join("refs/heads");
     let logs = common.join("logs/refs/heads");
-    let mut protection = Protection {
-        deny: vec![heads.join(ENGINE_BRANCHES), logs.join(ENGINE_BRANCHES)],
-        ..Protection::default()
-    };
+    let mut protection = Protection::default();
+    for prefix in ENGINE_BRANCHES {
+        protection
+            .deny
+            .extend([heads.join(prefix), logs.join(prefix)]);
+    }
     for target in targets {
         if Some(target.as_str()) != own && !protection.deny.contains(&heads.join(target)) {
             protection.deny.push(heads.join(target));
             protection.deny.push(logs.join(target));
         }
+    }
+    let worktrees = common.join("worktrees");
+    protection.deny.push(worktrees.clone());
+    if let Some(own) = own_git_dir.filter(|dir| dir.starts_with(&worktrees)) {
+        protection.allow.push(own.to_owned());
     }
     if !full {
         protection.deny.push(common.join("packed-refs"));
@@ -158,7 +172,14 @@ impl SessionManager {
                 targets.push(target.clone());
             }
         }
-        let protection = ref_protection(repo.common_dir(), own, &targets, full);
+        let own_git_dir = repo.git_dir().ok();
+        let protection = ref_protection(
+            repo.common_dir(),
+            own_git_dir.as_deref(),
+            own,
+            &targets,
+            full,
+        );
         make_own_folders(&protection);
         protection
     }
@@ -212,6 +233,7 @@ mod tests {
         git(&repo, &["init", "-q", "-b", "main"]);
         git(&repo, &["commit", "-q", "--allow-empty", "-m", "Start"]);
         git(&repo, &["branch", "brigadier/bb/task-1"]);
+        git(&repo, &["branch", "overnight/2026-10-11-run-bb"]);
         let worktree_arg = worktree.display().to_string();
         git(
             &repo,
@@ -222,6 +244,20 @@ mod tests {
                 "-b",
                 "brigadier/aa/session",
                 &worktree_arg,
+            ],
+        );
+        // Another session's worktree: what git keeps of it in the shared `.git` is its own.
+        let other_worktree = data.join("worktrees/bb-task-2");
+        let other_worktree_arg = other_worktree.display().to_string();
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "brigadier/bb/task-2",
+                &other_worktree_arg,
             ],
         );
         // Other sessions' temp and test folders, the thread's own temp folder, and the user's.
@@ -235,8 +271,10 @@ mod tests {
         std::fs::create_dir_all(own_temp.0.join("claude-501/proj/session")).unwrap();
 
         let common = repo.join(".git").canonicalize().unwrap();
+        let own_git_dir = common.join("worktrees/conv");
         let mut protection = ref_protection(
             &common,
+            Some(own_git_dir.as_path()),
             Some("brigadier/aa/session"),
             &["main".into(), "brigadier/aa/session".into()],
             true,
@@ -284,6 +322,18 @@ mod tests {
         assert!(!ok, "a packed ref's delete fails too");
         assert_eq!(git(&repo, &["rev-parse", "brigadier/bb/task-1"]), other);
         assert_eq!(git(&repo, &["rev-parse", "main"]), base);
+        let (ok, _) = sh("git branch -D overnight/2026-10-11-run-bb");
+        assert!(!ok, "an overnight run's branch is the engine's too");
+
+        // Removing another session's worktree fails, and so does dropping what git keeps of
+        // it: unprotected, `remove` deleted it though the files stayed, and `prune` agreed.
+        let (ok, _) = sh(&format!("git worktree remove --force {other_worktree_arg}"));
+        assert!(!ok);
+        let _ = sh("git worktree prune");
+        assert_eq!(
+            git(&other_worktree, &["branch", "--show-current"]),
+            "brigadier/bb/task-2"
+        );
 
         let (ok, _) = sh(&format!(
             "rm -rf {} {} {}",
@@ -338,7 +388,13 @@ mod tests {
         git(&repo, &["commit", "-q", "--allow-empty", "-m", "Start"]);
         git(&repo, &["branch", "brigadier/bb/task-1"]);
         let common = repo.join(".git").canonicalize().unwrap();
-        let mut protection = ref_protection(&common, Some("main"), &["main".into()], true);
+        let mut protection = ref_protection(
+            &common,
+            Some(common.as_path()),
+            Some("main"),
+            &["main".into()],
+            true,
+        );
         add_full_access(&mut protection, &data, &[scratch, repo.clone()]);
         let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
             data_dir: Some(dir.0.join("platform")),
@@ -380,6 +436,7 @@ mod tests {
         let common = Path::new("/r/.git");
         let protection = ref_protection(
             common,
+            Some(common.join("worktrees/task-1").as_path()),
             Some("brigadier/aa/task-1"),
             &["main".into(), "brigadier/aa/session".into()],
             false,
@@ -394,16 +451,20 @@ mod tests {
             [
                 "refs/heads/brigadier",
                 "logs/refs/heads/brigadier",
+                "refs/heads/overnight",
+                "logs/refs/heads/overnight",
                 "refs/heads/main",
                 "logs/refs/heads/main",
                 "refs/heads/brigadier/aa/session",
                 "logs/refs/heads/brigadier/aa/session",
+                "worktrees",
                 "packed-refs",
             ]
         );
         assert_eq!(
             paths(&protection.allow),
             [
+                "worktrees/task-1",
                 "refs/heads/brigadier/aa/task-1",
                 "refs/heads/brigadier/aa/task-1.lock",
                 "logs/refs/heads/brigadier/aa/task-1",
@@ -417,6 +478,7 @@ mod tests {
         let common = Path::new("/r/.git");
         let protection = ref_protection(
             common,
+            None,
             Some("feature"),
             &["main".into(), "feature".into()],
             true,

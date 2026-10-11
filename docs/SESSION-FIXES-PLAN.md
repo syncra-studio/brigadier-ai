@@ -881,7 +881,12 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
    - **Refs:** the repository's `refs/heads/brigadier/` and `logs/refs/heads/brigadier/`, except the session's own
      branch: a worker's task branch, or the thread's session branch. Also the base the session merges into, when
      the session has a branch of its own. Only the engine moves a target, after `check_merge` and the consent check
-     (Q2).
+     (Q2). Overnight runs' branches (`refs/heads/overnight/`) are the engine's too and protected the same way
+     (found live, 2026-10-11: a Full-access thread's cleanup deleted two finished runs' branches).
+   - **Other checkouts' own git folders:** `<common>/worktrees/<name>` (a linked worktree's HEAD and index), except
+     the session's own. Found live (2026-10-11): `git worktree remove --force` on another session's worktree failed
+     on its files but still deleted that folder, and `git worktree prune` dropped it, so the live worktree stopped
+     being a repository ("not a git repository").
    - **Brigadier's data dir,** except the folders this session's spec already lists as its own: its worktree,
      scratch and test folders, worker home, CLI home.
    - **Other sessions' temp and test folders:** `/tmp/brigadier-<12 hex>` (`CLAUDE_CODE_TMPDIR`) and
