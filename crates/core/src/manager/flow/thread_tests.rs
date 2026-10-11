@@ -2923,3 +2923,110 @@ async fn a_message_queued_while_a_ci_fix_runs_ends_the_yes_its_push_would_go_und
     assert!(!seen.contains("the user answered"), "{seen}");
     flow.stop().await;
 }
+
+/// The user writes while the reviewer weighs a CI fix's push under their yes to watching: its
+/// allowing verdict doesn't count. The consents are read again, the reviewer runs once more
+/// without the yes, and the push is the user's card.
+#[tokio::test]
+async fn a_message_queued_while_the_reviewer_weighs_a_ci_fixs_push_takes_back_the_yes() {
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let pushes = Arc::new(tokio::sync::Semaphore::new(0));
+    let reviewing = Arc::new(tokio::sync::Semaphore::new(0));
+    let verdict = Arc::new(tokio::sync::Semaphore::new(0));
+    let (reviewer_log, gate, started, release) = (
+        asked.clone(),
+        pushes.clone(),
+        reviewing.clone(),
+        verdict.clone(),
+    );
+    let flow = Flow::start(
+        "ci-repush-mid-review",
+        Options {
+            permission: PermissionLevel::ApproveForMe,
+            thread: ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (asked, gate, started, release) = (
+                reviewer_log.clone(),
+                gate.clone(),
+                started.clone(),
+                release.clone(),
+            );
+            async move {
+                if turn
+                    .prompt
+                    .starts_with("You review one request of a coding agent")
+                {
+                    asked.lock().unwrap().push(turn.input.clone());
+                    if turn
+                        .input
+                        .contains("the user answered \u{201c}Watch\u{201d}")
+                    {
+                        // Still weighing it when the user writes.
+                        started.add_permits(1);
+                        release.acquire().await.unwrap().forget();
+                        return Reply::text(
+                            r#"{"allow": true, "reason": "a CI fix to the watched branch"}"#,
+                        );
+                    }
+                    return Reply::text(r#"{"allow": false, "reason": "it pushes to a remote"}"#);
+                }
+                if turn.is_orchestrator() && turn.input.contains("Fix CI.") {
+                    gate.acquire().await.unwrap().forget();
+                    turn.ask_approval("git push origin fix", "git").await;
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", "git@github.com:o/n.git"],
+    );
+    flow.say("Fix CI.").await;
+    flow.until("the turn runs", |board| {
+        board.run == crate::work::RunState::Running
+    })
+    .await;
+    let consent = crate::work::CiConsent {
+        card: crate::model::CardId("card-1".into()),
+        question: "Watch CI for 97c298d5?".into(),
+        answer: "Watch".into(),
+        answered_at_ms: crate::now_ms() + 1,
+    };
+    flow.manager
+        .orchestrator_step(
+            &flow.conversation,
+            OrchestratorStepKind::CiWatch {
+                repo: "o/n".into(),
+                branch: "fix".into(),
+                sha: "aaaa1111".into(),
+                waiting: false,
+                runs: Vec::new(),
+                result: Some("failed".into()),
+                consent: Some(consent),
+            },
+        )
+        .await;
+    pushes.add_permits(1);
+    reviewing.acquire().await.unwrap().forget();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    flow.say("Wait, don't push anything yet.").await;
+    flow.until("the message waits", |board| !board.queue.items.is_empty())
+        .await;
+    verdict.add_permits(1);
+    flow.until("the push's card", |board| {
+        board
+            .approvals
+            .values()
+            .any(|approval| approval.state == CardState::Pending)
+    })
+    .await;
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(asked[0].contains("the user answered"), "{}", asked[0]);
+    assert!(!asked[1].contains("the user answered"), "{}", asked[1]);
+    flow.stop().await;
+}

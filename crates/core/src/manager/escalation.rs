@@ -205,7 +205,11 @@ impl SessionManager {
         }
     }
 
-    /// The reviewer's verdict on `request` (what is asked, and where: `dir`).
+    /// The reviewer's verdict on `request` (what is asked, and where: `dir`). The user's
+    /// consents it was shown are read again before an allowing verdict counts: a message they
+    /// wrote or a watch that ended while it reviewed changes them, and then it reviews again
+    /// with the current ones. Consents still changing after that leave no verdict (the user's
+    /// card, or a refusal when nobody is there).
     async fn review_escalation(
         &self,
         id: &ConversationId,
@@ -214,7 +218,32 @@ impl SessionManager {
         dir: Option<&Path>,
         protection: &Protection,
     ) -> std::result::Result<Verdict, String> {
-        let consents = self.push_consents(id, dir, workspace).await;
+        let mut consents = self.push_consents(id, dir, workspace).await;
+        for _ in 0..2 {
+            let verdict = self
+                .review_once(id, request, workspace, protection, consents.as_deref())
+                .await?;
+            if !verdict.allow || consents.is_none() {
+                return Ok(verdict);
+            }
+            let now = self.push_consents(id, dir, workspace).await;
+            if now == consents {
+                return Ok(verdict);
+            }
+            consents = now;
+        }
+        Err("the user's consents changed while it reviewed".to_owned())
+    }
+
+    /// One run of the reviewer on `request`, shown `consents` (`push_consents`).
+    async fn review_once(
+        &self,
+        id: &ConversationId,
+        request: &str,
+        workspace: Option<&Path>,
+        protection: &Protection,
+        consents: Option<&str>,
+    ) -> std::result::Result<Verdict, String> {
         let counted_as = TaskId(format!("{ESCALATION_OWNER}{}", uuid::Uuid::now_v7()));
         let owner = counted_as.0.clone();
         let home = self.owned_dir("escalation", &counted_as.0[ESCALATION_OWNER.len()..]);
@@ -266,7 +295,7 @@ impl SessionManager {
                 if let Some(rule) = brigadier_providers::approver_rule(protection) {
                     prompt.push_str(&format!("\n\n{rule}"));
                 }
-                if let Some(consents) = &consents {
+                if let Some(consents) = consents {
                     prompt.push_str(&format!("\n\n{consents}"));
                 }
                 let turn = async {
