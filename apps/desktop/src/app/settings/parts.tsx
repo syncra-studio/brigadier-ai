@@ -203,10 +203,12 @@ export function SettingsCard({ children, className }: { children: ReactNode; cla
 /**
  * One setting: its label and description on the start, its control on the end. `htmlFor` ties
  * the label to a control with that id; without it, give the control its own label. `error` is
- * what the last change of it failed with.
+ * what the last change of it failed with. `setting` is the name search and links find it by,
+ * for a label that isn't plain text or changes as it is used.
  */
 export function SettingsRow({
   label,
+  setting,
   description,
   htmlFor,
   error,
@@ -214,6 +216,7 @@ export function SettingsRow({
   className,
 }: {
   label: ReactNode;
+  setting?: string;
   description?: ReactNode;
   htmlFor?: string;
   error?: string | null;
@@ -224,7 +227,7 @@ export function SettingsRow({
     <div
       data-slot="settings-row"
       // Settings search scrolls to the row it found by this.
-      data-setting={typeof label === "string" ? label : undefined}
+      data-setting={setting ?? (typeof label === "string" ? label : undefined)}
       className={cn("@container flex items-center justify-between gap-6 px-4 py-3", className)}
     >
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">

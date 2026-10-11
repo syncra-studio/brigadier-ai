@@ -157,9 +157,10 @@ export function ModelSelector({
   onOpenChange?: ((open: boolean) => void) | undefined;
   /**
    * An "Automatic" choice above the models (a setting Brigadier may pick for): `chosen` shows
-   * it on the button, and `value` is then only where the menus open.
+   * it on the button, and `value` is then only where the menus open. `label` names it, with
+   * what it picks now ("Automatic (Opus 5.5)").
    */
-  automatic?: { chosen: boolean; hint: string; onChoose: () => void } | undefined;
+  automatic?: { chosen: boolean; hint: string; onChoose: () => void; label?: string } | undefined;
 }) {
   const auto = automatic?.chosen === true;
   const [own, setOwn] = useState(false);
@@ -223,7 +224,7 @@ export function ModelSelector({
           className={cn(composerPill, "text-muted-foreground gap-1", className)}
         >
           {auto ? (
-            <span className="text-foreground truncate">Automatic</span>
+            <span className="text-foreground truncate">{automatic?.label ?? "Automatic"}</span>
           ) : (
             <>
               <ProviderGlyph provider={value.provider} className="size-icon-sm shrink-0" />
@@ -250,7 +251,7 @@ export function ModelSelector({
               onCheckedChange={() => automatic.onChoose()}
             >
               <span className="flex min-w-0 flex-col py-1">
-                <span>Automatic</span>
+                <span>{automatic.label ?? "Automatic"}</span>
                 <span className="text-muted-foreground text-xs whitespace-normal">
                   {automatic.hint}
                 </span>

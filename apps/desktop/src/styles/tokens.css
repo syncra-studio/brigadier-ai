@@ -386,7 +386,7 @@
   --radius-nav: 0.78125rem;
   /* An icon on the sidebar's strip or at its foot, and a flyout's trigger: its highlight. */
   --radius-strip-button: 0.625rem;
-  --radius-settings: 1.25rem;
+  --radius-settings: 0.875rem;
 
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
@@ -740,7 +740,7 @@
   --radius-summary: 1rem;
   --radius-tooltip: 0.75rem;
   --radius-nav: 0.625rem;
-  --radius-settings: 1rem;
+  --radius-settings: 0.75rem;
   --radius-toolbar-button: 0.5rem;
   --radius-strip-button: 0.5rem;
 
