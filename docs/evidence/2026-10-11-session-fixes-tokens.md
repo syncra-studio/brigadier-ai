@@ -207,3 +207,21 @@ The after arm's savings per call were spent on more calls, on a handoff session 
 everything, and on checks the handoff repeated. With one run per arm, the call count alone varies
 widely: B's own task 7 took 271 calls. The gates would need several runs per arm to separate the
 change from that noise.
+
+### What followed (the user's decision, 2026-10-11)
+
+**The gates were missed at n = 1.** The user chose to fix the three causes the after arm showed,
+without a rerun. **A rerun with 3 runs per arm is deferred until after phase 6, at the user's
+option.** Until then, phase 3's measured gates stand as missed. The fixes, each tested on its own:
+- `e0653432`: the handoff note lists the checks that passed and the commit each passed at. The
+  fresh session's hand-off gains `checks.md`: each check of the task whose latest run passed, the
+  tree it passed on and the files changed since. Its first message and the worker prompt
+  (revision 8) say to rerun only the checks those changes cover. The 200k size stays.
+- `63b077d5`: every worktree Brigadier makes gets an empty stand-in for each git-ignored Tauri
+  `externalBin` sidecar, so `cargo clippy` runs in a fresh worktree. This covers task, session,
+  overnight and review worktrees.
+- `abcd1e95`: a Claude worker's subagent tokens are counted in its turn usage, so `turn_usage` and
+  the worker usage events no longer miss them. The Agent tool stays.
+
+The behaviour probes P3.1–P3.3 and the live check of the Brain counters still wait for computer
+use.
