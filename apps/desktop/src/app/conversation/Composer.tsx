@@ -44,7 +44,7 @@ import {
   usePendingActions,
   WaitingReminder,
 } from "@/app/conversation/ActionCards";
-import { WorkersStrip } from "@/app/conversation/activity/WorkersStrip";
+import { ComposerStatusSlot } from "@/app/conversation/ComposerStatusSlot";
 import { QueueCard } from "@/app/conversation/QueueCard";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { useComposerDraft } from "@/app/conversation/composerDraft";
@@ -146,7 +146,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
           {conversation && statusCard.open && (
             <StatusCard conversationId={conversation.id} onClose={() => statusCard.setOpen(false)} />
           )}
-          {conversation && !archived && <WorkersStrip conversationId={conversation.id} />}
+          {conversation && !archived && <ComposerStatusSlot conversationId={conversation.id} />}
           {conversation && !archived && <QueueCard conversationId={conversation.id} />}
           {current && (
             <PendingActionCard

@@ -1,13 +1,12 @@
 import { ChevronRight, StopCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, memo, useContext, useMemo, useState } from "react";
 
-import { lastReplies, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
+import { lastReplies, type StripView, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
 import { useAction } from "@/app/conversation/useAction";
 import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
 import { workerDone, workerState } from "@/app/conversation/workerPresentation";
 import { Changes, workerStat } from "@/app/conversation/WorkerSummary";
-import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
@@ -64,12 +63,8 @@ const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
   );
 });
 
-/**
- * The Workers strip on top of the composer (THREAD-UX-PLAN.md §3.5, SESSION-FIXES-PLAN.md Q8):
- * while workers run or wait, and until the thread's answer reports those that finished.
- * Collapsed it counts them; open, one row each, and Stop all. Each worker's progress lives here, not under the thread's live line.
- */
-export const WorkersStrip: FC<{ conversationId: string }> = ({ conversationId }) => {
+/** The Workers strip's view, live: `null` while it has nothing to show. */
+export function useWorkersStrip(conversationId: string): StripView | null {
   const items = useApp((s) => s.threads[conversationId]?.items);
   const replies = useMemo(() => lastReplies(items ?? []), [items]);
   const json = useBoard((s) => {
@@ -78,60 +73,66 @@ export const WorkersStrip: FC<{ conversationId: string }> = ({ conversationId })
     const view = workersStrip(Object.values(board.tasks), replies, board.workerSteps);
     return view ? JSON.stringify(view) : null;
   });
-  const view = useMemo(() => (json ? (JSON.parse(json) as ReturnType<typeof workersStrip>) : null), [json]);
+  return useMemo(() => (json ? (JSON.parse(json) as StripView) : null), [json]);
+}
+
+/**
+ * The Workers strip, a row of the composer's status slot (THREAD-UX-PLAN.md §3.5,
+ * SESSION-FIXES-PLAN.md Q8): while workers run or wait, and until the thread's answer reports
+ * those that finished. Collapsed it counts them; open, one row each, and Stop all. Each
+ * worker's progress lives here, not under the thread's live line.
+ */
+export const WorkersStrip: FC<{ conversationId: string; view: StripView }> = ({ conversationId, view }) => {
   const [open, setOpen] = useState(false);
   const stop = useAction();
-  if (!view) return null;
   return (
-    <ComposerRailItem label="Workers">
-      <div data-slot="workers-strip" data-state={open ? "open" : "closed"} className="group flex flex-col px-1 py-1">
-        <div className="flex min-h-row items-center gap-1">
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={() => setOpen(!open)}
-            className="group/toggle hover:text-foreground text-foreground/60 rounded-control flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-start text-sm"
-          >
-            <span className="flex shrink-0 items-center gap-1">
-              {view.rows.slice(0, 4).map((id) => <WorkerGlyph key={id} taskId={id} className="size-4" />)}
+    <div data-slot="workers-strip" data-state={open ? "open" : "closed"} className="group flex flex-col px-1 py-1">
+      <div className="flex min-h-row items-center gap-1">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="group/toggle hover:text-foreground text-foreground/60 rounded-control flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-start text-sm"
+        >
+          <span className="flex shrink-0 items-center gap-1">
+            {view.rows.slice(0, 4).map((id) => <WorkerGlyph key={id} taskId={id} className="size-4" />)}
+          </span>
+          {/* Its chevron right after the words, in a 24px box: right while closed, down open. */}
+          <span className="flex min-w-0 items-center">
+            <span className="min-w-0 truncate">{stripWords(view)}</span>
+            <span aria-hidden className="size-icon-button-sm flex shrink-0 items-center justify-center">
+              <ChevronRight
+                data-slot="workers-strip-chevron"
+                className="text-row-chevron size-chevron group-hover/toggle:text-foreground group-focus-visible/toggle:text-foreground transition-[rotate,color] duration-300 ease-standard group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+              />
             </span>
-            {/* Its chevron right after the words, in a 24px box: right while closed, down open. */}
-            <span className="flex min-w-0 items-center">
-              <span className="min-w-0 truncate">{stripWords(view)}</span>
-              <span aria-hidden className="size-icon-button-sm flex shrink-0 items-center justify-center">
-                <ChevronRight
-                  data-slot="workers-strip-chevron"
-                  className="text-row-chevron size-chevron group-hover/toggle:text-foreground group-focus-visible/toggle:text-foreground transition-[rotate,color] duration-300 ease-standard group-data-[state=open]:rotate-90 motion-reduce:transition-none"
-                />
-              </span>
-            </span>
-          </button>
-          {view.stoppable && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  data-slot="workers-stop-all"
-                  disabled={stop.busy}
-                  onClick={() => stop.run(() => stopWorkers(conversationId))}
-                  className="text-foreground/60 hover:text-foreground"
-                >
-                  <StopCircle />
-                  Stop all
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Stop every worker running or waiting to run</TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-        {stop.error && <p role="alert" className="text-destructive px-2 text-xs">{stop.error}</p>}
-        {open && (
-          <ul className="max-h-queue-max flex flex-col overflow-y-auto">
-            {view.rows.map((id) => <StripRow key={id} taskId={id} />)}
-          </ul>
+          </span>
+        </button>
+        {view.stoppable && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="xs"
+                variant="ghost"
+                data-slot="workers-stop-all"
+                disabled={stop.busy}
+                onClick={() => stop.run(() => stopWorkers(conversationId))}
+                className="text-foreground/60 hover:text-foreground"
+              >
+                <StopCircle />
+                Stop all
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Stop every worker running or waiting to run</TooltipContent>
+          </Tooltip>
         )}
       </div>
-    </ComposerRailItem>
+      {stop.error && <p role="alert" className="text-destructive px-2 text-xs">{stop.error}</p>}
+      {open && (
+        <ul className="max-h-queue-max flex flex-col overflow-y-auto">
+          {view.rows.map((id) => <StripRow key={id} taskId={id} />)}
+        </ul>
+      )}
+    </div>
   );
 };
