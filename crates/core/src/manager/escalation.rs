@@ -190,9 +190,7 @@ impl SessionManager {
         };
         if unattended {
             Settled::Answer(ApprovalDecision::Deny {
-                message: format!(
-                    "Declined, with nobody to ask: {why}. Work around it, or report it."
-                ),
+                message: format!("{why}, and nobody is here to ask. Work around it, or report it."),
             })
         } else {
             Settled::Ask(why)

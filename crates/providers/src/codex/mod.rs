@@ -1899,7 +1899,19 @@ impl ProviderSession for CodexSession {
                 PendingKind::McpTool if allow => json!({ "action": "accept", "content": {} }),
                 PendingKind::McpTool => json!({ "action": "decline" }),
             };
-            self.rpc.respond(rpc_id, result).await
+            self.rpc.respond(rpc_id, result).await?;
+            // A decline carries no words (the app-server's approval responses, 0.162.1), so
+            // the reason reaches the model as a message into its turn.
+            if let ApprovalDecision::Deny { message } = &decision
+                && !message.trim().is_empty()
+                && let Some(turn_id) = self.turn_id()
+            {
+                let why = TurnInput::text(format!("[Declined] {message}"));
+                if let Err(err) = self.steer_turn(turn_id, &why).await {
+                    tracing::debug!(thread = %self.thread_id, error = %err, "could not pass a decline's reason");
+                }
+            }
+            Ok(())
         })
     }
 

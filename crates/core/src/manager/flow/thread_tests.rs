@@ -2622,7 +2622,8 @@ async fn an_unsettled_codex_escalation_is_a_card_unless_nobody_is_there() {
             panic!("{command}: {decision:?}");
         };
         assert!(
-            message.starts_with("Declined, with nobody to ask: Brigadier's reviewer"),
+            message.starts_with("Brigadier's reviewer")
+                && message.contains("nobody is here to ask"),
             "{message}"
         );
     }
