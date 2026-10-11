@@ -598,6 +598,9 @@ async fn watch_capped(
                         why: format!("gh kept failing: {why}"),
                     };
                 }
+                // What the runs are now is unknown: only a poll that went through ends it.
+                tokio::time::sleep(timing.poll).await;
+                continue;
             }
         }
         progress(&Progress {
@@ -1836,6 +1839,25 @@ exit "$code"
                 "{outcome:?}"
             );
             assert!(outcome_envelope(SHA, &outcome).contains("only the first"));
+        }
+
+        /// A poll that fails says nothing of the runs: with every listing failing, the
+        /// first-run window passing doesn't make it "no runs"; gh failing does end it.
+        #[tokio::test]
+        async fn failed_polls_end_nothing_until_gh_kept_failing() {
+            let fake = FakeGh::new("failing");
+            fake.answer("list-20", "")
+                .answer("list-20.exit", "1")
+                .answer("list-20.err", "HTTP 500: Server Error\n");
+            let timing = Timing {
+                first_run: Duration::ZERO,
+                ..timing()
+            };
+            let (outcome, _) = run_watch(&fake, timing).await;
+            assert!(
+                matches!(&outcome, Outcome::GhUnavailable { why } if why.starts_with("gh kept failing")),
+                "{outcome:?}"
+            );
         }
 
         #[tokio::test]
