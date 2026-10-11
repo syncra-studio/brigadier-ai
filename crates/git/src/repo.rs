@@ -1303,8 +1303,9 @@ impl Repo {
     }
 
     /// `work`'s commits since `base` rebuilt with `leave_out` as it was at `base` in each
-    /// (restored where `base` had a file there, removed otherwise), their messages and authors
-    /// kept and a commit left with no change dropped; `work` itself when nothing is left out. A
+    /// (restored where `base` had a file there, removed otherwise), their messages, authors and
+    /// merged parents kept and a commit left with no change dropped; `work` itself when nothing
+    /// is left out. A
     /// merge task starts from it, so a conflicting task's stray files reach neither the merge
     /// nor the history it lands.
     pub fn work_without(&self, base: &Oid, work: &Oid, leave_out: &[String]) -> Result<Oid> {
@@ -1332,13 +1333,16 @@ impl Repo {
                     "the work holds a commit without a parent".into(),
                 ));
             };
+            // A merge's other parents (the target it merged, say) stay, so its ancestry does.
+            let merged: Vec<Oid> = ids.collect();
             let onto = tip.get_or_insert(parent).clone();
             let tree = self.tree_reverting(&commit, base, leave_out)?;
-            if tree == self.tree_of(&onto.0)? {
+            if merged.is_empty() && tree == self.tree_of(&onto.0)? {
                 continue;
             }
+            let parents: Vec<&Oid> = std::iter::once(&onto).chain(&merged).collect();
             let (message, author) = self.authored(&commit)?;
-            tip = Some(self.commit_tree_with(&tree, &[&onto], &message, &author)?);
+            tip = Some(self.commit_tree_with(&tree, &parents, &message, &author)?);
         }
         Ok(tip.unwrap_or_else(|| work.clone()))
     }
@@ -1778,6 +1782,20 @@ mod tests {
             .unwrap();
         assert!(touched.is_empty(), "{}", String::from_utf8_lossy(&touched));
         assert!(repo.ancestor(&base, &without).unwrap());
+
+        // A task that merged its target keeps the target in its ancestry.
+        let run = |args: &[&str]| {
+            repo.cmd(args, false).expect("git");
+        };
+        run(&["checkout", "-q", "-b", "target", &base.0]);
+        fs::write(root.join("t.txt"), "t\n").unwrap();
+        let target = repo.commit_changes("Target", true).unwrap();
+        run(&["checkout", "-q", "-B", "task", &work.0]);
+        run(&["merge", "-q", "--no-edit", "target"]);
+        let merged = repo.resolve("HEAD").unwrap();
+        let without = repo.work_without(&base, &merged, &leave_out).unwrap();
+        assert!(repo.ancestor(&target, &without).unwrap());
+        assert!(!repo.paths_at(&without).unwrap().contains("debug.log"));
         // Nothing to leave out: the work itself.
         assert_eq!(repo.work_without(&base, &work, &[]).unwrap(), work);
     }
