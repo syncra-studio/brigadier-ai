@@ -5,7 +5,7 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 A=$(cd "${1:?arm dir}" && pwd); taskf=${2:?task}; sha=${3:?sha}
-export PATH=$HOME/.cargo/bin:$PATH; unset CARGO_TARGET_DIR
+export PATH=$HOME/.cargo/bin:$PATH CARGO_INCREMENTAL=0 AB_TOOLS="$HERE"; unset CARGO_TARGET_DIR
 W="$A/check-wt"; out="$A/checks"; mkdir -p "$out"
 git -C "$A/repo" worktree add -f --detach "$W" "$sha" >/dev/null
 cp -c -R "$A/repo/target" "$W/target" 2>/dev/null || true

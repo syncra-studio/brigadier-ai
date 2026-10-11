@@ -10,7 +10,7 @@ An A/B root (for example `/tmp/brig-ab-1007`) holds one directory per arm:
 
 ## Tasks
 
-`tasks/t1.md`, `tasks/t2.md`: frozen before any arm runs. Request (verbatim), base, image (kept
+`tasks/t1.md`, `tasks/t2.md`, `tasks/t3.md`: frozen before any arm runs (t3: the session-fixes token A/B, `docs/evidence/2026-10-11-session-fixes-tokens.md`). Request (verbatim), base, image (kept
 outside the repo, named by sha256), done-when, behaviour probes and check commands. `task.py`
 reads them.
 
@@ -109,3 +109,5 @@ without cache reads. A figure a source doesn't report is "not reported", never 0
 | `check.sh`, `probe-app.sh` | the independent evaluator's checks and probes |
 | `replay/` | "only Thinking" from recorded events, through the app's own code |
 | `task.py`, `tasks/` | the frozen tasks |
+| `brainseed.py` | a Brain seed cut at a moment, read-only from its source, with a provenance audit (t3) |
+| `checks/t3/` | t3's hidden checks, copied into an arm's result by `check.sh` (`$AB_TOOLS`) |
