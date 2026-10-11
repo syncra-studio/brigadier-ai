@@ -44,6 +44,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::brains::ReportLearning;
 use super::conversation::{Cli, Envelope, safe_file_name};
+use super::escalation::Settled;
 use super::outputs::outputs_dir;
 use super::refcheck::engine_rewrite;
 use super::usage::TokenOwner;
@@ -2774,6 +2775,7 @@ impl SessionManager {
             &mut request,
             &access,
             worktree.as_deref(),
+            reviewed.is_some(),
         );
         match route {
             // A Codex worker at Approve for me: Brigadier's reviewer settles it, while the CLI
@@ -2782,14 +2784,24 @@ impl SessionManager {
                 let manager = self.arc();
                 let (live, cli) = (live.clone(), cli.clone());
                 self.spawn(async move {
-                    let decision = manager
+                    let unattended = manager.overnight.active.get(&live.conversation_id).is_some();
+                    let decision = match manager
                         .settle_codex_escalation(
                             &live.conversation_id,
                             &request,
                             worktree.as_deref(),
                             &protection,
+                            unattended,
                         )
-                        .await;
+                        .await
+                    {
+                        Settled::Answer(decision) => decision,
+                        Settled::Ask(why) => {
+                            request.reason = Some(why);
+                            manager.ask_user_for_worker(&live, request).await;
+                            return;
+                        }
+                    };
                     if let Err(err) = cli
                         .session
                         .answer(request.id.clone(), decision.clone())
@@ -2822,42 +2834,49 @@ impl SessionManager {
                 self.record_worker_resolution(&live.id, request.id, decision, decider)
                     .await;
             }
-            PolicyRoute::AskUser => {
-                let what = request
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| request.tool.clone());
-                if let Err(err) = self
-                    .open_approval(
-                        &live.conversation_id,
-                        Some(live.id.clone()),
-                        ApprovalSubject::Cli { request },
-                    )
-                    .await
-                {
-                    tracing::warn!(task = %live.id, error = %err, "could not open an approval card");
-                    return;
-                }
-                self.set_task_blocked(&live.id, Some(format!("Waiting for approval: {what}")))
-                    .await;
-            }
+            PolicyRoute::AskUser => self.ask_user_for_worker(live, request).await,
         }
+    }
+
+    /// The user's card for the worker CLI's request; the worker shows it waits on it.
+    async fn ask_user_for_worker(&self, live: &TaskLive, request: ApprovalRequest) {
+        let what = request
+            .command
+            .clone()
+            .unwrap_or_else(|| request.tool.clone());
+        if let Err(err) = self
+            .open_approval(
+                &live.conversation_id,
+                Some(live.id.clone()),
+                ApprovalSubject::Cli { request },
+            )
+            .await
+        {
+            tracing::warn!(task = %live.id, error = %err, "could not open an approval card");
+            return;
+        }
+        self.set_task_blocked(&live.id, Some(format!("Waiting for approval: {what}")))
+            .await;
     }
 
     /// Who answers a CLI's approval request in a sandbox with `access` (a worker's or the
     /// thread's): what stays inside its access is allowed, what the user already allowed
     /// something similar to in the conversation too; the rest asks the user. A file change
     /// that asks, all inside the asker's own `workspace`, may be allowed for the session: its
-    /// card offers that (`request.grant`).
+    /// card offers that (`request.grant`). Where Brigadier's reviewer settles what asks
+    /// (`reviewed`, [`super::escalation`]) no earlier grant answers for it: one for `git
+    /// worktree` would also cover removing another session's worktree.
     pub(crate) fn approval_route(
         &self,
         conversation_id: &ConversationId,
         request: &mut ApprovalRequest,
         access: &Access,
         workspace: Option<&Path>,
+        reviewed: bool,
     ) -> (PolicyRoute, Decider) {
         let route = policy::route(request, access, ApprovalMode::Delegated);
         if route == PolicyRoute::AskUser
+            && !reviewed
             && self
                 .waiters
                 .similar_allowed(conversation_id, request, workspace)

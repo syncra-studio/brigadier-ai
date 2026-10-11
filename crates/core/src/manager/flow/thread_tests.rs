@@ -312,7 +312,8 @@ async fn a_session_grant_allows_later_edits_in_the_workspace_only() {
                 &flow.conversation,
                 &mut edit,
                 &brigadier_providers::Access::ReadOnly,
-                Some(&workspace)
+                Some(&workspace),
+                false
             )
             .0,
         brigadier_providers::policy::Route::Allow
@@ -323,7 +324,8 @@ async fn a_session_grant_allows_later_edits_in_the_workspace_only() {
                 &flow.conversation,
                 &mut edit,
                 &brigadier_providers::Access::ReadOnly,
-                Some(&flow.repo)
+                Some(&flow.repo),
+                false
             )
             .0,
         brigadier_providers::policy::Route::AskUser
@@ -2352,8 +2354,9 @@ async fn a_cold_thread_over_150k_is_reborn_with_every_decision_whole() {
 /// A request a script's CLI asked, and the answer it got.
 type Asked = (String, Option<ApprovalDecision>);
 
-/// Brigadier's escalation reviewer in a script: refuses what deletes a branch or a worktree,
-/// allows the rest, and keeps what it was asked.
+/// Brigadier's escalation reviewer in a script: refuses what deletes a branch or a worktree
+/// (the protected set) or a cache folder, gives no verdict on a publish, allows the rest, and
+/// keeps what it was asked.
 fn escalation_reviewer(turn: &super::Turn, asked: &Mutex<Vec<String>>) -> Option<Reply> {
     if !turn
         .prompt
@@ -2367,7 +2370,11 @@ fn escalation_reviewer(turn: &super::Turn, asked: &Mutex<Vec<String>>) -> Option
         if turn.input.contains("```\ngit branch -D")
             || turn.input.contains("```\ngit worktree remove")
         {
-            r#"{"allow": false, "reason": "it deletes another session's work"}"#
+            r#"{"allow": false, "protected": true, "reason": "it deletes another session's work"}"#
+        } else if turn.input.contains("```\nrm -rf ~/caches") {
+            r#"{"allow": false, "reason": "it deletes outside the project"}"#
+        } else if turn.input.contains("```\nnpm publish") {
+            "I can't tell."
         } else {
             r#"{"allow": true, "reason": "a network read"}"#
         },
@@ -2375,8 +2382,9 @@ fn escalation_reviewer(turn: &super::Turn, asked: &Mutex<Vec<String>>) -> Option
 }
 
 /// Codex at Approve for me: its thread's and its workers' requests to leave the sandbox reach
-/// Brigadier, whose reviewer settles them with the session's protected set. What it refuses is
-/// declined to the model with the reason, never a card; what it allows goes through.
+/// Brigadier, whose reviewer settles them with the session's protected set, before any
+/// "Allow similar" grant could. What would touch the protected set is declined to the model
+/// with the reason, never a card; what it allows goes through.
 #[tokio::test]
 async fn brigadiers_reviewer_settles_a_codex_sessions_escalations_at_approve_for_me() {
     let asked: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -2424,6 +2432,35 @@ async fn brigadiers_reviewer_settles_a_codex_sessions_escalations_at_approve_for
         }),
     )
     .await;
+    // Earlier "Allow … for this session" answers that would cover both deletions.
+    let command = |command: &str| brigadier_providers::ApprovalRequest {
+        id: String::new(),
+        kind: brigadier_providers::ApprovalKind::Command,
+        tool: "commandExecution".into(),
+        command: Some(command.into()),
+        cwd: None,
+        paths: Vec::new(),
+        reason: None,
+        escalation: true,
+        input: None,
+        grant: None,
+    };
+    for granted in ["git branch --list", "git worktree list"] {
+        flow.manager
+            .waiters
+            .allow_similar(&flow.conversation, &command(granted));
+    }
+    for deletion in [
+        "git branch -D brigadier/other",
+        "git worktree remove --force /elsewhere",
+    ] {
+        assert!(
+            flow.manager
+                .waiters
+                .similar_allowed(&flow.conversation, &command(deletion), None),
+            "{deletion}"
+        );
+    }
     flow.say("Clean up everything.").await;
     flow.until("four requests settled", |_| {
         decisions.lock().unwrap().len() >= 4
@@ -2467,6 +2504,136 @@ async fn brigadiers_reviewer_settles_a_codex_sessions_escalations_at_approve_for
         board.approvals.is_empty(),
         "no card: {:#?}",
         board.approvals
+    );
+    flow.stop().await;
+}
+
+/// What Brigadier's reviewer refuses for another reason than the protected set, or gives no
+/// verdict on, is the user's card with the reviewer's word while the user is around, and
+/// declined to the model while an overnight run has nobody to ask.
+#[tokio::test]
+async fn an_unsettled_codex_escalation_is_a_card_unless_nobody_is_there() {
+    use super::super::overnight::policy::ActiveRun;
+    use crate::model::OvernightRunId;
+
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let decisions: Arc<Mutex<Vec<Asked>>> = Arc::default();
+    let (reviewer_log, log) = (asked.clone(), decisions.clone());
+    let flow = Flow::start(
+        "codex-unsettled",
+        Options {
+            permission: PermissionLevel::ApproveForMe,
+            thread: ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (asked, log) = (reviewer_log.clone(), log.clone());
+            async move {
+                if let Some(reply) = escalation_reviewer(&turn, &asked) {
+                    return reply;
+                }
+                if turn.is_orchestrator() {
+                    for command in ["rm -rf ~/caches", "npm publish"] {
+                        let decision = turn.ask_approval(command, "x").await;
+                        log.lock().unwrap().push((command.into(), decision));
+                    }
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+
+    // The user is around: each is a card saying why the reviewer didn't settle it.
+    flow.say("Tidy up and publish.").await;
+    let mut reasons = Vec::new();
+    for done in 0..2 {
+        let board = flow
+            .until("the next card", |board| {
+                board
+                    .approvals
+                    .values()
+                    .filter(|approval| approval.state != CardState::Pending)
+                    .count()
+                    == done
+                    && board
+                        .approvals
+                        .values()
+                        .any(|approval| approval.state == CardState::Pending)
+            })
+            .await;
+        let card = board
+            .approvals
+            .values()
+            .find(|approval| approval.state == CardState::Pending)
+            .unwrap();
+        let ApprovalSubject::Cli { request } = &card.subject else {
+            panic!("{:?}", card.subject);
+        };
+        reasons.push(request.reason.clone().unwrap_or_default());
+        flow.manager
+            .answer_card(
+                flow.conversation.clone(),
+                card.id.clone(),
+                ApprovalDecision::Allow,
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        reasons[0],
+        "Brigadier's reviewer would not allow it: it deletes outside the project"
+    );
+    assert!(
+        reasons[1].starts_with("Brigadier's reviewer gave no verdict"),
+        "{}",
+        reasons[1]
+    );
+    flow.until("both answered", |_| decisions.lock().unwrap().len() == 2)
+        .await;
+    assert!(
+        decisions
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, decision)| decision == &Some(ApprovalDecision::Allow))
+    );
+
+    // An overnight run: nobody to ask, so both are declined with the reason.
+    flow.manager.overnight.active.insert(
+        flow.conversation.clone(),
+        ActiveRun {
+            id: OvernightRunId("codex-unsettled-run".into()),
+            segment: 0,
+            generation: 0,
+            rules_hash: String::new(),
+            workspace: None,
+            max_workers: None,
+            winding_down: false,
+            wind_down_at_ms: None,
+        },
+    );
+    flow.say("Again.").await;
+    flow.until("both declined", |_| decisions.lock().unwrap().len() == 4)
+        .await;
+    let decisions = decisions.lock().unwrap().clone();
+    for (command, decision) in &decisions[2..] {
+        let Some(ApprovalDecision::Deny { message }) = decision else {
+            panic!("{command}: {decision:?}");
+        };
+        assert!(
+            message.starts_with("Declined, with nobody to ask: Brigadier's reviewer"),
+            "{message}"
+        );
+    }
+    assert_eq!(
+        flow.board()
+            .await
+            .approvals
+            .values()
+            .filter(|approval| approval.state == CardState::Pending)
+            .count(),
+        0
     );
     flow.stop().await;
 }

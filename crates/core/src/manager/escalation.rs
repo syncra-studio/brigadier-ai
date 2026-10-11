@@ -8,8 +8,9 @@
 //! - **A Codex session's escalations** (its thread's and its workers'). Codex's auto-reviewer
 //!   doesn't get the rule to keep off other sessions' work (codex-cli 0.162.1 ignores
 //!   `auto_review.extra_policy`, SESSION-FIXES-PLAN bug 6, "Gap left"), so Codex sends them to
-//!   Brigadier (`approvalsReviewer: user`). What the reviewer doesn't allow is declined to the
-//!   model with its reason, as Approve for me declines what a CLI's own reviewer can't settle.
+//!   Brigadier (`approvalsReviewer: user`). What would touch the protected set is declined to
+//!   the model with the reason; any other refusal, or no verdict, is the user's card, or
+//!   declined too when nobody is there to ask (an overnight run).
 //!
 //! The reviewer is a one-shot session (read-only, no tools, nobody to ask) that reads the
 //! request, with the session's protected set as a rule, and answers in JSON. It allows the
@@ -45,13 +46,26 @@ pub(crate) const OWN_APPROVAL: &str = "brigadier-escalation:";
 /// Under which owner the reviewer's tokens are counted ([`super::usage`] reads the prefix).
 pub(crate) const ESCALATION_OWNER: &str = "escalation:";
 
-const ROLE: &str = "You review one request of a coding agent to go beyond its sandbox (a shell command to run outside it, files to write, or wider permissions), on the user's behalf, while the user is away. You have no tools: decide from the request alone.\n\nAllow it unless it does any of these: pushes to a remote, publishes or releases anything, deploys, uses or reads credentials, tokens or keys, spends money, or deletes or writes outside the project's folder and its own temporary folders. Network reads (downloads, package installs), builds, tests and starting local servers are fine.\n\nReply with one line of JSON and nothing else: {\"allow\": true or false, \"reason\": \"one short sentence\"}.";
+const ROLE: &str = "You review one request of a coding agent to go beyond its sandbox (a shell command to run outside it, files to write, or wider permissions), on the user's behalf, while the user is away. You have no tools: decide from the request alone.\n\nAllow it unless it does any of these: pushes to a remote, publishes or releases anything, deploys, uses or reads credentials, tokens or keys, spends money, or deletes or writes outside the project's folder and its own temporary folders. Network reads (downloads, package installs), builds, tests and starting local servers are fine.\n\nReply with one line of JSON and nothing else: {\"allow\": true or false, \"protected\": true only when you refuse it because a rule below forbids it, \"reason\": \"one short sentence\"}.";
 
 #[derive(Deserialize)]
 struct Verdict {
     allow: bool,
+    /// A refusal because the request would touch what the session's rule protects (other
+    /// sessions' work, Brigadier's own).
+    #[serde(default)]
+    protected: bool,
     #[serde(default)]
     reason: String,
+}
+
+/// What Brigadier's reviewer made of a Codex session's request to go beyond its sandbox.
+#[derive(Debug)]
+pub(crate) enum Settled {
+    /// The CLI's answer.
+    Answer(ApprovalDecision),
+    /// The user's to answer on a card, with why the reviewer didn't settle it.
+    Ask(String),
 }
 
 impl SessionManager {
@@ -126,18 +140,22 @@ impl SessionManager {
     }
 
     /// How a Codex session at Approve for me answers `request`, a request to go beyond its
-    /// sandbox: what Brigadier's reviewer allows, with the session's `protection` as a rule
-    /// (logged as decided for the user), else declined with the reason. `workspace`: the
-    /// session's own folder.
+    /// sandbox, with Brigadier's reviewer and the session's `protection` as its rule: what it
+    /// allows is allowed (logged as decided for the user), and what would touch the protected
+    /// set is declined to the model with the reason. Any other refusal, or no verdict (a
+    /// reviewer that couldn't run, as for a user with Codex alone), is declined too when
+    /// nobody is there to ask (`unattended`: an overnight run), else it is the user's card.
+    /// `workspace`: the session's own folder.
     pub(crate) async fn settle_codex_escalation(
         &self,
         id: &ConversationId,
         request: &ApprovalRequest,
         workspace: Option<&Path>,
         protection: &Protection,
-    ) -> ApprovalDecision {
+        unattended: bool,
+    ) -> Settled {
         let what = describe(request);
-        match self
+        let why = match self
             .review_escalation(id, &what, workspace, protection)
             .await
         {
@@ -151,22 +169,33 @@ impl SessionManager {
                     format!("Brigadier's reviewer allowed it: {}", verdict.reason),
                 )
                 .await;
-                ApprovalDecision::Allow
+                return Settled::Answer(ApprovalDecision::Allow);
             }
-            Ok(verdict) => ApprovalDecision::Deny {
-                message: format!(
-                    "Brigadier's reviewer would not allow it: {}",
-                    verdict.reason
-                ),
-            },
+            Ok(verdict) if verdict.protected => {
+                return Settled::Answer(ApprovalDecision::Deny {
+                    message: format!(
+                        "Brigadier's reviewer would not allow it: {}",
+                        verdict.reason
+                    ),
+                });
+            }
+            Ok(verdict) => format!(
+                "Brigadier's reviewer would not allow it: {}",
+                verdict.reason
+            ),
             Err(err) => {
                 tracing::warn!(conversation = %id, error = %err, "the escalation reviewer gave no verdict");
-                ApprovalDecision::Deny {
-                    message: format!(
-                        "Declined: Brigadier's reviewer gave no verdict ({err}). Work around it, or report it."
-                    ),
-                }
+                format!("Brigadier's reviewer gave no verdict ({err})")
             }
+        };
+        if unattended {
+            Settled::Answer(ApprovalDecision::Deny {
+                message: format!(
+                    "Declined, with nobody to ask: {why}. Work around it, or report it."
+                ),
+            })
+        } else {
+            Settled::Ask(why)
         }
     }
 

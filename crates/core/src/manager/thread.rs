@@ -29,6 +29,7 @@ use brigadier_providers::{
 };
 
 use super::conversation::{Cli, ConvLive};
+use super::escalation::Settled;
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
     ConversationId, ConversationKind, DomainEvent, Environment, PermissionLevel, Setup,
@@ -348,7 +349,9 @@ impl SessionManager {
             .as_ref()
             .and_then(|launch| launch.workspace.as_ref())
             .map(|workspace| workspace.path.as_path());
-        let (route, decider) = self.approval_route(&conv.id, &mut request, &access, workspace);
+        let reviewed = brigadier_reviews(cli.provider, cli.launch.as_ref());
+        let (route, decider) =
+            self.approval_route(&conv.id, &mut request, &access, workspace, reviewed);
         let decision = match route {
             PolicyRoute::Allow => ApprovalDecision::Allow,
             PolicyRoute::Deny => ApprovalDecision::Deny {
@@ -356,7 +359,7 @@ impl SessionManager {
             },
             // A Codex thread at Approve for me: Brigadier's reviewer settles it
             // (`super::escalation`), while the CLI waits.
-            PolicyRoute::AskUser if brigadier_reviews(cli.provider, cli.launch.as_ref()) => {
+            PolicyRoute::AskUser if reviewed => {
                 let manager = self.arc();
                 let (conv, cli) = (conv.clone(), cli.clone());
                 self.spawn(async move {
@@ -364,27 +367,47 @@ impl SessionManager {
                         return;
                     };
                     let workspace = launch.workspace.as_ref().map(|w| w.path.as_path());
-                    let decision = manager
-                        .settle_codex_escalation(&conv.id, &request, workspace, &launch.protection)
-                        .await;
-                    manager
-                        .answer_thread(&conv, &cli, request, decision, Decider::Policy)
-                        .await;
+                    let unattended = manager.overnight.active.get(&conv.id).is_some();
+                    match manager
+                        .settle_codex_escalation(
+                            &conv.id,
+                            &request,
+                            workspace,
+                            &launch.protection,
+                            unattended,
+                        )
+                        .await
+                    {
+                        Settled::Answer(decision) => {
+                            manager
+                                .answer_thread(&conv, &cli, request, decision, Decider::Policy)
+                                .await;
+                        }
+                        Settled::Ask(why) => {
+                            request.reason = Some(why);
+                            manager.ask_user_for_thread(&conv, request).await;
+                        }
+                    }
                 });
                 return;
             }
             PolicyRoute::AskUser => {
-                if let Err(err) = self
-                    .open_approval(&conv.id, None, ApprovalSubject::Cli { request })
-                    .await
-                {
-                    tracing::warn!(conversation = %conv.id, error = %err, "could not open an approval card");
-                }
+                self.ask_user_for_thread(conv, request).await;
                 return;
             }
         };
         self.answer_thread(conv, cli, request, decision, decider)
             .await;
+    }
+
+    /// The user's card for the thread CLI's request.
+    async fn ask_user_for_thread(&self, conv: &ConvLive, request: ApprovalRequest) {
+        if let Err(err) = self
+            .open_approval(&conv.id, None, ApprovalSubject::Cli { request })
+            .await
+        {
+            tracing::warn!(conversation = %conv.id, error = %err, "could not open an approval card");
+        }
     }
 
     /// Gives the thread's CLI Brigadier's answer to its request.
