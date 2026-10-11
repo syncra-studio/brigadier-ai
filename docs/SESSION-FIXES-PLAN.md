@@ -963,16 +963,15 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      `"$defaults"` (read from `--settings`: docs/en/auto-mode-config; `claude auto-mode config` lists it). Brigadier's
      own reviewer for a Claude thread's `run_unsandboxed` gets it in its prompt. Both refused live (X3, 2026-10-11).
      At Ask for approval the user decides, as before.
-   - **Gap left: Codex's auto-review.** Brigadier sets `auto_review.extra_policy`, which the Codex config reference
-     documents ("Additional local Markdown policy for automatic review"). But codex-cli 0.162.1 doesn't apply it,
-     from a thread's config or from `codex exec -c`: the reviewer's session holds no copy of it, and on X4 the
-     reviewer approved deleting other sessions' branches (2026-10-11). `auto_review.policy` does reach the reviewer
-     and makes it refuse (tested with `codex exec -c`), but it replaces the reviewer's whole built-in Security Policy
-     section (exfiltration, credential probing, persistent weakening, destructive actions), so it isn't used.
-     Recommended follow-up (Phase 2 or its own task): at Approve for me, send a Codex session's escalations to
-     Brigadier (`approvals_reviewer: user`) and settle them with Brigadier's own reviewer and this rule, as for a
-     Claude thread's `run_unsandboxed`. Until then, the ref check (step 5) restores live sessions' branches, while
-     other sessions' worktrees, kept branches and folders can still go.
+   - **Codex's auto-review is no longer used (phase 2).** codex-cli 0.162.1 doesn't apply
+     `auto_review.extra_policy`, from a thread's config or from `codex exec -c`: the reviewer's session holds no copy
+     of it, and on X4 the reviewer approved deleting other sessions' branches (2026-10-11). `auto_review.policy`
+     reaches the reviewer but replaces its whole built-in Security Policy section, so it isn't used either. So a
+     Codex session's escalations always go to Brigadier (`approvalsReviewer: user`, documented in the app-server's
+     JSON Schema of 0.162.1). At Approve for me Brigadier's own reviewer settles them, with this rule in its prompt,
+     for the thread and its workers alike. What it doesn't allow (or a reviewer with no verdict) is declined to the
+     model with the reason, never a card, as Approve for me declines what a CLI's own reviewer can't settle (the
+     Delegator's decision, 2026-10-11). `extra_policy` is no longer set.
    - Whatever the approver, the rule binds a model, not the OS. An approver that ignores it still lets the command
      through.
 4. **Why git can't get around it.** Git's files backend takes the loose `<ref>.lock` for every update or delete of a

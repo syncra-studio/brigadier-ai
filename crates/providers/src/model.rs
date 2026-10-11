@@ -962,10 +962,11 @@ pub struct SessionSpec {
     /// limit (raw sessions, orchestrators, Chats). Claude allows exactly these, or runs without
     /// its Agent tool when it can't; Codex runs without sub-agents.
     pub allowed_models: Option<AllowedModels>,
-    /// The CLI's own reviewer settles requests to go beyond a sandboxed session's access
-    /// (Approve for me): Claude runs in its auto mode, Codex with its auto-review. What it
-    /// can't settle is declined to the model, which works around it or reports it. Otherwise
-    /// such requests reach Brigadier (Ask for approval). No effect under [`Access::Full`],
+    /// A reviewer settles requests to go beyond a sandboxed session's access (Approve for
+    /// me): Claude's own auto mode; for Codex, whose requests always reach Brigadier, the
+    /// caller's reviewer (Codex only gets the feature that lets a command ask for more). What
+    /// the reviewer doesn't allow is declined to the model, which works around it or reports
+    /// it. Otherwise such requests reach Brigadier for the user (Ask for approval). No effect under [`Access::Full`],
     /// which never asks, or [`Access::ReadOnly`].
     pub auto_review: bool,
     /// The CLI leaves Co-authored-by trailers that name an AI out of the commits it writes
@@ -1007,7 +1008,7 @@ impl SessionSpec {
 }
 
 /// The rule every approver of a session's requests to leave its sandbox gets (Claude's auto
-/// mode, Codex's auto-review, Brigadier's own reviewer): a command run outside the sandbox
+/// mode, Brigadier's own reviewer, which settles a Codex session's): a command run outside the sandbox
 /// reaches what [`SessionSpec::protection`] keeps from it, so the approver must refuse it.
 /// `None` when nothing is protected.
 #[must_use]

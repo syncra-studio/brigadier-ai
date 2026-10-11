@@ -6,9 +6,10 @@
 //!
 //! - Full access uses `never` with no sandbox: Codex never asks.
 //! - Workspace and scoped access use `on-request`: commands run inside the sandbox without
-//!   asking; Codex asks only to leave it. With [`SessionSpec::auto_review`] (Approve for me)
-//!   Codex's own auto-reviewer answers those requests (`approvalsReviewer: auto_review`) and
-//!   nothing reaches Brigadier; otherwise they go to the user.
+//!   asking; Codex asks only to leave it. Those requests always reach Brigadier
+//!   (`approvalsReviewer: user`): with [`SessionSpec::auto_review`] (Approve for me) the caller
+//!   has its own reviewer settle them, since Codex's auto-reviewer doesn't take the rule to keep
+//!   off other sessions' work ([`REVIEWER`]); otherwise they go to the user.
 //! - Read-only access uses `untrusted`: Codex asks before every command, and a read-only
 //!   session (such as an orchestrator) has all of them declined, so nothing runs.
 //!
@@ -651,7 +652,6 @@ impl Provider for Codex {
                 rpc,
                 shared,
                 access: spec.access.clone(),
-                auto_review: spec.auto_review,
                 profiled,
                 effort: spec.effort.clone(),
             });
@@ -828,7 +828,7 @@ async fn open_thread(
     let cwd_text = Some(cwd.display().to_string());
     let sandbox = thread_sandbox(&spec.access);
     let approval = Some(approval_policy(&spec.access));
-    let reviewer = Some(reviewer(spec.auto_review));
+    let reviewer = Some(REVIEWER);
     let instructions = match &spec.append_system_prompt {
         Some(prompt) if profiled && spec.auto_review => {
             Some(format!("{prompt}\n\n{ADDITIONAL_PERMISSIONS_HINT}"))
@@ -1121,7 +1121,6 @@ async fn thread_config(
             config.insert("web_search".into(), json!("live"));
         }
     }
-    approver_policy(&mut config, spec);
     if let Some(profile) = profile {
         // Profiles and the legacy sandbox settings don't compose: set only the profile.
         profile_config(&mut config, profile, spec.auto_review);
@@ -1167,22 +1166,6 @@ fn profile_config(config: &mut Map<String, Value>, profile: Value, auto_review: 
             format!("features.{ADDITIONAL_PERMISSIONS_FEATURE}"),
             json!(true),
         );
-    }
-}
-
-/// At Approve for me ([`SessionSpec::auto_review`]) Codex's auto-reviewer settles a command
-/// that leaves the sandbox: it gets the rule to refuse what the protection keeps out.
-/// `auto_review.extra_policy` is "Additional local Markdown policy for automatic review,
-/// included alongside the main policy" (Codex config reference); a dotted key, like the feature
-/// in [`profile_config`], so the rest of `auto_review` stays. codex-cli 0.162.1 doesn't apply it
-/// yet (its reviewer's session holds no copy, checked live); `auto_review.policy` would, but it
-/// replaces the reviewer's whole built-in security policy (PLAN bug 6, "Gap left").
-fn approver_policy(config: &mut Map<String, Value>, spec: &SessionSpec) {
-    if spec.auto_review
-        && !matches!(spec.access, Access::Full | Access::ReadOnly)
-        && let Some(rule) = crate::approver_rule(&spec.protection)
-    {
-        config.insert("auto_review.extra_policy".into(), json!(rule));
     }
 }
 
@@ -1348,15 +1331,13 @@ fn approval_policy(access: &Access) -> p::AskForApproval {
     }
 }
 
-/// Who answers Codex's approval requests: its own auto-reviewer, or Brigadier (and through it
-/// the user). Always named, so a reviewer set in the user's own config never applies.
-fn reviewer(auto_review: bool) -> p::ApprovalsReviewer {
-    if auto_review {
-        p::ApprovalsReviewer::AutoReview
-    } else {
-        p::ApprovalsReviewer::User
-    }
-}
+/// Who answers Codex's approval requests: Brigadier, at every level ("Configures who approval
+/// requests are routed to for review … Defaults to `user`", the app-server's JSON Schema,
+/// codex-cli 0.162.1). At Approve for me Brigadier's own reviewer settles them: Codex's
+/// `auto_review` doesn't apply `auto_review.extra_policy` in 0.162.1, so its reviewer never
+/// got the rule to keep off other sessions' work and approved deleting it (SESSION-FIXES-PLAN
+/// bug 6, "Gap left"). Always named, so a reviewer set in the user's own config never applies.
+const REVIEWER: p::ApprovalsReviewer = p::ApprovalsReviewer::User;
 
 /// The sandbox a thread starts with. Only read-only is set here: starting a thread with a
 /// writable sandbox in a project the user never trusted makes Codex persist a trust entry for
@@ -1715,8 +1696,6 @@ pub struct CodexSession {
     rpc: Arc<Rpc>,
     shared: Arc<Shared>,
     access: Access,
-    /// [`SessionSpec::auto_review`].
-    auto_review: bool,
     /// Its sandbox is a permission profile set when the thread opened.
     profiled: bool,
     effort: Option<String>,
@@ -1775,7 +1754,7 @@ impl CodexSession {
                     summary: Some(p::ReasoningSummary::Auto),
                     sandbox_policy: (!self.profiled).then(|| sandbox_policy(&self.access)),
                     approval_policy: Some(approval_policy(&self.access)),
-                    approvals_reviewer: Some(reviewer(self.auto_review)),
+                    approvals_reviewer: Some(REVIEWER),
                     ..Default::default()
                 },
             )
@@ -2211,8 +2190,7 @@ mod tests {
             approval_policy(&thread.access),
             p::AskForApproval::OnRequest
         ));
-        assert!(matches!(reviewer(true), p::ApprovalsReviewer::AutoReview));
-        assert!(matches!(reviewer(false), p::ApprovalsReviewer::User));
+        assert!(matches!(REVIEWER, p::ApprovalsReviewer::User));
     }
 
     /// A thread's `run` holds its command to the session's own permission profile through
@@ -2287,44 +2265,6 @@ mod tests {
         let mut config = Map::new();
         profile_config(&mut config, json!({}), false);
         assert!(!config.keys().any(|key| key.starts_with("features")));
-    }
-
-    /// At Approve for me the auto-reviewer gets the protected paths to refuse; otherwise
-    /// nothing is added.
-    #[test]
-    fn only_an_auto_reviewed_session_gives_its_reviewer_the_protected_paths() {
-        let protection = brigadier_sandbox::Protection {
-            deny: vec![PathBuf::from("/repo/.git/refs/heads/brigadier")],
-            allow: vec![PathBuf::from("/repo/.git/refs/heads/brigadier/aa/task-1")],
-            ..Default::default()
-        };
-        let session = |auto_review: bool, access: Access| SessionSpec {
-            auto_review,
-            access,
-            protection: protection.clone(),
-            ..spec(ToolSet::Default, None)
-        };
-        let scoped = Access::Scoped {
-            write_cwd: true,
-            writable_roots: Vec::new(),
-            network: true,
-            deny_read: Vec::new(),
-            unix_sockets: Vec::new(),
-        };
-        let mut config = Map::new();
-        approver_policy(&mut config, &session(true, scoped.clone()));
-        let rule = config["auto_review.extra_policy"].as_str().expect("policy");
-        assert!(rule.contains("`/repo/.git/refs/heads/brigadier`"), "{rule}");
-        assert!(
-            rule.contains("`/repo/.git/refs/heads/brigadier/aa/task-1`"),
-            "{rule}"
-        );
-        assert!(!config.contains_key("auto_review"), "{config:?}");
-        for spec in [session(false, scoped), session(true, Access::Full)] {
-            let mut config = Map::new();
-            approver_policy(&mut config, &spec);
-            assert!(config.is_empty(), "{config:?}");
-        }
     }
 
     /// A prompt-mode tool call reaches the client as an elicitation (shape seen live on
