@@ -729,8 +729,10 @@ impl Seatbelt {
 
 impl Seatbelt {
     /// Allow-all, then the protected writes taken back, then the process's own exceptions
-    /// given back: later rules win. A regex rule covers a path that doesn't exist yet (a
-    /// ref's `.lock`).
+    /// given back: later rules win. A protected path inside an exception (another session's
+    /// branch inside the user's own checkout, writable whole) is taken back after them, and
+    /// the exceptions inside it given back again: the narrower rule wins. A regex rule covers
+    /// a path that doesn't exist yet (a ref's `.lock`).
     fn protection_profile(protection: &Protection) -> String {
         let mut profile = String::from("(version 1)\n(allow default)\n");
         if !protection.is_empty() {
@@ -749,6 +751,32 @@ impl Seatbelt {
                 profile.push_str(&format!(" (subpath (param \"ALLOW_WRITE_{index}\"))"));
             }
             profile.push_str(")\n");
+        }
+        let deny: Vec<PathBuf> = protection.deny.iter().map(|p| resolved_path(p)).collect();
+        let allow: Vec<PathBuf> = protection.allow.iter().map(|p| resolved_path(p)).collect();
+        let inner: Vec<usize> = (0..deny.len())
+            .filter(|&i| {
+                allow
+                    .iter()
+                    .any(|a| deny[i] != *a && deny[i].starts_with(a))
+            })
+            .collect();
+        if !inner.is_empty() {
+            profile.push_str("(deny file-write*");
+            for index in &inner {
+                profile.push_str(&format!(" (subpath (param \"DENY_WRITE_{index}\"))"));
+            }
+            profile.push_str(")\n");
+            let own: Vec<usize> = (0..allow.len())
+                .filter(|&j| inner.iter().any(|&i| allow[j].starts_with(&deny[i])))
+                .collect();
+            if !own.is_empty() {
+                profile.push_str("(allow file-write*");
+                for index in own {
+                    profile.push_str(&format!(" (subpath (param \"ALLOW_WRITE_{index}\"))"));
+                }
+                profile.push_str(")\n");
+            }
         }
         if !protection.keep.is_empty() {
             profile.push_str(
@@ -946,6 +974,48 @@ mod tests {
         assert!(refs.join("bb/task-1").exists() && dir.join("tmp-ffff").exists());
         assert!(!sh(&format!("rm -rf '{}'", refs.display())));
         assert!(refs.join("bb/task-1").exists());
+    }
+
+    /// The user's own checkout is writable whole, but other sessions' branches inside its
+    /// `.git` stay protected: the narrower rule wins, whichever comes first.
+    #[test]
+    fn a_protected_path_inside_an_exception_stays_protected() {
+        let dir = Temp(std::env::temp_dir().join(format!("brig-inner-{}", std::process::id())));
+        let refs = dir.join(".git/refs/heads/brigadier");
+        std::fs::create_dir_all(refs.join("aa")).unwrap();
+        std::fs::create_dir_all(refs.join("bb")).unwrap();
+        std::fs::write(refs.join("bb/task-1"), "x").unwrap();
+        let protection = Protection {
+            deny: vec![refs.clone()],
+            allow: vec![
+                dir.to_path_buf(),
+                refs.join("aa/task-1"),
+                refs.join("aa/task-1.lock"),
+            ],
+            ..Protection::default()
+        };
+        let sh = |script: &str| {
+            let spec = SpawnSpec {
+                program: PathBuf::from("/bin/sh"),
+                args: vec!["-c".into(), script.into()],
+                cwd: Some(dir.to_path_buf()),
+                ..SpawnSpec::default()
+            };
+            let spec = Seatbelt.protect(spec, &protection).unwrap();
+            Command::new(&spec.program)
+                .args(&spec.args)
+                .current_dir(&*dir)
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(!sh("rm .git/refs/heads/brigadier/bb/task-1"));
+        assert!(!sh("echo b > .git/refs/heads/brigadier/bb/task-2.lock"));
+        assert!(refs.join("bb/task-1").exists());
+        assert!(sh(
+            "echo a > .git/refs/heads/brigadier/aa/task-1.lock && mv .git/refs/heads/brigadier/aa/task-1.lock .git/refs/heads/brigadier/aa/task-1"
+        ));
+        assert!(sh("echo c > notes.txt && rm notes.txt"));
     }
 
     #[test]

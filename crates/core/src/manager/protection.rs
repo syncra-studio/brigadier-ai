@@ -319,6 +319,62 @@ mod tests {
         assert!(!mine.0.exists());
     }
 
+    /// A Full-access thread on the user's own checkout: its workspace, given back whole, holds
+    /// the shared `.git`, and another session's branch in it still can't be deleted, while
+    /// a commit on the user's branch works.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_full_access_thread_on_the_users_checkout_cant_delete_another_sessions_branch() {
+        let dir = Temp(std::env::temp_dir().join(format!(
+            "brigadier-protect-local-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        )));
+        let repo = dir.0.join("repo");
+        let data = dir.0.join("data");
+        let scratch = data.join("orch/conv");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "Start"]);
+        git(&repo, &["branch", "brigadier/bb/task-1"]);
+        let common = repo.join(".git").canonicalize().unwrap();
+        let mut protection = ref_protection(&common, Some("main"), &["main".into()], true);
+        add_full_access(&mut protection, &data, &[scratch, repo.clone()]);
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.0.join("platform")),
+        })
+        .unwrap();
+        let sh = |script: &str| {
+            let spec = brigadier_sandbox::SpawnSpec {
+                program: PathBuf::from("/bin/sh"),
+                args: vec!["-c".into(), script.into()],
+                cwd: Some(repo.clone()),
+                ..Default::default()
+            };
+            let spec = platform.sandbox().protect(spec, &protection).unwrap();
+            let out = std::process::Command::new(&spec.program)
+                .args(&spec.args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            (
+                out.status.success(),
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+            )
+        };
+        let other = git(&repo, &["rev-parse", "brigadier/bb/task-1"]);
+        let (ok, stderr) = sh("git branch -D brigadier/bb/task-1");
+        assert!(
+            !ok && stderr.contains("Operation not permitted"),
+            "{stderr}"
+        );
+        assert_eq!(git(&repo, &["rev-parse", "brigadier/bb/task-1"]), other);
+        let (ok, stderr) = sh(
+            "echo a > f && git add f && git -c user.name=t -c user.email=t@example.invalid commit -q -m Work",
+        );
+        assert!(ok && stderr.is_empty(), "{stderr}");
+    }
+
     #[test]
     fn a_worker_may_move_only_its_own_branch() {
         let common = Path::new("/r/.git");

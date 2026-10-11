@@ -173,7 +173,9 @@ pub struct Protection {
     /// pattern, such as other sessions' temp folders). Anchored by the caller.
     pub deny_patterns: Vec<String>,
     /// The process's own paths inside the denied ones, writable all the same (its branch's
-    /// ref, its own folders), each with everything under it.
+    /// ref, its own folders), each with everything under it. A denied path inside one of
+    /// these (another session's branch in the user's own checkout) stays denied. A denied path inside one of
+    /// these (another session's branch in the user's own checkout) stays denied.
     pub allow: Vec<PathBuf>,
     /// Folders the process writes in but may not remove, nor the folders in them up to three
     /// deep: a CLI's own temp folder, whose layout the CLI relies on while it runs (`rm -rf`

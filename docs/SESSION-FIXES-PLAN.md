@@ -919,8 +919,9 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
    - **The thread's CLI** (Claude or Codex, so Codex's built-in shell too) and **the thread's own `run` commands**
      start inside Brigadier's Seatbelt with an allow-all profile: `(allow default)`, then `(deny file-write* …)`
      for the protected set, then `(allow file-write* …)` for its own exceptions (later rules win; a regex rule
-     covers a not-yet-existing `.lock`). Every child inherits it. A `run_unsandboxed` command the user approved runs
-     as approved.
+     covers a not-yet-existing `.lock`). A protected path inside an exception (a local-checkout thread's workspace
+     holds the shared `.git`) is denied again after them, and the exceptions inside it allowed again: the narrower
+     rule wins. Every child inherits it. A `run_unsandboxed` command the user approved runs as approved.
    - Its protected set at Full access: other branches and the base (step 1), Brigadier's data dir except its scratch
      folder and workspace, every `/tmp/brigadier-<12 hex>` and `/tmp/brigadier-test-*` folder. The CLI's own homes
      (configuration, history) and its own temp folder are given back by the adapter. Its own temp folder can't be
