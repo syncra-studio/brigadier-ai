@@ -2088,3 +2088,78 @@ async fn the_thread_suggests_full_access_once_and_never_at_full_access() {
     }
     flow.stop().await;
 }
+
+/// The native id the thread's first CLI session started with, from the log.
+async fn first_native_id(flow: &Flow) -> String {
+    flow.manager
+        .read_native_id(&flow.conversation, ProviderKind::Claude)
+        .await
+        .flatten()
+        .expect("a logged session start")
+}
+
+/// How many rebirths the conversation's log records.
+async fn rebirth_count(flow: &Flow) -> usize {
+    flow.core
+        .list_orchestrator_log(&flow.conversation, None, brigadier_store::MAX_PAGE)
+        .await
+        .unwrap()
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.entry, crate::work::OrchestratorEntry::Rebirth { .. }))
+        .count()
+}
+
+/// Bug 2: the turn after a closed CLI resumes its session however many events were logged
+/// since it started, even with nothing remembered (a restarted daemon reads the log).
+#[tokio::test]
+async fn a_busy_thread_resumes_its_session_past_a_thousand_logged_events() {
+    let flow = Flow::start(
+        "busy-resume",
+        Options::default(),
+        script(|_| async { Reply::text("Done.") }),
+    )
+    .await;
+    flow.say("First.").await;
+    flow.settled().await;
+    let native = first_native_id(&flow).await;
+    // 1,000 events logged behind the manager's back, then the CLI closes and the live state
+    // is gone, as after a restart.
+    for index in 0..1_000 {
+        flow.core
+            .record(vec![(
+                crate::model::streams::orchestrator(&flow.conversation),
+                crate::model::DomainEvent::OrchestratorLogged {
+                    conversation_id: flow.conversation.clone(),
+                    entry: crate::work::OrchestratorEntry::Provider {
+                        provider: ProviderKind::Claude,
+                        event: brigadier_providers::ProviderEvent::Notice {
+                            level: brigadier_providers::NoticeLevel::Info,
+                            message: format!("busy {index}"),
+                        },
+                    },
+                },
+            )])
+            .await
+            .unwrap();
+    }
+    flow.manager
+        .conv(&flow.conversation)
+        .unwrap()
+        .close_cli()
+        .await;
+    flow.manager.convs_lock().remove(&flow.conversation);
+
+    flow.say("Second.").await;
+    flow.until("the second start", |_| flow.thread_specs().len() >= 2)
+        .await;
+    flow.settled().await;
+    let specs = flow.thread_specs();
+    assert_eq!(
+        specs[1].1.origin,
+        Origin::Resume { native_id: native },
+        "the same session resumes"
+    );
+    assert_eq!(rebirth_count(&flow).await, 0, "no rebirth");
+    flow.stop().await;
+}
