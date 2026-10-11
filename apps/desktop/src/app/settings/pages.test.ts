@@ -49,7 +49,6 @@ test("search finds every merged setting on Configuration, and no Recent activity
       "Chat model",
       "Model for sessions",
       "Short replies",
-      "Show context window usage",
       "Show the Full access notice",
       "Use spare quota to deepen the Brain",
       "Memories",
@@ -72,6 +71,13 @@ test("search finds every merged setting on Configuration, and no Recent activity
       assert.ok(found(name).some((result) => result.page.id === "configuration" && result.row === null), name);
     }
     assert.deepEqual(found("Recent activity"), []);
+    // What the composer shows and how it sends are General's.
+    for (const query of ["Show context window usage", "Send shortcut", "Follow-up behaviour"]) {
+      assert.ok(
+        found(query).some((result) => result.page.id === "general" && result.row?.label === query),
+        `"${query}" finds its row on General`,
+      );
+    }
   } finally {
     await server.close();
   }

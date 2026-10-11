@@ -83,10 +83,6 @@ export const CONFIGURATION_ROWS = {
     label: "Memories",
     description: "What Brigadier remembers about you, used by every chat and session",
   },
-  contextUsage: {
-    label: "Show context window usage",
-    description: "A ring by the model picker in the composer shows how full the model's context is.",
-  },
   fullAccessNotice: {
     label: "Show the Full access notice",
     description:
@@ -100,7 +96,6 @@ export const CONFIGURATION_ROWS = {
 } as const;
 
 const ADVANCED_LABELS = [
-  CONFIGURATION_ROWS.contextUsage.label,
   CONFIGURATION_ROWS.fullAccessNotice.label,
   CONFIGURATION_ROWS.enrichBrain.label,
 ];
@@ -157,7 +152,6 @@ export function ConfigurationPage() {
       >
         <SettingsSection title="Composer">
           <SettingsCard>
-            <SwitchSetting setting="showContextUsage" row={CONFIGURATION_ROWS.contextUsage} />
             <SwitchSetting
               setting="showFullAccessNotice"
               row={CONFIGURATION_ROWS.fullAccessNotice}

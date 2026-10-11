@@ -11,6 +11,7 @@ import {
   SettingsSection,
   SettingsSelect,
   SettingsSwitch,
+  SwitchSetting,
 } from "@/app/settings/parts";
 import { SidebarClosedChoice } from "@/app/settings/SidebarClosedChoice";
 import { Input } from "@/components/ui/input";
@@ -54,6 +55,10 @@ export const GENERAL_ROWS = {
   followUp: {
     label: "Follow-up behaviour",
     description: "What a message sent while an agent works does",
+  },
+  contextUsage: {
+    label: "Show context window usage",
+    description: "A ring by the model picker shows how full the model's context is",
   },
   notifyFinished: {
     label: "Notify when a session finishes",
@@ -199,6 +204,7 @@ function ComposerSection() {
             onChange={(value) => followUpAction.run(() => setSetting("followUp", value))}
           />
         </SettingsRow>
+        <SwitchSetting setting="showContextUsage" row={GENERAL_ROWS.contextUsage} />
       </SettingsCard>
     </SettingsSection>
   );
