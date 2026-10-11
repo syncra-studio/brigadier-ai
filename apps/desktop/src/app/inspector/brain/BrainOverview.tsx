@@ -13,8 +13,11 @@ import type {
   EmbedderState,
   IndexStatus,
 } from "@/ipc/generated";
+import { brainUseText, lowBrainUse } from "@/lib/brainUse";
 import { formatAgo, formatBytes, formatDateTime, formatDuration, formatMs } from "@/lib/format";
+import { useBoard } from "@/state/board";
 import { loadBrain, projectOf, rebuildIndex, runBrainJob } from "@/state/brain";
+import { selectedConversation, useApp } from "@/state/store";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -103,6 +106,7 @@ export function BrainOverviewView({
       {projectId !== null && (
         <IndexSection index={overview.index} now={now} />
       )}
+      {projectId !== null && <WorkersSection projectId={projectId} />}
       <EmbedderSection overview={overview} />
       {projectId !== null && <JobsSection jobs={overview.jobs} now={now} />}
       {projectId !== null && <DeveloperActions brainKey={brainKey} projectId={projectId} hasIndex={overview.index !== null} />}
@@ -251,6 +255,38 @@ function jobBadge(state: BrainJobState): { label: string; variant: "success" | "
     case "failed":
       return { label: "failed", variant: "destructive" };
   }
+}
+
+/**
+ * How the open session's workers used this Brain: their queries, the facts their briefs
+ * carried, what they wrote back and their calls. A long task that neither asked nor taught it
+ * is marked "Low Brain use": a gap to fix (SESSION-FIXES-PLAN.md Q6.6).
+ */
+function WorkersSection({ projectId }: { projectId: string }) {
+  const open = useApp((s) => selectedConversation(s));
+  const tasks = useBoard((s) => s.board?.tasks);
+  if (!open || open.projectId !== projectId || !tasks) return null;
+  const workers = Object.values(tasks)
+    .filter((task) => task.conversationId === open.id && task.brain)
+    .toSorted((a, b) => a.number - b.number);
+  if (workers.length === 0) return null;
+  return (
+    <Section title="Workers in this session">
+      <ul className="divide-border flex flex-col divide-y">
+        {workers.map((task) => (
+          <li key={task.id} data-task={`task-${task.number}`} className="flex flex-col gap-0.5 py-1.5">
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate font-medium">
+                task-{task.number} {task.title}
+              </span>
+              {lowBrainUse(task.brain) && <Badge variant="warning">Low Brain use</Badge>}
+            </div>
+            <p className="text-muted-foreground tabular-nums">{brainUseText(task.brain)}</p>
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
 }
 
 function JobRow({ job, now }: { job: BrainJob; now: number }) {
