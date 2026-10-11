@@ -36,13 +36,15 @@ export function ActivityTab({ providers }: { providers: readonly ProviderUsage[]
         <p className="text-muted-foreground text-xs">
           {days === 7 ? "The last 7 days" : "The last 30 days"}
         </p>
-        <Segmented
-          label="Range"
-          value={String(days) as "7" | "30"}
-          options={RANGES}
-          onChange={(value) => setActivityDays(Number(value) as ActivityDays)}
-          fill
-        />
+        <div className="w-48 shrink-0">
+          <Segmented
+            label="Range"
+            value={String(days) as "7" | "30"}
+            options={RANGES}
+            onChange={(value) => setActivityDays(Number(value) as ActivityDays)}
+            fill
+          />
+        </div>
       </div>
       <section aria-label="Usage activity" className="flex flex-col gap-10">
         <ProviderSections providers={providers}>
