@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { ImportProfile } from "@/ipc/generated";
-import { byDay, dayLabel, firstProfile, importSummary, rangeStart, siteOf } from "@/state/browserData";
+import { byDay, dayLabel, rangeStart, siteOf } from "@/state/browserData";
 
 const at = (y: number, m: number, d: number, h = 12) => new Date(y, m - 1, d, h).getTime();
 
@@ -39,47 +38,4 @@ test("a cleared range starts that long ago; all time has no start", () => {
   assert.equal(rangeStart("hour", now), now - 3_600_000);
   assert.equal(rangeStart("month", now), now - 28 * 86_400_000);
   assert.equal(rangeStart("all", now), null);
-});
-
-const profile = (id: string, extra: Partial<ImportProfile> = {}): ImportProfile => ({
-  id,
-  browser: id,
-  name: "Default",
-  family: "gecko",
-  hasCookies: true,
-  hasHistory: true,
-  readable: true,
-  isDefault: false,
-  running: false,
-  ...extra,
-});
-
-test("an import starts on a default profile of a browser that isn't open", () => {
-  assert.equal(
-    firstProfile([profile("a"), profile("b", { isDefault: true, running: true }), profile("c", { isDefault: true })])?.id,
-    "c",
-  );
-  assert.equal(firstProfile([profile("a", { running: true }), profile("b")])?.id, "b");
-  assert.equal(firstProfile([profile("safari", { readable: false })])?.id, "safari");
-  assert.equal(firstProfile([]), undefined);
-});
-
-test("an import's result says what came over and what didn't", () => {
-  assert.deepEqual(
-    importSummary("Firefox", {
-      cookies: { imported: 1240, rejected: 2, skipped: 10, error: null },
-      history: { imported: 1, error: null },
-    }),
-    [
-      `Imported ${new Intl.NumberFormat().format(1240)} cookies and 1 page of history from Firefox.`,
-      "12 cookies couldn't come across (expired, or a kind Brigadier's browser can't keep).",
-    ],
-  );
-  assert.deepEqual(
-    importSummary("Dia", {
-      cookies: { imported: 0, rejected: 0, skipped: 0, error: "macOS didn't let Brigadier use Dia's cookie key, so no cookies were copied." },
-      history: { imported: 3, error: null },
-    }),
-    ["Imported 3 pages of history from Dia.", "macOS didn't let Brigadier use Dia's cookie key, so no cookies were copied."],
-  );
 });

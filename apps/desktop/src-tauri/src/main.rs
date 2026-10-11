@@ -731,7 +731,7 @@ fn main() {
             browser::browser_downloads_remove,
             browser::browser_sites,
             browser::browser_site_set,
-            browser_import::browser_import_profiles,
+            browser_import::browser_import_sources,
             browser_import::browser_import,
             browser_import::browser_import_open_access
         ])

@@ -198,24 +198,90 @@ pub enum ImportFamily {
     Safari,
 }
 
-/// Another browser's profile Settings › Browser › Import can copy from.
+/// Where an installed browser stands for an import, which decides its row's status and button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportState {
+    /// Nothing in the way; its profiles say how many cookies there are.
+    Ready,
+    /// The browser is open; it must be quit first.
+    Running,
+    /// macOS keeps its files from Brigadier until Brigadier has Full Disk Access.
+    NeedsFullDiskAccess,
+    /// The last import was refused the browser's cookie key in the Keychain.
+    NeedsKeychainAccess,
+    /// The browser's cookie key isn't in the Keychain at all.
+    NoKeychainKey,
+    /// It can't be imported from now for another reason.
+    Unavailable,
+}
+
+/// One profile of a browser an import can copy from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ImportProfile {
+pub struct ImportSourceProfile {
     pub id: String,
-    /// The browser's name, e.g. "Google Chrome".
-    pub browser: String,
     /// The profile's name, e.g. "Person 1".
     pub name: String,
-    pub family: ImportFamily,
-    pub has_cookies: bool,
-    pub has_history: bool,
-    /// False when its files can't be opened (Safari without Full Disk Access).
-    pub readable: bool,
-    /// The browser's own default profile.
+    /// How many cookies it keeps; absent when they couldn't be counted.
+    pub cookies: Option<u32>,
+    /// The browser's own default profile, listed first.
     pub is_default: bool,
-    /// The browser is open now; it must be quit first.
-    pub running: bool,
+}
+
+/// What the last import from a browser brought, kept so its row can say so.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportRecord {
+    /// When it finished, in Unix milliseconds.
+    pub at_ms: i64,
+    /// The names of the profiles it copied from.
+    pub profiles: Vec<String>,
+    /// Cookies now in Brigadier's browser.
+    pub imported: u32,
+    /// Cookies left out: expired, kept per site, unreadable or refused by the browser.
+    pub skipped: u32,
+    /// Up to 20 of the domains whose cookies were unreadable or refused.
+    pub skipped_domains: Vec<String>,
+    /// How many such domains there were in all.
+    pub skipped_domain_count: u32,
+    /// Pages of history added.
+    pub history: u32,
+}
+
+/// An installed browser an import can copy from, as Settings › Import Browser Data lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSource {
+    /// The browser's key, e.g. "dia".
+    pub key: String,
+    /// Its name, e.g. "Google Chrome", or "Comet (Chromium)" for one found by its files.
+    pub name: String,
+    pub family: ImportFamily,
+    /// Its app icon as a `data:image/png` URL; absent when it couldn't be read.
+    pub icon: Option<String>,
+    pub state: ImportState,
+    /// Its profiles that keep cookies, the default first; empty unless it is ready or needs
+    /// Keychain access.
+    pub profiles: Vec<ImportSourceProfile>,
+    /// The last import from it.
+    pub record: Option<ImportRecord>,
+}
+
+/// How an import was refused or failed, which decides what the page shows next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportFailure {
+    /// The browser is open.
+    Running,
+    NeedsFullDiskAccess,
+    /// macOS didn't hand over the browser's cookie key.
+    NeedsKeychainAccess,
+    NoKeychainKey,
+    /// The browser or a chosen profile is no longer there.
+    Gone,
+    /// Its cookies couldn't be read.
+    ReadFailed,
 }
 
 /// How an import is going, sent while it runs.
@@ -234,36 +300,25 @@ pub enum ImportProgress {
     History,
 }
 
-/// What an import of cookies brought over.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct CookieImport {
-    /// Now in Brigadier's browser.
-    pub imported: u32,
-    /// Read but not taken by Brigadier's browser.
-    pub rejected: u32,
-    /// Left out: expired, kept per site (which Brigadier's browser can't keep apart), or
-    /// unreadable.
-    pub skipped: u32,
-    /// Why none could be read, in plain words.
-    pub error: Option<String>,
-}
-
-/// What an import of history brought over.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryImport {
-    /// Pages added (ones already here are skipped).
-    pub imported: u32,
-    pub error: Option<String>,
-}
-
-/// The result of an import; a part is absent when it wasn't asked for.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportResult {
-    pub cookies: Option<CookieImport>,
-    pub history: Option<HistoryImport>,
+/// How an import ended.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ImportOutcome {
+    /// It ran; `record` is what it brought (also kept for the browser's row). `history_error`
+    /// says why history couldn't be added when it was asked for and wasn't.
+    Done {
+        record: ImportRecord,
+        history_error: Option<String>,
+    },
+    /// Nothing was imported, for `reason`; `message` says it in plain words.
+    Failed {
+        reason: ImportFailure,
+        message: String,
+    },
 }
 
 /// Where the Browser tab's page sits in the window, in CSS pixels from its top left.

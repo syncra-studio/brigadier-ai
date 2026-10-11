@@ -1,18 +1,20 @@
 //! What the built-in browser remembers beside its pages' own data (which WebKit or WebView2
-//! keeps in the browser's saved store): the pages it showed, its downloads, and which sites may
-//! use the camera or microphone. One SQLite file, `browser.sqlite`, in the browser's folder of
+//! keeps in the browser's saved store): the pages it showed, its downloads, which sites may
+//! use the camera or microphone, and what the last import from each other browser brought. One SQLite file, `browser.sqlite`, in the browser's folder of
 //! Brigadier's data folder; nothing here leaves the machine.
 
 use std::path::Path;
 use std::sync::Mutex;
 
 use brigadier_ipc::app::{
-    BrowserDownload, BrowserSite, BrowserVisit, DownloadState, HistoryFilter, SitePermission,
+    BrowserDownload, BrowserSite, BrowserVisit, DownloadState, HistoryFilter, ImportRecord,
+    SitePermission,
 };
 use rusqlite::{Connection, params};
 
 /// The schema, by `PRAGMA user_version`.
-const SCHEMA: &[&str] = &[r"
+const SCHEMA: &[&str] = &[
+    r"
     CREATE TABLE visits (
         id INTEGER PRIMARY KEY,
         url TEXT NOT NULL,
@@ -34,7 +36,15 @@ const SCHEMA: &[&str] = &[r"
         microphone TEXT NOT NULL DEFAULT 'ask',
         asked_ms INTEGER NOT NULL
     );
-"];
+",
+    r"
+    CREATE TABLE imports (
+        browser TEXT PRIMARY KEY,
+        record TEXT,
+        keychain_denied INTEGER NOT NULL DEFAULT 0
+    );
+",
+];
 
 /// The most pages a history list returns at once.
 const PAGE_LIMIT: u32 = 500;
@@ -390,6 +400,50 @@ impl Store {
     }
 
     /// Forgets the sites that asked since `since_ms` (all with none), and their choices.
+    /// What the last import from each browser brought, by browser key, and whether the last
+    /// try was refused the browser's Keychain key.
+    pub fn imports(
+        &self,
+    ) -> rusqlite::Result<std::collections::HashMap<String, (Option<ImportRecord>, bool)>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT browser, record, keychain_denied FROM imports")?;
+        let rows = stmt.query_map([], |row| {
+            let record: Option<String> = row.get(1)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                (
+                    record.and_then(|json| serde_json::from_str(&json).ok()),
+                    row.get::<_, i64>(2)? != 0,
+                ),
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// Keeps what an import from `browser` brought, in place of the last; it got the Keychain
+    /// key if it needed one, so a refusal before is forgotten.
+    pub fn save_import(&self, browser: &str, record: &ImportRecord) -> rusqlite::Result<()> {
+        let json = serde_json::to_string(record)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+        self.db.execute(
+            "INSERT INTO imports (browser, record, keychain_denied) VALUES (?1, ?2, 0)
+             ON CONFLICT (browser) DO UPDATE SET record = ?2, keychain_denied = 0",
+            params![browser, json],
+        )?;
+        Ok(())
+    }
+
+    /// An import from `browser` was refused its Keychain key; its last record stays.
+    pub fn import_denied(&self, browser: &str) -> rusqlite::Result<()> {
+        self.db.execute(
+            "INSERT INTO imports (browser, keychain_denied) VALUES (?1, 1)
+             ON CONFLICT (browser) DO UPDATE SET keychain_denied = 1",
+            params![browser],
+        )?;
+        Ok(())
+    }
+
     pub fn clear_sites(&self, since_ms: Option<i64>) -> rusqlite::Result<()> {
         self.db.execute(
             "DELETE FROM sites WHERE ?1 IS NULL OR asked_ms >= ?1",
@@ -452,6 +506,75 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_last_import_per_browser_is_kept_and_a_keychain_refusal_until_the_next() {
+        let store = Store::in_memory();
+        assert!(store.imports().unwrap().is_empty());
+        store.import_denied("dia").unwrap();
+        assert_eq!(store.imports().unwrap()["dia"], (None, true));
+        let record = ImportRecord {
+            at_ms: 1_000,
+            profiles: vec!["Work".into(), "HostPapa".into()],
+            imported: 2_790,
+            skipped: 51,
+            skipped_domains: vec!["a.com".into(), "b.com".into()],
+            skipped_domain_count: 49,
+            history: 120,
+        };
+        store.save_import("dia", &record).unwrap();
+        assert_eq!(
+            store.imports().unwrap()["dia"],
+            (Some(record.clone()), false)
+        );
+        // A refusal later keeps the record; a second import replaces it.
+        store.import_denied("dia").unwrap();
+        assert_eq!(
+            store.imports().unwrap()["dia"],
+            (Some(record.clone()), true)
+        );
+        let again = ImportRecord {
+            at_ms: 2_000,
+            imported: 3,
+            ..record
+        };
+        store.save_import("dia", &again).unwrap();
+        store
+            .save_import("safari", &ImportRecord::default())
+            .unwrap();
+        let all = store.imports().unwrap();
+        assert_eq!(all["dia"], (Some(again), false));
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn a_store_from_before_imports_gains_the_table() {
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-browser-store-imports-{}",
+            std::process::id()
+        ));
+        let path = dir.join("browser.sqlite");
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(SCHEMA[0]).unwrap();
+            db.pragma_update(None, "user_version", 1).unwrap();
+            db.execute(
+                "INSERT INTO visits (url, at_ms) VALUES ('https://kept.test/', 5)",
+                [],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        store.save_import("arc", &ImportRecord::default()).unwrap();
+        let kept = store
+            .history("", HistoryFilter::All, None, 10)
+            .unwrap()
+            .len();
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(kept, 1);
+    }
 
     #[test]
     fn a_reload_moves_the_visit_and_a_new_page_adds_one() {

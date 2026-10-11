@@ -3,21 +3,15 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-const INTRO = "Choose what to bring over to Brigadier's browser.";
-const ONCE = "A one-time copy. Passwords and extensions aren't brought over.";
-const KEYCHAIN =
-  "macOS will ask whether Brigadier may use “Google Chrome Safe Storage” from your Keychain: the key Google Chrome locks its cookies with. Choose Allow. Brigadier uses it only to copy the cookies.";
-
 /** A settings write as the daemon got it: the fields this page owns. */
 const settings = (browserEnabled: boolean) => ({
   updateSettings: { browserEnabled, webLinksIn: "brigadier", localLinksIn: "brigadier", browserFullUrl: false },
 });
 
-// The real pages in Chromium over a faked shell: Browser's rows, where links open, Import Browser
-// Data's Import… from each kind of browser (one open, one macOS keeps locked, one behind the
-// Keychain, one that just copies), Clear browsing data, the history and its filter, downloads,
-// site settings, off, and Import Browser Data while the browser is off.
-test("browser settings: rows, import, clear, history, downloads, sites, off", { timeout: 60000 }, async (t) => {
+// The real page in Chromium over a faked shell: Browser's rows, where links open, Clear browsing
+// data, the history and its filter, downloads, site settings and off. (Import Browser Data has
+// its own test.)
+test("browser settings: rows, clear, history, downloads, sites, off", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "browser.html?drive=1", "browser-result", 20000)) as Record<string, unknown>;
   assert.deepEqual(seen.on, {
     title: "Browser",
@@ -41,42 +35,6 @@ test("browser settings: rows, import, clear, history, downloads, sites, off", { 
   assert.deepEqual(seen.links, ["Your default browser", "Brigadier's browser"]);
   assert.deepEqual(seen.linkChoices, ["Brigadier's browser", "Your default browser"]);
   assert.equal(seen.webLinksIn, "brigadier");
-
-  assert.deepEqual(seen.importPage, {
-    title: "Import Browser Data",
-    sections: [],
-    rows: ["Import from your browser"],
-    note: ["Bring what another browser keeps into Brigadier's built-in browser."],
-    importable: true,
-  });
-  // Import starts on a browser that isn't open, and says what macOS will ask.
-  assert.deepEqual(seen.importOpen, {
-    title: "Import from your browser",
-    from: "Google Chrome — Person 1",
-    boxes: [
-      { label: "Cookies", checked: true, disabled: false },
-      { label: "Browsing history", checked: true, disabled: false },
-    ],
-  });
-  assert.deepEqual(seen.importNotes, [INTRO, KEYCHAIN, ONCE]);
-  assert.deepEqual(seen.profiles, [
-    "Dia — DefaultOpen now: quit it first",
-    "Google Chrome — Person 1",
-    "Firefox — default-release",
-    "Safari — Default",
-  ]);
-  assert.deepEqual(seen.running, {
-    notes: [INTRO, "Quit Dia first, so everything copies as it is. Check again", ONCE],
-    importable: false,
-  });
-  const locked = seen.locked as { notes: string[]; settings: boolean; importable: boolean };
-  assert.match(locked.notes[1] ?? "", /^To copy from Safari, allow Brigadier in System Settings › Privacy (&amp;|&) Security › Full Disk Access, then open this again\.$/);
-  assert.equal(locked.settings, true);
-  assert.equal(locked.importable, false);
-  assert.deepEqual(seen.chromium, { notes: [INTRO, KEYCHAIN, ONCE], importable: true });
-  // A Firefox profile needs no prompt; history alone is imported, and the result says so.
-  assert.deepEqual(seen.gecko, [INTRO, ONCE]);
-  assert.deepEqual(seen.imported, [INTRO, "Imported 5,321 pages of history from Firefox."]);
 
   // Clear browsing data: every kind but site settings picked, the sites counted.
   assert.deepEqual(
@@ -120,21 +78,9 @@ test("browser settings: rows, import, clear, history, downloads, sites, off", { 
     ],
   });
 
-  // Off, there is nothing to import into: Import waits, a line says why, and its link goes to
-  // Settings › Browser.
-  assert.deepEqual(seen.importOff, {
-    title: "Import Browser Data",
-    sections: [],
-    rows: ["Import from your browser"],
-    note: "The built-in browser is off, so there is nothing to import into. Turn it on in Settings › Browser.",
-    importable: false,
-  });
-  assert.deepEqual(seen.linkedTo, { type: "settings", page: "browser" });
-
   // What reached the shell and the daemon, in order.
   assert.deepEqual(seen.asked, [
     settings(true),
-    { import: { id: "firefox:default-release", cookies: false, history: true } },
     { clear: { sinceMs: null, history: true, cookies: true, cache: false, downloads: true, sites: false } },
     { history: "all" },
     { history: "agent" },
