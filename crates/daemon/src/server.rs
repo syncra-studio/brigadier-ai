@@ -15,8 +15,9 @@ use brigadier_core::{
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
     ArtifactText, ClientFrame, ClientInfo, ComputerAccess, ComputerGrant, DaemonActivity,
-    DaemonInfo, DictationUpdate, ErrorCode, EventEnvelope, IpcError, LifecycleOutcome, Outcome,
-    RawJson, Request, Response, SendOutcome, ServerFrame, TerminalInfo, TerminalOutput,
+    DaemonInfo, DictationStatus, DictationUpdate, ErrorCode, EventEnvelope, IpcError,
+    LifecycleOutcome, Outcome, RawJson, Request, Response, SendOutcome, ServerFrame, TerminalInfo,
+    TerminalOutput,
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token, Writer};
 use brigadier_providers::ProviderKind;
@@ -426,8 +427,9 @@ impl Session {
                 });
                 return Ok(Flow::Continue);
             }
+            // A window that reconnects mid-download asks this first: it hears the rest.
             Request::GetDictation => Ok(Response::GetDictation {
-                dictation: self.daemon.dictation.status(),
+                dictation: follow_status(&self.daemon.dictation, &mut self.dictation_feed),
             }),
             Request::DownloadDictationModel => {
                 self.follow_dictation();
@@ -829,9 +831,7 @@ impl Session {
 
     /// Forwards dictation updates to this connection from now on.
     fn follow_dictation(&mut self) {
-        if self.dictation_feed.is_none() {
-            self.dictation_feed = Some(self.daemon.dictation.subscribe());
-        }
+        follow(&self.daemon.dictation, &mut self.dictation_feed);
     }
 
     fn set_metrics(&mut self, enabled: bool) {
@@ -914,6 +914,22 @@ async fn next_terminal_output(
         },
         None => std::future::pending().await,
     }
+}
+
+fn follow(dictation: &Dictation, feed: &mut Option<broadcast::Receiver<DictationUpdate>>) {
+    if feed.is_none() {
+        *feed = Some(dictation.subscribe());
+    }
+}
+
+/// The speech model's status, with its updates forwarded from then on. Subscribed first, so
+/// a download that ends in between is still heard.
+fn follow_status(
+    dictation: &Dictation,
+    feed: &mut Option<broadcast::Receiver<DictationUpdate>>,
+) -> DictationStatus {
+    follow(dictation, feed);
+    dictation.status()
 }
 
 async fn next_dictation_update(
@@ -2080,6 +2096,28 @@ mod tests {
             computer_pane_url(ComputerGrant::ScreenRecording),
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
         );
+    }
+
+    #[tokio::test]
+    async fn a_window_that_asks_for_the_speech_model_hears_its_download_end() {
+        let models =
+            std::env::temp_dir().join(format!("brigadier-models-{}", uuid::Uuid::new_v4()));
+        let dictation = Arc::new(Dictation::new(models.clone()));
+        let mut feed = None;
+        assert!(!follow_status(&dictation, &mut feed).installed);
+        // The download ends (here: the model is already there), after the window asked.
+        let model = models.join("whisper").join("ggml-base-q5_1.bin");
+        std::fs::create_dir_all(model.parent().unwrap()).unwrap();
+        std::fs::File::create(&model)
+            .unwrap()
+            .set_len(dictation.status().model_bytes)
+            .unwrap();
+        dictation.download();
+        let update = tokio::time::timeout(Duration::from_secs(5), next_dictation_update(&mut feed))
+            .await
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&models);
+        assert!(matches!(update, Some(DictationUpdate::Downloaded)));
     }
 
     #[test]
