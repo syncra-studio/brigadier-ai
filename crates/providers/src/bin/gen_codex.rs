@@ -104,7 +104,10 @@ fn main() -> Result<(), Error> {
 
 fn generate(codex: &Path, version: &str, schema_dir: &Path) -> Result<String, Error> {
     let status = Command::new(codex)
-        .args(["app-server", "generate-json-schema", "--out"])
+        // With its experimental fields: a command's `additionalPermissions`, which the adapter
+        // opts into (`InitializeCapabilities::experimental_api`) so Brigadier's reviewer reads
+        // the whole request.
+        .args(["app-server", "generate-json-schema", "--experimental", "--out"])
         .arg(schema_dir)
         .status()?;
     if !status.success() {
@@ -160,7 +163,9 @@ fn generate(codex: &Path, version: &str, schema_dir: &Path) -> Result<String, Er
 
     let mut selected = Map::new();
     for name in &wanted {
-        selected.insert(name.clone(), definitions[name].clone());
+        let mut schema = definitions[name].clone();
+        one_of(&mut schema);
+        selected.insert(name.clone(), schema);
     }
     let root = serde_json::json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -227,6 +232,35 @@ fn line_doc_comments(code: &str) -> String {
         result.push('\n');
     }
     result
+}
+
+/// Since codex-cli 0.162.1 a union type (`CodexErrorInfo`, `RequestId`, …) is an `anyOf`,
+/// which typify makes a struct of flattened options; its members exclude each other, so as a
+/// `oneOf` it is the enum the adapter matches, as before. A nullable `anyOf` (an optional
+/// field's type) stays. A member that is only a list of types (`CodexErrorInfo`'s catch-all
+/// `{"type": ["string", "object"]}`, new in 0.162.1) is left out, as 0.159.2 had none.
+fn one_of(schema: &mut Value) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    let nullable = object
+        .get("anyOf")
+        .and_then(Value::as_array)
+        .is_none_or(|members| {
+            members
+                .iter()
+                .any(|member| member.get("type") == Some(&Value::from("null")))
+        });
+    if !nullable && let Some(Value::Array(members)) = object.remove("anyOf") {
+        let members = members
+            .into_iter()
+            .filter(|member| {
+                !(member.as_object().is_some_and(|member| member.len() == 1)
+                    && member.get("type").is_some_and(Value::is_array))
+            })
+            .collect();
+        object.insert("oneOf".into(), Value::Array(members));
+    }
 }
 
 fn read_json(path: &Path) -> Result<Value, Error> {
