@@ -73,6 +73,11 @@ const PRIVACY_PANE_BUNDLE: &str = "com.apple.settings.PrivacySecurity.extension"
 /// Why a terminal is refused; a terminal the session launches itself is allowed.
 pub const TERMINAL_NOT_LAUNCHED: &str = "a terminal the session didn't launch";
 
+/// Why another Brigadier is refused: any `ai.brigadier.*` bundle (a dev build included) is
+/// the session's only once it launched it, so a worker never drives another worker's
+/// instance or the user's own (SESSION-FIXES-PLAN.md, "Computer use").
+pub const BRIGADIER_NOT_LAUNCHED: &str = "a Brigadier app this session didn't launch";
+
 /// The installed app; dev builds the session launched are allowed (§5).
 const INSTALLED_BRIGADIER: &str = "/Applications/Brigadier.app";
 
@@ -123,6 +128,9 @@ impl BlockList {
             if self.host_bundle_path.as_deref() == Some(path) {
                 return Some("the Brigadier app running this session");
             }
+        }
+        if bundle.starts_with("ai.brigadier.") && !self.launched_pids.contains(&t.pid) {
+            return Some(BRIGADIER_NOT_LAUNCHED);
         }
         None
     }
@@ -193,18 +201,27 @@ mod tests {
     }
 
     #[test]
-    fn the_host_and_the_installed_app_are_blocked_but_dev_builds_are_not() {
-        let b = BlockList {
+    fn the_host_and_the_installed_app_are_blocked_and_dev_builds_only_once_launched() {
+        let mut b = BlockList {
             host_pid: Some(77),
             ..Default::default()
         };
         let mut f = facts("ai.brigadier.dev", "Brigadier Dev");
         f.bundle_path = Some("/tmp/dev/Brigadier.app");
+        // Another worker's dev instance, or one the user runs.
+        assert_eq!(b.check(&f), Some(BRIGADIER_NOT_LAUNCHED));
+        // The one this session launched.
+        b.launched_pids.insert(10);
         assert!(b.check(&f).is_none());
+        let mut other = facts("ai.brigadier.term-docs-fixes-w28", "Brigadier Dev");
+        other.pid = 11;
+        assert_eq!(b.check(&other), Some(BRIGADIER_NOT_LAUNCHED));
+        // The host and the installed app stay refused, launched or not.
+        b.launched_pids.extend([77, 78]);
         f.pid = 77;
         assert!(b.check(&f).is_some());
         f.pid = 78;
         f.bundle_path = Some("/Applications/Brigadier.app/");
-        assert!(b.check(&f).is_some());
+        assert_eq!(b.check(&f), Some("the installed Brigadier app"));
     }
 }

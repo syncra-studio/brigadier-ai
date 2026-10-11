@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::block::{TERMINAL_NOT_LAUNCHED, TargetFacts};
+use crate::block::{BRIGADIER_NOT_LAUNCHED, TERMINAL_NOT_LAUNCHED, TargetFacts};
 use crate::cancel::CancelToken;
 use crate::desktop::{AppInfo, Desktop, WindowInfo};
 use crate::engine::Engine;
@@ -160,7 +160,8 @@ pub fn launch<D: Desktop>(
         );
     }
     // Refused before anything opens, by the name the request gave and by the app the system
-    // would run for it; a terminal is allowed, as long as it's a new one.
+    // would run for it; a terminal or a Brigadier dev build is allowed, as long as it's a new
+    // one: the launch makes it the session's.
     let resolved = engine
         .desktop
         .resolve(req.app.as_deref(), req.open.as_deref());
@@ -186,7 +187,7 @@ pub fn launch<D: Desktop>(
     if let Some(reason) = facts
         .iter()
         .filter_map(|f| engine.block.check(f))
-        .find(|r| *r != TERMINAL_NOT_LAUNCHED)
+        .find(|r| *r != TERMINAL_NOT_LAUNCHED && *r != BRIGADIER_NOT_LAUNCHED)
     {
         return err(ErrorCode::Blocked, reason);
     }
@@ -326,8 +327,10 @@ pub fn launch<D: Desktop>(
         ..Default::default()
     };
     if let Some(reason) = engine.block.check(&facts) {
-        // A terminal this launch started is the session's; any other blocked app isn't.
-        if !(reason == TERMINAL_NOT_LAUNCHED && opened.new_process) {
+        // A terminal or Brigadier this launch started is the session's; any other blocked app
+        // isn't.
+        let own = [TERMINAL_NOT_LAUNCHED, BRIGADIER_NOT_LAUNCHED].contains(&reason);
+        if !(own && opened.new_process) {
             return Err(CuError::new(ErrorCode::Blocked, reason));
         }
     }

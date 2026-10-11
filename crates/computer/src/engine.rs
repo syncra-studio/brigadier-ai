@@ -3965,6 +3965,23 @@ mod tests {
     }
 
     #[test]
+    fn a_brigadier_dev_build_is_the_sessions_once_it_launches_it_and_no_other_is() {
+        let mut e = engine(Fake::new(basic()));
+        // Its first launch starts it: allowed, and it is the session's from then on.
+        e.desktop.on_open = Some(other_app(30, "Brigadier Dev", "ai.brigadier.dev", 7));
+        let o = launch(&mut e, Some("Brigadier Dev"), None).unwrap();
+        assert!(o.new_process);
+        e.block.launched_pids.insert(30);
+        assert!(launch(&mut e, Some("Brigadier Dev"), None).is_ok());
+        // Another worker's instance, already running: refused.
+        let mut e = engine(Fake::new(basic()));
+        e.desktop.on_open = Some(other_app(30, "Brigadier Dev", "ai.brigadier.dev", 7));
+        launch(&mut e, Some("Brigadier Dev"), None).unwrap();
+        let r = launch(&mut e, Some("Brigadier Dev"), None);
+        assert_eq!(r.unwrap_err().code, ErrorCode::Blocked);
+    }
+
+    #[test]
     fn an_observe_waits_while_the_app_builds_its_structure_then_reads_it_once() {
         let mut fake = Fake::new(basic());
         fake.building = 3;
