@@ -2,12 +2,14 @@ import { Agent, Branch, Folders, Lightbulb, PlayCircle, SidebarFloatingRight, Si
 import { type CSSProperties, createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { WorkersTab } from "@/app/conversation/Agents";
+import { workerDone } from "@/app/conversation/workerPresentation";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { SidebarReveal, SidebarResizeHandle, useSidebarChoice, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { useSidebar } from "@/components/ui/sidebar";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { isRightSidebarKey, rightSidebarFolds, rightSidebarToggleLabel, type RightSidebarTab, selectRightSidebarTab, setRightSidebarOpen, useRightSidebarState } from "@/state/rightSidebar";
+import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { usePlanTab } from "@/state/planDoc";
 import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
@@ -120,6 +122,9 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
   const content = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
   const tabs: readonly (typeof WITH_PLAN)[number][] = usePlanTab((s) => s.shown[conversationId] !== undefined) ? WITH_PLAN : TABS;
+  // Finished workers leave the composer's strip once answered; they stay here, counted.
+  const done = useBoard((s) =>
+    s.board?.conversationId === conversationId ? Object.values(s.board.tasks).filter(workerDone).length : 0);
   useLayoutEffect(() => {
     const element = column.current;
     const left = element?.closest<HTMLElement>('[data-slot="sidebar-wrapper"]');
@@ -166,7 +171,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
                   aria-selected={panel.active === id}
                   className="aria-selected:bg-toolbar-pressed aria-selected:text-foreground"
                   tabIndex={panel.active === id ? 0 : -1}
-                  tooltip={title}
+                  tooltip={id === "workers" && done > 0 ? `${title} · ${done} done` : title}
                   onClick={() => panel.selectTab(id)}
                   onKeyDown={(event) => {
                     const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
