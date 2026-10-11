@@ -104,8 +104,14 @@ function captureSupported(): boolean {
 }
 
 function refreshStatus(): void {
+  // Progress from before this asked, with the daemon now saying nothing downloads, is left over
+  // from a download whose end never arrived.
+  const before = snapshot.model;
   request({ method: "getDictation" })
-    .then(({ dictation }) => set({ status: dictation }))
+    .then(({ dictation }) => {
+      set({ status: dictation });
+      if (!dictation.downloading && before && snapshot.model === before) set({ model: null });
+    })
     .catch((error: unknown) => console.error("dictation status failed", error));
 }
 
@@ -395,6 +401,8 @@ export function onDictationUpdate(update: DictationUpdate): void {
 /** The daemon went away: what it was doing for dictation is gone with it. */
 export function onDictationDisconnected(): void {
   if (busy()) fail("The connection to Brigadier's core dropped.");
+  // A download's progress and end no longer reach this connection; the next status says.
+  set({ model: null });
   statusRequested = false;
 }
 

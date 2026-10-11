@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 import { VoicePage } from "@/app/settings/VoicePage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { DictationStatus, Request, Settings } from "@/ipc/generated";
-import { onDictationUpdate, openMicrophone } from "@/state/dictation";
+import { onDictationDisconnected, onDictationUpdate, openMicrophone } from "@/state/dictation";
 import { readAloud } from "@/state/readAloud";
 import { useApp } from "@/state/store";
 
@@ -216,6 +216,13 @@ function Fixture() {
       },
       () => {
         seen.cancelled = modelLine();
+        button("Download")?.click();
+      },
+      () => onDictationUpdate({ type: "download", received: 10 * MB, total: 141 * MB }),
+      // The connection drops, and with it the download's end: the line doesn't stay on Downloading.
+      () => onDictationDisconnected(),
+      () => {
+        seen.afterDrop = modelLine();
         button("Download")?.click();
       },
       () => {

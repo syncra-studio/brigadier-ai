@@ -20,6 +20,7 @@ test("voice settings: microphone, language, voice, words and the speech model", 
   assert.equal(seen.modelFirst, "Speech modelNot downloaded yet, 141.0 MB. It downloads when you first dictate, or now.Download");
   assert.equal(seen.downloading, "Speech modelDownloading… 47.0 MB of 141.0 MBCancel");
   assert.equal(seen.cancelled, seen.modelFirst);
+  assert.equal(seen.afterDrop, seen.modelFirst);
   assert.equal(seen.downloaded, "Speech modelDownloaded, 141.0 MB. Dictation runs on this computer with this model.Remove");
   assert.equal(seen.removed, seen.modelFirst);
   // Read aloud speaks an answer's words in the chosen voice.
@@ -32,6 +33,7 @@ test("voice settings: microphone, language, voice, words and the speech model", 
   assert.deepEqual(seen.calls, [
     "downloadDictationModel",
     "cancelDictationDownload",
+    "downloadDictationModel",
     "downloadDictationModel",
     "scanStorage",
     "cleanStorage scan-9 model-1",
