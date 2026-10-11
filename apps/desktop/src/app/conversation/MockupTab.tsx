@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { addAttachment, send } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { type Mockup, mockupOf, revisedSince } from "@/state/mockup";
-import { changeNotes, markedName, markerNumber, mockupNotesOf, type MockupNote, NO_NOTES, notePlacement, notesByScreen, notesMessage, pointIn, useSessionNotes } from "@/state/mockupNotes";
+import { changeNotes, markedName, markerNumber, mockupNotesOf, type MockupNote, NO_NOTES, notePlacement, notesByScreen, notesMessage, pointIn, sendEnded, takeNotes, useSessionNotes } from "@/state/mockupNotes";
 import { useApp } from "@/state/store";
 
 /** The zoom menu's steps, as the reference app's image tab offers them. */
@@ -587,16 +587,13 @@ function NotesList({ notes }: { notes: MockupNote[] }) {
  * attached with the markers drawn on it; the thread hands them to the mockup's worker.
  */
 function useSendNotes(conversationId: string, mockup: Mockup | null, items: readonly Item[]) {
-  const [sending, setSending] = useState(false);
-  const [failed, setFailed] = useState(false);
-  // Send and ⌘↩ share one send at a time: a second press while it runs does nothing.
-  const busy = useRef(false);
+  // The send in flight is the session's, not this tab's: a tab closed and opened meanwhile
+  // still has it, so the notes stay frozen and Send and ⌘↩ do nothing until it ends.
+  const { sending, failed } = useSessionNotes(conversationId);
   const sendNotes = useCallback(() => {
-    const { notes } = mockupNotesOf(conversationId);
-    if (!mockup || !notes.length || busy.current) return;
-    busy.current = true;
-    setSending(true);
-    setFailed(false);
+    if (!mockup) return;
+    const notes = takeNotes(conversationId);
+    if (!notes) return;
     void (async () => {
       const files = await Promise.all(notesByScreen(notes).map(async ({ screen, notes: own }) => {
         const ref = items.find((item) => item.kind === "mockup" && item.screen === screen)?.ref;
@@ -605,8 +602,10 @@ function useSendNotes(conversationId: string, mockup: Mockup | null, items: read
       }));
       const attachments = await Promise.all(files.map((file) => addAttachment(file)));
       await send({ text: notesMessage(mockup.version, notes), attachments, mentions: [] }, undefined, { to: conversationId });
-      changeNotes(conversationId, () => ({ notes: [], commenting: false, sent: { version: mockup.version, shots: mockup.shots.map((ref) => ref.id), dismissed: false } }));
-    })().catch(() => setFailed(true)).finally(() => { busy.current = false; setSending(false); });
+    })().then(
+      () => sendEnded(conversationId, notes, { version: mockup.version, shots: mockup.shots.map((ref) => ref.id), dismissed: false }),
+      () => sendEnded(conversationId, notes, null),
+    );
   }, [conversationId, mockup, items]);
   return { sendNotes, sending, failed };
 }

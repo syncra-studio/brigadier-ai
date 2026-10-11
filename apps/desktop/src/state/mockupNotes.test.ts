@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { changeNotes, markedName, markerNumber, mockupNotesOf, notePlacement, notesMessage, percent, pointIn } from "./mockupNotes";
+import { changeNotes, markedName, markerNumber, mockupNotesOf, notePlacement, notesMessage, percent, pointIn, sendEnded, takeNotes } from "./mockupNotes";
 
 test("a click is kept as fractions of the image, inside it", () => {
   const size = { width: 200, height: 100 };
@@ -45,4 +45,30 @@ test("a session's notes are kept apart from another's", () => {
   assert.equal(mockupNotesOf("one").notes.length, 1);
   assert.equal(mockupNotesOf("two").notes.length, 0);
   assert.equal(mockupNotesOf("two").commenting, false);
+});
+
+test("one send at a time per session, even when its tab opens again mid-send, and it clears only what it took", () => {
+  const first = { id: "a", screen: 1, x: 0.1, y: 0.1, text: "Bluer" };
+  changeNotes("sending", () => ({ commenting: true, notes: [first] }));
+  const taken = takeNotes("sending");
+  assert.deepEqual(taken, [first]);
+  // A tab mounted again has no guard of its own: the session's says a send runs.
+  assert.equal(mockupNotesOf("sending").sending, true);
+  assert.equal(takeNotes("sending"), null);
+  // A note made meanwhile (it can't be from the tab, which freezes them) outlives the send.
+  const later = { id: "b", screen: 1, x: 0.5, y: 0.5, text: "Wider" };
+  changeNotes("sending", (current) => ({ notes: [...current.notes, later] }));
+  const sent = { version: 1, shots: ["s1"], dismissed: false };
+  sendEnded("sending", taken!, sent);
+  assert.deepEqual(mockupNotesOf("sending").notes, [later]);
+  assert.equal(mockupNotesOf("sending").sending, false);
+  assert.deepEqual(mockupNotesOf("sending").sent, sent);
+
+  // A failed send keeps its notes to try again.
+  changeNotes("failing", () => ({ commenting: true, notes: [first] }));
+  sendEnded("failing", takeNotes("failing")!, null);
+  assert.deepEqual(mockupNotesOf("failing").notes, [first]);
+  assert.equal(mockupNotesOf("failing").commenting, true);
+  assert.equal(mockupNotesOf("failing").failed, true);
+  assert.equal(mockupNotesOf("failing").sending, false);
 });

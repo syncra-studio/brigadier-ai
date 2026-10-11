@@ -69,12 +69,18 @@ export function notePlacement(point: { x: number; y: number }, box: Box, surface
 /**
  * A session's notes on its mockup (the task `task` built) while they are made, kept while the
  * tab closes and opens. `sent` holds the screenshots shown when notes went, until the user
- * moves to the revised ones (`dismissed`: not now, the next time the mockup opens).
+ * moves to the revised ones (`dismissed`: not now, the next time the mockup opens). `sending`
+ * and `failed` are the send in flight and the last one's failure, kept with the notes so a tab
+ * opened again mid-send still has them frozen.
  */
-type SessionNotes = { task: string | null; notes: MockupNote[]; commenting: boolean; sent: { version: number; shots: string[]; dismissed: boolean } | null };
+type SessionNotes = {
+  task: string | null; notes: MockupNote[]; commenting: boolean;
+  sent: { version: number; shots: string[]; dismissed: boolean } | null;
+  sending: boolean; failed: boolean;
+};
 
 /** No notes, for no mockup yet. */
-export const NO_NOTES: SessionNotes = { task: null, notes: [], commenting: false, sent: null };
+export const NO_NOTES: SessionNotes = { task: null, notes: [], commenting: false, sent: null, sending: false, failed: false };
 const EMPTY = NO_NOTES;
 
 export const useMockupNotes = create<{ sessions: Record<string, SessionNotes> }>(() => ({ sessions: {} }));
@@ -91,5 +97,29 @@ export function changeNotes(conversationId: string, change: (current: SessionNot
   useMockupNotes.setState(({ sessions }) => {
     const current = sessions[conversationId] ?? EMPTY;
     return { sessions: { ...sessions, [conversationId]: { ...current, ...change(current) } } };
+  });
+}
+
+/**
+ * Takes the session's notes to send: none when there are none or a send already runs, so it
+ * is one send at a time per session, however often its tab closes and opens meanwhile.
+ */
+export function takeNotes(conversationId: string): MockupNote[] | null {
+  const { notes, sending } = mockupNotesOf(conversationId);
+  if (!notes.length || sending) return null;
+  changeNotes(conversationId, () => ({ sending: true, failed: false }));
+  return notes;
+}
+
+/**
+ * Ends the send of the notes `taken`: sent (`sent`, the screenshots they went on), only those
+ * notes leave; failed (`null`), they stay to try again.
+ */
+export function sendEnded(conversationId: string, taken: readonly MockupNote[], sent: SessionNotes["sent"]): void {
+  changeNotes(conversationId, (current) => {
+    if (!sent) return { sending: false, failed: true };
+    const gone = new Set(taken.map((note) => note.id));
+    const notes = current.notes.filter((note) => !gone.has(note.id));
+    return { sending: false, notes, commenting: current.commenting && notes.length > 0, sent };
   });
 }
