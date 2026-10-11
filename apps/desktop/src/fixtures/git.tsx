@@ -68,7 +68,7 @@ useApp.setState((state) => ({
     ...state.settings,
     ...(custom
       ? {
-          gitWriter: { provider: "claude", model: "sonnet", effort: "low", fast: null, account: null },
+          gitWriter: { provider: "claude", model: "sonnet", effort: "low" },
           commitStyle: "custom",
           commitInstructions:
             "Start with the area in brackets, like [Settings]. Say what changed for the user, in the present tense. Keep the subject under 60 characters.",
@@ -151,7 +151,7 @@ function Fixture() {
         useApp.setState((state) => ({
           settings: {
             ...state.settings,
-            gitWriter: { provider: "claude", model: "sonnet", effort: "low", fast: null, account: null },
+            gitWriter: { provider: "claude", model: "sonnet", effort: "low" },
           },
         }));
       },
