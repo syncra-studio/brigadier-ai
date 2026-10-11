@@ -34,7 +34,7 @@ use super::{SessionManager, blocking, git_error};
 use crate::model::{
     ConversationId, ConversationKind, DomainEvent, Environment, PermissionLevel, Setup,
 };
-use crate::work::{ApprovalSubject, TaskKind};
+use crate::work::TaskKind;
 use crate::{Error, Result};
 
 /// The read-back window of a Claude thread's Bash output (the documented maximum): a failing
@@ -385,14 +385,14 @@ impl SessionManager {
                         }
                         Settled::Ask(why) => {
                             request.reason = Some(why);
-                            manager.ask_user_for_thread(&conv, request).await;
+                            manager.ask_user_for_thread(&conv, &cli, request).await;
                         }
                     }
                 });
                 return;
             }
             PolicyRoute::AskUser => {
-                self.ask_user_for_thread(conv, request).await;
+                self.ask_user_for_thread(conv, cli, request).await;
                 return;
             }
         };
@@ -400,12 +400,9 @@ impl SessionManager {
             .await;
     }
 
-    /// The user's card for the thread CLI's request.
-    async fn ask_user_for_thread(&self, conv: &ConvLive, request: ApprovalRequest) {
-        if let Err(err) = self
-            .open_approval(&conv.id, None, ApprovalSubject::Cli { request })
-            .await
-        {
+    /// The user's card for the thread CLI's request, while that CLI runs.
+    async fn ask_user_for_thread(&self, conv: &ConvLive, cli: &Cli, request: ApprovalRequest) {
+        if let Err(err) = self.open_cli_card(cli, &conv.id, None, request).await {
             tracing::warn!(conversation = %conv.id, error = %err, "could not open an approval card");
         }
     }

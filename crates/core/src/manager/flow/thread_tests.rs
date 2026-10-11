@@ -2381,6 +2381,64 @@ fn escalation_reviewer(turn: &super::Turn, asked: &Mutex<Vec<String>>) -> Option
     ))
 }
 
+/// A Codex escalation whose review ends after the CLI that asked has closed (retired, taken
+/// over) opens no card: its answer would have nowhere to go.
+#[tokio::test]
+async fn a_review_that_outlives_its_cli_opens_no_card() {
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let closed = Arc::new(tokio::sync::Notify::new());
+    let reviewed = Arc::new(tokio::sync::Notify::new());
+    let (reviewer_log, gate, done) = (asked.clone(), closed.clone(), reviewed.clone());
+    let flow = Flow::start(
+        "codex-review-outlives",
+        Options {
+            permission: PermissionLevel::ApproveForMe,
+            thread: ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (asked, gate, done) = (reviewer_log.clone(), gate.clone(), done.clone());
+            async move {
+                if let Some(reply) = escalation_reviewer(&turn, &asked) {
+                    gate.notified().await;
+                    done.notify_one();
+                    return reply;
+                }
+                if turn.is_orchestrator() {
+                    turn.ask_approval("npm publish", "x").await;
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+
+    flow.say("Publish.").await;
+    super::eventually("the reviewer to be asked", || {
+        asked.lock().unwrap().len() == 1
+    })
+    .await;
+    flow.manager
+        .conv(&flow.conversation)
+        .unwrap()
+        .close_cli()
+        .await;
+    closed.notify_one();
+    reviewed.notified().await;
+    // The review's verdict ("I can't tell") would be a card.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        flow.board()
+            .await
+            .approvals
+            .values()
+            .all(|approval| approval.state != CardState::Pending),
+        "{:?}",
+        flow.board().await.approvals
+    );
+    flow.stop().await;
+}
+
 /// Codex at Approve for me: its thread's and its workers' requests to leave the sandbox reach
 /// Brigadier, whose reviewer settles them with the session's protected set, before any
 /// "Allow similar" grant could. What would touch the protected set is declined to the model

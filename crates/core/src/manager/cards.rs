@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use brigadier_providers::policy::Similar;
-use brigadier_providers::{ApprovalDecision, Decider, ProviderEvent};
+use brigadier_providers::{ApprovalDecision, ApprovalRequest, Decider, ProviderEvent};
 use tokio::sync::oneshot;
 
 use super::SessionManager;
@@ -124,6 +124,37 @@ impl SessionManager {
             .entry(conversation_id.clone())
             .or_default()
             .merge(grants);
+    }
+
+    /// Opens the user's card for a request of `cli`, unless that CLI session has ended: a
+    /// request settled late (Brigadier's reviewer, [`super::escalation`]) may find it closed
+    /// (taken over, retired), and its answer would have nowhere to go. A card opened as it ended
+    /// is expired at once; one opened before it is expired by whoever closed it, if they do.
+    /// `None` when no card waits.
+    pub(crate) async fn open_cli_card(
+        &self,
+        cli: &super::conversation::Cli,
+        conversation_id: &ConversationId,
+        task_id: Option<TaskId>,
+        request: ApprovalRequest,
+    ) -> Result<Option<Approval>> {
+        if cli.ended.is_cancelled() {
+            return Ok(None);
+        }
+        let (approval, _) = self
+            .open_approval(conversation_id, task_id, ApprovalSubject::Cli { request })
+            .await?;
+        if cli.ended.is_cancelled() {
+            self.settle_approval(
+                &approval,
+                CardState::Expired {
+                    reason: "The session that asked has ended.".into(),
+                },
+            )
+            .await;
+            return Ok(None);
+        }
+        Ok(Some(approval))
     }
 
     /// Opens an approval card and returns a receiver for its answer.

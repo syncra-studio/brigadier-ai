@@ -61,10 +61,9 @@ use crate::routing::TokenMeter;
 use crate::runtime::{is_delta, merge_delta};
 use crate::tools::Role;
 use crate::work::{
-    ApprovalSubject, ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, GateLink,
-    GateOwner, InjectionKind, OrchestratorStepKind, QuestionKind, QuotaWait, RepoAccess, Report,
-    Route, Task, TaskId, TaskKind, TaskState, TaskWorkspace, WaitingSource, WorkerAccess,
-    WorkerRole,
+    ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, GateLink, GateOwner,
+    InjectionKind, OrchestratorStepKind, QuestionKind, QuotaWait, RepoAccess, Report, Route, Task,
+    TaskId, TaskKind, TaskState, TaskWorkspace, WaitingSource, WorkerAccess, WorkerRole,
 };
 use crate::{Error, Result, now_ms};
 
@@ -2798,7 +2797,7 @@ impl SessionManager {
                         Settled::Answer(decision) => decision,
                         Settled::Ask(why) => {
                             request.reason = Some(why);
-                            manager.ask_user_for_worker(&live, request).await;
+                            manager.ask_user_for_worker(&live, &cli, request).await;
                             return;
                         }
                     };
@@ -2834,26 +2833,27 @@ impl SessionManager {
                 self.record_worker_resolution(&live.id, request.id, decision, decider)
                     .await;
             }
-            PolicyRoute::AskUser => self.ask_user_for_worker(live, request).await,
+            PolicyRoute::AskUser => self.ask_user_for_worker(live, cli, request).await,
         }
     }
 
-    /// The user's card for the worker CLI's request; the worker shows it waits on it.
-    async fn ask_user_for_worker(&self, live: &TaskLive, request: ApprovalRequest) {
+    /// The user's card for the worker CLI's request, while that CLI runs; the worker shows it
+    /// waits on it.
+    async fn ask_user_for_worker(&self, live: &TaskLive, cli: &Cli, request: ApprovalRequest) {
         let what = request
             .command
             .clone()
             .unwrap_or_else(|| request.tool.clone());
-        if let Err(err) = self
-            .open_approval(
-                &live.conversation_id,
-                Some(live.id.clone()),
-                ApprovalSubject::Cli { request },
-            )
+        match self
+            .open_cli_card(cli, &live.conversation_id, Some(live.id.clone()), request)
             .await
         {
-            tracing::warn!(task = %live.id, error = %err, "could not open an approval card");
-            return;
+            Ok(Some(_)) => {}
+            Ok(None) => return,
+            Err(err) => {
+                tracing::warn!(task = %live.id, error = %err, "could not open an approval card");
+                return;
+            }
         }
         self.set_task_blocked(&live.id, Some(format!("Waiting for approval: {what}")))
             .await;
