@@ -2698,3 +2698,140 @@ async fn an_unsettled_codex_escalation_is_a_card_unless_nobody_is_there() {
     );
     flow.stop().await;
 }
+
+/// Under Approve for me, the user's yes to watching CI lets the thread push a CI fix to the
+/// same repository and branch with no card: Brigadier's reviewer reads the yes, the question it
+/// answered and the folder's push remotes, and judges. Once the watch passed, the same push is
+/// the user's card again (SESSION-FIXES-PLAN.md phase 5, the user's addition).
+#[tokio::test]
+async fn a_ci_fixs_push_under_the_users_yes_to_watching_goes_through_and_then_asks_again() {
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let decisions: Arc<Mutex<Vec<Asked>>> = Arc::default();
+    let pushes = Arc::new(tokio::sync::Semaphore::new(0));
+    let (reviewer_log, log, gate) = (asked.clone(), decisions.clone(), pushes.clone());
+    let flow = Flow::start(
+        "ci-repush",
+        Options {
+            permission: PermissionLevel::ApproveForMe,
+            thread: ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (asked, log, gate) = (reviewer_log.clone(), log.clone(), gate.clone());
+            async move {
+                if turn
+                    .prompt
+                    .starts_with("You review one request of a coding agent")
+                {
+                    asked.lock().unwrap().push(turn.input.clone());
+                    // The reviewer allows a push only with the user's yes to watching CI.
+                    return Reply::text(
+                        if turn
+                            .input
+                            .contains("the user answered \u{201c}Watch\u{201d}")
+                        {
+                            r#"{"allow": true, "reason": "a CI fix to the watched branch"}"#
+                        } else {
+                            r#"{"allow": false, "reason": "it pushes to a remote"}"#
+                        },
+                    );
+                }
+                if turn.is_orchestrator() {
+                    for _ in 0..2 {
+                        gate.acquire().await.unwrap().forget();
+                        let decision = turn.ask_approval("git push origin fix", "git").await;
+                        log.lock()
+                            .unwrap()
+                            .push(("git push origin fix".into(), decision));
+                    }
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", "git@github.com:o/n.git"],
+    );
+    flow.say("Fix CI.").await;
+    // The user's yes, answered after their message, held by a watch that went red.
+    let consent = crate::work::CiConsent {
+        card: crate::model::CardId("card-1".into()),
+        question: "Watch CI for 97c298d5?".into(),
+        answer: "Watch".into(),
+        answered_at_ms: crate::now_ms() + 1,
+    };
+    let watch = |sha: &str, result: &str| OrchestratorStepKind::CiWatch {
+        repo: "o/n".into(),
+        branch: "fix".into(),
+        sha: sha.into(),
+        waiting: false,
+        runs: Vec::new(),
+        result: Some(result.into()),
+        consent: Some(consent.clone()),
+    };
+    flow.manager
+        .orchestrator_step(&flow.conversation, watch("aaaa1111", "failed"))
+        .await;
+    pushes.add_permits(1);
+    flow.until("the fix pushed", |_| decisions.lock().unwrap().len() == 1)
+        .await;
+    assert_eq!(
+        decisions.lock().unwrap()[0].1,
+        Some(ApprovalDecision::Allow)
+    );
+    let seen = asked.lock().unwrap()[0].clone();
+    assert!(seen.contains("`o/n` on GitHub, branch `fix`"), "{seen}");
+    assert!(
+        seen.contains("asked \u{201c}Watch CI for 97c298d5?\u{201d}"),
+        "{seen}"
+    );
+    assert!(
+        seen.contains("origin\tgit@github.com:o/n.git (push)"),
+        "the push remotes: {seen}"
+    );
+    assert!(flow.board().await.approvals.is_empty());
+
+    // The fix's watch passed: the loop is over, and a push is the user's card again.
+    flow.manager
+        .orchestrator_step(&flow.conversation, watch("bbbb2222", "passed"))
+        .await;
+    pushes.add_permits(1);
+    let board = flow
+        .until("the push's card", |board| {
+            board
+                .approvals
+                .values()
+                .any(|approval| approval.state == CardState::Pending)
+        })
+        .await;
+    let card = board
+        .approvals
+        .values()
+        .find(|approval| approval.state == CardState::Pending)
+        .unwrap();
+    let ApprovalSubject::Cli { request } = &card.subject else {
+        panic!("{:?}", card.subject);
+    };
+    assert_eq!(
+        request.reason.as_deref(),
+        Some("Brigadier's reviewer would not allow it: it pushes to a remote")
+    );
+    assert!(
+        !asked.lock().unwrap()[1].contains("the user answered"),
+        "no consent after the loop: {}",
+        asked.lock().unwrap()[1]
+    );
+    flow.manager
+        .answer_card(
+            flow.conversation.clone(),
+            card.id.clone(),
+            ApprovalDecision::Deny {
+                message: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+    flow.stop().await;
+}

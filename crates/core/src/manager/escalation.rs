@@ -15,7 +15,10 @@
 //! The reviewer is a one-shot session (read-only, no tools, nobody to ask) that reads the
 //! request, with the session's protected set as a rule, and answers in JSON. It allows the
 //! request unless it pushes, publishes or deploys, uses credentials, spends money, or deletes
-//! or writes outside the work. Its tokens are metered as their own step.
+//! or writes outside the work. One push it may allow: a CI fix's, to the repository and branch
+//! whose CI the user said yes to watching, while that yes lasts (`ci::live_ci_consents`); it
+//! reads the yes and the folder's push remotes, and judges. Its tokens are metered as their
+//! own step.
 
 use std::path::Path;
 use std::time::Duration;
@@ -46,7 +49,7 @@ pub(crate) const OWN_APPROVAL: &str = "brigadier-escalation:";
 /// Under which owner the reviewer's tokens are counted ([`super::usage`] reads the prefix).
 pub(crate) const ESCALATION_OWNER: &str = "escalation:";
 
-const ROLE: &str = "You review one request of a coding agent to go beyond its sandbox (a shell command to run outside it, files to write, or wider permissions), on the user's behalf, while the user is away. You have no tools: decide from the request alone.\n\nAllow it unless it does any of these: pushes to a remote, publishes or releases anything, deploys, uses or reads credentials, tokens or keys, spends money, or deletes or writes outside the project's folder and its own temporary folders. Network reads (downloads, package installs), builds, tests and starting local servers are fine.\n\nReply with one line of JSON and nothing else: {\"allow\": true or false, \"protected\": true only when you refuse it because a rule below forbids it, \"reason\": \"one short sentence\"}.";
+const ROLE: &str = "You review one request of a coding agent to go beyond its sandbox (a shell command to run outside it, files to write, or wider permissions), on the user's behalf, while the user is away. You have no tools: decide from the request alone.\n\nAllow it unless it does any of these: pushes to a remote (unless the user's consent given with the request covers that push), publishes or releases anything, deploys, uses or reads credentials, tokens or keys, spends money, or deletes or writes outside the project's folder and its own temporary folders. Network reads (downloads, package installs), builds, tests and starting local servers are fine.\n\nA consent covers a push only when the user's answer was a yes to watching CI, and the push is a plain push of commits to that same repository (read the folder's push remotes) and to that same branch only: no other branch, no tags, no force push, nothing else on the list. Every other push stays refused.\n\nReply with one line of JSON and nothing else: {\"allow\": true or false, \"protected\": true only when you refuse it because a rule below forbids it, \"reason\": \"one short sentence\"}.";
 
 #[derive(Deserialize)]
 struct Verdict {
@@ -85,7 +88,7 @@ impl SessionManager {
             workdir.display()
         );
         let verdict = self
-            .review_escalation(id, &request, workspace, protection)
+            .review_escalation(id, &request, workspace, Some(workdir), protection)
             .await;
         let why = match verdict {
             Ok(verdict) if verdict.allow => {
@@ -155,8 +158,9 @@ impl SessionManager {
         unattended: bool,
     ) -> Settled {
         let what = describe(request);
+        let dir = request.cwd.as_deref().map(Path::new).or(workspace);
         let why = match self
-            .review_escalation(id, &what, workspace, protection)
+            .review_escalation(id, &what, workspace, dir, protection)
             .await
         {
             Ok(verdict) if verdict.allow => {
@@ -201,14 +205,16 @@ impl SessionManager {
         }
     }
 
-    /// The reviewer's verdict on `request` (what is asked, and where).
+    /// The reviewer's verdict on `request` (what is asked, and where: `dir`).
     async fn review_escalation(
         &self,
         id: &ConversationId,
         request: &str,
         workspace: Option<&Path>,
+        dir: Option<&Path>,
         protection: &Protection,
     ) -> std::result::Result<Verdict, String> {
+        let consents = self.push_consents(id, dir, workspace).await;
         let counted_as = TaskId(format!("{ESCALATION_OWNER}{}", uuid::Uuid::now_v7()));
         let owner = counted_as.0.clone();
         let home = self.owned_dir("escalation", &counted_as.0[ESCALATION_OWNER.len()..]);
@@ -259,6 +265,9 @@ impl SessionManager {
                 // outside it would reach.
                 if let Some(rule) = brigadier_providers::approver_rule(protection) {
                     prompt.push_str(&format!("\n\n{rule}"));
+                }
+                if let Some(consents) = &consents {
+                    prompt.push_str(&format!("\n\n{consents}"));
                 }
                 let turn = async {
                     session
@@ -322,6 +331,70 @@ impl SessionManager {
         self.runtime.ledger().dispose(&owner).await;
         verdict(&reply?)
     }
+}
+
+impl SessionManager {
+    /// The user's consents that may cover a push, as the reviewer reads them: their yes to
+    /// watching CI while its loop lasts (a fix pushed to the same repository and branch, and
+    /// watched again; `ci::live_ci_consents`), with the push remotes to check the push against:
+    /// of `dir`, where the request runs, or else of the project's folder (`workspace`; a
+    /// thread runs in a folder of its own). None when there is no such yes.
+    async fn push_consents(
+        &self,
+        id: &ConversationId,
+        dir: Option<&Path>,
+        workspace: Option<&Path>,
+    ) -> Option<String> {
+        let board = self.core.board(id).await.ok()?;
+        let spoke = self.latest_user_message_at(id, &board).await.ok()?;
+        let consents = super::ci::live_ci_consents(&board, spoke);
+        if consents.is_empty() {
+            return None;
+        }
+        let mut text = String::from(
+            "The user's consent that may cover a push: they said yes to watching CI, which covers pushing CI fixes to the same repository and branch while the watch goes on.",
+        );
+        for (repo, branch, consent) in &consents {
+            text.push_str(&format!(
+                "\n- `{repo}` on GitHub, branch `{branch}`: asked \u{201c}{}\u{201d}, the user answered \u{201c}{}\u{201d}.",
+                consent.question.trim(),
+                consent.answer.trim()
+            ));
+        }
+        let mut remotes = push_remotes(dir).await;
+        if remotes.is_none() && workspace != dir {
+            remotes = push_remotes(workspace).await;
+        }
+        text.push_str(&format!(
+            "\nThe folder's push remotes:\n{}",
+            remotes.as_deref().unwrap_or("(none found)")
+        ));
+        Some(text)
+    }
+}
+
+/// `git remote -v`'s push lines in `dir`; none when there are none to read.
+async fn push_remotes(dir: Option<&Path>) -> Option<String> {
+    let dir = dir?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["remote", "-v"])
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await;
+    let lines: Vec<String> = match output {
+        Ok(Ok(output)) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| line.ends_with("(push)"))
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    };
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// A CLI's request to go beyond its sandbox as the reviewer reads it.

@@ -1407,7 +1407,7 @@ impl SessionManager {
     }
 
     /// When the user last wrote on the branch shown, if ever.
-    async fn latest_user_message_at(
+    pub(super) async fn latest_user_message_at(
         &self,
         id: &ConversationId,
         board: &crate::board::Board,

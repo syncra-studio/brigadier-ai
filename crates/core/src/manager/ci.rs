@@ -1048,6 +1048,11 @@ impl super::SessionManager {
         let request = self.request_for(id, None).await;
         let branch = push.branch.trim().to_owned();
         let short = short_sha(&sha).to_owned();
+        // The user's yes to watching it: carried on from the watch whose fix this is, or the
+        // card they answered since they last wrote.
+        let board = self.core.board(id).await?;
+        let spoke = self.latest_user_message_at(id, &board).await?;
+        let consent = watch_consent(&board, &repo, &branch, spoke);
         self.ci_row(
             id,
             request.clone(),
@@ -1059,6 +1064,7 @@ impl super::SessionManager {
                 waiting_for_first: true,
             },
             None,
+            consent.as_ref(),
         )
         .await;
         let this = self.arc();
@@ -1078,8 +1084,17 @@ impl super::SessionManager {
                         continue;
                     }
                     last = Some(now);
-                    this.ci_row(&id, request.clone(), &repo, &branch, &sha, &progress, None)
-                        .await;
+                    this.ci_row(
+                        &id,
+                        request.clone(),
+                        &repo,
+                        &branch,
+                        &sha,
+                        &progress,
+                        None,
+                        consent.as_ref(),
+                    )
+                    .await;
                 }
             };
             // `HOST/OWNER/REPO`, so a GH_HOST set to another host doesn't send the run
@@ -1109,6 +1124,7 @@ impl super::SessionManager {
                     waiting_for_first: false,
                 },
                 Some(result),
+                consent.as_ref(),
             )
             .await;
             let mut text = outcome_envelope(&sha, &outcome);
@@ -1195,6 +1211,7 @@ impl super::SessionManager {
         sha: &str,
         progress: &Progress,
         result: Option<&str>,
+        consent: Option<&crate::work::CiConsent>,
     ) {
         let runs = progress
             .runs
@@ -1218,15 +1235,249 @@ impl super::SessionManager {
                 waiting: progress.waiting_for_first,
                 runs,
                 result: result.map(str::to_owned),
+                consent: consent.cloned(),
             },
         )
         .await;
     }
 }
 
+/// How a watch ends the user's yes to it: what passed, saw no runs or stopped needs no fix.
+const LOOP_ENDS: [&str; 3] = ["passed", "no runs", "stopped"];
+
+/// A watched push's row, as the board keeps it: one per repository, branch and sha.
+struct WatchRow<'a> {
+    repo: &'a str,
+    branch: &'a str,
+    result: Option<&'a str>,
+    consent: Option<&'a crate::work::CiConsent>,
+}
+
+fn watch_rows(board: &crate::board::Board) -> Vec<WatchRow<'_>> {
+    board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            crate::work::OrchestratorStepKind::CiWatch {
+                repo,
+                branch,
+                result,
+                consent,
+                ..
+            } => Some(WatchRow {
+                repo,
+                branch,
+                result: result.as_deref(),
+                consent: consent.as_ref(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The user's yeses to watching CI that still cover a CI fix's push, each with the
+/// repository and branch it covers: the newest per repository and branch, unless a watch under
+/// it passed, saw no runs or stopped, or the user wrote since (`spoke`: when they last did).
+/// A failed watch keeps it: the fix is pushed and watched again under the same yes.
+pub(crate) fn live_ci_consents(
+    board: &crate::board::Board,
+    spoke: Option<i64>,
+) -> Vec<(String, String, crate::work::CiConsent)> {
+    let rows = watch_rows(board);
+    let mut seen: Vec<(&str, &str)> = Vec::new();
+    let mut live = Vec::new();
+    for row in rows.iter().rev() {
+        let Some(consent) = row.consent else {
+            continue;
+        };
+        if seen.contains(&(row.repo, row.branch)) {
+            continue;
+        }
+        seen.push((row.repo, row.branch));
+        let ended = rows.iter().any(|other| {
+            other.repo == row.repo
+                && other.branch == row.branch
+                && other.consent.is_some_and(|c| c.card == consent.card)
+                && other
+                    .result
+                    .is_some_and(|result| LOOP_ENDS.contains(&result))
+        });
+        let wrote_since = spoke.is_some_and(|at| at > consent.answered_at_ms);
+        if !ended && !wrote_since {
+            live.push((row.repo.to_owned(), row.branch.to_owned(), consent.clone()));
+        }
+    }
+    live
+}
+
+/// The yes a new watch of `repo` and `branch` holds: the one still live for them (a fix's
+/// push watched again), else the newest card the user answered since they last wrote that no
+/// watch holds yet. Which card the thread asked on, and whether its answer is a yes, is the
+/// escalation reviewer's to read; Brigadier only binds the user's own answer to the watch.
+pub(crate) fn watch_consent(
+    board: &crate::board::Board,
+    repo: &str,
+    branch: &str,
+    spoke: Option<i64>,
+) -> Option<crate::work::CiConsent> {
+    if let Some((_, _, consent)) = live_ci_consents(board, spoke)
+        .into_iter()
+        .find(|(r, b, _)| r == repo && b == branch)
+    {
+        return Some(consent);
+    }
+    let held = watch_rows(board);
+    board
+        .questions
+        .values()
+        .filter(|question| matches!(question.kind, crate::work::QuestionKind::Orchestrator))
+        .filter(|question| {
+            !held
+                .iter()
+                .any(|row| row.consent.is_some_and(|c| c.card == question.id))
+        })
+        .filter_map(|question| {
+            let answer = question.answer.as_ref()?;
+            let at = question.answered_at_ms?;
+            spoke
+                .is_none_or(|spoke| at > spoke)
+                .then(|| crate::work::CiConsent {
+                    card: question.id.clone(),
+                    question: question.text.clone(),
+                    answer: answer.clone(),
+                    answered_at_ms: at,
+                })
+        })
+        .max_by_key(|consent| consent.answered_at_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The board of a session whose thread asked to watch CI on a card: `answered` when the
+    /// user answered it, and the watches since.
+    fn ci_board(
+        answered: Option<i64>,
+        watches: &[(&str, Option<&str>, bool)],
+    ) -> crate::board::Board {
+        use crate::work::{OrchestratorStep, OrchestratorStepKind, Question, QuestionKind};
+        let mut board = crate::board::Board::default();
+        let card = crate::model::CardId("card-1".into());
+        board.questions.insert(
+            card.clone(),
+            Question {
+                id: card,
+                conversation_id: crate::model::ConversationId("c".into()),
+                task_id: None,
+                request_id: None,
+                position: 1,
+                kind: QuestionKind::Orchestrator,
+                text: "Watch CI for 97c298d5?".into(),
+                options: vec!["Watch".into(), "No".into()],
+                recommended: Some(0),
+                items: Vec::new(),
+                answer: answered.map(|_| "Watch".into()),
+                answers: Vec::new(),
+                created_at_ms: 5,
+                answered_at_ms: answered,
+            },
+        );
+        for (seq, (sha, result, consented)) in watches.iter().enumerate() {
+            let consent = consented
+                .then(|| watch_consent(&board, "o/n", "fix", Some(1)))
+                .flatten();
+            board.apply(
+                &crate::model::DomainEvent::OrchestratorStepped {
+                    step: OrchestratorStep {
+                        request_id: None,
+                        kind: OrchestratorStepKind::CiWatch {
+                            repo: "o/n".into(),
+                            branch: "fix".into(),
+                            sha: (*sha).into(),
+                            waiting: false,
+                            runs: Vec::new(),
+                            result: result.map(str::to_owned),
+                            consent,
+                        },
+                        at_ms: 20,
+                        position: 0,
+                    },
+                },
+                i64::try_from(seq).unwrap() + 2,
+            );
+        }
+        board
+    }
+
+    fn live(board: &crate::board::Board, spoke: Option<i64>) -> Vec<(String, String, String)> {
+        live_ci_consents(board, spoke)
+            .into_iter()
+            .map(|(repo, branch, consent)| (repo, branch, consent.card.0))
+            .collect()
+    }
+
+    #[test]
+    fn a_watch_holds_the_card_the_user_answered_since_they_last_wrote() {
+        // Answered at 10, after the user's last message at 1.
+        let board = ci_board(Some(10), &[]);
+        let consent = watch_consent(&board, "o/n", "fix", Some(1)).unwrap();
+        assert_eq!(consent.card.0, "card-1");
+        assert_eq!(consent.question, "Watch CI for 97c298d5?");
+        assert_eq!(consent.answer, "Watch");
+        assert_eq!(consent.answered_at_ms, 10);
+        // Never answered, or answered before the user's last message: no consent.
+        assert!(watch_consent(&ci_board(None, &[]), "o/n", "fix", Some(1)).is_none());
+        assert!(watch_consent(&board, "o/n", "fix", Some(11)).is_none());
+    }
+
+    #[test]
+    fn a_watch_the_user_never_said_yes_to_covers_no_push() {
+        let board = ci_board(None, &[("aaaa", None, true)]);
+        assert!(live(&board, Some(1)).is_empty());
+    }
+
+    #[test]
+    fn a_red_watch_keeps_the_yes_for_the_fix_and_its_new_watch() {
+        // Red: the fix's push is covered while nothing else happened.
+        let red = ci_board(Some(10), &[("aaaa", Some("failed"), true)]);
+        assert_eq!(
+            live(&red, Some(1)),
+            [("o/n".into(), "fix".into(), "card-1".into())]
+        );
+        // The fix's watch carries the same yes, though no card was answered for it.
+        let board = ci_board(
+            Some(10),
+            &[("aaaa", Some("failed"), true), ("bbbb", None, true)],
+        );
+        assert_eq!(live(&board, Some(1)).len(), 1);
+        // Another repository's or branch's watch gets nothing from it.
+        assert!(watch_consent(&board, "o/other", "fix", Some(1)).is_none());
+        assert!(watch_consent(&board, "o/n", "main", Some(1)).is_none());
+    }
+
+    #[test]
+    fn a_watch_that_passed_saw_no_runs_or_stopped_ends_the_yes() {
+        for end in ["passed", "no runs", "stopped"] {
+            let board = ci_board(
+                Some(10),
+                &[("aaaa", Some("failed"), true), ("bbbb", Some(end), true)],
+            );
+            assert!(live(&board, Some(1)).is_empty(), "{end}");
+            // A card used up isn't taken again by the next watch.
+            assert!(
+                watch_consent(&board, "o/n", "fix", Some(1)).is_none(),
+                "{end}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_users_next_message_ends_the_yes() {
+        let board = ci_board(Some(10), &[("aaaa", Some("failed"), true)]);
+        assert_eq!(live(&board, Some(9)).len(), 1);
+        assert!(live(&board, Some(12)).is_empty());
+    }
 
     const SHA: &str = "97c298d5aaaabbbbccccddddeeeeffff00001111";
 
