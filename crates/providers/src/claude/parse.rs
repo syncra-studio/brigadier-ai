@@ -6,7 +6,7 @@
 //! forwarded under the item id `<message id>:<block index>`; the final message reuses the id of
 //! the block still open, so it replaces the streamed text instead of repeating it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
@@ -86,6 +86,12 @@ pub struct Parser {
     /// The context size last reported, to repeat once the window is known.
     context_used: Option<i64>,
     totals: TokenUsage,
+    /// Subagents' (the Agent tool's) messages since the last result, each one's last usage by
+    /// message id. Claude's `result` leaves them out of its `usage` (only its cumulative
+    /// `modelUsage` has them), so the next result's turn adds them.
+    subagent_usage: HashMap<String, TokenUsage>,
+    /// Subagent messages already added to a turn: a line repeated after its result adds nothing.
+    subagent_counted: HashSet<String>,
     interrupting: bool,
     turn_active: bool,
     /// Messages written to Claude that it has not taken yet (echoed back).
@@ -324,11 +330,17 @@ impl Parser {
             return;
         }
         // Subagent output is summarized by its tool result; meanwhile it shows the session is
-        // alive.
+        // alive. Its tokens count towards the next result's turn.
         if value
             .get("parent_tool_use_id")
             .is_some_and(|id| !id.is_null())
         {
+            if let (Some(id), Some(usage)) = (str_of(&message, "id"), message.get("usage"))
+                && !self.subagent_counted.contains(id)
+            {
+                self.subagent_usage
+                    .insert(id.to_owned(), token_usage(usage));
+            }
             progress(value, out);
             return;
         }
@@ -762,6 +774,14 @@ impl Parser {
         let usage = value.get("usage").map(|usage| {
             let mut turn = token_usage(usage);
             turn.cost_usd = value.get("total_cost_usd").and_then(Value::as_f64);
+            for (id, sub) in self.subagent_usage.drain() {
+                turn.input_tokens += sub.input_tokens;
+                turn.cached_input_tokens += sub.cached_input_tokens;
+                turn.cache_write_tokens += sub.cache_write_tokens;
+                turn.output_tokens += sub.output_tokens;
+                turn.reasoning_tokens += sub.reasoning_tokens;
+                self.subagent_counted.insert(id);
+            }
             turn
         });
         if let Some(turn) = &usage {
@@ -1661,5 +1681,59 @@ mod tests {
             "tool_use_id": "toolu_4",
         });
         assert_eq!(progress(&mut parser, task), ["toolu_4"]);
+    }
+
+    /// Claude's `result` leaves its subagents (the Agent tool) out of `usage`: a turn's usage
+    /// adds each subagent message's last usage once, and one that arrives after a result (a
+    /// subagent run in the background) goes to the next turn. Shapes as Claude Code 2.1.296
+    /// streams them.
+    #[test]
+    fn a_turns_usage_counts_its_subagents_messages_once() {
+        let mut parser = Parser::live();
+        let usage = |input: i64, read: i64, write: i64, output: i64| {
+            json!({ "input_tokens": input, "cache_read_input_tokens": read,
+                    "cache_creation_input_tokens": write, "output_tokens": output })
+        };
+        let sub = |id: &str, usage: Value| {
+            json!({ "type": "assistant", "parent_tool_use_id": "toolu_1",
+                    "message": { "id": id, "content": [{ "type": "text", "text": "…" }],
+                                 "usage": usage } })
+            .to_string()
+        };
+        let turn_usage = |outputs: Vec<Output>| {
+            outputs
+                .into_iter()
+                .find_map(|output| match output {
+                    Output::Event(ProviderEvent::TurnCompleted { usage, .. }) => usage,
+                    _ => None,
+                })
+                .expect("a turn's usage")
+        };
+        parser.feed(&sub("m1", usage(2, 0, 13_171, 16)));
+        // The same message again, as each of its blocks streams it.
+        parser.feed(&sub("m1", usage(2, 0, 13_171, 16)));
+        parser.feed(&sub("m2", usage(2, 13_171, 2_455, 2)));
+        let result = |main: Value| {
+            json!({ "type": "result", "subtype": "success", "is_error": false, "usage": main })
+                .to_string()
+        };
+        let first = turn_usage(parser.feed(&result(usage(4, 36_377, 14_851, 318))));
+        assert_eq!(
+            (
+                first.input_tokens,
+                first.cached_input_tokens,
+                first.cache_write_tokens,
+                first.output_tokens
+            ),
+            (4 + 4, 36_377 + 13_171, 14_851 + 13_171 + 2_455, 318 + 18)
+        );
+        // A line of a counted message after its result adds nothing; a new one counts next.
+        parser.feed(&sub("m2", usage(2, 13_171, 2_455, 2)));
+        parser.feed(&sub("m3", usage(2, 15_626, 160, 4)));
+        let second = turn_usage(parser.feed(&result(usage(4, 25_905, 639, 4))));
+        assert_eq!(
+            (second.cached_input_tokens, second.output_tokens),
+            (25_905 + 15_626, 4 + 4)
+        );
     }
 }
