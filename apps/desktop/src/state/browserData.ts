@@ -20,13 +20,20 @@ import type {
 /** How many pages the history view asks for at a time. */
 export const HISTORY_PAGE = 200;
 
+/** History newest first; `after` (the last visit shown) asks for the next page. */
 export function browserHistory(
   query: string,
   filter: HistoryFilter,
-  beforeMs: number | null,
+  after: BrowserVisit | null,
   limit = HISTORY_PAGE,
 ): Promise<BrowserVisit[]> {
-  return invoke<BrowserVisit[]>("browser_history", { query, filter, beforeMs, limit });
+  return invoke<BrowserVisit[]>("browser_history", {
+    query,
+    filter,
+    beforeMs: after?.atMs ?? null,
+    beforeId: after?.id ?? null,
+    limit,
+  });
 }
 
 export function removeHistory(ids: number[]): Promise<void> {

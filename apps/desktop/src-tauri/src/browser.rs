@@ -207,27 +207,40 @@ impl FaviconLimit {
 struct Visit {
     id: Option<i64>,
     title: String,
+    /// A page is loading: a title now is the new page's, kept for its visit, never the
+    /// last page's.
+    loading: bool,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl Visit {
-    fn load(&mut self, url: &str, loading: bool, agent: bool) {
+    fn load(
+        &mut self,
+        store: &crate::browser_store::Store,
+        url: &str,
+        loading: bool,
+        agent: bool,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.loading = loading;
         if loading {
             self.title.clear();
-            return;
+            return Ok(());
         }
         if !web_page(url) {
-            return;
+            self.id = None;
+            return Ok(());
         }
-        let (last, title) = (self.id, &self.title);
-        let now = crate::browser_store::now_ms();
-        self.id = crate::browser_store::with(|store| store.visit(last, url, title, agent, now));
+        let visited = store.visit(self.id, url, &self.title, agent, now);
+        self.id = visited.as_ref().ok().copied();
+        visited.map(drop)
     }
 
-    fn titled(&mut self, title: &str) {
+    fn titled(&mut self, store: &crate::browser_store::Store, title: &str) -> rusqlite::Result<()> {
         self.title = title.to_owned();
-        if let Some(id) = self.id {
-            crate::browser_store::with(|store| store.titled(id, title));
+        match self.id {
+            Some(id) if !self.loading => store.titled(id, title),
+            _ => Ok(()),
         }
     }
 }
@@ -473,11 +486,22 @@ mod embedded {
                     held.reset();
                 }
                 drop(held);
-                visit.lock().expect("visit lock").load(&url, loading, agent);
+                crate::browser_store::with(|store| {
+                    let now = crate::browser_store::now_ms();
+                    visit
+                        .lock()
+                        .expect("visit lock")
+                        .load(store, &url, loading, agent, now)
+                });
                 let _ = on_load.send(BrowserEvent::Load { url, loading });
             })
             .with_document_title_changed_handler(move |title| {
-                title_visit.lock().expect("visit lock").titled(&title);
+                crate::browser_store::with(|store| {
+                    title_visit
+                        .lock()
+                        .expect("visit lock")
+                        .titled(store, &title)
+                });
                 let _ = on_title.send(BrowserEvent::Title { title });
             });
         // macOS: `browser_ui`'s delegate takes the popups instead.
@@ -699,15 +723,18 @@ pub fn browser_go(id: String, action: String) -> Result<(), IpcError> {
     embedded::go(&id, &action)
 }
 
-/// The built-in browser's history, newest first: `before_ms` pages through it.
+/// The built-in browser's history, newest first: the last visit shown (`before_ms`,
+/// `before_id`) pages through it.
 #[tauri::command]
 pub fn browser_history(
     query: String,
     filter: HistoryFilter,
     before_ms: Option<i64>,
+    before_id: Option<i64>,
     limit: u32,
 ) -> Vec<BrowserVisit> {
-    browser_store::with(|store| store.history(&query, filter, before_ms, limit)).unwrap_or_default()
+    let before = before_ms.map(|at_ms| (at_ms, before_id.unwrap_or(i64::MAX)));
+    browser_store::with(|store| store.history(&query, filter, before, limit)).unwrap_or_default()
 }
 
 /// Removes pages from the browser's history.
@@ -854,6 +881,54 @@ mod tests {
             store_identifier(Path::new("/Users/u/Library/Application Support/x/browser"))
         );
         assert_ne!(real, store_identifier(Path::new("/tmp/scratch/browser")));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn a_title_while_the_next_page_loads_is_that_pages() {
+        use crate::browser_store::Store;
+        use brigadier_ipc::app::HistoryFilter;
+        let store = Store::in_memory();
+        let mut visit = Visit::default();
+        let title = |store: &Store| {
+            store
+                .history("", HistoryFilter::All, None, 10)
+                .unwrap()
+                .into_iter()
+                .map(|v| (v.url, v.title))
+                .collect::<Vec<_>>()
+        };
+        visit
+            .load(&store, "https://a.test/", true, false, 1)
+            .unwrap();
+        visit
+            .load(&store, "https://a.test/", false, false, 2)
+            .unwrap();
+        visit.titled(&store, "A").unwrap();
+        // B shows its title before it finishes loading: A keeps its own.
+        visit
+            .load(&store, "https://b.test/", true, false, 3)
+            .unwrap();
+        visit.titled(&store, "B").unwrap();
+        assert_eq!(title(&store), [("https://a.test/".into(), "A".into())]);
+        visit
+            .load(&store, "https://b.test/", false, false, 4)
+            .unwrap();
+        // A reload takes the title it showed.
+        visit
+            .load(&store, "https://b.test/", true, false, 5)
+            .unwrap();
+        visit.titled(&store, "B, again").unwrap();
+        visit
+            .load(&store, "https://b.test/", false, false, 6)
+            .unwrap();
+        assert_eq!(
+            title(&store),
+            [
+                ("https://b.test/".into(), "B, again".into()),
+                ("https://a.test/".into(), "A".into()),
+            ]
+        );
     }
 
     #[test]

@@ -124,11 +124,18 @@ impl Store {
             db.execute_batch(step)?;
             db.pragma_update(None, "user_version", at + 1)?;
         }
+        // The store is opened once per run: a download still running is one the last run left
+        // unfinished, and nothing resumes it.
+        db.execute(
+            "UPDATE downloads SET state = 'failed' WHERE state = 'running'",
+            [],
+        )?;
         Ok(Self { db })
     }
 
-    /// The page at `url` finished loading. A reload of the page just shown moves that visit's
-    /// time instead of adding one. Returns the visit, whose title arrives later.
+    /// The page at `url` finished loading, with the title it showed while loading, if any. A
+    /// reload of the page just shown moves that visit's time (and takes a new title) instead of
+    /// adding one. Returns the visit, whose title may arrive later.
     pub fn visit(
         &self,
         last: Option<i64>,
@@ -147,8 +154,9 @@ impl Store {
                 .is_some_and(|shown| shown == url);
             if same {
                 self.db.execute(
-                    "UPDATE visits SET at_ms = ?2 WHERE id = ?1",
-                    params![id, at_ms],
+                    "UPDATE visits SET at_ms = ?2, title = CASE WHEN ?3 = '' THEN title ELSE ?3 END
+                     WHERE id = ?1",
+                    params![id, at_ms, title],
                 )?;
                 return Ok(id);
             }
@@ -168,13 +176,14 @@ impl Store {
         Ok(())
     }
 
-    /// Visits newest first, before `before_ms` when given, whose address or title holds
-    /// `query`.
+    /// Visits newest first, after the visit `before` (its time and id) when given, whose
+    /// address or title holds `query`. The id breaks ties, so a page boundary between visits at
+    /// the same millisecond skips none of them.
     pub fn history(
         &self,
         query: &str,
         filter: HistoryFilter,
-        before_ms: Option<i64>,
+        before: Option<(i64, i64)>,
         limit: u32,
     ) -> rusqlite::Result<Vec<BrowserVisit>> {
         let agent = match filter {
@@ -186,12 +195,18 @@ impl Store {
             "SELECT id, url, title, at_ms, agent FROM visits
              WHERE (url LIKE ?1 ESCAPE '\\' OR title LIKE ?1 ESCAPE '\\')
                AND (?2 IS NULL OR agent = ?2)
-               AND (?3 IS NULL OR at_ms < ?3)
+               AND (?3 IS NULL OR at_ms < ?3 OR (at_ms = ?3 AND id < ?5))
              ORDER BY at_ms DESC, id DESC LIMIT ?4",
         )?;
         statement
             .query_map(
-                params![like(query), agent, before_ms, limit.min(PAGE_LIMIT)],
+                params![
+                    like(query),
+                    agent,
+                    before.map(|(at_ms, _)| at_ms),
+                    limit.min(PAGE_LIMIT),
+                    before.map(|(_, id)| id),
+                ],
                 |row| {
                     Ok(BrowserVisit {
                         id: row.get(0)?,
@@ -490,7 +505,26 @@ mod tests {
             ["https://mine.test/100%"]
         );
         assert_eq!(urls(HistoryFilter::All, "0%o", None), Vec::<String>::new());
-        assert_eq!(urls(HistoryFilter::All, "", Some(3)).len(), 2);
+        assert_eq!(urls(HistoryFilter::All, "", Some((3, 3))).len(), 2);
+    }
+
+    #[test]
+    fn a_page_boundary_between_visits_at_the_same_time_skips_none() {
+        let store = Store::in_memory();
+        for n in 0..5 {
+            store
+                .visit(None, &format!("https://site.test/{n}"), "", false, 7)
+                .unwrap();
+        }
+        let mut seen = Vec::new();
+        let mut before = None;
+        loop {
+            let page = store.history("", HistoryFilter::All, before, 2).unwrap();
+            let Some(last) = page.last() else { break };
+            before = Some((last.at_ms, last.id));
+            seen.extend(page.into_iter().map(|visit| visit.id));
+        }
+        assert_eq!(seen, [5, 4, 3, 2, 1]);
     }
 
     #[test]
@@ -557,6 +591,25 @@ mod tests {
         assert_eq!(store.downloads("").unwrap().len(), 1);
         store.remove_downloads(Some(&[running]), None).unwrap();
         assert!(store.downloads("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_download_the_last_run_left_running_reads_as_failed() {
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-browser-store-{}", std::process::id()));
+        let path = dir.join("browser.sqlite");
+        let store = Store::open(&path).unwrap();
+        let left = store
+            .download_started("https://a.test/f.zip", "/d/f.zip", 1)
+            .unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        let listed = store.downloads("").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            (listed[0].id, listed[0].state),
+            (left, DownloadState::Failed)
+        );
     }
 
     #[test]

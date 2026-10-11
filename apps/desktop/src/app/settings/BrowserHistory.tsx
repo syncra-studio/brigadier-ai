@@ -101,9 +101,9 @@ export function BrowserHistory({
   const loadMore = () => {
     const last = visits?.at(-1);
     if (!last) return;
-    browserHistory(query, filter, last.atMs)
+    browserHistory(query, filter, last)
       .then((found) => {
-        setVisits((shown) => [...(shown ?? []), ...found.filter((visit) => visit.atMs < last.atMs)]);
+        setVisits((shown) => [...(shown ?? []), ...found]);
         setMore(found.length === HISTORY_PAGE);
       })
       .catch((cause: unknown) => setError(errorText(cause)));
