@@ -333,6 +333,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "stop_preview" => ToolCall::Orchestrator(O::StopPreview(arg(name, args))),
         "preview_log" => ToolCall::Orchestrator(O::PreviewLog(arg(name, args))),
         "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
+        "clean_up" => ToolCall::Orchestrator(O::CleanUp),
         "project_map" => ToolCall::Worker(W::ProjectMap),
         other => panic!("the flow harness doesn't know the tool {other}"),
     }
@@ -1527,6 +1528,8 @@ mod brain_first_tests;
 mod card_tests;
 #[cfg(test)]
 mod checks_tests;
+#[cfg(test)]
+mod clean_up_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod computer_tests;
 #[cfg(test)]

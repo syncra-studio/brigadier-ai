@@ -192,6 +192,12 @@ const WATCH_CI: &str = "Watch the GitHub Actions runs of a push, once the user s
 watching it: it returns at once, the user sees the runs live, and the result comes later as a \
 [ci <sha> · passed|failed|no runs …] message with each failing job and its log lines.";
 
+const CLEAN_UP: &str = "Only when the user asks to clean up: removes what this session's \
+finished work left that nothing uses any more (finished tasks' worktrees, folders and merged \
+branches, ended reviews' checkouts), by Brigadier's own records, and says what went and what \
+stayed and why. Brigadier already cleans up after you; never delete branches, worktrees or temp \
+folders by hand.";
+
 const RECORD_FINDINGS: &str = "Record what became of a code review's findings, every one, in \
 one call, after its [review …] message: by the id the message lists (R3.2), fixed (with the task \
 that fixed it, task-7, or none for your own fix), open (not fixed; it should be), or dismissed \
@@ -435,6 +441,7 @@ fn orchestrator_tools() -> Vec<Tool> {
         tool("code_search", CODE_SEARCH, input_schema::<CodeSearch>()),
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
+        tool("clean_up", CLEAN_UP, no_arguments()),
         tool("review_plan", REVIEW_PLAN, input_schema::<ReviewPlan>()),
         tool(
             "start_preview",
@@ -567,6 +574,7 @@ pub fn parse_call(
                 "code_search" => OrchestratorCall::CodeSearch(args(name, arguments)?),
                 "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
                 "project_map" => OrchestratorCall::ProjectMap,
+                "clean_up" => OrchestratorCall::CleanUp,
                 "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
                 "start_preview" => OrchestratorCall::StartPreview(args(name, arguments)?),
                 "stop_preview" => OrchestratorCall::StopPreview(args(name, arguments)?),

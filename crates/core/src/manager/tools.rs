@@ -570,6 +570,7 @@ impl SessionManager {
                 Ok(text)
             }
             OrchestratorCall::ProjectMap => crate::heap(|| self.project_map_tool(id)).await,
+            OrchestratorCall::CleanUp => crate::heap(|| self.clean_up(id)).await,
             OrchestratorCall::ReviewPlan(args) => {
                 crate::heap(|| self.review_thread_plan(id, args)).await
             }
