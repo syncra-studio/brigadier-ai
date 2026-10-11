@@ -1460,7 +1460,7 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 **Risks.** Three stacked rows crowd a small window. Cap at three rows, and let the slot collapse to one line with a
 count when the window is narrow.
 
-**Outcome (2026-10-11): built as below; the bold-header live check is still open**
+**Outcome (2026-10-11): built as below, and verified (with Phase 4's bold-header check)**
 - **The composer slot** (`ComposerStatusSlot.tsx`, its rules in `activity/slotView.ts`):
   - It stacks the Workers strip, one CI pill for every active watch, and the held merge's pill, newest last.
   - The merge pill reads "Merging after N workers finish", then "Merging after the review", then "Merging…". Its
@@ -1470,6 +1470,8 @@ count when the window is narrow.
   - A finished worker stays until a reply for its request comes after the last of that request's workers
     finished. A worker with no request drops when it finishes.
   - When older messages aren't loaded, a worker that finished before the oldest loaded one counts as answered.
+  - A reply counts for every request its own was steered into: a message steered into a running turn takes over
+    the turn's later replies, while the turn's workers keep the first request's id.
 - **The side panel's Workers tab** reads "Workers · N done".
 - **The review line** (`reviewStatus.ts`):
   - It counts the findings the thread recorded: "Review: N open · M new" before a merge, and "Merged · review
@@ -1488,6 +1490,9 @@ count when the window is narrow.
     again. A message queued for the running turn counts as writing.
   - The escalation reviewer is shown the consent, its question and answer, and the folder's push remotes; it alone
     judges. A refused push's reason says only that a push needs the user's yes.
+  - An allowing verdict counts only if the consents are the same once it is in. If the user wrote or a watch ended
+    while it reviewed, it reviews again with the current ones; if they change again, there is no verdict (the
+    user's card).
   - No thread or worker instruction changed, so there is no revision note; `CONTRACT` is unchanged.
 - **Live, on a dev build (W34) with Brigadier's own `brigadier-computer`** (cmux computer use was down all day):
   - Phase 4's late "Update:" line was seen. A review that came in late found two findings; the user kept the code;
@@ -1496,14 +1501,19 @@ count when the window is narrow.
   - The slot was seen in Normal, Compact, at 900 pt (both rows fit) and folded ("2 Merging… · 1 more") in the
     thread beside the side panel. Cancel was clicked in the app.
 - **`brigadier-computer run`:** a script may drive an app it opens itself, a Brigadier build included.
+- **Dialogs in a hidden window** (`lib/pageHidden.ts`, found by the bold-header check):
+  - A hidden or fully covered macOS window runs no animation frames. A Radix exit animation never ended there, so
+    the window froze on the closed dialog's overlay until it came to the front. `backgroundThrottling: "disabled"`
+    (tauri-utils 2.9.3) didn't change that.
+  - The root is marked `data-page-hidden` while `document.hidden`, and closing elements have no animation under the
+    mark, so they leave at once. Nothing fronts the window.
+  - Checked in WKWebView: on a dev build, Search closed by an AX press in the background window was gone within
+    1.5 s; on the build before the fix it stayed stuck for over 7.5 s.
+- **Phase 4's bold-header check: met** (dev build W36, 2026-10-11). The worker bolded the header, launched
+  `Brigadier Dev.app` with computer `launch`, got past the trust dialog in the background window, ran a session with
+  one worker, and put a zoomed screenshot of the bold Workers header in its report.
 - **Open:**
-  - Phase 4's bold-header check:
-    - A worker drove `Brigadier Dev.app` with computer use, but the window froze behind the trust dialog. An occluded
-      WKWebView never ends a dialog's exit animation.
-    - `backgroundThrottling: "disabled"` (tauri-utils 2.9.3) doesn't change that. A closed dialog stayed mounted
-      until the window came to the front.
-    - Fix ideas: skip exit animations while the window is hidden, or let `computer/launch` front the window for a
-      moment. A data-folder field for `launch` is still the follow-up.
+  - A data-folder field for computer `launch`: the check used the debug build's default `/tmp/brigadier-dev`.
   - Two identical "open this app" cards were pending at once for one worker.
 
 ### Phase 6: opt-in mockup previews (Q10)
