@@ -1,4 +1,6 @@
 //! Safari cookies (binarycookies) and history from generated fixtures.
+// The fixtures set Unix file modes; Safari exists only on macOS anyway.
+#![cfg(unix)]
 
 mod common;
 

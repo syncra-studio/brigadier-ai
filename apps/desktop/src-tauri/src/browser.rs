@@ -246,6 +246,7 @@ impl Visit {
 }
 
 /// `name` in `dir`, or with " (2)", " (3)"… before its extension while `taken` says that one is.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn free_name(dir: &Path, name: &std::ffi::OsStr, taken: impl Fn(&Path) -> bool) -> PathBuf {
     let first = dir.join(name);
     if !taken(&first) {

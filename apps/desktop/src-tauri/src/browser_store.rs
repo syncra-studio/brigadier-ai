@@ -75,6 +75,7 @@ fn permission(text: &str) -> SitePermission {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn state_text(state: DownloadState) -> &'static str {
     match state {
         DownloadState::Running => "running",
@@ -136,6 +137,7 @@ impl Store {
     /// The page at `url` finished loading, with the title it showed while loading, if any. A
     /// reload of the page just shown moves that visit's time (and takes a new title) instead of
     /// adding one. Returns the visit, whose title may arrive later.
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     pub fn visit(
         &self,
         last: Option<i64>,
@@ -168,6 +170,7 @@ impl Store {
         Ok(self.db.last_insert_rowid())
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     pub fn titled(&self, id: i64, title: &str) -> rusqlite::Result<()> {
         self.db.execute(
             "UPDATE visits SET title = ?2 WHERE id = ?1",
@@ -261,6 +264,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     pub fn download_started(&self, url: &str, path: &str, at_ms: i64) -> rusqlite::Result<i64> {
         self.db.execute(
             "INSERT INTO downloads (url, path, at_ms, state) VALUES (?1, ?2, ?3, ?4)",
@@ -269,6 +273,7 @@ impl Store {
         Ok(self.db.last_insert_rowid())
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     pub fn download_finished(&self, id: i64, done: bool) -> rusqlite::Result<()> {
         let state = if done {
             DownloadState::Done
