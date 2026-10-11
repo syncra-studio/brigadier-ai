@@ -150,7 +150,12 @@ fn workers(tasks: &[Task], request: &str) -> Vec<String> {
     of_request(tasks, request)
         .flat_map(|task| {
             let started = format!("{} started", name(task));
-            let ended = end(task.state).map(|end| format!("{} {end}", name(task)));
+            // A task that reported and then finished without landing is no news.
+            let ended = match task.state {
+                TaskState::Done => Some("reported"),
+                state => end(state),
+            }
+            .map(|end| format!("{} {end}", name(task)));
             std::iter::once(started).chain(ended)
         })
         .collect()
