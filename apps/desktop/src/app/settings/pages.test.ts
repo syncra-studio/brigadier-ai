@@ -178,3 +178,22 @@ test("the old Accounts and Routing ids open Providers at their setting", async (
     Object.assign(globals, saved);
   }
 });
+
+// Every Browser row is found on its page; Import, a button in a section's header, brings that
+// section into view.
+test("search finds every Browser row, and Import brings its section into view", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { searchSettings } = await server.ssrLoadModule("/src/app/settings/pages.ts");
+    const { BROWSER_ROWS } = await server.ssrLoadModule("/src/app/settings/BrowserPage.tsx");
+    type Result = { page: { id: string }; row: { label: string; target?: string } | null };
+    const onBrowser = (label: string) =>
+      (searchSettings(label) as Result[]).find((result) => result.page.id === "browser" && result.row?.label === label);
+    for (const { label } of Object.values(BROWSER_ROWS) as { label: string }[]) {
+      assert.ok(onBrowser(label), `"${label}" finds a row on Browser`);
+    }
+    assert.equal(onBrowser("Import from your browser")?.row?.target, "General");
+  } finally {
+    await server.close();
+  }
+});

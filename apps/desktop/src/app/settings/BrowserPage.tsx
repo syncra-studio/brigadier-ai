@@ -65,6 +65,8 @@ export const BROWSER_ROWS = {
   import: {
     label: "Import from your browser",
     description: "Bring over cookies and browsing history from Safari, Chrome, Arc, Firefox and other browsers.",
+    // The Import… button sits in the General section's header.
+    target: "General",
   },
   sites: {
     label: "Site settings",
