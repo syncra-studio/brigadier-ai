@@ -1540,6 +1540,59 @@ the mockup in it, and of the final side-by-side. A thread open since phase 5 off
 **Risks.** A mockup of a deep screen may need state the fixtures don't have. The worker builds a fixture board for it
 (as `thread-t1-2026-10-08.events.json` was), and a screen it can't fake is said in the offer.
 
+**Outcome (2026-10-11): built as below, and verified on the integrated tree**
+- **Engine:**
+  - `delegate_task` takes `mockup: true` or `matches_mockup: "task-N"`; `Task.mockup` is `builds` or
+    `matches {task}`. Only an implement lead can be either, never both, and the named task must have built a mockup
+    with images.
+  - The real work gets every mockup screen as an attachment, deduped by id and name. `message_worker` takes
+    attachments, which go into the worker's scratch folder.
+  - The computer tool's `observe` takes `save_as`, which keeps the screenshot in the worker's outputs folder.
+  - Both writes happen while the worker runs, so they go through `outputs::write_unfollowed`: the folder is opened
+    once without following links, and the file is written and renamed through that handle. A link the worker
+    planted, or a folder swapped for a link after it opened, is never followed.
+- **Briefs:** `WORKER_MOCKUP` builds a preview from the real components with fake data and reports `mockup-N.png`.
+  `WORKER_MOCKUP_MATCH` matches it, captures `live-N.png` with `observe save_as`, and reports `compare-N.png`.
+- **Thread:** the `MOCKUPS` paragraph is the offer ("Want a mockup first?", Yes or Skip), never a setting. Open
+  threads and workers hear it as **revision 16** (`MOCKUP_REVISION`, after Phase 5's 15), in the same commit.
+  `CONTRACT` is unchanged.
+- **The Mockup tab** in the titlebar's strip (the user's decision):
+  - It is added when the mockup task starts, without taking the front. Its icon is the running spinner while the
+    mockup is built or built for real.
+  - It opens the mockup: Focused and Canvas views, the pill (the version on screen and its state), zoom, Comment
+    mode with numbered markers.
+  - Send, or ⌘↩ while the tab is in front, sends one message with the marked screenshots. The notes are frozen while
+    they send.
+  - Then "Working", "See latest changes", and Mockup, live and side by side once the comparison arrives.
+  - A closed tab comes back at the next moment, and is restored with the session's other tabs. A session tab keeps
+    within its width, so a long title leaves the Mockup tab room.
+- **Integration onto Phase 5:** Phase 5 renames tools per provider, so the mockup test reads the tool's name for its
+  provider. The Codex thread prompt grew to 15,038 bytes; its cap went from 14,600 to 15,100.
+- **Codex review** of the integrated phase: five findings, all fixed with a test each. They were a folder swapped
+  for a link during a write, ⌘↩ sending from a tab behind, notes editable while sending, the pill's version, and a
+  dismissed revision not coming back.
+- **Live, on dev builds driven by Brigadier's own `brigadier-computer`:**
+  - **Continuity:** a session opened on a c4fa9116 build was told revision 15. Reopened on this tree, its next
+    message went to the same native session with one `[instructions]` note (revision 16's text, no new role
+    instructions), and the thread offered a mockup.
+  - **Yes:** the tab was busy, then ready. The mockup opened in it. One note was sent and went to the same worker,
+    which made a version 2. The thread asked only what the picture can't show. The real work matched version 2 and
+    landed.
+  - **Skip:** the request "Add a compact density toggle to the sidebar" got the offer and Skip delegated a build
+    with no `mockup`. In a project where another session had built the same toggle, the card added "Reuse the other
+    build".
+  - **"Fix the typo in Settings":** no offer.
+  - **The real work's live side:** computer use drove the built app (AX state confirmed). Its own screenshots came
+    from headless Chromium, because a covered window doesn't paint. The live side was then captured with computer use on the
+    worker's build, fronted under the focus lock, and it matches version 2's screens.
+- **Open:**
+  - A covered or off-Space WKWebView window doesn't paint, so a worker's `observe` screenshot can lag its AX state.
+    `act` has a foreground rung, `observe` doesn't. Recommended fix: either a brief foreground rung for `observe` under a
+    machine-wide focus lock, or, for dev builds only, WebKit's window-occlusion detection turned off (check that the
+    SPI exists in the installed WebKit first).
+  - A worker's `computer/launch` waiting on its approval card shows the worker nothing. An unanswered card made the
+    first mockup worker give up its native check.
+
 ### Why this order
 - Phase 1 holds the bugs that lose work: missing files, killed workers, and agents deleting others' branches. Every
   later phase's live checks need workers that survive, merges that keep files, and refs nobody else can move.
