@@ -276,21 +276,17 @@ function WorkersSection({ projectId }: { projectId: string }) {
     const open = inspectedConversation(s);
     return open?.projectId === projectId ? open.id : null;
   });
-  const connected = useApp((s) => s.connection.status === "connected");
   const tasks = useBrain((s) =>
     sessionId !== null && s.sessionTasks?.conversationId === sessionId ? s.sessionTasks.tasks : null,
   );
+  // Read on showing; the bridge's resync reads again on reconnecting or after missed events.
   useEffect(() => {
     if (sessionId === null) return undefined;
-    return () => unwatchSessionTasks(sessionId);
-  }, [sessionId]);
-  // Read on showing and again on reconnecting: events missed while away are in the snapshot.
-  useEffect(() => {
-    if (sessionId === null || !connected) return;
     watchSessionTasks(sessionId).catch((cause: unknown) => {
       console.error("reading the session's workers failed", cause);
     });
-  }, [sessionId, connected]);
+    return () => unwatchSessionTasks(sessionId);
+  }, [sessionId]);
   if (!tasks) return null;
   const workers = Object.values(tasks)
     .filter((task) => task.brain)

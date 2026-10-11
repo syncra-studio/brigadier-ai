@@ -52,19 +52,28 @@ function upsertJob(jobs: readonly BrainJob[], job: BrainJob): BrainJob[] {
   return [job, ...others].toSorted((a, b) => b.startedAtMs - a.startedAtMs);
 }
 
-/** Keeps the newer copy of each task: an event read before a snapshot doesn't roll it back. */
-function mergeTasks(known: Record<string, Task>, tasks: readonly Task[]): Record<string, Task> {
+/**
+ * Keeps the newer copy of each task. Events arrive in order, so one wins a timestamp tie; a
+ * snapshot may have been read before an event applied meanwhile, so it loses one.
+ */
+function mergeTasks(
+  known: Record<string, Task>,
+  tasks: readonly Task[],
+  from: "events" | "snapshot",
+): Record<string, Task> {
   const merged = { ...known };
   for (const task of tasks) {
     const held = merged[task.id];
-    if (!held || held.updatedAtMs <= task.updatedAtMs) merged[task.id] = task;
+    const newer =
+      !held || (from === "events" ? held.updatedAtMs <= task.updatedAtMs : held.updatedAtMs < task.updatedAtMs);
+    if (newer) merged[task.id] = task;
   }
   return merged;
 }
 
 /**
- * Lists a session's workers for the Brain tab: reads its tasks once (and again on
- * reconnecting); task events keep them current in between.
+ * Lists a session's workers for the Brain tab: reads its tasks once (and again when the bridge
+ * resyncs, on reconnecting or after missing events); task events keep them current in between.
  */
 export async function watchSessionTasks(conversationId: string): Promise<void> {
   if (useBrain.getState().sessionTasks?.conversationId !== conversationId) {
@@ -73,9 +82,15 @@ export async function watchSessionTasks(conversationId: string): Promise<void> {
   const { view } = await request({ method: "getConversation", id: conversationId, limit: 1 });
   useBrain.setState((state) =>
     state.sessionTasks?.conversationId === conversationId
-      ? { sessionTasks: { conversationId, tasks: mergeTasks(state.sessionTasks.tasks, view.tasks) } }
+      ? { sessionTasks: { conversationId, tasks: mergeTasks(state.sessionTasks.tasks, view.tasks, "snapshot") } }
       : state,
   );
+}
+
+/** Reads the watched session's tasks again: the bridge's resync, after events may have been missed. */
+export async function reloadSessionTasks(): Promise<void> {
+  const watched = useBrain.getState().sessionTasks;
+  if (watched) await watchSessionTasks(watched.conversationId);
 }
 
 export function unwatchSessionTasks(conversationId: string): void {
@@ -94,7 +109,7 @@ function applyTaskEvents(envelopes: readonly EventEnvelope[]): void {
   if (tasks.length === 0) return;
   useBrain.setState((state) =>
     state.sessionTasks?.conversationId === watched.conversationId
-      ? { sessionTasks: { ...state.sessionTasks, tasks: mergeTasks(state.sessionTasks.tasks, tasks) } }
+      ? { sessionTasks: { ...state.sessionTasks, tasks: mergeTasks(state.sessionTasks.tasks, tasks, "events") } }
       : state,
   );
 }

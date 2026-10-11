@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
 type Row = { name: string; low: boolean; use: string };
-type Rendering = { first: { picker: string; rows: Row[] }; updated: Row[]; calls: string[] };
+type Rendering = { first: { picker: string; rows: Row[] }; updated: Row[]; reloaded: Row[]; calls: string[] };
 
 async function render(t: Parameters<typeof renderFixturePage>[0], query: string): Promise<Rendering> {
   // The page's dump is HTML: its ">" comes back escaped.
@@ -23,14 +23,16 @@ const longRefactor: Row = {
 // The real Brain tab in Chromium over a faked daemon. Settings opened from a session, with no
 // Brain picked before, shows that session's project's Brain and its workers' counters: one read
 // of the session's tasks, kept current by task events (an older copy never rolls one back), and
-// read again on reconnecting.
+// read again as the bridge resyncs, where a snapshot that ties with an applied update loses.
 test("the Brain tab opened from a session lists its workers and keeps them current", { timeout: 60000 }, async (t) => {
   const rendering = await render(t, "from=session");
   assert.deepEqual(rendering.first, {
     picker: "calc",
     rows: [{ name: "task-1 Add mul", low: false, use: added(3, 1, 40) }, longRefactor],
   });
-  assert.deepEqual(rendering.updated, [{ name: "task-1 Add mul", low: false, use: added(4, 2, 45) }, longRefactor]);
+  const updated = [{ name: "task-1 Add mul", low: false, use: added(4, 2, 45) }, longRefactor];
+  assert.deepEqual(rendering.updated, updated);
+  assert.deepEqual(rendering.reloaded, updated);
   assert.deepEqual(rendering.calls, ["getBrain calc", "getConversation session", "getConversation session"]);
 });
 

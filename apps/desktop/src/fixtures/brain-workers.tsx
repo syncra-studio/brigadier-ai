@@ -5,8 +5,9 @@
  * ?from=session (the default) | chat | other: Settings opened from a session of the project, a
  * chat, or a session of another project. ?pick=<key>: a Brain picked before (calc, other or
  * personal).
- * ?drive=1 records what the tab shows, sends a task update and a reconnect, and writes what it
- * saw to #brain-workers-result (BrainWorkersRender.test.ts reads it).
+ * ?drive=1 records what the tab shows, sends task updates, reads the tasks again as the bridge's
+ * resync does (its later snapshot ties with the update), and writes what it saw to
+ * #brain-workers-result (BrainWorkersRender.test.ts reads it).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -16,7 +17,7 @@ import { BrainTab } from "@/app/inspector/brain/BrainTab";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BrainOverview, BrainUse, Conversation, EventEnvelope, Project, Request, Task } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
-import { applyBrainEvents, selectBrain } from "@/state/brain";
+import { applyBrainEvents, reloadSessionTasks, selectBrain } from "@/state/brain";
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
@@ -51,7 +52,6 @@ useApp.setState({
     chat: conversation("chat", null),
     elsewhere: conversation("elsewhere", "other"),
   },
-  connection: { status: "connected", daemon: null, reason: null },
   selection: { type: "conversation", id: from === "chat" ? "chat" : from === "other" ? "elsewhere" : "session" },
 });
 const pick = params.get("pick");
@@ -60,6 +60,7 @@ if (pick) selectBrain(pick);
 openSettings("inspector");
 
 const calls: string[] = [];
+let reads = 0;
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
@@ -73,7 +74,8 @@ mockIPC((command, payload) => {
         method: req.method,
         view: {
           tasks: [
-            task("t1", 1, "Add mul", { queries: 3, factsIn: 2, factsOut: 1, calls: 40 }, 10),
+            // A later read was taken before the update at 20 applied: a tie it must lose.
+            task("t1", 1, "Add mul", { queries: 3, factsIn: 2, factsOut: 1, calls: 40 }, reads++ === 0 ? 10 : 20),
             task("t2", 2, "Long refactor", { queries: 0, factsIn: 0, factsOut: 0, calls: 80 }, 10),
             task("t3", 3, "Before counters", undefined, 10),
           ],
@@ -114,10 +116,10 @@ function Fixture() {
       }),
       at(900, () => {
         seen.updated = rows();
-        useApp.setState({ connection: { status: "disconnected", daemon: null, reason: "fixture" } });
+        void reloadSessionTasks();
       }),
-      at(1200, () => useApp.setState({ connection: { status: "connected", daemon: null, reason: null } })),
-      at(1600, () => {
+      at(1300, () => {
+        seen.reloaded = rows();
         seen.calls = calls;
         setResult(JSON.stringify(seen));
       }),
