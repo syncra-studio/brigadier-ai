@@ -104,6 +104,7 @@ without cache reads. A figure a source doesn't report is "not reported", never 0
 | `audit.py`, `cant.py` | every session in an arm's window accounted for; "I can't" candidates |
 | `clone.sh`, `warm.sh`, `conditions.sh` | arm setup and conditions |
 | `times.py`, `timeline.py` | boundaries; a readable timeline |
+| `worker_tokens.py` | per-worker calls, contexts, tokens, Brain use and checks; per-provider totals and elapsed (SESSION-FIXES-PLAN §3 Q6.7) |
 | `brig_tokens.py`, `armtokens.sh`, `brig_manifest.py`, `evtokens.py`, `dlg_manifest.py`, `tokens.py` | tokens |
 | `check.sh`, `probe-app.sh` | the independent evaluator's checks and probes |
 | `replay/` | "only Thinking" from recorded events, through the app's own code |
