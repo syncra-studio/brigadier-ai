@@ -613,6 +613,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "cleanupRecorded":
     case "cleanupRemoved":
     case "branchesKept":
+    case "branchMade":
     case "cleanupRequested":
     case "cleanupCompleted":
     case "cleanupFinished":
