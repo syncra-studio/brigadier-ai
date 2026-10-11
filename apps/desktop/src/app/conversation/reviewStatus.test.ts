@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { batchReviews, reviewLines, reviewStatus } from "@/app/conversation/reviewStatus";
-import type { OrchestratorStep, ReviewRun, ReviewState } from "@/ipc/generated";
+import { batchReviews, findingRows, reviewLines, reviewStatus } from "@/app/conversation/reviewStatus";
+import type { Finding, FindingStatus, OrchestratorStep, ReviewRun, ReviewState } from "@/ipc/generated";
 
 const review = (id: string, startedAtMs: number, state: ReviewState, kind: ReviewRun["kind"] = "code"): ReviewRun => ({
   id,
@@ -31,7 +31,15 @@ const merged = (atMs: number): OrchestratorStep => ({
   position: 0,
 });
 
-test("the review line says the review runs, then what it found, in plain words", () => {
+const item = (id: string, status: FindingStatus): Finding =>
+  ({ id, severity: "P2", title: `Finding ${id}`, location: "src/a.ts:1", status, high: false });
+const found = (id: string, startedAtMs: number, items: Finding[]): ReviewRun =>
+  ({ ...review(id, startedAtMs, { type: "findings", count: items.length }), items });
+const open = (id: string) => item(id, { type: "open", why: null });
+const fixed = (id: string) => item(id, { type: "fixed", task: null, why: null });
+const text = (lines: ReturnType<typeof reviewLines>) => ({ merged: lines.merged?.text ?? null, current: lines.current?.text ?? null });
+
+test("the review line says the review runs, then what the thread recorded, in plain words", () => {
   assert.equal(reviewStatus([]), null);
   assert.equal(reviewStatus([review("1", 1, { type: "running" })]), "Review running…");
   assert.equal(
@@ -39,14 +47,6 @@ test("the review line says the review runs, then what it found, in plain words",
     "Review running…",
   );
   assert.equal(reviewStatus([review("1", 1, { type: "clean" })]), "Review: clean");
-  assert.equal(
-    reviewStatus([review("1", 1, { type: "findings", count: 1 }), review("2", 2, { type: "clean" })]),
-    "Review: 1 finding",
-  );
-  assert.equal(
-    reviewStatus([review("1", 1, { type: "findings", count: 2 }), review("2", 2, { type: "findings", count: 1 })]),
-    "Review: 3 findings",
-  );
   assert.equal(reviewStatus([review("1", 1, { type: "failed", reason: "no model" })]), "Review couldn’t run");
   assert.equal(
     reviewStatus([review("1", 1, { type: "failed", reason: "no model" }), review("2", 2, { type: "clean" })]),
@@ -54,26 +54,76 @@ test("the review line says the review runs, then what it found, in plain words",
   );
 });
 
+test("two reviews, 3 + 2 findings, 4 fixed and 1 dismissed, read clean; one left open reads 1 open", () => {
+  const fixedIn = (id: string): Finding => item(id, { type: "fixed", task: "task-7", why: null });
+  const first = found("1", 1, [fixedIn("R1.1"), fixedIn("R1.2"), fixedIn("R1.3")]);
+  const second = found("2", 2, [fixedIn("R2.1"), item("R2.2", { type: "dismissed", why: "by design" })]);
+  assert.equal(reviewStatus([first, second]), "Review: clean");
+  const leftOpen = found("2", 2, [fixedIn("R2.1"), item("R2.2", { type: "open", why: null })]);
+  assert.equal(reviewStatus([first, leftOpen]), "Review: 1 open");
+  // Not recorded yet: "new", never the reviews' raw count.
+  const unrecorded = found("2", 2, [item("R2.1", { type: "new" }), item("R2.2", { type: "open", why: null })]);
+  assert.equal(reviewStatus([first, unrecorded]), "Review: 1 open · 1 new");
+  // A review from before findings were items: its count was never recorded.
+  assert.equal(reviewStatus([review("3", 3, { type: "findings", count: 2 })]), "Review: 2 new");
+});
+
+test("a click lists each finding with what the thread recorded", () => {
+  const rows = findingRows([found("1", 1, [
+    item("R1.1", { type: "fixed", task: "task-7", why: null }),
+    item("R1.2", { type: "open", why: "needs the user" }),
+    item("R1.3", { type: "dismissed", why: "the test covers it" }),
+    item("R1.4", { type: "new" }),
+  ])]);
+  assert.deepEqual(rows.map((row) => [row.id, row.status, row.open]), [
+    ["R1.1", "fixed in task-7", false],
+    ["R1.2", "open: needs the user", true],
+    ["R1.3", "dismissed: the test covers it", false],
+    ["R1.4", "new", false],
+  ]);
+});
+
+test("after a merge, the line counts only that merge's open findings, never across merges", () => {
+  const first = found("1", 10, [open("R1.1"), open("R1.2"), fixed("R1.3")]);
+  const second = found("2", 30, [open("R2.1"), fixed("R2.2")]);
+  assert.deepEqual(text(reviewLines([merged(20)], [first])), { merged: "Merged · 2 open (not fixed)", current: null });
+  assert.deepEqual(text(reviewLines([merged(20)], [first, second])), {
+    merged: "Merged · 2 open (not fixed)",
+    current: "Review: 1 open",
+  });
+  // The second merge's line is its own work's: 1, not 3.
+  assert.deepEqual(text(reviewLines([merged(20), merged(40)], [first, second])), {
+    merged: "Merged · 1 open (not fixed)",
+    current: null,
+  });
+  const clean = found("3", 50, [fixed("R3.1")]);
+  assert.deepEqual(text(reviewLines([merged(20), merged(40), merged(60)], [first, second, clean])), {
+    merged: "Merged · review clean",
+    current: null,
+  });
+  assert.equal(reviewLines([merged(20)], [first]).merged?.findings.length, 3);
+});
+
 test("before any merge, the context card's line speaks for all the session's code reviews", () => {
-  const reviews = [review("1", 10, { type: "clean" }), review("2", 20, { type: "findings", count: 2 })];
-  assert.deepEqual(reviewLines([], reviews), { merged: null, current: "Review: 2 findings" });
+  const reviews = [review("1", 10, { type: "clean" }), found("2", 20, [item("R2.1", { type: "open", why: null })])];
+  assert.deepEqual(text(reviewLines([], reviews)), { merged: null, current: "Review: 1 open" });
   assert.deepEqual(reviewLines([], []), { merged: null, current: null });
 });
 
 test("a review still running at the merge stays the merged work's, and so does its outcome", () => {
   const running = review("1", 10, { type: "running" });
-  assert.deepEqual(reviewLines([merged(20)], [running]), { merged: "Review running…", current: null });
-  const found = { ...running, state: { type: "findings", count: 1 } } as ReviewRun;
-  assert.deepEqual(reviewLines([merged(20)], [found]), { merged: "Review: 1 finding", current: null });
+  assert.deepEqual(text(reviewLines([merged(20)], [running])), { merged: "Merged · review running…", current: null });
+  const ended = found("1", 10, [item("R1.1", { type: "new" })]);
+  assert.deepEqual(text(reviewLines([merged(20)], [ended])), { merged: "Merged · 1 new", current: null });
   // New work after the merge has its own line; the merged work's stays until the next merge.
   const after = review("2", 30, { type: "running" });
-  assert.deepEqual(reviewLines([merged(20)], [found, after]), {
-    merged: "Review: 1 finding",
+  assert.deepEqual(text(reviewLines([merged(20)], [ended, after])), {
+    merged: "Merged · 1 new",
     current: "Review running…",
   });
   const done = { ...after, state: { type: "clean" } } as ReviewRun;
-  assert.deepEqual(reviewLines([merged(20), merged(40)], [found, done]), {
-    merged: "Review: clean",
+  assert.deepEqual(text(reviewLines([merged(20), merged(40)], [ended, done])), {
+    merged: "Merged · review clean",
     current: null,
   });
 });
@@ -84,11 +134,11 @@ test("the lines count the reviews of what landed and of the thread's own commits
   const thread = review("3", 30, { type: "running" });
   const plan = review("4", 35, { type: "findings", count: 1 }, "plan");
   assert.deepEqual(
-    batchReviews([own, landing, thread, plan], 0, 40).map((found) => found.id),
+    batchReviews([own, landing, thread, plan], 0, 40).map((batch) => batch.id),
     ["2", "3"],
   );
-  assert.deepEqual(reviewLines([merged(40)], [own, landing, thread, plan]), {
-    merged: "Review running…",
+  assert.deepEqual(text(reviewLines([merged(40)], [own, landing, thread, plan])), {
+    merged: "Merged · review running…",
     current: null,
   });
 });
