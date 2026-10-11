@@ -48,31 +48,82 @@ pub(crate) fn outputs_dir(scratch: &Path) -> PathBuf {
 /// Writes `name` in `dir`, a folder of the worker's scratch it can write in too, without
 /// following a link the worker put there: a linked folder is refused, and the file goes to a
 /// fresh temporary name first, then takes `name`'s place (a link there is replaced, never
-/// written through).
+/// written through). On Unix the folder is opened once without following a link, and the file
+/// is made and renamed relative to that handle, so a folder swapped for a link meanwhile can't
+/// redirect the write.
 pub(crate) fn write_unfollowed(dir: &Path, name: &str, bytes: &[u8]) -> crate::Result<()> {
-    use std::io::Write as _;
     let invalid = |err: std::io::Error| crate::Error::Invalid(err.to_string());
     std::fs::create_dir_all(dir).map_err(invalid)?;
-    if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
-        return Err(crate::Error::Invalid(format!(
-            "{} is a link; keep it a plain folder",
-            dir.display()
-        )));
+    #[cfg(unix)]
+    {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+        let folder = open(dir, flags, Mode::empty()).map_err(|_| {
+            crate::Error::Invalid(format!(
+                "{} is a link; keep it a plain folder",
+                dir.display()
+            ))
+        })?;
+        write_in(&folder, name, bytes)
     }
-    let temp = dir.join(format!(".{name}.{}.part", std::process::id()));
-    let _ = std::fs::remove_file(&temp);
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
-        .map_err(invalid)?;
+    #[cfg(not(unix))]
+    {
+        use std::io::Write as _;
+        if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
+            return Err(crate::Error::Invalid(format!(
+                "{} is a link; keep it a plain folder",
+                dir.display()
+            )));
+        }
+        let temp = dir.join(format!(".{name}.{}.part", std::process::id()));
+        let _ = std::fs::remove_file(&temp);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(invalid)?;
+        let written = file.write_all(bytes).and_then(|()| file.sync_all());
+        drop(file);
+        let placed = written.and_then(|()| std::fs::rename(&temp, dir.join(name)));
+        if placed.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+        placed.map_err(invalid)
+    }
+}
+
+/// [`write_unfollowed`]'s write in the folder `folder` already opened: a temporary file made
+/// there (never through a link), then renamed to `name` in the same folder.
+#[cfg(unix)]
+fn write_in(folder: &std::os::fd::OwnedFd, name: &str, bytes: &[u8]) -> crate::Result<()> {
+    use std::io::Write as _;
+
+    use nix::fcntl::{OFlag, openat, renameat};
+    use nix::sys::stat::Mode;
+    use nix::unistd::{UnlinkatFlags, unlinkat};
+    let invalid = |err: nix::Error| crate::Error::Invalid(err.to_string());
+    let temp = format!(".{name}.{}.part", std::process::id());
+    let _ = unlinkat(folder, temp.as_str(), UnlinkatFlags::NoRemoveDir);
+    let flags =
+        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+    let fd = openat(
+        folder,
+        temp.as_str(),
+        flags,
+        Mode::from_bits_truncate(0o644),
+    )
+    .map_err(invalid)?;
+    let mut file = std::fs::File::from(fd);
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     drop(file);
-    let placed = written.and_then(|()| std::fs::rename(&temp, dir.join(name)));
+    let placed = written
+        .map_err(|err| crate::Error::Invalid(err.to_string()))
+        .and_then(|()| renameat(folder, temp.as_str(), folder, name).map_err(invalid));
     if placed.is_err() {
-        let _ = std::fs::remove_file(&temp);
+        let _ = unlinkat(folder, temp.as_str(), UnlinkatFlags::NoRemoveDir);
     }
-    placed.map_err(invalid)
+    placed
 }
 
 /// A file to store with a report.
@@ -682,6 +733,35 @@ mod tests {
             std::fs::read_dir(&dir).unwrap().count(),
             1,
             "no temporary file is left"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The folder is held open from the start: swapped for a link before the write, it still
+    /// gets the file, and the link's target gets nothing (Codex review, phase 6).
+    #[test]
+    fn a_folder_swapped_for_a_link_after_it_opened_still_gets_the_write() {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        let root =
+            std::env::temp_dir().join(format!("brigadier-unfollowed-{}", uuid::Uuid::now_v7()));
+        let dir = root.join("outputs");
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+        let folder = open(&dir, flags, Mode::empty()).unwrap();
+        std::fs::rename(&dir, root.join("moved")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
+        super::write_in(&folder, "live-1.png", b"png").unwrap();
+        assert_eq!(
+            std::fs::read(root.join("moved/live-1.png")).unwrap(),
+            b"png"
+        );
+        assert_eq!(
+            std::fs::read_dir(&elsewhere).unwrap().count(),
+            0,
+            "nothing went through the link"
         );
         std::fs::remove_dir_all(&root).unwrap();
     }
