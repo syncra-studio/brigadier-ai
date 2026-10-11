@@ -1547,7 +1547,7 @@ impl SessionManager {
                 if !open.is_empty() {
                     self.settle_requests(id).await;
                 }
-                merged_reviews(&board)
+                merged_findings(&board)
             }
             Err(_) => String::new(),
         };
@@ -1966,9 +1966,10 @@ fn wrote_meanwhile() -> Error {
 }
 
 /// What the code reviews of the work merged now say, for the thread to tell the user: those it
-/// hears, started since the session's previous merge (the context card shows the same line).
-fn merged_reviews(board: &crate::board::Board) -> String {
-    use crate::work::{ReviewFor, ReviewKind, ReviewState};
+/// hears, started since the session's previous merge. It counts only what the thread recorded
+/// (`record_findings`), never a sum of reviews, and lists the open findings in its words.
+pub(super) fn merged_findings(board: &crate::board::Board) -> String {
+    use crate::work::{FindingStatus, ReviewFor, ReviewKind, ReviewState};
     let since = board
         .orchestrator_steps
         .iter()
@@ -1976,7 +1977,7 @@ fn merged_reviews(board: &crate::board::Board) -> String {
         .map(|step| step.at_ms)
         .max()
         .unwrap_or(0);
-    let reviews: Vec<_> = board
+    let mut reviews: Vec<_> = board
         .reviews
         .values()
         .filter(|review| {
@@ -1988,30 +1989,56 @@ fn merged_reviews(board: &crate::board::Board) -> String {
     if reviews.is_empty() {
         return String::new();
     }
-    let findings: u32 = reviews
-        .iter()
-        .map(|review| match review.state {
-            ReviewState::Findings { count } => count,
-            _ => 0,
-        })
-        .sum();
+    reviews.sort_by_key(|review| (review.number, review.started_at_ms));
     if reviews
         .iter()
         .any(|review| review.state == ReviewState::Running)
     {
-        " Its review still runs; if it finds anything, you hear it as a [review …] message: tell the user then.".into()
-    } else if findings > 0 {
-        format!(
-            " Its review found {findings}; if you haven't told the user what, and what you did about it, do."
-        )
-    } else if reviews
-        .iter()
-        .all(|review| matches!(review.state, ReviewState::Failed { .. }))
-    {
-        " Its review couldn't run.".into()
-    } else {
-        " Its review is clean.".into()
+        return " Its review still runs; if it finds anything, you hear it as a [review …] message: record its findings and tell the user then.".into();
     }
+    let items: Vec<_> = reviews.iter().flat_map(|review| &review.items).collect();
+    if items.is_empty() {
+        return if reviews
+            .iter()
+            .all(|review| matches!(review.state, ReviewState::Failed { .. }))
+        {
+            " Its review couldn't run.".into()
+        } else {
+            " Its review is clean.".into()
+        };
+    }
+    let open: Vec<String> = items
+        .iter()
+        .filter_map(|item| match &item.status {
+            FindingStatus::Open { why } => Some(match why {
+                Some(why) => format!("{} {} ({why})", item.id, item.title),
+                None => format!("{} {}", item.id, item.title),
+            }),
+            _ => None,
+        })
+        .collect();
+    let new: Vec<&str> = items
+        .iter()
+        .filter(|item| item.status == FindingStatus::New)
+        .map(|item| item.id.as_str())
+        .collect();
+    let mut text = String::new();
+    if !open.is_empty() {
+        text.push_str(&format!(
+            " Open review findings, as you recorded them (not fixed): {}. Tell the user, as a list.",
+            open.join("; ")
+        ));
+    }
+    if !new.is_empty() {
+        text.push_str(&format!(
+            " Findings you haven't recorded: {}. Record them with record_findings, and tell the user which stay open.",
+            new.join(", ")
+        ));
+    }
+    if text.is_empty() {
+        text.push_str(" Its review's findings are all fixed or dismissed, as you recorded them.");
+    }
+    text
 }
 
 pub(super) fn diff_stat_of(stat: &brigadier_git::DiffStat) -> DiffStat {

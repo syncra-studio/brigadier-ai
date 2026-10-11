@@ -651,6 +651,44 @@ pub struct NoteForUser {
     pub why: Option<String>,
 }
 
+/// What became of a review finding, as `record_findings` says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum FindingVerdict {
+    /// Fixed: name the task that fixed it in `task`, or leave it out for your own fix.
+    Fixed,
+    /// Not fixed, and it still should be: it goes back to the worker, or to the user's list.
+    Open,
+    /// Not worth fixing: say why in `why`.
+    Dismissed,
+}
+
+/// One finding's record.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FindingRecord {
+    /// The finding's id from the review's message (`R3.2`).
+    pub id: String,
+    pub status: FindingVerdict,
+    /// For a fixed one: the task that fixed it (`task-7`).
+    #[serde(default)]
+    pub task: Option<String>,
+    /// Why, in your words, for the user: required to dismiss.
+    #[serde(default)]
+    pub why: Option<String>,
+    /// It is high severity (it loses data, breaks a build or a security boundary): its fix
+    /// gets one targeted re-check.
+    #[serde(default)]
+    pub high: Option<bool>,
+}
+
+/// `record_findings`: what became of a review's findings, each one, in one call.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecordFindings {
+    pub items: Vec<FindingRecord>,
+}
+
 /// `suggest_full_access`: something the user asked for needs more than the session's sandbox
 /// allows; the thread shows a notice with a button that switches the session to Full access.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -756,6 +794,7 @@ pub enum OrchestratorCall {
     FinishSession(FinishSession),
     ProposeMerge(ProposeMerge),
     NoteForUser(NoteForUser),
+    RecordFindings(RecordFindings),
     SuggestFullAccess(SuggestFullAccess),
     ListTasks,
     SettleStep(SettleStep),
@@ -797,6 +836,7 @@ impl OrchestratorCall {
             Self::FinishSession(_) => "finish_session",
             Self::ProposeMerge(_) => "propose_merge",
             Self::NoteForUser(_) => "note_for_user",
+            Self::RecordFindings(_) => "record_findings",
             Self::SuggestFullAccess(_) => "suggest_full_access",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",

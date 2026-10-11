@@ -30,8 +30,8 @@ use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, DomainEvent};
 use crate::routing::TokenMeter;
 use crate::work::{
-    InjectionKind, OrchestratorStepKind, ReviewFor, ReviewKind, ReviewRun, ReviewState, Task,
-    TaskId, TaskKind, TaskState,
+    Finding, FindingStatus, InjectionKind, OrchestratorStepKind, ReviewFor, ReviewKind, ReviewRun,
+    ReviewState, Task, TaskId, TaskKind, TaskState,
 };
 use crate::{Error, Result, now_ms};
 
@@ -119,6 +119,99 @@ fn clipped(text: &str) -> String {
         end -= 1;
     }
     format!("{}\n[… the rest of the review is cut]", &text[..end])
+}
+
+/// The number the next review of a conversation gets: one more than the highest so far.
+fn next_number<'a>(reviews: impl IntoIterator<Item = &'a ReviewRun>) -> u32 {
+    reviews
+        .into_iter()
+        .map(|review| review.number)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+/// The findings of review `number`'s `text`, as items (`R{number}.{n}`). A text that names a
+/// priority but can't be split is one item that points at the review.
+pub(crate) fn items_of(number: u32, text: &str) -> Vec<Finding> {
+    let mut items: Vec<Finding> = brigadier_review::split_findings(text)
+        .into_iter()
+        .enumerate()
+        .map(|(n, found)| Finding {
+            id: format!("R{number}.{}", n + 1),
+            severity: Some(found.severity),
+            title: found.title,
+            location: found.location,
+            status: FindingStatus::New,
+            high: false,
+        })
+        .collect();
+    if items.is_empty() && text.contains("[P") && !text.trim().eq_ignore_ascii_case("no findings.")
+    {
+        items.push(Finding {
+            id: format!("R{number}.1"),
+            severity: None,
+            title: "See the review".into(),
+            location: None,
+            status: FindingStatus::New,
+            high: false,
+        });
+    }
+    items
+}
+
+/// `task-7` for a task of `board` named `task-7`, `Task 7` or `7`.
+fn task_label(named: &str, board: &crate::board::Board) -> Option<String> {
+    let digits = named
+        .trim_start_matches(|c: char| !c.is_ascii_digit())
+        .trim_end_matches(|c: char| !c.is_ascii_digit());
+    let number: u32 = digits.parse().ok()?;
+    board
+        .tasks
+        .values()
+        .any(|task| task.number == number)
+        .then(|| format!("task-{number}"))
+}
+
+/// A finding's status in a word or two, as the thread's replies and the merge's result say it.
+pub(crate) fn status_word(status: &FindingStatus) -> String {
+    match status {
+        FindingStatus::New => "not recorded".into(),
+        FindingStatus::Fixed {
+            task: Some(task), ..
+        } => format!("fixed in {task}"),
+        FindingStatus::Fixed { task: None, .. } => "fixed".into(),
+        FindingStatus::Open { .. } => "open".into(),
+        FindingStatus::Dismissed { why } => format!("dismissed: {why}"),
+    }
+}
+
+/// What a code review's message to the thread ends with: its findings by id, and how to
+/// record them.
+fn record_line(items: &[Finding]) -> String {
+    format!(
+        "Its findings:\n{}\nRecord what became of each with record_findings, all in one call: fixed (in task-N, or by you), open, or dismissed and why.",
+        listed(items)
+    )
+}
+
+/// One line per finding, with its id, for the thread to record each by.
+fn listed(items: &[Finding]) -> String {
+    items
+        .iter()
+        .map(|item| {
+            let severity = item
+                .severity
+                .as_deref()
+                .map_or_else(String::new, |s| format!("[{s}] "));
+            let location = item
+                .location
+                .as_deref()
+                .map_or_else(String::new, |l| format!(" — {l}"));
+            format!("{}: {severity}{}{location}", item.id, item.title)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 impl SessionManager {
@@ -436,19 +529,19 @@ impl SessionManager {
         // A closing conversation starts nothing more.
         drop(self.enter(&new.conversation_id)?);
         let _held = self.reviews.lock().await;
-        if new.kind == ReviewKind::Code {
-            let board = self.core.board(&new.conversation_id).await?;
-            if let Some(known) = review_of(board.reviews.values(), &new.base.0, &new.tip.0) {
-                let mut known = known.clone();
-                if known.notify != new.notify
-                    && let ReviewFor::Worker { task_id } = &known.notify
-                    && !self.still_works(&known.conversation_id, task_id).await
-                {
-                    known.notify = new.notify.clone();
-                    self.store_review(&known).await?;
-                }
-                return Ok((known, false));
+        let board = self.core.board(&new.conversation_id).await?;
+        if new.kind == ReviewKind::Code
+            && let Some(known) = review_of(board.reviews.values(), &new.base.0, &new.tip.0)
+        {
+            let mut known = known.clone();
+            if known.notify != new.notify
+                && let ReviewFor::Worker { task_id } = &known.notify
+                && !self.still_works(&known.conversation_id, task_id).await
+            {
+                known.notify = new.notify.clone();
+                self.store_review(&known).await?;
             }
+            return Ok((known, false));
         }
         let reviewer = other_vendor(new.author.provider);
         let mut review = ReviewRun {
@@ -467,6 +560,8 @@ impl SessionManager {
             started_at_ms: now_ms(),
             ended_at_ms: None,
             findings: None,
+            number: next_number(board.reviews.values()),
+            items: Vec::new(),
         };
         let effort = match self.reviewer_model(&new, reviewer).await {
             Ok((model, effort)) => {
@@ -870,7 +965,8 @@ impl SessionManager {
                         tracing::warn!(review = %ended.id, error = %err, "could not keep a review's text");
                     }
                 }
-                ended.state = match found.findings {
+                ended.items = items_of(ended.number, &found.text);
+                ended.state = match u32::try_from(ended.items.len()).unwrap_or(u32::MAX) {
                     0 => ReviewState::Clean,
                     count => ReviewState::Findings { count },
                 };
@@ -984,8 +1080,9 @@ impl SessionManager {
                 if review.task_id.is_none() =>
             {
                 format!(
-                    "[review of your commits · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of the commits you made yourself. Fix what you agree with (a tiny fix of your own, or delegate one), or tell the user why not. There are no review rounds.",
-                    clipped(text)
+                    "[review of your commits · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of the commits you made yourself. Fix what you agree with (a tiny fix of your own, or delegate one), or tell the user why not. There are no review rounds.\n{}",
+                    clipped(text),
+                    record_line(&review.items)
                 )
             }
             (ReviewKind::Plan, ReviewState::Findings { count }, Some(text))
@@ -1007,8 +1104,9 @@ impl SessionManager {
                 )
             }
             (ReviewKind::Code, ReviewState::Findings { count }, Some(text)) => format!(
-                "[review {of} · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of what landed. Fix what you agree with (delegate a fix, or a tiny fix of your own), or tell the user why not. There are no review rounds.",
-                clipped(text)
+                "[review {of} · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of what landed. Fix what you agree with (delegate a fix, or a tiny fix of your own), or tell the user why not. There are no review rounds.\n{}",
+                clipped(text),
+                record_line(&review.items)
             ),
             (ReviewKind::Plan, ReviewState::Findings { count }, Some(text)) => format!(
                 "[plan review {of} · {reviewer} found {count}]\n{}\n[/plan review]\nWeigh them against the brief (it wins any conflict; never reopen what is settled). If {of} still waits for its go-ahead, put the ones you agree with in approve_outline's corrections; if it has it, send them with message_worker. There are no review rounds.",
@@ -1069,6 +1167,109 @@ impl SessionManager {
             request,
         )
         .await;
+    }
+
+    /// `record_findings`: the thread's word on what became of review findings. Every id must
+    /// be one of the conversation's; nothing is stored when one isn't. Brigadier stores and
+    /// shows what the thread says, and judges none of it.
+    pub(crate) async fn record_findings(
+        &self,
+        conversation_id: &ConversationId,
+        args: crate::tools::RecordFindings,
+    ) -> Result<String> {
+        use crate::tools::FindingVerdict;
+        if args.items.is_empty() {
+            return Err(Error::Invalid(
+                "`items` is empty: list every finding of the review.".into(),
+            ));
+        }
+        let _held = self.reviews.lock().await;
+        let board = self.core.board(conversation_id).await?;
+        let mut changed: Vec<ReviewRun> = Vec::new();
+        let mut problems = Vec::new();
+        let mut said = Vec::new();
+        for record in &args.items {
+            let id = record.id.trim().to_ascii_uppercase();
+            let found = changed
+                .iter()
+                .position(|review| review.items.iter().any(|item| item.id == id));
+            let index = match found {
+                Some(index) => index,
+                None => match board
+                    .reviews
+                    .values()
+                    .find(|review| review.items.iter().any(|item| item.id == id))
+                {
+                    Some(review) => {
+                        changed.push(review.clone());
+                        changed.len() - 1
+                    }
+                    None => {
+                        problems.push(format!("{id} is no finding of this session"));
+                        continue;
+                    }
+                },
+            };
+            let why = record
+                .why
+                .as_deref()
+                .map(str::trim)
+                .filter(|why| !why.is_empty())
+                .map(str::to_owned);
+            let status = match record.status {
+                FindingVerdict::Fixed => {
+                    let task = match record.task.as_deref().map(str::trim) {
+                        None | Some("") => None,
+                        Some(named) => match task_label(named, &board) {
+                            Some(label) => Some(label),
+                            None => {
+                                problems.push(format!("{id}: {named} is no task of this session"));
+                                continue;
+                            }
+                        },
+                    };
+                    FindingStatus::Fixed { task, why }
+                }
+                FindingVerdict::Open => FindingStatus::Open { why },
+                FindingVerdict::Dismissed => match why {
+                    Some(why) => FindingStatus::Dismissed { why },
+                    None => {
+                        problems.push(format!("{id}: say why you dismiss it"));
+                        continue;
+                    }
+                },
+            };
+            let item = changed[index]
+                .items
+                .iter_mut()
+                .find(|item| item.id == id)
+                .expect("found above");
+            said.push(format!("{id} {}", status_word(&status)));
+            item.status = status;
+            if let Some(high) = record.high {
+                item.high = high;
+            }
+        }
+        if !problems.is_empty() {
+            return Err(Error::Invalid(format!(
+                "Nothing was recorded: {}. Record them all again in one call.",
+                problems.join("; ")
+            )));
+        }
+        for review in &changed {
+            self.store_review(review).await?;
+        }
+        let unrecorded: Vec<String> = changed
+            .iter()
+            .flat_map(|review| &review.items)
+            .filter(|item| item.status == FindingStatus::New)
+            .map(|item| item.id.clone())
+            .collect();
+        let mut reply = format!("Recorded: {}.", said.join(", "));
+        if !unrecorded.is_empty() {
+            reply.push_str(&format!(" Still not recorded: {}.", unrecorded.join(", ")));
+        }
+        Ok(reply)
     }
 
     /// Ends `conversation_id`'s running reviews: it is closing.
@@ -1178,7 +1379,94 @@ mod tests {
             started_at_ms: 0,
             ended_at_ms: None,
             findings: None,
+            number: 0,
+            items: Vec::new(),
         }
+    }
+
+    /// Q7: a review with three findings stores three items, numbered by the review; a text
+    /// that names a priority but can't be split is one item that points at the review.
+    #[test]
+    fn a_reviews_findings_are_stored_as_items() {
+        let text = "- [P1] Guard the empty list — src/a.rs:10\n  Fix.\n- [P2] Old events fail — src/b.rs:3\n- [P3] Typo — README.md:4";
+        let items = items_of(3, text);
+        let ids: Vec<_> = items.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(ids, ["R3.1", "R3.2", "R3.3"]);
+        assert_eq!(items[1].severity.as_deref(), Some("P2"));
+        assert_eq!(items[1].title, "Old events fail");
+        assert_eq!(items[1].location.as_deref(), Some("src/b.rs:3"));
+        assert!(items.iter().all(|item| item.status == FindingStatus::New));
+        assert!(items_of(1, "No findings.").is_empty());
+        assert!(items_of(1, "Looks right to me.").is_empty());
+        let unsplit = items_of(2, "Two problems, see [P1] and [P2] in the summary.");
+        assert_eq!(unsplit.len(), 1);
+        assert_eq!(unsplit[0].title, "See the review");
+        assert_eq!(unsplit[0].severity, None);
+        assert_eq!(next_number([&review("a", ReviewKind::Code, "a", "b")]), 1);
+    }
+
+    /// Q7: the merge's result counts only what the thread recorded for the reviews since the
+    /// previous merge; nothing sums across two merges.
+    #[test]
+    fn a_merges_result_lists_only_its_own_open_findings() {
+        use crate::work::{OrchestratorStep, OrchestratorStepKind};
+        let mut board = crate::board::Board::default();
+        let mut first = review("first", ReviewKind::Code, "a", "b");
+        first.number = 1;
+        first.started_at_ms = 10;
+        first.state = ReviewState::Findings { count: 3 };
+        first.items = items_of(1, "- [P1] One — a:1\n- [P2] Two — a:2\n- [P3] Three — a:3");
+        first.items[0].status = FindingStatus::Open { why: None };
+        first.items[1].status = FindingStatus::Open {
+            why: Some("needs the user's call".into()),
+        };
+        first.items[2].status = FindingStatus::Fixed {
+            task: Some("task-2".into()),
+            why: None,
+        };
+        board.reviews.insert(first.id.clone(), first);
+        let merged = super::super::landing::merged_findings(&board);
+        assert_eq!(
+            merged,
+            " Open review findings, as you recorded them (not fixed): R1.1 One; R1.2 Two (needs the user's call). Tell the user, as a list."
+        );
+        // The first merge, then a second piece of work whose review found two the thread
+        // hasn't recorded yet: only those two count, never 2 + 3.
+        board.orchestrator_steps.push(OrchestratorStep {
+            request_id: None,
+            kind: OrchestratorStepKind::Merged {
+                branch: "b".into(),
+                base: "main".into(),
+                commits: 1,
+                asked_in: None,
+            },
+            at_ms: 20,
+            position: 0,
+        });
+        let mut second = review("second", ReviewKind::Code, "b", "c");
+        second.number = 2;
+        second.started_at_ms = 30;
+        second.state = ReviewState::Findings { count: 2 };
+        second.items = items_of(2, "- [P2] Four — a:4\n- [P2] Five — a:5");
+        board.reviews.insert(second.id.clone(), second);
+        let merged = super::super::landing::merged_findings(&board);
+        assert_eq!(
+            merged,
+            " Findings you haven't recorded: R2.1, R2.2. Record them with record_findings, and tell the user which stay open."
+        );
+        // Recorded fixed and dismissed: nothing open.
+        let second = board.reviews.get_mut("second").unwrap();
+        second.items[0].status = FindingStatus::Fixed {
+            task: None,
+            why: None,
+        };
+        second.items[1].status = FindingStatus::Dismissed {
+            why: "by design".into(),
+        };
+        assert_eq!(
+            super::super::landing::merged_findings(&board),
+            " Its review's findings are all fixed or dismissed, as you recorded them."
+        );
     }
 
     #[test]

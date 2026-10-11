@@ -91,7 +91,7 @@ How to work:
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
 - Land finished work with land_phase (a phase isn't needed). What it left unfixed goes to a fix task (role fix, subject that task) or, when only the user can settle it, on a card (ask_user).
-- Every landing and every commit of your own gets one review by the other vendor in the background; nothing waits for it, and a tip already reviewed isn't reviewed again. Its findings arrive as a [review …] message, maybe after your answer or a merge: fix what you agree with (a fix worker, or a tiny fix) and say why not for the rest.
+- Every landing and every commit of your own gets one review by the other vendor in the background; nothing waits for it, and a tip already reviewed isn't reviewed again. Its findings arrive as a [review …] message, maybe after your answer or a merge: fix what you agree with (a fix worker, or a tiny fix) and say why not for the rest. Record what became of each finding with record_findings, all in one call (fixed in task-N, open, or dismissed and why): the review line and finish_session show only what you record.
 - Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
@@ -361,6 +361,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: 3,
         thread: "From now on, a merge task's worker runs `git merge` and commits the merge itself; Brigadier checks it (both sides merged, no marker, nothing missing unless listed under deleted) and moves the target. A merge that fails the check, or whose target moved meanwhile, goes back to the same worker, and lands on its own after its next report.",
         worker: "From now on, a merge task's worker runs `git merge` and commits the merge itself, with any fix after it as a normal commit, and lists each file it removed on purpose under `deleted` with why; Brigadier no longer prepares the merge or builds the commit.",
+    },
+    Revision {
+        number: 4,
+        thread: "You now have record_findings: after a [review …] message, record what became of each finding, by the id the message lists (R3.2), all in one call: fixed in task-N, open, or dismissed and why. Brigadier no longer counts findings for you: the review line and finish_session show only what you record.",
+        worker: "",
     },
 ];
 
@@ -1772,12 +1777,14 @@ mod environment_tests {
         // A session from before revisions existed hears every one; a worker its own words.
         older.revision = None;
         assert_eq!(labels(&notes(&older, &now)), vec![REVISION_LABEL]);
+        let workers: Vec<&str> = REVISIONS
+            .iter()
+            .map(|revision| revision.worker)
+            .filter(|note| !note.is_empty())
+            .collect();
         assert_eq!(
             revision_note(0, true),
-            Some(format!(
-                "[instructions] {}\n{}",
-                REVISIONS[0].worker, REVISIONS[2].worker
-            ))
+            Some(format!("[instructions] {}", workers.join("\n")))
         );
         assert_eq!(revision_note(revision(), true), None);
         // Revision 3: merge workers merge and commit with git themselves.
@@ -1788,9 +1795,10 @@ mod environment_tests {
         );
         // Revision 2: the thread hears that workers resume themselves; workers hear nothing.
         assert!(REVISIONS[1].thread.contains("[task-N stopped: died twice]"));
-        assert_eq!(
-            revision_note(1, true),
-            Some(format!("[instructions] {}", REVISIONS[2].worker))
+        assert!(
+            revision_note(1, true)
+                .unwrap()
+                .starts_with(&format!("[instructions] {}", REVISIONS[2].worker))
         );
         // Revision 1: checks get no prefixes.
         assert!(
@@ -1798,6 +1806,31 @@ mod environment_tests {
                 .worker
                 .contains("never prefix `ulimit -n …;` or `TMPDIR=…`")
         );
+    }
+
+    /// SESSION-FIXES-PLAN.md Q7: the thread told the revision before record_findings hears
+    /// exactly that note; one told it hears nothing.
+    #[test]
+    fn the_record_findings_revision_reaches_an_open_thread_with_its_tool() {
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.thread.starts_with("You now have record_findings"))
+            .expect("the record_findings revision");
+        assert!(added.worker.is_empty());
+        let before = added.number - 1;
+        let note = revision_note(before, false).unwrap();
+        assert!(note.starts_with(&format!("[instructions] {}", added.thread)));
+        assert_eq!(revision_note(revision(), false), None);
+        let prompt = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            Some("/work/session @ brigadier/flow"),
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(prompt.contains("Record what became of each finding with record_findings"));
     }
 
     #[test]

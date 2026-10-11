@@ -1741,6 +1741,8 @@ mod tests {
                     started_at_ms: 0,
                     ended_at_ms: None,
                     findings: None,
+                    number: 0,
+                    items: Vec::new(),
                 },
             );
         }

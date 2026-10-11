@@ -113,6 +113,8 @@ export type { FileRead } from "./FileRead";
 export type { FileRef } from "./FileRef";
 export type { FileSearch } from "./FileSearch";
 export type { FileStat } from "./FileStat";
+export type { Finding } from "./Finding";
+export type { FindingStatus } from "./FindingStatus";
 export type { Fixture } from "./Fixture";
 export type { FolderCheck } from "./FolderCheck";
 export type { FolderEntry } from "./FolderEntry";

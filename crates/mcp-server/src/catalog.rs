@@ -7,10 +7,10 @@ use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CodeRefs, CodeSearch,
     DelegateTask, EndRun, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser,
     OrchestratorCall, PlanPhases, PreviewLog, ProposeMerge, ProposeOvernight, ProposePlan,
-    QueryBrain, ReadArtifact, RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role,
-    RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript,
-    SettleStep, StartPreview, StopPreview, StopWorker, SubmitOutline, SubmitReport,
-    SuggestFullAccess, TaskRef, ToolCall, WorkerCall,
+    QueryBrain, ReadArtifact, RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval,
+    ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
+    SearchTranscript, SettleStep, StartPreview, StopPreview, StopWorker, SubmitOutline,
+    SubmitReport, SuggestFullAccess, TaskRef, ToolCall, WorkerCall,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -179,6 +179,13 @@ during an overnight run only, something only the user can do (a key, a sign-in, 
 push), in one line, for the run's \"Waiting on you\" list; outside a run it is refused: say it \
 in your answer instead. Brigadier lists its own decisions and, in a run, the workers' needs_user \
 items itself: don't repeat them. Returns at once.";
+
+const RECORD_FINDINGS: &str = "Record what became of a code review's findings, every one, in \
+one call, after its [review …] message: by the id the message lists (R3.2), fixed (with the task \
+that fixed it, task-7, or none for your own fix), open (not fixed; it should be), or dismissed \
+(not worth fixing, with why). Set high on an open one that loses data, breaks the build or a \
+security boundary. Brigadier only stores and shows what you record: the review line counts your \
+open ones, and finish_session lists them for the user. Record again when a status changes.";
 
 const SUGGEST_FULL_ACCESS: &str = "Show the user a notice in the thread when something they \
 asked for needs more access than this session's sandbox gives (writing outside the workspace, \
@@ -399,6 +406,11 @@ fn orchestrator_tools() -> Vec<Tool> {
             input_schema::<NoteForUser>(),
         ),
         tool(
+            "record_findings",
+            RECORD_FINDINGS,
+            input_schema::<RecordFindings>(),
+        ),
+        tool(
             "suggest_full_access",
             SUGGEST_FULL_ACCESS,
             input_schema::<SuggestFullAccess>(),
@@ -528,6 +540,7 @@ pub fn parse_call(
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
                 "propose_merge" => OrchestratorCall::ProposeMerge(args(name, arguments)?),
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
+                "record_findings" => OrchestratorCall::RecordFindings(args(name, arguments)?),
                 "suggest_full_access" => {
                     OrchestratorCall::SuggestFullAccess(args(name, arguments)?)
                 }
@@ -928,6 +941,40 @@ mod tests {
                     ..
                 })))
             ));
+        }
+    }
+
+    /// SESSION-FIXES-PLAN.md Q7: every thread records review findings; no worker does.
+    #[test]
+    fn the_thread_records_review_findings() {
+        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+            let thread = Role::Orchestrator {
+                conversation_id: brigadier_core::model::ConversationId("c1".into()),
+                run,
+            };
+            assert!(
+                tools_for(&thread)
+                    .iter()
+                    .any(|tool| tool.name == "record_findings")
+            );
+            let call = serde_json::json!({"items": [
+                {"id": "R1.1", "status": "fixed", "task": "task-2"},
+                {"id": "R1.2", "status": "dismissed", "why": "by design", "high": false},
+            ]});
+            let Ok(ToolCall::Orchestrator(OrchestratorCall::RecordFindings(args))) =
+                parse_call(&thread, "record_findings", call.as_object().cloned())
+            else {
+                panic!("record_findings parses for {run:?}");
+            };
+            assert_eq!(args.items.len(), 2);
+            assert_eq!(args.items[0].task.as_deref(), Some("task-2"));
+        }
+        for checks in [false, true] {
+            assert!(
+                !tools_for(&worker(checks))
+                    .iter()
+                    .any(|tool| tool.name == "record_findings")
+            );
         }
     }
 

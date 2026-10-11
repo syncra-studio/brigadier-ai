@@ -489,6 +489,9 @@ impl SessionManager {
             OrchestratorCall::NoteForUser(args) => {
                 crate::heap(|| self.note_for_user(id, args)).await
             }
+            OrchestratorCall::RecordFindings(args) => {
+                crate::heap(|| self.record_findings(id, args)).await
+            }
             OrchestratorCall::SuggestFullAccess(args) => {
                 crate::heap(|| self.suggest_full_access(id, &args.reason)).await
             }

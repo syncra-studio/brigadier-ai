@@ -20,6 +20,8 @@ const review = (id: string, startedAtMs: number, state: ReviewState, kind: Revie
   startedAtMs,
   endedAtMs: null,
   findings: null,
+  number: 0,
+  items: [],
 });
 
 const merged = (atMs: number): OrchestratorStep => ({

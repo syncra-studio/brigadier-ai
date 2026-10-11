@@ -1334,6 +1334,55 @@ pub struct ReviewRun {
     /// The reviewer's full text, in the blob store.
     #[serde(default)]
     pub findings: Option<String>,
+    /// Its place among the conversation's reviews, from 1: its findings are `R{number}.{n}`.
+    /// 0 for a review recorded before findings were items.
+    #[serde(default)]
+    pub number: u32,
+    /// What it found, one item per finding (SESSION-FIXES-PLAN.md Q7): split from its text by
+    /// the engine; each one's status is the thread's (`record_findings`).
+    #[serde(default)]
+    pub items: Vec<Finding>,
+}
+
+/// One finding of a review. Brigadier splits it from the review's text; the thread decides
+/// what became of it, and Brigadier only stores and shows that.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Finding {
+    /// `R3.2`: the conversation's third review, its second finding.
+    pub id: String,
+    /// `P0` to `P3`, as the reviewer wrote it; none for a review whose text couldn't be split.
+    pub severity: Option<String>,
+    pub title: String,
+    /// `path:line`, when the reviewer gave one.
+    pub location: Option<String>,
+    #[serde(default)]
+    pub status: FindingStatus,
+    /// The thread marked it high severity: its fix gets one targeted re-check.
+    #[serde(default)]
+    pub high: bool,
+}
+
+/// What became of a finding, as the thread recorded it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FindingStatus {
+    /// The thread hasn't recorded it yet.
+    #[default]
+    New,
+    /// Fixed, in the task named (`task-7`), or by the thread itself.
+    Fixed {
+        task: Option<String>,
+        why: Option<String>,
+    },
+    /// Still open: nobody fixed it (yet).
+    Open { why: Option<String> },
+    /// Not worth fixing, and why.
+    Dismissed { why: String },
 }
 
 // ----- the message queue --------------------------------------------------------------------

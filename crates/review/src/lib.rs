@@ -115,36 +115,65 @@ pub fn codex_args(subject: Subject<'_>, model: Option<&str>, output: &Path) -> V
     args
 }
 
-/// How many findings a review lists: its lines that start (after a list marker) with a
-/// priority, `[P0]` to `[P3]`.
+/// One finding a review lists, as its line says it: `- [P1] what is wrong — path:line`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finding {
+    /// `P0` to `P3`.
+    pub severity: String,
+    /// What is wrong, without the location.
+    pub title: String,
+    /// `path:line`, when the line ends with one after a dash.
+    pub location: Option<String>,
+}
+
+/// The findings a review lists: its lines that start (after a list marker) with a priority,
+/// `[P0]` to `[P3]`.
+pub fn split_findings(text: &str) -> Vec<Finding> {
+    text.lines().filter_map(finding).collect()
+}
+
+/// How many findings a review lists ([`split_findings`]).
 pub fn count_findings(text: &str) -> u32 {
-    let count = text
-        .lines()
-        .filter(|line| {
-            let line = line.trim_start();
-            let line = line
-                .strip_prefix("- ")
-                .or_else(|| line.strip_prefix("* "))
-                .or_else(|| line.strip_prefix("• "))
-                .unwrap_or_else(|| {
-                    // "1. [P1] …"
-                    let digits = line.trim_start_matches(|c: char| c.is_ascii_digit());
-                    if digits.len() < line.len() {
-                        digits.strip_prefix(". ").unwrap_or(line)
-                    } else {
-                        line
-                    }
-                })
-                .trim_start()
-                .trim_start_matches("**");
-            let mut chars = line.chars();
-            chars.next() == Some('[')
-                && chars.next() == Some('P')
-                && chars.next().is_some_and(|c| c.is_ascii_digit())
-                && chars.next() == Some(']')
+    u32::try_from(split_findings(text).len()).unwrap_or(u32::MAX)
+}
+
+/// The finding `line` states, if it is one.
+fn finding(line: &str) -> Option<Finding> {
+    let line = line.trim_start();
+    let line = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .or_else(|| line.strip_prefix("• "))
+        .unwrap_or_else(|| {
+            // "1. [P1] …"
+            let digits = line.trim_start_matches(|c: char| c.is_ascii_digit());
+            if digits.len() < line.len() {
+                digits.strip_prefix(". ").unwrap_or(line)
+            } else {
+                line
+            }
         })
-        .count();
-    u32::try_from(count).unwrap_or(u32::MAX)
+        .trim_start()
+        .trim_start_matches("**");
+    let rest = line.strip_prefix("[P")?;
+    let digit = rest.chars().next().filter(char::is_ascii_digit)?;
+    let rest = rest[1..].strip_prefix(']')?;
+    let rest = rest.trim_start_matches("**").trim();
+    // "title — path:line", also with "--" or " - " as the dash.
+    let (title, location) = [" — ", " -- ", " – ", " - "]
+        .iter()
+        .find_map(|dash| {
+            let (title, location) = rest.rsplit_once(dash)?;
+            let location = location.trim().trim_matches('`');
+            (!location.is_empty() && !location.contains(' ') && location.contains(':'))
+                .then(|| (title.trim(), Some(location.to_owned())))
+        })
+        .unwrap_or((rest, None));
+    Some(Finding {
+        severity: format!("P{digit}"),
+        title: title.trim_matches('`').to_owned(),
+        location,
+    })
 }
 
 /// What `codex exec --json` printed, as far as a review needs it.
@@ -894,6 +923,35 @@ exit 1"#
         assert_eq!(count_findings(claude), 2);
         assert_eq!(count_findings("No findings."), 0);
         assert_eq!(count_findings("- [PX] not a priority"), 0);
+    }
+
+    #[test]
+    fn each_finding_is_split_into_its_severity_title_and_location() {
+        let codex = "Full review comments:\n\n- [P1] Guard the empty list — src/a.rs:10-12\n  `first()` panics.\n- [P3] Typo in the readme — README.md:4\n- [P2] Old events no longer load\n  The new field has no default.";
+        assert_eq!(
+            split_findings(codex),
+            vec![
+                Finding {
+                    severity: "P1".into(),
+                    title: "Guard the empty list".into(),
+                    location: Some("src/a.rs:10-12".into()),
+                },
+                Finding {
+                    severity: "P3".into(),
+                    title: "Typo in the readme".into(),
+                    location: Some("README.md:4".into()),
+                },
+                Finding {
+                    severity: "P2".into(),
+                    title: "Old events no longer load".into(),
+                    location: None,
+                },
+            ]
+        );
+        let claude = split_findings("1. **[P0]** Leaks the token - crates/x/src/y.rs:1");
+        assert_eq!(claude[0].severity, "P0");
+        assert_eq!(claude[0].title, "Leaks the token");
+        assert_eq!(claude[0].location.as_deref(), Some("crates/x/src/y.rs:1"));
     }
 
     #[test]
