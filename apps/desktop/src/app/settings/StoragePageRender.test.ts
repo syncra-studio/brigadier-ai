@@ -33,6 +33,8 @@ test("storage refreshes, reviews, frees up space and chooses items", { timeout: 
     ],
     footer: "3 things are kept on purpose. Nothing else is touched.",
   });
+  // At the column's dialog width (32rem), not across the window.
+  assert.ok(Number(seen.reviewWidth) > 0 && Number(seen.reviewWidth) <= 512, `review is ${String(seen.reviewWidth)}px wide`);
   assert.deepEqual(seen.firstGroup, ["Work folder of “Fix login”Its session ended and its branch is merged.Reveal in Finder9.0 GB"]);
   // The one button removes exactly the safe items of the latest scan.
   assert.equal(

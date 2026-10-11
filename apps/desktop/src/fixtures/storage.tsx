@@ -141,6 +141,7 @@ function Fixture() {
       },
       () => {
         const open = dialog();
+        seen.reviewWidth = Math.round(open?.getBoundingClientRect().width ?? 0);
         seen.review = {
           title: text(q("h2", open ?? document)),
           groups: all('[data-slot="storage-group"] > button', open ?? document).map(text),
