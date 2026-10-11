@@ -101,11 +101,10 @@ const press = (element: Element | null | undefined) =>
 const button = (name: string) => all<HTMLButtonElement>("button").find((item) => text(item) === name);
 
 function Fixture() {
-  const [page, setPage] = useState<"general" | null>(null);
+  const page = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
   const [result, setResult] = useState<string | null>(null);
   useEffect(() => {
     openSettings("general");
-    setPage("general");
   }, []);
   useEffect(() => {
     if (params.has("licenses")) {
