@@ -543,7 +543,10 @@ fn finished_request(event: &EventEnvelope) -> Option<UserRequest> {
     let DomainEvent::RequestUpdated { request } = serde_json::from_str(raw).ok()? else {
         return None;
     };
-    let over = matches!(request.state, RequestState::Done | RequestState::Failed { .. });
+    let over = matches!(
+        request.state,
+        RequestState::Done | RequestState::Failed { .. }
+    );
     (over && request.steered_into.is_none() && !brigadier_core::is_run_request(&request.id))
         .then_some(request)
 }
@@ -757,7 +760,9 @@ mod tests {
             assert!(notice_for(&envelope(&request("m1", state))).is_none());
         }
         assert!(notice_for(&envelope(&request("run-ab12-g1", RequestState::Done))).is_none());
-        let DomainEvent::RequestUpdated { request: mut steered } = request("m2", RequestState::Done)
+        let DomainEvent::RequestUpdated {
+            request: mut steered,
+        } = request("m2", RequestState::Done)
         else {
             unreachable!()
         };

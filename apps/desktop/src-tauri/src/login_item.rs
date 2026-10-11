@@ -134,7 +134,9 @@ mod imp {
         let output = if on {
             let exe = std::env::current_exe().map_err(|err| err.to_string())?;
             let command = format!("\"{}\"", exe.display());
-            reg(&["add", RUN_KEY, "/v", &name, "/t", "REG_SZ", "/d", &command, "/f"])
+            reg(&[
+                "add", RUN_KEY, "/v", &name, "/t", "REG_SZ", "/d", &command, "/f",
+            ])
         } else {
             if status(app) == LoginItem::Off {
                 return Ok(());
