@@ -51,11 +51,33 @@ impl Held {
             .count()
     }
 
+    /// The id of the finding in task-2's review, from the message that brought it.
+    fn finding(&self) -> String {
+        let log = self.log.lock().unwrap();
+        log.iter()
+            .find_map(|line| finding_id(line))
+            .expect("task-2's review")
+    }
+
     /// Whether the session's notes are on `main` (a merge may fast-forward it).
     fn merged(&self) -> bool {
         let files = git(&self.flow.repo, &["ls-tree", "--name-only", "main"]);
         files.contains("A.md") || files.contains("B.md")
     }
+}
+
+/// The id of the finding a `[review task-2 · …]` message lists ("R2.1"): reviews are numbered
+/// in landing order, which the two writers don't fix.
+fn finding_id(input: &str) -> Option<String> {
+    let review = &input[input.find("[review task-2 · ")?..];
+    review.match_indices('R').find_map(|(at, _)| {
+        let digits: String = review[at + 1..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        (!digits.is_empty() && review[at + 1 + digits.len()..].starts_with(".1"))
+            .then(|| format!("R{digits}.1"))
+    })
 }
 
 /// A session whose thread delegates two writers and, in the same turn, passes the user's
@@ -156,13 +178,13 @@ async fn held(name: &str, plan: Plan) -> Held {
                 if !reports.is_empty() && !turn.input.contains("[merge") {
                     return Reply::text("[quiet]");
                 }
-                if turn.input.contains("[review task-2 · ")
+                if let Some(id) = finding_id(&turn.input)
                     && let Some(status) = plan.records
                 {
                     let reply = turn
                         .call(
                             "record_findings",
-                            json!({"items": [{"id": "R2.1", "status": status, "task": "task-2"}]}),
+                            json!({"items": [{"id": id, "status": status, "task": "task-2"}]}),
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
@@ -322,7 +344,10 @@ async fn an_open_finding_stops_the_held_merge_at_medium_severity() {
         .await;
     held.flow.settled().await;
     assert_eq!(
-        held.logged("[merge stopped] R2.1 is open: The second note has no title"),
+        held.logged(&format!(
+            "[merge stopped] {} is open: The second note has no title",
+            held.finding()
+        )),
         1
     );
     assert!(!held.merged());
@@ -371,7 +396,11 @@ async fn an_unrecorded_finding_holds_the_merge_until_recorded() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(refused.contains("Record the findings R2.1"), "{refused}");
+    let id = held.finding();
+    assert!(
+        refused.contains(&format!("Record the findings {id}")),
+        "{refused}"
+    );
     assert!(!held.merged());
     // Recorded fixed: the merge is due.
     let reply = held
@@ -380,7 +409,7 @@ async fn an_unrecorded_finding_holds_the_merge_until_recorded() {
         .record_findings(
             &held.flow.conversation,
             serde_json::from_value(
-                json!({"items": [{"id": "R2.1", "status": "fixed", "task": "task-2"}]}),
+                json!({"items": [{"id": id, "status": "fixed", "task": "task-2"}]}),
             )
             .unwrap(),
         )

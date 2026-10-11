@@ -925,7 +925,7 @@ async fn starts_over_on_older_instructions(thread: ProviderKind) {
         rules.contains("Interview the user when they invite questions"),
         "{rules}"
     );
-    assert!(rules.contains("propose_merge, propose_plan"), "{rules}");
+    assert!(rules.contains("propose_plan), never in text"), "{rules}");
     assert!(
         specs.iter().all(|(provider, _)| *provider == thread),
         "{specs:#?}"
@@ -1037,7 +1037,8 @@ async fn a_merge_removes_the_session_worktree_and_the_next_message_starts_fresh(
     );
     let (input, dirs) = seen.lock().unwrap().last().unwrap().clone();
     assert!(input.contains("Next."), "{input}");
-    assert!(!input.contains("[workspace]"), "{input}");
+    // It hears that its worktree was made again (bug 5), in the same CLI session.
+    assert!(input.contains("[workspace] A fresh branch"), "{input}");
     assert_eq!(dirs[0], worktree);
     assert_eq!(
         flow.thread_specs().len(),
