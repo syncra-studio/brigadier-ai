@@ -81,10 +81,12 @@
   white-space: pre;
 }
 
+/* Level with the steps' footer buttons (parts.tsx: pb-8, gap-3, then a text-xs note), so
+   Continue doesn't jump going from the name to the agents. */
 .welcome-continue {
   position: absolute;
   left: 50%;
-  bottom: 2.5rem;
+  bottom: calc(var(--spacing) * 11 + var(--text-xs--line-height));
   translate: -50% 0;
 }
 
