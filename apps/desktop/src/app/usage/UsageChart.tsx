@@ -155,15 +155,17 @@ export function UsageChart({
                 {tickDate.format(at)}
               </text>
             ))}
-            {lines.map((line, index) =>
-              // A single reading (just after an account's first check) is a dot; a path of one
-              // point paints nothing.
-              inRange[index]!.length === 1 ? (
+            {lines.map((line, index) => {
+              // Readings too close together to draw a line (an account's first checks) show as a
+              // dot at the latest; a path of one point paints nothing.
+              const samples = inRange[index]!;
+              const last = samples.at(-1);
+              return last && x(last.atMs) - x(samples[0]!.atMs) < unit * 2 ? (
                 <circle
                   key={shown[index]!.id}
                   data-slot="usage-chart-point"
-                  cx={x(inRange[index]![0]!.atMs)}
-                  cy={y(inRange[index]![0]!.usedPercent)}
+                  cx={x(last.atMs)}
+                  cy={y(last.usedPercent)}
                   r={unit * 0.75}
                   className={style(index).mark}
                 />
@@ -176,8 +178,8 @@ export function UsageChart({
                   strokeLinejoin="round"
                   strokeLinecap="round"
                 />
-              ),
-            )}
+              );
+            })}
             {hoverMs !== null && (
               <>
                 <line

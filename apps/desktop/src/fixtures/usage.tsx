@@ -153,10 +153,11 @@ function activity(days: number): { sinceMs: number; accounts: AccountActivity[] 
       history: windows.map(({ window }, line) => ({
         windowId: window.id,
         label: window.label,
-        // The Codex account was read once so far: a single reading per window.
+        // The Codex account was only just signed in: two readings a minute apart per window.
         samples: samples(window.windowMinutes!, 70 + 15 * line - 10 * index, index * 3 + line)
           .filter((sample) => sample.atMs >= sinceMs)
-          .slice(ref === OWN_CODEX ? -1 : 0),
+          .slice(ref === OWN_CODEX ? -1 : 0)
+          .flatMap((sample) => (ref === OWN_CODEX ? [{ ...sample, atMs: sample.atMs - MINUTE }, sample] : [sample])),
       })),
       tokens: ref === OWN_CODEX ? { byModel: [], byConversation: [] } : tokens(days === 30 ? 4 : 1),
     })),
