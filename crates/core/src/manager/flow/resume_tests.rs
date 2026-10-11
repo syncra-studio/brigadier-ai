@@ -164,3 +164,74 @@ async fn a_worker_that_dies_twice_before_reporting_stops_with_both_exits_named()
     assert!(told.lock().unwrap().contains(&reason));
     flow.stop().await;
 }
+
+/// The ref check counts a worker live only while its CLI runs: a rewrite of its branch is
+/// recorded as its own amend while its first CLI and its resumed one run, and put back once
+/// it stopped after dying twice, its task still held (PLAN bug 6 step 5).
+#[tokio::test]
+async fn a_worker_counts_live_for_the_ref_check_only_while_its_cli_runs() {
+    use crate::manager::refcheck::Caller;
+    use crate::model::ConversationId;
+    use crate::work::TaskId;
+    let conversation = Arc::new(std::sync::Mutex::new(None::<ConversationId>));
+    let shared = conversation.clone();
+    let starts = Arc::new(AtomicU32::new(0));
+    // A commit on no parent: no rewrite to it is a forward move.
+    let rewrite = |dir: &std::path::Path, message: &str| -> String {
+        let tree = super::git(dir, &["rev-parse", "HEAD^{tree}"]);
+        let commit = super::git(dir, &["commit-tree", &tree, "-m", message]);
+        let branch = super::git(dir, &["symbolic-ref", "--short", "HEAD"]);
+        super::git(
+            dir,
+            &["update-ref", &format!("refs/heads/{branch}"), &commit],
+        );
+        commit
+    };
+    let flow = Flow::start(
+        "worker-live-ref-check",
+        Options::default(),
+        script(move |turn| {
+            let (shared, starts) = (shared.clone(), starts.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    return thread(&turn).await;
+                }
+                let start = starts.fetch_add(1, Ordering::SeqCst);
+                let conversation = shared.lock().unwrap().clone().unwrap();
+                let branch = turn.git(&["symbolic-ref", "--short", "HEAD"]);
+                let task = turn.host.core.board(&conversation).await.unwrap();
+                let task = Flow::task(&task, 1).id.clone();
+                turn.host
+                    .record_branch(&turn.cwd, &branch, &conversation, Some(&task));
+                // Another worker's landing check, while this one's CLI runs.
+                let amended = rewrite(&turn.cwd, &format!("Amended {start}"));
+                turn.host
+                    .ref_check(&turn.cwd, Caller::Task(TaskId("other".into())))
+                    .await;
+                assert_eq!(turn.git(&["rev-parse", "HEAD"]), amended);
+                Reply::crashed(9)
+            }
+        }),
+    )
+    .await;
+    *conversation.lock().unwrap() = Some(flow.conversation.clone());
+    flow.say("Add a.").await;
+    let board = flow
+        .until("the task to stop", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.state == TaskState::Blocked)
+        })
+        .await;
+    assert_eq!(worker_starts(&flow).len(), 2, "resumed once");
+    let task = board.tasks.values().next().expect("the task").clone();
+    let worktree = std::path::PathBuf::from(task.workspace.unwrap().worktree.unwrap());
+    let kept = super::git(&worktree, &["rev-parse", "HEAD"]);
+    rewrite(&worktree, "Rewound");
+    flow.manager
+        .ref_check(&worktree, Caller::Task(TaskId("other".into())))
+        .await;
+    assert_eq!(super::git(&worktree, &["rev-parse", "HEAD"]), kept);
+    flow.stop().await;
+}

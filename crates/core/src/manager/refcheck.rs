@@ -135,7 +135,8 @@ pub(crate) fn judge(
 /// The check on the repository of `repo` for `caller`, its records read and written back
 /// under the repository's ref lock: a branch the engine forgot and deleted a moment earlier
 /// (a landing's, a removal's) is never recreated from a copy taken before. `live`: the tasks
-/// whose worker is live. Restores what it must and returns what each thread is told.
+/// whose worker runs now (its CLI or its terminal). Restores what it must and returns what
+/// each thread is told.
 pub(crate) fn check_recorded(
     repo: &Repo,
     store: &RefRecords,
@@ -391,7 +392,15 @@ impl SessionManager {
         let Ok(repo) = self.git.open(checkout) else {
             return;
         };
-        let live: HashSet<TaskId> = self.tasks_lock().keys().cloned().collect();
+        // The workers that can move their branch now; the registry also holds workers that
+        // run nothing (waiting for quota, stopped after dying twice).
+        let tasks: Vec<_> = self.tasks_lock().values().cloned().collect();
+        let mut live = HashSet::new();
+        for task in tasks {
+            if task.executing().await {
+                live.insert(task.id.clone());
+            }
+        }
         let store = self.ref_records.clone();
         let told = match super::blocking(move || Ok(check_recorded(&repo, &store, &caller, &live)))
             .await

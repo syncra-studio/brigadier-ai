@@ -517,6 +517,14 @@ impl TaskLive {
         self.state.lock().await.cli.is_some()
     }
 
+    /// Whether the worker can move its branch now: a CLI session of it runs (mid-turn or
+    /// between turns), or the session is open in the user's terminal. A worker waiting for
+    /// quota, or stopped after its CLI died, runs nothing.
+    pub(crate) async fn executing(&self) -> bool {
+        let state = self.state.lock().await;
+        state.cli.is_some() || state.taken_over
+    }
+
     fn new(id: TaskId, conversation_id: ConversationId) -> Self {
         Self {
             id,

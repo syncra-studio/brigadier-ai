@@ -956,7 +956,9 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
      for a worker, the session branch. A live branch deleted by its own owner is restored too (bug 5): no session
      deletes a branch the engine still uses. A rewrite of another branch while its own worker is live is
      ambiguous (the worker may have amended it): its new tip is recorded and the old tip logged with the note
-     `[brigadier/…/task-5 was rewritten while its worker ran: <old> → <new>]`.
+     `[brigadier/…/task-5 was rewritten while its worker ran: <old> → <new>]`. Live means its CLI runs (mid-turn
+     or between turns, a resumed one included) or it is open in the user's terminal; a worker waiting for quota
+     or stopped after dying twice runs nothing, so a rewrite of its branch is put back.
    - **The base (`main`)** is the user's branch, not the engine's: the user may move or reset it from their own
      terminal at any time. The check never restores it. A deletion or non-forward move of the base seen at a check
      is told to the thread, which tells the user. The sandbox (steps 2–3) is the base's protection.
