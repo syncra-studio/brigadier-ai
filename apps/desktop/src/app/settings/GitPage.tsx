@@ -80,7 +80,7 @@ export const GIT_ROWS = {
 } as const;
 
 const AUTOMATIC_HINT =
-  "A fast, light model, picked by routing. When an agent is out of quota, another one writes.";
+  "A fast, light model Brigadier picks for each message. When an agent is out of quota, another one writes.";
 
 const STYLE_CHOICES = (what: string): Choice<GitStyle>[] => [
   {
@@ -113,9 +113,6 @@ export function GitPage() {
         <SettingsCard>
           <WriterRow />
         </SettingsCard>
-      </SettingsSection>
-
-      <SettingsSection title="Commits">
         <SettingsCard>
           <StyleRow
             setting="commitStyle"
@@ -132,9 +129,6 @@ export function GitPage() {
           )}
           <SwitchSetting setting="omitAiCoauthors" row={GIT_ROWS.omitAiCoauthors} />
         </SettingsCard>
-      </SettingsSection>
-
-      <SettingsSection title="Pull requests">
         <SettingsCard>
           <StyleRow
             setting="prStyle"
