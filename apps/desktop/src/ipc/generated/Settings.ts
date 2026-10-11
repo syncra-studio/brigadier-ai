@@ -90,7 +90,7 @@ branchPrefix: string,
  */
 reviewWork: boolean, 
 /**
- * The first-run setup (agents, then projects) was finished or skipped.
+ * The first-run setup (welcome, name, agents, then projects) was finished or skipped.
  */
 onboarded: boolean, 
 /**
