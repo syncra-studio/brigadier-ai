@@ -357,6 +357,8 @@ const WORKSPACE_LABEL: &str = "workspace";
 const REVIEWS_ON_LABEL: &str = "reviews on";
 const REVIEWS_OFF_LABEL: &str = "reviews off";
 const GIT_WRITING_LABEL: &str = "git writing";
+const BROWSER_ON_LABEL: &str = "browser on";
+const BROWSER_OFF_LABEL: &str = "browser off";
 
 /// What the thread does while the user has reviews off; it replaces what its instructions say
 /// about reviews (Settings' "Review the work").
@@ -375,6 +377,31 @@ pub(crate) fn reviews_note(on: bool) -> String {
     } else {
         format!(
             "[settings] The user turned reviews off. From now on, this replaces what your instructions say about reviews: {REVIEWS_OFF} Don't mention this note."
+        )
+    }
+}
+
+/// What a session does while the user has Brigadier's built-in browser off (Settings ›
+/// Browser). Instructions never mention the browser while it is on.
+pub(crate) const BROWSER_OFF: &str = "Brigadier's built-in browser is off (the user's setting): for you it doesn't exist. Never offer to open a page in it or say a page will open there; links and preview URLs you give the user open in their default browser.";
+
+/// The instructions' paragraph while the browser is off; nothing while it is on.
+pub(crate) fn browser_section(on: bool) -> String {
+    if on {
+        String::new()
+    } else {
+        format!("\n\n{BROWSER_OFF}")
+    }
+}
+
+/// Tells a running session the user switched Brigadier's built-in browser: its CLI keeps the
+/// instructions it started with.
+pub(crate) fn browser_note(on: bool) -> String {
+    if on {
+        "[settings] The user turned Brigadier's built-in browser back on: links and preview URLs you give the user may open in its Browser tab, which only the user uses (you can't see or drive it). This replaces what your instructions or earlier notes said about it. Don't mention this note.".to_owned()
+    } else {
+        format!(
+            "[settings] The user turned Brigadier's built-in browser off. From now on: {BROWSER_OFF} Don't mention this note."
         )
     }
 }
@@ -399,6 +426,8 @@ pub(crate) struct Current {
     /// What the user's Git settings say about writing commits and pull requests
     /// ([`git_writing`]); `None` while they follow the repository.
     pub git_writing: Option<String>,
+    /// Whether Brigadier's built-in browser is on (Settings › Browser); on unless set.
+    pub browser: bool,
     pub permission: PermissionLevel,
     pub folder_trusted: bool,
     /// Where accepted work lands and the permission level, as the instructions say them
@@ -442,6 +471,7 @@ impl Current {
             short_replies,
             review_work: true,
             git_writing: None,
+            browser: true,
             permission,
             folder_trusted: trusted,
             plain: setting_texts(conversation, trusted, None),
@@ -459,6 +489,7 @@ impl Current {
             short_replies: false,
             review_work: true,
             git_writing: None,
+            browser: true,
             permission: PermissionLevel::ApproveForMe,
             folder_trusted: true,
             plain: (String::new(), String::new()),
@@ -488,6 +519,7 @@ impl Current {
             workspace: self.workspace.clone(),
             review_work: session.then_some(self.review_work),
             git_writing: session.then(|| git_writing_fingerprint(self.git_writing.as_deref())),
+            browser: session.then_some(self.browser),
         }
     }
 }
@@ -578,6 +610,21 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
                 label: GIT_WRITING_LABEL,
                 told: Told {
                     git_writing: Some(writing),
+                    ..Told::default()
+                },
+            });
+        }
+        // Instructions from before the setting never mentioned the browser: it was on.
+        if told.browser.unwrap_or(true) != now.browser {
+            notes.push(Note {
+                text: browser_note(now.browser),
+                label: if now.browser {
+                    BROWSER_ON_LABEL
+                } else {
+                    BROWSER_OFF_LABEL
+                },
+                told: Told {
+                    browser: Some(now.browser),
                     ..Told::default()
                 },
             });
@@ -711,6 +758,7 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
     if told.git_writing.is_none() {
         told.git_writing.clone_from(&older.git_writing);
     }
+    told.browser = told.browser.or(older.browser);
 }
 
 /// What the current CLI session was last told, from its log's instruction entries (logged at
@@ -1751,6 +1799,62 @@ mod environment_tests {
         assert_eq!(on[0].told.review_work, Some(true));
         // A new thread is told as its instructions say.
         assert_eq!(now.told().review_work, Some(true));
+    }
+
+    #[test]
+    fn a_running_session_hears_the_browser_switched_once() {
+        let conversation = session("fullAccess");
+        let mut now = Current::session(&conversation, true, None, true, vec![], None);
+        let mut told = now.told();
+        told.browser = None;
+        assert!(notes(&told, &now).is_empty(), "unknown counts as on");
+        now.browser = false;
+        let off = notes(&told, &now);
+        assert_eq!(off.len(), 1, "{off:#?}");
+        assert!(
+            off[0]
+                .text
+                .starts_with("[settings] The user turned Brigadier's built-in browser off.")
+        );
+        assert!(off[0].text.contains(BROWSER_OFF));
+        let mut after = off[0].told.clone();
+        fill_told(&mut after, &told);
+        assert!(notes(&after, &now).is_empty(), "told once");
+        now.browser = true;
+        let on = notes(&after, &now);
+        assert_eq!(on.len(), 1, "{on:#?}");
+        assert!(on[0].text.contains("back on"));
+        assert_eq!(on[0].told.browser, Some(true));
+        // A new session is told as its instructions say; a Chat never hears of it.
+        assert_eq!(now.told().browser, Some(true));
+        assert_eq!(Current::chat(vec![]).told().browser, None);
+    }
+
+    /// No agent can reach Brigadier's built-in browser: while it is on, nothing in the
+    /// instructions mentions it, so turning it off has nothing to take away but the note.
+    #[test]
+    fn instructions_never_mention_the_built_in_browser_while_it_is_on() {
+        let mentions = |text: &str| {
+            let text = text.to_lowercase();
+            ["built-in browser", "browser tab", "brigadier's browser"]
+                .iter()
+                .any(|phrase| text.contains(phrase))
+        };
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let prompt = thread(
+                &session("fullAccess"),
+                None,
+                &[],
+                None,
+                None,
+                provider,
+                true,
+            );
+            assert!(!mentions(&prompt), "{prompt}");
+        }
+        assert!(!mentions(&worker_system("")));
+        assert!(browser_section(true).is_empty());
+        assert!(mentions(&browser_section(false)));
     }
 
     fn session(permission: &str) -> Conversation {

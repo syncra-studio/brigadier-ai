@@ -843,6 +843,37 @@ mod tests {
         }
     }
 
+    /// Brigadier's built-in browser is the user's alone: no tool opens, reads or drives it, so
+    /// turning it off in Settings has no tool to take away. A tool that ever does must be
+    /// gated on the setting first.
+    #[test]
+    fn no_tool_reaches_the_built_in_browser() {
+        let lists = [
+            orchestrator_tools(),
+            worker_tools(),
+            job_tools(),
+            chat_tools(),
+            crate::computer::tools(),
+        ];
+        for tool in lists.iter().flatten() {
+            let text = format!(
+                "{} {} {}",
+                tool.name,
+                tool.description.as_deref().unwrap_or(""),
+                serde_json::Value::Object((*tool.input_schema).clone())
+            )
+            .to_lowercase();
+            for phrase in [
+                "built-in browser",
+                "browser tab",
+                "brigadier's browser",
+                "browser_open",
+            ] {
+                assert!(!text.contains(phrase), "{}: {phrase}", tool.name);
+            }
+        }
+    }
+
     #[test]
     fn every_thread_starts_reads_and_stops_previews() {
         for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {

@@ -2165,6 +2165,10 @@ pub struct Told {
     /// pull requests; empty, as `None` counts too, while they follow the repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_writing: Option<String>,
+    /// Whether Brigadier's built-in browser is on (Settings › Browser); `None` counts as on,
+    /// as no instructions mentioned it before the switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<bool>,
 }
 
 /// One entry of the orchestrator log shown in the Inspector.

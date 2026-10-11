@@ -1506,6 +1506,8 @@ mod base_merge_tests;
 #[cfg(test)]
 mod branch_prefix_tests;
 #[cfg(test)]
+mod browser_switch_tests;
+#[cfg(test)]
 mod card_tests;
 #[cfg(test)]
 mod checks_tests;

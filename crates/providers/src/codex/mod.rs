@@ -2080,6 +2080,18 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 mod tests {
     use super::*;
 
+    /// Codex's own browser stays off for every session: agents never get a browser of their
+    /// own beside Brigadier's (the user's alone, gated by Settings › Browser).
+    #[test]
+    fn every_session_runs_without_codex_browser_use() {
+        let args = app_server_args(None);
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--disable" && pair[1] == "browser_use"),
+            "{args:?}"
+        );
+    }
+
     #[test]
     fn inline_input_preserves_text_image_text_order() {
         let file = crate::InputFile {

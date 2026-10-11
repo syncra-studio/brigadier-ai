@@ -3,6 +3,7 @@ import type { AccountEntry } from "./AccountEntry";
 import type { Density } from "./Density";
 import type { GitStyle } from "./GitStyle";
 import type { KeepAwake } from "./KeepAwake";
+import type { LinkTarget } from "./LinkTarget";
 import type { ModelChoice } from "./ModelChoice";
 import type { ModelRef } from "./ModelRef";
 import type { OverrideRule } from "./OverrideRule";
@@ -153,6 +154,32 @@ dictationMicrophone: string,
  * The system voice Read aloud speaks with (its voice URI). Empty: the system's default.
  */
 readAloudVoice: string, 
+/**
+ * Brigadier's built-in browser exists (Settings › Browser). Off, there is no Browser tab,
+ * shortcut or menu item, links open in the default browser, and sessions are told.
+ */
+browserEnabled: boolean, 
+/**
+ * Where web links open while the browser is on.
+ */
+webLinksIn: LinkTarget, 
+/**
+ * Where local development URLs (localhost and loopback addresses) open while the browser
+ * is on.
+ */
+localLinksIn: LinkTarget, 
+/**
+ * The Browser tab's address bar shows the whole URL, not only the site.
+ */
+browserFullUrl: boolean, 
+/**
+ * Where the built-in browser saves downloads. Empty: the system's Downloads folder.
+ */
+browserDownloadsDir: string, 
+/**
+ * The built-in browser asks where to save each download.
+ */
+browserAskDownloads: boolean, 
 /**
  * The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
  * before it existed read as 0, so their conversions run.

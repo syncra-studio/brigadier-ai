@@ -151,6 +151,7 @@ export type { LifecycleOutcome } from "./LifecycleOutcome";
 export type { LimitHit } from "./LimitHit";
 export type { LimitKind } from "./LimitKind";
 export type { LineRange } from "./LineRange";
+export type { LinkTarget } from "./LinkTarget";
 export type { MachineStep } from "./MachineStep";
 export type { MachineStepKind } from "./MachineStepKind";
 export type { MachineStepReason } from "./MachineStepReason";

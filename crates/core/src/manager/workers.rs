@@ -244,6 +244,9 @@ pub(crate) struct TaskLive {
     /// ([`prompts::git_writing_fingerprint`]): its brief, or a note since. `None`: unknown,
     /// which counts as following the repository, as every brief said before the setting.
     git_writing_told: std::sync::Mutex<Option<String>>,
+    /// What the worker was last told of Brigadier's built-in browser: its brief, or a note
+    /// since. `None`: unknown, which counts as on, as no brief mentioned it before the setting.
+    browser_told: std::sync::Mutex<Option<bool>>,
 }
 
 /// [`TaskLive::reviews_told`]'s values.
@@ -304,6 +307,26 @@ impl TaskLive {
             .replace(now.clone())
             .unwrap_or_default();
         (before != now).then(|| prompts::git_writing_note(writing))
+    }
+
+    /// Records that the worker was told the browser is `on` in its brief.
+    pub(crate) fn told_browser(&self, on: bool) {
+        *self
+            .browser_told
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(on);
+    }
+
+    /// The note a worker needs with its next message when what it was told of the browser
+    /// isn't `on` any more; it counts as told from then on.
+    pub(crate) fn browser_note(&self, on: bool) -> Option<String> {
+        let before = self
+            .browser_told
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replace(on)
+            .unwrap_or(true);
+        (before != on).then(|| prompts::browser_note(on))
     }
 
     /// Records why the running model must hand the task on when its turn ends.
@@ -597,6 +620,7 @@ impl TaskLive {
             takeover: tokio::sync::Mutex::new(None),
             reviews_told: std::sync::atomic::AtomicU8::new(REVIEWS_UNKNOWN),
             git_writing_told: std::sync::Mutex::new(None),
+            browser_told: std::sync::Mutex::new(None),
         }
     }
 
@@ -1480,6 +1504,11 @@ impl SessionManager {
             extra.push_str("\n\n");
             extra.push_str(text);
         }
+        let browser = self.core.settings().browser_enabled;
+        if !browser {
+            extra.push_str("\n\n");
+            extra.push_str(prompts::BROWSER_OFF);
+        }
         if self.held_by_plan_mode(task).await {
             extra.push_str("\n\n");
             extra.push_str(super::phases::PLAN_MODE_HOLD);
@@ -1496,6 +1525,7 @@ impl SessionManager {
             );
             self.task_live(task).told_reviews(reviewed);
             self.task_live(task).told_git_writing(writing.as_deref());
+            self.task_live(task).told_browser(browser);
         }
 
         let worker_grant = self.grants.issue(
@@ -3449,6 +3479,41 @@ impl SessionManager {
         }
     }
 
+    /// The user switched Brigadier's built-in browser: a worker at work hears it at once, one
+    /// between turns with its next message, and the thread in a note before its next turn.
+    pub async fn browser_switched(&self) {
+        let on = self.core.settings().browser_enabled;
+        let workers: Vec<_> = self.tasks_lock().values().cloned().collect();
+        for live in workers {
+            let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
+                continue;
+            };
+            if task.state.is_final() || !live.busy().await {
+                continue;
+            }
+            let Some(note) = live.browser_note(on) else {
+                continue;
+            };
+            let rounds = task.rework_rounds;
+            match self
+                .tell_worker(&task.conversation_id, &task, note, "Brigadier")
+                .await
+            {
+                // A note is no rework round.
+                Ok(_) => {
+                    let _ = self
+                        .update_task(&task.conversation_id, &task.id, |t| {
+                            t.rework_rounds = t.rework_rounds.min(rounds);
+                        })
+                        .await;
+                }
+                Err(err) => {
+                    tracing::info!(task = %task.id, error = %err, "a worker took no note that the browser was switched");
+                }
+            }
+        }
+    }
+
     pub(crate) async fn tell_worker(
         &self,
         conversation_id: &ConversationId,
@@ -3563,8 +3628,8 @@ impl SessionManager {
                 false,
             ));
         }
-        // A worker told otherwise of reviews or git writing hears the user's settings with
-        // this message.
+        // A worker told otherwise of reviews, git writing or the browser hears the user's
+        // settings with this message.
         let text = match live.reviews_note(task, self.reviews_on()) {
             Some(note) if text.is_empty() => note.to_owned(),
             Some(note) => format!("{note}\n\n{text}"),
@@ -3572,6 +3637,11 @@ impl SessionManager {
         };
         let writing = prompts::git_writing(&self.core.settings());
         let text = match live.git_writing_note(task, writing.as_deref()) {
+            Some(note) if text.is_empty() => note,
+            Some(note) => format!("{note}\n\n{text}"),
+            None => text,
+        };
+        let text = match live.browser_note(self.core.settings().browser_enabled) {
             Some(note) if text.is_empty() => note,
             Some(note) => format!("{note}\n\n{text}"),
             None => text,

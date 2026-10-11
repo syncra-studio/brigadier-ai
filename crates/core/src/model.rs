@@ -594,6 +594,17 @@ pub enum KeepAwake {
     Always,
 }
 
+/// Where a kind of web link opens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkTarget {
+    /// A Browser tab in the session in front (the system browser when there is none).
+    Brigadier,
+    /// The user's default browser.
+    #[default]
+    System,
+}
+
 /// User settings persisted by the core.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
@@ -681,6 +692,20 @@ pub struct Settings {
     pub dictation_microphone: String,
     /// The system voice Read aloud speaks with (its voice URI). Empty: the system's default.
     pub read_aloud_voice: String,
+    /// Brigadier's built-in browser exists (Settings › Browser). Off, there is no Browser tab,
+    /// shortcut or menu item, links open in the default browser, and sessions are told.
+    pub browser_enabled: bool,
+    /// Where web links open while the browser is on.
+    pub web_links_in: LinkTarget,
+    /// Where local development URLs (localhost and loopback addresses) open while the browser
+    /// is on.
+    pub local_links_in: LinkTarget,
+    /// The Browser tab's address bar shows the whole URL, not only the site.
+    pub browser_full_url: bool,
+    /// Where the built-in browser saves downloads. Empty: the system's Downloads folder.
+    pub browser_downloads_dir: String,
+    /// The built-in browser asks where to save each download.
+    pub browser_ask_downloads: bool,
     /// The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
     /// before it existed read as 0, so their conversions run.
     #[serde(default)]
@@ -802,6 +827,12 @@ impl Default for Settings {
             dictation_words: Vec::new(),
             dictation_microphone: String::new(),
             read_aloud_voice: String::new(),
+            browser_enabled: true,
+            web_links_in: LinkTarget::System,
+            local_links_in: LinkTarget::Brigadier,
+            browser_full_url: false,
+            browser_downloads_dir: String::new(),
+            browser_ask_downloads: false,
             settings_version: SETTINGS_VERSION,
         }
     }
