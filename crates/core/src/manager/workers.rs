@@ -2221,7 +2221,7 @@ impl SessionManager {
                 // A branch that was there already (the user's, or one a restored session
                 // made before) is only Brigadier's when its records say so.
                 if made {
-                    self.note_branch_made(repo, &branch).await;
+                    self.note_branch_made(repo, branch).await;
                 }
                 if let Some(Setup::Session {
                     repo,

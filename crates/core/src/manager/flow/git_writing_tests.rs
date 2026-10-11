@@ -105,7 +105,7 @@ async fn automatic_writes_with_routings_pick_in_the_repositorys_style() {
     assert_eq!(specs.len(), 1, "{specs:?}");
     assert_eq!(specs[0].0, ProviderKind::Claude);
     assert_eq!(specs[0].1.as_deref(), Some("claude-opus-5-5"));
-    let prompt = &writes.lock().unwrap()[0].1;
+    let prompt = writes.lock().unwrap()[0].1.clone();
     assert!(
         prompt.contains("Its latest commit subjects:\n- Start"),
         "{prompt}"
