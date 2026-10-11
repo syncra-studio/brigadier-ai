@@ -22,7 +22,7 @@ import { pickFolder } from "@/ipc/client";
 import type { LinkTarget } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
 import { setSetting } from "@/state/settings";
-import { useApp } from "@/state/store";
+import { type Selection, useApp } from "@/state/store";
 
 /** The Browser page's rows, for the page and for Settings search. */
 export const BROWSER_ROWS = {
@@ -72,6 +72,8 @@ export const BROWSER_ROWS = {
   },
 } as const;
 
+type SubView = "history" | "downloads" | "sites";
+
 const PAGE_DESCRIPTION = "The built-in browser, where links open, and what it keeps.";
 const OFF_NOTE = "The built-in browser is off: links open in your default browser, and agents are told it isn't there.";
 
@@ -85,7 +87,12 @@ export function BrowserPage() {
   const on = useApp((s) => s.settings.browserEnabled);
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
-  const [view, setView] = useState<"page" | "history" | "downloads" | "sites">("page");
+  const shown = useApp((s) => s.selection);
+  // A sub-view lasts while Settings shows what it was opened under: Browser picked again in the
+  // sidebar opens the page itself.
+  const [opened, setOpened] = useState<{ view: SubView; under: Selection } | null>(null);
+  const view = opened?.under === shown ? opened.view : "page";
+  const setView = (next: SubView | "page") => setOpened(next === "page" ? null : { view: next, under: shown });
   const [clearing, setClearing] = useState(false);
   const [cleared, setCleared] = useState(0);
   const [importing, setImporting] = useState(false);
@@ -196,7 +203,7 @@ function BrowserSwitch({ on }: { on: boolean }) {
           {BROWSER_ROWS.browser.label}
         </span>
       }
-      description={<span className="ps-9 block">{BROWSER_ROWS.browser.description}</span>}
+      description={<span className="block ps-[calc(var(--spacing-icon-lg)+var(--spacing)*3)]">{BROWSER_ROWS.browser.description}</span>}
       error={save.error}
       className="py-4"
     >

@@ -253,7 +253,11 @@ function Fixture() {
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 200));
         seen.agentVisits = all("main li button[title]").map((element) => element.title);
-        button("Browser")?.click();
+        // Browser picked again in the sidebar: the page itself, not the history.
+        useApp.setState({ selection: { type: "settings", page: "browser" } });
+      },
+      () => {
+        seen.repicked = text(document.querySelector("main h1"));
       },
       () => VIEWS.downloads?.(),
       () => {

@@ -92,6 +92,7 @@ test("browser settings: rows, import, clear, history, downloads, sites, off", { 
   ]);
   assert.deepEqual(seen.filters, ["All", "Agent", "Other"]);
   assert.deepEqual(seen.agentVisits, ["http://localhost:5173/checkout"]);
+  assert.equal(seen.repicked, "Browser");
   assert.deepEqual(seen.downloads, {
     title: "Download history",
     files: ["/Users/me/Downloads/report.pdf", "/Users/me/Downloads/big.zip"],
