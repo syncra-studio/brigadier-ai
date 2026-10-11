@@ -28,6 +28,7 @@ import {
   renameAccount,
   signInAccount,
 } from "@/state/accounts";
+import { closeSetupTerminal } from "@/state/onboarding";
 
 /** How long after its sign-in ends an account may take to read as signed in. */
 const SIGN_IN_SLACK_MS = 2000;
@@ -81,6 +82,14 @@ export function ProviderAccounts({
   const label = PROVIDER_LABELS[provider];
   const [signing, setSigning] = useState<SigningIn | null>(null);
   const signingId = useRef<string | null>(null);
+  // Off the page: a new account added only after that goes again with its sign-in.
+  const left = useRef(false);
+  useEffect(() => {
+    left.current = false;
+    return () => {
+      left.current = true;
+    };
+  }, []);
   const start = (id: string | null) => {
     signingId.current = id;
     setSigning({ id, fresh: id === null, exitedAtMs: null });
@@ -91,6 +100,11 @@ export function ProviderAccounts({
       const id = signingId.current;
       if (id !== null) return signInAccount(id, cols, rows);
       const { account, terminal } = await addAccount(provider, cols, rows);
+      if (left.current) {
+        closeSetupTerminal(terminal.id);
+        void removeAccount(account.id).catch(() => {});
+        throw new Error("The page closed before the sign-in started.");
+      }
       signingId.current = account.id;
       setSigning((current) => current && { ...current, id: account.id });
       return terminal;
