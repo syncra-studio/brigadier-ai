@@ -73,6 +73,29 @@ impl RefRecords {
     }
 }
 
+/// Runs `rewrite`, the engine's own move of `branch` in `repo` that needn't be forward (a
+/// stopped task's work kept without its snapshot or its AI co-authors), under the repository's
+/// ref lock, and records the tip it leaves: no check puts the old tip back, before or after
+/// the branch's worker is gone.
+pub(crate) fn engine_rewrite<T>(
+    repo: &Repo,
+    store: &RefRecords,
+    branch: &str,
+    rewrite: impl FnOnce() -> T,
+) -> T {
+    repo.with_ref_lock(|| {
+        let done = rewrite();
+        if let Ok(Some(tip)) = repo.branch_tip(branch) {
+            store.with(repo.common_dir(), |records| {
+                if let Some(recorded) = records.branches.get_mut(branch) {
+                    recorded.tip = tip;
+                }
+            });
+        }
+        done
+    })
+}
+
 /// What the check does with one recorded branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Verdict {

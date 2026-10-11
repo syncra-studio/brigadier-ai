@@ -45,6 +45,7 @@ use tokio_util::sync::CancellationToken;
 use super::brains::ReportLearning;
 use super::conversation::{Cli, Envelope, safe_file_name};
 use super::outputs::outputs_dir;
+use super::refcheck::engine_rewrite;
 use super::usage::TokenOwner;
 use super::watchdog::WorkerWatch;
 use super::worker_handoff::Handover;
@@ -4126,6 +4127,7 @@ impl SessionManager {
         let base = workspace.base.clone().map(Oid);
         let on_snapshot = workspace.on_snapshot;
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
+        let (records, kept_branch) = (self.ref_records.clone(), branch.clone());
         let result = blocking(move || {
             let worktree = git.open_worktree(&path).map_err(git_error)?;
             worktree.commit_wip(&message).map_err(git_error)?;
@@ -4133,11 +4135,16 @@ impl SessionManager {
             let Some(base) = base.filter(|base| *base != head) else {
                 return Ok(Unfinished::None);
             };
+            // The rewrites below needn't be forward: recorded as the engine's own, so no ref
+            // check puts the branch back once its worker is gone.
+            let repo = git.open(&path).map_err(git_error)?;
             if !on_snapshot {
                 // Kept as the user wants its messages (work on a snapshot is kept as one
                 // commit of Brigadier's instead).
                 if omit_ai_coauthors {
-                    match worktree.clean_ai_coauthors(&base, &head) {
+                    match engine_rewrite(&repo, &records, &kept_branch, || {
+                        worktree.clean_ai_coauthors(&base, &head)
+                    }) {
                         Ok(Some(cleaned)) => return Ok(Unfinished::Commit(cleaned)),
                         Ok(None) => {}
                         Err(err) => {
@@ -4148,7 +4155,11 @@ impl SessionManager {
                 return Ok(Unfinished::Commit(head));
             }
             Ok(
-                match worktree.drop_snapshot(&base, &message).map_err(git_error)? {
+                match engine_rewrite(&repo, &records, &kept_branch, || {
+                    worktree.drop_snapshot(&base, &message)
+                })
+                .map_err(git_error)?
+                {
                     Ok(commit) => Unfinished::Commit(commit),
                     Err(paths) => Unfinished::Overlaps { paths, head },
                 },

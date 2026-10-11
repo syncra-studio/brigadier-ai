@@ -2633,3 +2633,137 @@ async fn orchestrator_tools_are_visible_while_running_and_keep_their_first_posit
     assert_eq!(restored.orchestrator_steps, finished.orchestrator_steps);
     flow.stop().await;
 }
+
+/// A worker on a snapshot of the user's uncommitted files stops: its work is kept on its
+/// branch as one commit on the user's HEAD, a rewrite of the engine's own. The ref check
+/// after it keeps that commit, though the worker is gone (PLAN bug 6 step 5).
+#[tokio::test]
+async fn a_stopped_snapshot_workers_kept_work_survives_the_ref_check() {
+    use crate::model::{
+        ConversationKind, EnvironmentRequest, ModelChoice, PermissionLevel, Setup, SetupRequest,
+    };
+    use brigadier_providers::ProviderKind;
+    let mut flow = Flow::start(
+        "kept-snapshot",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("Add the notes.") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Add notes", "kind": "implement", "spec": "Create notes.txt."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                return Reply::text("[quiet]");
+            }
+            // Still at work when it is stopped.
+            std::future::pending::<()>().await;
+            Reply::text("Never.")
+        }),
+    )
+    .await;
+    // A session on the user's own checkout, whose workers see their uncommitted files.
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id;
+    flow.conversation = flow
+        .manager
+        .create_conversation(
+            ConversationKind::Session,
+            project,
+            Some("Local".into()),
+            Some(SetupRequest::Session {
+                repo: flow.repo.display().to_string(),
+                environment: EnvironmentRequest::LocalCheckout {
+                    branch: "main".into(),
+                    create_from: None,
+                },
+                permission: PermissionLevel::FullAccess,
+                orchestrator: ModelChoice {
+                    provider: ProviderKind::Claude,
+                    model: Some("claude-opus-5-5".into()),
+                    effort: None,
+                    fast: None,
+                    account: None,
+                },
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+    let Some(Setup::Session {
+        repo,
+        environment,
+        permission,
+        orchestrator,
+        plan_mode,
+        ..
+    }) = flow.core.conversation(&flow.conversation).unwrap().setup
+    else {
+        panic!("a session");
+    };
+    flow.manager
+        .set_setup(
+            flow.conversation.clone(),
+            Setup::Session {
+                repo,
+                environment,
+                permission,
+                orchestrator,
+                workers_see_uncommitted: Some(true),
+                plan_mode,
+            },
+        )
+        .await
+        .unwrap();
+    std::fs::write(flow.repo.join("README.md"), "# Flow, edited\n").unwrap();
+    flow.say("Add the notes.").await;
+    let board = flow
+        .until("task-1 at work", |board| {
+            board.tasks.values().any(|task| {
+                task.number == 1
+                    && task.state == TaskState::Running
+                    && task.workspace.as_ref().is_some_and(|w| w.on_snapshot)
+            })
+        })
+        .await;
+    let task = Flow::task(&board, 1).clone();
+    let workspace = task.workspace.clone().unwrap();
+    let (worktree, branch) = (
+        std::path::PathBuf::from(workspace.worktree.unwrap()),
+        workspace.branch.unwrap(),
+    );
+    // Recorded at its start, on the snapshot.
+    flow.manager
+        .record_branch(&worktree, &branch, &flow.conversation, Some(&task.id));
+    std::fs::write(worktree.join("notes.txt"), "notes\n").unwrap();
+    flow.manager.stop_task(task.id.clone()).await.unwrap();
+    let board = flow
+        .until("task-1 stopped", |board| {
+            Flow::task(board, 1).state == TaskState::Stopped
+        })
+        .await;
+    let Some(crate::work::KeptWork::Branch { commit, .. }) = &Flow::task(&board, 1).kept else {
+        panic!("kept on its branch: {:?}", Flow::task(&board, 1).kept);
+    };
+    let head = super::git(&flow.repo, &["rev-parse", "main"]);
+    assert_eq!(
+        super::git(&flow.repo, &["rev-parse", &format!("{commit}^")]),
+        head,
+        "kept on the user's HEAD, without the snapshot"
+    );
+    flow.manager
+        .ref_check(
+            &flow.repo,
+            crate::manager::refcheck::Caller::Thread(flow.conversation.clone()),
+        )
+        .await;
+    assert_eq!(&super::git(&flow.repo, &["rev-parse", &branch]), commit);
+    flow.stop().await;
+}
