@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use brigadier_ipc::app::{
     BrowserDownload, BrowserSite, BrowserVisit, DownloadState, HistoryFilter, SitePermission,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 
 /// The schema, by `PRAGMA user_version`.
 const SCHEMA: &[&str] = &[r"
@@ -146,6 +146,8 @@ impl Store {
         agent: bool,
         at_ms: i64,
     ) -> rusqlite::Result<i64> {
+        use rusqlite::OptionalExtension;
+
         if let Some(id) = last {
             let same = self
                 .db
