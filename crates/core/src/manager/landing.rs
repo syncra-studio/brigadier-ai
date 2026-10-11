@@ -1488,6 +1488,8 @@ impl SessionManager {
                 // A review of the session's work still runs: an open finding it brings
                 // would stop the merge, so it waits for the review's end.
                 Gate::Wait(new) if new.is_empty() => {
+                    // A [merge due] told before that review started is told again at its end.
+                    *conv.merge_told.lock().unwrap() = Some((held.asked_in.clone(), "waiting"));
                     return Err(Error::Invalid(
                         "[not merged] A review of the session's work still runs, and the user's held merge waits for it: Brigadier tells you [merge due] when it ends, or [merge stopped]. Nothing was merged; reply [quiet] meanwhile.".into(),
                     ));
