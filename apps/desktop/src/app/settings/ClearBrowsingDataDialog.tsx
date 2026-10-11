@@ -52,7 +52,7 @@ export function ClearBrowsingDataDialog({
   const [clearing, setClearing] = useState(false);
   return (
     <Dialog open={open} onOpenChange={(next) => !clearing && onOpenChange(next)}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Clear browsing data</DialogTitle>
           <DialogDescription className="sr-only">
