@@ -76,8 +76,7 @@ pub(crate) fn write_unfollowed(dir: &Path, name: &str, bytes: &[u8]) -> crate::R
                 dir.display()
             )));
         }
-        let temp = dir.join(format!(".{name}.{}.part", std::process::id()));
-        let _ = std::fs::remove_file(&temp);
+        let temp = dir.join(temp_name(name));
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -93,6 +92,13 @@ pub(crate) fn write_unfollowed(dir: &Path, name: &str, bytes: &[u8]) -> crate::R
     }
 }
 
+/// A temporary name for one write of `name`, its own even when two writes of the same name
+/// run at once (two `observe`s saving the same file): neither unlinks or publishes the
+/// other's file.
+fn temp_name(name: &str) -> String {
+    format!(".{name}.{}.part", uuid::Uuid::now_v7().simple())
+}
+
 /// [`write_unfollowed`]'s write in the folder `folder` already opened: a temporary file made
 /// there (never through a link), then renamed to `name` in the same folder.
 #[cfg(unix)]
@@ -103,8 +109,7 @@ fn write_in(folder: &std::os::fd::OwnedFd, name: &str, bytes: &[u8]) -> crate::R
     use nix::sys::stat::Mode;
     use nix::unistd::{UnlinkatFlags, unlinkat};
     let invalid = |err: nix::Error| crate::Error::Invalid(err.to_string());
-    let temp = format!(".{name}.{}.part", std::process::id());
-    let _ = unlinkat(folder, temp.as_str(), UnlinkatFlags::NoRemoveDir);
+    let temp = temp_name(name);
     let flags =
         OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
     let fd = openat(
@@ -763,6 +768,35 @@ mod tests {
             0,
             "nothing went through the link"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Writes of the same name at once each succeed, and the file is one of them whole, with
+    /// no temporary file left (Codex review, phase 6 verify).
+    #[test]
+    fn writes_of_the_same_name_at_once_each_land_whole() {
+        let root =
+            std::env::temp_dir().join(format!("brigadier-unfollowed-{}", uuid::Uuid::now_v7()));
+        let dir = root.join("outputs");
+        let writes: Vec<Vec<u8>> = (0..8u8).map(|n| vec![n; 512 * 1024]).collect();
+        for _ in 0..10 {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = writes
+                    .iter()
+                    .map(|bytes| scope.spawn(|| super::write_unfollowed(&dir, "live-1.png", bytes)))
+                    .collect();
+                for handle in handles {
+                    handle.join().unwrap().unwrap();
+                }
+            });
+            let kept = std::fs::read(dir.join("live-1.png")).unwrap();
+            assert!(writes.contains(&kept), "the file is one write, whole");
+            let names: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(names, vec!["live-1.png"], "no temporary file is left");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
