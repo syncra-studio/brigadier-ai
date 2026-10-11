@@ -964,13 +964,13 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
    - **The base (`main`)** is the user's branch, not the engine's: the user may move or reset it from their own
      terminal at any time. The check never restores it. A deletion or non-forward move of the base seen at a check
      is told to the thread, which tells the user. The sandbox (steps 2–3) is the base's protection.
-   - **Serialized with landings.** Every move the engine makes (a landing's fast-forward or rebase, a merge into
-     the base, a branch it creates or deletes, a stopped task's branch rewritten to keep its work without the
-     snapshot or AI co-authors) and the check itself run under one per-repository ref lock in the
-     engine, and the engine updates its recorded tip inside that same critical section. So the check never sees
-     the engine's own move as foreign, and a restore can't undo a landing that ran a moment earlier. The check
-     reads its records only once it holds that lock, so a branch the engine forgot and deleted just before is
-     never recreated from an older copy.
+   - **Serialized with landings.** Every move the engine makes (a landing's fast-forward, its rewrite of the task
+     branch onto the target without litter or AI co-authors, a merge into the base, a branch it creates or
+     deletes, a stopped task's branch rewritten to keep its work without the snapshot or AI co-authors) and the
+     check itself run under one per-repository ref lock in the engine, and the engine updates its recorded tip
+     inside that same critical section. So the check never sees the engine's own move as foreign, and a restore
+     can't undo a landing that ran a moment earlier. The check reads its records only once it holds that lock, so
+     a branch the engine forgot and deleted just before is never recreated from an older copy.
    - This also covers platforms whose sandbox can't express allow-all-but rules (Linux and Windows today).
 6. **A `clean_up` tool** (plumbing) for the thread:
    - It lists and removes only what the ledger records under this conversation's owners (`session:`, `task:`,

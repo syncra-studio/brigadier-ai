@@ -186,6 +186,10 @@ pub struct SessionManager {
     /// none (never the real `~/.claude.json` or `~/.codex/config.toml`).
     #[cfg(test)]
     pub(crate) trust_home: std::sync::OnceLock<PathBuf>,
+    /// Tests: what a landing runs once it has rewritten the task branch, before it moves
+    /// the target.
+    #[cfg(test)]
+    pub(crate) landing_rewritten: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// Background model turns, for maintenance's idle check.
     activity: Arc<quiet::Activity>,
 }
@@ -271,6 +275,8 @@ impl SessionManager {
             terminal_host: std::sync::OnceLock::new(),
             #[cfg(test)]
             trust_home: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            landing_rewritten: std::sync::Mutex::new(None),
             activity: Arc::default(),
         });
         manager.install_worktree_remover();

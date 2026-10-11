@@ -2783,3 +2783,105 @@ async fn a_stopped_snapshot_workers_kept_work_survives_the_ref_check() {
     assert_eq!(&super::git(&flow.repo, &["rev-parse", &branch]), commit);
     flow.stop().await;
 }
+
+/// A landing replays the task branch without its litter: the engine's own rewrite, recorded
+/// under the ref lock as it is made. A check made for the thread right after it, with the
+/// worker's CLI gone, keeps the rewritten branch (PLAN bug 6 step 5).
+#[tokio::test]
+async fn a_check_right_after_a_landing_rewrites_the_task_branch_keeps_the_rewrite() {
+    let flow = Flow::start(
+        "land-rewrite",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("[report task-1 ") {
+                    let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[landed task-") {
+                    return Reply::text("The notes are in.");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "high", "title": "Add notes", "kind": "implement",
+                               "spec": "Create notes.txt."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            turn.write("notes.txt", "notes\n");
+            turn.git(&["add", "notes.txt"]);
+            turn.git(&["commit", "-q", "-m", "Add notes.txt"]);
+            // Litter the landing leaves out, so the branch it lands is rewritten.
+            turn.write("debug.log", "scratch\n");
+            turn.git(&["add", "-f", "debug.log"]);
+            turn.git(&["commit", "-q", "-m", "Keep a log"]);
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "Added notes.txt.", "changes": ["notes.txt"]}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    // The thread's turn ends between the rewrite and the target's move: its check runs there.
+    let told: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let checked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let repo = flow.manager.git.open(&flow.repo).unwrap();
+        let (store, conversation) = (flow.manager.ref_records.clone(), flow.conversation.clone());
+        let (told, checked) = (told.clone(), checked.clone());
+        *flow.manager.landing_rewritten.lock().unwrap() = Some(Arc::new(move || {
+            let said = crate::manager::refcheck::check_recorded(
+                &repo,
+                &store,
+                &crate::manager::refcheck::Caller::Thread(conversation.clone()),
+                &std::collections::HashSet::new(),
+            );
+            told.lock()
+                .unwrap()
+                .extend(said.into_iter().map(|said| said.text));
+            checked.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+    }
+    flow.say("Add the notes.").await;
+    let board = flow
+        .until("task-1 to land", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.number == 1 && task.state == TaskState::Landed)
+        })
+        .await;
+    assert!(checked.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        told.lock().unwrap().is_empty(),
+        "{:?}",
+        told.lock().unwrap()
+    );
+    let task = Flow::task(&board, 1);
+    let workspace = task.workspace.as_ref().unwrap();
+    let (branch, target) = (
+        workspace.branch.clone().unwrap(),
+        workspace.target.clone().unwrap(),
+    );
+    let landed = super::git(&flow.repo, &["rev-parse", &target]);
+    assert_eq!(
+        super::git(&flow.repo, &["rev-parse", &branch]),
+        landed,
+        "the task branch stays at the commits that landed"
+    );
+    let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &target]);
+    assert!(
+        files.contains("notes.txt") && !files.contains("debug.log"),
+        "{files}"
+    );
+    flow.settled().await;
+    flow.stop().await;
+}

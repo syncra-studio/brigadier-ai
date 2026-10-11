@@ -249,8 +249,8 @@ impl SessionManager {
             )
             .await?
         };
-        // The engine rewrote the task branch (replayed onto the target, co-authors left out),
-        // or the merge worker moved it: its new tip is the recorded one.
+        // The merge worker moved the task branch (the engine's own rewrite was recorded as it
+        // was made): its new tip is the recorded one.
         if let Some(branch) = &workspace.branch {
             self.moved_branch(&checkout, branch);
         }
@@ -276,6 +276,9 @@ impl SessionManager {
             task.title, task.number
         ));
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
+        let (records, branch) = (self.ref_records.clone(), workspace.branch.clone());
+        #[cfg(test)]
+        let rewritten = self.landing_rewritten.lock().unwrap().clone();
         blocking(move || {
             let repo = git.open(&repo).map_err(git_error)?;
             let worktree = git.open_worktree(&worktree).map_err(git_error)?;
@@ -352,26 +355,58 @@ impl SessionManager {
                             drop.push(change.path);
                         }
                     }
-                    // 3. Onto the target's tip.
-                    match worktree
-                        .replay_series(&base, &onto, &drop)
-                        .map_err(git_error)?
-                    {
-                        SeriesOutcome::Conflicts { paths } => {
-                            return Ok(Moved::Conflicts { onto, paths });
-                        }
-                        SeriesOutcome::Replayed { tip, commits, .. } => {
-                            // Work started on a snapshot of the user's uncommitted files sits
-                            // on the commit the snapshot was taken on.
-                            let started = if on_snapshot {
-                                repo.resolve(&format!("{}^", base.0)).map_err(git_error)?
-                            } else {
-                                base.clone()
-                            };
-                            (tip, commits, started != onto)
-                        }
+                    // 3. Onto the target's tip, and the messages as the user wants them, before
+                    // they land: the worker's branch moves to the rewritten commits, so it is
+                    // found merged once they have landed. The engine's own rewrite, under the
+                    // ref lock and recorded there: no check takes it for damage, whether or
+                    // not the worker still runs.
+                    let rewrite = || -> Result<std::result::Result<(Oid, u32, bool), Moved>> {
+                        let (tip, commits) = match worktree
+                            .replay_series(&base, &onto, &drop)
+                            .map_err(git_error)?
+                        {
+                            SeriesOutcome::Conflicts { paths } => {
+                                return Ok(Err(Moved::Conflicts {
+                                    onto: onto.clone(),
+                                    paths,
+                                }));
+                            }
+                            SeriesOutcome::Replayed { tip, commits, .. } => (tip, commits),
+                        };
+                        // Work started on a snapshot of the user's uncommitted files sits on
+                        // the commit the snapshot was taken on.
+                        let started = if on_snapshot {
+                            repo.resolve(&format!("{}^", base.0)).map_err(git_error)?
+                        } else {
+                            base.clone()
+                        };
+                        let rebased = started != onto;
+                        let tip = if omit_ai_coauthors && commits > 0 && !rebased {
+                            match worktree.clean_ai_coauthors(&onto, &tip) {
+                                Ok(cleaned) => cleaned.unwrap_or(tip),
+                                Err(err) => {
+                                    tracing::warn!(error = %err, "could not leave AI co-authors out of the commits that land");
+                                    tip
+                                }
+                            }
+                        } else {
+                            tip
+                        };
+                        Ok(Ok((tip, commits, rebased)))
+                    };
+                    let rewritten_now = match &branch {
+                        Some(branch) => super::refcheck::engine_rewrite(&repo, &records, branch, rewrite),
+                        None => rewrite(),
+                    };
+                    match rewritten_now? {
+                        Ok(done) => done,
+                        Err(conflicts) => return Ok(conflicts),
                     }
                 };
+                #[cfg(test)]
+                if let Some(rewritten) = &rewritten {
+                    rewritten();
+                }
                 if commits == 0 {
                     return Ok(Moved::Nothing { excluded });
                 }
@@ -382,19 +417,6 @@ impl SessionManager {
                         excluded,
                     });
                 }
-                // The messages as the user wants them, before they land: the worker's branch
-                // moves to the rewritten commits, so it is found merged once they have landed.
-                let tip = if omit_ai_coauthors {
-                    match worktree.clean_ai_coauthors(&onto, &tip) {
-                        Ok(cleaned) => cleaned.unwrap_or(tip),
-                        Err(err) => {
-                            tracing::warn!(error = %err, "could not leave AI co-authors out of the commits that land");
-                            tip
-                        }
-                    }
-                } else {
-                    tip
-                };
                 // 4. Fast-forward.
                 let request = LandRequest {
                     branch: target.clone(),
