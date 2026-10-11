@@ -57,18 +57,35 @@ export function mockupOf(tasks: Readonly<Record<string, Task>>): Mockup | null {
   const shots = shotsOf(task.outputs, "mockup", true);
   const live = matching ? shotsOf(matching.outputs, "live") : [];
   const compare = matching ? shotsOf(matching.outputs, "compare") : [];
-  // The mockup's screenshots in order are screens 1, 2, …; live-N and compare-N show screen N.
-  const last = Math.max(shots.length, ...[...live, ...compare].map((ref) =>
-    shotNumber(nameOf(ref), "live") ?? shotNumber(nameOf(ref), "compare") ?? 0));
-  const pairs = Array.from({ length: last }, (_, index) => ({
-    number: index + 1,
-    mockup: shots[index] ?? null,
-    live: at(live, "live", index + 1),
-    compare: at(compare, "compare", index + 1),
+  // mockup-N, live-N and compare-N show screen N; the mockup's other images follow its last.
+  const named = shots.flatMap((ref) => shotNumber(nameOf(ref), "mockup") ?? []);
+  let next = Math.max(0, ...named);
+  const screens = shots.map((ref) => ({ ref, number: shotNumber(nameOf(ref), "mockup") ?? ++next }));
+  const numbers = [...new Set([
+    ...screens.map((screen) => screen.number),
+    ...live.map((ref) => shotNumber(nameOf(ref), "live")!),
+    ...compare.map((ref) => shotNumber(nameOf(ref), "compare")!),
+  ])].toSorted((a, b) => a - b);
+  const pairs = numbers.map((number) => ({
+    number,
+    mockup: screens.find((screen) => screen.number === number)?.ref ?? null,
+    live: at(live, "live", number),
+    compare: at(compare, "compare", number),
   }));
-  const status: MockupStatus = matching && live.length ? "compared"
-    : matching && !ENDED.includes(matching.state) ? "matching"
-      : WORKING.includes(task.state) ? "building"
-        : ENDED.includes(task.state) && !shots.length ? "stopped" : "ready";
+  // Real work sent back is building again, whatever it captured before.
+  const status: MockupStatus = matching && WORKING.includes(matching.state) ? "matching"
+    : matching && live.length ? "compared"
+      : matching && !ENDED.includes(matching.state) ? "matching"
+        : WORKING.includes(task.state) ? "building"
+          : ENDED.includes(task.state) && !shots.length ? "stopped" : "ready";
   return { task, matching, version: task.reworkRounds + 1, status, shots, pairs };
+}
+
+/**
+ * Whether the mockup moved on since notes went on `sent`'s screenshots: its worker is done and
+ * made new ones, or was sent back and is done again, even with the same ones.
+ */
+export function revisedSince(mockup: Mockup, sent: { version: number; shots: readonly string[] }): boolean {
+  if (WORKING.includes(mockup.task.state)) return false;
+  return mockup.shots.map((ref) => ref.id).join() !== sent.shots.join() || mockup.version > sent.version;
 }

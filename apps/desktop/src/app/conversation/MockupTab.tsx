@@ -11,8 +11,8 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { addAttachment, send } from "@/state/actions";
 import { useBoard } from "@/state/board";
-import { type Mockup, mockupOf } from "@/state/mockup";
-import { changeNotes, markedName, markerNumber, mockupNotesOf, type MockupNote, notePlacement, notesByScreen, notesMessage, pointIn, useSessionNotes } from "@/state/mockupNotes";
+import { type Mockup, mockupOf, revisedSince } from "@/state/mockup";
+import { changeNotes, markedName, markerNumber, mockupNotesOf, type MockupNote, NO_NOTES, notePlacement, notesByScreen, notesMessage, pointIn, useSessionNotes } from "@/state/mockupNotes";
 import { useApp } from "@/state/store";
 
 /** The zoom menu's steps, as the reference app's image tab offers them. */
@@ -32,7 +32,8 @@ const KIND_LABEL = { mockup: "Mockup", live: "Live", compare: "Side by side" } a
 
 function itemsOf(mockup: Mockup, shown: readonly ArtifactRef[]): Item[] {
   return mockup.pairs.flatMap((pair) => {
-    const own = shown[pair.number - 1] ?? null;
+    // `shown` is the mockup's screenshots in order, or the earlier version's in the same order.
+    const own = pair.mockup ? (shown[mockup.shots.indexOf(pair.mockup)] ?? null) : null;
     return ([["mockup", own], ["live", pair.live], ["compare", pair.compare]] as const)
       .flatMap(([kind, ref]) => ref ? [{ key: `${kind}-${pair.number}`, screen: pair.number, kind, ref }] : []);
   });
@@ -55,10 +56,16 @@ const CAPSULE = "bg-popover/90 text-popover-foreground shadow-mockup-control rou
 export function MockupView({ conversationId }: { conversationId: string }) {
   const tasks = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.tasks : null));
   const mockup = useMemo(() => (tasks ? mockupOf(tasks) : null), [tasks]);
-  const { notes, commenting, sent } = useSessionNotes(conversationId);
-  const latest = useMemo(() => mockup?.shots.map((ref) => ref.id) ?? [], [mockup]);
+  const stored = useSessionNotes(conversationId);
+  // Notes belong to one mockup: a newer mockup in the session starts without them.
+  const mine = !mockup || stored.task === null || stored.task === mockup.task.id;
+  const { notes, commenting, sent } = mine ? stored : NO_NOTES;
+  const taskId = mockup?.task.id ?? null;
+  useEffect(() => {
+    if (taskId) changeNotes(conversationId, (current) => (current.task === null || current.task === taskId ? { task: taskId } : { ...NO_NOTES, task: taskId }));
+  }, [conversationId, taskId]);
   // After notes go, the screenshots they were made on stay until the user moves to the revision.
-  const revised = Boolean(sent && mockup && !WORKING.has(mockup.task.state) && latest.join() !== sent.shots.join());
+  const revised = Boolean(sent && mockup && revisedSince(mockup, sent));
   const shown = useMemo(() => {
     if (!mockup) return [];
     if (!sent || !revised) return mockup.shots;
@@ -78,14 +85,14 @@ export function MockupView({ conversationId }: { conversationId: string }) {
     if (mockupNotesOf(conversationId).sent?.dismissed) changeNotes(conversationId, () => ({ sent: null }));
   }, [conversationId]);
 
-  const sendNotes = useSendNotes(conversationId, mockup, shown);
+  const { sendNotes, sending, failed } = useSendNotes(conversationId, mockup, items);
   useEffect(() => {
     if (!commenting) return;
     const onKey = (event: KeyboardEvent) => {
       const typing = event.target instanceof HTMLElement && event.target.closest("input, textarea, [contenteditable]");
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !typing) {
         event.preventDefault();
-        void sendNotes();
+        sendNotes();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -117,13 +124,11 @@ export function MockupView({ conversationId }: { conversationId: string }) {
             onFitted={setFitted} onZoom={setZoom} />
         )}
         <Toolbar conversationId={conversationId} notes={notes} commenting={commenting} canComment={canComment}
-          working={Boolean(sent && !revised)} revised={revised && !sent?.dismissed} onSend={sendNotes} />
+          working={Boolean(sent && !revised)} revised={revised && !sent?.dismissed} sending={sending} failed={failed} onSend={sendNotes} />
       </section>
     </TooltipProvider>
   );
 }
-
-const WORKING = new Set(["queued", "starting", "running", "blocked", "paused", "takenOver"]);
 
 function Centered({ children }: { children: ReactNode }) {
   return <div className="text-muted-foreground flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm">{children}</div>;
@@ -314,7 +319,7 @@ function Surface({ conversationId, screen, commenting, width, height, image, cla
       data-slot="mockup-surface"
       className={cn("relative shrink-0", active && "cursor-none", className)}
       style={{ width: `${width}px`, height: `${height}px` }}
-      onPointerMove={active ? (event) => setHover(local(event)) : undefined}
+      onPointerMove={active ? (event) => { const point = local(event); setHover(pointIn(point, point)); } : undefined}
       onPointerLeave={() => setHover(null)}
       onPointerDown={active ? (event) => { down.current = local(event); } : undefined}
       onPointerUp={active ? (event) => {
@@ -324,7 +329,7 @@ function Surface({ conversationId, screen, commenting, width, height, image, cla
         const end = local(event);
         if (Math.hypot(end.x - start.x, end.y - start.y) > CLICK_SLOP) return;
         setEditing(null);
-        setDraft(pointIn(end, size));
+        setDraft(pointIn(end, end));
       } : undefined}
     >
       <img src={image.url} alt="" draggable={false} className="shadow-mockup-image pointer-events-none size-full object-contain select-none" />
@@ -333,7 +338,7 @@ function Surface({ conversationId, screen, commenting, width, height, image, cla
           selected={editing === note.id} onClick={active ? () => { setDraft(null); setEditing(note.id); } : undefined} />
       ))}
       {draft && <Marker at={draft} number={own.length + 1} label="New comment" selected />}
-      {active && hover && !draft && !editing && <Marker at={pointIn(hover, size)} label="" ghost />}
+      {active && hover && !draft && !editing && <Marker at={hover} label="" ghost />}
       {draft && screen !== null && (
         <NoteBox at={draft} surface={size} onCancel={() => setDraft(null)} onSave={(text) => {
           changeNotes(conversationId, (current) => ({ notes: [...current.notes, { id: crypto.randomUUID(), screen, ...draft, text }] }));
@@ -343,7 +348,7 @@ function Surface({ conversationId, screen, commenting, width, height, image, cla
       {editing && (() => {
         const note = own.find((entry) => entry.id === editing);
         return note && (
-          <NoteBox at={note} surface={size} initial={note.text} onCancel={() => setEditing(null)}
+          <NoteBox key={note.id} at={note} surface={size} initial={note.text} onCancel={() => setEditing(null)}
             onDelete={() => { changeNotes(conversationId, (current) => ({ notes: current.notes.filter((entry) => entry.id !== note.id) })); setEditing(null); }}
             onSave={(text) => { changeNotes(conversationId, (current) => ({ notes: current.notes.map((entry) => entry.id === note.id ? { ...entry, text } : entry) })); setEditing(null); }} />
         );
@@ -352,10 +357,14 @@ function Surface({ conversationId, screen, commenting, width, height, image, cla
   );
 }
 
-/** A pointer's place in the element it is over. */
+/**
+ * A pointer's place in the element it is over, and the element's size, both as drawn: under
+ * Canvas view's CSS zoom they differ from its laid-out size, and only the two together give
+ * the right fraction.
+ */
 function local(event: ReactPointerEvent) {
   const box = event.currentTarget.getBoundingClientRect();
-  return { x: event.clientX - box.left, y: event.clientY - box.top };
+  return { x: event.clientX - box.left, y: event.clientY - box.top, width: box.width, height: box.height };
 }
 
 const at = (point: { x: number; y: number }): CSSProperties => ({ left: `${point.x * 100}%`, top: `${point.y * 100}%` });
@@ -477,11 +486,10 @@ function Tile({ conversationId, item, commenting, onFocus }: { conversationId: s
  * The dark toolbar at the bottom: Comment; while commenting, the notes' count (hover lists
  * them), Send (⌘↩) and Cancel; after sending, Working; once revised, See latest changes.
  */
-function Toolbar({ conversationId, notes, commenting, canComment, working, revised, onSend }: {
-  conversationId: string; notes: MockupNote[]; commenting: boolean; canComment: boolean; working: boolean; revised: boolean; onSend: () => Promise<void>;
+function Toolbar({ conversationId, notes, commenting, canComment, working, revised, sending, failed, onSend }: {
+  conversationId: string; notes: MockupNote[]; commenting: boolean; canComment: boolean; working: boolean; revised: boolean;
+  sending: boolean; failed: boolean; onSend: () => void;
 }) {
-  const [sending, setSending] = useState(false);
-  const [failed, setFailed] = useState(false);
   const mac = useApp((s) => s.info?.platform === "macos");
   const bar = "bg-popover text-popover-foreground shadow-mockup-toolbar h-mockup-toolbar pointer-events-auto flex items-center gap-1.5 rounded-xl p-0.5 text-sm";
   let content: ReactNode = null;
@@ -503,11 +511,7 @@ function Toolbar({ conversationId, notes, commenting, canComment, working, revis
       <div className={bar}>
         {notes.length ? <NotesList notes={notes} /> : <span className="text-muted-foreground px-2.5">Click on the image to add comments</span>}
         <Tip label={mac ? "Send ⌘↩" : "Send Ctrl+↩"}>
-          <Button size="sm" className="rounded-capsule h-9" disabled={!notes.length || sending} onClick={async () => {
-            setSending(true);
-            setFailed(false);
-            try { await onSend(); } catch { setFailed(true); } finally { setSending(false); }
-          }}>Send</Button>
+          <Button size="sm" className="rounded-capsule h-9" disabled={!notes.length || sending} onClick={onSend}>Send</Button>
         </Tip>
         <Button variant="ghost" size="icon" aria-label="Cancel" onClick={() => changeNotes(conversationId, () => ({ notes: [], commenting: false }))}>
           <X />
@@ -562,17 +566,27 @@ function NotesList({ notes }: { notes: MockupNote[] }) {
  * Sends the notes as one message to the thread: its text names each marked screenshot,
  * attached with the markers drawn on it; the thread hands them to the mockup's worker.
  */
-function useSendNotes(conversationId: string, mockup: Mockup | null, shown: readonly ArtifactRef[]) {
-  return useCallback(async () => {
+function useSendNotes(conversationId: string, mockup: Mockup | null, items: readonly Item[]) {
+  const [sending, setSending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  // Send and ⌘↩ share one send at a time: a second press while it runs does nothing.
+  const busy = useRef(false);
+  const sendNotes = useCallback(() => {
     const { notes } = mockupNotesOf(conversationId);
-    if (!mockup || !notes.length) return;
-    const files = await Promise.all(notesByScreen(notes).map(async ({ screen, notes: own }) => {
-      const ref = shown[screen - 1];
-      if (!ref) throw new Error(`no screenshot for screen ${screen}`);
-      return markedScreenshot(await loadImage(ref.id), own, notes, markedName(screen));
-    }));
-    const attachments = await Promise.all(files.map((file) => addAttachment(file)));
-    await send({ text: notesMessage(mockup.version, notes), attachments, mentions: [] }, undefined, { to: conversationId });
-    changeNotes(conversationId, () => ({ notes: [], commenting: false, sent: { version: mockup.version, shots: mockup.shots.map((ref) => ref.id), dismissed: false } }));
-  }, [conversationId, mockup, shown]);
+    if (!mockup || !notes.length || busy.current) return;
+    busy.current = true;
+    setSending(true);
+    setFailed(false);
+    void (async () => {
+      const files = await Promise.all(notesByScreen(notes).map(async ({ screen, notes: own }) => {
+        const ref = items.find((item) => item.kind === "mockup" && item.screen === screen)?.ref;
+        if (!ref) throw new Error(`no screenshot for screen ${screen}`);
+        return markedScreenshot(await loadImage(ref.id), own, notes, markedName(screen));
+      }));
+      const attachments = await Promise.all(files.map((file) => addAttachment(file)));
+      await send({ text: notesMessage(mockup.version, notes), attachments, mentions: [] }, undefined, { to: conversationId });
+      changeNotes(conversationId, () => ({ notes: [], commenting: false, sent: { version: mockup.version, shots: mockup.shots.map((ref) => ref.id), dismissed: false } }));
+    })().catch(() => setFailed(true)).finally(() => { busy.current = false; setSending(false); });
+  }, [conversationId, mockup, items]);
+  return { sendNotes, sending, failed };
 }

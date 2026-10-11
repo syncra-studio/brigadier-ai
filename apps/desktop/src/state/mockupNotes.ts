@@ -67,13 +67,15 @@ export function notePlacement(point: { x: number; y: number }, box: Box, surface
 }
 
 /**
- * A session's notes while they are made, kept across the tab's split and full views. `sent`
- * holds the screenshots shown when notes went, until the user moves to the revised ones
- * (`dismissed`: not now, the next time the mockup opens).
+ * A session's notes on its mockup (the task `task` built) while they are made, kept while the
+ * tab closes and opens. `sent` holds the screenshots shown when notes went, until the user
+ * moves to the revised ones (`dismissed`: not now, the next time the mockup opens).
  */
-type SessionNotes = { notes: MockupNote[]; commenting: boolean; sent: { version: number; shots: string[]; dismissed: boolean } | null };
+type SessionNotes = { task: string | null; notes: MockupNote[]; commenting: boolean; sent: { version: number; shots: string[]; dismissed: boolean } | null };
 
-const EMPTY: SessionNotes = { notes: [], commenting: false, sent: null };
+/** No notes, for no mockup yet. */
+export const NO_NOTES: SessionNotes = { task: null, notes: [], commenting: false, sent: null };
+const EMPTY = NO_NOTES;
 
 export const useMockupNotes = create<{ sessions: Record<string, SessionNotes> }>(() => ({ sessions: {} }));
 

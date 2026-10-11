@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { ArtifactRef, Task } from "@/ipc/generated";
 
-import { mockupOf, shotNumber, shotsOf } from "./mockup";
+import { mockupOf, revisedSince, shotNumber, shotsOf } from "./mockup";
 
 const ref = (name: string, mime = "image/png"): ArtifactRef => ({
   id: `hash-${name}`, title: name, kind: "screenshot", mime, bytes: 1, fileName: name,
@@ -46,6 +46,24 @@ test("the newest mockup pairs each screen with its live capture and side-by-side
   assert.equal(mockup.status, "compared");
   assert.deepEqual(mockup.pairs.map((p) => [p.mockup?.fileName, p.live?.fileName, p.compare?.fileName ?? null]),
     [["mockup-1.png", "live-1.png", null], ["mockup-2.png", "live-2.png", "compare-2.png"]]);
+  // Real work sent back builds again: busy, not compared, though its captures stay.
+  mockup = mockupOf({ t3: built, t4: { ...matching, state: "running", reworkRounds: 1, outputs: [ref("live-1.png")] } })!;
+  assert.equal(mockup.status, "matching");
+  // Screens go by their numbers, with gaps, and the mockup's unnumbered images after them.
+  const sparse = task(6, { mockup: { type: "builds" }, outputs: [ref("mockup-10.png"), ref("extra.png"), ref("mockup-2.png")] });
+  const real = task(7, { mockup: { type: "matches", task: "t6" }, outputs: [ref("live-10.png"), ref("live-2.png")] });
+  assert.deepEqual(mockupOf({ t6: sparse, t7: real })!.pairs.map((p) => [p.number, p.mockup?.fileName, p.live?.fileName ?? null]),
+    [[2, "mockup-2.png", "live-2.png"], [10, "mockup-10.png", "live-10.png"], [11, "extra.png", null]]);
   // A mockup stopped before any screenshot.
   assert.equal(mockupOf({ t5: task(5, { mockup: { type: "builds" }, state: "stopped" }) })!.status, "stopped");
+});
+
+test("notes' revision is there once the worker is done with new screenshots, or done after being sent back", () => {
+  const shots = [ref("mockup-1.png")];
+  const sent = { version: 1, shots: ["hash-mockup-1.png"] };
+  const at = (change: Partial<Task>) => mockupOf({ t1: task(1, { mockup: { type: "builds" }, outputs: shots, ...change }) })!;
+  assert.equal(revisedSince(at({}), sent), false, "not sent back yet");
+  assert.equal(revisedSince(at({ state: "running", reworkRounds: 1 }), sent), false, "still working");
+  assert.equal(revisedSince(at({ reworkRounds: 1 }), sent), true, "done with the same screenshots");
+  assert.equal(revisedSince(at({ outputs: [ref("mockup-1b.png")] }), sent), true, "new screenshots");
 });
