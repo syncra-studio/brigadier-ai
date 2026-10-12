@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Kbd } from "@/components/ui/kbd";
 import { request } from "@/ipc/client";
-import { keepSource, readSource, useCachedEntry, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
+import { keepSource, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import type { CommitOutcome, SourceChange, SourceFile, SourceScope, SourceState, SourceStatus } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
@@ -131,16 +131,20 @@ function useSourceState(target: SourceTarget) {
     [conversationId, projectId],
   );
   const key = useCheckoutKey(cacheTarget);
-  const state = useCachedEntry(key)?.source ?? null;
+  const kept = useCachedEntry(key)?.source;
+  const [read, setRead] = useState<{ key: string; state: SourceState } | null>(null);
+  const state = kept ?? (read?.key === key ? read.state : null);
   const [failure, setFailure] = useState<{ key: string; error: string } | null>(null);
   const changeKey = useCheckoutChanges(conversationId ?? "");
   const load = useCallback(() => {
     readSource(cacheTarget)
-      .then((read) => {
+      .then((next) => {
+        if (workspaceKey(cacheTarget) !== key) return;
+        setRead({ key, state: next });
         setFailure(null);
-        if (conversationId) noteSourceState(conversationId, read);
+        if (conversationId) noteSourceState(conversationId, next);
       })
-      .catch((error: unknown) => setFailure({ key, error: reason(error) }));
+      .catch((error: unknown) => { if (workspaceKey(cacheTarget) === key) setFailure({ key, error: reason(error) }); });
   }, [cacheTarget, conversationId, key]);
   // A landing, Undo or Reapply changes the checkout at once.
   useEffect(() => {
@@ -158,7 +162,9 @@ function useSourceState(target: SourceTarget) {
     };
   }, [load]);
   const set = (next: SourceState) => {
-    keepSource(cacheTarget, next);
+    if (workspaceKey(cacheTarget) !== key) return;
+    keepSource(cacheTarget, next, key);
+    setRead({ key, state: next });
     setFailure(null);
     if (conversationId) noteSourceState(conversationId, next);
   };

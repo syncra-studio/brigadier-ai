@@ -33,7 +33,9 @@ useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: { previe
   workdir: "/fixture", workspace: "/fixture", pid: null, log: null,
   state: { type: "running" }, startedAtMs: 0, endedAtMs: null,
 } } } });
+let keyboardReturns = 0;
 mockIPC((command, args) => {
+  if (command === "browser_focus" && (args as { id: string | null }).id === null) keyboardReturns++;
   if (command !== "ipc_request") return null;
   const req = (args as { request: Request }).request;
   if (req.method === "listFiles") return { method: req.method, files: ["README.md"], truncated: false };
@@ -41,6 +43,7 @@ mockIPC((command, args) => {
   if (req.method === "listProjectFiles") return { method: req.method, files: ["src/app.ts", "package.json"], truncated: false };
   if (req.method === "getProjectSourceState") return { method: req.method, state: { branch: "trunk", remote: null, upstream: null, ahead: 0, staged: [],
     changes: [{ path: "src/app.ts", oldPath: null, status: "modified" }] } };
+  if (req.method === "pageList") return { method: req.method, pages: [] };
   if (req.method === "previewLog") return { method: req.method, tail: "", url: null };
   return { method: req.method };
 });
@@ -57,6 +60,7 @@ function Fixture() {
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const [seen] = useState<Record<string, unknown>>({});
   useEffect(() => {
+    if (new URLSearchParams(location.search).has("manual")) return;
     const timers: ReturnType<typeof setTimeout>[] = [];
     const at = (ms: number, action: () => void) => timers.push(setTimeout(action, ms));
     const click = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)?.click();
@@ -106,10 +110,12 @@ function Fixture() {
     });
     at(2200, () => {
       seen.switchedFiles = pane(); seen.filesRight = right();
+      Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false });
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyP", metaKey: true, bubbles: true, cancelable: true }));
     });
     at(2500, () => {
       seen.searchFocused = document.activeElement?.getAttribute("aria-label");
+      seen.keyboardReturns = keyboardReturns; Reflect.deleteProperty(document, "hasFocus");
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB", metaKey: true, altKey: true, bubbles: true, cancelable: true }));
       seen.removedKeyRight = right(); seen.menuKey = MENU_KEYS["right-sidebar"] ?? null;
     });

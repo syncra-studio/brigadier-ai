@@ -13,7 +13,7 @@ const { chromium } = playwright.chromium ? playwright : playwright.default;
 const delay = Number(process.argv[2] ?? 25);
 const runs = Number(process.argv[3] ?? 5);
 const root = fileURLToPath(new URL('..', import.meta.url));
-const outDir = join(tmpdir(), `brigadier-measure-pane-open-${process.pid}`);
+const outDir = join(tmpdir(), `shell-tabs-sidebar-pane-open-${process.pid}`);
 // The column whose contents are measured, and its views, each with the key that opens the
 // sidebar on it and a text its contents show once read.
 const COLUMN = '[data-slot="workspace-pane"]';
@@ -56,6 +56,8 @@ function summary(frames) {
   const at = (test) => Math.round(frames.find(test)?.t ?? NaN);
   return {
     present: at((f) => f.present),
+    firstFrameHasContent: frames[0].present,
+    emptyContentFrames: frames.filter((f) => !f.present).length,
     shown: at((f) => f.present && f.opacity >= 0.5 && f.width >= 40),
     settled: at((f) => f.present && f.opacity >= 0.99 && Math.abs(f.width - final) < 1),
     blankFrames: frames.findIndex((f) => f.present && f.opacity >= 0.5 && f.width >= 40),
@@ -92,5 +94,5 @@ const median = (values) => values.toSorted((a, b) => a - b)[Math.floor(values.le
 console.log(`IPC delay ${delay} ms, ${runs} runs, medians in ms from the click:`);
 for (const phase of ['cold', 'warm']) for (const { label } of VIEWS) {
   const rows = results.filter((r) => r.phase === phase && r.view === label);
-  console.log(`${phase.padEnd(4)} ${label.padEnd(6)} present ${median(rows.map((r) => r.present))}  shown ${median(rows.map((r) => r.shown))}  settled ${median(rows.map((r) => r.settled))}  blank frames ${median(rows.map((r) => r.blankFrames))}`);
+  console.log(`${phase.padEnd(4)} ${label.padEnd(6)} present ${median(rows.map((r) => r.present))}  shown ${median(rows.map((r) => r.shown))}  settled ${median(rows.map((r) => r.settled))}  slide frames ${median(rows.map((r) => r.blankFrames))}  first frame content ${rows.every((r) => r.firstFrameHasContent)}  empty content frames ${median(rows.map((r) => r.emptyContentFrames))}`);
 }

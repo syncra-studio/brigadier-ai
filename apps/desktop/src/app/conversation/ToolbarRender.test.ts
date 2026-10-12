@@ -20,6 +20,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.deepEqual(seen.sidebarWins, ["files", "collapsed"], "where both don't fit, ⌥⌘B closes the Workers panel");
   assert.equal(seen.workersInside, true, "the Workers panel sits between the content and the right sidebar");
   assert.equal(seen.searchFocused, "Search files");
+  assert.equal(seen.keyboardReturns, 1, "⌘P returns the native browser keyboard to the app before focusing Files");
   assert.equal(seen.findFileFocused, "Search files");
   for (const field of ["initialRight", "filesRight", "removedKeyRight", "closedRight", "previewRight"]) assert.equal(seen[field], "collapsed", field);
   for (const field of ["workerRight", "composerRight", "contextWorkerRight"]) assert.equal(seen[field], "expanded", field);

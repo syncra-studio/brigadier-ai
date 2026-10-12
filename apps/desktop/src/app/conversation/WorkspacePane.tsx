@@ -8,10 +8,11 @@ import { FilesGlyph, SidebarRightGlyph, SidebarRightOffGlyph, SourceControlGlyph
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { cn } from "@/lib/utils";
+import { browserFocus } from "@/ipc/client";
 import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, workspacePaneKey, type WorkspacePaneTab } from "@/state/workspacePane";
 import { useApp } from "@/state/store";
-import { prefetchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
+import { prefetchWorkspace, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
 
 
 /** The right sidebar's views, in its icon row's order. */
@@ -45,12 +46,19 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
   }, [enabled, id]);
   const target = useMemo<WorkspaceTarget | null>(() => conversationId ? { type: "conversation", conversationId }
     : projectId ? { type: "project", projectId } : null, [conversationId, projectId]);
+  const checkout = useCheckoutKey(target ?? { type: "project", projectId: "" });
   // What the sidebar would show is read as the session or draft opens, so opening it paints at once.
   const prefetch = useCallback(() => {
     if (enabled && target) prefetchWorkspace(target);
   }, [enabled, target]);
-  useEffect(prefetch, [prefetch]);
+  useEffect(prefetch, [prefetch, checkout]);
   const mac = useApp((s) => s.info?.platform === "macos");
+  // A native browser page has its own first responder. DOM focus alone cannot take the
+  // keyboard back from it when a menu key opens the sidebar's filter or focuses a view.
+  const withKeyboard = useCallback((act: () => void) => {
+    if (mac && !document.hasFocus()) void browserFocus(null).then(act).catch(act);
+    else act();
+  }, [mac]);
   // A view's key opens the sidebar on it; pressed again while it shows, it takes the keyboard there.
   const show = useCallback((tab: WorkspacePaneTab) => {
     if (open && active === tab) {
@@ -66,18 +74,18 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
       if (event.defaultPrevented) return;
       if (isFilesSearchKey(event, mac)) {
         event.preventDefault();
-        openFilesSearch();
+        withKeyboard(openFilesSearch);
         return;
       }
       const asked = workspacePaneKey(event, mac);
       if (!asked) return;
       event.preventDefault();
       if (asked === "toggle") toggleOpen();
-      else show(asked);
+      else withKeyboard(() => show(asked));
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [enabled, mac, openFilesSearch, toggleOpen, show]);
+  }, [enabled, mac, openFilesSearch, toggleOpen, show, withKeyboard]);
   return useMemo(() => ({
     ...size, enabled, open: enabled && open, active, toggleOpen, select, openFilesSearch, prefetch,
     setOpen: setWorkspacePaneOpen, conversationId, projectId, searchRequest, searchHandled,

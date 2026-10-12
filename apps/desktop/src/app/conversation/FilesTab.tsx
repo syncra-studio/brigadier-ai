@@ -148,11 +148,12 @@ export function ProjectFiles({ projectId, searchRequest, onSearchHandled, onOpen
 function useWorkspaceFiles(target: WorkspaceTarget, changed: number): FileList | null {
   const key = useCheckoutKey(target);
   const kept = useCachedEntry(key)?.files;
+  const [read, setRead] = useState<{ key: string; list: FileList } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
     const load = () =>
-      readFiles(target).catch((error: unknown) => {
+      readFiles(target).then((list) => { if (live) setRead({ key, list }); }).catch((error: unknown) => {
         console.error("listing the checkout's files failed", error);
         // Keep the last good list when a refresh fails; with none, show an empty one.
         if (live) setFailed(key);
@@ -166,7 +167,7 @@ function useWorkspaceFiles(target: WorkspaceTarget, changed: number): FileList |
     // `changed` asks for a fresh read even though nothing read here depends on it.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
   }, [target, key, changed]);
-  return kept ?? (failed === key ? EMPTY : null);
+  return kept ?? (read?.key === key ? read.list : failed === key ? EMPTY : null);
 }
 
 const EMPTY: FileList = { files: [], truncated: false };
