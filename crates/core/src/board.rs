@@ -259,6 +259,11 @@ impl Board {
                         matches!(&known.kind, crate::work::OrchestratorStepKind::CiWatch { repo: r, sha: s, branch: b, .. } if r == repo && s == sha && b == branch)
                     })
                 {
+                    // Its result row keeps when it ended: the app shows the result for a
+                    // moment after that, a reopened conversation too.
+                    if matches!(&step.kind, crate::work::OrchestratorStepKind::CiWatch { result: Some(_), .. }) {
+                        known.at_ms = step.at_ms;
+                    }
                     known.kind = step.kind;
                     return;
                 }
@@ -565,5 +570,23 @@ mod ci_tests {
                 ("o/upstream".into(), Some("passed".into()), 2),
             ]
         );
+    }
+    /// A reopened conversation's board shows a watch's result for a moment after it ended, as
+    /// the live one does: its row takes the time of the result, not of the watch's start.
+    #[test]
+    fn a_ci_watchs_row_keeps_when_its_result_came() {
+        let at = |event: DomainEvent, at_ms: i64| match event {
+            DomainEvent::OrchestratorStepped { mut step } => {
+                step.at_ms = at_ms;
+                DomainEvent::OrchestratorStepped { step }
+            }
+            _ => unreachable!(),
+        };
+        let mut board = Board::default();
+        board.apply(&at(watch("o/fork", None), 1_000), 1);
+        board.apply(&at(watch("o/fork", None), 5_000), 2);
+        assert_eq!(board.orchestrator_steps[0].at_ms, 1_000);
+        board.apply(&at(watch("o/fork", Some("passed")), 90_000), 3);
+        assert_eq!(board.orchestrator_steps[0].at_ms, 90_000);
     }
 }

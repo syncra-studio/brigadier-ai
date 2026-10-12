@@ -853,13 +853,14 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
         "6",
         "the lead's fix after its review landed (\"hello\\n\")"
     );
-    // The reviews are one-shot: started ephemeral. The thread and its lead are resumed later.
+    // The review is one-shot: started ephemeral, and the only one (the lead's own). The
+    // thread and its lead are resumed later.
     let specs = flow.specs();
     let one_shot = |spec: &brigadier_providers::SessionSpec| {
         spec.append_system_prompt.as_deref() == Some(brigadier_review::REVIEW_ROLE)
     };
     let reviews: Vec<_> = specs.iter().filter(|(_, spec)| one_shot(spec)).collect();
-    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    assert_eq!(reviews.len(), 1, "{reviews:#?}");
     assert!(reviews.iter().all(|(_, spec)| spec.ephemeral));
     let resumable: Vec<_> = specs
         .iter()

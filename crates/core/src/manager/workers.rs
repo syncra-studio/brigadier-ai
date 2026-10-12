@@ -184,9 +184,12 @@ struct TaskLiveState {
     /// Its CLI's own background jobs still running (`ProviderEvent::BackgroundJobs`): each
     /// one's end starts a turn of its own.
     background_jobs: u32,
-    /// It waited for its background jobs past [`BACKGROUND_SILENCE`]: a turn that ends
-    /// without a report now counts as one, jobs or not.
+    /// It waited for its background jobs past [`BACKGROUND_SILENCE`]: until they are gone, a
+    /// turn that ends without a report counts as one, jobs or not.
     background_overdue: bool,
+    /// Its turn ended while it waits for its background jobs: their end starts its next turn,
+    /// so it keeps its place in an overnight run meanwhile.
+    background_waiting: bool,
     /// When the watchdog nudged the silent worker of this CLI session.
     stall_nudged_at_ms: Option<i64>,
     /// Fresh sessions the watchdog started for stalls in the current attempt.
@@ -505,13 +508,16 @@ impl TaskLive {
             }
             ProviderEvent::BackgroundJobs { running } => {
                 state.background_jobs = *running;
+                if *running == 0 {
+                    state.background_overdue = false;
+                }
                 (None, None)
             }
             // A turn its CLI started on its own (a background job ended) runs like one we
             // started.
             ProviderEvent::TurnStarted { .. } => {
                 state.begin_turn();
-                state.background_overdue = false;
+                state.background_waiting = false;
                 (None, None)
             }
             _ => (None, None),
@@ -789,6 +795,13 @@ impl TaskLive {
     /// Whether a turn of its worker runs now.
     pub async fn busy(&self) -> bool {
         self.state.lock().await.busy
+    }
+
+    /// Whether its worker still needs its place in an overnight run: a turn runs, or one is
+    /// coming when its background jobs end.
+    async fn holds_run_slot(&self) -> bool {
+        let state = self.state.lock().await;
+        state.busy || state.background_waiting
     }
 
     /// After a deliberate close (hibernation) the worker may be started again.
@@ -1975,6 +1988,7 @@ impl SessionManager {
             state.running_items.clear();
             state.background_jobs = 0;
             state.background_overdue = false;
+            state.background_waiting = false;
             state.stall_nudged_at_ms = None;
             state.orphaned_at_ms = None;
             state.allowed_models = Some(allowed_models);
@@ -2964,7 +2978,7 @@ impl SessionManager {
             self.worker_turn_completed(live, cli, status).await;
             // No turn followed (a nudge or retry would have started one): an overnight run's
             // worker slot is free for another task.
-            if !live.busy().await {
+            if !live.holds_run_slot().await {
                 self.release_run_task(&live.id);
             }
         }
@@ -3094,6 +3108,7 @@ impl SessionManager {
         // Its own background job (a command or sub-agent) still runs: the job's end starts its
         // next turn, so it waits, unless it waits silently too long.
         if background && status == TurnStatus::Completed {
+            live.state.lock().await.background_waiting = true;
             self.watch_background_wait(live, cli, from);
             return;
         }
@@ -3121,9 +3136,9 @@ impl SessionManager {
     }
 
     /// A worker waits for its own background jobs after a turn that ended without a report.
-    /// Once its CLI stays silent for [`BACKGROUND_SILENCE`] with no turn started, the wait is
-    /// over and the turn's end counts as one without a report (a nudge, then a failure), so a
-    /// hung job is still caught.
+    /// Once its CLI stays silent for [`BACKGROUND_SILENCE`] with no turn started, or its jobs
+    /// end and no turn follows, the wait is over and the turn's end counts as one without a
+    /// report (a nudge, then a failure), so a hung job is still caught.
     fn watch_background_wait(&self, live: &Arc<TaskLive>, cli: &Arc<Cli>, from: u64) {
         let manager = self.arc();
         let (live, cli) = (live.clone(), cli.clone());
@@ -3131,15 +3146,13 @@ impl SessionManager {
             // Silence is counted in checks, from the last event seen.
             let mut last_seen = None;
             let mut quiet = Duration::ZERO;
+            // Checks since its jobs were gone without a turn starting.
+            let mut gone = 0;
             loop {
                 tokio::time::sleep(BACKGROUND_CHECK).await;
                 {
                     let mut state = live.state.lock().await;
-                    if state.generation != from
-                        || state.busy
-                        || state.stopping
-                        || state.background_jobs == 0
-                    {
+                    if state.generation != from || state.busy || state.stopping {
                         return;
                     }
                     if last_seen.replace(state.last_event_ms) == Some(state.last_event_ms) {
@@ -3147,14 +3160,25 @@ impl SessionManager {
                     } else {
                         quiet = Duration::ZERO;
                     }
-                    if quiet < BACKGROUND_SILENCE {
+                    if state.background_jobs == 0 {
+                        // The jobs ended, but no turn followed: it stopped without a report.
+                        gone += 1;
+                        if gone < 2 {
+                            continue;
+                        }
+                    } else if quiet < BACKGROUND_SILENCE {
                         continue;
+                    } else {
+                        state.background_overdue = true;
                     }
-                    state.background_overdue = true;
+                    state.background_waiting = false;
                 }
                 manager
                     .worker_turn_completed(&live, &cli, TurnStatus::Completed)
                     .await;
+                if !live.holds_run_slot().await {
+                    manager.release_run_task(&live.id);
+                }
                 return;
             }
         });
