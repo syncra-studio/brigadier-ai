@@ -13,7 +13,7 @@ import {
   Storage,
   Usage,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { lazy, type ComponentType, type SVGProps } from "react";
+import type { ComponentType, SVGProps } from "react";
 
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
 import { BROWSER_IMPORT_ROWS, BrowserImportPage } from "@/app/settings/BrowserImportPage";
@@ -26,8 +26,12 @@ import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
+import { UsagePage } from "@/app/usage/UsagePage";
+import { preloadable } from "@/lib/preloadable";
+import { prefetchImportSources } from "@/state/browserImport";
 import { computerUseAvailable } from "@/state/computerAccess";
 import { type SettingsPageId, useApp } from "@/state/store";
+import { prefetchUsage } from "@/state/usage";
 
 /**
  * The pages of Settings, in the order the navigation lists them, each in its group. A page's
@@ -56,16 +60,17 @@ export type SettingsPageEntry = {
   rows: readonly SettingsRowCopy[];
   /** Whether the page shows on this system; every page does unless it says otherwise. */
   shown?: () => boolean;
+  /**
+   * Gets what the page shows ready before it opens (its code, or a cheap read of its data), as
+   * the pointer comes to its row: the page then shows it on its first frame.
+   */
+  prefetch?: () => void;
 };
 
-// The Usage page (charts and all) and the Inspector (a developer view) load when first
-// opened, off the cold-start path.
-const UsagePage = lazy(() =>
-  import("@/app/usage/UsagePage").then((module) => ({ default: module.UsagePage })),
-);
-
-const InspectorPage = lazy(() =>
-  import("@/app/inspector/InspectorPage").then((module) => ({ default: module.InspectorPage })),
+// The Inspector (a developer view) loads when first wanted, off the cold-start path: once
+// Settings is open and idle, or as the pointer comes to its row.
+const inspector = preloadable(() =>
+  import("@/app/inspector/InspectorPage").then((module) => module.InspectorPage),
 );
 
 // What search finds on the Inspector's page: its tabs.
@@ -132,6 +137,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Agents",
     component: ProvidersPage,
     rows: Object.values(PROVIDERS_ROWS),
+    prefetch: prefetchUsage,
   },
   {
     id: "usage",
@@ -140,6 +146,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Agents",
     component: UsagePage,
     rows: USAGE_ROWS,
+    prefetch: prefetchUsage,
   },
   {
     id: "git",
@@ -174,6 +181,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Browser & Data",
     component: BrowserImportPage,
     rows: Object.values(BROWSER_IMPORT_ROWS),
+    prefetch: prefetchImportSources,
     // Importing reads other browsers' macOS profiles into WebKit's store: macOS only.
     shown: () => useApp.getState().info?.platform === "macos",
   },
@@ -190,8 +198,9 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     label: "Inspector",
     icon: Dock,
     group: "System",
-    component: InspectorPage,
+    component: inspector.View,
     rows: INSPECTOR_ROWS,
+    prefetch: () => void inspector.preload().catch((error: unknown) => console.error("loading the Inspector failed", error)),
   },
   {
     id: "archived",
@@ -202,6 +211,15 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     rows: Object.values(ARCHIVED_ROWS),
   },
 ];
+
+/**
+ * Once Settings shows and the app is idle: the pages' code that loads apart (the Inspector) and
+ * the usage read Usage and Providers show, if there is none yet.
+ */
+export function prefetchSettingsPages(): void {
+  settingsPage("inspector").prefetch?.();
+  prefetchUsage();
+}
 
 export function settingsPage(id: SettingsPageId): SettingsPageEntry {
   // Every id has an entry: the list is written out above.

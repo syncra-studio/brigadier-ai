@@ -11,7 +11,7 @@ const buttons = (html: string) =>
   [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((match) => (match[1] ?? "").replace(/<[^>]+>/g, "").trim());
 const count = (html: string, pattern: RegExp) => [...html.matchAll(pattern)].length;
 
-test("computer use shows a status, each permission's state and one action, Start over only after an Allow, and nothing where unavailable", async () => {
+test("computer use shows a status, each permission's state and one action, Start over only after an Allow, and nothing where unavailable; before the first read, the page waits in place", async () => {
   // The tips read their offset from the theme; a server render has none.
   const globals = globalThis as Record<string, unknown>;
   const saved = { document: globals.document, getComputedStyle: globals.getComputedStyle };
@@ -86,7 +86,19 @@ test("computer use shows a status, each permission's state and one action, Start
     assert.equal(count(failed, /Not checked</g), 2);
 
     assert.equal(render({ ...none, available: false }), "");
-    assert.equal(render(null), "");
+
+    // Not read yet (the first read starts the helper): the page shows at once, its status says
+    // it is checking, each row waits where its state and Allow… will be, and nothing can be
+    // pressed until the read answers.
+    const checking = render(null);
+    assert.match(checking, />Computer use</);
+    assert.match(checking, />Checking permissions</);
+    assert.equal(count(checking, />Checking</g), 2);
+    assert.match(checking, />Control apps</);
+    assert.match(checking, />See the screen</);
+    assert.equal(count(checking, /<button[^>]*disabled=""[^>]*>/g), 3);
+    assert.equal(count(checking, /class="[^"]*invisible[^"]*"/g), 2);
+    assert.doesNotMatch(checking, /Not allowed|Allowed|Start over/);
   } finally {
     await server.close();
     Object.assign(globals, saved);

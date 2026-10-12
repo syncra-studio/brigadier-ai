@@ -60,10 +60,11 @@ export const RESTARTING = "Brigadier Computer Use is restarting to use the permi
 /** Asks for a permission; `startOver` first forgets Brigadier Computer Use's old entry for it. */
 export type OnAllow = (grant: ComputerGrant, startOver: boolean) => Promise<void>;
 
-type Tone = "ready" | "needed" | "restarting" | "problem";
+type Tone = "checking" | "ready" | "needed" | "restarting" | "problem";
 
-/** What the status card says: a heading and one line, in plain words. */
-export function computerUseStatus(access: ComputerAccess): { tone: Tone; title: string; detail: string } {
+/** What the status card says: a heading and one line, in plain words. Null: not read yet. */
+export function computerUseStatus(access: ComputerAccess | null): { tone: Tone; title: string; detail: string } {
+  if (access === null) return { tone: "checking", title: "Checking permissions", detail: "Asking macOS what Brigadier Computer Use may do." };
   if (access.problem) return { tone: "problem", title: "Couldn't check permissions", detail: access.problem };
   if (access.restarting) return { tone: "restarting", title: "Almost ready", detail: RESTARTING };
   const missing = GRANTS.filter((grant) => !access[grant]).length;
@@ -77,6 +78,7 @@ export function computerUseStatus(access: ComputerAccess): { tone: Tone; title: 
 
 // Missing permissions raise the hand the conversation's "Waiting on you" item does.
 const TONE_ICON: Record<Tone, ReactNode> = {
+  checking: <HandRaised />,
   ready: <CheckCircleFilled />,
   needed: <HandRaised />,
   restarting: <ArrowRotateCw className="animate-spin [animation-duration:2s] motion-reduce:animate-none" />,
@@ -84,6 +86,7 @@ const TONE_ICON: Record<Tone, ReactNode> = {
 };
 
 const TONE_TILE: Record<Tone, string> = {
+  checking: "bg-foreground/5 text-foreground/50",
   ready: "bg-success/15 text-success",
   needed: "bg-warning/15 text-warning",
   restarting: "bg-foreground/5 text-foreground/80",
@@ -105,7 +108,7 @@ function Tile({ className, children }: { className?: string; children: ReactNode
   );
 }
 
-function StatusCard({ access, onRefresh }: { access: ComputerAccess; onRefresh: () => Promise<void> }) {
+function StatusCard({ access, onRefresh }: { access: ComputerAccess | null; onRefresh: () => Promise<void> }) {
   const refresh = useAction();
   const status = computerUseStatus(access);
   return (
@@ -121,7 +124,7 @@ function StatusCard({ access, onRefresh }: { access: ComputerAccess; onRefresh: 
         <TooltipIconButton
           tooltip="Check again"
           side="left"
-          disabled={refresh.busy}
+          disabled={refresh.busy || access === null}
           onClick={() => refresh.run(onRefresh)}
           className="text-foreground/65 hover:text-foreground"
         >
@@ -136,6 +139,7 @@ function GrantRow({
   grant,
   allowed,
   unknown,
+  checking = false,
   asked,
   onAllow,
   onOpen,
@@ -144,6 +148,8 @@ function GrantRow({
   allowed: boolean;
   /** The permissions couldn't be read: neither allowed nor not is known. */
   unknown: boolean;
+  /** Not read yet: the row shows where it will say how it stands, and waits. */
+  checking?: boolean;
   asked: boolean;
   onAllow: OnAllow;
   onOpen: (grant: ComputerGrant) => Promise<void>;
@@ -170,7 +176,7 @@ function GrantRow({
           ) : (
             <Badge variant="outline" className="border-divider text-foreground/65">
               <span aria-hidden className="bg-foreground/35 size-1.5 rounded-full" />
-              {unknown ? "Not checked" : "Not allowed"}
+              {checking ? "Checking" : unknown ? "Not checked" : "Not allowed"}
             </Badge>
           )}
         </div>
@@ -192,9 +198,10 @@ function GrantRow({
         )}
         {!allowed && (
           <SettingsButton
-            disabled={allow.busy}
+            // Where Allow… will be, so the row doesn't move when the read answers.
+            className={cn("bg-primary text-primary-foreground hover:bg-primary/90", checking && "invisible")}
+            disabled={allow.busy || checking}
             onClick={() => allow.run(() => onAllow(grant, false))}
-            className="bg-primary text-primary-foreground hover:bg-primary/90"
           >
             Allow…
           </SettingsButton>
@@ -246,8 +253,9 @@ export function ComputerUseBody({
   onOpen: (grant: ComputerGrant) => Promise<void>;
   onRefresh: () => Promise<void>;
 }) {
-  if (!access?.available) return null;
-  const stale = access.problem ? [] : GRANTS.filter((grant) => asked.has(grant) && !access[grant]);
+  // Not read yet, the page shows at once and fills in; where there's no computer use, nothing.
+  if (access && !access.available) return null;
+  const stale = !access || access.problem ? [] : GRANTS.filter((grant) => asked.has(grant) && !access[grant]);
   return (
     <SettingsPage title="Computer use" description={INTRO}>
       <div className="flex flex-col gap-3">
@@ -257,8 +265,9 @@ export function ComputerUseBody({
             <GrantRow
               key={grant}
               grant={grant}
-              allowed={access[grant]}
-              unknown={access.problem !== null}
+              allowed={access?.[grant] ?? false}
+              unknown={access?.problem != null}
+              checking={access === null}
               asked={asked.has(grant)}
               onAllow={onAllow}
               onOpen={onOpen}

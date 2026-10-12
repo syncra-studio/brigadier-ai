@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { Suspense, useEffect } from "react";
 
 import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
 import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
@@ -15,6 +15,7 @@ import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { useNavigationShortcuts } from "@/app/navigationShortcuts";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { runSmoke } from "@/app/smoke";
+import { SettingsNav, SettingsView, warmSettings } from "@/app/settings/lazy";
 import { SidebarFoot } from "@/app/SidebarFoot";
 import { TitlebarTips } from "@/components/titlebar-button";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
@@ -22,6 +23,7 @@ import { Toaster } from "@/components/ui/toast";
 import { appReady, nowEpochMs } from "@/ipc/client";
 import { waitForAgents } from "@/lib/agentsReady";
 import { nextPaint, setFrameSampling } from "@/lib/perf";
+import { whenIdle } from "@/lib/preloadable";
 import { markMounted, revealApp } from "@/lib/splash";
 import { markStartup } from "@/lib/startup";
 import { setMetricsStreaming, toggleInspector, toggleSettings } from "@/state/actions";
@@ -30,14 +32,6 @@ import { useApp, type Selection } from "@/state/store";
 import { HOME_PLACE } from "@/state/terminalPlaces";
 
 let readyReported = false;
-
-// Settings (with its pages and their search) loads when first opened, off the cold-start path.
-const SettingsNav = lazy(() =>
-  import("@/app/settings/SettingsNav").then((module) => ({ default: module.SettingsNav })),
-);
-const SettingsView = lazy(() =>
-  import("@/app/settings/SettingsView").then((module) => ({ default: module.SettingsView })),
-);
 
 /** Drafts share one key: switching the composer's project must not lose the typed text. */
 function viewKey(selection: Selection): string {
@@ -99,6 +93,9 @@ export function App() {
       })
       .then(() => {
         markStartup("revealed");
+        // Settings, once the app is up and idle: it then opens on the next frame. (The smoke
+        // check opens it straight away, and measures the app as it is.)
+        if (!useApp.getState().info?.smoke) whenIdle(warmSettings);
         return appReady(nowEpochMs());
       })
       .then((coldStartMs) => {

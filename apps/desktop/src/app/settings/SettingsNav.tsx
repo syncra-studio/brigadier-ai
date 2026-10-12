@@ -135,6 +135,8 @@ export function SettingsNav() {
                         type="button"
                         aria-current={page.id === current ? "page" : undefined}
                         className={navRow}
+                        onPointerEnter={page.prefetch}
+                        onFocus={page.prefetch}
                         onClick={() => openSettings(page.id)}
                       >
                         <Icon aria-hidden className="text-foreground/65" />

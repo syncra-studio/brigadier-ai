@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { KeepAwakeMenu, UsageMenu } from "@/app/BarStatus";
 import { useShortcuts } from "@/app/shortcuts";
+import { preloadSettings } from "@/app/settings/lazy";
 import { FootButton } from "@/app/sidebar/nav";
 import { UpdatesRow } from "@/app/UpdatesRow";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -23,6 +24,9 @@ export function SidebarFoot() {
       tip="Settings"
       shortcut={shortcuts.settings}
       icon={<Settings />}
+      // Its code loads as the pointer comes (if idle hasn't loaded it yet), before the click.
+      onPointerEnter={preloadSettings}
+      onFocus={preloadSettings}
       onClick={toggleSettings}
     />
   );
