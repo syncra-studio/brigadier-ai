@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { KINDS, NODE_KINDS } from "@/app/inspector/brain/kinds";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -15,9 +15,17 @@ import type {
 } from "@/ipc/generated";
 import { brainUseText, lowBrainUse } from "@/lib/brainUse";
 import { formatAgo, formatBytes, formatDateTime, formatDuration, formatMs } from "@/lib/format";
-import { useBoard } from "@/state/board";
-import { loadBrain, projectOf, rebuildIndex, runBrainJob } from "@/state/brain";
-import { selectedConversation, useApp } from "@/state/store";
+import { inspectedConversation } from "@/state/actions";
+import {
+  loadBrain,
+  projectOf,
+  rebuildIndex,
+  runBrainJob,
+  unwatchSessionTasks,
+  useBrain,
+  watchSessionTasks,
+} from "@/state/brain";
+import { useApp } from "@/state/store";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -258,16 +266,30 @@ function jobBadge(state: BrainJobState): { label: string; variant: "success" | "
 }
 
 /**
- * How the open session's workers used this Brain: their queries, the facts their briefs
+ * How the inspected session's workers used this Brain: their queries, the facts their briefs
  * carried, what they wrote back and their calls. A long task that neither asked nor taught it
- * is marked "Low Brain use": a gap to fix (SESSION-FIXES-PLAN.md Q6.6).
+ * is marked "Low Brain use": a gap to fix (SESSION-FIXES-PLAN.md Q6.6). The session is the one
+ * Settings was opened from; its tasks are read once and kept current by task events.
  */
 function WorkersSection({ projectId }: { projectId: string }) {
-  const open = useApp((s) => selectedConversation(s));
-  const tasks = useBoard((s) => s.board?.tasks);
-  if (!open || open.projectId !== projectId || !tasks) return null;
+  const sessionId = useApp((s) => {
+    const open = inspectedConversation(s);
+    return open?.projectId === projectId ? open.id : null;
+  });
+  const tasks = useBrain((s) =>
+    sessionId !== null && s.sessionTasks?.conversationId === sessionId ? s.sessionTasks.tasks : null,
+  );
+  // Read on showing; the bridge's resync reads again on reconnecting or after missed events.
+  useEffect(() => {
+    if (sessionId === null) return undefined;
+    watchSessionTasks(sessionId).catch((cause: unknown) => {
+      console.error("reading the session's workers failed", cause);
+    });
+    return () => unwatchSessionTasks(sessionId);
+  }, [sessionId]);
+  if (!tasks) return null;
   const workers = Object.values(tasks)
-    .filter((task) => task.conversationId === open.id && task.brain)
+    .filter((task) => task.brain)
     .toSorted((a, b) => a.number - b.number);
   if (workers.length === 0) return null;
   return (
