@@ -11,7 +11,7 @@ import {
   useAuiState,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { Unarchive, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Info, Unarchive, Warning, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   createContext,
   type FC,
@@ -32,6 +32,7 @@ import { PinnedSummary, PinnedSummaryToggle, SummaryFloat, SummaryPane } from "@
 import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
 import { WorkerDiffs } from "@/app/conversation/WorkerSummary";
 import { latestRequest, reworkableRequest } from "@/app/conversation/rework";
+import { newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import {
   TerminalButton,
@@ -504,6 +505,14 @@ export function ConversationView({
   const reworkable = useBoard((s) =>
     s.board?.conversationId === conversationId && s.board ? reworkableRequest(s.board) : null,
   );
+  // The newest answer works on while only what Brigadier owes it runs (a CI watch, a held
+  // merge, a review its thread waits for): Stop ends that too.
+  const answerWorking = useBoard(
+    (s) =>
+      s.board?.conversationId === conversationId &&
+      !!s.board &&
+      latestRequest(s.board)?.state.type === "working",
+  );
   // The user stopped the latest request and nothing runs for it: the send button resumes it.
   const stopped = useBoard(
     (s) =>
@@ -691,7 +700,7 @@ export function ConversationView({
       await regenerate(conversationId, storedIdOf(parentId)).catch(fail);
     },
     isLoading: thread.loading && thread.items.length === 0,
-    isRunning: running || waitingForQuota || Object.values(digest?.tasks ?? {}).some((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)),
+    isRunning: running || waitingForQuota || answerWorking || Object.values(digest?.tasks ?? {}).some((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)),
     isDisabled: archived,
     isSendDisabled: conversation === null && resolved.problem !== null,
     queue,
@@ -935,6 +944,9 @@ const UserAttachments: FC = () => {
   return <MessageAttachments attachments={custom.attachments} className="justify-end" />;
 };
 
+/** One calm line above the composer: a small muted icon, the words, and × where it can go. */
+const ABOVE_LINE = "bg-muted text-foreground rounded-control flex items-start gap-2 px-3 py-1.5 text-xs";
+
 /** Notices (environment problems, fallbacks), newest last; each can be dismissed. */
 function Notices({ notices }: { notices: readonly Notice[] }) {
   const [dismissed, setDismissed] = useState<ReadonlySet<number>>(new Set());
@@ -943,18 +955,17 @@ function Notices({ notices }: { notices: readonly Notice[] }) {
   return (
     <ul aria-label="Notices" className="flex flex-col gap-1">
       {shown.map((notice) => (
-        <li
-          key={`${notice.atMs}:${notice.text}`}
-          className={cn(
-            "rounded-control flex items-start gap-2 px-3 py-1.5 text-xs",
-            notice.level === "warning" ? "bg-warning/10 text-warning" : "bg-muted text-muted-foreground",
+        <li key={`${notice.atMs}:${notice.text}`} data-level={notice.level} className={ABOVE_LINE}>
+          {notice.level === "warning" ? (
+            <Warning aria-hidden className="text-muted-foreground size-icon-xs mt-px shrink-0" />
+          ) : (
+            <Info aria-hidden className="text-muted-foreground size-icon-xs mt-px shrink-0" />
           )}
-        >
           <span className="min-w-0 flex-1 whitespace-pre-wrap">{notice.text}</span>
           <button
             type="button"
             aria-label="Dismiss notice"
-            className="shrink-0 opacity-70 hover:opacity-100"
+            className="text-muted-foreground hover:text-foreground shrink-0"
             onClick={() => setDismissed((current) => new Set(current).add(notice.atMs))}
           >
             <X className="size-icon-xs" />
@@ -974,21 +985,39 @@ const AboveComposer: FC = () => {
   const notices = useBoard((s) =>
     s.board?.conversationId === conversationId ? s.board.notices : NO_NOTICES,
   );
+  // A run that failed a request is said by that request in the thread, once.
   const runError = useBoard((s) =>
-    s.board?.conversationId === conversationId && s.board.run === "failed"
+    s.board?.conversationId === conversationId && s.board.run === "failed" && !s.board.runRequest
       ? (s.board.runError ?? "The model stopped with an error.")
       : null,
   );
+  // What the newest failed turn already says in the thread is never said again here.
+  const turnError = useBoard((s) =>
+    s.board?.conversationId === conversationId ? newestFailedError(s.board.requests) : null,
+  );
+  const shown = useMemo(() => withoutTurnError(notices, turnError), [notices, turnError]);
+  const failure = runError !== null && runError.trim() !== turnError?.trim() ? runError : null;
+  const [failureDismissed, setFailureDismissed] = useState<string | null>(null);
   const action = useAction();
   const archived = conversation?.lifecycle === "archived";
+  const failed = failure !== null && failure !== failureDismissed;
   // Nothing at all when there is nothing to say, so the footer adds no gap for it.
-  if (!conversation || (notices.length === 0 && !runError && !archived)) return null;
+  if (!conversation || (shown.length === 0 && !failed && !archived)) return null;
   return (
     <div className="flex flex-col gap-1.5">
-      <Notices notices={notices} />
-      {runError && (
-        <p role="alert" className="bg-destructive/10 text-destructive rounded-control px-3 py-1.5 text-xs">
-          {runError}
+      <Notices notices={shown} />
+      {failed && (
+        <p role="status" className={ABOVE_LINE}>
+          <Warning aria-hidden className="text-muted-foreground size-icon-xs mt-px shrink-0" />
+          <span className="min-w-0 flex-1 whitespace-pre-wrap">{failure}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            className="text-muted-foreground hover:text-foreground shrink-0"
+            onClick={() => setFailureDismissed(failure)}
+          >
+            <X className="size-icon-xs" />
+          </button>
         </p>
       )}
       {archived ? (

@@ -7,6 +7,7 @@ import { settledSession } from "@/fixtures/settledSession";
 import {
   answerIndex,
   type Block,
+  blockFinished,
   type BoardDigest,
   blockSequence,
   buildBlocks,
@@ -349,6 +350,47 @@ test("a late event's update line shows under the answer, never as a new answer",
   assert.equal(isUpdate("  update: lower case"), true);
   assert.equal(answerIndex([{ update: true }, { update: true }], true), 1);
   assert.equal(answerIndex([{ update: true }], false), null);
+});
+
+test("a working request shows a reply written after its work in place: only a done one has an answer", () => {
+  const request = "owed-request";
+  const user = { ...messages[0]!, id: request, seq: 600, requestId: request, text: "Add a note, and merge it when done." };
+  const reply = (id: string, seq: number, text: string) =>
+    ({ ...messages[0]!, id, seq, role: "assistant" as const, requestId: request, parentId: request, text });
+  const landed: Task = { ...byNumber(1), id: "one", requestId: request, position: 601, state: "landed" };
+  const digest = (state: UserRequest["state"], streaming: string | null): BoardDigest => ({
+    ...board,
+    plans: {},
+    decisions: [],
+    tasks: { one: landed },
+    requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state } },
+    orchestratorSteps: [
+      { requestId: request, atMs: 603, position: 603, kind: { type: "landed", taskIds: ["one"], commits: 1, branch: "b", head: "h" } },
+    ],
+    streaming: streaming === null ? null : { messageId: "live", text: streaming, requestId: request },
+  });
+  const requestBlock = (said: Message[], d: BoardDigest) => {
+    const found = buildBlocks([user, ...said], {}, false, d, []).find((candidate) => candidate.key === request);
+    assert.ok(found);
+    return found;
+  };
+  // The thread writes a line after the landing, its worker over, while the merge it holds waits for a review.
+  const streaming = requestBlock([], digest({ type: "working" }, "Diff looks right."));
+  assert.equal(streaming.texts.at(-1)?.position, Number.POSITIVE_INFINITY);
+  assert.equal(blockFinished(streaming.state), false);
+  assert.equal(answerIndex(streaming.texts, blockFinished(streaming.state)), null);
+  // Its turn ended on [quiet] and the request works on: the line is no answer.
+  const said = reply("said", 604, "Diff looks right.");
+  const between = requestBlock([said], digest({ type: "working" }, null));
+  assert.equal(answerIndex(between.texts, blockFinished(between.state)), null);
+  // Done at its real ending: the last reply is the answer, and the line folds into the work.
+  const done = requestBlock([said, reply("ending", 620, "Merged the note into main.")], digest({ type: "done" }, null));
+  const answer = answerIndex(done.texts, blockFinished(done.state));
+  assert.equal(done.texts[answer!]!.text, "Merged the note into main.");
+  assert.ok(sequence(done).some((entry) => entry.kind === "text" && entry.index === 0 && foldsAway(entry, answer)));
+  // A run's block follows its run, whatever its request says.
+  assert.equal(blockFinished("working", { settled: true }), true);
+  assert.equal(blockFinished("done", { settled: false }), false);
 });
 
 test("a run's decision shows in the thread unless its kind says it is a phase's outcome", () => {

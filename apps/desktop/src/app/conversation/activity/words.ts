@@ -1,6 +1,6 @@
 import { namedTasks, workerName } from "@/app/conversation/rowWords";
 import type { TranscriptItem } from "@/components/transcript/transcript";
-import type { ItemStatus, OrchestratorStepKind, Task } from "@/ipc/generated";
+import type { Approval, ItemStatus, OrchestratorStepKind, Task } from "@/ipc/generated";
 
 /**
  * The one vocabulary of the thread's work (THREAD-UX-PLAN.md §3.2): what a step of the lead or
@@ -364,10 +364,41 @@ export function toolHasOwnResult(
  */
 export function stepLabel(words: StepWords, status: ItemStatus, exit: number | null = null): string {
   if (status === "inProgress") return words.doing;
-  if (status === "declined") return `${words.done} — stopped`;
+  // Declined is the user's answer, not a failure: said plainly, with what it would have acted on.
+  if (status === "declined") return words.object ? `Declined: ${words.object}` : `${words.done} — declined`;
   if (exit !== null && exit !== 0) return `${words.done} — failed (exit ${exit})`;
   if (status === "failed") return `${words.done} — failed`;
   return words.done;
+}
+
+/** How far apart a call's start or end and its approval's answer can be on the daemon's clock. */
+const ANSWER_SLACK_MS = 1000;
+
+/**
+ * Whether a lead's failed call is one an approval denied: the thread's own approval (not a
+ * worker's) in one of the turn's requests, for the same tool, answered while the call ran (from
+ * `atMs`, when it was first seen). A CLI reports a denied call as a failed one; its row reads as
+ * declined instead, never as an error.
+ */
+export function deniedCall(
+  call: ToolStep,
+  atMs: number | undefined,
+  requestIds: readonly string[],
+  approvals: readonly Approval[],
+): boolean {
+  if (call.status !== "failed") return false;
+  return approvals.some(
+    (approval) =>
+      approval.taskId === null &&
+      approval.requestId !== null &&
+      requestIds.includes(approval.requestId) &&
+      approval.state.type === "denied" &&
+      approval.subject.type === "cli" &&
+      toolName(approval.subject.request.tool) === toolName(call.name) &&
+      approval.resolvedAtMs !== null &&
+      (atMs === undefined || approval.resolvedAtMs >= atMs - ANSWER_SLACK_MS) &&
+      (call.endedAtMs === undefined || approval.resolvedAtMs <= call.endedAtMs + ANSWER_SLACK_MS),
+  );
 }
 
 /**

@@ -26,6 +26,7 @@ import { MentionText } from "@/app/conversation/Mentions";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { type Activity, type LeadStep, turnActivity } from "@/app/conversation/activity/group";
+import { deniedCall } from "@/app/conversation/activity/words";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
 import { CHEVRON, ROW, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
 import {
@@ -35,6 +36,7 @@ import {
   type BlockRow,
   type BlockState,
   answerIndex,
+  blockFinished,
   endsWithPlan,
   blockSequence,
   foldsAway,
@@ -51,6 +53,8 @@ import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
 import { ThreadStatus } from "@/app/conversation/ThreadStatus";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
+import { describeTurnError } from "@/app/conversation/turnError";
+import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import {
@@ -65,9 +69,10 @@ import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
 import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
 import { formatDuration, formatSentAt } from "@/lib/format";
+import { VENDOR_LABELS } from "@/lib/routing";
 import { modelName, sameModel, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
-import { openConversation } from "@/state/actions";
+import { openConversation, send } from "@/state/actions";
 import { readAloud, stopReading, useReading } from "@/state/readAloud";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -152,8 +157,9 @@ function headerLabel(state: BlockState, elapsed: number, quota = false): string 
       return `Worked for ${time}`;
     case "stopped":
       return `You stopped after ${time}`;
+    // Said calmly: the error row under the turn tells what happened.
     case "failed":
-      return `Failed after ${time}`;
+      return `Stopped after ${time}`;
   }
 }
 
@@ -194,8 +200,7 @@ const WorkHeader: FC<{
     <span
       data-slot="request-work-label"
       className={cn(
-        "text-sm leading-(--spacing-activity-row) tabular-nums",
-        meta.state === "failed" && !phase ? "text-destructive" : "text-foreground/50",
+        "text-foreground/50 text-sm leading-(--spacing-activity-row) tabular-nums",
         foldable && "group-hover:text-foreground group-focus-visible:text-foreground",
       )}
     >
@@ -399,8 +404,16 @@ const ActivityItems: FC<{
   activity: readonly Activity<LeadStep, Entry>[];
   live: boolean;
   streaming: (entry: Entry) => boolean;
-}> = ({ activity, live, streaming }) => {
+  /** The turn's requests, whose denied approvals its failed calls may be. */
+  requestIds: readonly string[];
+}> = ({ activity, live, streaming, requestIds }) => {
   const tasks = useBoard((s) => s.board?.tasks);
+  const approvals = useBoard((s) => s.board?.approvals);
+  // A call the user's Deny stopped reads as declined, not failed.
+  const shown = (step: LeadStep): LeadStep =>
+    approvals && step.kind.type === "tool" && deniedCall(step.kind, step.atMs, requestIds, Object.values(approvals))
+      ? { ...step, kind: { ...step.kind, status: "declined" } }
+      : step;
   return (
     <>
       {activity.map((item, index) =>
@@ -409,8 +422,8 @@ const ActivityItems: FC<{
             key={`group:${item.key}`}
             items={item.items}
             live={live && index === activity.length - 1}
-            describe={(step) => describeLeadStep(step, tasks)}
-            renderStep={(step, key) => <LeadStepRow key={key} step={step} />}
+            describe={(step) => describeLeadStep(shown(step), tasks)}
+            renderStep={(step, key) => <LeadStepRow key={key} step={shown(step)} />}
           />
         ) : (
           <SequenceEntry key={entryKey(item.entry)} entry={item.entry} streaming={streaming(item.entry)} />
@@ -420,22 +433,44 @@ const ActivityItems: FC<{
   );
 };
 
-/** The block's error: what went wrong in full, and Try again where a Chat can answer again. */
-const BlockError: FC<{ retry: boolean }> = ({ retry }) => {
+/** What a session's Try again sends, as the user's own message. */
+const TRY_AGAIN = "Try again.";
+
+/**
+ * The block's error: one plain line, the error's own words under Details, and Try again where it
+ * can be: a Chat answers again; a session's last turn gets "Try again." sent as the user's
+ * message, the way the composer sends it. An overnight run's turn has none: the run goes on.
+ */
+const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
   const error = useAuiState((s) => {
     const status = s.message.status;
     return status?.type === "incomplete" && status.reason === "error"
       ? String(status.error ?? "The reply failed.")
       : null;
   });
+  const latest = useAuiState((s) => s.message.isLast);
+  const conversation = useViewConversation();
   const aui = useAui();
+  const action = useAction();
   if (error === null) return null;
+  const model = meta.texts.at(-1)?.model ?? meta.picked;
+  const { summary } = describeTurnError(error, model ? VENDOR_LABELS[model.provider] : undefined);
+  const again = (() => {
+    if (live || isRunRequest(meta.requestId)) return undefined;
+    if (!meta.session) return meta.rework ? () => aui.message().reload() : undefined;
+    if (!latest || !conversation || conversation.lifecycle === "archived" || action.busy) return undefined;
+    const to = conversation.id;
+    return () => action.run(() => send({ text: TRY_AGAIN, attachments: [], mentions: [] }, undefined, { to }));
+  })();
   return (
-    <ErrorState
-      title="Something went wrong"
-      detail={error}
-      onRetry={retry ? () => aui.message().reload() : undefined}
-    />
+    <div className="flex flex-col gap-1">
+      <ErrorState summary={summary} details={error} onRetry={again} />
+      {action.error && (
+        <p role="alert" className="text-muted-foreground px-3 text-xs">
+          Couldn’t send it: {action.error}
+        </p>
+      )}
+    </div>
   );
 };
 
@@ -475,17 +510,8 @@ export const RequestBlock: FC = () => {
   const live = phase ? !phase.settled : isLive(meta.state);
   const last = meta.texts.length - 1;
   const sequence = blockSequence(meta);
-  // The final answer is streaming: the workers it waited for are all over, or a session's thread
-  // writes after its work (it writes nothing between its steps but one opening line, before them).
-  // The work folds now, when the final answer starts.
-  const streamingAt = sequence.findIndex((entry) => entry.kind === "text" && entry.index === last);
-  const workBefore = sequence.slice(0, Math.max(0, streamingAt)).some((entry) => entry.kind === "orchestrator" || entry.kind === "row" || entry.kind === "card");
-  const answering =
-    meta.state === "working" &&
-    (meta.rows.length > 0 || (meta.session && workBefore)) &&
-    !workersActive &&
-    meta.texts[last]?.position === Number.POSITIVE_INFINITY;
-  const done = phase ? phase.settled : meta.state === "done" || answering;
+  // Its work folds once, when the request is done; while it works, a reply streams in place.
+  const done = blockFinished(meta.state, phase);
   // A run over folds to its outcome; the thread's replies during it go into the fold.
   const answer = endsWithPlan(sequence) ? null : answerIndex(meta.texts, done && !phase);
   const updates = updateIndices(meta.texts, answer);
@@ -541,6 +567,7 @@ export const RequestBlock: FC = () => {
               >
                 <ActivityItems
                   activity={part.items}
+                  requestIds={meta.requestIds}
                   live={live && !done && index === parts.length - 1}
                   streaming={(entry) => !done && entry.kind === "text" && meta.texts[entry.index]?.position === Number.POSITIVE_INFINITY}
                 />
@@ -578,7 +605,7 @@ export const RequestBlock: FC = () => {
                 data-slot="aui_assistant-message-content"
                 className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0) && "pt-activity")}
               >
-                <ReplyText index={answer} streaming={answering && updates.length === 0} report={(report || meta.session) && !answering} />
+                <ReplyText index={answer} streaming={false} report={report || meta.session} />
               </div>
             )}
             {/* A late event's "Update: …" line: small, under the answer, never a new answer. */}
@@ -588,7 +615,7 @@ export const RequestBlock: FC = () => {
                 data-slot="answer-update"
                 className="text-foreground/80 border-foreground/15 mt-activity border-s-2 ps-3 text-sm leading-relaxed wrap-break-word"
               >
-                <ReplyText index={index} streaming={answering && index === last} />
+                <ReplyText index={index} streaming={false} />
               </div>
             ))}
           </>
@@ -597,7 +624,7 @@ export const RequestBlock: FC = () => {
       {/* A run's work is merged from its card, never undone behind the run's back. */}
       {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestId={meta.requestId} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
-      <BlockError retry={!meta.session && meta.rework} />
+      <BlockError meta={meta} live={live} />
       {!live && last >= 0 && !phase && (
         <AnswerActions
           session={meta.session}

@@ -150,3 +150,20 @@ Mockup tab of the session tab strip, with screenshots drawn in the page. Query s
 checks: the tab busy while it builds, then ready; opening it, Comment, two markers with notes, ⌘↩ sends
 one message with the marked screenshot, Working, the revision's See latest changes, closing the tab and
 its return at the comparison. Requests never reach a daemon.
+
+# A failed turn
+
+`/fixtures/turn-error.html?view=done&approvals=0&summary=0` is the phase flow with its second request
+failed on an API error, the run's error and an old notice repeating it. The turn reads "Stopped after …",
+then one calm row (what happened in plain words, the error's own words under Details with Copy, Try again);
+above the composer only the other notice shows. A bare row sits under the page. `drive=1` opens Details,
+presses Try again (recorded, never sent) and writes JSON into `#turn-error-result`;
+`TurnErrorRender.test.ts` checks it. This entry is absent from the production build.
+
+# The Full access line
+
+`/fixtures/full-access-notice.html` is the finished phase flow with the session at Full access: one calm
+row above the composer (a muted shield, "Full access: workers run without asking." with Learn more,
+Don't show again and ×). `drive=1` scrolls the thread to its bottom, measures the line and the thread's
+last row, closes it with × and writes JSON into `#full-access-notice-result`;
+`FullAccessNoticeRender.test.ts` checks it. This entry is absent from the production build.
