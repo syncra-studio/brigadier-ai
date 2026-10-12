@@ -1,8 +1,7 @@
 import { Check, Copy, DownloadSimple, X } from "@openai/apps-sdk-ui/components/Icon";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { BarItem } from "@/app/BarItem";
-import { errorText } from "@/app/dialogs/fields";
+import { BarItem, ITEM_MS } from "@/app/BarItem";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
@@ -14,7 +13,7 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { UpdateItem, UpdateTarget } from "@/ipc/generated";
-import { noteUpdatesSeen, shownUpdates, skipUpdate, takeUpdate, useUpdates } from "@/state/updates";
+import { pillClick, shownUpdates, skipUpdate, startUpdate, useUpdates } from "@/state/updates";
 
 const UPDATE_NAMES: Record<UpdateTarget, string> = {
   app: "Brigadier",
@@ -27,7 +26,10 @@ const CLIS = ["claude", "codex"] as const;
 /**
  * Updates at the sidebar's foot, there only while something has a newer version: a chip of a
  * download icon and the outdated app's and agents' marks in the expanded sidebar's row, or a
- * download icon with a dot on the collapsed strip. It opens their versions, to update or skip.
+ * download icon with a dot on the collapsed strip. When the one update is an agent's, a click
+ * runs it; otherwise it opens their versions, to update or skip. An update that finishes shows
+ * its check a moment, then leaves by itself: its row shrinks away, the list closes after its
+ * last row, and the chip after the list.
  */
 export function UpdatesRow() {
   const view = useUpdates((s) => s.view);
@@ -35,32 +37,53 @@ export function UpdatesRow() {
   const seen = useUpdates((s) => s.seen);
   const items = shownUpdates(view, skipped, seen);
   const { open: expanded } = useSidebar();
-  // Kept while the row leaves, so it doesn't empty as it shrinks.
+  const [open, setOpen] = useState(false);
+  // Kept while the chip leaves, so it doesn't empty as it shrinks.
   const [last, setLast] = useState(items);
   if (items.length > 0 && JSON.stringify(items) !== JSON.stringify(last)) setLast(items);
-  const rows = items.length > 0 ? items : last;
-  const outdated = new Set(rows.map((item) => item.target));
-  const busy = rows.some((item) => item.progress.type === "updating");
+  const shown = items.length > 0 ? items : last;
+  // Every row the list has had, so a row that leaves shrinks away rather than vanishing.
+  const all = view?.items ?? [];
+  const [lastAll, setLastAll] = useState(all);
+  if (all.length > 0 && JSON.stringify(all) !== JSON.stringify(lastAll)) setLastAll(all);
+  const rows = all.length > 0 ? all : lastAll;
+  const outdated = new Set(shown.map((item) => item.target));
+  const busy = shown.some((item) => item.progress.type === "updating");
+  const finished = shown.length > 0 && shown.every((item) => item.progress.type === "updated");
+  const direct = pillClick(items);
+  const empty = items.length === 0;
+  // The list closes once its last row has shrunk away.
+  useEffect(() => {
+    if (!empty || !open) return;
+    const timer = window.setTimeout(() => setOpen(false), ITEM_MS);
+    return () => window.clearTimeout(timer);
+  }, [empty, open]);
   return (
-    <BarItem show={items.length > 0} axis={expanded ? "x" : "y"}>
-      <Popover
-        onOpenChange={(opened) => {
-          if (!opened) noteUpdatesSeen();
-        }}
-      >
+    <BarItem show={!empty || open} axis={expanded ? "x" : "y"}>
+      <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <FootButton
-            tip={rowLabel(rows)}
+            tip={direct === "menu" ? rowLabel(shown) : `Update ${UPDATE_NAMES[direct.target]} to ${direct.latest}`}
             icon={
               busy ? (
                 <Spinner aria-hidden className="animate-spin" />
+              ) : finished ? (
+                <Check aria-hidden />
               ) : (
                 <DownloadSimple aria-hidden />
               )
             }
-            dot={expanded || busy ? null : "bg-foreground"}
+            dot={expanded || busy || finished ? null : "bg-foreground"}
             // In the row, a chip: outlined, round-ended, filled only on hover.
             className={expanded ? "border-border rounded-full border px-2" : undefined}
+            onClick={(event) => {
+              if (direct === "menu") return;
+              // Runs before the trigger's own click, which then leaves the list closed.
+              event.preventDefault();
+              void startUpdate(direct).then((started) => {
+                if (!started) setOpen(true);
+              });
+            }}
             end={
               expanded && (
                 <span className="flex items-center">
@@ -84,16 +107,21 @@ export function UpdatesRow() {
             event.preventDefault();
             if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
           }}
-          className="flex w-sm flex-col gap-1 p-1.5"
+          className="flex w-sm flex-col p-1.5"
         >
           {rows.map((item) => (
-            <UpdateRow key={item.target} item={item} />
+            <BarItem key={item.target} axis="y" show={items.includes(item)}>
+              <UpdateRow item={item} />
+            </BarItem>
           ))}
-          {rows.some((item) => item.target !== "app" && item.progress.type !== "available") && (
-            <p className="text-muted-foreground px-1.5 pb-1 text-xs">
+          <BarItem
+            axis="y"
+            show={items.some((item) => item.target !== "app" && item.progress.type !== "available")}
+          >
+            <p className="text-muted-foreground px-1.5 pt-1 pb-1 text-xs">
               Sessions already running keep the version they started with.
             </p>
-          )}
+          </BarItem>
         </PopoverContent>
       </Popover>
     </BarItem>
@@ -109,19 +137,17 @@ function rowLabel(items: readonly UpdateItem[]): string {
   const names =
     all.length > 1 ? `${all.slice(0, -1).join(", ")} and ${all.at(-1)}` : (all[0] ?? "");
   if (items.some((item) => item.progress.type === "updating")) return `Updating ${names}`;
+  if (items.every((item) => item.progress.type === "updated")) return `${names} updated`;
   return `${names} ${items.length > 1 ? "updates" : "update"} available`;
 }
 
 function UpdateRow({ item }: { item: UpdateItem }) {
-  const [error, setError] = useState<string | null>(null);
+  const asked = useUpdates((s) => s.errors[item.target]);
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const name = UPDATE_NAMES[item.target];
   const { progress, action } = item;
-  const shownError = error ?? (progress.type === "failed" ? progress.error : null);
-  const take = () => {
-    setError(null);
-    takeUpdate(item).catch((cause: unknown) => setError(errorText(cause)));
-  };
+  const shownError = asked ?? (progress.type === "failed" ? progress.error : null);
+  const take = () => void startUpdate(item);
   return (
     <div className="flex flex-col gap-1.5 rounded-md px-1.5 py-1.5">
       <div className="flex items-center gap-2.5">
@@ -144,10 +170,7 @@ function UpdateRow({ item }: { item: UpdateItem }) {
             Updating…
           </span>
         ) : progress.type === "updated" ? (
-          <span className="text-muted-foreground flex items-center gap-1 text-xs">
-            <Check className="size-icon-sm" />
-            Done
-          </span>
+          <Check aria-label="Updated" className="text-muted-foreground size-icon-sm shrink-0" />
         ) : (
           <>
             {action.type !== "manual" && (

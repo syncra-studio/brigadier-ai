@@ -1,12 +1,13 @@
 import { create } from "zustand";
 
 import { openUrl, request } from "@/ipc/client";
-import type { EventEnvelope, UpdateItem, UpdatesView } from "@/ipc/generated";
+import type { EventEnvelope, UpdateItem, UpdateTarget, UpdatesView } from "@/ipc/generated";
 
 /**
  * Newer versions of Brigadier and the agent CLIs: the daemon checks and runs the updates,
- * publishing each change as `updatesChanged`; this holds the last view, and which versions the
- * user skipped (kept across launches) or has seen updated (until the app quits).
+ * publishing each change as `updatesChanged`; this holds the last view, which versions the user
+ * skipped (kept across launches), the updates that finished and have left (until the app quits),
+ * and why starting an update failed.
  */
 
 const SKIPPED_KEY = "brigadier.skippedUpdates";
@@ -26,11 +27,16 @@ function readSkipped(): string[] {
 export const useUpdates = create<{
   view: UpdatesView | null;
   skipped: string[];
-  /** Updated rows the user has seen; they leave the list once its panel closes. */
+  /** Updates that finished and, after a moment showing so, left the list. */
   seen: string[];
-}>(() => ({ view: null, skipped: readSkipped(), seen: [] }));
+  /** Why asking for an update failed, by what it was for, until it is asked again. */
+  errors: Partial<Record<UpdateTarget, string>>;
+}>(() => ({ view: null, skipped: readSkipped(), seen: [], errors: {} }));
 
-/** The rows to show: not skipped, and not an update the user already saw finish. */
+/** How long a finished update shows its check before it leaves on its own. */
+export const UPDATED_LINGER_MS = 1000;
+
+/** The rows to show: not skipped, and not an update that finished and has left. */
 export function shownUpdates(
   view: UpdatesView | null,
   skipped: readonly string[],
@@ -41,15 +47,71 @@ export function shownUpdates(
   );
 }
 
+/**
+ * What a click on the updates pill does: when all there is is one agent's update that Brigadier
+ * runs itself, it starts at once; anything else (several, Brigadier's own download, a command
+ * to copy, a failure to read) opens the list.
+ */
+export function pillClick(items: readonly UpdateItem[]): UpdateItem | "menu" {
+  const only = items.length === 1 ? items[0] : undefined;
+  return only &&
+    only.target !== "app" &&
+    only.action.type === "run" &&
+    only.progress.type === "available"
+    ? only
+    : "menu";
+}
+
+/** The updates in `view` that have finished but not yet left. */
+export function finishedKeys(view: UpdatesView | null, seen: readonly string[]): string[] {
+  return (view?.items ?? [])
+    .filter((item) => item.progress.type === "updated")
+    .map(keyOf)
+    .filter((key) => !seen.includes(key));
+}
+
+const leaving = new Set<string>();
+
+/** Takes in the daemon's view; an update that finished leaves the list a moment later. */
+function setView(view: UpdatesView | null): void {
+  useUpdates.setState({ view });
+  for (const key of finishedKeys(view, useUpdates.getState().seen)) {
+    if (leaving.has(key)) continue;
+    leaving.add(key);
+    setTimeout(() => {
+      leaving.delete(key);
+      const { seen } = useUpdates.getState();
+      if (!seen.includes(key)) useUpdates.setState({ seen: [...seen, key] });
+    }, UPDATED_LINGER_MS);
+  }
+}
+
 /** Reads the daemon's view: on (re)connecting, after events may have been missed. */
 export async function loadUpdates(): Promise<void> {
   const { updates } = await request({ method: "getUpdates" });
-  useUpdates.setState({ view: updates });
+  setView(updates);
 }
 
 export function applyUpdateEvents(batch: readonly EventEnvelope[]): void {
   for (const { event } of batch) {
-    if (event.type === "updatesChanged") useUpdates.setState({ view: event.updates });
+    if (event.type === "updatesChanged") setView(event.updates);
+  }
+}
+
+/** Takes the update, keeping why asking failed for its row; false when it did. */
+export async function startUpdate(item: UpdateItem): Promise<boolean> {
+  useUpdates.setState(({ errors }) => {
+    const rest = { ...errors };
+    delete rest[item.target];
+    return { errors: rest };
+  });
+  try {
+    await takeUpdate(item);
+    return true;
+  } catch (cause) {
+    const error = cause instanceof Error ? cause.message : String(cause);
+    useUpdates.setState(({ errors }) => ({ errors: { ...errors, [item.target]: error } }));
+    return false;
   }
 }
 
@@ -70,14 +132,5 @@ export function skipUpdate(item: UpdateItem): void {
     localStorage.setItem(SKIPPED_KEY, JSON.stringify(skipped));
   } catch {
     // Storage can be unavailable; the skip then lasts until the app quits.
-  }
-}
-
-/** The panel closed: rows that finished updating have been seen. */
-export function noteUpdatesSeen(): void {
-  const { view, seen } = useUpdates.getState();
-  const done = (view?.items ?? []).filter((item) => item.progress.type === "updated").map(keyOf);
-  if (done.some((key) => !seen.includes(key))) {
-    useUpdates.setState({ seen: [...new Set([...seen, ...done])] });
   }
 }

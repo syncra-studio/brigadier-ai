@@ -150,3 +150,11 @@ Mockup tab of the session tab strip, with screenshots drawn in the page. Query s
 checks: the tab busy while it builds, then ready; opening it, Comment, two markers with notes, ⌘↩ sends
 one message with the marked screenshot, Working, the revision's See latest changes, closing the tab and
 its return at the comparison. Requests never reach a daemon.
+
+# Sidebar and updates
+
+`http://localhost:1426/fixtures/updates.html` shows the expanded sidebar with Claude Code and Codex updates
+waiting, for screenshots. With `?drive=1` it backs `src/app/SidebarUpdatesRender.test.ts` (run by `pnpm test`):
+it clicks the Chats section's "+", runs a lone agent's update from the chip, runs one of two from the list and
+watches the finished row leave the open list by itself, and has an update fail to start. Requests are answered
+in the page and never reach a daemon.

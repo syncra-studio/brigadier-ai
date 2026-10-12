@@ -2,7 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
-const ITEM_MS = 200;
+/** How long an item takes to grow in or shrink away. */
+export const ITEM_MS = 200;
 
 function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
