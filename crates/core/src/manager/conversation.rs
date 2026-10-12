@@ -2000,7 +2000,7 @@ impl SessionManager {
         let mut skill_plugins = Vec::new();
         let mut redacted = grant_values.clone();
         if conv.kind == ConversationKind::Session
-            && let Some(kit) = self.computer_use_kit(false).await
+            && let Some(kit) = self.computer_use_kit(&conv.id.to_string(), false).await
         {
             prompt.push_str("\n\n");
             prompt.push_str(prompts::COMPUTER_USE);

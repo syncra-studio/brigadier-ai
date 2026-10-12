@@ -1708,7 +1708,9 @@ impl SessionManager {
             extra.push_str(prompts::BROWSER_OFF);
         }
         // Computer use (a GUI job has its tools loaded from the start).
-        let computer = self.computer_use_kit(task.kind == TaskKind::Operate).await;
+        let computer = self
+            .computer_use_kit(&task.id.to_string(), task.kind == TaskKind::Operate)
+            .await;
         if computer.is_some() {
             extra.push_str("\n\n");
             extra.push_str(prompts::COMPUTER_USE);

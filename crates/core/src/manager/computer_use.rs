@@ -64,10 +64,16 @@ pub(crate) struct ComputerUseKit {
 
 impl SessionManager {
     /// The `computer` MCP server and the skill, while computer use is on (macOS only).
+    /// `owner` names the agent (its task or conversation id): every call of its MCP server runs
+    /// in that agent's own helper session, which ends when the agent's server exits.
     /// `always_load`: its tools are in the model's list from the start (a GUI job) instead of
     /// behind Claude's tool search. `None` when it is off or the helper can't be placed; the
     /// agent then simply works without it.
-    pub(crate) async fn computer_use_kit(&self, always_load: bool) -> Option<ComputerUseKit> {
+    pub(crate) async fn computer_use_kit(
+        &self,
+        owner: &str,
+        always_load: bool,
+    ) -> Option<ComputerUseKit> {
         if !cfg!(target_os = "macos") || !self.core.settings().computer_use {
             return None;
         }
@@ -99,6 +105,12 @@ impl SessionManager {
                     (
                         "BRIGADIER_CU_SOCKET_AUTH_TOKEN".into(),
                         placed.token.clone(),
+                    ),
+                    // The session the helper keeps for this agent: it overrides the session
+                    // names the agent passes, so the cursor, recordings and state end with it.
+                    (
+                        "BRIGADIER_CU_DEFAULT_SESSION".into(),
+                        format!("brigadier-{owner}"),
                     ),
                 ],
                 tool_timeout_secs: Some(TOOL_TIMEOUT_SECS),
