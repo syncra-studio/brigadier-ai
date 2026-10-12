@@ -10,6 +10,7 @@ mod bridge;
 mod browser;
 mod browser_import;
 mod browser_store;
+mod computer_setup;
 mod documents;
 mod intro;
 // WebKit's narrow unsafe boundary (the workspace denies it): see its header and the README.
@@ -738,6 +739,7 @@ fn main() {
             reveal_path,
             set_running_chats,
             set_key_capture,
+            computer_setup::open_privacy_settings,
             browser::browser_configure,
             browser::browser_open,
             browser::browser_navigate,

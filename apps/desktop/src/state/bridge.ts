@@ -13,6 +13,7 @@ import { applyActivityEvents, loadActivity } from "@/state/activity";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
 import { applyBoardEvents, sideBoardIds, useBoard } from "@/state/board";
 import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
+import { onComputerUse } from "@/state/computerUse";
 import { applyEvents, useApp } from "@/state/store";
 import { startBrowserOptions } from "@/state/links";
 import { startMenuBar } from "@/state/menuBar";
@@ -120,6 +121,9 @@ function onBridgeEvent(message: BridgeEvent) {
       break;
     case "dictation":
       onDictationUpdate(message.update);
+      break;
+    case "computerUse":
+      onComputerUse(message.status);
       break;
     case "pageChanged":
       emitPageChanged({ id: message.id, revision: message.revision });
