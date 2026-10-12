@@ -1,9 +1,9 @@
-import { Terminal } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useMemo, useState } from "react";
 import { BarItem } from "@/app/BarItem";
 import { useWorkspacePane } from "@/app/conversation/WorkspacePane";
 import { useRightSidebar } from "@/app/conversation/RightSidebar";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
+import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { TitlebarButton } from "@/components/titlebar-button";
 import { takePaneClose } from "@/state/closedPanes";
 import { openReviewTab } from "@/state/sessionTabs";
@@ -70,7 +70,7 @@ export function TerminalButton() {
         aria-pressed={open}
         onClick={() => toggleTerminal()}
       >
-        <Terminal />
+        <TerminalGlyph />
       </TitlebarButton>
     </BarItem>
   );

@@ -23,6 +23,7 @@
  *               px-button-{xs,sm,md,lg}       horizontal padding of text buttons
  *               size-icon-button-{xs,sm,md,lg} square icon-only buttons
  *               size-icon-{xs,sm,md,lg}       icon glyphs (apps-sdk-ui icons are 1em/currentColor)
+ *               size-icon-text                our own glyphs' default: the text's size, as those
  *               h-pill, px-pill               badges and status pills
  *               h-row, h-row-sm               list rows (event rows, menus)
  *               h-nav-row                     sidebar and Settings navigation rows
@@ -168,6 +169,7 @@
   --spacing-icon-sm: 0.875rem;
   --spacing-icon-md: 1rem;
   --spacing-icon-lg: 1.25rem;
+  --spacing-icon-text: 1em;
   --spacing-pill: 1.25rem;
   --spacing-pill-x: 0.5rem;
   --spacing-row: 2rem;

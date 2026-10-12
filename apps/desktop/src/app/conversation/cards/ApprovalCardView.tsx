@@ -3,7 +3,6 @@ import {
   Commit,
   Globe,
   Sparkle,
-  Terminal,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { memo, type ReactNode } from "react";
@@ -15,6 +14,7 @@ import {
   ApprovalCard,
   ApprovalCardCode,
 } from "@/components/assistant-ui/elements/approval-card";
+import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { DECIDERS } from "@/components/transcript/TranscriptRow";
 import { Badge } from "@/components/ui/badge";
 import type { CardState } from "@/ipc/generated";
@@ -78,7 +78,7 @@ function describe(
     case "cli": {
       const { request } = subject;
       return {
-        icon: <Terminal />,
+        icon: <TerminalGlyph />,
         title: `Allow ${request.tool}?`,
         subtitle: byline(by, request.reason),
         body: (
