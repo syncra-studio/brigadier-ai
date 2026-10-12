@@ -127,9 +127,10 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
   // Chrome crashes (SIGTRAP) in single-process mode, so it keeps the default.
   const oneProcess = process.platform === "darwin" ? ["--single-process"] : [];
   // Chrome stopped at the timeout exits cleanly with no DOM, so the failure names the time it ran.
+  // Scrollbars hidden: Linux Chrome's take room where macOS's float, and the page lays out alike.
   const started = Date.now();
   const { stdout, stderr } = await promisify(execFile)(binary, [
-    "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+    "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
     "--enable-logging=stderr",
     `--user-data-dir=${join(scratch, "profile")}`,
     "--dump-dom", `--virtual-time-budget=${budgetMs}`,
@@ -166,7 +167,7 @@ export async function renderFixtureLive(t: TestContext, page: string, resultId: 
   const profile = join(scratch, "profile");
   const oneProcess = process.platform === "darwin" ? ["--single-process"] : [];
   const browser = spawn(binary, [
-    "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+    "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
     "--window-size=1280,976", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"] });
   let browserLog = "";
@@ -215,6 +216,9 @@ export async function renderFixtureLive(t: TestContext, page: string, resultId: 
       replies.set(++id, resolve);
       socket.send(JSON.stringify({ id, method, params }));
     });
+  // The page acts as the focused one, as a window in front is: headless Chrome gives none the
+  // window's focus, so a field's focus() would fire no focus event.
+  await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   if (reducedMotion) await call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
   await call("Page.navigate", { url: `${url}fixtures/${page}` });
   while (Date.now() < deadline) {

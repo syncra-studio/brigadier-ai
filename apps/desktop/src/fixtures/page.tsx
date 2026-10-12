@@ -257,7 +257,8 @@ async function steps(seen: Record<string, unknown>): Promise<void> {
   await until(() => document.querySelectorAll(".page-list-row").length === 2);
   seen.pageList = [...document.querySelectorAll(".page-list-row")].map((row) => row.textContent?.replace(/Just now|\d+ min ago/, "").trim());
   document.querySelectorAll<HTMLButtonElement>(".page-list-row")[1]?.click();
-  await wait(100);
+  // The list closes as the page opens; Delete's dialog is asked for once it has gone.
+  await until(() => ![...document.querySelectorAll('[role="dialog"] h2')].some((shown) => shown.textContent === "Pages"));
   seen.openedFromList = sessionTabs(ID).tabs.map((tab) => tab.kind === "page" && tab.pageId);
   useSessionTabs.setState({ sessions: { [ID]: { ...sessionTabs(ID), active: "page:fixture" } } });
   await wait(100);
