@@ -51,18 +51,21 @@ export function useSidebarChoice(
   return { open, setOpen, toggleSidebar };
 }
 
-/** Both columns reveal full-width contents with the same spring as the left sidebar. */
-export function SidebarReveal({ open, hidden, resizing, children, side = "left" }: {
+/** Both columns, and the docked Files and Source pane, reveal full-width contents with the same
+ * spring as the left sidebar. */
+export function SidebarReveal({ open, hidden, resizing, children, side = "left", width }: {
   side?: "left" | "right";
   open: boolean;
   hidden: boolean;
   resizing: boolean;
   children: React.ReactNode;
+  /** The open width's utility, where it isn't the side's column's own. */
+  width?: string;
 }) {
   return (
     <div inert={hidden} className={cn(
       "h-full overflow-hidden transition-[width] duration-300 ease-sidebar motion-reduce:transition-none",
-      open ? (side === "right" ? "right-sidebar-panel-width" : "sidebar-panel-width") : hidden ? "w-0" : "w-sidebar-strip",
+      open ? (width ?? (side === "right" ? "right-sidebar-panel-width" : "sidebar-panel-width")) : hidden ? "w-0" : "w-sidebar-strip",
       resizing && "transition-none",
     )}>
       {children}

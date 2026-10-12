@@ -62,17 +62,44 @@ function Fixture() {
     const click = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)?.click();
     const controls = () => [...document.querySelectorAll('header[data-slot="test-toolbar"] button[aria-label]')].map((button) => button.getAttribute("aria-label"));
     const right = () => document.querySelector('[data-slot="right-sidebar"]')?.getAttribute("data-state");
-    const pane = () => document.querySelector('[data-slot="workspace-pane"] [data-pane]')?.getAttribute("data-pane") ?? null;
-    at(1000, () => { seen.sessionControls = controls(); seen.initialRight = right(); click("Files"); });
+    const pane = () => document.querySelector('[data-slot="workspace-pane"][data-state="expanded"] [data-pane]')?.getAttribute("data-pane") ?? null;
+    // The right panel and the docked Files and Source pane slide like the left sidebar: the
+    // column's width animates on the same spring, and not at all with reduced motion.
+    const slide = (column: string) => {
+      const reveal = document.querySelector(`[data-slot="${column}"] > div`);
+      if (!reveal) return null;
+      const probe = document.body.appendChild(document.createElement("div"));
+      probe.style.transitionTimingFunction = "var(--ease-sidebar)";
+      const { transitionProperty, transitionDuration, transitionTimingFunction } = getComputedStyle(reveal);
+      const sidebarEase = getComputedStyle(probe).transitionTimingFunction;
+      probe.remove();
+      return { transitionProperty, transitionDuration, sidebarEase: transitionTimingFunction === sidebarEase, reducedMotion: reveal.className.includes("motion-reduce:transition-none") };
+    };
+    // Width slides started on the docked pane's column, and whether it holds its contents.
+    const dockSlides = () => document.querySelector('[data-slot="workspace-pane"] > div')?.getAnimations() ?? null;
+    const dockContents = () => !!document.querySelector('[data-slot="workspace-pane"] [data-pane] > *');
+    at(1000, () => {
+      seen.sessionControls = controls(); seen.initialRight = right();
+      seen.dockClosedSlide = slide("workspace-pane"); click("Files");
+      setTimeout(() => { seen.dockOpeningSlides = dockSlides()?.length; });
+    });
     at(1300, () => {
-      seen.files = pane();
+      seen.files = pane(); seen.dockOpenSlide = slide("workspace-pane");
       const header = document.querySelector('header[data-slot="test-toolbar"]')!.getBoundingClientRect();
       const dock = document.querySelector('[data-slot="workspace-pane"]')!.getBoundingClientRect();
       seen.belowToolbar = dock.top >= header.bottom;
       click("Files");
+      // Through the closing slide the contents stay; once it is over they go.
+      setTimeout(() => { seen.closingContents = dockContents(); });
+      setTimeout(() => { seen.closedContents = dockContents(); }, 450);
     });
-    at(1600, () => { seen.closedFiles = pane(); click("Source"); });
-    at(1900, () => { seen.source = pane(); click("Files"); });
+    at(1800, () => { seen.closedFiles = pane(); click("Source"); });
+    at(2100, () => {
+      seen.source = pane();
+      const before = dockSlides() ?? [];
+      click("Files");
+      setTimeout(() => { seen.switchSlides = dockSlides()?.filter((animation) => !before.includes(animation)).length; });
+    });
     at(2200, () => {
       seen.switchedFiles = pane(); seen.filesRight = right();
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyP", metaKey: true, bubbles: true, cancelable: true }));
@@ -84,27 +111,17 @@ function Fixture() {
       const find = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Find file"));
       find?.click();
     });
-    // The right panel slides like the left one: its column's width animates on the same spring,
-    // the panel stays in the page while closed, and the room it takes is its full width from the
-    // moment it opens rather than the sliding width, frame by frame.
+    // The right panel stays in the page while closed, and the room it takes is its full width
+    // from the moment it opens rather than the sliding width, frame by frame.
     const shown = () => document.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]')?.style.getPropertyValue("--right-sidebar-shown");
-    const slide = () => {
-      const reveal = document.querySelector('[data-slot="right-sidebar"] > div')!;
-      const probe = document.body.appendChild(document.createElement("div"));
-      probe.style.transitionTimingFunction = "var(--ease-sidebar)";
-      const { transitionProperty, transitionDuration, transitionTimingFunction } = getComputedStyle(reveal);
-      const sidebarEase = getComputedStyle(probe).transitionTimingFunction;
-      probe.remove();
-      return { transitionProperty, transitionDuration, sidebarEase: transitionTimingFunction === sidebarEase, reducedMotion: reveal.className.includes("motion-reduce:transition-none") };
-    };
     at(2800, () => {
-      seen.findFileFocused = document.activeElement?.getAttribute("aria-label"); seen.closedSlide = slide(); click("Thread worker");
+      seen.findFileFocused = document.activeElement?.getAttribute("aria-label"); seen.closedSlide = slide("right-sidebar"); click("Thread worker");
       // Once the click's update is in, before any frame of the slide.
       setTimeout(() => { seen.openingShown = shown(); });
     });
     at(3100, () => {
       seen.workerRight = right(); seen.workerTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane");
-      seen.openShown = shown(); seen.openSlide = slide();
+      seen.openShown = shown(); seen.openSlide = slide("right-sidebar");
       seen.openWidth = `${document.querySelector('[data-slot="right-sidebar"] > div > div')!.getBoundingClientRect().width}px`;
       click("Close right panel"); setTimeout(() => { seen.closingShown = shown(); });
     });

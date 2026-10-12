@@ -18,6 +18,14 @@ test("toolbar order, docked pane, Files search, draft project folder and worker/
   assert.equal(seen.removedMenu, null);
   for (const field of ["workerRight", "composerRight", "contextWorkerRight"]) assert.equal(seen[field], "expanded", field);
   assert.equal(seen.workerTab, "workers");
+  for (const field of ["dockClosedSlide", "dockOpenSlide"]) {
+    assert.deepEqual(seen[field], { transitionProperty: "width", transitionDuration: "0.3s", sidebarEase: true, reducedMotion: true },
+      `${field}: the docked pane stays in the page and its width slides on the left sidebar's spring, and not with reduced motion`);
+  }
+  assert.equal(seen.dockOpeningSlides, 1, "opening the docked pane slides its width");
+  assert.equal(seen.switchSlides, 0, "switching Source to Files while open doesn't slide again");
+  assert.equal(seen.closingContents, true, "the docked pane keeps its contents through the closing slide");
+  assert.equal(seen.closedContents, false, "and drops them once closed, so a closed Source reads nothing");
   for (const field of ["closedSlide", "openSlide"]) {
     assert.deepEqual(seen[field], { transitionProperty: "width", transitionDuration: "0.3s", sidebarEase: true, reducedMotion: true },
       `${field}: the right panel's width slides on the left sidebar's spring, and not with reduced motion`);

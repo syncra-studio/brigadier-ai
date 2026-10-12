@@ -1,8 +1,9 @@
 import { Branch, Folders } from "@openai/apps-sdk-ui/components/Icon";
-import { createContext, lazy, Suspense, type CSSProperties, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { createContext, lazy, Suspense, type CSSProperties, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { TitlebarButton } from "@/components/titlebar-button";
-import { SidebarResizeHandle, useSidebarWidth } from "@/components/ui/sidebar-layout";
+import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/ui/sidebar-layout";
+import { cn } from "@/lib/utils";
 import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, toggleWorkspacePane, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, type WorkspacePaneTab } from "@/state/workspacePane";
 import { useApp } from "@/state/store";
@@ -75,24 +76,44 @@ export function WorkspacePane() {
       wrapper?.style.removeProperty("--workspace-pane-reserve");
     };
   }, [open]);
-  if (!pane?.open) return null;
+  // It slides open and closed as the sidebar does, pushing the thread aside. Its contents stay
+  // through the closing slide, then go, so a closed pane reads and refreshes nothing.
+  const column = useRef<HTMLElement>(null);
+  const [shown, setShown] = useState(open);
+  if (open && !shown) setShown(true);
+  useEffect(() => {
+    if (open || !shown) return;
+    const slide = column.current?.firstElementChild;
+    const style = slide ? getComputedStyle(slide) : null;
+    // Reduced motion has no slide, so the contents go at once.
+    const ms = style && style.transitionProperty !== "none"
+      ? (Number.parseFloat(style.transitionDuration) + Number.parseFloat(style.transitionDelay)) * 1000 : 0;
+    const timer = setTimeout(() => setShown(false), ms);
+    return () => clearTimeout(timer);
+  }, [open, shown]);
+  if (!pane?.enabled) return null;
   return (
-    <aside aria-label={pane.active === "files" ? "Files" : "Source"} data-slot="workspace-pane"
-      className="border-border relative flex h-full min-h-0 shrink-0 border-s"
+    <aside ref={column} aria-label={pane.active === "files" ? "Files" : "Source"} data-slot="workspace-pane"
+      data-state={open ? "expanded" : "collapsed"} className="relative flex h-full min-h-0 shrink-0"
       style={{ "--right-sidebar-width": pane.width === null ? "var(--spacing-sidebar)" : `${pane.width}px` } as CSSProperties}>
-      <div id="workspace-pane-content" data-pane={pane.active}
-        className="workspace-pane-width bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col overflow-hidden">
-        {/* Keyed by whose files they are: one draft's list or message never shows for another. */}
-        <Suspense key={pane.conversationId ?? `project:${pane.projectId}`} fallback={null}>
-          {pane.conversationId ? (
-            pane.active === "files" ? <FilesTab conversationId={pane.conversationId} searchRequest={pane.searchRequest}
-              onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />
-              : <SourcePanel target={{ type: "conversation", conversationId: pane.conversationId }} />
-          ) : pane.projectId && <ProjectDraftPane projectId={pane.projectId} tab={pane.active}
-            searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />}
-        </Suspense>
-      </div>
-      <SidebarResizeHandle {...pane} side="right" label="Resize workspace pane" belowToolbar />
+      <SidebarReveal side="right" width="workspace-pane-width" open={open} hidden={!open} resizing={pane.resizing}>
+        <div id="workspace-pane-content" data-pane={pane.active}
+          className={cn(
+            "workspace-pane-width border-border bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col overflow-hidden border-s transition-opacity duration-150 motion-reduce:transition-none",
+            open ? "opacity-100" : "opacity-0",
+          )}>
+          {/* Keyed by whose files they are: one draft's list or message never shows for another. */}
+          {shown && <Suspense key={pane.conversationId ?? `project:${pane.projectId}`} fallback={null}>
+            {pane.conversationId ? (
+              pane.active === "files" ? <FilesTab conversationId={pane.conversationId} searchRequest={pane.searchRequest}
+                onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />
+                : <SourcePanel target={{ type: "conversation", conversationId: pane.conversationId }} />
+            ) : pane.projectId && <ProjectDraftPane projectId={pane.projectId} tab={pane.active}
+              searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />}
+          </Suspense>}
+        </div>
+      </SidebarReveal>
+      {open && <SidebarResizeHandle {...pane} side="right" label="Resize workspace pane" belowToolbar />}
     </aside>
   );
 }
