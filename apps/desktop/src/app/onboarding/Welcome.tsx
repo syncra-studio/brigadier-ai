@@ -22,10 +22,12 @@ const STAGE_PAINT_MS = 50;
 const QUICK_LIFT_MS = 300;
 
 /**
- * The welcome's title, a line at a time: the first shorter than the second. Others to try:
- * ["Let us", "command your fleet."], ["Trust us to", "command your fleet."].
+ * The welcome's title, a line at a time: the first shorter than the second. Others to try
+ * (swap one in):
+ *   ["Meet the", "brigadier, march on!"]
+ *   ["Let Brigadier", "command your fleet."]
  */
-const TITLE = ["Let Brigadier", "command your fleet."] as const;
+const TITLE = ["Meet the", "brigadier, march!"] as const;
 
 /** A time token from tokens.css ("2.2s", "450ms") in milliseconds. */
 function tokenMs(name: string): number {
@@ -38,22 +40,25 @@ function reducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-/** The page shows clear while the window is staged, so only the comet is seen (onboarding.css). */
+/** The page shows clear while the window is staged, so only the orb is seen (onboarding.css). */
 function setPageStaged(staged: boolean): void {
   if (staged) document.documentElement.dataset.intro = "staged";
   else delete document.documentElement.dataset.intro;
 }
 
 /**
- * The first launch's welcome, then the name. The intro starts with its sound. On macOS's
- * first launch the desktop dims and the window shows only a comet, which streaks in and
- * becomes Brigadier's mark, crisp and white; the mark bursts like a star, and its shockwave
- * opens the window, pure black; the window's chrome comes back around faint white waves. As
- * the dim lifts, the title comes in a letter at a time, and the button under it appears last;
- * only then can it be used (Enter too, as it takes the focus). Elsewhere it plays the same
- * inside the window, without the dim. Escape shows the end at once, as reduced motion does.
- * Continuing fades the title and the black out, and the name step comes in over the setup's
- * own backdrop, with the mark above the question.
+ * The first launch's welcome, then the name. The intro starts with its music, a moment before
+ * anything is seen. On macOS's first launch the desktop dims and a soft orb of light comes into
+ * focus at the window's centre, idling there, slowly changing shape, while the music builds.
+ * It opens out, blurred, into the window, and its light settles onto the shell's dark, with
+ * faint waves of light moving over it; the window's chrome comes back. Brigadier's mark comes
+ * up out of a blur at the centre as the music drops into its groove, held while the desktop's
+ * dim lifts, then blurs away. On the music's next bar the title comes in a letter at a time;
+ * the arrow button under it appears last, on that bar's last beat, and only then can it be
+ * used (Enter too, as it takes the focus). The music plays on, into the name if need be, and
+ * resolves. Elsewhere it plays the same inside the window, without the dim. Escape shows the
+ * end at once, as reduced motion does. Continuing fades the title and the waves out, and the
+ * name step comes in on the same dark, with the mark above the question.
  */
 export function Welcome({
   step,
@@ -65,7 +70,7 @@ export function Welcome({
   step: "intro" | "name";
   /** The name already given, if any. */
   name: string;
-  /** The sound started: stops it (fading) if the setup closes before it ends. */
+  /** The sound started: stops it (fading) if the setup or the window closes before it ends. */
   onSound: (stop: () => void) => void;
   onContinue: () => void;
   onName: (name: string) => Promise<void>;
@@ -77,7 +82,7 @@ export function Welcome({
   const [canvasShown, setCanvasShown] = useState(step === "intro");
   // The window is staged for the intro (intro.rs) until its dim starts lifting.
   const staged = useRef(false);
-  // Continuing: the title and the black fade out before the name comes in.
+  // Continuing: the title and the waves fade out before the name comes in.
   const [leaving, setLeaving] = useState(false);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onContinueRef = useRef(onContinue);
@@ -89,8 +94,11 @@ export function Welcome({
     onSoundRef.current = onSound;
   }, [onSound]);
 
+  // Settled before the window was staged (WebGL can't draw, or Escape): it isn't staged.
+  const settledEarly = useRef(settled);
   // Shows the intro's end at once; the window's own state comes back with it.
   const settle = useCallback(() => {
+    settledEarly.current = true;
     setSettled(true);
     setReady(true);
     setPageStaged(false);
@@ -119,7 +127,7 @@ export function Welcome({
       ]);
       if (!live) return;
       if (loaded === "late") console.error("the welcome sound took too long to load; the intro starts without it");
-      if (still) {
+      if (still || settledEarly.current) {
         await introRelease().catch((error: unknown) => console.error(error));
       } else {
         setPageStaged(true);
@@ -229,6 +237,11 @@ export function Welcome({
           }}
         />
       )}
+      {step === "intro" && (
+        <div className="welcome-intro-mark" aria-hidden>
+          <BrigadierGlyph />
+        </div>
+      )}
       {step === "intro" ? (
         <div className="welcome-copy">
           <DialogTitle asChild>
@@ -283,7 +296,7 @@ function ContinueButton({
 }: {
   ready: boolean;
   busy?: boolean;
-  /** Just an arrow (and the key), not the word. */
+  /** Just an arrow, not the word or its key (Enter still works). */
   arrow?: boolean;
   onClick?: () => void;
   form?: string;
@@ -302,11 +315,11 @@ function ContinueButton({
       disabled={!ready || busy}
       onClick={onClick}
       aria-label={arrow ? "Continue" : undefined}
-      className={arrow ? "gap-2 px-5" : "min-w-32 gap-2"}
+      className={arrow ? "px-5" : "min-w-32 gap-2"}
     >
       {busy && <Spinner className="animate-spin" />}
       {arrow ? <ArrowRight /> : "Continue"}
-      <Kbd>⏎</Kbd>
+      {!arrow && <Kbd>⏎</Kbd>}
     </Button>
   );
 }

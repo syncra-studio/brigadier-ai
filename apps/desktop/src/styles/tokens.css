@@ -855,24 +855,30 @@
 
 /* ── First launch ───────────────────────────────────────────────────────────────────────────
    The welcome intro and the setup after it (styles/onboarding.css, app/onboarding), from the
-   moment the intro starts. The comet's beats are drawn by app/onboarding/IntroCanvas.tsx: it
-   streaks in from 0.25 s, reaches the centre at 2.2 s and has become the crisp mark by 2.9 s,
-   which holds, draws in at 3.55 s and bursts at 3.68 s; the shockwave passes the window's
-   corners by 4.05 s, when the window's chrome comes back (src-tauri/src/intro.rs dims the
-   desktop from 0 s), and the waves come up by 5.2 s. The welcome sound's beats match
-   (scripts/render-welcome-sound.mjs: LAND, COLLAPSE, BURST, HEADING, CONTINUE). */
+   moment the intro starts, with its music. The orb and the window it opens into are drawn by
+   app/onboarding/IntroCanvas.tsx: the orb comes into focus from 0.75 s and idles, then opens
+   out into the window at 4.25 s, whose light has settled onto the dark by 4.85 s; the window's
+   chrome comes back at 4.8 s (src-tauri/src/intro.rs dims the desktop from 1.1 s), and the
+   waves come up by 5.8 s. The welcome music's beats match (scripts/render-welcome-sound.mjs):
+   88 beats a minute, it drops into its groove at 4.9 s, as the mark comes up; the title
+   comes on the next bar and its button on that bar's last beat. */
 :root {
-  /* The desktop's dim lifts from here, over this long. */
-  --intro-dim-lift-at: 4.5s;
-  --intro-dim-lift: 1.85s;
-  /* The title, a letter at a time, one line after the other (app/onboarding/StaggerText.tsx). */
-  --intro-heading: 4.7s;
+  /* The mark at the window's centre: up out of a blur from here, held, gone by the end. */
+  --intro-mark-at: 4.78s;
+  --intro-mark-for: 2.35s;
+  --intro-held-mark-size: clamp(4rem, 6.5vw, 7rem);
+  /* The desktop's dim lifts from here, over this long, while the mark is held. */
+  --intro-dim-lift-at: 5.55s;
+  --intro-dim-lift: 1s;
+  /* The title, a letter at a time, one line after the other (app/onboarding/StaggerText.tsx):
+     its first letter is seen about 0.12 s after it starts, on the music's bar at 7.63 s. */
+  --intro-heading: 7.51s;
   --intro-letter-stagger: 35ms;
-  /* The button under it. */
-  --intro-continue: 6.4s;
+  /* The button under it, seen from about 0.03 s after it starts (the beat at 9.67 s). */
+  --intro-continue: 9.64s;
   --intro-continue-in: 0.45s;
-  /* Continuing: the title fades out, then the name comes in, as the welcome's black
-     cross-fades into the name step's backdrop. */
+  /* Continuing: the title fades out, then the name comes in, as the welcome's waves fade
+     from the dark they share with the name step. */
   --intro-leave: 0.25s;
   --intro-to-name: 0.6s;
   --intro-ease: cubic-bezier(0.22, 1, 0.36, 1);

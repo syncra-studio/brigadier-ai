@@ -177,8 +177,10 @@ mod mac {
 
     /// How dark the desktop gets behind the window.
     const DIM: f64 = 0.85;
-    /// The dim's fade in, in seconds.
-    const DIM_IN: f64 = 1.2;
+    /// When the dim starts fading in, after the window is staged (just after the page's orb
+    /// has come up: tokens.css), and how long it takes, in seconds.
+    const DIM_AFTER: f64 = 1.1;
+    const DIM_IN: f64 = 0.75;
 
     thread_local! {
         /// The dim over the desktop while the intro is staged (main thread only).
@@ -231,7 +233,7 @@ mod mac {
     }
 
     /// The window shows with nothing of its own (only the page draws), over the dim, which
-    /// starts fading in. `false` if it couldn't be staged.
+    /// fades in a moment later. `false` if it couldn't be staged.
     pub fn stage(app: &AppHandle) -> bool {
         let Some(mtm) = MainThreadMarker::new() else {
             return false;
@@ -256,8 +258,19 @@ mod mac {
         ns_window.setIgnoresMouseEvents(false);
         ns_window.setAlphaValue(1.0);
         shell::show_main(app);
-        fade(&dim, DIM, DIM_IN, None);
         DIM_WINDOW.with_borrow_mut(|slot| *slot = Some(dim));
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs_f64(DIM_AFTER));
+            // Only if the intro hasn't ended meanwhile (its end takes the dim away).
+            let _ = handle.run_on_main_thread(|| {
+                DIM_WINDOW.with_borrow(|slot| {
+                    if let Some(dim) = slot {
+                        fade(dim, DIM, DIM_IN, None);
+                    }
+                });
+            });
+        });
         true
     }
 

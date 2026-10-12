@@ -1,11 +1,12 @@
 /* The first launch (app/onboarding): the welcome intro, the name, then the setup steps. Its
    timings and sizes are the "First launch" tokens in tokens.css.
 
-   The intro, from the moment it starts (`data-started` on `.welcome`): the comet, the mark it
-   becomes, its burst and the black with white waves it leaves are drawn on `.welcome-canvas`
-   (IntroCanvas.tsx); the title comes in a letter at a time (StaggerText.tsx); the button under
-   it comes in last, and its animation ending is what makes it usable. Escape (`data-settled`)
-   and reduced motion show the end of all that at once. */
+   The intro, from the moment it starts (`data-started` on `.welcome`): the orb, the window it
+   opens into and the waves on the shell's dark are drawn on `.welcome-canvas` (IntroCanvas.tsx);
+   the mark comes up out of a blur and goes (`.welcome-intro-mark`); the title comes in a letter
+   at a time (StaggerText.tsx); the button under it comes in last, and its animation ending is
+   what makes it usable. Escape (`data-settled`) and reduced motion show the end of all that at
+   once. */
 
 .welcome {
   position: absolute;
@@ -22,14 +23,8 @@
   transition: opacity var(--intro-to-name) var(--intro-ease);
 }
 
-/* The welcome is pure black (its waves are white light on it), unless the window is staged
-   and shows only the comet over the desktop, or it's fading into the name's backdrop. */
-html:not([data-intro="staged"]) .welcome[data-step="intro"]:not([data-leaving]) {
-  background: #000;
-}
-
-/* Continuing, then behind the name, the black and its waves cross-fade into the setup's
-   backdrop (then go); the title and its button fade out first. */
+/* Continuing, then behind the name, the waves fade out (then go), leaving the same dark; the
+   title and its button fade out first. */
 .welcome:is([data-leaving], [data-step="name"]) .welcome-canvas {
   opacity: 0;
 }
@@ -55,6 +50,30 @@ html:not([data-intro="staged"]) .welcome[data-step="intro"]:not([data-leaving]) 
   width: 100%;
   height: 100%;
   overflow: visible;
+}
+
+/* The intro's mark, small at the window's centre: it comes up out of a blur as the music
+   drops, is held, then blurs away (only while the intro plays). */
+.welcome-intro-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--intro-held-mark-size);
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.welcome-intro-mark > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.welcome[data-started]:not([data-settled]) .welcome-intro-mark {
+  animation: intro-mark var(--intro-mark-for) linear var(--intro-mark-at) both;
 }
 
 /* Above the name, the mark rests over the question. */
@@ -148,7 +167,7 @@ html:not([data-intro="staged"]) .welcome[data-step="intro"]:not([data-leaving]) 
   animation: onboarding-in var(--onboarding-step-in) var(--intro-ease) both;
 }
 
-/* ── While the window is staged (intro.rs), the page is clear but for the comet ─────────── */
+/* ── While the window is staged (intro.rs), the page is clear but for the orb ───────────── */
 
 html[data-intro="staged"],
 html[data-intro="staged"] body,
@@ -160,6 +179,32 @@ html[data-intro="staged"] [data-slot="dialog-content"] {
 
 html[data-intro="staged"] #root {
   visibility: hidden;
+}
+
+/* Its share of --intro-mark-for: in over the first 18 %, held to 88 %, then away. */
+@keyframes intro-mark {
+  0% {
+    opacity: 0;
+    filter: blur(14px);
+    scale: 0.9;
+    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  18% {
+    opacity: 1;
+    filter: blur(0);
+    scale: 1;
+  }
+  88% {
+    opacity: 1;
+    filter: blur(0);
+    scale: 1;
+    animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45);
+  }
+  100% {
+    opacity: 0;
+    filter: blur(16px);
+    scale: 1.06;
+  }
 }
 
 @keyframes intro-continue-in {
