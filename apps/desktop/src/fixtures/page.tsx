@@ -31,6 +31,13 @@ put(OTHER, { title: "Older notes", emoji: "📌", body: "Kept" });
 const calls: { command: string; payload: unknown }[] = [];
 const sent: { text: string; mentions: unknown; afterWrite: boolean }[] = [];
 const copied: string[] = [];
+/** While set, page saves wait for it. */
+let held: Promise<void> | null = null;
+let releaseSaves: (() => void) | null = null;
+/** Holds page saves until `releaseSaves`. */
+const holdSaves = () => {
+  held = new Promise((resolve) => { releaseSaves = () => { held = null; resolve(); }; });
+};
 Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { copied.push(text); } } });
 
 const conversation: Conversation = { id: ID, kind: "session", projectId: "fixture-project", title: "Page", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
@@ -40,11 +47,12 @@ useApp.setState(() => ({
 }));
 useSessionTabs.setState({ sessions: { [ID]: { tabs: [{ kind: "page", id: "page:fixture", opener: "chat", pageId: FIRST, title: "" }], active: "page:fixture" } } });
 
-mockIPC((command, payload) => {
+mockIPC(async (command, payload) => {
   calls.push({ command, payload });
   if (command === "save_document") return `/tmp/${String((payload as { name: string }).name)}`;
   if (command !== "ipc_request") return null;
   const request = (payload as { request: { method: string; id?: string; content?: PageContent; baseRevision?: string; text?: string; mentions?: unknown } }).request;
+  if (request.method === "pageWrite" && held) await held;
   const page = request.id ? pages.get(request.id) : undefined;
   switch (request.method) {
     case "pageRead": if (!page) throw new Error("No such page"); return { method: "pageRead", page };
@@ -86,9 +94,9 @@ const setComposer = (text: string) => {
   composer().dispatchEvent(new Event("input", { bubbles: true }));
 };
 /** Writes in the page's composer and presses Enter. */
-const ask = async (text: string) => {
+const ask = async (text: string, keys: KeyboardEventInit = {}) => {
   setComposer(text); await wait(30);
-  composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+  composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true, ...keys }));
   await wait(100);
 };
 /** Puts the caret at the end of the page's last block. */
@@ -213,6 +221,22 @@ async function steps(seen: Record<string, unknown>): Promise<void> {
   await ask("tick the first item");
   await until(() => sent.length === 1);
   seen.sentFromPage = { ...sent[0], cleared: composer().value === "", placeholder: composer().placeholder };
+  // Words typed while the page saves stay for the next message.
+  holdSaves();
+  content().focus(); caretAtEnd(); await wait(50); type("!"); await wait(50);
+  await ask("add a date");
+  setComposer("add a date and a time"); await wait(30);
+  releaseSaves?.();
+  await until(() => sent.length === 2); await wait(50);
+  seen.typedWhileSaving = { sent: sent[1]?.text, kept: composer().value };
+  // With ⌘Enter chosen to send, Enter alone doesn't send.
+  useApp.setState((state) => ({ settings: { ...state.settings, sendShortcut: "modEnter" } }));
+  await ask("one more");
+  const afterEnter = sent.length;
+  await ask("one more", { metaKey: true });
+  await until(() => sent.length === 3);
+  seen.modEnter = { enterSent: afterEnter > 2, modEnterSent: sent[2]?.text };
+  useApp.setState((state) => ({ settings: { ...state.settings, sendShortcut: "enter" } }));
   // The File menu.
   openMenu("File menu"); await until(() => menuItems().length > 0);
   seen.fileItems = menuItems().map((item) => item.textContent);

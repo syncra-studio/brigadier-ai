@@ -927,6 +927,23 @@ function under(parent: { order: number } | null, order: number): number {
 }
 
 /**
+ * The branch the thread shows, oldest first: back from `head` (else the last message) as far
+ * as the loaded pages go.
+ */
+export function shownBranch(messages: readonly Message[], head: string | null, hasMore: boolean): Message[] {
+  const index = new Map(messages.map((message, at) => [message.id, at]));
+  const path: Message[] = [];
+  let at = index.get(head ?? "") ?? (messages.length > 0 ? messages.length - 1 : undefined);
+  while (at !== undefined) {
+    path.push(messages[at] as Message);
+    const parent = parentOf(messages, at, hasMore);
+    const next = parent == null ? undefined : index.get(parent);
+    at = next !== undefined && next < at ? next : undefined;
+  }
+  return path.toReversed();
+}
+
+/**
  * The thread as assistant-ui's message tree. The branch that ends at `head` becomes blocks
  * with everything its requests did; with `branches` (a Chat), each message the user or the
  * model replaced on that branch comes along with everything that followed it, so the branch picker
@@ -954,16 +971,7 @@ export function buildThread(
     else children.set(parent, [message]);
   });
 
-  // The branch shown, back from its last message as far as the loaded pages go.
-  const path: Message[] = [];
-  let at = index.get(board.head ?? "") ?? (messages.length > 0 ? messages.length - 1 : undefined);
-  while (at !== undefined) {
-    path.push(messages[at] as Message);
-    const parent = parentOf(messages, at, hasMore);
-    const next = parent == null ? undefined : index.get(parent);
-    at = next !== undefined && next < at ? next : undefined;
-  }
-  path.reverse();
+  const path = shownBranch(messages, board.head, hasMore);
 
   // Each node sorts by its oldest message, so siblings number oldest first ("1/2" is the
   // original) and every parent comes before its children.

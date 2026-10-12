@@ -51,7 +51,9 @@ test("a page: shortcuts, the Insert list, formatting, dragging, autosave, confli
     cleared: true, placeholder: "Work with this page…",
   });
   assert.deepEqual(seen.fileItems, ["Show pages⇧⌘E", "Rename", "Copy as Markdown", "Download", "Delete"]);
-  assert.equal(seen.copied, "# Launch plan\n\nTheir version before sending");
+  assert.deepEqual(seen.typedWhileSaving, { sent: "add a date", kept: "add a date and a time" });
+  assert.deepEqual(seen.modEnter, { enterSent: false, modEnterSent: "one more" });
+  assert.equal(seen.copied, "# Launch plan\n\nTheir version before sending!");
   assert.equal(seen.renameFocus, true);
   assert.deepEqual(seen.renameSelection, [0, 11, 11]);
   assert.deepEqual(seen.download, { name: "Launch plan.md", choose: true, sameText: true });

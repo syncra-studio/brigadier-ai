@@ -1,6 +1,8 @@
 import { ArrowUp } from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
+import { shownBranch } from "@/app/conversation/blocks";
+import { enterAction } from "@/app/conversation/composerKeys";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import type { Mention } from "@/ipc/generated";
 import { send } from "@/state/actions";
@@ -26,12 +28,17 @@ export function PageComposer({ conversationId, pageId, title, editing }: {
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const archived = useApp((s) => s.conversations[conversationId]?.lifecycle === "archived");
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const sendShortcut = useApp((s) => s.settings.sendShortcut);
+  const followUp = useApp((s) => s.settings.followUp);
+  const head = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.head : null));
   // The agent works on this page while its turn runs for the latest message, sent from here.
   const latestPage = useApp((s) => {
     const pending = s.pending.filter((entry) => entry.conversationId === conversationId).at(-1);
     if (pending) return pageOf(pending.mentions);
-    const items = s.threads[conversationId]?.items ?? [];
-    return pageOf(items.findLast((item) => item.role === "user")?.mentions);
+    const thread = s.threads[conversationId];
+    const branch = thread ? shownBranch(thread.items, head, thread.hasMore) : [];
+    return pageOf(branch.findLast((item) => item.role === "user")?.mentions);
   });
   const running = useBoard((s) => {
     const board = s.board;
@@ -40,7 +47,8 @@ export function PageComposer({ conversationId, pageId, title, editing }: {
   });
   const working = running && latestPage === pageId;
 
-  const submit = async () => {
+  /** `other`: sent the follow-up's other way (steered in instead of queued, or the reverse). */
+  const submit = async (other = false) => {
     const message = text.trim();
     if (!message || sending || archived) return;
     setSending(true);
@@ -48,11 +56,13 @@ export function PageComposer({ conversationId, pageId, title, editing }: {
     try {
       const unsaved = await editing.flush(pageId);
       if (unsaved) { setProblem(`Not sent. ${unsaved}`); return; }
-      setText("");
+      // Words typed while the page saved stay for the next message.
+      setText((now) => (now.trim() === message ? "" : now));
+      const steer = running && (followUp === "steer") !== other;
       await send(
         { text: message, attachments: [], mentions: [{ type: "page", id: pageId, title }] },
         undefined,
-        { to: conversationId },
+        { to: conversationId, lane: steer ? "steer" : "auto" },
       ).catch((error: unknown) => {
         setText((now) => now || message);
         setProblem(`Not sent: ${error instanceof Error ? error.message : String(error)}`);
@@ -85,10 +95,11 @@ export function PageComposer({ conversationId, pageId, title, editing }: {
             value={text}
             onChange={(event) => { setText(event.target.value); setProblem(null); }}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                void submit();
-              }
+              if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+              const action = enterAction(event, mac, sendShortcut);
+              if (!action) return;
+              event.preventDefault();
+              void submit(action === "other");
             }}
             className="page-composer-input"
           />

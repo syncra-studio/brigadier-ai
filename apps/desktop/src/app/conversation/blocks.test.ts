@@ -16,6 +16,7 @@ import {
   foldTurns,
   isUpdate,
   judgementCall,
+  shownBranch,
   type ThreadNode,
   updateIndices,
 } from "@/app/conversation/blocks";
@@ -569,4 +570,17 @@ test("an answer with a Details section shows its head and folds the rest", () =>
   });
   // Without one, the answer shows whole.
   assert.equal(splitReport("Merged into `main`."), null);
+});
+
+const branchMessage = (id: string, parentId: string | null, role: Message["role"]): Message =>
+  ({ id, conversationId: "c", seq: 0, role, text: id, blob: null, createdAtMs: 0, attachments: [], mentions: [], model: null, requestId: null, parentId });
+
+test("the branch shown runs back from its head by parent, so another branch's newer message isn't on it", () => {
+  // "edited" replaced "asked", and the thread shows the first branch again.
+  const edited = [branchMessage("asked", null, "user"), branchMessage("answer", "asked", "assistant"), branchMessage("edited", "", "user"), branchMessage("answer 2", "edited", "assistant")];
+  assert.deepEqual(shownBranch(edited, "answer", false).map((entry) => entry.id), ["asked", "answer"]);
+  assert.deepEqual(shownBranch(edited, null, false).map((entry) => entry.id), ["edited", "answer 2"]);
+  // Messages from before branches follow the one before them.
+  const old = [branchMessage("a", null, "user"), branchMessage("b", null, "assistant")];
+  assert.deepEqual(shownBranch(old, null, false).map((entry) => entry.id), ["a", "b"]);
 });
