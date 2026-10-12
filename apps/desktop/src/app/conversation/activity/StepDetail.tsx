@@ -47,7 +47,7 @@ function Output({ text }: { text: string }) {
 /** How a command ended, in the Shell box's last line. */
 function ending(status: ItemStatus, exit: number | null): string {
   if (status === "inProgress") return "Running";
-  if (status === "declined") return "Stopped";
+  if (status === "declined") return "Declined";
   if (exit !== null && exit !== 0) return `Exit ${exit}`;
   if (status === "failed") return "Failed";
   return "✓ Success";
@@ -76,7 +76,7 @@ export function ShellBox({ command, output, status, exit }: {
       <span
         className={cn(
           "px-3 py-1.5 text-end text-xs",
-          end === "✓ Success" ? "text-muted-foreground" : end === "Running" ? "shimmer" : "text-destructive",
+          end === "✓ Success" || end === "Declined" ? "text-muted-foreground" : end === "Running" ? "shimmer" : "text-destructive",
         )}
       >
         {end}
@@ -166,7 +166,7 @@ function callDetail(name: string, status: ItemStatus, call: { input: string | nu
     return (
       <div className="flex flex-col gap-2 pt-1">
         <WebSearch query={query} results={[]} />
-        <ErrorState title="The search failed" detail={call.output || null} />
+        <ErrorState summary="The search failed." details={call.output || null} />
       </div>
     );
   }

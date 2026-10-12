@@ -370,7 +370,9 @@ export const leadTranscript: RawEntry[] = [
 ];
 
 // The composer's slot: a second worker, a push's CI watch, and the user's merge held for both.
+// `ci=failed` fails its CI run; `ci=passed` passes it, while the watch still looks for late runs.
 if (query.get("slot") === "1") {
+  const ci = query.get("ci");
   tasks["t5"] = task({ id: "t5", number: 5, title: "Theme icons", state: "running", requestId: "r2", position: 17, role: null, createdAtMs: ago(50), updatedAtMs: ago(1) });
   orchestratorSteps.push(
     step(18, "r2", {
@@ -380,7 +382,9 @@ if (query.get("slot") === "1") {
       sha: "97c298d5aa11bb22",
       waiting: false,
       runs: [
-        { workflow: "CI", status: "in_progress", conclusion: "", url: "https://github.com/acme/settings-app/actions/runs/1", jobsDone: 2, jobsTotal: 4 },
+        ci === "failed" || ci === "passed"
+          ? { workflow: "CI", status: "completed", conclusion: ci === "failed" ? "failure" : "success", url: "https://github.com/acme/settings-app/actions/runs/1", jobsDone: 4, jobsTotal: 4 }
+          : { workflow: "CI", status: "in_progress", conclusion: "", url: "https://github.com/acme/settings-app/actions/runs/1", jobsDone: 2, jobsTotal: 4 },
         { workflow: "Lint", status: "completed", conclusion: "success", url: "https://github.com/acme/settings-app/actions/runs/2", jobsDone: 1, jobsTotal: 1 },
       ],
     }, ago(40)),

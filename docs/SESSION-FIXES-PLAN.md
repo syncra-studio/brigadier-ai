@@ -522,8 +522,11 @@ noticed.
      and the key lines of `gh run view <id> --repo R --log-failed` (trimmed, the full log as an artifact). Or
      `[ci 97c298d5 · passed · 5 jobs]`.
    - `gh` missing or signed out mid-watch: the tool says so and the thread tells the user in one line.
-3. **On red,** the thread fixes the failure (a worker, or a tiny fix), pushes the fix to the same branch and watches
-   again, as decided. The user's yes to watching covers re-pushing fixes for that run's failures, and nothing else.
+3. **On red,** the thread fixes the failure (a worker, or a tiny fix) and lands it the way the watched branch takes
+   changes: a session branch directly; a base branch like `main` only through the usual local merge into it (review
+   and merge rules unchanged), then that branch is pushed. A fix never goes straight to the remote branch, leaving the
+   local one behind (the user's decision, 2026-10-12, after the tour). The user's yes to watching covers the push and
+   the watch again, and nothing else.
    On green it reports the result.
 
 **Verify.**
@@ -1371,6 +1374,31 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
     sidecar, so clippy and builds run in a fresh worktree.
   - `abcd1e95`: a Claude worker's subagent (Agent tool) tokens are counted in its turn usage. The Agent tool stays.
 - The behaviour probes P3.1–P3.3 and the live check of the Brain counters wait for computer use.
+
+**Outcome (2026-10-12): the rerun with 3 runs per arm misses the token gates too**
+(`docs/evidence/2026-10-11-session-fixes-tokens.md`, "Rerun: 3 runs per arm").
+- **Arms:** before `4920bbde`; after `8014bf30` (phase 3 with fixes 1a–1c and `5a31d274`), not the asked-for
+  `b1e78213`, whose phase 4–6 prompts have a UI task's worker build and drive `ai.brigadier.dev`, the user's own dev
+  identity. All six runs on the default Claude login, checked per run.
+- **Means, after ÷ before:** worker tokens 0.87× (gate ≤ 0.6×; best after over worst before 0.71×), the sum 0.89×
+  (≤ 0.75×), `run_check` calls 0.75× (≤ 0.5×): **missed**. Per provider (Claude 0.90×, Codex 0.78×), elapsed
+  (1.07×, with a machine-load caveat) and fix tasks (before 2, after 1) pass. The Brain gates hold for every after
+  worker but r6's review-fix task, whose brief had no Brain section and which made no query.
+- **Checks and probes:** all six results pass the frozen checks (clippy with the sidecar stand-in, as at n = 1).
+  P3.1 and P3.2 pass on all six; P3.3 has no verdict on this Mac (the Command Line Tools are installed, and the
+  substitute message gets the approval card on the solution too), so it rests on the hidden check and the review.
+- **Blind review:** one Codex call per result against the frozen checklist (the whole request), labels from a
+  sealed shuffle, calibrated on `524c337e`. No result does the whole request, and neither does `524c337e`, for the same
+  reasons (explanations not true to the sandbox, a picked level that can stay in the draft, a notice withheld in
+  untrusted folders, tests that miss these). Every run is incomplete by the rerun's rule; no rerun was made, as none
+  could change a token verdict that misses on all six runs.
+- **Found in the runs:** a worker that ends its turn waiting for a background subagent is failed as "stopped without
+  a report" (both arms, 4 times in 6 runs); an operate task's dev build ran into the user's running Brigadier Dev
+  through the single-instance guard (r3, before; nothing was driven); the Brain's skeleton job adds 17–25 nodes that
+  differ per run.
+- **The Brain counters, live:** a worker row shows "Brain 0↓ 1↑" and Inspector › Brain shows "Workers in this
+  session" on a dev build after `2f6aaafa`…`7309a92b`; it was broken before those fixes.
+- **Phase 3's measured gates stand as missed.** What to do about them is the user's call.
 
 **Risks.**
 - The Brain may have little about a fresh area; the measurement must use an area the Brain has seen (B's).

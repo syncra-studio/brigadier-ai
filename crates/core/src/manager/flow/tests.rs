@@ -1,5 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use brigadier_providers::{ProviderEvent, TurnStatus};
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
@@ -12,6 +14,151 @@ where
     Fut: std::future::Future<Output = Reply> + Send + 'static,
 {
     Arc::new(move |turn| Box::pin(f(turn)))
+}
+
+/// The worker's side of a scripted run where the worker ends its first turn to wait for its
+/// own background job. `ends` says whether the job ends (and its end starts a turn that
+/// reports) or hangs (the wait runs out and the worker is nudged, then reports).
+fn waits_for_its_job(ends: bool, inputs: Arc<Mutex<Vec<String>>>) -> Script {
+    script(move |turn| {
+        let inputs = inputs.clone();
+        async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("[report task-1") {
+                    return Reply::text("Finished.");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "high", "title": "Read files", "kind": "scout",
+                               "spec": "Read the files."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            let first = inputs.lock().unwrap().is_empty();
+            inputs.lock().unwrap().push(turn.input.clone());
+            if !first {
+                let reply = turn
+                    .call("submit_report", json!({"summary": "Read the files."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Reported.");
+            }
+            let events = turn.events.clone();
+            let _ = events
+                .send(ProviderEvent::BackgroundJobs { running: 1 })
+                .await;
+            if ends {
+                // The job ends after the turn: its CLI starts a turn of its own.
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let _ = events
+                        .send(ProviderEvent::BackgroundJobs { running: 0 })
+                        .await;
+                    let _ = events
+                        .send(ProviderEvent::TurnStarted { turn_id: None })
+                        .await;
+                    let reply = turn
+                        .call("submit_report", json!({"summary": "Read the files."}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    let _ = events
+                        .send(ProviderEvent::TurnCompleted {
+                            turn_id: None,
+                            status: TurnStatus::Completed,
+                            duration_ms: Some(1),
+                            usage: None,
+                        })
+                        .await;
+                });
+            }
+            Reply::text("Waiting for my background job; its end starts my next turn.")
+        }
+    })
+}
+
+/// A worker that ends its turn to wait for its own background job (a sub-agent or command run
+/// in the background) is neither nudged nor failed as "stopped without a report": the job's
+/// end starts its next turn, which reports.
+#[tokio::test]
+async fn a_worker_waiting_for_its_own_background_job_is_not_failed() {
+    let inputs = Arc::new(Mutex::new(Vec::new()));
+    let flow = Flow::start(
+        "background-job",
+        Options::default(),
+        waits_for_its_job(true, inputs.clone()),
+    )
+    .await;
+    flow.say("Read the files.").await;
+    let board = flow.settled().await;
+    assert_eq!(Flow::task(&board, 1).state, TaskState::Done);
+    assert_eq!(inputs.lock().unwrap().len(), 1, "never nudged");
+    flow.stop().await;
+}
+
+/// A background job that never ends still gets caught: once the worker stays silent too long,
+/// its wait counts as a turn without a report, and it is nudged.
+#[tokio::test]
+async fn a_hung_background_job_still_gets_the_worker_nudged() {
+    let inputs = Arc::new(Mutex::new(Vec::new()));
+    let flow = Flow::start(
+        "background-hung",
+        Options::default(),
+        waits_for_its_job(false, inputs.clone()),
+    )
+    .await;
+    flow.say("Read the files.").await;
+    let board = flow.settled().await;
+    assert_eq!(Flow::task(&board, 1).state, TaskState::Done);
+    let inputs = inputs.lock().unwrap().clone();
+    assert_eq!(inputs.len(), 2);
+    assert!(
+        inputs[1].contains("without calling submit_report"),
+        "{}",
+        inputs[1]
+    );
+    flow.stop().await;
+}
+
+/// An error that fails a request's turn is said once, by the failed request: no notice above
+/// the composer repeats it, and the failed run names the request so the app adds no line of
+/// its own.
+#[tokio::test]
+async fn a_turns_error_is_said_once_by_its_request() {
+    const ERROR: &str = "API Error: 400 messages.15.content.0.tool_result: content cannot be empty";
+    let flow = Flow::start(
+        "turn-error-once",
+        Options::default(),
+        script(|_turn| async { Reply::failed(ERROR) }),
+    )
+    .await;
+    flow.say("Install cowsay.").await;
+    let board = flow
+        .until("the request failed", |board| {
+            board
+                .requests
+                .values()
+                .any(|request| matches!(request.state, RequestState::Failed { .. }))
+        })
+        .await;
+    let request = board.requests.values().next().unwrap();
+    assert_eq!(
+        request.state,
+        RequestState::Failed {
+            error: ERROR.into()
+        }
+    );
+    flow.settled().await;
+    let events = flow.events().await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, crate::model::DomainEvent::ConversationNotice { .. })),
+        "no notice repeats it"
+    );
+    flow.stop().await;
 }
 
 #[tokio::test]
@@ -597,8 +744,9 @@ fn reports_in(input: &str) -> Vec<u32> {
 /// which can't commit from its sandbox, so Brigadier commits for it) asks for its own review
 /// (review_code), which returns at once; the review comes from the other vendor, reads its
 /// work in a checkout of its own, and its findings reach the lead as a message. Then the
-/// orchestrator lands it, and the landing gets its own background review. No verifier, no
-/// reviewer task, no cards.
+/// orchestrator lands it: the lead's own review is the change's one review, so the landing,
+/// with the lead's fix after it, gets none of its own (SESSION-FIXES-PLAN.md Q6.1). No
+/// verifier, no reviewer task, no cards.
 #[tokio::test]
 async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() {
     let flow = Flow::start(
@@ -660,8 +808,8 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
     .await;
     flow.say("Add a greeting file and merge it.").await;
     flow.settled().await;
-    // The lead's own review and the landing's.
-    let board = reviews_ended(&flow, 2).await;
+    // The lead's own review only.
+    let board = reviews_ended(&flow, 1).await;
     let lead = Flow::task(&board, 1);
     assert_eq!(
         board.tasks.len(),
@@ -669,24 +817,29 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
         "a lead only: no verifier, no reviewer task"
     );
     assert_eq!(lead.state, TaskState::Landed);
-    let mut reviews: Vec<_> = board.reviews.values().collect();
-    reviews.sort_by_key(|review| review.started_at_ms);
-    assert_eq!(reviews.len(), 2, "{reviews:#?}");
-    for review in &reviews {
-        assert_eq!(review.kind, crate::work::ReviewKind::Code);
-        assert_eq!(review.author, lead.route.choice.provider);
-        assert_ne!(review.reviewer, lead.route.choice.provider);
-        assert_eq!(review.task_id.as_ref(), Some(&lead.id));
-    }
+    let reviews: Vec<_> = board.reviews.values().collect();
     assert_eq!(
-        reviews[0].state,
+        reviews.len(),
+        1,
+        "no second review at landing: {reviews:#?}"
+    );
+    let review = reviews[0];
+    assert_eq!(review.kind, crate::work::ReviewKind::Code);
+    assert_eq!(review.author, lead.route.choice.provider);
+    assert_ne!(review.reviewer, lead.route.choice.provider);
+    assert_eq!(review.task_id.as_ref(), Some(&lead.id));
+    assert_eq!(
+        review.state,
         crate::work::ReviewState::Findings { count: 1 }
     );
-    assert_eq!(reviews[1].state, crate::work::ReviewState::Clean);
+    // It read the lead's work before its fix, which landed after it.
+    assert_ne!(lead.landed.as_deref(), Some(review.tip.as_str()));
     assert_eq!(
-        lead.landed.as_deref(),
-        Some(reviews[1].tip.as_str()),
-        "the landing's review reads what landed"
+        review.notify,
+        crate::work::ReviewFor::Worker {
+            task_id: lead.id.clone()
+        },
+        "its findings were the lead's to weigh, not the thread's to record"
     );
     assert!(board.plans.is_empty(), "a small request has no phases");
     assert!(board.approvals.is_empty(), "no cards");
@@ -700,13 +853,14 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
         "6",
         "the lead's fix after its review landed (\"hello\\n\")"
     );
-    // The reviews are one-shot: started ephemeral. The thread and its lead are resumed later.
+    // The review is one-shot: started ephemeral, and the only one (the lead's own). The
+    // thread and its lead are resumed later.
     let specs = flow.specs();
     let one_shot = |spec: &brigadier_providers::SessionSpec| {
         spec.append_system_prompt.as_deref() == Some(brigadier_review::REVIEW_ROLE)
     };
     let reviews: Vec<_> = specs.iter().filter(|(_, spec)| one_shot(spec)).collect();
-    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    assert_eq!(reviews.len(), 1, "{reviews:#?}");
     assert!(reviews.iter().all(|(_, spec)| spec.ephemeral));
     let resumable: Vec<_> = specs
         .iter()
@@ -719,6 +873,73 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
         .collect();
     assert!(resumable.len() >= 2, "{resumable:#?}");
     assert!(resumable.iter().all(|(_, spec)| !spec.ephemeral));
+    flow.stop().await;
+}
+
+/// A lead whose own review came back clean and that committed more after it: the landing's
+/// review reads only those later commits, not the change its own review already read.
+#[tokio::test]
+async fn after_a_clean_own_review_only_the_later_commits_are_reviewed_at_landing() {
+    let flow = Flow::start(
+        "own-review-clean",
+        Options {
+            reviews: Some(script(|_| async { Reply::text("No findings.") })),
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if let Some(n) = reports_in(&turn.input).first() {
+                    let reply = turn
+                        .call("land_phase", json!({"task": format!("task-{n}")}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Added the greeting.");
+                }
+                if turn.input.contains("[review ") {
+                    return Reply::text("[quiet]");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "medium", "title": "Add a greeting", "kind": "implement",
+                               "spec": "Create hello.txt.", "provider": "codex"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            turn.write("hello.txt", "hello\n");
+            let review = own_review(&turn).await;
+            assert!(review.contains("found nothing"), "{review}");
+            // More work after the clean review: nobody has read it yet.
+            turn.write("bye.txt", "bye\n");
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "Added hello.txt and bye.txt.",
+                           "changes": ["hello.txt", "bye.txt"]}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Add a greeting file.").await;
+    flow.settled().await;
+    let board = reviews_ended(&flow, 2).await;
+    let lead = Flow::task(&board, 1);
+    assert_eq!(lead.state, TaskState::Landed);
+    let mut reviews: Vec<_> = board.reviews.values().collect();
+    reviews.sort_by_key(|review| review.number);
+    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    assert_eq!(reviews[0].state, crate::work::ReviewState::Clean);
+    assert_eq!(
+        (reviews[1].base.as_str(), reviews[1].tip.as_str()),
+        (reviews[0].tip.as_str(), lead.landed.as_deref().unwrap()),
+        "the landing's review starts where the lead's own ended"
+    );
+    assert_eq!(reviews[1].notify, crate::work::ReviewFor::Orchestrator);
     flow.stop().await;
 }
 
@@ -961,7 +1182,10 @@ async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
     .await;
     flow.say("Add a greeting file and merge it.").await;
     flow.settled().await;
-    let board = reviews_ended(&flow, 2).await;
+    // The verifier's own review is the change's one review: the fix it made after it lands
+    // with no second one.
+    let board = reviews_ended(&flow, 1).await;
+    assert_eq!(board.reviews.len(), 1, "one review: {:?}", board.reviews);
     let lead = Flow::task(&board, 1);
     let verifier = Flow::task(&board, 2);
     assert_eq!(board.tasks.len(), 2, "a lead and the verifier it was given");

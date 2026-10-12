@@ -1542,15 +1542,7 @@ impl ProviderSession for ClaudeSession {
             let input = lock(&self.shared.approvals)
                 .remove(&approval_id)
                 .ok_or_else(|| Error::Invalid(format!("no pending approval {approval_id}")))?;
-            let response = match &decision {
-                // Brigadier answers the same command again itself.
-                ApprovalDecision::Allow | ApprovalDecision::AllowSimilar => {
-                    json!({ "behavior": "allow", "updatedInput": input })
-                }
-                ApprovalDecision::Deny { message } => {
-                    json!({ "behavior": "deny", "message": message })
-                }
-            };
+            let response = approval_response(input, &decision);
             let line = json!({
                 "type": "control_response",
                 "response": {
@@ -1667,6 +1659,25 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// The permission answer for the CLI. A deny always has words: the CLI turns its message into
+/// an error tool result, and the API fails the whole turn on an empty one.
+fn approval_response(input: Value, decision: &ApprovalDecision) -> Value {
+    match decision {
+        // Brigadier answers the same command again itself.
+        ApprovalDecision::Allow | ApprovalDecision::AllowSimilar => {
+            json!({ "behavior": "allow", "updatedInput": input })
+        }
+        ApprovalDecision::Deny { message } => {
+            let message = if message.trim().is_empty() {
+                crate::DECLINED
+            } else {
+                message.as_str()
+            };
+            json!({ "behavior": "deny", "message": message })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1704,6 +1715,36 @@ mod tests {
         assert_eq!(content[4]["text"], "after");
         assert_eq!(content[1]["source"]["data"], "AQID");
         assert_eq!(content[1], content[3]);
+    }
+
+    /// The CLI puts a deny's message into an error tool result, which the API refuses empty:
+    /// a Deny with no words still says the user declined.
+    #[test]
+    fn a_deny_always_tells_the_model_why() {
+        let blank = approval_response(
+            json!({}),
+            &ApprovalDecision::Deny {
+                message: " ".into(),
+            },
+        );
+        assert_eq!(blank["behavior"], "deny");
+        assert_eq!(blank["message"], crate::DECLINED);
+        let given = approval_response(
+            json!({}),
+            &ApprovalDecision::Deny {
+                message: "This session may not do that.".into(),
+            },
+        );
+        assert_eq!(given["message"], "This session may not do that.");
+        // The user's own Deny: their reason when they gave one.
+        assert_eq!(crate::user_deny_message("  "), crate::DECLINED);
+        assert_eq!(
+            crate::user_deny_message(" not now "),
+            "The user declined this: not now"
+        );
+        let allowed = approval_response(json!({ "command": "ls" }), &ApprovalDecision::Allow);
+        assert_eq!(allowed["behavior"], "allow");
+        assert_eq!(allowed["updatedInput"]["command"], "ls");
     }
 
     /// The extra home keeps local state even though its transcript lives in the shared

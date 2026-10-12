@@ -25,13 +25,19 @@ export function batchReviews(
   );
 }
 
+/** What the thread recorded of a finding, as its chip says it. */
+export type FindingLabel = "Open" | "New" | "Fixed" | "Dismissed";
+
 /** One finding as the review line's list shows it: what it is and what the thread recorded. */
 export type FindingRow = {
   id: string;
+  /** `P0` to `P3`; null when the review's text couldn't be split. */
+  severity: string | null;
   title: string;
   location: string | null;
-  /** "fixed in task-7", "open", "dismissed: …", "new": the thread's words, or not recorded yet. */
-  status: string;
+  status: FindingLabel;
+  /** The thread's words on it, shown on hover: why it stays open or was dismissed, what fixed it. */
+  note: string | null;
   open: boolean;
 };
 
@@ -40,24 +46,28 @@ export function findingRows(reviews: readonly ReviewRun[]): FindingRow[] {
   return reviews.flatMap((review) =>
     review.items.map((item) => ({
       id: item.id,
+      severity: item.severity,
       title: item.title,
       location: item.location,
-      status: findingStatus(item.status),
+      ...findingStatus(item.status),
       open: item.status.type === "open",
     })),
   );
 }
 
-function findingStatus(status: Finding["status"]): string {
+function findingStatus(status: Finding["status"]): { status: FindingLabel; note: string | null } {
   switch (status.type) {
     case "new":
-      return "new";
-    case "fixed":
-      return status.task ? `fixed in ${status.task}` : "fixed";
+      return { status: "New", note: null };
+    case "fixed": {
+      const task = status.task ? `Fixed in ${status.task}` : null;
+      const note = [task, status.why].filter(Boolean).join(": ");
+      return { status: "Fixed", note: note || null };
+    }
     case "open":
-      return status.why ? `open: ${status.why}` : "open";
+      return { status: "Open", note: status.why };
     case "dismissed":
-      return `dismissed: ${status.why}`;
+      return { status: "Dismissed", note: status.why };
   }
 }
 
@@ -77,19 +87,31 @@ function counts(reviews: readonly ReviewRun[]): { open: number; unrecorded: numb
 }
 
 /**
- * The reviews' outcome in a few words, from what the thread recorded of each finding (Q7):
- * "Review running…" while one runs (merging doesn't wait for it), then "Review: clean" or
+ * A batch's outcome in a word or two, from what the thread recorded of each finding (Q7):
+ * "running…" while a review runs (merging doesn't wait for it), then "2 open · 1 new", "clean"
+ * or "couldn’t run". Null when nothing was reviewed.
+ */
+function outcome(reviews: readonly ReviewRun[]): string | null {
+  if (reviews.length === 0) return null;
+  if (reviews.some((review) => review.state.type === "running")) return "running…";
+  const { open, unrecorded } = counts(reviews);
+  const parts = [...(open > 0 ? [`${open} open`] : []), ...(unrecorded > 0 ? [`${unrecorded} new`] : [])];
+  if (parts.length > 0) return parts.join(" · ");
+  if (reviews.every((review) => review.state.type === "failed")) return "couldn’t run";
+  return "clean";
+}
+
+/**
+ * The reviews' outcome in a few words: "Review running…", then "Review: clean" or
  * "Review: 2 open", with the findings the thread hasn't recorded yet as "new". Never a total
  * of what the reviews found. Null when nothing was reviewed.
  */
 export function reviewStatus(reviews: readonly ReviewRun[]): string | null {
-  if (reviews.length === 0) return null;
-  if (reviews.some((review) => review.state.type === "running")) return "Review running…";
-  const { open, unrecorded } = counts(reviews);
-  const parts = [...(open > 0 ? [`${open} open`] : []), ...(unrecorded > 0 ? [`${unrecorded} new`] : [])];
-  if (parts.length > 0) return `Review: ${parts.join(" · ")}`;
-  if (reviews.every((review) => review.state.type === "failed")) return "Review couldn’t run";
-  return "Review: clean";
+  const said = outcome(reviews);
+  if (said === null) return null;
+  if (said === "running…") return "Review running…";
+  if (said === "couldn’t run") return "Review couldn’t run";
+  return `Review: ${said}`;
 }
 
 /**
@@ -107,7 +129,12 @@ export function mergedStatus(reviews: readonly ReviewRun[]): string | null {
 }
 
 /** One review line of the context card, with the findings a click lists. */
-export type ReviewLine = { text: string; findings: FindingRow[] };
+export type ReviewLine = {
+  text: string;
+  /** Its batch's outcome alone: "clean", "1 open", "running…". */
+  outcome: string;
+  findings: FindingRow[];
+};
 
 /** The context card's review lines; null where there is nothing to say. */
 export type ReviewLines = {
@@ -118,7 +145,8 @@ export type ReviewLines = {
 };
 
 function line(batch: readonly ReviewRun[], text: string | null): ReviewLine | null {
-  return text === null ? null : { text, findings: findingRows(batch) };
+  const said = outcome(batch);
+  return text === null || said === null ? null : { text, outcome: said, findings: findingRows(batch) };
 }
 
 /**
@@ -143,12 +171,40 @@ export function reviewLines(
   return { merged: line(before, mergedStatus(before)), current };
 }
 
-/** The open conversation's review lines, live. */
-export function useReviewLines(conversationId: string): ReviewLines {
+/** One batch's findings in the review row's list: unlabelled when the row speaks for one batch. */
+export type ReviewSection = { label: string | null; outcome: string; findings: FindingRow[] };
+
+/** The context card's one review row, and the findings its click lists. */
+export type ReviewRow = { text: string; sections: ReviewSection[] };
+
+/**
+ * The context card's one review row. With work since the last merge, the row speaks for both
+ * batches: "Review: clean" when both are, else each batch's own outcome, labelled ("Merged:
+ * 1 open · Since the merge: running…"), so a newer review never hides what the merge left open
+ * and no count adds across merges (Q7). Its list keeps the batches apart the same way.
+ */
+export function reviewRow({ merged, current }: ReviewLines): ReviewRow | null {
+  const only = merged ?? current;
+  if (only === null) return null;
+  if (merged === null || current === null) {
+    return { text: only.text, sections: [{ label: null, outcome: only.outcome, findings: only.findings }] };
+  }
+  const clean = merged.outcome === "clean" && current.outcome === "clean";
+  return {
+    text: clean ? "Review: clean" : `Merged: ${merged.outcome} · Since the merge: ${current.outcome}`,
+    sections: [
+      { label: "Merged work", outcome: merged.outcome, findings: merged.findings },
+      { label: "Since the merge", outcome: current.outcome, findings: current.findings },
+    ],
+  };
+}
+
+/** The open conversation's review row, live. */
+export function useReviewRow(conversationId: string): ReviewRow | null {
   const json = useBoard((s) => {
     const board = s.board;
     if (!board || board.conversationId !== conversationId) return null;
-    return JSON.stringify(reviewLines(board.orchestratorSteps, Object.values(board.reviews)));
+    return JSON.stringify(reviewRow(reviewLines(board.orchestratorSteps, Object.values(board.reviews))));
   });
-  return useMemo(() => (json ? (JSON.parse(json) as ReviewLines) : { merged: null, current: null }), [json]);
+  return useMemo(() => (json ? (JSON.parse(json) as ReviewRow | null) : null), [json]);
 }

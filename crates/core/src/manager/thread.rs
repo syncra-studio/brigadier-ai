@@ -627,8 +627,19 @@ impl SessionManager {
         match found {
             Ok(Some((tip, base))) => {
                 if let Some(base) = base {
-                    self.review_thread_commits(id, base, tip.clone(), repo.to_owned())
-                        .await;
+                    // Commits that only fix review findings get no review of their own, and a
+                    // held merge's consent covers them (SESSION-FIXES-PLAN.md Q3.4, Q6.1).
+                    match self.thread_fixes(id, repo, &base, &tip).await {
+                        Some(fixed) => {
+                            self.move_held_merge(id, branch, &base, &tip).await;
+                            self.recheck_thread_fix(id, base, tip.clone(), repo.to_owned(), &fixed)
+                                .await;
+                        }
+                        None => {
+                            self.review_thread_commits(id, base, tip.clone(), repo.to_owned())
+                                .await;
+                        }
+                    }
                 }
                 self.record_thread_tip(id, branch, &tip).await;
             }

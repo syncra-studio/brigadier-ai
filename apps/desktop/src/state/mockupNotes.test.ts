@@ -58,7 +58,7 @@ test("one send at a time per session, even when its tab opens again mid-send, an
   // A note made meanwhile (it can't be from the tab, which freezes them) outlives the send.
   const later = { id: "b", screen: 1, x: 0.5, y: 0.5, text: "Wider" };
   changeNotes("sending", (current) => ({ notes: [...current.notes, later] }));
-  const sent = { version: 1, shots: ["s1"], dismissed: false };
+  const sent = { version: 1, shots: ["s1"], screens: [1], dismissed: false };
   sendEnded("sending", taken!, sent);
   assert.deepEqual(mockupNotesOf("sending").notes, [later]);
   assert.equal(mockupNotesOf("sending").sending, false);

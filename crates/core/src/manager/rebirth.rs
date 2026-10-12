@@ -181,7 +181,7 @@ impl RebirthPrep {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl RebirthPrep {
     /// A checkpoint whose fork wrote `note` at `at_ms`, for the session `old_native_id`.
     pub(crate) fn written(note: &str, old_native_id: &str, at_ms: i64) -> Arc<Self> {

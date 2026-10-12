@@ -1,7 +1,8 @@
 //! The merge said while workers write (SESSION-FIXES-PLAN.md Q3): it is held, stored, until
 //! they land, then the thread is told it is due and merges on the held consent without a new
 //! question; a failed or stopped writer, or an open finding, stops it; an unrecorded finding
-//! holds it; the user's Cancel spends the consent for good, under the landing lock.
+//! holds it; the user's Cancel spends the consent for good, under the landing lock. The
+//! thread's own commit that names the findings it fixes is covered by the held consent too.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,6 +10,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
+use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::manager::landing::pending_merge;
 use crate::work::{MergeCondition, OrchestratorStepKind, TaskState};
@@ -690,4 +692,214 @@ async fn branch_of(flow: &Flow) -> String {
         }) => branch,
         _ => panic!("a new-worktree session"),
     }
+}
+
+/// How the thread fixes its landing review's finding itself, in [`fixed_by_the_thread`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum OwnFix {
+    /// Its commit names the finding (`Brigadier-Fixes: R1.1`), recorded `high` or not.
+    Named { high: bool },
+    /// Its commit doesn't say what it fixes.
+    Unnamed,
+}
+
+/// A session whose thread delegates one writer and passes the user's "merge it when done" to
+/// finish_session; it lands the report, fixes the landing review's one finding itself with a
+/// commit of its own (as `fix` says), records it fixed, and calls finish_session on `[merge
+/// due]`. The thread's inputs and finish_session's answers, and the reviewers' inputs.
+async fn fixed_by_the_thread(
+    name: &str,
+    fix: OwnFix,
+) -> (Flow, Arc<Mutex<Vec<String>>>, Arc<Mutex<Vec<String>>>) {
+    let log: Arc<Mutex<Vec<String>>> = Arc::default();
+    let reviews: Arc<Mutex<Vec<String>>> = Arc::default();
+    let merge_held = Arc::new(AtomicBool::new(false));
+    let (said, read, gate) = (log.clone(), reviews.clone(), merge_held.clone());
+    let flow = Flow::start(
+        name,
+        Options {
+            reviews: Some(script(move |turn| {
+                let read = read.clone();
+                async move {
+                    let first = {
+                        let mut read = read.lock().unwrap();
+                        read.push(turn.input.clone());
+                        read.len() == 1
+                    };
+                    // The landing's review finds one thing; nothing after it does.
+                    Reply::text(if first { ONE_MEDIUM } else { "No findings." })
+                }
+            })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (said, gate) = (said.clone(), gate.clone());
+            async move {
+                if turn.is_review() {
+                    return Reply::text("No findings.");
+                }
+                if !turn.is_orchestrator() {
+                    // Writes once the merge is held.
+                    for _ in 0..1000 {
+                        if gate.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    turn.write("B.md", "note\n");
+                    turn.git(&["add", "B.md"]);
+                    turn.git(&["commit", "-qm", "Write B.md"]);
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "Wrote B.md.", "changes": ["B.md"]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reported.");
+                }
+                said.lock().unwrap().push(turn.input.clone());
+                let log = |text: &str| said.lock().unwrap().push(text.to_owned());
+                if turn.input.starts_with("Add a note") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "medium", "title": "Write note B", "kind": "implement",
+                                   "spec": "Write the note.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    let reply = turn
+                        .call(
+                            "finish_session",
+                            json!({"user_words": "merge it when done"}),
+                        )
+                        .await;
+                    log(&format!("finish_session: {}", reply.text));
+                    gate.store(true, Ordering::SeqCst);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[report task-1") {
+                    let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[review task-1 · ") {
+                    assert!(turn.input.contains("R1.1: [P2]"), "{}", turn.input);
+                    let message = match fix {
+                        OwnFix::Named { .. } => {
+                            "Title note B\n\nBrigadier-Author: thread\nBrigadier-Fixes: R1.1"
+                        }
+                        OwnFix::Unnamed => "Title note B\n\nBrigadier-Author: thread",
+                    };
+                    commit_in_workspace(&turn, "B.md", "# B\nnote\n", message);
+                    let high = fix == OwnFix::Named { high: true };
+                    let reply = turn
+                        .call(
+                            "record_findings",
+                            json!({"items": [{"id": "R1.1", "status": "fixed", "high": high}]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[merge due]") {
+                    let reply = turn.call("finish_session", json!({})).await;
+                    log(&format!("finish_session: {}", reply.text));
+                    return Reply::text("Merged.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add a note, and merge it when done.").await;
+    (flow, log, reviews)
+}
+
+fn count(log: &Arc<Mutex<Vec<String>>>, what: &str) -> usize {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.contains(what))
+        .count()
+}
+
+/// The user said "merge it when done"; the landing's review found one thing, and the thread
+/// fixed it itself, naming it in its commit. That commit gets no review of its own (a re-check
+/// only when the thread recorded the finding high), the held consent covers it, and the merge
+/// happens with no second question (SESSION-FIXES-PLAN.md Q3.4, Q6.1).
+#[tokio::test]
+async fn a_held_merge_covers_the_threads_own_fix_of_a_finding_and_asks_nothing_again() {
+    for high in [false, true] {
+        let (flow, log, reviews) =
+            fixed_by_the_thread("held-merge-own-fix", OwnFix::Named { high }).await;
+        flow.until("the merge", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+        })
+        .await;
+        let board = flow.settled().await;
+        assert_eq!(
+            count(
+                &log,
+                "finish_session: [merge held] Merging after 1 worker finish"
+            ),
+            1
+        );
+        assert_eq!(count(&log, "finish_session: [finished]"), 1);
+        assert_eq!(count(&log, "Other work landed"), 0);
+        assert!(
+            !board
+                .questions
+                .values()
+                .any(|question| matches!(question.kind, crate::work::QuestionKind::Merge { .. })),
+            "no second merge card"
+        );
+        // The thread's fix is what merged.
+        assert_eq!(
+            git(&flow.repo, &["show", "main:B.md"]).trim_end(),
+            "# B\nnote"
+        );
+        // The landing's review, and a re-check of the fix only when its finding is high: never
+        // a full review of the thread's commit.
+        let reviews = reviews.lock().unwrap().clone();
+        let rechecks = reviews
+            .iter()
+            .filter(|input| input.contains("Re-check a fix"))
+            .count();
+        if high {
+            assert_eq!(reviews.len(), 2, "{reviews:#?}");
+            assert_eq!(rechecks, 1);
+            assert!(reviews[1].contains("R1.1: [P2] The second note has no title"));
+        } else {
+            assert_eq!(reviews.len(), 1, "{reviews:#?}");
+        }
+        assert_eq!(count(&log, "[review of your commits"), 0);
+        flow.stop().await;
+    }
+}
+
+/// The rule's other side: a commit of the thread's that doesn't name the findings it fixes is
+/// other work, with a full review of its own, and the held consent doesn't cover it.
+#[tokio::test]
+async fn a_threads_commit_that_names_no_finding_gets_a_full_review_and_needs_a_fresh_yes() {
+    let (flow, log, reviews) = fixed_by_the_thread("held-merge-own-commit", OwnFix::Unnamed).await;
+    let said = log.clone();
+    flow.until("the held consent to be refused", move |_| {
+        count(&said, "Other work landed") > 0
+    })
+    .await;
+    flow.settled().await;
+    let reviews = reviews.lock().unwrap().clone();
+    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    assert!(!reviews[1].contains("Re-check a fix"), "{}", reviews[1]);
+    assert_eq!(count(&log, "finish_session: [finished]"), 0);
+    assert!(
+        !git(&flow.repo, &["ls-tree", "--name-only", "main"]).contains("B.md"),
+        "nothing merged"
+    );
+    flow.stop().await;
 }

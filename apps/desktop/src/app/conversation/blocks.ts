@@ -776,6 +776,17 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
 }
 
 /**
+ * Whether a block is finished, so its work folds under "Worked for …" with an answer below it:
+ * a run's once the run has settled, a request's once it is done. A working request shows its
+ * replies in place, also one written after its work with no worker left: Brigadier may still
+ * wake its thread (a review, a held merge, a CI result), and a line written mid-way ("Diff looks
+ * right.") is no answer.
+ */
+export function blockFinished(state: BlockState, run: { settled: boolean } | null = null): boolean {
+  return run ? run.settled : state === "done";
+}
+
+/**
  * A finished block's answer, by its index in `texts`: the request's last reply that isn't an
  * update line, so an ending written again after a late fix replaces the earlier one in place,
  * which folds into the work (THREAD-PARITY-PLAN §4.6), while a late event's "Update: …" line

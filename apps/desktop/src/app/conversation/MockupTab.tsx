@@ -11,7 +11,7 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { addAttachment, send } from "@/state/actions";
 import { useBoard } from "@/state/board";
-import { type Mockup, mockupOf, revisedSince, takesNotes } from "@/state/mockup";
+import { earlierShots, type Mockup, mockupOf, revisedSince, sentShots, type Shot, shotsOfMockup, takesNotes } from "@/state/mockup";
 import { changeNotes, markedName, markerNumber, mockupNotesOf, type MockupNote, NO_NOTES, notePlacement, notesByScreen, notesMessage, pointIn, sendEnded, takeNotes, useSessionNotes } from "@/state/mockupNotes";
 import { useApp } from "@/state/store";
 
@@ -30,12 +30,14 @@ type Item = { key: string; screen: number; kind: "mockup" | "live" | "compare"; 
 
 const KIND_LABEL = { mockup: "Mockup", live: "Live", compare: "Side by side" } as const;
 
-function itemsOf(mockup: Mockup, shown: readonly ArtifactRef[]): Item[] {
-  return mockup.pairs.flatMap((pair) => {
-    // `shown` is the mockup's screenshots in order, or the earlier version's in the same order.
-    const own = pair.mockup ? (shown[mockup.shots.indexOf(pair.mockup)] ?? null) : null;
-    return ([["mockup", own], ["live", pair.live], ["compare", pair.compare]] as const)
-      .flatMap(([kind, ref]) => ref ? [{ key: `${kind}-${pair.number}`, screen: pair.number, kind, ref }] : []);
+function itemsOf(mockup: Mockup, shown: readonly Shot[]): Item[] {
+  // `shown` is the mockup's screenshots, or the earlier version's: its screens may differ.
+  const numbers = [...new Set([...mockup.pairs.map((pair) => pair.number), ...shown.map((shot) => shot.screen)])].toSorted((a, b) => a - b);
+  return numbers.flatMap((number) => {
+    const pair = mockup.pairs.find((each) => each.number === number);
+    const own = shown.find((shot) => shot.screen === number)?.ref ?? null;
+    return ([["mockup", own], ["live", pair?.live ?? null], ["compare", pair?.compare ?? null]] as const)
+      .flatMap(([kind, ref]) => ref ? [{ key: `${kind}-${number}`, screen: number, kind, ref }] : []);
   });
 }
 
@@ -68,8 +70,7 @@ export function MockupView({ conversationId, active }: { conversationId: string;
   const revised = Boolean(sent && mockup && revisedSince(mockup, sent));
   const shown = useMemo(() => {
     if (!mockup) return [];
-    if (!sent || !revised) return mockup.shots;
-    return sent.shots.map((id) => mockup.shots.find((ref) => ref.id === id) ?? { ...mockup.shots[0]!, id, fileName: null, title: "Earlier version" });
+    return sent && revised ? earlierShots(mockup, sent) : shotsOfMockup(mockup);
   }, [mockup, sent, revised]);
   const items = useMemo(() => (mockup ? itemsOf(mockup, shown) : []), [mockup, shown]);
   // Compared with the live app, it opens on every pair side by side.
@@ -603,7 +604,7 @@ function useSendNotes(conversationId: string, mockup: Mockup | null, items: read
       const attachments = await Promise.all(files.map((file) => addAttachment(file)));
       await send({ text: notesMessage(mockup.version, notes), attachments, mentions: [] }, undefined, { to: conversationId });
     })().then(
-      () => sendEnded(conversationId, notes, { version: mockup.version, shots: mockup.shots.map((ref) => ref.id), dismissed: false }),
+      () => sendEnded(conversationId, notes, { version: mockup.version, ...sentShots(mockup), dismissed: false }),
       () => sendEnded(conversationId, notes, null),
     );
   }, [conversationId, mockup, items]);

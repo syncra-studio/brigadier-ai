@@ -197,6 +197,73 @@ async fn under_ask_the_threads_request_is_the_users_card() {
     flow.stop().await;
 }
 
+/// The user's Deny with no reason still tells the thread why (an empty one fails its whole
+/// turn at the API), and the thread goes on to say it was declined: the request ends Done
+/// with an answer, never Failed.
+#[tokio::test]
+async fn a_deny_without_a_reason_tells_the_thread_and_the_turn_goes_on() {
+    let answered: Arc<Mutex<Option<ApprovalDecision>>> = Arc::default();
+    let log = answered.clone();
+    let flow = Flow::start(
+        "thread-deny",
+        Options {
+            permission: PermissionLevel::AskForApproval,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                let decision = turn.ask_approval("brew install cowsay", "brew").await;
+                *log.lock().unwrap() = decision;
+                Reply::text("You declined installing cowsay, so I didn't run it.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Install cowsay.").await;
+    let board = flow
+        .until("the thread's card", |board| {
+            board
+                .approvals
+                .values()
+                .any(|approval| approval.state == CardState::Pending)
+        })
+        .await;
+    let card = board
+        .approvals
+        .values()
+        .find(|approval| approval.state == CardState::Pending)
+        .unwrap();
+    flow.manager
+        .answer_card(
+            flow.conversation.clone(),
+            card.id.clone(),
+            ApprovalDecision::Deny {
+                message: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let board = flow.settled().await;
+    assert_eq!(
+        *answered.lock().unwrap(),
+        Some(ApprovalDecision::Deny {
+            message: brigadier_providers::DECLINED.into()
+        })
+    );
+    // The card keeps what the user said: nothing.
+    assert_eq!(
+        board.approvals[&card.id].state,
+        CardState::Denied {
+            by: brigadier_providers::Decider::User,
+            message: None
+        }
+    );
+    let request = board.requests.values().next().unwrap();
+    assert_eq!(request.state, crate::work::RequestState::Done);
+    flow.stop().await;
+}
+
 /// "For this session" on the thread's file change in its workspace allows its later changes
 /// there, never one outside it or in its `.git`; on a host it asked to reach, later requests
 /// for that host. Each card offers the grant only where it is safe.

@@ -725,6 +725,44 @@ impl SessionManager {
         tasks
     }
 
+    /// The session's own work moved `branch` from `from` to `to`: a landing, or the thread's
+    /// commits that fix review findings. A held merge's consent covers it (SESSION-FIXES-PLAN.md
+    /// Q3.4): its tip moves on along such moves, in whatever order they are told.
+    pub(crate) async fn move_held_merge(
+        &self,
+        id: &ConversationId,
+        branch: &str,
+        from: &Oid,
+        to: &Oid,
+    ) {
+        let Ok(conv) = self.conv(id) else {
+            return;
+        };
+        let mut moves = conv.held_moves.lock().await;
+        if let Ok(board) = self.core.board(id).await
+            && let Some(held) = pending_merge(&board)
+            && held.branch == branch
+        {
+            moves.insert(from.0.clone(), to.0.clone());
+            let tip = advance_tip(&held.tip, &mut moves);
+            if tip != held.tip {
+                self.orchestrator_step(
+                    id,
+                    OrchestratorStepKind::MergeHeld {
+                        branch: held.branch,
+                        base: held.base,
+                        asked_in: held.asked_in,
+                        consented_at_ms: held.consented_at_ms,
+                        condition: held.condition,
+                        waiting: held.waiting,
+                        tip,
+                    },
+                )
+                .await;
+            }
+        }
+    }
+
     async fn landed(&self, task: &Task, target: &str, from: &Oid, new_tip: &Oid, commits: u32) {
         // Counted before the task is final, until its review is stored: a held merge waits.
         let review_due = self.conv(&task.conversation_id).ok().map(ReviewDue::new);
@@ -735,31 +773,8 @@ impl SessionManager {
         }
         let tasks = self.landed_with(task).await;
         // The session's own landing on a held merge's branch is covered by its consent.
-        if let Ok(conv) = self.conv(&task.conversation_id) {
-            let mut moves = conv.held_moves.lock().await;
-            if let Ok(board) = self.core.board(&task.conversation_id).await
-                && let Some(held) = pending_merge(&board)
-                && held.branch == target
-            {
-                moves.insert(from.0.clone(), new_tip.0.clone());
-                let tip = advance_tip(&held.tip, &mut moves);
-                if tip != held.tip {
-                    self.orchestrator_step(
-                        &task.conversation_id,
-                        OrchestratorStepKind::MergeHeld {
-                            branch: held.branch,
-                            base: held.base,
-                            asked_in: held.asked_in,
-                            consented_at_ms: held.consented_at_ms,
-                            condition: held.condition,
-                            waiting: held.waiting,
-                            tip,
-                        },
-                    )
-                    .await;
-                }
-            }
-        }
+        self.move_held_merge(&task.conversation_id, target, from, new_tip)
+            .await;
         // A fix of landed work's review findings gets no review of its own, only the
         // targeted re-check of a finding the thread marked high (SESSION-FIXES-PLAN.md Q6.1).
         let fixed = match (&task.role, &task.subject) {
@@ -899,6 +914,8 @@ impl SessionManager {
             }
             drop(review_due);
             manager.check_held_merge(&task.conversation_id).await;
+            // A request that waited for this review to be stored may be over now.
+            manager.settle_requests(&task.conversation_id).await;
         });
     }
 
@@ -1839,6 +1856,23 @@ impl SessionManager {
         *conv.merge_told.lock().unwrap() = None;
     }
 
+    /// The user's Stop ends the held merge with what it stopped: nothing merges on its own
+    /// afterwards, and the thread isn't woken for it. Its consent is spent, so a resumed
+    /// request asks again.
+    pub(super) async fn stop_merge_for_stop(&self, id: &ConversationId) {
+        let Ok(conv) = self.conv(id) else {
+            return;
+        };
+        let _landing = conv.merge_lock.lock().await;
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        if let Some(held) = pending_merge(&board) {
+            self.stop_held_merge(id, &conv, &held, "The user pressed Stop.")
+                .await;
+        }
+    }
+
     /// The Cancel on the held merge's pill (SESSION-FIXES-PLAN.md Q3 step 5): under the
     /// landing lock, a stored `MergeCancelled` spends the consent, so neither the answered
     /// card nor the message counts again, after a restart too; the thread hears it. A merge
@@ -2268,6 +2302,8 @@ pub(super) struct PendingMerge {
     pub tip: String,
     /// When it was held.
     pub at_ms: i64,
+    /// The request whose turn held it.
+    pub request: Option<String>,
 }
 
 /// Whether a message the user wrote at or after `at_ms` still waits in the queue.
@@ -2313,6 +2349,7 @@ pub(super) fn pending_merge(board: &crate::board::Board) -> Option<PendingMerge>
         waiting: waiting.clone(),
         tip: tip.clone(),
         at_ms: steps[at].at_ms,
+        request: steps[at].request_id.clone(),
     })
     .filter(|held| !spent(board, &held.asked_in))
 }
@@ -2452,7 +2489,7 @@ pub(super) fn findings_now(board: &crate::board::Board) -> FindingsNow {
 }
 
 /// The code reviews the thread hears, started since the session's previous merge.
-fn reviews_since_merge(board: &crate::board::Board) -> Vec<&crate::work::ReviewRun> {
+pub(super) fn reviews_since_merge(board: &crate::board::Board) -> Vec<&crate::work::ReviewRun> {
     use crate::work::{ReviewFor, ReviewKind};
     let since = board
         .orchestrator_steps

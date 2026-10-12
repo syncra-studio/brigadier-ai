@@ -247,17 +247,26 @@ impl SessionManager {
         self.store_approval(&approval).await?;
 
         match &approval.subject {
-            // A worker's request, or the thread's own (no task).
-            ApprovalSubject::Cli { request } => match &approval.task_id {
-                Some(task_id) => {
-                    self.answer_worker_approval(task_id, request, decision.clone())
-                        .await?;
+            // A worker's request, or the thread's own (no task). A Deny always tells the model
+            // why, even when the user gave no reason: an empty one fails its whole turn.
+            ApprovalSubject::Cli { request } => {
+                let decision = match &decision {
+                    ApprovalDecision::Deny { message } => ApprovalDecision::Deny {
+                        message: brigadier_providers::user_deny_message(message),
+                    },
+                    other => other.clone(),
+                };
+                match &approval.task_id {
+                    Some(task_id) => {
+                        self.answer_worker_approval(task_id, request, decision)
+                            .await?;
+                    }
+                    None => {
+                        self.answer_thread_approval(&conversation_id, request, decision)
+                            .await?;
+                    }
                 }
-                None => {
-                    self.answer_thread_approval(&conversation_id, request, decision.clone())
-                        .await?;
-                }
-            },
+            }
             // The call waiting on it gets the answer.
             ApprovalSubject::Action { live: true, .. } => {}
             ApprovalSubject::Action { action, .. } => {

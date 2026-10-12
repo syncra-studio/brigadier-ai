@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { batchReviews, findingRows, reviewLines, reviewStatus } from "@/app/conversation/reviewStatus";
+import { batchReviews, findingRows, reviewLines, reviewRow, reviewStatus } from "@/app/conversation/reviewStatus";
 import type { Finding, FindingStatus, OrchestratorStep, ReviewRun, ReviewState } from "@/ipc/generated";
 
 const review = (id: string, startedAtMs: number, state: ReviewState, kind: ReviewRun["kind"] = "code"): ReviewRun => ({
@@ -75,11 +75,11 @@ test("a click lists each finding with what the thread recorded", () => {
     item("R1.3", { type: "dismissed", why: "the test covers it" }),
     item("R1.4", { type: "new" }),
   ])]);
-  assert.deepEqual(rows.map((row) => [row.id, row.status, row.open]), [
-    ["R1.1", "fixed in task-7", false],
-    ["R1.2", "open: needs the user", true],
-    ["R1.3", "dismissed: the test covers it", false],
-    ["R1.4", "new", false],
+  assert.deepEqual(rows.map((row) => [row.id, row.severity, row.status, row.note, row.open]), [
+    ["R1.1", "P2", "Fixed", "Fixed in task-7", false],
+    ["R1.2", "P2", "Open", "needs the user", true],
+    ["R1.3", "P2", "Dismissed", "the test covers it", false],
+    ["R1.4", "P2", "New", null, false],
   ]);
 });
 
@@ -141,4 +141,41 @@ test("the lines count the reviews of what landed and of the thread's own commits
     merged: "Merged · review running…",
     current: null,
   });
+});
+
+test("merged work and work since, both clean, read as one row: Review: clean", () => {
+  const before = found("1", 10, [fixed("R1.1")]);
+  const after = review("2", 30, { type: "clean" });
+  const row = reviewRow(reviewLines([merged(20)], [before, after]));
+  assert.equal(row?.text, "Review: clean");
+  // The list still keeps each batch apart, with what the thread recorded of each.
+  assert.deepEqual(row?.sections.map((section) => [section.label, section.outcome, section.findings.length]), [
+    ["Merged work", "clean", 1],
+    ["Since the merge", "clean", 0],
+  ]);
+  assert.equal(reviewRow(reviewLines([], [])), null);
+});
+
+test("a newer review never hides what the merge left open, and the counts stay apart", () => {
+  const before = found("1", 10, [open("R1.1"), fixed("R1.2")]);
+  const running = review("2", 30, { type: "running" });
+  const row = reviewRow(reviewLines([merged(20)], [before, running]));
+  assert.equal(row?.text, "Merged: 1 open · Since the merge: running…");
+  assert.deepEqual(row?.sections.map((section) => [section.label, section.outcome]), [
+    ["Merged work", "1 open"],
+    ["Since the merge", "running…"],
+  ]);
+  // Two open findings, one in each batch: 1 and 1, never 2.
+  const after = found("3", 30, [open("R3.1")]);
+  assert.equal(reviewRow(reviewLines([merged(20)], [before, after]))?.text, "Merged: 1 open · Since the merge: 1 open");
+});
+
+test("one batch alone keeps its own words in an unlabelled list", () => {
+  const before = found("1", 10, [open("R1.1")]);
+  assert.deepEqual(reviewRow(reviewLines([merged(20)], [before])), {
+    text: "Merged · 1 open (not fixed)",
+    sections: [{ label: null, outcome: "1 open", findings: findingRows([before]) }],
+  });
+  const now = review("1", 10, { type: "running" });
+  assert.equal(reviewRow(reviewLines([], [now]))?.text, "Review running…");
 });

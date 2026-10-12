@@ -6,9 +6,15 @@
  *   crossing the view's top, or for a moment the toggle the user just clicked.
  * - The thread follows new content (stays at its bottom) only once the user went to the bottom
  *   themselves, by scrolling there or with the scroll button; scrolling away, sending and opening
- *   a fold stop it. The floating composer changing size never moves the view.
+ *   a fold stop it. A fold in the newest turn that leaves the view at its end follows again, and
+ *   so does the end of a turn watched from its end. The floating composer changing size never
+ *   moves the view.
  * - A sent message's turn glides up to its `scroll-margin-top` under the view's top, with room
- *   below it (the newest turn's minimum height) that its answer fills as it streams.
+ *   below it (the newest turn's minimum height) that its answer fills as it streams. The room
+ *   lasts while the turn runs: once it ends, only what keeps the view still is left, and that
+ *   only shrinks.
+ * - The scroll button shows while a row reaches under the floating footer or below the view,
+ *   never for the room alone or for content in the gap above the footer, which stays in view.
  * - Each conversation's place is kept for the app's run, by row id, and restored on return.
  * - While the thread is hidden (`display: none`, under a fullscreen side panel) nothing is measured
  *   or kept; shown again, it is put back where it was, or at the bottom if it was there.
@@ -50,6 +56,8 @@ export type ThreadLayout = {
   content: () => number;
   /** The bottom padding: the floating footer's height and the gap above it. */
   padding: () => number;
+  /** The floating footer's height: what hides the content under it. */
+  footer: () => number;
   /** How far under the view's top a sent message's row settles. */
   turnTop: (row: RowBox) => number;
   /** The room after the rows. */
@@ -114,6 +122,16 @@ export class ThreadScroller {
   /** The user message whose turn has room, and the room's height. */
   private room: string | null = null;
   private roomPx = 0;
+  /** The room's turn was seen running: its end is the room's end. */
+  private roomRan = false;
+  /** Once the room's turn ended: the most the room may be, which only shrinks. */
+  private roomMax: number | null = null;
+  /** The thread works on its newest turn. */
+  private running = false;
+  /** A row reaches under the floating footer: some of it is hidden. */
+  private below = false;
+  /** A fold in the newest turn was clicked at the view's end: it follows if the end stays in view. */
+  private foldAtEnd = false;
   private ids: readonly string[] = [];
   private newestUser: string | null = null;
   private editSentAtMs: number | null = null;
@@ -130,8 +148,11 @@ export class ThreadScroller {
     return this.lastDistance;
   }
 
-  /** Whether the view is above the bottom: the scroll button shows. */
-  contentBelow = (): boolean => this.lastDistance > AT_BOTTOM_PX;
+  /**
+   * Whether a row is hidden under the footer or below the view (the room and the gap above the
+   * footer don't count): the scroll button shows.
+   */
+  contentBelow = (): boolean => this.below;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -152,8 +173,12 @@ export class ThreadScroller {
     this.restore = null;
     this.room = null;
     this.roomPx = 0;
+    this.roomRan = false;
+    this.roomMax = null;
+    this.foldAtEnd = false;
     this.newestUser = null;
     this.lastDistance = 0;
+    this.below = false;
     layout.setRoom(0);
     this.rowsChanged();
     return () => {
@@ -194,6 +219,14 @@ export class ThreadScroller {
   editSent = (): void => {
     this.editSentAtMs = performance.now();
   };
+
+  /** Whether the thread works on its newest turn: a sent turn's room lasts while it does. */
+  setRunning(running: boolean): void {
+    this.running = running;
+    if (this.room === null) return;
+    if (running) this.roomRan = true;
+    else if (this.roomRan) this.turnEnded();
+  }
 
   /**
    * Something changed size: the view, the content, or the floating footer. The view stays on
@@ -256,6 +289,11 @@ export class ThreadScroller {
     }
     this.interrupt();
     this.follow = max - viewport.scrollTop <= AT_BOTTOM_PX;
+    // An ended turn's room is kept only where it shows: what the user scrolls below the view goes.
+    if (this.roomMax !== null) {
+      this.roomMax = Math.max(0, this.roomPx - (max - viewport.scrollTop));
+      this.updateRoom();
+    }
     this.record();
   }
 
@@ -264,19 +302,29 @@ export class ThreadScroller {
     this.stopGlide();
     this.restore = null;
     this.held = null;
+    this.foldAtEnd = false;
   };
 
   /**
    * A click in the thread: a button or toggle keeps its place while what it opens or closes
-   * settles, and opening or closing a fold stops following.
+   * settles, and opening or closing a fold stops following; one in the newest turn, clicked at
+   * the view's end with no room under it, follows again if the end stays in view (see `record`).
    */
   clicked(target: Element): void {
-    const viewport = this.layout?.viewport;
+    const layout = this.layout;
     const toggle = target.closest<HTMLElement>("button, summary, [role=button], [aria-expanded]");
-    if (!viewport || !toggle) return;
-    const offset = toggle.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
-    this.held = { row: toggle, offset, untilMs: performance.now() + HOLD_MS };
-    if (toggle.matches("summary, [aria-expanded]")) this.follow = false;
+    if (!layout || !toggle) return;
+    const viewTop = layout.viewport.getBoundingClientRect().top;
+    const top = toggle.getBoundingClientRect().top;
+    this.held = { row: toggle, offset: top - viewTop, untilMs: performance.now() + HOLD_MS };
+    if (!toggle.matches("summary, [aria-expanded]")) return;
+    this.follow = false;
+    const user = newestUserRow(layout.rows());
+    this.foldAtEnd =
+      this.roomPx === 0 &&
+      this.lastDistance <= AT_BOTTOM_PX &&
+      user !== undefined &&
+      top >= user.getBoundingClientRect().top;
   }
 
   /** The scroll button: glides to the bottom and follows from there. */
@@ -306,7 +354,9 @@ export class ThreadScroller {
     }
     const kept = key === null ? undefined : saved.get(key);
     if (kept) {
-      this.room = kept.room !== null && kept.room === this.newestUser ? kept.room : null;
+      // The room of a turn that ended while the conversation was away is gone.
+      this.room = kept.room !== null && kept.room === this.newestUser && this.running ? kept.room : null;
+      this.roomRan = this.room !== null;
       this.updateRoom();
       this.follow = kept.follow;
       this.restore = kept.follow ? null : this.restored(kept);
@@ -363,6 +413,8 @@ export class ThreadScroller {
     this.interrupt();
     this.follow = false;
     this.room = id;
+    this.roomRan = this.running;
+    this.roomMax = null;
     this.updateRoom();
     const row = layout.rows().find((candidate) => rowId(candidate) === id);
     const viewport = layout.viewport;
@@ -374,7 +426,11 @@ export class ThreadScroller {
     this.record();
   }
 
-  /** The newest turn's room: down to the composer's gap, with the turn's top at its place. */
+  /**
+   * The newest turn's room: down to the composer's gap, with the turn's top at its place. Once
+   * its turn ended it never grows again (a fold closing in it doesn't bring it back), and at 0
+   * it is gone.
+   */
   private updateRoom(): void {
     const layout = this.layout;
     if (!layout || this.hide(layout.viewport)) return;
@@ -383,16 +439,58 @@ export class ThreadScroller {
       const rows = layout.rows();
       const user = newestUserRow(rows);
       const last = rows.at(-1);
-      if (!user || !last || rowId(user) !== this.room) this.room = null;
-      else {
+      if (user && last && rowId(user) === this.room) {
         const turn = last.getBoundingClientRect().bottom - user.getBoundingClientRect().top;
         px = Math.max(0, layout.viewport.clientHeight - layout.turnTop(user) - layout.padding() - turn);
       }
+      if (this.roomMax !== null) {
+        px = Math.min(px, this.roomMax);
+        this.roomMax = px;
+      }
+      if (px === 0 && (this.roomMax !== null || !user || rowId(user) !== this.room)) this.dropRoom();
     }
-    if (px !== this.roomPx) {
-      this.roomPx = px;
-      layout.setRoom(px);
+    this.setRoomPx(px);
+  }
+
+  /**
+   * The room's turn ended. Watched from the view's end (or gliding there), its room goes and the
+   * view stays at the end, following; from above it, only the room below the view goes, so what
+   * shows doesn't move.
+   */
+  private turnEnded(): void {
+    const layout = this.layout;
+    this.roomRan = false;
+    if (!layout || this.hide(layout.viewport)) {
+      this.dropRoom();
+      this.setRoomPx(0);
+      return;
     }
+    const viewport = layout.viewport;
+    const distance = maxScroll(viewport) - viewport.scrollTop;
+    if (this.glide === null && distance > AT_BOTTOM_PX) {
+      this.roomMax = Math.max(0, this.roomPx - distance);
+      this.updateRoom();
+      this.record(false);
+      return;
+    }
+    this.stopGlide();
+    this.dropRoom();
+    this.setRoomPx(0);
+    this.follow = true;
+    this.toBottom();
+    this.record();
+  }
+
+  private dropRoom(): void {
+    this.room = null;
+    this.roomRan = false;
+    this.roomMax = null;
+  }
+
+  private setRoomPx(px: number): void {
+    if (px === this.roomPx) return;
+    this.roomPx = px;
+    this.layout?.setRoom(px);
   }
 
   /* --- moving ----------------------------------------------------------------------------- */
@@ -479,9 +577,18 @@ export class ThreadScroller {
     if (viewport.clientWidth === this.size.width && viewport.clientHeight === this.size.height) {
       this.atBottom = this.lastDistance <= AT_BOTTOM_PX;
     }
+    // A fold clicked at the end: while it settles, the view follows if the end is still in view.
+    if (this.foldAtEnd) {
+      if (this.held) this.follow = this.lastDistance <= AT_BOTTOM_PX;
+      else this.foldAtEnd = false;
+    }
     this.contentHeight = layout.content();
     const rows = layout.rows();
-    const viewTop = viewport.getBoundingClientRect().top;
+    const viewRect = viewport.getBoundingClientRect();
+    const viewTop = viewRect.top;
+    const lastBottom = rows.at(-1)?.getBoundingClientRect().bottom;
+    // Content in the gap above the footer is in view; only what reaches under the footer is hidden.
+    this.below = lastBottom !== undefined && lastBottom > viewRect.bottom - layout.footer() + AT_BOTTOM_PX;
     // The first row whose bottom is below the view's top: the rows are in order.
     let low = 0;
     let high = rows.length;
@@ -502,7 +609,8 @@ export class ThreadScroller {
         anchor: id !== undefined && this.anchor ? { id, offset: this.anchor.offset } : null,
         follow: this.follow,
         ids: this.ids,
-        room: this.room,
+        // An ended turn's leftover room isn't kept.
+        room: this.roomMax === null ? this.room : null,
       });
     }
     for (const listener of this.listeners) listener();

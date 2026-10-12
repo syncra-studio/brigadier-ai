@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   type ActionItem,
+  deniedCall,
   editHunks,
   fileDiffs,
   hunkDiff,
@@ -17,6 +18,7 @@ import {
   type ToolStep,
   toolStepWords,
 } from "@/app/conversation/activity/words";
+import type { Approval, CardState } from "@/ipc/generated";
 
 const call = (name: string, status: ToolStep["status"] = "completed", detail: string | null = null): ToolStep => ({
   type: "tool",
@@ -127,14 +129,16 @@ test("deduplication needs the matching authored result in this call's window", (
   );
 });
 
-test("a command that exited badly says how, a stopped one says so", () => {
+test("a command that exited badly says how, a declined one says so", () => {
   const ran = toolStepWords(call("Bash", "completed", "pnpm test"));
   assert.equal(stepLabel(ran, "completed", 0), "Ran pnpm test");
   assert.equal(stepLabel(ran, "failed", 1), "Ran pnpm test — failed (exit 1)");
   // A command can end "completed" with a bad exit code (Codex): still a failure.
   assert.equal(stepLabel(ran, "completed", 2), "Ran pnpm test — failed (exit 2)");
   assert.equal(stepLabel(ran, "failed"), "Ran pnpm test — failed");
-  assert.equal(stepLabel(ran, "declined", 130), "Ran pnpm test — stopped");
+  // Declined is an answer, not a failure.
+  assert.equal(stepLabel(ran, "declined", 130), "Declined: pnpm test");
+  assert.deepEqual(labelParts(ran, "Declined: pnpm test"), { verb: "Declined: ", object: "pnpm test", rest: "" });
 });
 
 test("an edit's call reads as its lines out and in", () => {
@@ -173,4 +177,36 @@ test("a row's words split into its verb and, a step fainter, what it acts on", (
   assert.deepEqual(labelParts(listed, stepLabel(listed, "completed")), { verb: "Listed files", object: "", rest: "" });
   const read = stepWords({ name: "Read", detail: null, status: "completed" });
   assert.deepEqual(labelParts(read, stepLabel(read, "completed")), { verb: "Read a file", object: "", rest: "" });
+});
+
+/** The thread's own approval, in `state`. */
+const approval = (state: CardState, fields: Partial<Approval> = {}): Approval =>
+  ({
+    id: "a1",
+    conversationId: "c",
+    taskId: null,
+    requestId: "r2",
+    position: 5,
+    subject: { type: "cli", request: { id: "q", kind: "command", tool: "Bash", command: "git push", cwd: null, paths: [], reason: null, escalation: false, input: null, grant: null } },
+    state,
+    createdAtMs: 1_500,
+    resolvedAtMs: 4_000,
+    ...fields,
+  }) as Approval;
+
+test("a lead's call its denied approval stopped reads as declined, other failures stay failures", () => {
+  const denied = approval({ type: "denied", by: "user", message: null });
+  const failed = { ...call("Bash", "failed", "git push"), endedAtMs: 4_100 };
+  const denies = (approvals: Approval[], shown = failed, atMs: number | undefined = 1_000) => deniedCall(shown, atMs, ["r2"], approvals);
+  assert.equal(denies([denied]), true);
+  assert.equal(denies([denied], failed, undefined), true);
+  assert.equal(denies([approval({ type: "allowed", by: "user", similar: false })]), false);
+  // A worker's approval, another request's, another tool's, or one answered long after: not this call.
+  assert.equal(denies([approval(denied.state, { taskId: "t1" })]), false);
+  assert.equal(denies([approval(denied.state, { requestId: "r1" })]), false);
+  assert.equal(denies([denied], { ...failed, name: "Edit" }), false);
+  assert.equal(denies([approval(denied.state, { resolvedAtMs: 60_000 })]), false);
+  // A call that completed, or failed with no approval, keeps its own status.
+  assert.equal(denies([denied], { ...failed, status: "completed" }), false);
+  assert.equal(denies([]), false);
 });

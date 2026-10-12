@@ -78,6 +78,18 @@ const NUDGE_TIMEOUT: Duration = Duration::from_secs(30);
 const TURN_END_WAIT: Duration = Duration::from_secs(30);
 /// How long `ask_orchestrator` waits for the orchestrator's answer.
 const QUESTION_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// How long a worker waiting for its own background jobs may stay silent before its wait
+/// counts as a turn without a report. A background sub-agent shows its steps; a background
+/// command says nothing until it ends.
+#[cfg(not(test))]
+const BACKGROUND_SILENCE: Duration = Duration::from_secs(30 * 60);
+#[cfg(test)]
+const BACKGROUND_SILENCE: Duration = Duration::from_secs(2);
+/// How often that wait is checked.
+#[cfg(not(test))]
+const BACKGROUND_CHECK: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const BACKGROUND_CHECK: Duration = Duration::from_millis(200);
 /// Report size cap: about 800 tokens.
 pub(crate) const REPORT_MAX_BYTES: usize = 3_600;
 /// A worker's message at least this long, left out of its report, is kept as an artifact.
@@ -169,6 +181,15 @@ struct TaskLiveState {
     last_event_ms: i64,
     /// The commands and tool calls the worker started that have not finished.
     running_items: std::collections::HashSet<String>,
+    /// Its CLI's own background jobs still running (`ProviderEvent::BackgroundJobs`): each
+    /// one's end starts a turn of its own.
+    background_jobs: u32,
+    /// It waited for its background jobs past [`BACKGROUND_SILENCE`]: until they are gone, a
+    /// turn that ends without a report counts as one, jobs or not.
+    background_overdue: bool,
+    /// Its turn ended while it waits for its background jobs: their end starts its next turn,
+    /// so it keeps its place in an overnight run meanwhile.
+    background_waiting: bool,
     /// When the watchdog nudged the silent worker of this CLI session.
     stall_nudged_at_ms: Option<i64>,
     /// Fresh sessions the watchdog started for stalls in the current attempt.
@@ -476,8 +497,27 @@ impl TaskLive {
             | ProviderEvent::ToolCall {
                 item_id, status, ..
             } => (Some(item_id), Some(*status)),
-            ProviderEvent::TurnCompleted { .. } | ProviderEvent::Exited { .. } => {
+            ProviderEvent::TurnCompleted { .. } => {
                 state.running_items.clear();
+                (None, None)
+            }
+            ProviderEvent::Exited { .. } => {
+                state.running_items.clear();
+                state.background_jobs = 0;
+                (None, None)
+            }
+            ProviderEvent::BackgroundJobs { running } => {
+                state.background_jobs = *running;
+                if *running == 0 {
+                    state.background_overdue = false;
+                }
+                (None, None)
+            }
+            // A turn its CLI started on its own (a background job ended) runs like one we
+            // started.
+            ProviderEvent::TurnStarted { .. } => {
+                state.begin_turn();
+                state.background_waiting = false;
                 (None, None)
             }
             _ => (None, None),
@@ -755,6 +795,13 @@ impl TaskLive {
     /// Whether a turn of its worker runs now.
     pub async fn busy(&self) -> bool {
         self.state.lock().await.busy
+    }
+
+    /// Whether its worker still needs its place in an overnight run: a turn runs, or one is
+    /// coming when its background jobs end.
+    async fn holds_run_slot(&self) -> bool {
+        let state = self.state.lock().await;
+        state.busy || state.background_waiting
     }
 
     /// After a deliberate close (hibernation) the worker may be started again.
@@ -1939,6 +1986,9 @@ impl SessionManager {
             state.held_handover = None;
             state.generation += 1;
             state.running_items.clear();
+            state.background_jobs = 0;
+            state.background_overdue = false;
+            state.background_waiting = false;
             state.stall_nudged_at_ms = None;
             state.orphaned_at_ms = None;
             state.allowed_models = Some(allowed_models);
@@ -2734,8 +2784,9 @@ impl SessionManager {
             };
             tokio::select! {
                 event = events.recv() => match event {
-                    // It only shows the worker is alive: never stored.
-                    Some(event @ ProviderEvent::Progress { .. }) => {
+                    // It only shows the worker is alive, or how many background jobs it runs:
+                    // never stored.
+                    Some(event @ (ProviderEvent::Progress { .. } | ProviderEvent::BackgroundJobs { .. })) => {
                         live.note_event(&cli, &event).await;
                     }
                     // Only the thread's reads are kept (`super::reads`); the call that made it
@@ -2927,7 +2978,7 @@ impl SessionManager {
             self.worker_turn_completed(live, cli, status).await;
             // No turn followed (a nudge or retry would have started one): an overnight run's
             // worker slot is free for another task.
-            if !live.busy().await {
+            if !live.holds_run_slot().await {
                 self.release_run_task(&live.id);
             }
         }
@@ -2941,16 +2992,21 @@ impl SessionManager {
     ) {
         // Taken before the turn counts as over: see `TaskLive::turn_over`.
         let _end = live.turn_end.lock().await;
-        let (nudge, handoff_asked, from) = {
+        let (nudge, handoff_asked, from, background) = {
             let mut state = live.state.lock().await;
             state.busy = false;
             let handoff_asked = std::mem::take(&mut state.handoff_asked);
             if state.stopping {
                 return;
             }
-            let nudge = !state.nudged;
-            state.nudged = true;
-            (nudge, handoff_asked, state.generation)
+            let background = state.background_jobs > 0 && !state.background_overdue;
+            // Waiting for its own background jobs is no turn without a report: the nudge is
+            // kept for one.
+            let nudge = !background && !state.nudged;
+            if !background {
+                state.nudged = true;
+            }
+            (nudge, handoff_asked, state.generation, background)
         };
         let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
             return;
@@ -3049,6 +3105,13 @@ impl SessionManager {
             return;
         }
         drop(switch);
+        // Its own background job (a command or sub-agent) still runs: the job's end starts its
+        // next turn, so it waits, unless it waits silently too long.
+        if background && status == TurnStatus::Completed {
+            live.state.lock().await.background_waiting = true;
+            self.watch_background_wait(live, cli, from);
+            return;
+        }
         if nudge {
             let text = match self.keep_last_message(live, task.number).await {
                 Some(_) => {
@@ -3070,6 +3133,55 @@ impl SessionManager {
             .unwrap_or_else(|| "The worker stopped without a report.".into());
         let manager = self.arc();
         self.spawn(async move { manager.worker_failed(&task, &reason).await });
+    }
+
+    /// A worker waits for its own background jobs after a turn that ended without a report.
+    /// Once its CLI stays silent for [`BACKGROUND_SILENCE`] with no turn started, or its jobs
+    /// end and no turn follows, the wait is over and the turn's end counts as one without a
+    /// report (a nudge, then a failure), so a hung job is still caught.
+    fn watch_background_wait(&self, live: &Arc<TaskLive>, cli: &Arc<Cli>, from: u64) {
+        let manager = self.arc();
+        let (live, cli) = (live.clone(), cli.clone());
+        self.spawn(async move {
+            // Silence is counted in checks, from the last event seen.
+            let mut last_seen = None;
+            let mut quiet = Duration::ZERO;
+            // Checks since its jobs were gone without a turn starting.
+            let mut gone = 0;
+            loop {
+                tokio::time::sleep(BACKGROUND_CHECK).await;
+                {
+                    let mut state = live.state.lock().await;
+                    if state.generation != from || state.busy || state.stopping {
+                        return;
+                    }
+                    if last_seen.replace(state.last_event_ms) == Some(state.last_event_ms) {
+                        quiet += BACKGROUND_CHECK;
+                    } else {
+                        quiet = Duration::ZERO;
+                    }
+                    if state.background_jobs == 0 {
+                        // The jobs ended, but no turn followed: it stopped without a report.
+                        gone += 1;
+                        if gone < 2 {
+                            continue;
+                        }
+                    } else if quiet < BACKGROUND_SILENCE {
+                        continue;
+                    } else {
+                        state.background_overdue = true;
+                    }
+                    state.background_waiting = false;
+                }
+                manager
+                    .worker_turn_completed(&live, &cli, TurnStatus::Completed)
+                    .await;
+                if !live.holds_run_slot().await {
+                    manager.release_run_task(&live.id);
+                }
+                return;
+            }
+        });
     }
 
     /// B7 for worker approvals: routed by the task's access, then by what the user already

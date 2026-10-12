@@ -87,12 +87,22 @@ pub(crate) struct Reply {
     pub limit: Option<brigadier_providers::LimitHit>,
     /// The CLI dies mid-turn on this signal, saying "Killed" on stderr.
     pub crash: Option<i32>,
+    /// The turn fails on this error (an API error, say), which isn't retried.
+    pub error: Option<String>,
 }
 
 impl Reply {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
+            ..Self::default()
+        }
+    }
+
+    /// The turn fails on `message`, an error the CLI doesn't retry.
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self {
+            error: Some(message.into()),
             ..Self::default()
         }
     }
@@ -900,6 +910,19 @@ impl ProviderSession for FakeSession {
                         })
                         .await;
                     TurnStatus::Failed
+                } else if let Some(message) = reply.error {
+                    let _ = tx
+                        .send(ProviderEvent::Error {
+                            error: brigadier_providers::ProviderError {
+                                kind: brigadier_providers::ErrorKind::InvalidRequest,
+                                message,
+                                will_retry: false,
+                                limit: None,
+                                code: None,
+                            },
+                        })
+                        .await;
+                    TurnStatus::Failed
                 } else if stops.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
                     TurnStatus::Interrupted
                 } else {
@@ -1577,6 +1600,8 @@ mod litter_tests;
 mod mockup_tests;
 #[cfg(test)]
 mod overnight_tests;
+#[cfg(test)]
+mod owed_tests;
 #[cfg(test)]
 mod page_tools_tests;
 #[cfg(test)]

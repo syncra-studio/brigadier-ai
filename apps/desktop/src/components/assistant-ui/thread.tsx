@@ -158,6 +158,13 @@ function useThreadScroll(
   const [pad, setPad] = useState<HTMLDivElement | null>(null);
   const [footer, setFooter] = useState<HTMLDivElement | null>(null);
 
+  // A sent turn's room lasts while the thread works on it. Told before attaching, so a
+  // conversation shown again knows whether its kept room's turn still runs.
+  const running = useAuiState((s) => s.thread.isRunning);
+  useLayoutEffect(() => {
+    scroller.setRunning(running);
+  }, [scroller, running]);
+
   useLayoutEffect(() => {
     if (!viewport || !column || !group || !spacer || !pad || !footer) return;
     const list = () => [...group.children].filter((child) => child instanceof HTMLElement);
@@ -172,6 +179,7 @@ function useThreadScroll(
         rows: () => rows,
         content: () => spacer.getBoundingClientRect().bottom - column.getBoundingClientRect().top,
         padding: () => pad.offsetHeight,
+        footer: () => footer.offsetHeight,
         turnTop: (row) =>
           row instanceof HTMLElement ? Number.parseFloat(getComputedStyle(row).scrollMarginTop) || 0 : 0,
         setRoom: (px) => {
@@ -407,7 +415,7 @@ const WorkingDots: FC = () => (
 );
 
 /**
- * ↓ over the composer once the view is above the bottom; "•••" in its place while the model
+ * ↓ over the composer while a message reaches below the view; "•••" in its place while the model
  * works, and ↓ again on hover or focus. It fades in and out.
  */
 const ThreadScrollToBottom: FC = () => {

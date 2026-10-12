@@ -7,7 +7,8 @@ import { Picker } from "@/app/inspector/providers/Picker";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { BrainOverview } from "@/ipc/generated";
 import { loadBrain, PERSONAL, selectBrain, useBrain } from "@/state/brain";
-import { selectedConversation, useApp } from "@/state/store";
+import { inspectedConversation } from "@/state/actions";
+import { useApp } from "@/state/store";
 
 type View = "overview" | "search" | "graph";
 
@@ -31,12 +32,12 @@ function busy(overview: BrainOverview | undefined): boolean {
 }
 
 /**
- * The Brain the tab shows: the one picked, else the open conversation's project's, else the
- * Personal Brain.
+ * The Brain the tab shows: the one picked, else the inspected conversation's project's (the one
+ * Settings was opened from), else the Personal Brain.
  */
 function useBrainKey(): string {
   const picked = useBrain((s) => s.selected);
-  const openProject = useApp((s) => selectedConversation(s)?.projectId ?? null);
+  const openProject = useApp((s) => inspectedConversation(s)?.projectId ?? null);
   const exists = useApp((s) => (picked === null ? false : picked === PERSONAL || !!s.projects[picked]));
   if (picked !== null && exists) return picked;
   return openProject ?? PERSONAL;

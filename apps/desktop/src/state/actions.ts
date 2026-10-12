@@ -54,6 +54,7 @@ import {
   emptyThread,
   mergeMessages,
   replaceCatalog,
+  type AppState,
   type InspectorTab,
   type ProvidersState,
   type RawTranscript,
@@ -206,6 +207,15 @@ export function select(selection: Selection, mode: HistoryMode = "push"): void {
 /** What was shown when Settings opened (what the Inspector's Orchestrator tab starts on). */
 export function shownBeforeSettings(): Selection {
   return beforeSettings;
+}
+
+/**
+ * The conversation the Inspector looks at: the open one, or in Settings (where the Inspector
+ * lives) the one Settings was opened from.
+ */
+export function inspectedConversation(state: AppState): Conversation | null {
+  const shown = state.selection.type === "settings" ? beforeSettings : state.selection;
+  return shown.type === "conversation" ? (state.conversations[shown.id] ?? null) : null;
 }
 
 /** Pages merged into another, by the page they are part of now and the row each opens at. */

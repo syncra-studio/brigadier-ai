@@ -174,8 +174,14 @@ struct ConvState {
     request: Option<String>,
     /// How the last turn for a request ended, when it was stopped or failed.
     outcomes: HashMap<String, RequestState>,
+    /// Requests whose last turn ended on [`prompts::QUIET`], or said nothing: the thread left
+    /// its answer to what wakes it next (see `requests::owed_a_turn`).
+    deferred: HashSet<String>,
     /// The last error the running turn reported.
     turn_error: Option<String>,
+    /// That error, not yet said anywhere: the running turn's request shows it when it fails,
+    /// and it becomes a notice only if the turn ends some other way.
+    unshown_error: Option<String>,
     /// Brigadier's notes for the next turn that carries user messages (an edit, a redo).
     notes: Vec<String>,
     /// No new turn starts while the user's edit or redo takes the thread apart.
@@ -640,6 +646,8 @@ impl ConvLive {
                 .chain(state.answering.values().flatten().cloned())
                 .collect(),
             outcomes: state.outcomes.clone(),
+            deferred: state.deferred.clone(),
+            reviews_due: self.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0,
         }
     }
 }
@@ -660,6 +668,10 @@ pub(super) struct RequestActivity {
     pub carried: HashSet<String>,
     /// How requests' last turns ended, when they were stopped or failed.
     pub outcomes: HashMap<String, RequestState>,
+    /// Requests whose last turn left the answer to what wakes the thread next.
+    pub deferred: HashSet<String>,
+    /// A landing's review isn't stored yet.
+    pub reviews_due: bool,
 }
 
 impl SessionManager {
@@ -1143,8 +1155,14 @@ impl SessionManager {
         // Messages waiting for quota: the user no longer wants them sent. After a retry that
         // is looking now (it could record the wait again once they are gone).
         let retrying = conv.retry.lock().await;
+        // The newest answer that works only for what Brigadier owes it (a CI watch, a held
+        // merge, a review it left its answer to) has no turn to interrupt: it ends Stopped.
+        let owed = self.owed_only(&conv).await;
         let (stopped, handed_over) = {
             let mut state = conv.state.lock().await;
+            if let Some(request) = owed {
+                state.outcomes.insert(request, RequestState::Stopped);
+            }
             // A limited turn being handed over: it ends Stopped, and its messages don't go again.
             let mut handed_over = false;
             if let Some(over) = &mut state.hand_over
@@ -1213,6 +1231,13 @@ impl SessionManager {
         };
         self.stop_previews(&id, super::preview::USER_STOP).await;
         self.drop_prewarm(&id, "stopped by the user");
+        // What Brigadier still owed the stopped answers ends with them, so nothing wakes the
+        // thread for them later or merges on its own: the CI watches, and the held merge
+        // (the composer's Stop stops the workers too). A failed turn ends none of it: what
+        // it started may still come, and works its request again then, as a late event does.
+        self.stop_ci_watches(&id).await;
+        self.stop_merge_for_stop(&id).await;
+        self.settle_requests(&id).await;
         interrupted
     }
 
@@ -1294,6 +1319,7 @@ impl SessionManager {
             state.compacting = true;
             state.request = None;
             state.turn_error = None;
+            state.unshown_error = None;
             state.limit_hit = None;
             state.in_turn.clear();
         }
@@ -1618,6 +1644,7 @@ impl SessionManager {
             state.landed = false;
             state.limit_hit = None;
             state.turn_error = None;
+            state.unshown_error = None;
             state.last_reply = None;
             state.request.clone_from(&request);
             if let Some(request) = &request {
@@ -1785,13 +1812,14 @@ impl SessionManager {
         envelopes: Vec<(Envelope, Option<String>)>,
         message: &str,
     ) {
-        let asked = {
+        let (asked, failed) = {
             let mut state = conv.state.lock().await;
             state.busy = false;
             state.compacting = false;
-            if let Some(request) = state.request.take() {
+            let failed = state.request.take();
+            if let Some(request) = &failed {
                 state.outcomes.insert(
-                    request,
+                    request.clone(),
                     RequestState::Failed {
                         error: message.to_owned(),
                     },
@@ -1803,15 +1831,19 @@ impl SessionManager {
             let mut inbox = envelopes;
             inbox.append(&mut state.inbox);
             state.inbox = inbox;
-            std::mem::take(&mut state.asked)
+            (std::mem::take(&mut state.asked), failed)
         };
         // Its follow-ups wait in the queue; the carried envelopes ask again.
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
             tracing::warn!(conversation = %conv.id, error = %err, "could not settle follow-ups");
         }
-        self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, message)
-            .await;
-        self.set_run(&conv.id, RunState::Failed, Some(message.to_owned()))
+        // Said once: by the failed request when there is one, else as a notice. The run names
+        // the request, so the app shows no second line for it.
+        if failed.is_none() {
+            self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, message)
+                .await;
+        }
+        self.set_run_for(&conv.id, RunState::Failed, Some(message.to_owned()), failed)
             .await;
         self.settle_requests(&conv.id).await;
     }
@@ -2514,7 +2546,7 @@ impl SessionManager {
             tokio::select! {
                 event = events.recv() => match event {
                     // Never stored.
-                    Some(ProviderEvent::Progress { .. }) => {}
+                    Some(ProviderEvent::Progress { .. } | ProviderEvent::BackgroundJobs { .. }) => {}
                     // Only a session's thread keeps what it read (a Chat only searches the web).
                     Some(event @ ProviderEvent::Looked { .. }) => {
                         if conv.kind == ConversationKind::Session {
@@ -2592,7 +2624,7 @@ impl SessionManager {
             self.on_conversation_event(&conv, &cli, reply).await;
         }
         self.grants.revoke_owner(&cli.owner);
-        let (was_busy, closing) = {
+        let (was_busy, closing, failed) = {
             let mut state = conv.state.lock().await;
             if state
                 .cli
@@ -2604,24 +2636,32 @@ impl SessionManager {
             let was_busy = state.busy;
             state.busy = false;
             state.compacting = false;
+            let mut failed = None;
             if let Some(request) = state.request.take()
                 && was_busy
                 && !state.closing
             {
                 state.outcomes.insert(
-                    request,
+                    request.clone(),
                     RequestState::Failed {
                         error: ENDED_UNEXPECTEDLY.into(),
                     },
                 );
+                failed = Some(request);
             }
-            (was_busy, state.closing)
+            (was_busy, state.closing, failed)
         };
         self.end_compaction(&conv, ENDED_UNEXPECTEDLY.into()).await;
         cli.ended.cancel();
         if was_busy && !closing {
-            self.set_run(&conv.id, RunState::Failed, Some(ENDED_UNEXPECTEDLY.into()))
-                .await;
+            // The run names the failed request, which says it in the thread.
+            self.set_run_for(
+                &conv.id,
+                RunState::Failed,
+                Some(ENDED_UNEXPECTEDLY.into()),
+                failed,
+            )
+            .await;
         } else if !closing {
             self.set_run(&conv.id, RunState::Idle, None).await;
         }
@@ -2947,10 +2987,19 @@ impl SessionManager {
                         .runtime
                         .switch_target(&cli.account, cli.model.model.as_deref())
                         .is_some();
-                if !error.will_retry {
-                    conv.state.lock().await.turn_error = Some(error.message.clone());
-                }
-                if !error.will_retry && !switching {
+                // An error that ends a request's turn is said once, by the failed request in
+                // the thread; a limit has its own hand-over, and an error with no request to
+                // carry it is a notice.
+                let unshown = !error.will_retry && {
+                    let mut state = conv.state.lock().await;
+                    state.turn_error = Some(error.message.clone());
+                    let carried = !limited && state.request.is_some();
+                    if carried {
+                        state.unshown_error = Some(error.message.clone());
+                    }
+                    carried
+                };
+                if !error.will_retry && !switching && !unshown {
                     self.notice(
                         &conv.id,
                         brigadier_providers::NoticeLevel::Warning,
@@ -3287,7 +3336,7 @@ impl SessionManager {
             _ => HashSet::new(),
         };
         let in_run = self.overnight.active.get(&conv.id).is_some();
-        let (limit_hit, ended, landed, carried, asked, served, end_commands) = {
+        let (limit_hit, ended, landed, carried, asked, served, end_commands, unshown) = {
             let mut state = conv.state.lock().await;
             state.commands.clear();
             // Taken now, so no turn starts on it in between (a stand-in closes it anyway).
@@ -3314,6 +3363,10 @@ impl SessionManager {
                 _ => None,
             };
             let served = state.request.take();
+            // An error the request won't show after all (its turn didn't fail) is a notice.
+            let unshown = state.unshown_error.take().filter(|_| {
+                served.is_none() || !matches!(ended, Some(RequestState::Failed { .. }))
+            });
             let limit_hit = state.limit_hit.take();
             // A CLI at its limit fails the turn; an injected limit (development builds)
             // interrupts it first. Its request isn't over until a hand-over is chosen: it goes
@@ -3335,6 +3388,18 @@ impl SessionManager {
             // told once to ask it on a card, and the request goes on. After that, nothing
             // pushes the orchestrator past it before the user answers (see `asked_user`).
             let reply = state.last_reply.take();
+            // A turn that ended on [quiet], or said nothing, left the request's answer to what
+            // wakes the thread next: a review of its work still running keeps it working.
+            if let Some(request) = &served {
+                let quiet = reply
+                    .as_deref()
+                    .is_none_or(|reply| reply.trim_end().ends_with(prompts::QUIET));
+                if status == TurnStatus::Completed && quiet {
+                    state.deferred.insert(request.clone());
+                } else {
+                    state.deferred.remove(request);
+                }
+            }
             if conv.kind == ConversationKind::Session
                 && status == TurnStatus::Completed
                 && let Some(request) = &served
@@ -3364,8 +3429,13 @@ impl SessionManager {
                 std::mem::take(&mut state.asked),
                 served,
                 end_commands,
+                unshown,
             )
         };
+        if let Some(text) = unshown {
+            self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, &text)
+                .await;
+        }
         // Follow-ups the turn left undecided wait in the queue for their own turn.
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
             tracing::warn!(conversation = %conv.id, error = %err, "could not settle follow-ups");

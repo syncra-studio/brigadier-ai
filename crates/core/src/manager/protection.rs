@@ -205,14 +205,17 @@ mod tests {
     use super::*;
 
     /// A folder removed when dropped however the test ends.
+    #[cfg(target_os = "macos")]
     struct Temp(PathBuf);
 
+    #[cfg(target_os = "macos")]
     impl Drop for Temp {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn git(cwd: &Path, args: &[&str]) -> String {
         let out = std::process::Command::new("git")
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])

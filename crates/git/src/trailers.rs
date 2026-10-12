@@ -150,6 +150,30 @@ impl Repo {
             .any(|line| line.trim().eq_ignore_ascii_case(value)))
     }
 
+    /// The values of the trailer `key` in each commit from `base` (excluded) to `tip`, one
+    /// list per commit (empty for a commit without it), newest first, as git parses a
+    /// message's trailers.
+    pub fn trailer_values(&self, base: &Oid, tip: &Oid, key: &str) -> Result<Vec<Vec<String>>> {
+        valid_oid(base)?;
+        valid_oid(tip)?;
+        // Each commit starts with a record separator, then its values on one line.
+        let format = format!("--format=%x1e%(trailers:key={key},valueonly,separator=%x1f)");
+        let range = format!("{}..{}", base.0, tip.0);
+        let out = self.cmd(&["log", &format, &range, "--"], true)?;
+        Ok(parse::text(&out)?
+            .split('\x1e')
+            .skip(1)
+            .map(|commit| {
+                commit
+                    .split('\x1f')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .collect())
+    }
+
     /// The commits from `base` (excluded) to `tip` that carry the trailer `key: value` (as
     /// [`Self::has_trailer`] matches it), and the lines they added and removed (`--numstat`;
     /// merges show none, binary files count none).

@@ -133,7 +133,8 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
         {conversation && (
           <Mentions conversation={conversation} targets={targets} />
         )}
-        {conversation && !archived && <FullAccessNotice conversation={conversation} />}
+        {/* Out of the way while a decision waits above the composer (see FullAccessNotice). */}
+        {conversation && !archived && !current && !slot && <FullAccessNotice conversation={conversation} />}
         <SlashCommands
           conversation={conversation}
           groups={resolved.groups}
@@ -294,8 +295,12 @@ const closedNotices = new Set<string>();
 
 /**
  * The "Full access is on" card above the composer, while a session's workers run without the
- * OS sandbox. × closes it for this conversation; "Don't show again" turns it off in Settings,
- * where it can be turned back on.
+ * OS sandbox: the full warning at nine tenths of a card's usual size (its padding, type, icon
+ * and buttons; heights rounded to whole pixels, so the thread's footer stays on the pixel grid),
+ * rounded like the composer. It steps aside while a question, proposal or approval
+ * waits above the composer, so it never pushes that card or the thread's last lines out of
+ * view. × closes it for this conversation; "Don't show again" turns it off in Settings, where it
+ * can be turned back on.
  */
 function FullAccessNotice({ conversation }: { conversation: Conversation }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
@@ -310,12 +315,12 @@ function FullAccessNotice({ conversation }: { conversation: Conversation }) {
     <section
       aria-label="Full access is on"
       data-slot="full-access-notice"
-      className="@container/notice animate-rail-open bg-rail border-foreground/10 rounded-surface mb-2 border px-4 py-3 text-sm motion-reduce:animate-none"
+      className="@container/notice animate-rail-open bg-rail border-foreground/10 rounded-composer mb-2 border px-notice-x py-notice-y text-notice motion-reduce:animate-none"
     >
       {/* Narrow, the buttons go under the text, so the text keeps the width to read. */}
-      <div className="flex flex-col gap-2 @lg/notice:flex-row @lg/notice:items-center @lg/notice:gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <ShieldExclamation className="size-icon-md shrink-0" />
+      <div className="flex flex-col gap-notice-gap @lg/notice:flex-row @lg/notice:items-center @lg/notice:gap-notice-gap-wide">
+        <div className="flex min-w-0 flex-1 items-center gap-notice-gap-wide">
+          <ShieldExclamation className="size-notice-icon shrink-0" />
           <div className="min-w-0 flex-1">
             <p className="font-medium">Full access is on</p>
             <p className="text-muted-foreground">
@@ -329,10 +334,10 @@ function FullAccessNotice({ conversation }: { conversation: Conversation }) {
             </p>
           </div>
         </div>
-        <div className="border-foreground/10 flex shrink-0 items-center justify-end gap-1 @lg/notice:self-stretch @lg/notice:border-s @lg/notice:ps-3">
+        <div className="border-foreground/10 flex shrink-0 items-center justify-end gap-1 @lg/notice:self-stretch @lg/notice:border-s @lg/notice:ps-notice-gap-wide">
           <Button
             size="xs"
-            className="rounded-capsule"
+            className="rounded-capsule h-notice-button text-notice-button"
             onClick={() =>
               void setSetting("showFullAccessNotice", false).catch(
                 (error: unknown) => console.error("couldn't save the setting", error),
@@ -341,8 +346,13 @@ function FullAccessNotice({ conversation }: { conversation: Conversation }) {
           >
             Don’t show again
           </Button>
-          <TooltipIconButton tooltip="Close" side="bottom" className="rounded-capsule" onClick={close}>
-            <X />
+          <TooltipIconButton
+            tooltip="Close"
+            side="bottom"
+            className="rounded-capsule size-notice-close"
+            onClick={close}
+          >
+            <X className="size-notice-close-icon" />
           </TooltipIconButton>
         </div>
       </div>

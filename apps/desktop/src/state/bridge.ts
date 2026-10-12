@@ -12,7 +12,7 @@ import {
 import { applyActivityEvents, loadActivity } from "@/state/activity";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
 import { applyBoardEvents, sideBoardIds, useBoard } from "@/state/board";
-import { applyBrainEvents } from "@/state/brain";
+import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
 import { applyEvents, useApp } from "@/state/store";
 import { startBrowserOptions } from "@/state/links";
 import { startMenuBar } from "@/state/menuBar";
@@ -48,7 +48,8 @@ function flush() {
 
 /** Reloads everything the UI holds: used after (re)connecting and after missing events.
  * Threads other than the shown ones may be stale, so they are dropped and reload when opened.
- * The shown conversations' boards and the Inspector's orchestrator log are read again. */
+ * The shown conversations' boards, the Inspector's orchestrator log and the Brain tab's session
+ * workers are read again. */
 async function resync() {
   const { selection, threads } = useApp.getState();
   const openId = selection.type === "conversation" ? selection.id : null;
@@ -62,7 +63,7 @@ async function resync() {
   await Promise.all([loadCatalog(), loadActivity(), loadUpdates()]);
   const log = useBoard.getState().orchestrator;
   if (log) void openOrchestratorLog(log.conversationId);
-  await Promise.all(shown.map((id) => loadConversation(id)));
+  await Promise.all([...shown.map((id) => loadConversation(id)), reloadSessionTasks()]);
 }
 
 /** Whether the daemon has answered yet: startup marks the first time. */

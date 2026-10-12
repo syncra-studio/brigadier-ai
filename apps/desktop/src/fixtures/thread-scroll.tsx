@@ -362,12 +362,12 @@ const steps = {
       bottomFade: round(fade(".thread-bottom-fade") - footer),
     };
   },
-  /** The button's threshold and place. */
+  /** The button's threshold and place: the last row 8px, then 9px, under the composer's top. */
   async button() {
-    await userScroll(max() - 8);
+    await userScroll(max() - 84 - 8);
     await settle(250);
     const at8 = buttonState();
-    await userScroll(max() - 9);
+    await userScroll(max() - 84 - 9);
     await settle(250);
     const at9 = buttonState();
     return { at8, at9 };
@@ -531,6 +531,8 @@ const steps = {
   },
   /** With the capsule above the composer: the gaps are to the capsule's top. */
   async capsule() {
+    // A shorter window, so the plan's thread runs past the view and its bottom is a real one.
+    $("#thread-scroll-main")!.style.paddingBottom = `${SHRINK_PX}px`;
     await open(planId);
     useBoard.setState({ board: { ...planBoard, loaded: true, head: planMessages.at(-1)?.id ?? null } });
     await settle(400);
@@ -540,7 +542,10 @@ const steps = {
     const atBottom = { capsule: capsule !== null, capsuleInStack: capsule ? round(capsule.getBoundingClientRect().top - stackTop()) : null, lastGap: lastGap(), distance: distance() };
     await userScroll(max() - 200);
     await settle(250);
-    return { atBottom, button: buttonState() };
+    const above = buttonState();
+    $("#thread-scroll-main")!.style.paddingBottom = "";
+    await settle(200);
+    return { atBottom, button: above };
   },
   /** An existing conversation never opened, whose one turn still runs: the bottom. */
   async working() {

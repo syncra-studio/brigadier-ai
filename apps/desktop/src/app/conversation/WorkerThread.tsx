@@ -141,8 +141,8 @@ function EntryView({ entry }: { entry: ThreadEntry }) {
     case "error":
       return (
         <ErrorState
-          title={ERROR_TITLES[item.error.kind]}
-          detail={item.error.willRetry ? `${item.error.message}\n\nIt tries again on its own.` : item.error.message}
+          summary={item.error.willRetry ? `${ERROR_TITLES[item.error.kind]}: it tries again on its own.` : `${ERROR_TITLES[item.error.kind]}.`}
+          details={item.error.message}
         />
       );
     case "notice":

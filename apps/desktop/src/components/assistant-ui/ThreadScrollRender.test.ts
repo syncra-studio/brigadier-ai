@@ -54,7 +54,8 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   near(firstOpen.topFade, 20, "fade under the top bar");
   near(firstOpen.bottomFade, 30, "fade above the composer");
 
-  // The button: hidden within 8px of the bottom, shown past it; a 32px circle 24px above the
+  // The button: hidden while the last row reaches at most 8px under the composer's top (the
+  // 84px gap above the composer is in view), shown past it; a 32px circle 24px above the
   // composer, centred on the column.
   assert.equal(seen.button.at8.shown, false);
   assert.equal(seen.button.at9.shown, true);
@@ -89,13 +90,15 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(expand.buttonAfter.shown, true);
   assert.equal(expand.bottomClose.distance, 0);
 
-  // The composer growing doesn't scroll (it covers content, the button shows); the gaps are to
-  // the top of what floats over the thread.
+  // The composer growing doesn't scroll; the gaps are to the top of what floats over the thread.
+  // The notice covers only part of the gap above the composer: the content stays in view, so
+  // the button stays hidden.
   const { composerGrows } = seen;
   assert.equal(composerGrows.grown.top, composerGrows.before.top);
   assert.ok(composerGrows.grown.stackTop < composerGrows.before.stackTop);
   assert.equal(composerGrows.grown.distance, Math.round(composerGrows.before.stackTop - composerGrows.grown.stackTop));
-  assert.equal(composerGrows.grown.button.shown, true);
+  assert.ok(composerGrows.grown.distance < 84, `the notice is ${composerGrows.grown.distance}px`);
+  assert.equal(composerGrows.grown.button.shown, false);
   near(composerGrows.atBottom.lastGap, 84, "last content to the notice");
   near(composerGrows.atBottom.button.aboveStack, 24, "button above the notice");
   assert.equal(composerGrows.shrunk.distance, 0);
