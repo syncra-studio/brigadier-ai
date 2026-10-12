@@ -109,8 +109,13 @@ function Onboarding({ onEscape }: { onEscape: (handler: (() => boolean) | null) 
   const [reached, setReached] = useState(() => Math.max(STEPS.indexOf(step), 0));
   const stopSound = useRef<(() => void) | null>(null);
 
-  // Closing the setup before the sound has ended fades it out.
+  // Closing the setup before the sound has ended fades it out. So does closing the window,
+  // which only hides it (the setup stays, behind it).
   useEffect(() => () => stopSound.current?.(), []);
+  const windowVisible = useApp((s) => s.windowVisible);
+  useEffect(() => {
+    if (!windowVisible) stopSound.current?.();
+  }, [windowVisible]);
 
   const go = (next: Step) => {
     setStep(next);
@@ -126,6 +131,7 @@ function Onboarding({ onEscape }: { onEscape: (handler: (() => boolean) | null) 
           name={userName}
           onSound={(stop) => {
             stopSound.current = stop;
+            if (!useApp.getState().windowVisible) stop();
           }}
           onContinue={() => {
             go("name");

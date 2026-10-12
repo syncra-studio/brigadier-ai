@@ -8,7 +8,7 @@
 
 /** How loud it plays. */
 const GAIN = 0.6;
-/** How long it takes to fade out when the setup closes before it has finished. */
+/** How long it fades out over when the setup or the window closes before it has finished. */
 const FADE_S = 0.6;
 
 let loading: Promise<{ context: AudioContext; buffer: AudioBuffer }> | null = null;
@@ -35,7 +35,7 @@ export function preloadWelcomeSound(): Promise<{ context: AudioContext; buffer: 
 
 /**
  * Plays the sound once from the start. Resolves, as it starts, to a function that fades it out
- * (for a setup closed before it ends); rejects if it can't play.
+ * (for a setup or window closed before it ends); rejects if it can't play.
  */
 export async function playWelcomeSound(): Promise<() => void> {
   const { context, buffer } = await preloadWelcomeSound();
