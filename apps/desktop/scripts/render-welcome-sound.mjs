@@ -4,11 +4,12 @@
 //
 // Everything is synthesized here, no samples: detuned harmonic voices moving through
 // F(add9), Bbmaj7 and F6/9, quiet filtered air, and diffuse reflections of the voices. The
-// air swells as the comet streaks in, into the moment it becomes the mark (LAND), where a
-// soft bell and a low swell arrive with it; a breath of air and a low bloom go with the mark
-// flaring out into the window (FLARE); the chords change as the heading and then Continue
-// come in. Those times match the intro's (the comet's beats in IntroCanvas.tsx,
-// --intro-heading and --intro-continue in tokens.css).
+// air swells as the comet streaks in, into the moment it has become the crisp mark (LAND),
+// where a soft bell and a low swell arrive with it; the air draws in as the mark does
+// (COLLAPSE), and the burst (BURST) comes with a soft low thump, a deep bloom and a breath of
+// air flung outward; the chords change as the title and then its button come in. Those times
+// match the intro's (the comet's beats in IntroCanvas.tsx, --intro-heading and
+// --intro-continue in tokens.css).
 //
 // Writes a WAV, then encodes it to AAC with macOS's afconvert (on other systems the WAV is
 // left next to the output instead).
@@ -21,12 +22,18 @@ import { join, resolve } from "node:path";
 const OUT = resolve(process.argv[2] ?? new URL("../src/app/onboarding/welcome-sound.m4a", import.meta.url).pathname);
 
 const SR = 44_100;
-const DURATION = 10.6;
-/** When the comet becomes the mark, the mark flares out, the heading starts and Continue appears, in seconds. */
-const LAND = 2.75;
-const FLARE = 3.65;
-const HEADING = 4.6;
-const CONTINUE = 6.5;
+const DURATION = 10.8;
+/**
+ * When the comet has become the mark, the mark draws in, it bursts, the title starts and its
+ * button appears, in seconds.
+ */
+const LAND = 2.9;
+const COLLAPSE = 3.55;
+const BURST = 3.68;
+const HEADING = 4.7;
+const CONTINUE = 6.4;
+/** When the whole starts fading out. */
+const RELEASE = 8.6;
 /** The loudest sample, as a fraction of full scale (about -7.5 dBFS). */
 const PEAK = 0.42;
 
@@ -98,7 +105,8 @@ CHORDS.forEach((chord, index) => {
   });
 });
 
-// Soft air that swells into the landing and thins out after it, with a breath at the flare.
+// Soft air that swells into the landing and thins out after it, draws in with the mark and is
+// flung out with the burst.
 for (let c = 0; c < 2; c++) {
   const noise = Float64Array.from({ length: N }, normal);
   const width = 75;
@@ -108,8 +116,8 @@ for (let c = 0; c < 2; c++) {
     const time = i / SR;
     const swell = smooth(time, 0.1, LAND) * (1 - smooth(time, LAND, LAND + 2.2));
     const bed = 0.35 * smooth(time, LAND, LAND + 1) * (1 - smooth(time, 7.6, 10));
-    const flare = 0.75 * (time < FLARE ? smooth(time, FLARE - 0.45, FLARE) : Math.exp(-(time - FLARE) / 0.6));
-    channels[c][i] += (sum / width) * 0.09 * Math.max(swell, bed, flare);
+    const burst = time < BURST ? 0.8 * smooth(time, COLLAPSE - 0.25, BURST) : 1.1 * Math.exp(-(time - BURST) / 0.9);
+    channels[c][i] += (sum / width) * 0.09 * Math.max(swell, bed, burst);
   }
 }
 
@@ -135,11 +143,23 @@ for (let c = 0; c < 2; c++) {
   }
 }
 
-// A low bloom under the flare, a fifth above the landing's swell.
+// The burst: a soft, rounded thump falling in pitch, then a deep bloom an octave below the
+// landing's swell, with its octave and fifth, that rings out slowly.
+const BLOOM = [
+  { note: 29, level: 0.05 }, // F1
+  { note: 41, level: 0.07 }, // F2
+  { note: 48, level: 0.03 }, // C3
+];
 for (let c = 0; c < 2; c++) {
-  for (let i = Math.floor(FLARE * SR); i < N; i++) {
-    const since = i / SR - FLARE;
-    channels[c][i] += 0.045 * smooth(since, 0, 0.25) * Math.exp(-since / 1.3) * Math.sin(2 * Math.PI * hz(48) * since + c * 0.4);
+  let thump = 0;
+  for (let i = Math.floor(BURST * SR); i < N; i++) {
+    const since = i / SR - BURST;
+    thump += (2 * Math.PI * (50 + 60 * Math.exp(-since / 0.08))) / SR;
+    let bloom = 0;
+    for (const { note, level } of BLOOM) bloom += level * Math.sin(2 * Math.PI * hz(note) * since + c * 0.4);
+    channels[c][i] +=
+      0.08 * smooth(since, 0, 0.015) * Math.exp(-since / 0.12) * Math.sin(thump) +
+      smooth(since, 0, 0.04) * Math.exp(-since / 2.2) * bloom;
   }
 }
 
@@ -147,7 +167,7 @@ for (let c = 0; c < 2; c++) {
 for (let c = 0; c < 2; c++) {
   for (let i = 0; i < N; i++) {
     const time = i / SR;
-    const level = 0.008 * smooth(time, LAND, LAND + 1.6) * (1 - smooth(time, 4.4, 8.4));
+    const level = 0.008 * smooth(time, LAND, LAND + 1.6) * (1 - smooth(time, 4.4, RELEASE));
     if (level > 0) channels[c][i] += level * Math.sin(2 * Math.PI * 698.456 * time + 0.02 * Math.sin(time * 1.8 + c));
   }
 }
@@ -174,7 +194,7 @@ for (let c = 0; c < 2; c++) {
   for (let i = 0; i < N; i++) mean += out[i] / N;
   for (let i = 0; i < N; i++) {
     const time = i / SR;
-    const envelope = (0.035 + 0.965 * smooth(time, 0, LAND)) * (1 - smooth(time, 8.4, DURATION));
+    const envelope = (0.035 + 0.965 * smooth(time, 0, LAND)) * (1 - smooth(time, RELEASE, DURATION));
     const edges = Math.min(1, time / 0.025) * Math.min(1, (DURATION - time) / 0.04);
     out[i] = (out[i] - mean) * envelope * edges;
     peak = Math.max(peak, Math.abs(out[i]));
