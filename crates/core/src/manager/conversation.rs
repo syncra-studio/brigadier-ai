@@ -560,6 +560,10 @@ impl ConvLive {
     /// lets turns start again.
     pub(super) async fn carry(&self, message: Option<Message>, note: Option<String>) {
         let mut state = self.state.lock().await;
+        if let Some(message) = &message {
+            // Rework reuses the request id. Its old answer is moot after the old turn stops.
+            state.answered.remove(&message.id);
+        }
         state.pending.extend(message);
         state.notes.extend(note);
         state.held = false;

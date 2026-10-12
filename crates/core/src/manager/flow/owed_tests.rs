@@ -457,3 +457,69 @@ async fn a_quiet_late_turn_keeps_an_answered_request_done_while_its_review_runs(
     flow.settled().await;
     flow.stop().await;
 }
+
+/// Regenerating restarts the same request: its earlier answer no longer settles a quiet
+/// replacement turn while the review of its new commit is still running.
+#[tokio::test]
+async fn a_regenerated_quiet_turn_waits_for_its_review_despite_the_earlier_answer() {
+    let review = Arc::new(AtomicBool::new(false));
+    let gate = review.clone();
+    let answered = Arc::new(AtomicBool::new(false));
+    let flow = Flow::start(
+        "20261012-2245-review-fixes-w04-regenerated-quiet",
+        Options {
+            reviews: Some(script(move |_| {
+                let gate = gate.clone();
+                async move {
+                    until_set(&gate).await;
+                    Reply::text("No findings.")
+                }
+            })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let answered = answered.clone();
+            async move {
+                if turn.input.contains("Add notes.") {
+                    if !answered.swap(true, Ordering::SeqCst) {
+                        return Reply::text("Ready to add the notes.");
+                    }
+                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    return Reply::text("[quiet]");
+                }
+                Reply::text("Added and reviewed the notes.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes.").await;
+    let board = flow.settled().await;
+    let request = board.latest_request().unwrap().id.clone();
+    assert_eq!(board.requests[&request].state, RequestState::Done);
+    flow.manager
+        .regenerate(flow.conversation.clone(), request.clone())
+        .await
+        .unwrap();
+    flow.until(
+        "the new review running, the regenerated turn idle",
+        |board| {
+            board.run == RunState::Idle
+                && board
+                    .reviews
+                    .values()
+                    .any(|review| review.state == ReviewState::Running)
+        },
+    )
+    .await;
+    assert_eq!(stays(&flow, &request).await, RequestState::Working);
+    assert_eq!(
+        times_done(&flow, &request).await,
+        1,
+        "only the earlier answer was done"
+    );
+    review.store(true, Ordering::SeqCst);
+    let board = flow.settled().await;
+    assert_eq!(board.requests[&request].state, RequestState::Done);
+    assert_eq!(times_done(&flow, &request).await, 2);
+    flow.stop().await;
+}
