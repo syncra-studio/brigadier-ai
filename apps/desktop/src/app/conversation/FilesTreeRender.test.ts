@@ -4,7 +4,7 @@ import { renderFixturePage } from "@/fixtures/headless";
 
 type Row = { name: string; title: string; letter: string | null; dot: boolean; colour: string | null; struck: boolean; dimmed: boolean; icon: string | null };
 
-test("the Files tree marks changes, folders holding them and ignored entries, and reads again when the checkout changes", { timeout: 60000 }, async (t) => {
+test("the Files tree marks changes, folders holding them and ignored entries, and reads again when the checkout changes or the tree comes back", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "files-tree.html", "files-tree-result", 6000)) as Record<string, Row[] | boolean | string>;
   assert.equal(seen.error, undefined, JSON.stringify(seen));
   const top = seen.top as Row[];
@@ -27,4 +27,6 @@ test("the Files tree marks changes, folders holding them and ignored entries, an
   assert.deepEqual(changed.map((row) => [row.name, row.letter]), [["CHANGELOG.md", "U"], ["README.md", null]], "a change heard from the daemon reads files and changes again");
   assert.equal(seen.folderReread, true, "opened ignored folders are read again too");
   assert.equal(seen.otherIgnored, true, "another checkout's change reads nothing");
+  assert.deepEqual(seen.remounted, ["node_modules", "react"], "an ignored folder still open when the tree comes back is read again");
+  assert.deepEqual(seen.otherCheckout, ["vue"], "another checkout's folder is read anew, and the old one's late answer is dropped");
 });

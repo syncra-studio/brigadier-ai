@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Search } from "@openai/apps-sdk-ui/components/Icon";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { type ChangeMarks, changeMarks, LETTERS } from "@/app/conversation/sourceStatus";
 import { fuzzyMatch } from "@/components/assistant-ui/elements/fuzzy-match";
@@ -241,31 +241,51 @@ function useWorkspaceSource(target: WorkspaceTarget): SourceState | null {
   return kept ?? (read?.key === key ? read.state : null);
 }
 
+const NO_FOLDERS: ReadonlyMap<string, WorkspaceFolder> = new Map();
+
 /**
- * The ignored folders opened in the tree and what each holds, read from disk when opened and
- * again when the checkout changes.
+ * What the ignored folders open in the tree hold, read from disk: when one is shown open (also
+ * open again when the tree comes back) and again when the checkout changes. What was read of
+ * one checkout is dropped when the target moves to another, late answers too.
  */
 function useIgnoredFolders(target: WorkspaceTarget) {
-  const [loaded, setLoaded] = useState<ReadonlyMap<string, WorkspaceFolder>>(() => new Map());
-  const paths = useRef(new Set<string>());
+  const key = useCheckoutKey(target);
+  const [state, setState] = useState<{ key: string; loaded: ReadonlyMap<string, WorkspaceFolder> }>(
+    () => ({ key, loaded: NO_FOLDERS }),
+  );
+  const loaded = state.key === key ? state.loaded : NO_FOLDERS;
+  // The checkout shown now, and the folders asked of it (a failed read waits for a change).
+  const current = useRef(key);
+  const asked = useRef({ key, paths: new Set<string>() });
+  useLayoutEffect(() => {
+    current.current = key;
+    if (asked.current.key !== key) asked.current = { key, paths: new Set() };
+  }, [key]);
   const read = useCallback((path: string) => {
-    paths.current.add(path);
+    asked.current.paths.add(path);
+    const update = (change: (folders: Map<string, WorkspaceFolder>) => void) =>
+      setState((last) => {
+        if (current.current !== key) return last;
+        const folders = new Map(last.key === key ? last.loaded : NO_FOLDERS);
+        change(folders);
+        return { key, loaded: folders };
+      });
     readFolder(target, path)
-      .then((folder) => setLoaded((current) => new Map(current).set(path, folder)))
+      .then((folder) => update((folders) => folders.set(path, folder)))
       .catch((error: unknown) => {
-        paths.current.delete(path);
-        setLoaded((current) => {
-          const next = new Map(current);
-          next.delete(path);
-          return next;
-        });
+        update((folders) => folders.delete(path));
         console.error("reading an ignored folder failed", error);
       });
-  }, [target]);
+  }, [target, key]);
+  // Reads the open folders not asked of this checkout yet.
+  const want = useCallback((paths: readonly string[]) => {
+    if (asked.current.key !== key) return;
+    for (const path of paths) if (!asked.current.paths.has(path)) read(path);
+  }, [key, read]);
   useEffect(() => onWorkspaceChanged(target, () => {
-    for (const path of paths.current) read(path);
-  }), [target, read]);
-  return { loaded, read };
+    if (asked.current.key === key) for (const path of asked.current.paths) read(path);
+  }), [target, key, read]);
+  return { loaded, want };
 }
 
 function FileBrowser({
@@ -300,9 +320,12 @@ function FileBrowser({
   const [active, setActive] = useState(0);
   const source = useWorkspaceSource(target);
   const marks = useMemo(() => changeMarks(source), [source]);
-  const { loaded, read } = useIgnoredFolders(target);
+  const { loaded, want: readIgnored } = useIgnoredFolders(target);
   const tree = useMemo(() => buildTree(list, marks, loaded), [list, marks, loaded]);
   const rows = useMemo(() => visibleRows(tree, open, marks), [tree, open, marks]);
+  // Git doesn't list what an ignored folder holds: the open ones shown are read from disk.
+  const openIgnored = rows.flatMap((row) => row.kind === "folder" && row.open && row.ignored ? [row.path] : []).join("\n");
+  useEffect(() => readIgnored(openIgnored ? openIgnored.split("\n") : []), [openIgnored, readIgnored]);
   const searched = useSearchedFiles(scope, searchFiles, list?.truncated ?? false, query.trim());
   const results = useMemo(() => {
     const want = query.trim();
@@ -320,14 +343,10 @@ function FileBrowser({
       .map((result) => result.path);
   }, [list, searched, query]);
 
-  const toggle = (path: string, ignored: boolean) => {
+  const toggle = (path: string) => {
     const next = new Set(open);
     if (next.has(path)) next.delete(path);
-    else {
-      next.add(path);
-      // Git doesn't list what an ignored folder holds: it is read from disk.
-      if (ignored && !loaded.has(path)) read(path);
-    }
+    else next.add(path);
     openFolders.set(scope, next);
     setOpen(next);
   };
@@ -443,7 +462,7 @@ const TreeRow = memo(function TreeRow({
   onOpen,
 }: {
   row: Row;
-  onToggle: (path: string, ignored: boolean) => void;
+  onToggle: (path: string) => void;
   onOpen: OnOpen;
 }) {
   const folder = row.kind === "folder";
@@ -453,7 +472,7 @@ const TreeRow = memo(function TreeRow({
       <button
         type="button"
         title={mark ? `${row.path} · ${mark.label}` : row.ignored ? `${row.path} · Ignored` : row.path}
-        onClick={() => (folder ? onToggle(row.path, row.ignored) : onOpen(row.path, false))}
+        onClick={() => (folder ? onToggle(row.path) : onOpen(row.path, false))}
         onDoubleClick={() => !folder && onOpen(row.path, true)}
         // Each level indents by one step of the spacing scale.
         style={{ paddingInlineStart: `calc(var(--spacing) * ${2 + row.depth * 4})` }}
