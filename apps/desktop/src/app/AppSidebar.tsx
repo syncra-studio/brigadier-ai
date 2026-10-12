@@ -384,6 +384,21 @@ export function AppSidebar() {
           title="Chats"
           open={sections.isOpen("chats")}
           onOpenChange={(open) => sections.setOpen("chats", open)}
+          actions={
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="New chat"
+                  className={cn(rowAction, "size-icon-button-sm")}
+                  onClick={() => select({ type: "draft", kind: "chat" })}
+                >
+                  <Plus />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">New chat</TooltipContent>
+            </Tooltip>
+          }
         >
           <NavList>
             {chats.map((conversation) => (
