@@ -10,6 +10,10 @@
 //! The MCP server each agent gets is the helper's own stdio shim (`brigadier-cu mcp`). The shim
 //! starts the helper's daemon through LaunchServices on the first tool call and replaces a dead
 //! or hung one, under a lock all shims share, so Brigadier itself starts nothing here.
+//!
+//! Computer use is macOS only: elsewhere [`SessionManager::computer_use_kit`] is always `None`
+//! and the placing code isn't built.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -110,6 +114,7 @@ impl SessionManager {
 
 impl ComputerUse {
     /// The placed helper, placing it first when this is the first use or the bundle changed.
+    #[cfg(target_os = "macos")]
     async fn ready(&self, daemon_exe: &Path, data_dir: &Path) -> Result<Placed, String> {
         let source = bundled_helper(daemon_exe)
             .ok_or_else(|| "the helper app is missing from this install".to_owned())?;
@@ -129,10 +134,17 @@ impl ComputerUse {
         *placed = Some(fresh.clone());
         Ok(fresh)
     }
+
+    /// Computer use is macOS only.
+    #[cfg(not(target_os = "macos"))]
+    async fn ready(&self, _: &Path, _: &Path) -> Result<Placed, String> {
+        Err("computer use needs macOS".to_owned())
+    }
 }
 
 /// The helper bundled with this install: beside the daemon in Brigadier.app
 /// (`Contents/MacOS/brigadierd` → `Contents/Helpers/…`), or where [`HELPER_APP_ENV`] says.
+#[cfg(target_os = "macos")]
 fn bundled_helper(daemon_exe: &Path) -> Option<PathBuf> {
     if let Some(app) = std::env::var_os(HELPER_APP_ENV).filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(app)).filter(|app| app.exists());
@@ -144,6 +156,7 @@ fn bundled_helper(daemon_exe: &Path) -> Option<PathBuf> {
         .filter(|app| app.exists())
 }
 
+#[cfg(target_os = "macos")]
 fn executable_stamp(app: &Path) -> Option<SystemTime> {
     std::fs::metadata(app.join("Contents/MacOS").join(HELPER_BIN))
         .and_then(|meta| meta.modified())
@@ -151,6 +164,7 @@ fn executable_stamp(app: &Path) -> Option<SystemTime> {
 }
 
 /// Places the helper, its token and the skill plugin under `home`.
+#[cfg(target_os = "macos")]
 fn place(source: &Path, stamp: Option<SystemTime>, home: &Path) -> Result<Placed, String> {
     private_dir(home).map_err(|e| format!("couldn't make {}: {e}", home.display()))?;
     let app = place_helper(source, home).map_err(|e| e.to_string())?;
@@ -167,6 +181,7 @@ fn place(source: &Path, stamp: Option<SystemTime>, home: &Path) -> Result<Placed
     })
 }
 
+#[cfg(target_os = "macos")]
 fn private_dir(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir)?;
@@ -176,6 +191,7 @@ fn private_dir(dir: &Path) -> std::io::Result<()> {
 /// The token every request on the helper's socket carries: `<home>/auth`, made once (0600).
 /// The daemon reads the file (LaunchServices starts it without our environment); each shim
 /// gets the token in its environment.
+#[cfg(target_os = "macos")]
 fn socket_token(home: &Path) -> std::io::Result<String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -208,6 +224,7 @@ fn socket_token(home: &Path) -> std::io::Result<String> {
 /// Writes the skill plugin: `<home>/agent-plugin/.claude-plugin/plugin.json` and
 /// `skills/computer-use/SKILL.md`. Claude loads the folder as a plugin; Codex reads its
 /// `skills` folder as an extra skills root.
+#[cfg(target_os = "macos")]
 fn write_plugin(home: &Path) -> std::io::Result<PathBuf> {
     let plugin = home.join("agent-plugin");
     let skill = plugin.join("skills/computer-use");
@@ -226,6 +243,7 @@ fn write_plugin(home: &Path) -> std::io::Result<PathBuf> {
     Ok(plugin)
 }
 
+#[cfg(target_os = "macos")]
 fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<()> {
     if std::fs::read_to_string(path).is_ok_and(|current| current == contents) {
         return Ok(());
@@ -260,11 +278,6 @@ fn place_helper(bundle: &Path, home: &Path) -> std::io::Result<PathBuf> {
     }
     verify_signature(&placed)?;
     Ok(placed)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn place_helper(_: &Path, _: &Path) -> std::io::Result<PathBuf> {
-    Err(std::io::ErrorKind::Unsupported.into())
 }
 
 /// The helper daemon recorded in `<home>/cu.pid`, if it still runs from `placed`: a reused pid
@@ -411,7 +424,7 @@ fn same_tree(a: &Path, b: &Path) -> bool {
         && matches!((std::fs::read(a), std::fs::read(b)), (Ok(x), Ok(y)) if x == y)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 
