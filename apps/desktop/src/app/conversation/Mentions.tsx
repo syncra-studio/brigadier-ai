@@ -71,7 +71,15 @@ export const MentionText: FC<{ text: string }> = ({ text }) => {
 /** A user message's text part, its @-mentioned workers as chips. */
 export const UserMessageText: FC<TextMessagePartProps> = ({ text }) => {
   const attachments = useAuiState((s) => s.message.metadata.custom["attachments"]) as AttachmentRef[] | undefined;
-  return <InlineImageText text={text} attachments={attachments ?? []} Text={MentionText} />;
+  const mentions = useAuiState((s) => s.message.metadata.custom["mentions"]) as Mention[] | undefined;
+  return <>
+    {pageMentions(mentions).map((page) => page.type === "page" && (
+      <span key={page.id} data-slot="page-mention" className="text-muted-foreground mb-1 block text-sm">
+        From page: {page.title}
+      </span>
+    ))}
+    <InlineImageText text={text} attachments={attachments ?? []} Text={MentionText} />
+  </>;
 };
 
 /**
@@ -118,7 +126,7 @@ export function mentionsIn(
 }
 
 /**
- * The page a queued message was sent from, which it keeps when edited: no `@name` in the text
+ * The page a message was sent from, which it keeps when edited: no `@name` in the text
  * stands for it.
  */
 export function pageMentions(mentions: readonly Mention[] | undefined): Mention[] {
