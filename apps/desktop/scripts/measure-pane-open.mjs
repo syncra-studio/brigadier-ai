@@ -1,4 +1,4 @@
-// Measures how long the right sidebar takes to show Files or Source, frame by frame from the key
+// Measures how long the right sidebar takes to show Files, Source or a cached Search, frame by frame from the key
 // that opens it on that view, in a production build of the pane-open fixture with IPC answered
 // after a daemon-like delay.
 // PLAYWRIGHT_MODULE=<installed module> CHROME_BIN=<installed browser> node scripts/measure-pane-open.mjs [delay ms] [runs]
@@ -20,6 +20,7 @@ const COLUMN = '[data-slot="workspace-pane"]';
 const VIEWS = [
   { label: 'Files', key: { code: 'KeyE', metaKey: true, shiftKey: true }, text: 'apps' },
   { label: 'Source', key: { code: 'KeyG', ctrlKey: true, shiftKey: true }, text: 'file-0.ts' },
+  { label: 'Search', key: { code: 'KeyF', metaKey: true, shiftKey: true }, text: 'needle in file-0.ts' },
 ];
 const TOGGLE = { code: 'KeyB', metaKey: true, altKey: true };
 

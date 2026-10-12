@@ -18,6 +18,7 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import type { Conversation, Request, SourceFile } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
+import { emitSearchUpdate, runSearch, setSearchForm } from "@/state/workspaceSearch";
 
 const params = new URLSearchParams(location.search);
 const delay = Number(params.get("delay") ?? 25);
@@ -33,7 +34,16 @@ useBoard.setState({ board: { ...emptyBoard(id), loaded: true } });
 const files = Array.from({ length: 1500 }, (_, index) =>
   `${["apps", "crates", "docs", "scripts"][index % 4]}/part-${index % 37}/file-${index}.ts`).toSorted();
 const changes: SourceFile[] = files.slice(0, 12).map((path, index) => ({ path, oldPath: null, status: index % 3 ? "modified" : "untracked" }));
+let searchId = 0;
 const answer = (req: Request): unknown => {
+  if (req.method === "startSearch") {
+    const runId = ++searchId;
+    emitSearchUpdate(runId, { type: "files", files: changes.map((file, index) => ({
+      path: file.path, hash: "fixture", matches: 1, lines: [{ line: 1, preview: `needle in file-${index}.ts`, ranges: [{ start: 0, end: 6 }] }],
+    })) });
+    emitSearchUpdate(runId, { type: "done", files: changes.length, matches: changes.length, capped: false });
+    return { method: req.method, id: runId };
+  }
   if (req.method === "listFiles") return { method: req.method, files, truncated: false };
   if (req.method === "getWorkspaceTree") return { method: req.method, tree: { files, truncated: false, ignored: [], ignoredTruncated: false } };
   if (req.method === "getSourceState") return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes } };
@@ -44,6 +54,11 @@ mockIPC((command, args) => {
   const req = (args as { request: Request }).request;
   return new Promise((resolve) => setTimeout(() => resolve(answer(req)), delay));
 });
+
+// Search's first open is measured after a query has already completed, like reopening it.
+const searchTarget = { type: "conversation", conversationId: id } as const;
+setSearchForm(searchTarget, { text: "needle" });
+runSearch(searchTarget, { text: "needle", matchCase: false, wholeWord: false, regex: false, include: "", exclude: "" });
 
 const target = { mentions: new MentionMemory() } as unknown as ComposerTarget;
 
