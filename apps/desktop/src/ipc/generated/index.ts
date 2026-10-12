@@ -342,6 +342,7 @@ export type { SharedPart } from "./SharedPart";
 export type { SharedUsage } from "./SharedUsage";
 export type { SitePermission } from "./SitePermission";
 export type { SmokeReport } from "./SmokeReport";
+export type { SourceChange } from "./SourceChange";
 export type { SourceFile } from "./SourceFile";
 export type { SourceScope } from "./SourceScope";
 export type { SourceSnapshot } from "./SourceSnapshot";

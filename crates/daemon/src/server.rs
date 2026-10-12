@@ -1503,6 +1503,27 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::DiscardFiles {
             state: heap(|| sessions.discard_files(&conversation_id, scope, paths)).await?,
         },
+        Request::ListProjectFiles { project_id, query } => {
+            let (files, truncated) = sessions.list_project_files(&project_id, query).await?;
+            Response::ListProjectFiles { files, truncated }
+        }
+        Request::GetProjectSourceState { project_id } => Response::GetProjectSourceState {
+            state: heap(|| sessions.project_source_state(&project_id)).await?,
+        },
+        Request::ChangeProjectSource { project_id, change } => Response::ChangeProjectSource {
+            state: heap(|| sessions.change_project_source(&project_id, change)).await?,
+        },
+        Request::CommitProjectChanges {
+            project_id,
+            message,
+            include_unstaged,
+            push,
+        } => Response::CommitProjectChanges {
+            outcome: heap(|| {
+                sessions.commit_project_changes(&project_id, message, include_unstaged, push)
+            })
+            .await?,
+        },
         Request::GetReviewDiff {
             conversation_id,
             scope,

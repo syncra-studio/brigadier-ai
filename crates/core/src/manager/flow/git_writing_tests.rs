@@ -597,3 +597,88 @@ async fn a_chosen_writer_at_its_limit_notes_the_model_that_wrote_it() {
     );
     flow.stop().await;
 }
+
+/// Before its session starts, a project's Files and Source panes act on the project's own
+/// folder: its files, its changes staged, unstaged and discarded there, and a commit there with
+/// a message written for it.
+#[tokio::test]
+async fn a_project_folder_lists_stages_and_commits_before_a_session_starts() {
+    use crate::work::{SourceChange, SourceScope};
+
+    let writes = Writes::default();
+    let flow = Flow::start(
+        "git-writer-project",
+        Options::default(),
+        writing(&writes, |_| Reply::text("Add the draft")),
+    )
+    .await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .expect("a session has a project");
+    let manager = &flow.manager;
+
+    let (files, truncated) = manager.list_project_files(&project, None).await.unwrap();
+    assert!(files.contains(&"README.md".to_owned()), "{files:?}");
+    assert!(!truncated);
+
+    std::fs::write(flow.repo.join("draft.txt"), "draft\n").unwrap();
+    std::fs::write(flow.repo.join("README.md"), "# Changed\n").unwrap();
+    let paths = |files: &[crate::work::SourceFile]| -> Vec<String> {
+        files.iter().map(|file| file.path.clone()).collect()
+    };
+    let state = manager.project_source_state(&project).await.unwrap();
+    assert_eq!(paths(&state.changes), ["README.md", "draft.txt"]);
+    assert!(state.staged.is_empty());
+
+    let only = |path: &str| Some(vec![path.to_owned()]);
+    let state = manager
+        .change_project_source(
+            &project,
+            SourceChange::Stage {
+                paths: only("draft.txt"),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(paths(&state.staged), ["draft.txt"]);
+    let state = manager
+        .change_project_source(&project, SourceChange::Unstage { paths: None })
+        .await
+        .unwrap();
+    assert!(state.staged.is_empty());
+    let state = manager
+        .change_project_source(
+            &project,
+            SourceChange::Discard {
+                scope: SourceScope::Unstaged,
+                paths: only("README.md"),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(paths(&state.changes), ["draft.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("README.md")).unwrap(),
+        "# Flow\n"
+    );
+
+    manager
+        .change_project_source(&project, SourceChange::Stage { paths: None })
+        .await
+        .unwrap();
+    let outcome = manager
+        .commit_project_changes(&project, None, false, false)
+        .await
+        .unwrap();
+    assert_eq!(outcome.message, "Add the draft");
+    assert_eq!(outcome.branch, "main");
+    assert_eq!(
+        super::git(&flow.repo, &["log", "-1", "--format=%s"]).trim(),
+        "Add the draft"
+    );
+    assert_eq!(writes.lock().unwrap().len(), 1);
+    flow.stop().await;
+}

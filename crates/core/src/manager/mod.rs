@@ -365,9 +365,24 @@ impl SessionManager {
             Environment::LocalCheckout { .. } => repo,
             Environment::NewWorktree { path, .. } => path.unwrap_or(repo),
         };
+        self.files_at(PathBuf::from(path), query).await
+    }
+
+    /// The files of a project's folder, as [`Self::list_files`] lists a session's: what the
+    /// Files pane of a session not started yet shows.
+    pub async fn list_project_files(
+        &self,
+        project: &ProjectId,
+        query: Option<String>,
+    ) -> Result<(Vec<String>, bool)> {
+        let path = self.project_checkout(project)?;
+        self.files_at(path, query).await
+    }
+
+    async fn files_at(&self, path: PathBuf, query: Option<String>) -> Result<(Vec<String>, bool)> {
         let git = self.git.clone();
         blocking(move || {
-            git.open(Path::new(&path))
+            git.open(&path)
                 .and_then(|repo| repo.files(MENTION_FILES, query.as_deref()))
                 .map_err(git_error)
         })

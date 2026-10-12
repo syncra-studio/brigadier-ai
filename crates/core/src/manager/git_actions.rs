@@ -2,6 +2,11 @@
 //! checkout. They are never automatic (PLAN §4); a commit waits for any landing on the same
 //! repository (the landing lock). A blank commit message is written in a throwaway CLI session
 //! that is disposed of right after, by the model and style the user's Git settings name.
+//!
+//! A session not started yet has no checkout of its own: its Source pane reads, stages and
+//! commits in its project's folder (the `project_*` actions), which is where a session that
+//! works in the project folder will work. One that will make its own copy shows it read-only;
+//! the window keeps to that, as only it knows how the session will be set up.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,8 +22,12 @@ use super::landing::diff_stat_of;
 use super::routing::{Ask, Trial};
 use super::{SessionManager, blocking, git_error};
 use crate::accounts::AccountRef;
-use crate::model::{ConversationId, Environment, GitStyle, ModelChoice, Settings, Setup};
-use crate::work::{CommitOutcome, GitState, SourceFile, SourceScope, SourceState, SourceStatus};
+use crate::model::{
+    ConversationId, Environment, GitStyle, ModelChoice, ProjectId, Settings, Setup,
+};
+use crate::work::{
+    CommitOutcome, GitState, SourceChange, SourceFile, SourceScope, SourceState, SourceStatus,
+};
 use crate::{Error, Result};
 
 /// How much of the patch the message writer reads.
@@ -56,6 +65,17 @@ impl SessionManager {
         Ok((PathBuf::from(path), orchestrator.provider))
     }
 
+    /// A project's folder: its first repository, the user's own checkout. What a session not
+    /// started yet shows in its Files and Source panes.
+    pub(crate) fn project_checkout(&self, project: &ProjectId) -> Result<PathBuf> {
+        self.core
+            .project(project)?
+            .repos
+            .first()
+            .map(|repo| PathBuf::from(&repo.path))
+            .ok_or_else(|| Error::Invalid("the project has no repository".into()))
+    }
+
     /// What the commit popover shows: the checkout's branch, what is staged and uncommitted,
     /// and where it pushes.
     pub async fn git_state(&self, id: &ConversationId) -> Result<GitState> {
@@ -91,6 +111,16 @@ impl SessionManager {
     /// branch pushes.
     pub async fn source_state(&self, id: &ConversationId) -> Result<SourceState> {
         let (path, _) = self.checkout(id)?;
+        self.source_state_at(path).await
+    }
+
+    /// What the Source pane lists before a session starts: its project folder's changes.
+    pub async fn project_source_state(&self, project: &ProjectId) -> Result<SourceState> {
+        let path = self.project_checkout(project)?;
+        self.source_state_at(path).await
+    }
+
+    async fn source_state_at(&self, path: PathBuf) -> Result<SourceState> {
         let git = self.git.clone();
         blocking(move || source_state_of(&git.open(&path).map_err(git_error)?)).await
     }
@@ -127,6 +157,25 @@ impl SessionManager {
             .await
     }
 
+    /// The user's staging, unstaging or discarding in a project's folder, from the Source pane
+    /// of a session not started yet.
+    pub async fn change_project_source(
+        &self,
+        project: &ProjectId,
+        change: SourceChange,
+    ) -> Result<SourceState> {
+        self.admit()?;
+        let path = self.project_checkout(project)?;
+        self.change_source_at(path, move |repo| match change {
+            SourceChange::Stage { paths } => repo.stage(paths.as_deref()),
+            SourceChange::Unstage { paths } => repo.unstage(paths.as_deref()),
+            SourceChange::Discard { scope, paths } => {
+                repo.discard(scope == SourceScope::Staged, paths.as_deref())
+            }
+        })
+        .await
+    }
+
     /// Runs one of the Source panel's changes in the checkout, then reads it again.
     async fn change_source(
         &self,
@@ -135,6 +184,14 @@ impl SessionManager {
     ) -> Result<SourceState> {
         self.admit()?;
         let (path, _) = self.checkout(id)?;
+        self.change_source_at(path, change).await
+    }
+
+    async fn change_source_at(
+        &self,
+        path: PathBuf,
+        change: impl FnOnce(&Repo) -> brigadier_git::Result<()> + Send + 'static,
+    ) -> Result<SourceState> {
         let git = self.git.clone();
         blocking(move || {
             let repo = git.open(&path).map_err(git_error)?;
@@ -156,11 +213,40 @@ impl SessionManager {
         self.admit()?;
         let _fence = self.enter(id)?;
         let (path, _) = self.checkout(id)?;
+        let project = self.core.conversation(id)?.project_id;
+        self.commit_at(path, project, message, include_unstaged, push)
+            .await
+    }
+
+    /// The user's commit in a project's folder, from the Source pane of a session not started
+    /// yet; as [`Self::commit_changes`] otherwise.
+    pub async fn commit_project_changes(
+        &self,
+        project: &ProjectId,
+        message: Option<String>,
+        include_unstaged: bool,
+        push: bool,
+    ) -> Result<CommitOutcome> {
+        self.admit()?;
+        let path = self.project_checkout(project)?;
+        self.commit_at(path, Some(project.clone()), message, include_unstaged, push)
+            .await
+    }
+
+    async fn commit_at(
+        &self,
+        path: PathBuf,
+        project: Option<ProjectId>,
+        message: Option<String>,
+        include_unstaged: bool,
+        push: bool,
+    ) -> Result<CommitOutcome> {
         let (message, note) = match message.map(|text| text.trim().to_owned()) {
             Some(text) if !text.is_empty() => (text, None),
             _ => {
                 let patch = self.pending_patch(&path, include_unstaged).await?;
-                self.write_commit_message(id, &path, &patch).await?
+                self.write_commit_message(project.as_ref(), &path, &patch)
+                    .await?
             }
         };
         let message = if self.core.settings().omit_ai_coauthors {
@@ -241,13 +327,12 @@ impl SessionManager {
     /// write it, when it didn't.
     async fn write_commit_message(
         &self,
-        id: &ConversationId,
+        project: Option<&ProjectId>,
         path: &Path,
         patch: &str,
     ) -> Result<(String, Option<String>)> {
         let _turn = self.background_turn();
         let settings = self.core.settings();
-        let project = self.core.conversation(id)?.project_id;
         let subjects = match settings.commit_style {
             GitStyle::Repository => self.recent_subjects(path).await,
             _ => Vec::new(),
@@ -270,7 +355,7 @@ impl SessionManager {
                 break;
             }
             let (routed, mut account, why) = self
-                .writer_route(settings.git_writer.as_ref(), project.as_ref(), &exclude)
+                .writer_route(settings.git_writer.as_ref(), project, &exclude)
                 .await?;
             // The user's model writes it as they set it, Fast included.
             let fast = why.is_none()
@@ -304,14 +389,14 @@ impl SessionManager {
                 Some(message) => {
                     let message = clean_message(&message);
                     if message.is_empty() {
-                        tracing::warn!(conversation = %id, "the message writer's reply was empty");
+                        tracing::warn!(checkout = %path.display(), "the message writer's reply was empty");
                         return Err(Error::Provider("the message writer replied nothing".into()));
                     }
                     // Why the user's model didn't write it, of the pass that did.
                     return Ok((message, why));
                 }
                 None => {
-                    tracing::info!(conversation = %id, model = %routed.model, "the message writer hit its usage limit");
+                    tracing::info!(checkout = %path.display(), model = %routed.model, "the message writer hit its usage limit");
                     limited.push((account, routed.model));
                 }
             }

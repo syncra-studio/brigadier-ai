@@ -2127,6 +2127,27 @@ pub enum SourceScope {
     Unstaged,
 }
 
+/// One of the Source pane's changes to a checkout: stage, unstage, or discard one side. A
+/// list of paths acts on those files; none, on every one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SourceChange {
+    Stage {
+        paths: Option<Vec<String>>,
+    },
+    Unstage {
+        paths: Option<Vec<String>>,
+    },
+    Discard {
+        scope: SourceScope,
+        paths: Option<Vec<String>>,
+    },
+}
+
 /// The GitHub pull request of a session's branch (the pinned card's row).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

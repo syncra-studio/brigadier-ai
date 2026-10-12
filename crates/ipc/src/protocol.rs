@@ -20,8 +20,8 @@ use brigadier_core::{
     ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
     QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, RepoInfo,
     RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup, SetupRequest,
-    SourceScope, SourceState, TaskId, ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView,
-    UsageActivity, UsageView, WorkerDiff, WorkerPage,
+    SourceChange, SourceScope, SourceState, TaskId, ThreadItem, ThreadMetrics, UpdateTarget,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -223,6 +223,13 @@ pub enum Request {
         conversation_id: ConversationId,
         /// Only the files whose path has these letters in order (ignoring case), searched in
         /// the whole checkout: how the Files tab finds files past the listed ones.
+        #[serde(default)]
+        query: Option<String>,
+    },
+    /// The files of a project's folder, for the Files pane of a session not started yet.
+    ListProjectFiles {
+        project_id: ProjectId,
+        /// As [`Request::ListFiles`]'s.
         #[serde(default)]
         query: Option<String>,
     },
@@ -557,6 +564,25 @@ pub enum Request {
         conversation_id: ConversationId,
         scope: SourceScope,
         paths: Option<Vec<String>>,
+    },
+    /// A project folder's staged and unstaged files, for the Source pane of a session not
+    /// started yet.
+    GetProjectSourceState {
+        project_id: ProjectId,
+    },
+    /// Stages, unstages or discards changes in a project's folder, from the Source pane of a
+    /// session not started yet that will work in that folder.
+    ChangeProjectSource {
+        project_id: ProjectId,
+        change: SourceChange,
+    },
+    /// The user's commit in a project's folder, from the Source pane of a session not started
+    /// yet that will work in that folder; as [`Request::CommitChanges`] otherwise.
+    CommitProjectChanges {
+        project_id: ProjectId,
+        message: Option<String>,
+        include_unstaged: bool,
+        push: bool,
     },
     /// Answers an approval card.
     AnswerCard {
@@ -1187,6 +1213,19 @@ pub enum Response {
     },
     DiscardFiles {
         state: SourceState,
+    },
+    ListProjectFiles {
+        files: Vec<String>,
+        truncated: bool,
+    },
+    GetProjectSourceState {
+        state: SourceState,
+    },
+    ChangeProjectSource {
+        state: SourceState,
+    },
+    CommitProjectChanges {
+        outcome: CommitOutcome,
     },
     AnswerCard,
     AnswerQuestion,
