@@ -7,6 +7,9 @@
 //!
 //! - `probe`: `{"state": "healthy"|"absent"|"hung", "current", "build_id",
 //!   "pid"}`. Never starts anything.
+//! - `status`: `probe`, plus `permissions` (`permissions_status`) and
+//!   `sessions` (`agent_sessions`) when the daemon is healthy. Never starts
+//!   anything.
 //! - `ensure`: starts or replaces the daemon as a shim would.
 //! - `restart`: stops and starts the daemon (a hung one).
 //! - `stop`, `off`, `on`: stop it; turn computer use off (and stop it) or
@@ -22,6 +25,7 @@ pub fn run(subcommand: &str, args: &[String]) -> ! {
     let socket = default_socket_path();
     let result = match subcommand {
         "probe" => Ok(probe(&socket)),
+        "status" => Ok(status(&socket)),
         "ensure" => supervisor::ensure(&socket, false).map(|()| probe(&socket)),
         "restart" => supervisor::restart(&socket).map(|()| probe(&socket)),
         "stop" => supervisor::stop(&socket).map(|()| serde_json::json!({"stopped": true})),
@@ -55,6 +59,31 @@ fn probe(socket: &str) -> serde_json::Value {
         "build_id": build_id,
         "pid": supervisor::running_daemon(socket),
     })
+}
+
+fn status(socket: &str) -> serde_json::Value {
+    let mut value = probe(socket);
+    if value["state"] == "healthy" {
+        let ask = |method: &str| {
+            send_request(
+                socket,
+                &DaemonRequest {
+                    method: method.to_owned(),
+                    name: None,
+                    args: None,
+                    session_id: None,
+                },
+            )
+            .ok()
+            .filter(|response| response.ok)
+            .and_then(|response| response.result)
+        };
+        value["permissions"] = ask("permissions_status").unwrap_or_default();
+        value["sessions"] = ask("agent_sessions")
+            .and_then(|sessions| sessions.get("sessions").cloned())
+            .unwrap_or_default();
+    }
+    value
 }
 
 fn request(socket: &str, args: &[String]) -> anyhow::Result<serde_json::Value> {
