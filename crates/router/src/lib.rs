@@ -22,13 +22,16 @@
 //!
 //! A model may take a task when all of these hold ([`decide`]):
 //! - it isn't Fable, and its provider is logged in;
+//! - the registry doesn't keep it for other categories (an entry's `only`: Haiku 5.5 takes only
+//!   operating apps on screen, where it counts as strong);
 //! - **no confirmed limit**: a provider limit (usage window, spend control, credits), a window
 //!   that limits it at 97% used, or its own scoped bucket used up. A limit is a hard exclusion,
 //!   never a large penalty;
 //! - it isn't excluded by the query (it or its provider just failed on the task);
 //! - no applicable `never` rule names it, and every applicable `only` rule allows it;
 //! - it meets the task's needs (image input, image generation, context window);
-//! - its tier is at or above the task's quality floor ([`default_floor`]);
+//! - its tier (for a model with `only`, its tier in this category) is at or above the task's
+//!   quality floor ([`default_floor`]);
 //! - for reviews, its vendor differs from the author's when another vendor can review; else a
 //!   different model of the same vendor reviews, and the reason says so.
 //!

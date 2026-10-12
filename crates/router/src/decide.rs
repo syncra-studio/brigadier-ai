@@ -222,6 +222,8 @@ fn category_effort(category: TaskCategory) -> Option<&'static str> {
 /// Why a model can't take the task, in the order they are checked.
 #[derive(Debug, Clone, PartialEq)]
 enum Block {
+    /// The registry keeps it for other categories (its `only`).
+    Role(String),
     /// It (or its provider) just failed on this task.
     Excluded(String),
     /// A user rule removes it (`never`, or outside every `only`).
@@ -246,7 +248,8 @@ enum Block {
 impl Block {
     fn why(&self) -> &str {
         match self {
-            Block::Excluded(why)
+            Block::Role(why)
+            | Block::Excluded(why)
             | Block::Rule(why)
             | Block::Needs(why)
             | Block::Floor(why)
@@ -1079,6 +1082,7 @@ fn candidates<'q>(query: &'q Query) -> Vec<Candidate<'q>> {
     }
     models
         .into_iter()
+        .map(|(model, unchecked)| (role_tier(model, query.category), unchecked))
         .map(|(model, unchecked)| Candidate {
             model,
             unchecked,
@@ -1096,6 +1100,20 @@ fn candidates<'q>(query: &'q Query) -> Vec<Candidate<'q>> {
             listed: None,
         })
         .collect()
+}
+
+/// A model the registry keeps for some categories only, at the tier it counts as in this one
+/// (its floor check, ordering and route use it). Unchanged when it has no such tier here; a
+/// category it doesn't take is blocked in [`assess`].
+fn role_tier(model: Cow<'_, MergedModel>, category: TaskCategory) -> Cow<'_, MergedModel> {
+    match model.tier_for(category) {
+        Some(tier) if tier != model.tier => {
+            let mut model = model.into_owned();
+            model.tier = tier;
+            Cow::Owned(model)
+        }
+        _ => model,
+    }
 }
 
 /// Checks one candidate and scores it.
@@ -1120,7 +1138,13 @@ fn assess<'q>(
     candidate.trial =
         on_trial && query.trial_slot && allows_trials(query.category) && candidate.listed.is_none();
 
-    let block = if let Some(exclusion) = query.exclude.iter().find(|ex| {
+    let block = if let Some(only) = model
+        .only
+        .as_ref()
+        .filter(|only| !only.contains_key(&query.category))
+    {
+        Some(Block::Role(role_text(only.keys())))
+    } else if let Some(exclusion) = query.exclude.iter().find(|ex| {
         ex.provider == model.provider
             && ex
                 .model
@@ -1546,7 +1570,7 @@ fn provider_block(candidates: &[Candidate], provider: ProviderKind) -> String {
         .max_by_key(|block| match block {
             Block::Limit { .. } | Block::Unavailable(_) => 3,
             Block::Author(_) | Block::Excluded(_) | Block::Rule(_) | Block::Pinned(_) => 2,
-            Block::Floor(_) | Block::Needs(_) => 1,
+            Block::Floor(_) | Block::Needs(_) | Block::Role(_) => 1,
         })
         .map_or_else(
             || format!("{} has no models listed", name(provider)),
@@ -1930,6 +1954,19 @@ fn resets_text(resets_at_ms: Option<i64>, now_ms: i64) -> String {
     format!(" (resets in {span})")
 }
 
+/// Why a model kept for some categories can't take this one: "kept for operating apps on
+/// screen".
+fn role_text<'c>(categories: impl Iterator<Item = &'c TaskCategory>) -> String {
+    let purposes: Vec<&str> = categories
+        .map(|category| table::row(*category).purpose)
+        .collect();
+    if purposes.is_empty() {
+        "kept for work this app doesn't know".to_owned()
+    } else {
+        format!("kept for {}", purposes.join(" and "))
+    }
+}
+
 fn tier_name(tier: QualityTier) -> &'static str {
     match tier {
         QualityTier::Unrated => "unrated",
@@ -2198,6 +2235,215 @@ mod tests {
             &[],
             &[],
         )
+    }
+
+    /// The lists as the current Claude CLI gives them: its `haiku` alias is Haiku 5.5, and
+    /// Haiku 4.5 is listed by its dated id.
+    fn catalog_with_haiku_5_5(registry: &Registry) -> Vec<MergedModel> {
+        let claude = [
+            info("opus[1m]", "Opus 5.5", Some("claude-opus-5-5[1m]")),
+            info("claude-fable-5-1[1m]", "Fable", Some("claude-fable-5-1")),
+            info("sonnet", "Sonnet 5.5", Some("claude-sonnet-5-5")),
+            info("haiku", "Haiku 5.5", Some("claude-haiku-5-5")),
+            info(
+                "claude-haiku-4-5-20251001",
+                "Haiku 4.5",
+                Some("claude-haiku-4-5-20251001"),
+            ),
+            info("claude-opus-5", "Opus 5", None),
+        ];
+        let codex = [
+            info("gpt-6.1-sol", "GPT-6.1-Sol", None),
+            info("gpt-6-astra", "GPT-6-Astra", None),
+            info("gpt-6-luna", "GPT-6-Luna", None),
+            info("gpt-5.6-terra", "GPT-5.6-Terra", None),
+        ];
+        crate::merge(
+            registry,
+            &[
+                (ProviderKind::Claude, claude.as_slice()),
+                (ProviderKind::Codex, codex.as_slice()),
+            ],
+            &[],
+            &[],
+        )
+    }
+
+    fn is_haiku_5_5(model: &MergedModel) -> bool {
+        model.registry_key.as_deref() == Some("claude-haiku-5-5")
+    }
+
+    fn operate_query<'a>(
+        registry: &'a Registry,
+        models: &'a [MergedModel],
+        providers: &'a [ProviderState],
+    ) -> Query<'a> {
+        let mut q = query(registry, models, providers);
+        q.category = TaskCategory::Operate;
+        q.floor = default_floor(TaskCategory::Operate);
+        q.needs = Needs {
+            image_input: true,
+            ..Needs::default()
+        };
+        q
+    }
+
+    /// Work only in apps on screen goes to Claude Haiku 5.5 at medium: the registry keeps it
+    /// for operating apps, where it counts as strong.
+    #[test]
+    fn operating_apps_goes_to_haiku_5_5_at_medium() {
+        let registry = Registry::bundled();
+        let entry = registry
+            .entry("claude-haiku-5-5")
+            .expect("Haiku 5.5 is curated");
+        assert_eq!(entry.tier, QualityTier::Light);
+        assert_eq!(
+            entry
+                .only
+                .as_ref()
+                .map(|only| only.iter().collect::<Vec<_>>()),
+            Some(vec![(&TaskCategory::Operate, &QualityTier::Strong)])
+        );
+        let models = catalog_with_haiku_5_5(&registry);
+        let haiku = models.iter().find(|m| m.id == "haiku").unwrap();
+        assert!(is_haiku_5_5(haiku), "{:?}", haiku.registry_key);
+        assert_eq!(haiku.status, ModelStatus::Curated);
+        // Haiku 4.5 keeps its own entry.
+        let older = models
+            .iter()
+            .find(|m| m.id == "claude-haiku-4-5-20251001")
+            .unwrap();
+        assert_eq!(older.registry_key.as_deref(), Some("claude-haiku-4-5"));
+
+        let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        });
+        let route = routed(&operate_query(&registry, &models, &both));
+        assert_eq!(
+            (
+                route.provider,
+                route.model.as_str(),
+                route.effort.as_deref()
+            ),
+            (ProviderKind::Claude, "haiku", Some("medium"))
+        );
+        assert_eq!(route.tier, QualityTier::Strong);
+    }
+
+    /// With only Codex set up, operating apps stays on a Codex model at the operate floor,
+    /// never a light one.
+    #[test]
+    fn operating_apps_with_only_codex_stays_at_the_strong_floor() {
+        let registry = Registry::bundled();
+        let models = catalog_with_haiku_5_5(&registry);
+        let codex_only = [
+            ProviderState {
+                provider: ProviderKind::Claude,
+                logged_in: false,
+                quota: None,
+            },
+            ProviderState {
+                provider: ProviderKind::Codex,
+                logged_in: true,
+                quota: None,
+            },
+        ];
+        let q = operate_query(&registry, &models, &codex_only);
+        let route = routed(&q);
+        assert_eq!(route.provider, ProviderKind::Codex);
+        assert!(route.tier >= QualityTier::Strong, "{}", route.model);
+        for model in eligible(&q) {
+            assert_eq!(model.provider, ProviderKind::Codex);
+            assert!(model.tier >= QualityTier::Strong, "{}", model.id);
+            assert!(!["gpt-6-luna", "gpt-5.6-terra"].contains(&model.id.as_str()));
+        }
+    }
+
+    /// Haiku 5.5 takes no other kind of work, whatever asks for it (a pin, a prefer rule, a
+    /// manual ranking), and Fable takes none at all.
+    #[test]
+    fn haiku_5_5_is_never_chosen_or_allowed_outside_operating_apps() {
+        let registry = Registry::bundled();
+        let models = catalog_with_haiku_5_5(&registry);
+        let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        });
+        let claude_only = [
+            both[0].clone(),
+            ProviderState {
+                logged_in: false,
+                ..both[1].clone()
+            },
+        ];
+        let haiku = OverrideTarget::Model {
+            provider: ProviderKind::Claude,
+            id: "haiku".into(),
+        };
+        let prefer = [rule(OverrideEffect::Prefer, haiku.clone())];
+        for category in TaskCategory::ALL {
+            let rankings = [Ranking {
+                id: "manual".into(),
+                category,
+                areas: vec![],
+                project_id: None,
+                manual: true,
+                only: false,
+                updated_at_ms: 0,
+                entries: vec![crate::RankedEntry {
+                    target: haiku.clone(),
+                    effort: None,
+                }],
+            }];
+            for providers in [&both[..], &claude_only[..]] {
+                let mut plain = query(&registry, &models, providers);
+                plain.category = category;
+                plain.floor = default_floor(category);
+                let mut pinned = plain.clone();
+                pinned.pin = Some(Pin {
+                    model: Some("haiku".into()),
+                    ..Pin::default()
+                });
+                let mut preferred = plain.clone();
+                preferred.overrides = &prefer;
+                let mut ranked = plain.clone();
+                ranked.rankings = &rankings;
+                for q in [plain, pinned, preferred, ranked] {
+                    let allowed = eligible(&q);
+                    for model in &allowed {
+                        assert!(!table::names_fable(&model.id), "{category:?}: {}", model.id);
+                    }
+                    let haiku_allowed = allowed.iter().any(is_haiku_5_5);
+                    let chosen = match decide(&q) {
+                        Decision::Run(route) => Some(route.model),
+                        Decision::Wait(_) => None,
+                    };
+                    assert!(
+                        chosen.as_deref().is_none_or(|id| !table::names_fable(id)),
+                        "{category:?}"
+                    );
+                    if category == TaskCategory::Operate {
+                        assert!(haiku_allowed);
+                        continue;
+                    }
+                    assert!(!haiku_allowed, "{category:?}: Haiku 5.5 allowed");
+                    assert_ne!(chosen.as_deref(), Some("haiku"), "{category:?}");
+                    let listed = preview(&q)
+                        .candidates
+                        .into_iter()
+                        .find(|candidate| candidate.model == "haiku")
+                        .expect("Haiku 5.5 is listed");
+                    assert_eq!(
+                        listed.blocked.as_deref(),
+                        Some("kept for operating apps on screen"),
+                        "{category:?}"
+                    );
+                }
+            }
+        }
     }
 
     fn rule(effect: OverrideEffect, target: OverrideTarget) -> OverrideRule {

@@ -578,7 +578,8 @@ impl SessionManager {
     }
 
     /// The provider's cheapest model for a one-off chore, at low effort where it has efforts.
-    /// Only a model the user left available: when its list has none, the chore isn't done.
+    /// Only a model the user left available, and never one the registry keeps for one kind of
+    /// work (Haiku 5.5, for operating apps): when its list has none, the chore isn't done.
     pub(super) fn cheapest(&self, provider: ProviderKind) -> Result<(String, Option<String>)> {
         let family = match provider {
             ProviderKind::Claude => "haiku",
@@ -587,14 +588,22 @@ impl SessionManager {
         let settings = self.core.settings();
         let available =
             |id: &str| crate::routing::availability::model_available(&settings, provider, id);
-        let models = self
+        let listed = self
             .runtime
             .overview(provider)
             .and_then(|overview| overview.models)
             .map(|catalog| catalog.models)
             .unwrap_or_default();
+        let registry = self.runtime.registry().current();
+        let merged = brigadier_router::merge(&registry, &[(provider, &listed)], &[], &[]);
+        let models: Vec<_> = listed
+            .iter()
+            .zip(&merged)
+            .filter(|(_, merged)| merged.only.is_none())
+            .map(|(model, _)| model)
+            .collect();
         // Before its list is read, the family's alias stands in for it.
-        let model = if models.is_empty() {
+        let model = if listed.is_empty() {
             available(family).then(|| family.to_owned())
         } else {
             models

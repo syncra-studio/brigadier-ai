@@ -89,7 +89,7 @@ How to work:
 - Delegate by default: anything beyond a tiny edit goes to a worker (delegate_task), so you stay free to talk while it runs. Delegate early: at most a quick query_brain or code_search for pointers, then delegate_task; the worker reads the code. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
 - Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
 - Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak or small feature, copy, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
-- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part (screenshots in the chat only if the user asked; a worker's live check is evidence in its report), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task.
+- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part (screenshots in the chat only if the user asked; a worker's live check is evidence in its report), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task. A job that only uses apps on screen, changing no code, is an operate task, which Brigadier gives to a fast GUI model; one that changes code and then checks it in the running app stays one implementation task, whose worker checks the app itself.
 {MOCKUPS}
 - Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
@@ -411,6 +411,9 @@ pub(crate) const OWN_REVIEW_REVISION: u32 = 19;
 /// The thread's commit that fixes review findings names them: a re-check of the high ones at
 /// most, and a held merge still covers it.
 pub(crate) const FINDING_FIX_REVISION: u32 = 20;
+/// A job only in apps on screen is an operate task, for a fast GUI model; code changed and then
+/// checked in the app stays one implementation task.
+pub(crate) const OPERATE_REVISION: u32 = 21;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -514,6 +517,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: FINDING_FIX_REVISION,
         thread: "From now on, a commit of yours that only fixes review findings names them in a second trailer, `--trailer \"Brigadier-Fixes: R2.2, R2.3\"`: it gets no review of its own, only one re-check of those you record `high`, and a merge the user already said yes to still covers it, so never ask them again for it.",
+        worker: "",
+    },
+    Revision {
+        number: OPERATE_REVISION,
+        thread: "From now on, a job that only uses apps on screen, changing no code, is an operate task, which Brigadier gives to a fast GUI model; one that changes code and then checks it in the running app stays one implementation task, whose worker checks the app itself.",
         worker: "",
     },
 ];
@@ -2655,6 +2663,38 @@ mod environment_tests {
         assert!(prompt.contains(&format!(
             "--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it"
         )));
+    }
+
+    /// A job only in apps on screen is an operate task for a fast GUI model, and code checked in
+    /// the app stays one implementation task: a new thread's instructions say so, and an open
+    /// thread hears it once (a worker nothing).
+    #[test]
+    fn a_gui_only_job_is_an_operate_task_and_code_checked_in_the_app_is_not() {
+        let revision = REVISIONS
+            .iter()
+            .find(|revision| revision.number == OPERATE_REVISION)
+            .expect("listed");
+        assert!(revision.worker.is_empty());
+        let note = revision_note(OPERATE_REVISION - 1, false).unwrap();
+        assert!(note.contains(revision.thread), "{note}");
+        assert!(
+            revision_note(OPERATE_REVISION, false)
+                .is_none_or(|later| !later.contains(revision.thread))
+        );
+        let prompt = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            Some("/work/session @ brigadier/flow"),
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(prompt.contains(
+            "A job that only uses apps on screen, changing no code, is an operate task, which \
+             Brigadier gives to a fast GUI model; one that changes code and then checks it in the \
+             running app stays one implementation task, whose worker checks the app itself."
+        ));
     }
 
     /// Q10's revision: a thread told the one before hears exactly the mockup offer, once, and

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "revision": 3,
-  "updated": "2026-10-09",
+  "revision": 4,
+  "updated": "2026-10-13",
   "models": [
     {
       "key": "claude-opus-5-5",
@@ -123,6 +123,62 @@
       ]
     },
     {
+      "key": "claude-haiku-5-5",
+      "vendor": "anthropic",
+      "cli": "claude",
+      "match": {
+        "ids": [
+          "claude-haiku-5-5"
+        ],
+        "family": "haiku"
+      },
+      "tier": "light",
+      "only": {
+        "operate": "strong"
+      },
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "contextWindow": 1000000,
+      "knowledgeCutoff": "2026-06",
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "tools": [
+          "webSearch"
+        ]
+      },
+      "strengths": {
+        "scout": 0,
+        "research": 0,
+        "implement": 0,
+        "review": 0,
+        "merge": 0,
+        "verify": 0,
+        "chat": 0,
+        "orchestrate": 0,
+        "gitText": 0,
+        "operate": 10
+      },
+      "defaultEffort": {
+        "operate": "medium"
+      },
+      "released": "2026-10-07",
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/models/overview",
+        "https://code.claude.com/docs/en/tools-reference",
+        "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+        "https://www.anthropic.com/claude-haiku-5-5"
+      ]
+    },
+    {
       "key": "claude-haiku-4-5",
       "vendor": "anthropic",
       "cli": "claude",
@@ -131,8 +187,7 @@
           "haiku",
           "claude-haiku-4-5-20251001",
           "claude-haiku-4-5"
-        ],
-        "family": "haiku"
+        ]
       },
       "tier": "light",
       "efforts": [],
