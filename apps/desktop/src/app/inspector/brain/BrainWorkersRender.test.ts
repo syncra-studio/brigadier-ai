@@ -9,6 +9,7 @@ type Rendering = {
   updated: Row[];
   reloaded: Row[];
   raced: Row[];
+  overtaken: Row[];
   calls: string[];
 };
 
@@ -30,7 +31,8 @@ const longRefactor: Row = {
 // Brain picked before, shows that session's project's Brain and its workers' counters: one read
 // of the session's tasks, kept current by task events (an older copy never rolls one back), and
 // read again as the bridge resyncs: the read brings back an update the feed missed even at the
-// moment of one it delivered, and an update that arrived during the read is applied again.
+// moment of one it delivered, and an update that arrived during the read is applied again; of
+// two overlapping reads, the older answering last keeps nothing.
 test("the Brain tab opened from a session lists its workers and keeps them current", { timeout: 60000 }, async (t) => {
   const rendering = await render(t, "from=session");
   assert.deepEqual(rendering.first, {
@@ -41,11 +43,10 @@ test("the Brain tab opened from a session lists its workers and keeps them curre
   assert.deepEqual(rendering.updated, updated);
   assert.deepEqual(rendering.reloaded, [{ name: "task-1 Add mul", low: false, use: added(5, 2, 50) }, longRefactor]);
   assert.deepEqual(rendering.raced, [{ name: "task-1 Add mul", low: false, use: added(6, 3, 55) }, longRefactor]);
+  assert.deepEqual(rendering.overtaken, [{ name: "task-1 Add mul", low: false, use: added(8, 3, 65) }, longRefactor]);
   assert.deepEqual(rendering.calls, [
     "getBrain calc",
-    "getConversation session",
-    "getConversation session",
-    "getConversation session",
+    ...Array.from({ length: 5 }, () => "getConversation session"),
   ]);
 });
 

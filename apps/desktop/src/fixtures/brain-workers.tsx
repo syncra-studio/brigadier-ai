@@ -7,7 +7,8 @@
  * personal).
  * ?drive=1 records what the tab shows, sends task updates, reads the tasks again twice as the
  * bridge's resync does (first bringing back an update the feed missed, at the same moment as one
- * it delivered; then with an update arriving during the read), and writes what it saw to
+ * it delivered; then with an update arriving during the read; then two overlapping reads, the
+ * older finishing last), and writes what it saw to
  * #brain-workers-result (BrainWorkersRender.test.ts reads it).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -85,9 +86,13 @@ mockIPC((command, payload) => {
           ? task("t1", 1, "Add mul", { queries: 3, factsIn: 2, factsOut: 1, calls: 40 }, 10)
           : read === 1
             ? task("t1", 1, "Add mul", { queries: 5, factsIn: 2, factsOut: 2, calls: 50 }, 20)
-            : task("t1", 1, "Add mul", { queries: 5, factsIn: 2, factsOut: 2, calls: 50 }, 30);
+            : read === 2
+              ? task("t1", 1, "Add mul", { queries: 5, factsIn: 2, factsOut: 2, calls: 50 }, 30)
+              : read === 3
+                ? task("t1", 1, "Add mul", { queries: 7, factsIn: 2, factsOut: 3, calls: 60 }, 40)
+                : task("t1", 1, "Add mul", { queries: 8, factsIn: 2, factsOut: 3, calls: 65 }, 50);
       if (read === 2) send([task("t1", 1, "Add mul", { queries: 6, factsIn: 2, factsOut: 3, calls: 55 }, 30)]);
-      return {
+      const response = {
         method: req.method,
         view: {
           tasks: [
@@ -97,6 +102,8 @@ mockIPC((command, payload) => {
           ],
         },
       };
+      // The fourth read is overtaken by the fifth: it answers last.
+      return read === 3 ? new Promise((resolve) => setTimeout(() => resolve(response), 300)) : response;
     }
     default:
       return { method: req.method };
@@ -137,6 +144,11 @@ function Fixture() {
       }),
       at(1700, () => {
         seen.raced = rows();
+        void reloadSessionTasks();
+        setTimeout(() => void reloadSessionTasks(), 50);
+      }),
+      at(2300, () => {
+        seen.overtaken = rows();
         seen.calls = calls;
         setResult(JSON.stringify(seen));
       }),

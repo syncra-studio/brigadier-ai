@@ -64,19 +64,22 @@ function applyTasks(known: Record<string, Task>, tasks: readonly Task[]): Record
 
 /** Session task reads in flight, each collecting the task updates that arrive meanwhile. */
 const taskReads = new Set<{ conversationId: string; tasks: Task[] }>();
+/** Counts session task reads: only the newest one's snapshot is kept. */
+let taskReadCount = 0;
 
 /**
  * Lists a session's workers for the Brain tab: reads its tasks once (and again when the bridge
  * resyncs, on reconnecting or after missing events); task events keep them current in between.
  * A read replaces what was held, so an update the feed missed comes back even when it tied with
  * one it delivered; updates that arrived while it was read are applied again, since the read
- * may predate them.
+ * may predate them. A read that a later one overtook keeps nothing: its snapshot is older.
  */
 export async function watchSessionTasks(conversationId: string): Promise<void> {
   if (useBrain.getState().sessionTasks?.conversationId !== conversationId) {
     useBrain.setState({ sessionTasks: { conversationId, tasks: {} } });
   }
   const read = { conversationId, tasks: [] as Task[] };
+  const number = ++taskReadCount;
   taskReads.add(read);
   let view;
   try {
@@ -84,6 +87,7 @@ export async function watchSessionTasks(conversationId: string): Promise<void> {
   } finally {
     taskReads.delete(read);
   }
+  if (number !== taskReadCount) return;
   const snapshot = Object.fromEntries(view.tasks.map((task) => [task.id, task]));
   useBrain.setState((state) =>
     state.sessionTasks?.conversationId === conversationId
