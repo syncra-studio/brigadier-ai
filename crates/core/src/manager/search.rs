@@ -3,7 +3,7 @@
 //! if every one is still as the search found it, all of them or none. It reads what git would
 //! (ignored files and `.git` stay out) and never writes outside the checkout.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
@@ -450,13 +450,15 @@ struct Staged {
     temp: PathBuf,
     /// Where the file is moved aside while the rewrite takes its place, until all are in.
     aside: PathBuf,
+    /// Whether this directory supports links, probed before any original is moved.
+    hard_links: bool,
 }
 
 /// Rewrites the listed files, all of them or none. Each is checked against what the search
 /// found and its rewrite is written beside it; any that changed, can't be searched or written
 /// stops it all before a byte moves. Then each in turn is moved aside, checked once more (it may
-/// have changed since), and its rewrite linked into its place, which fails if anything took the
-/// place meanwhile. A failure puts back every file already rewritten; one that something else
+/// have changed since), and its rewrite linked or exclusively renamed into its place, refusing
+/// anything that took the place meanwhile. A failure puts back every file already rewritten; one that something else
 /// changed meanwhile stays as it is, its text from before kept beside it, and is listed in
 /// `unrestored`. `interfere` runs before each file goes in place (tests change files there).
 fn replace(
@@ -465,7 +467,27 @@ fn replace(
     replacement: &str,
     files: Vec<ReplaceFile>,
     eligible: &HashSet<String>,
+    interfere: impl FnMut(usize),
+) -> ReplaceOutcome {
+    replace_with_link(
+        root,
+        matcher,
+        replacement,
+        files,
+        eligible,
+        interfere,
+        |from, to| fs::hard_link(from, to),
+    )
+}
+
+fn replace_with_link(
+    root: &Path,
+    matcher: &Matcher,
+    replacement: &str,
+    files: Vec<ReplaceFile>,
+    eligible: &HashSet<String>,
     mut interfere: impl FnMut(usize),
+    mut link: impl FnMut(&Path, &Path) -> std::io::Result<()>,
 ) -> ReplaceOutcome {
     let mut outcome = ReplaceOutcome {
         files: 0,
@@ -497,11 +519,32 @@ fn replace(
         discard(&staged);
         return outcome;
     }
+    let mut directories = HashMap::new();
+    for file in &mut staged {
+        let parent = file.full.parent().expect("a checkout file has a parent");
+        match directories.entry(parent.to_owned()).or_insert_with(|| {
+            probe_placement(file, &mut link)
+                .map_err(|err| format!("couldn't prepare to replace it: {err}"))
+        }) {
+            Ok(hard_links) => file.hard_links = *hard_links,
+            Err(reason) => {
+                outcome.skipped.push(ReplaceSkip {
+                    path: file.path.clone(),
+                    reason: reason.clone(),
+                });
+                break;
+            }
+        }
+    }
+    if !outcome.skipped.is_empty() {
+        discard(&staged);
+        return outcome;
+    }
     let mut placed = 0;
     let mut failed = None;
     for (index, file) in staged.iter().enumerate() {
         interfere(index);
-        match place(file) {
+        match place(file, &mut link) {
             Ok(()) => placed += 1,
             Err((reason, moved)) => {
                 // Moved aside but not replaced: it goes back with the rest.
@@ -518,7 +561,7 @@ fn replace(
     }
     if let Some(failed) = failed {
         for file in staged[..placed].iter().rev() {
-            if let Err(reason) = put_back(file) {
+            if let Err(reason) = put_back(file, &mut link) {
                 outcome.unrestored.push(ReplaceSkip {
                     path: file.path.clone(),
                     reason,
@@ -581,13 +624,77 @@ fn stage_file(
         new_hash: self::hash(out.as_bytes()),
         matches: count,
         temp,
+        hard_links: true,
     })
 }
 
+/// Probe each directory before moving originals. If links fail, prove that an exclusive
+/// rename works there using only the rewrite. A failed probe leaves every original untouched.
+fn probe_placement(
+    file: &Staged,
+    link: &mut impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> std::io::Result<bool> {
+    let probe = sibling(&file.full, "replace-probe");
+    if link(&file.temp, &probe).is_ok() {
+        fs::remove_file(&probe)?;
+        return Ok(true);
+    }
+    rename_into(&file.temp, &probe)?;
+    let result = fs::rename(&probe, &file.temp);
+    if result.is_err() {
+        let _ = fs::remove_file(&probe);
+    }
+    result.map(|()| false)
+}
+
+/// Move a rewrite or original into an empty path, refusing a concurrent writer atomically.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn rename_into(from: &Path, to: &Path) -> std::io::Result<()> {
+    use nix::libc;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let from = CString::new(from.as_os_str().as_bytes()).map_err(std::io::Error::other)?;
+    let to = CString::new(to.as_os_str().as_bytes()).map_err(std::io::Error::other)?;
+    // SAFETY: both paths are NUL-terminated and live for the entire call.
+    if unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn rename_into(from: &Path, to: &Path) -> std::io::Result<()> {
+    use nix::fcntl::{AT_FDCWD, RenameFlags, renameat2};
+    renameat2(AT_FDCWD, from, AT_FDCWD, to, RenameFlags::RENAME_NOREPLACE)
+        .map_err(std::io::Error::from)
+}
+
+#[cfg(windows)]
+fn rename_into(from: &Path, to: &Path) -> std::io::Result<()> {
+    // Windows' rename refuses an existing destination.
+    fs::rename(from, to)
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    all(target_os = "linux", target_env = "gnu"),
+    windows
+)))]
+fn rename_into(_: &Path, _: &Path) -> std::io::Result<()> {
+    // Without an exclusive rename, fail the probe before moving an original.
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
 /// Puts a staged rewrite in its file's place: the file moved aside, checked unchanged, and the
-/// rewrite linked in where nothing may have appeared meanwhile. On failure, whether the file
+/// rewrite placed where nothing may have appeared meanwhile. On failure, whether the file
 /// was moved aside (and so needs putting back).
-fn place(file: &Staged) -> std::result::Result<(), (String, bool)> {
+fn place(
+    file: &Staged,
+    link: &mut impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> std::result::Result<(), (String, bool)> {
     fs::rename(&file.full, &file.aside)
         .map_err(|err| (format!("couldn't move it: {err}"), false))?;
     let unchanged = fs::read(&file.aside).is_ok_and(|bytes| hash(&bytes) == file.hash);
@@ -597,8 +704,13 @@ fn place(file: &Staged) -> std::result::Result<(), (String, bool)> {
             true,
         ));
     }
-    // A link, unlike a rename, refuses a file that took the place meanwhile.
-    fs::hard_link(&file.temp, &file.full).map_err(|err| {
+    // Both methods refuse a file that took the place meanwhile.
+    let placed = if file.hard_links {
+        link(&file.temp, &file.full)
+    } else {
+        rename_into(&file.temp, &file.full)
+    };
+    placed.map_err(|err| {
         let reason = if err.kind() == std::io::ErrorKind::AlreadyExists {
             "it was written again while the files were being replaced".into()
         } else {
@@ -611,7 +723,10 @@ fn place(file: &Staged) -> std::result::Result<(), (String, bool)> {
 /// Puts back a file `place` moved aside: its rewrite (if still as written) goes, and the file
 /// from before comes back. When something else is in its place, both stay: why, and where the
 /// text from before is.
-fn put_back(file: &Staged) -> std::result::Result<(), String> {
+fn put_back(
+    file: &Staged,
+    link: &mut impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> std::result::Result<(), String> {
     match fs::read(&file.full) {
         Ok(bytes) if hash(&bytes) == file.new_hash => {
             fs::remove_file(&file.full).map_err(|err| format!("couldn't undo it: {err}"))?;
@@ -625,14 +740,17 @@ fn put_back(file: &Staged) -> std::result::Result<(), String> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(format!("couldn't undo it: {err}")),
     }
-    fs::hard_link(&file.aside, &file.full)
-        .and_then(|()| fs::remove_file(&file.aside))
-        .map_err(|err| {
-            format!(
-                "couldn't undo it ({err}); its text from before is in {}",
-                file.aside.display()
-            )
-        })
+    let restored = if file.hard_links {
+        link(&file.aside, &file.full).and_then(|()| fs::remove_file(&file.aside))
+    } else {
+        rename_into(&file.aside, &file.full)
+    };
+    restored.map_err(|err| {
+        format!(
+            "couldn't undo it ({err}); its text from before is in {}",
+            file.aside.display()
+        )
+    })
 }
 
 /// The file at `path` in the checkout: relative, without `.`, `..` or `.git`, and once
@@ -911,6 +1029,82 @@ mod tests {
         assert_eq!(read(&dir, "a.txt"), "a.txt hit\n");
         assert_eq!(read(&dir, "b.txt"), "b.txt hit\n");
         assert_eq!(others(&dir), Vec::<String>::new());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unsupported_hard_links_replace_every_file_after_one_probe() {
+        let (dir, listed, eligible) =
+            three_files("20261012-2245-review-fixes-w04-unsupported-success");
+        let matcher = Matcher::new(&query("hit")).unwrap();
+        let mut probes = 0;
+        let outcome = replace_with_link(
+            &dir,
+            &matcher,
+            "miss",
+            listed,
+            &eligible,
+            |_| {},
+            |_, _| {
+                probes += 1;
+                for path in ["a.txt", "b.txt", "c.txt"] {
+                    assert_eq!(
+                        read(&dir, path),
+                        format!("{path} hit\n"),
+                        "probe before moving any original"
+                    );
+                }
+                Err(std::io::ErrorKind::Unsupported.into())
+            },
+        );
+        assert_eq!(probes, 1, "probe once in each directory");
+        assert_eq!((outcome.files, outcome.matches), (3, 3));
+        assert!(outcome.skipped.is_empty());
+        assert!(outcome.unrestored.is_empty());
+        for path in ["a.txt", "b.txt", "c.txt"] {
+            assert_eq!(read(&dir, path), format!("{path} miss\n"));
+        }
+        assert!(others(&dir).is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_rename_without_links_refuses_an_existing_destination() {
+        let (dir, _, _) = three_files("20261012-2245-review-fixes-w04-exclusive-rename");
+        let error = rename_into(&dir.join("a.txt"), &dir.join("b.txt")).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(read(&dir, "a.txt"), "a.txt hit\n");
+        assert_eq!(read(&dir, "b.txt"), "b.txt hit\n");
+        assert!(others(&dir).is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unsupported_hard_links_restore_every_original_without_hidden_files() {
+        let (dir, listed, eligible) =
+            three_files("20261012-2245-review-fixes-w04-unsupported-rollback");
+        let matcher = Matcher::new(&query("hit")).unwrap();
+        let outcome = replace_with_link(
+            &dir,
+            &matcher,
+            "miss",
+            listed,
+            &eligible,
+            |index| {
+                if index == 1 {
+                    fs::write(dir.join("b.txt"), "b.txt hit, edited\n").unwrap();
+                }
+            },
+            |_, _| Err(std::io::Error::from(std::io::ErrorKind::Unsupported)),
+        );
+        // Check the paths first: the old implementation leaves a.txt only under its aside.
+        assert_eq!(read(&dir, "a.txt"), "a.txt hit\n");
+        assert_eq!(read(&dir, "b.txt"), "b.txt hit, edited\n");
+        assert_eq!(read(&dir, "c.txt"), "c.txt hit\n");
+        assert_eq!(outcome.files, 0);
+        assert_eq!(outcome.skipped[0].path, "b.txt");
+        assert!(outcome.unrestored.is_empty(), "{:?}", outcome.unrestored);
+        assert!(others(&dir).is_empty());
         fs::remove_dir_all(&dir).unwrap();
     }
 
