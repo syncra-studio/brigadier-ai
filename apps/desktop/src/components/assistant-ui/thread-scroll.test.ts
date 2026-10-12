@@ -156,8 +156,9 @@ function flushFrames(scroller: ThreadScroller, ms = 50): void {
   assert.equal(frames.length, 0);
 }
 
-function open(fake: Fake, id: string | null = key()): ThreadScroller {
+function open(fake: Fake, id: string | null = key(), running = false): ThreadScroller {
   const scroller = new ThreadScroller();
+  scroller.setRunning(running);
   scroller.attach(fake.layout(), id);
   return scroller;
 }
@@ -537,23 +538,51 @@ test("a kept row that is gone falls back to the nearest one before it, or the bo
   assert.equal(reopened.following, true);
 });
 
-test("a conversation left at the bottom reopens at the bottom, its room kept", () => {
+test("a conversation left at the bottom reopens at the bottom, its room kept while its turn runs", () => {
   const id = key();
   const first = new Fake();
   conversation(first, 6);
-  const scroller = open(first, id);
+  const scroller = open(first, id, true);
   expectSentTurn(id, "sent");
   first.rows.push(first.row("sent", 60, "user"), first.row("answer", 120));
   scroller.rowsChanged();
   const top = first.scrollTop;
   const room = first.room;
+  assert.ok(room > 0);
 
   const again = new Fake();
   conversation(again, 6);
   again.rows.push(again.row("sent", 60, "user"), again.row("answer", 120));
-  open(again, id);
+  open(again, id, true);
   assert.equal(again.room, room);
   assert.equal(again.scrollTop, top);
+
+  // Its turn ended while it was away: the room is gone, and nothing below shows the button.
+  const ended = new Fake();
+  conversation(ended, 6);
+  ended.rows.push(ended.row("sent", 60, "user"), ended.row("answer", 120));
+  const reopened = open(ended, id, false);
+  assert.equal(ended.room, 0);
+  assert.equal(reopened.contentBelow(), false);
+});
+
+test("a sent turn's room lasts while it runs, never shows the button alone, and goes when it ends", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  expectSentTurn(id, "sent");
+  fake.rows.push(fake.row("sent", 60, "user"), fake.row("answer", 40));
+  scroller.rowsChanged();
+  // Streaming: room under the short answer, and no button for the empty room.
+  assert.ok(fake.room > 0);
+  assert.equal(scroller.contentBelow(), false);
+  // The turn ends watched from its end: the room goes, the view stays at the end.
+  scroller.setRunning(false);
+  scroller.rowsChanged();
+  assert.equal(fake.room, 0);
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(scroller.contentBelow(), false);
 });
 
 test("at the bottom, a resize of the view keeps it at the bottom", () => {
