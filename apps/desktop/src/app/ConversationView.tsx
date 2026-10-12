@@ -780,7 +780,26 @@ export function ConversationView({
               <AssistantRuntimeProvider runtime={runtime}>
                 <AttachmentReaderContext.Provider value={reader}>
                   <OpenFileContext.Provider value={openFileAt}>
-                    <div className="flex h-full min-h-0 min-w-0">
+                    {/* The summary's popover, where it floats: opened in the top bar, under it. */}
+                    <SummaryFloat>
+                    {/* The top bar spans the window to its end edge, over the right panels too, so
+                        opening or closing one never moves its controls; the panels open below it. */}
+                    <div className="flex h-full min-h-0 min-w-0 flex-col">
+                    {tabbed && conversation ? (
+                      <SessionTabBar conversation={conversation} onRename={() => setRenaming(true)}>
+                        <ConversationToolbar kind="session" onContext={() => conversationId && selectTab(conversationId, CHAT_TAB)} />
+                      </SessionTabBar>
+                    ) : (
+                      !embedded && (
+                        <TopBar onRename={conversation && !archived ? () => setRenaming(true) : undefined}>
+                          {conversation && (
+                            <ChatActions conversation={conversation} onRename={() => setRenaming(true)} />
+                          )}
+                          <ConversationToolbar kind={workspace.enabled ? "session" : "chat"} />
+                        </TopBar>
+                      )
+                    )}
+                    <div className="flex min-h-0 min-w-0 flex-1">
                     <div
                       data-embedded-view={embedded || undefined}
                       data-slot="pane-workspace"
@@ -788,22 +807,6 @@ export function ConversationView({
                     >
                       <div className="relative flex min-h-0 flex-1">
                       <div className="flex h-full min-w-0 flex-1 flex-col">
-                        {/* The summary's popover, where it floats: opened in the top bar, under it. */}
-                        <SummaryFloat>
-                          {tabbed && conversation ? (
-                            <SessionTabBar conversation={conversation} onRename={() => setRenaming(true)}>
-                              <ConversationToolbar kind="session" onContext={() => conversationId && selectTab(conversationId, CHAT_TAB)} />
-                            </SessionTabBar>
-                          ) : (
-                            !embedded && (
-                              <TopBar onRename={conversation && !archived ? () => setRenaming(true) : undefined}>
-                                {conversation && (
-                                  <ChatActions conversation={conversation} onRename={() => setRenaming(true)} />
-                                )}
-                                <ConversationToolbar kind={workspace.enabled ? "session" : "chat"} />
-                              </TopBar>
-                            )
-                          )}
                           {error && (
                             <p
                               role="alert"
@@ -841,7 +844,6 @@ export function ConversationView({
                             {tabbed && conversationId && <SessionTabViews conversationId={conversationId} />}
                           </div>
                           </div>
-                        </SummaryFloat>
                         {!embedded && <TerminalPane place={placeOf(selection)} />}
                       </div>
                       </div>
@@ -849,6 +851,8 @@ export function ConversationView({
                     {tabbed && conversationId && <RightSidebar conversationId={conversationId} />}
                     <WorkspacePane />
                     </div>
+                    </div>
+                    </SummaryFloat>
                   </OpenFileContext.Provider>
                   {conversation && (
                     <RenameDialog

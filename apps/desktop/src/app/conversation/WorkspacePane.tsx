@@ -129,9 +129,9 @@ export function WorkspacePaneToggle() {
 }
 
 /**
- * The right sidebar: Files or Source for the open session, or before it starts for its
- * project's folder. A full-height column at the window's edge, its views' icons in the titlebar
- * strip; the Workers panel, when open too, sits between it and the content.
+ * The right sidebar: Files, Search or Source for the open session, or before it starts for its
+ * project's folder. A column at the window's end edge below the titlebar, its views' icons in a
+ * row at its top; the Workers panel, when open too, sits between it and the content.
  */
 export function WorkspacePane() {
   const pane = useContext(WorkspacePaneContext);
@@ -171,13 +171,13 @@ export function WorkspacePane() {
   return (
     <aside ref={column} aria-label="Right sidebar" data-slot="workspace-pane" data-state={open ? "expanded" : "collapsed"}
       className={cn(
-        "column-divider relative flex h-full min-h-0 shrink-0 before:transition-opacity before:duration-300 before:ease-sidebar after:transition-opacity after:duration-300 after:ease-sidebar motion-reduce:before:transition-none motion-reduce:after:transition-none",
-        !open && "before:opacity-0 after:opacity-0",
+        "start-hairline relative flex h-full min-h-0 shrink-0 before:transition-opacity before:duration-300 before:ease-sidebar motion-reduce:before:transition-none",
+        !open && "before:opacity-0",
       )}
       style={{ "--right-sidebar-width": pane.width === null ? "var(--spacing-sidebar)" : `${pane.width}px` } as CSSProperties}>
       <SidebarReveal side="right" width="workspace-pane-width" open={open} hidden={!open} resizing={pane.resizing}>
         <div className="workspace-pane-width flex h-full min-h-0 flex-col">
-          <div role="tablist" aria-label="Right sidebar" data-tauri-drag-region className="h-titlebar flex shrink-0 items-center justify-center gap-1 px-2">
+          <div role="tablist" aria-label="Right sidebar" className="h-page-toolbar bg-background flex shrink-0 items-center justify-center gap-1 px-2">
             <TitlebarTips>
               {VIEWS.map(({ id, title, shortcut, Icon }, index) => (
                 <TitlebarButton key={id} role="tab" id={`workspace-pane-${id}`} aria-controls="workspace-pane-content"
@@ -207,7 +207,7 @@ export function WorkspacePane() {
             </TitlebarTips>
           </div>
           <div id="workspace-pane-content" role="tabpanel" aria-labelledby={`workspace-pane-${pane.active}`} data-pane={pane.active}
-            className="bg-background text-sidebar-foreground rounded-e-page flex min-h-0 flex-1 flex-col overflow-hidden">
+            className="bg-background text-sidebar-foreground rounded-ee-page flex min-h-0 flex-1 flex-col overflow-clip">
             {/* Keyed by whose files they are: one draft's list or message never shows for another. */}
             {shown && (pane.conversationId ? (
               pane.active === "files" ? <FilesTab key={pane.conversationId} conversationId={pane.conversationId} searchRequest={pane.searchRequest}

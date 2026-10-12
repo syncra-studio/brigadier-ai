@@ -3,6 +3,11 @@
  * (App.tsx) around a project session with a long thread, over IPC answered here. Run live by
  * ShellRender.test.ts, which turns the wheel and resizes the window for it (fixtures/input.ts).
  *
+ * `?drive=layout` opens and closes the right panels (Files, Workers, both) with the sidebar
+ * expanded and folded, and in a narrow window, measuring every titlebar control on every frame:
+ * none moves, the panels open below the titlebar, the left sidebar keeps its width; and where
+ * the divider before the tabs sits. `wide=1` widens the left sidebar, `density=compact`.
+ *
  * `?drive=scroll` checks that the window itself never scrolls: the titlebar and both sidebars
  * stay where they are whatever scrolls inside them (the thread, a page, the tab strip, Settings),
  * whether a wheel turns past an end or the app brings something into view, and that the panes
@@ -13,18 +18,25 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "@/app/App";
+import planned from "@/fixtures/boards/thread-plan-2026-10-10.events.json";
 import { fixtureInput } from "@/fixtures/input";
-import type { Conversation, Message, Page, PageContent, Project, Request } from "@/ipc/generated";
+import type { Conversation, EventEnvelope, Message, Page, PageContent, Project, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";
-import { emptyBoard, useBoard } from "@/state/board";
+import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
 import { newSessionTab, openPageTab, selectTab, useSessionTabs } from "@/state/sessionTabs";
 import { emptyThread, useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
+// A left sidebar the user widened.
+if (query.has("wide")) localStorage.setItem("brigadier.sidebarWidth", "420");
+else localStorage.removeItem("brigadier.sidebarWidth");
 if (query.get("density") === "compact") document.documentElement.dataset.density = "compact";
 document.documentElement.dataset.platform = "macos";
 
-const ID = "shell-session";
+// The plan session of 2026-10-10 while phase 1 builds: its workers show over the composer
+// (`drive=layout`), or a long thread of its own (`drive=scroll`).
+const ID = planned.conversationId;
+const layout = query.get("drive") === "layout";
 const PAGE = "3".repeat(32);
 const start = Date.now() - 86_400_000;
 
@@ -56,15 +68,24 @@ const conversation = {
   },
 } as unknown as Conversation;
 
-useBoard.setState({ board: { ...emptyBoard(ID), loaded: true, head: messages.at(-1)?.id ?? null } });
+let board = emptyBoard(ID);
+const planMessages: Message[] = [];
+for (const envelope of (planned.events as unknown as EventEnvelope[]).filter((event) => event.atMs <= 1791603900000)) {
+  board = applyToBoard(board, envelope);
+  if (envelope.event.type === "messageAppended") planMessages.push({ ...envelope.event.message, seq: envelope.streamSeq });
+}
+const items = layout ? planMessages : messages;
+useBoard.setState({ board: layout ? { ...board, loaded: true, head: items.at(-1)?.id ?? null } : { ...emptyBoard(ID), loaded: true, head: items.at(-1)?.id ?? null } });
 useApp.setState((state) => ({
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
   settings: { ...state.settings, onboarded: true, introSeen: true },
   projects: { "shell-project": { id: "shell-project", name: "release-notes", createdAtMs: start, repos: [{ path: "/tmp/shell-fixture", name: "release-notes" }], prefs: {}, trust: [] } as unknown as Project },
   conversations: { [ID]: conversation },
-  threads: { [ID]: { ...emptyThread, items: messages } },
+  threads: { [ID]: { ...emptyThread, items } },
   selection: { type: "conversation", id: ID },
+  // The session's summary, pinned: its Workers row opens the Workers panel.
+  pinnedSummary: layout,
 }));
 useSessionTabs.setState({ sessions: {} });
 
@@ -78,6 +99,8 @@ mockIPC((command, payload) => {
     case "pageRead": return { method: "pageRead", page };
     case "pageList": return { method: "pageList", pages: [{ id: PAGE, title: "Long page", emoji: null, updatedMs: start }] };
     case "listMessages": return { method: "listMessages", page: { items: [], hasMore: false } };
+    // The board as replayed here stays: the daemon's own view of it never comes.
+    case "getConversation": return layout ? new Promise(() => {}) : { method: request.method };
     case "listFiles": return { method: "listFiles", files: Array.from({ length: 60 }, (_, index) => `src/file-${index}.ts`), truncated: false };
     default: return { method: request.method };
   }
@@ -245,6 +268,114 @@ async function driveScroll(): Promise<Record<string, unknown>> {
   return seen;
 }
 
+/** Every control in the titlebar row, by name, at its x: where it starts and ends. */
+function titlebar(): Record<string, [number, number]> {
+  const header = one('[data-slot="session-tabs"]')!;
+  const controls = [...document.querySelectorAll<HTMLElement>('[data-slot="titlebar-nav"] button'), ...header.querySelectorAll<HTMLElement>("button")]
+    .filter((button) => !button.closest("[data-session-tab]"));
+  const placed: Record<string, [number, number]> = {};
+  for (const control of controls) {
+    const box = control.getBoundingClientRect();
+    if (!box.width) continue;
+    placed[control.getAttribute("aria-label") ?? control.textContent?.trim() ?? "?"] = [Math.round(box.left), Math.round(box.right)];
+  }
+  placed.divider = [divider(), divider()];
+  return placed;
+}
+
+/** Where the divider before the tabs is drawn. */
+function divider() {
+  const header = one('[data-slot="session-tabs"]')!;
+  return Math.round(header.getBoundingClientRect().left + Number.parseFloat(getComputedStyle(header, "::before").left));
+}
+
+/** Runs `act`, then reads every frame for `ms`: whether a titlebar control moved, the window scrolled, or the left sidebar's width changed. */
+async function watch(act: () => void, ms = 600) {
+  const titles = JSON.stringify(titlebar());
+  const left = rect(one('[data-slot="sidebar-panel"]'))!.w;
+  const moved = new Set<string>();
+  act();
+  for (const end = performance.now() + ms; performance.now() < end;) {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const now = titlebar();
+    for (const [name, at] of Object.entries(now)) if (JSON.stringify(at) !== JSON.stringify(JSON.parse(titles)[name])) moved.add(`${name} ${JSON.stringify(JSON.parse(titles)[name])}→${JSON.stringify(at)}`);
+    for (const name of Object.keys(JSON.parse(titles))) if (!(name in now)) moved.add(`${name} gone`);
+    for (const line of shellMoved()) moved.add(line);
+    const width = rect(one('[data-slot="sidebar-panel"]'))!.w;
+    if (width !== left) moved.add(`left sidebar ${left}→${width}`);
+  }
+  return [...moved];
+}
+
+const headerBottom = () => {
+  const header = rect(one('[data-slot="session-tabs"]'))!;
+  return header.y + header.h;
+};
+const click = (selector: string) => one<HTMLButtonElement>(selector)?.click();
+const toggle = '[data-slot="session-tabs"] button[aria-label="Right sidebar"]';
+
+/** The right panels opened and closed, one and then both: what moved, and where they opened. */
+async function panels() {
+  const seen: Record<string, unknown> = {};
+  const header = one('[data-slot="session-tabs"]')!;
+  const last = [...header.querySelectorAll("button")].at(-1)!;
+  seen.toggleLast = last.getAttribute("aria-label");
+  seen.toggleToEdge = Math.round(innerWidth - last.getBoundingClientRect().right);
+  seen.filesOpening = await watch(() => click(toggle));
+  const pane = rect(one('[data-slot="workspace-pane"]'))!;
+  seen.filesOpen = { top: pane.y - headerBottom(), width: pane.w, row: one('[data-slot="workspace-pane"] [role="tablist"]')?.textContent !== undefined && rect(one('[data-slot="workspace-pane"] [role="tablist"]'))!.y - headerBottom() };
+  // The session's context, where its Workers row opens the Workers panel.
+  if (!one('[data-slot="workers-summary"]')) {
+    click('[data-slot="session-tabs"] button[aria-label="Context"]');
+    await until(() => Boolean(one('[data-slot="workers-summary"]')));
+    await wait(400);
+  }
+  seen.workersOpening = await watch(() => click('[data-slot="workers-summary"]'));
+  const workers = rect(one('[data-slot="right-sidebar"]'))!;
+  seen.workersOpen = { top: workers.y - headerBottom(), width: workers.w, state: one('[data-slot="right-sidebar"]')?.getAttribute("data-state"),
+    files: one('[data-slot="workspace-pane"]')?.getAttribute("data-state"), row: rect(one('[data-slot="right-sidebar"] [role="tablist"]'))!.y - headerBottom() };
+  seen.filesClosing = await watch(() => click(toggle));
+  seen.filesAgain = await watch(() => click(toggle));
+  seen.workersClosing = await watch(() => click('[data-slot="right-sidebar"] button[aria-label="Close right panel"]'));
+  seen.filesClosingLast = await watch(() => one('[data-slot="workspace-pane"]')?.getAttribute("data-state") === "expanded" && click(toggle));
+  return seen;
+}
+
+/** The divider before the tabs and what is beside it, the sidebar expanded or folded. */
+function tabsStart() {
+  const sidebar = rect(one('[data-slot="sidebar-panel"]'))!;
+  const nav = [...document.querySelectorAll<HTMLElement>('[data-slot="titlebar-nav"] button')].map((button) => button.getAttribute("aria-label"));
+  const newChat = rect(one('[data-slot="titlebar-new-chat"]'));
+  const firstTab = rect(one('[data-slot="session-tabs"] [data-tab-id="chat"]'))!;
+  const rule = getComputedStyle(one('[data-slot="session-tabs"]')!, "::before");
+  return {
+    nav, divider: divider(), sidebarEnd: sidebar.x + sidebar.w, newChatEnd: newChat ? newChat.x + newChat.w : null, firstTab: firstTab.x,
+    rule: { width: Number.parseFloat(rule.width), height: Math.round(Number.parseFloat(rule.height)), shown: rule.content !== "none" && rule.display !== "none" },
+  };
+}
+
+async function driveLayout(): Promise<Record<string, unknown>> {
+  const seen: Record<string, unknown> = {};
+  await until(() => Boolean(one('[data-slot="session-tabs"]')), 8000);
+  await wait(800);
+  seen.expandedStart = tabsStart();
+  seen.expanded = await panels();
+  // The sidebar folded: New chat joins the titlebar's controls, the divider follows it.
+  seen.folding = await watch(() => click('[data-slot="sidebar-toggle"]'), 700)
+    // Only the tabs move over: the toolbar at the end stays, and the window never scrolls.
+    .then((moved) => moved.filter((line) => /^(Context|Terminal|Right sidebar) |^(window|scrollingElement) /.test(line)));
+  seen.foldedStart = tabsStart();
+  seen.folded = await panels();
+  click('[data-slot="sidebar-toggle"]');
+  await wait(700);
+  // A narrow window.
+  await fixtureInput({ type: "viewport", width: 1000, height: 760 });
+  await wait(800);
+  seen.narrowStart = tabsStart();
+  seen.narrow = await panels();
+  return seen;
+}
+
 function titlebarHeight() {
   return Math.round(Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--spacing-titlebar")) * 16);
 }
@@ -252,8 +383,9 @@ function titlebarHeight() {
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
-    if (query.get("drive") !== "scroll") return;
-    void driveScroll()
+    const drive = query.get("drive") === "scroll" ? driveScroll : query.get("drive") === "layout" ? driveLayout : null;
+    if (!drive) return;
+    void drive()
       .then((seen) => setResult(JSON.stringify(seen)))
       .catch((error: unknown) => setResult(JSON.stringify({ error: String(error instanceof Error ? error.stack : error) })));
   }, []);

@@ -94,9 +94,11 @@ function Fixture() {
     });
     at(1300, () => {
       seen.files = pane(); seen.dockOpenSlide = slide("workspace-pane");
-      // A full-height column at the window's right edge, its views' icons in the titlebar strip.
+      // A column at the window's right edge below the titlebar, its views' icons in a row at its top.
       const dock = document.querySelector('[data-slot="workspace-pane"]')!.getBoundingClientRect();
-      seen.atEdge = dock.top === 0 && Math.abs(dock.right - window.innerWidth) < 1 && Math.abs(dock.bottom - window.innerHeight) < 1;
+      const bar = document.querySelector('header[data-slot="test-toolbar"]')!.getBoundingClientRect();
+      const views = document.querySelector('[data-slot="workspace-pane"] [role="tablist"]')!.getBoundingClientRect();
+      seen.atEdge = dock.top === bar.bottom && views.top === dock.top && Math.abs(dock.right - window.innerWidth) < 1 && Math.abs(dock.bottom - window.innerHeight) < 1;
       seen.views = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => tab.getAttribute("aria-label"));
       click("Right sidebar");
       // Through the closing slide the contents stay; once it is over they go.
@@ -218,12 +220,14 @@ function Fixture() {
   }, [seen, runtime]);
   return <AssistantRuntimeProvider runtime={runtime}><ComposerTargetContext.Provider value={target}>
     <WorkspacePaneContext.Provider value={workspace}><RightSidebarContext.Provider value={panel}>
-      <div className="bg-background text-foreground flex h-screen min-w-0 flex-1">
+      <SummaryFloat>
+      {/* As ConversationView lays it out: the top bar across the window, the panels below it. */}
+      <div className="bg-background text-foreground flex h-screen min-w-0 flex-1 flex-col">
+        <header data-slot="test-toolbar" className="h-titlebar flex shrink-0 items-center justify-end">
+          <TitlebarTips><ConversationToolbar kind={kind === "chat" ? "chat" : "session"} /></TitlebarTips>
+        </header>
+        <div className="flex min-h-0 min-w-0 flex-1">
         <main className="flex min-w-0 flex-1 flex-col">
-          <SummaryFloat>
-            <header data-slot="test-toolbar" className="h-titlebar flex shrink-0 items-center justify-end">
-              <TitlebarTips><ConversationToolbar kind={kind === "chat" ? "chat" : "session"} /></TitlebarTips>
-            </header>
             <div className="flex min-h-0 flex-1">
               <SummaryPane summary>
                 {kind === "chat" && <PinnedSummary conversation={conversation} />}
@@ -235,11 +239,12 @@ function Fixture() {
                 <PreviewChip conversationId={id} />
               </SummaryPane>
             </div>
-          </SummaryFloat>
         </main>
         {kind !== "draft" && <RightSidebar conversationId={id} />}
         <WorkspacePane />
+        </div>
       </div>
+      </SummaryFloat>
       {result && <pre id="toolbar-result">{result}</pre>}
     </RightSidebarContext.Provider></WorkspacePaneContext.Provider>
   </ComposerTargetContext.Provider></AssistantRuntimeProvider>;

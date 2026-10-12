@@ -59,7 +59,10 @@ export function useRightSidebar(conversationId: string | null, enabled: boolean)
 
 export const RightSidebarContext = createContext<ReturnType<typeof useRightSidebar> | null>(null);
 
-/** The full-height right column. Closing reveals no strip and installs no hover trigger. */
+/**
+ * The Workers and Plan column, below the titlebar: its tabs and close in a row at its top.
+ * Closing reveals no strip and installs no hover trigger.
+ */
 export function RightSidebar({ conversationId }: { conversationId: string }) {
   const panel = useContext(RightSidebarContext);
   const content = useRef<HTMLDivElement>(null);
@@ -103,14 +106,14 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
       data-slot="right-sidebar"
       data-state={panel.open ? "expanded" : "collapsed"}
       className={cn(
-        "column-divider relative flex h-full shrink-0 before:transition-opacity before:duration-300 before:ease-sidebar after:transition-opacity after:duration-300 after:ease-sidebar motion-reduce:before:transition-none motion-reduce:after:transition-none",
-        !panel.open && "before:opacity-0 after:opacity-0",
+        "start-hairline relative flex h-full shrink-0 before:transition-opacity before:duration-300 before:ease-sidebar motion-reduce:before:transition-none",
+        !panel.open && "before:opacity-0",
       )}
       style={{ "--right-sidebar-width": panel.width === null ? "var(--spacing-sidebar)" : `${panel.width}px` } as CSSProperties}
     >
       <SidebarReveal side="right" open={panel.open} hidden={!panel.open} resizing={panel.resizing}>
         <div ref={content} className="right-sidebar-panel-width flex h-full flex-col">
-          <div role="tablist" aria-label="Right panel" data-tauri-drag-region className="h-titlebar flex shrink-0 items-center gap-1 px-2">
+          <div role="tablist" aria-label="Right panel" className="h-page-toolbar bg-background flex shrink-0 items-center gap-1 px-2">
             <TitlebarTips>
               {tabs.map(({ id, title, Icon }, index) => (
                 <TitlebarButton
@@ -149,7 +152,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
             aria-labelledby={`right-sidebar-${panel.active}`}
             data-pane={panel.active}
             className={cn(
-              "bg-background text-sidebar-foreground rounded-e-page flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 motion-reduce:transition-none",
+              "bg-background text-sidebar-foreground flex min-h-0 flex-1 flex-col overflow-clip transition-opacity duration-150 motion-reduce:transition-none",
               panel.open ? "opacity-100" : "opacity-0",
             )}
           >

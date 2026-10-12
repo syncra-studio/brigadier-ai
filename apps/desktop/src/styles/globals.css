@@ -145,12 +145,13 @@
 }
 
 /* The sidebar panel's width: where the user dragged it (--sidebar-width, set by the sidebar)
-   or the default, kept within its range and leaving the content beside it room. */
+   or the default, kept within its range and leaving the content beside it room. The right
+   panels never narrow it: opening or closing one leaves it, and the titlebar over it, still. */
 @utility sidebar-panel-width {
   width: clamp(
     var(--spacing-sidebar-min),
     var(--sidebar-width, var(--spacing-sidebar)),
-    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--right-sidebar-shown, var(--sidebar-other-width)) - var(--workspace-pane-reserve, var(--sidebar-other-width))))
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min)))
   );
 }
 
@@ -182,8 +183,17 @@
   --sidebar-shown: clamp(
     var(--spacing-sidebar-min),
     var(--sidebar-width, var(--spacing-sidebar)),
-    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--right-sidebar-shown, var(--sidebar-other-width)) - var(--workspace-pane-reserve, var(--sidebar-other-width))))
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min)))
   );
+}
+
+/* Where Back, Forward and the sidebar toggle end in the titlebar, and while the panel is
+   folded, New chat after them (AppSidebar's TitlebarNav). */
+[data-slot="sidebar-wrapper"] {
+  --titlebar-nav-end: calc(var(--spacing-titlebar-nav-end) + var(--spacing-icon-button-md) + var(--spacing) * 1.5);
+}
+[data-slot="sidebar-wrapper"][data-state="expanded"] {
+  --titlebar-nav-end: var(--spacing-titlebar-nav-end);
 }
 
 /* A hidden sidebar reserves no width and leaves no body divider on the main content.
@@ -202,7 +212,7 @@
   padding-inline-start: max(
     --spacing(--value(integer)),
     calc(
-      var(--spacing-titlebar-nav-end) + var(--spacing) * 2 - var(--spacing-surface-inset) -
+      var(--titlebar-nav-end, var(--spacing-titlebar-nav-end)) + var(--spacing) * 2 - var(--spacing-surface-inset) -
         var(--sidebar-shown)
     )
   );
@@ -303,12 +313,13 @@
   }
 }
 
-/* A session's column divider clears the fixed navigation controls when the sidebar folds. */
+/* A session's tabs start after a divider: at the sidebar panel's end edge, or where the panel is
+   folded, after the titlebar's controls and New chat. */
 [data-slot="session-tabs"]::before {
   @apply transition-[inset-inline-start] duration-300 ease-sidebar motion-reduce:transition-none;
   inset-inline-start: max(
     0%,
-    calc(var(--spacing-titlebar-nav-end) + var(--spacing) - var(--spacing-surface-inset) - var(--sidebar-shown))
+    calc(var(--titlebar-nav-end, var(--spacing-titlebar-nav-end)) + var(--spacing) - var(--spacing-surface-inset) - var(--sidebar-shown))
   );
 }
 

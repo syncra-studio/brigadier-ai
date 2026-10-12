@@ -12,7 +12,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.closedFiles, null);
   assert.equal(seen.source, "source");
   assert.equal(seen.switchedFiles, "files");
-  assert.equal(seen.atEdge, true, "the right sidebar runs the window's full height at its right edge");
+  assert.equal(seen.atEdge, true, "the right sidebar runs from the titlebar's bottom to the window's at its right edge, its views at its top");
   assert.equal(seen.keyClosed, null, "⌥⌘B hides the right sidebar");
   assert.deepEqual(seen.menuKey, { code: "KeyB", alt: true });
   assert.equal(seen.reopened, "files", "⌘P shows the closed right sidebar on Files");
