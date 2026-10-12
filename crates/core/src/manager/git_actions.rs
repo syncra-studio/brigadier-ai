@@ -47,7 +47,7 @@ trailers.";
 
 impl SessionManager {
     /// The session's checkout: its path and the provider its orchestrator runs on.
-    fn checkout(&self, id: &ConversationId) -> Result<(PathBuf, ProviderKind)> {
+    pub(super) fn checkout(&self, id: &ConversationId) -> Result<(PathBuf, ProviderKind)> {
         let Some(Setup::Session {
             repo,
             environment,

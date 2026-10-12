@@ -50,6 +50,7 @@ import type { RawPage } from "./RawPage";
 import type { RawSession } from "./RawSession";
 import type { RegistryInfo } from "./RegistryInfo";
 import type { RemoveProjectReport } from "./RemoveProjectReport";
+import type { ReplaceOutcome } from "./ReplaceOutcome";
 import type { RepoInfo } from "./RepoInfo";
 import type { RestoreOutcome } from "./RestoreOutcome";
 import type { ReviewDiff } from "./ReviewDiff";
@@ -101,7 +102,7 @@ stat: DiffStat | null, } | { "method": "getWorkerDiffs", diffs: Array<WorkerDiff
 /**
  * Whether a watch runs now (false when stopped, or the target has no checkout).
  */
-watching: boolean, } | { "method": "getProjectSourceState", state: SourceState, } | { "method": "changeProjectSource", state: SourceState, } | { "method": "commitProjectChanges", outcome: CommitOutcome, } | { "method": "answerCard" } | { "method": "answerQuestion" } | { "method": "decidePlan" } | { "method": "cancelMerge", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
+watching: boolean, } | { "method": "startSearch", id: number, } | { "method": "cancelSearch" } | { "method": "replaceInFiles", outcome: ReplaceOutcome, } | { "method": "getProjectSourceState", state: SourceState, } | { "method": "changeProjectSource", state: SourceState, } | { "method": "commitProjectChanges", outcome: CommitOutcome, } | { "method": "answerCard" } | { "method": "answerQuestion" } | { "method": "decidePlan" } | { "method": "cancelMerge", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
 /**
  * Absent before the run has a branch, and for a finished run with nothing verified.
  */

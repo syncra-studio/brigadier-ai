@@ -52,6 +52,11 @@ pub enum BridgeEvent {
     WorkspaceChanged {
         target: brigadier_core::WorkspaceTarget,
     },
+    /// What the right sidebar's search with `id` found next, or that it ended.
+    Search {
+        id: u32,
+        update: brigadier_core::SearchUpdate,
+    },
     /// The window was hidden or shown; pause sampling while hidden.
     WindowVisibility {
         visible: bool,

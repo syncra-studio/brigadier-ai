@@ -1589,6 +1589,8 @@ mod review_hold_tests;
 #[cfg(test)]
 mod review_switch_tests;
 #[cfg(test)]
+mod search_tests;
+#[cfg(test)]
 mod status_tests;
 #[cfg(test)]
 mod takeover_tests;

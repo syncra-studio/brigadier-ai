@@ -25,7 +25,7 @@ const POLL: Duration = Duration::from_secs(10);
 
 impl SessionManager {
     /// The folder a target's checkout is in: a session's, or a project's folder.
-    fn workspace_dir(&self, target: &WorkspaceTarget) -> Result<PathBuf> {
+    pub(super) fn workspace_dir(&self, target: &WorkspaceTarget) -> Result<PathBuf> {
         match target {
             WorkspaceTarget::Conversation { conversation_id } => {
                 self.checkout_dir(conversation_id).map(PathBuf::from)

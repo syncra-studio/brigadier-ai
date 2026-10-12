@@ -2316,6 +2316,104 @@ pub struct WorkspaceFolder {
     pub truncated: bool,
 }
 
+/// What the right sidebar's Search looks for in a checkout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchQuery {
+    /// The text, or with `regex` a regular expression.
+    pub text: String,
+    pub match_case: bool,
+    /// Only matches standing as whole words.
+    pub whole_word: bool,
+    pub regex: bool,
+    /// Comma-separated globs a file must match (none: every file), such as `src/**, *.ts`.
+    #[serde(default)]
+    pub include: String,
+    /// Comma-separated globs of files and folders left out.
+    #[serde(default)]
+    pub exclude: String,
+}
+
+/// Where a match is in a result line's preview, in UTF-16 code units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// One line of a file holding matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchLine {
+    /// From 1.
+    pub line: u32,
+    /// The line's text, or the part of a long line around its first match (cut ends marked
+    /// with `…`).
+    pub preview: String,
+    pub ranges: Vec<SearchRange>,
+}
+
+/// A file holding matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFile {
+    /// Relative to the checkout's root.
+    pub path: String,
+    /// Every match in the file, also those past the lines listed.
+    pub matches: u32,
+    /// The lines with matches, the first ones when it has very many.
+    pub lines: Vec<SearchLine>,
+    /// What the file held when searched: a replace only rewrites it unchanged.
+    pub hash: String,
+}
+
+/// What a running search sends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SearchUpdate {
+    /// More files with matches, in path order.
+    Files { files: Vec<SearchFile> },
+    /// The search ended: how many it found, and whether it stopped at its limits first.
+    Done {
+        files: u32,
+        matches: u32,
+        capped: bool,
+    },
+}
+
+/// A file a replace rewrites, as its search found it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceFile {
+    pub path: String,
+    /// The search's hash of it.
+    pub hash: String,
+    /// How many matches the search found in it.
+    pub matches: u32,
+}
+
+/// A file a replace left alone, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceSkip {
+    pub path: String,
+    pub reason: String,
+}
+
+/// What a replace did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceOutcome {
+    pub files: u32,
+    pub matches: u32,
+    pub skipped: Vec<ReplaceSkip>,
+}
+
 /// Why something entered the orchestrator's context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]

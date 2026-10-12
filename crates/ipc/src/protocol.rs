@@ -19,11 +19,11 @@ use brigadier_core::{
     DiffStat, FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message,
     MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, ProbeBurst, Project,
     ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
-    QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, RepoInfo,
-    RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup, SetupRequest,
-    SourceChange, SourceScope, SourceState, TaskId, ThreadItem, ThreadMetrics, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
-    WorkspaceTarget, WorkspaceTree,
+    QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile,
+    ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, SearchQuery,
+    SearchUpdate, Settings, Setup, SetupRequest, SourceChange, SourceScope, SourceState, TaskId,
+    ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff,
+    WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -249,6 +249,23 @@ pub enum Request {
     /// stops watching): `WorkspaceChanged` frames say when to read it again.
     WatchWorkspace {
         target: Option<WorkspaceTarget>,
+    },
+    /// Searches a checkout for this connection, stopping the search it ran before: `Search`
+    /// frames with the returned id bring the results.
+    StartSearch {
+        target: WorkspaceTarget,
+        query: SearchQuery,
+    },
+    /// Stops this connection's search, if it is still the one with `id`.
+    CancelSearch {
+        id: u32,
+    },
+    /// Replaces a search's matches in the files listed, each only if unchanged since.
+    ReplaceInFiles {
+        target: WorkspaceTarget,
+        query: SearchQuery,
+        replacement: String,
+        files: Vec<ReplaceFile>,
     },
     /// One file of a session's checkout, for the side panel's Files tab.
     ReadFile {
@@ -1264,6 +1281,13 @@ pub enum Response {
         /// Whether a watch runs now (false when stopped, or the target has no checkout).
         watching: bool,
     },
+    StartSearch {
+        id: u32,
+    },
+    CancelSearch,
+    ReplaceInFiles {
+        outcome: ReplaceOutcome,
+    },
     GetProjectSourceState {
         state: SourceState,
     },
@@ -1640,6 +1664,11 @@ pub enum ServerFrame {
     /// The checkout this connection watches changed: its files, index or HEAD. Live only.
     WorkspaceChanged {
         target: WorkspaceTarget,
+    },
+    /// What this connection's search with `id` found next, or that it ended. Live only.
+    Search {
+        id: u32,
+        update: SearchUpdate,
     },
     /// The daemon is shutting down; the connection closes next.
     Closing,

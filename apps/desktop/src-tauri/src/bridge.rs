@@ -401,6 +401,9 @@ impl Bridge {
             ServerFrame::WorkspaceChanged { target } => {
                 self.emit(BridgeEvent::WorkspaceChanged { target });
             }
+            ServerFrame::Search { id, update } => {
+                self.emit(BridgeEvent::Search { id, update });
+            }
             ServerFrame::Closing => return Some("daemon is shutting down".into()),
             ServerFrame::Welcome { .. } => return Some("unexpected second welcome".into()),
         }

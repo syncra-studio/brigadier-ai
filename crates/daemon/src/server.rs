@@ -9,12 +9,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use brigadier_core::heap;
 use brigadier_core::manager::SessionManager;
+use brigadier_core::manager::search::SearchRun;
 use brigadier_core::manager::workspace::WorkspaceWatch;
 use brigadier_core::pages::{PageChange, PageError, Pages};
 use brigadier_core::runtime::{Runtime, StartRaw};
 use brigadier_core::{
-    Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId, Setup,
-    WorkspaceTarget,
+    Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId, SearchUpdate,
+    Setup, WorkspaceTarget,
 };
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
@@ -204,6 +205,8 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         dictations: Started::new(daemon.dictation.clone()),
         page_feed: None,
         workspace_watch: None,
+        search: None,
+        searches: 0,
         late_tx,
         late,
     };
@@ -240,6 +243,10 @@ struct Session {
     page_feed: Option<broadcast::Receiver<PageChange>>,
     /// The checkout this connection's right sidebar shows, watched while it shows.
     workspace_watch: Option<(WorkspaceTarget, WorkspaceWatch)>,
+    /// The right sidebar's search running for this connection, by its id.
+    search: Option<(u32, SearchRun)>,
+    /// The last search id given out.
+    searches: u32,
     /// Answers to slow requests (clones), which run beside the others, by request id.
     late_tx: mpsc::Sender<(u32, Result<Response, IpcError>)>,
     late: mpsc::Receiver<(u32, Result<Response, IpcError>)>,
@@ -348,6 +355,11 @@ impl Session {
                 target = next_workspace_change(&mut self.workspace_watch) => {
                     if let Some(target) = target {
                         self.writer.write(&ServerFrame::WorkspaceChanged { target }).await?;
+                    }
+                }
+                found = next_search_update(&mut self.search) => {
+                    if let Some((id, update)) = found {
+                        self.writer.write(&ServerFrame::Search { id, update }).await?;
                     }
                 }
                 update = next_dictation_update(&mut self.dictation_feed) => {
@@ -467,6 +479,28 @@ impl Session {
                         Err(err) => Err(IpcError::from(err)),
                     },
                 }
+            }
+            Request::StartSearch { target, query } => {
+                // The old search stops first, and a failed new one leaves none.
+                self.search = None;
+                match self.daemon.sessions.start_search(&target, query).await {
+                    Ok(run) => {
+                        self.searches = self.searches.wrapping_add(1);
+                        self.search = Some((self.searches, run));
+                        Ok(Response::StartSearch { id: self.searches })
+                    }
+                    Err(err) => Err(IpcError::from(err)),
+                }
+            }
+            Request::CancelSearch { id } => {
+                if self
+                    .search
+                    .as_ref()
+                    .is_some_and(|(running, _)| *running == id)
+                {
+                    self.search = None;
+                }
+                Ok(Response::CancelSearch)
             }
             // A window that reconnects mid-download asks this first: it hears the rest.
             Request::GetDictation => Ok(Response::GetDictation {
@@ -936,6 +970,25 @@ async fn next_event(
 ) -> Result<Arc<StoredEvent>, RecvError> {
     match feed {
         Some(feed) => feed.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The running search's next update, by its id; pending forever while none runs. It is
+/// dropped once it ended.
+async fn next_search_update(search: &mut Option<(u32, SearchRun)>) -> Option<(u32, SearchUpdate)> {
+    match search {
+        Some((id, run)) => {
+            let id = *id;
+            let update = run.next().await;
+            if update
+                .as_ref()
+                .is_none_or(|update| matches!(update, SearchUpdate::Done { .. }))
+            {
+                *search = None;
+            }
+            update.map(|update| (id, update))
+        }
         None => std::future::pending().await,
     }
 }
@@ -1586,6 +1639,14 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::ListWorkspaceFolder { target, path } => Response::ListWorkspaceFolder {
             folder: heap(|| sessions.workspace_folder(&target, path)).await?,
         },
+        Request::ReplaceInFiles {
+            target,
+            query,
+            replacement,
+            files,
+        } => Response::ReplaceInFiles {
+            outcome: heap(|| sessions.replace_in_files(&target, query, replacement, files)).await?,
+        },
         Request::ListProjectFiles { project_id, query } => {
             let (files, truncated) = sessions.list_project_files(&project_id, query).await?;
             Response::ListProjectFiles { files, truncated }
@@ -2155,6 +2216,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::Subscribe { .. }
         | Request::SetMetricsStreaming { .. }
         | Request::WatchWorkspace { .. }
+        | Request::StartSearch { .. }
+        | Request::CancelSearch { .. }
         | Request::RefreshRankings
         | Request::Shutdown => {
             return Err(IpcError {

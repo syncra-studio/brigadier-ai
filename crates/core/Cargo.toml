@@ -18,10 +18,13 @@ brigadier-router.workspace = true
 brigadier-sandbox.workspace = true
 brigadier-store.workspace = true
 blake3.workspace = true
+globset = "0.4.20"
+ignore = "0.4.33"
 jiff = "0.2.37"
 memchr.workspace = true
 # Pages: noticing edits made to the pages folder by other programs.
 notify = "8.2.0"
+regex = "1.13.1"
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 schemars.workspace = true

@@ -3,10 +3,11 @@ import type { DaemonInfo } from "./DaemonInfo";
 import type { DaemonMetrics } from "./DaemonMetrics";
 import type { DictationUpdate } from "./DictationUpdate";
 import type { EventEnvelope } from "./EventEnvelope";
+import type { SearchUpdate } from "./SearchUpdate";
 import type { TerminalOutput } from "./TerminalOutput";
 import type { WorkspaceTarget } from "./WorkspaceTarget";
 
 /**
  * Pushed from the shell to the webview.
  */
-export type BridgeEvent = { "type": "connected", daemon: DaemonInfo, lastSeq: number, } | { "type": "disconnected", reason: string, } | { "type": "event", event: EventEnvelope, } | { "type": "lagged", resumeAfter: number, } | { "type": "metrics", metrics: DaemonMetrics, } | { "type": "terminal", output: TerminalOutput, } | { "type": "dictation", update: DictationUpdate, } | { "type": "pageChanged", id: string, revision: string | null, } | { "type": "workspaceChanged", target: WorkspaceTarget, } | { "type": "windowVisibility", visible: boolean, } | { "type": "openConversation", conversationId: string, } | { "type": "foldersOpened" } | { "type": "openFolderMenu" } | { "type": "uninstallMenu" } | { "type": "settingsMenu" };
+export type BridgeEvent = { "type": "connected", daemon: DaemonInfo, lastSeq: number, } | { "type": "disconnected", reason: string, } | { "type": "event", event: EventEnvelope, } | { "type": "lagged", resumeAfter: number, } | { "type": "metrics", metrics: DaemonMetrics, } | { "type": "terminal", output: TerminalOutput, } | { "type": "dictation", update: DictationUpdate, } | { "type": "pageChanged", id: string, revision: string | null, } | { "type": "workspaceChanged", target: WorkspaceTarget, } | { "type": "search", id: number, update: SearchUpdate, } | { "type": "windowVisibility", visible: boolean, } | { "type": "openConversation", conversationId: string, } | { "type": "foldersOpened" } | { "type": "openFolderMenu" } | { "type": "uninstallMenu" } | { "type": "settingsMenu" };
