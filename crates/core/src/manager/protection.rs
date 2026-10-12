@@ -168,12 +168,20 @@ impl SessionManager {
         };
         let mut targets = self.landing_targets(id);
         // Every branch Brigadier's records show it made in this repository, as other sessions'
-        // branches take Settings › Git's prefix rather than `brigadier/`.
+        // branches take Settings › Git's prefix rather than `brigadier/`: those still there
+        // and not under an engine prefix already, since the records keep every branch ever
+        // made and each adds to the launch's sandbox profile.
         let ownership = self.runtime.ledger().branch_ownership();
         let mut made = ownership.made_in(checkout);
         if let Some(main) = repo.common_dir().parent() {
             made.extend(ownership.made_in(main));
         }
+        made.retain(|name| {
+            !ENGINE_BRANCHES
+                .iter()
+                .any(|prefix| name.starts_with(&format!("{prefix}/")))
+                && matches!(repo.branch_tip(name), Ok(Some(_)))
+        });
         for target in extra_targets.iter().chain(&made) {
             if !targets.contains(target) {
                 targets.push(target.clone());
