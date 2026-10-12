@@ -89,7 +89,7 @@ function takeTheirs(id: string): void {
   const current = get(id);
   if (!current?.conflict) return;
   const page = current.conflict;
-  set(id, { content: page.content, revision: page.revision, conflict: null, dirty: false, error: null, version: current.version + 1 });
+  set(id, { status: "ready", content: page.content, revision: page.revision, conflict: null, dirty: false, error: null, version: current.version + 1 });
   writeRecovery(id, null);
 }
 
@@ -196,20 +196,27 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
     const current = get(id);
     if (!current || current.status === "loading") return;
     if (chains.has(id)) { pendingChange.set(id, revision); return; }
-    if (revision !== null && revision === current.revision) return;
+    if (current.status === "ready" && revision !== null && revision === current.revision) return;
     if (revision === null) {
-      if (!current.dirty) set(id, { status: "missing" });
-      else set(id, { status: "missing", error: "This page was deleted elsewhere." });
+      if (!current.dirty) set(id, { status: "missing", conflict: null });
+      else set(id, { status: "missing", conflict: null, error: "This page was deleted elsewhere." });
       return;
     }
     void ipc.read(id).then((page) => {
       const now = get(id);
-      if (!now || page.revision === now.revision) return;
+      if (!now) return;
+      if (page.revision === now.revision) {
+        if (now.status !== "ready") {
+          set(id, { status: "ready", error: null });
+          if (now.dirty) schedule(id);
+        }
+        return;
+      }
       if (samePage(page.content, now.content)) {
-        set(id, { revision: page.revision, dirty: false, conflict: null });
+        set(id, { status: "ready", revision: page.revision, dirty: false, conflict: null, error: null });
         writeRecovery(id, null);
-      } else if (now.dirty) set(id, { conflict: page });
-      else set(id, { content: page.content, revision: page.revision, conflict: null, version: now.version + 1 });
+      } else if (now.dirty) set(id, { status: "ready", conflict: page, error: null });
+      else set(id, { status: "ready", content: page.content, revision: page.revision, conflict: null, error: null, version: now.version + 1 });
     }, (error: unknown) => console.error("Could not read the changed page", error));
   }
 

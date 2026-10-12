@@ -66,6 +66,50 @@ test("closing one of two tabs for a page keeps the remaining editor and its save
   assert.equal(usePageEdits.getState().pages.shared, undefined);
 });
 
+test("restoring a deleted page at the same revision resumes saving the recovered edits", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  const original = daemon.put("restored-same", text("base"));
+  const editing = createPageEditing(daemon.ipc, 10_000);
+  await editing.open(original.id);
+  editing.edit(original.id, text("mine"));
+  daemon.pages.delete(original.id);
+  editing.changed(original.id, null);
+  assert.equal(usePageEdits.getState().pages[original.id]!.status, "missing");
+  daemon.pages.set(original.id, original);
+  editing.changed(original.id, original.revision);
+  await wait(0);
+  assert.equal(usePageEdits.getState().pages[original.id]!.status, "ready");
+  assert.equal(usePageEdits.getState().pages[original.id]!.conflict, null);
+  await editing.flush(original.id);
+  assert.equal(daemon.pages.get(original.id)!.content.body, "mine");
+});
+
+test("a restored page at another revision can resolve its conflict and keep saving", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  daemon.put("restored-other", text("base"));
+  const editing = createPageEditing(daemon.ipc, 10_000);
+  await editing.open("restored-other");
+  editing.edit("restored-other", text("mine"));
+  const changed = daemon.put("restored-other", text("before deletion"));
+  editing.changed("restored-other", changed.revision);
+  await wait(0);
+  daemon.pages.delete("restored-other");
+  editing.changed("restored-other", null);
+  assert.equal(usePageEdits.getState().pages["restored-other"]!.conflict, null, "a deleted file offers no stale Use theirs choice");
+  const restored = daemon.put("restored-other", text("restored elsewhere"));
+  editing.changed(restored.id, restored.revision);
+  await wait(0);
+  assert.equal(usePageEdits.getState().pages[restored.id]!.status, "ready");
+  assert.equal(usePageEdits.getState().pages[restored.id]!.conflict?.content.body, "restored elsewhere");
+  await editing.keepMine(restored.id);
+  assert.equal(daemon.pages.get(restored.id)!.content.body, "mine");
+  editing.edit(restored.id, text("next edit"));
+  await editing.flush(restored.id);
+  assert.equal(daemon.pages.get(restored.id)!.content.body, "next edit");
+});
+
 test("reopening while the previous tab flushes keeps the reopened editor", async () => {
   data.clear();
   const daemon = fakeDaemon();
