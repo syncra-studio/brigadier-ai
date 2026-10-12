@@ -13,6 +13,8 @@ export function PreviewChip({ conversationId }: { conversationId: string }) {
   const previews = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.previews : null));
   const chip = useMemo(() => (previews ? previewChip(previews) : null), [previews]);
   const [open, setOpen] = useState(false);
+  // Cleared while open: the next preview's chip comes back closed.
+  if (!chip && open) setOpen(false);
   if (!chip) return null;
   return (
     <Popover open={open} onOpenChange={setOpen}>

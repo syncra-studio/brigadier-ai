@@ -149,16 +149,26 @@
   width: clamp(
     var(--spacing-sidebar-min),
     var(--sidebar-width, var(--spacing-sidebar)),
-    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--right-sidebar-shown, var(--sidebar-other-width))))
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--right-sidebar-shown, var(--sidebar-other-width)) - var(--workspace-pane-reserve, var(--sidebar-other-width))))
   );
 }
 
-/* The right column owns its width variable and leaves room for the left column too. */
+/* The right column owns its width variable and leaves room for the left column too, and for
+   the docked Files and Source pane's minimum while that shows. */
 @utility right-sidebar-panel-width {
   width: clamp(
     var(--spacing-sidebar-min),
     var(--right-sidebar-width, var(--spacing-sidebar)),
-    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--sidebar-shown)))
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--sidebar-shown) - var(--workspace-pane-reserve, var(--sidebar-other-width))))
+  );
+}
+
+/* The docked Files and Source pane takes what the sidebar and the right column leave. */
+@utility workspace-pane-width {
+  width: clamp(
+    var(--spacing-sidebar-min),
+    var(--right-sidebar-width, var(--spacing-sidebar)),
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--sidebar-shown) - var(--right-sidebar-shown, var(--sidebar-other-width))))
   );
 }
 
@@ -171,7 +181,7 @@
   --sidebar-shown: clamp(
     var(--spacing-sidebar-min),
     var(--sidebar-width, var(--spacing-sidebar)),
-    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--right-sidebar-shown, var(--sidebar-other-width))))
+    max(var(--spacing-sidebar-min), min(var(--spacing-sidebar-max), 100vw - var(--spacing-surface-inset) * 2 - var(--spacing-sidebar-thread-min) - var(--right-sidebar-shown, var(--sidebar-other-width)) - var(--workspace-pane-reserve, var(--sidebar-other-width))))
   );
 }
 

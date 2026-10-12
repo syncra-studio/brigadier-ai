@@ -1,5 +1,5 @@
 import { Branch, Folders } from "@openai/apps-sdk-ui/components/Icon";
-import { createContext, lazy, Suspense, type CSSProperties, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, lazy, Suspense, type CSSProperties, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 
 import { TitlebarButton } from "@/components/titlebar-button";
 import { SidebarResizeHandle, useSidebarWidth } from "@/components/ui/sidebar-layout";
@@ -66,14 +66,24 @@ export function WorkspacePaneToggle({ tab }: { tab: WorkspacePaneTab }) {
 /** Files or Source for the open session, or before it starts for its project's folder. */
 export function WorkspacePane() {
   const pane = useContext(WorkspacePaneContext);
+  const open = Boolean(pane?.open);
+  // While it shows, the sidebar and the right panel leave it at least its minimum width.
+  useLayoutEffect(() => {
+    const wrapper = open ? document.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]') : null;
+    wrapper?.style.setProperty("--workspace-pane-reserve", "var(--spacing-sidebar-min)");
+    return () => {
+      wrapper?.style.removeProperty("--workspace-pane-reserve");
+    };
+  }, [open]);
   if (!pane?.open) return null;
   return (
     <aside aria-label={pane.active === "files" ? "Files" : "Source"} data-slot="workspace-pane"
       className="border-border relative flex h-full min-h-0 shrink-0 border-s"
       style={{ "--right-sidebar-width": pane.width === null ? "var(--spacing-sidebar)" : `${pane.width}px` } as CSSProperties}>
       <div id="workspace-pane-content" data-pane={pane.active}
-        className="right-sidebar-panel-width bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col overflow-hidden">
-        <Suspense fallback={null}>
+        className="workspace-pane-width bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col overflow-hidden">
+        {/* Keyed by whose files they are: one draft's list or message never shows for another. */}
+        <Suspense key={pane.conversationId ?? `project:${pane.projectId}`} fallback={null}>
           {pane.conversationId ? (
             pane.active === "files" ? <FilesTab conversationId={pane.conversationId} searchRequest={pane.searchRequest}
               onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />

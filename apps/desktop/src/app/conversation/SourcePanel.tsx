@@ -85,6 +85,14 @@ function sessionOf(target: SourceTarget): string | null {
   return target.type === "conversation" ? target.conversationId : null;
 }
 
+/** Each target's unsent commit message, kept while the app runs: closing or switching the pane keeps it. */
+const unsent = new Map<string, string>();
+
+/** The key a target's unsent message is kept under. */
+function targetKey(target: SourceTarget): string {
+  return target.type === "conversation" ? target.conversationId : `project:${target.projectId}`;
+}
+
 /** How often the panel reads the checkout again while it shows: agents change files meanwhile. */
 const REFRESH_MS = 4000;
 
@@ -445,7 +453,13 @@ const CommitBox: FC<{
   onCommitted: () => void;
 }> = ({ target, state, staging, onCommitting, onCommitted }) => {
   const conversationId = sessionOf(target);
-  const [message, setMessage] = useState("");
+  const key = targetKey(target);
+  const [message, setMessageState] = useState(() => unsent.get(key) ?? "");
+  const setMessage = (next: string) => {
+    if (next) unsent.set(key, next);
+    else unsent.delete(key);
+    setMessageState(next);
+  };
   const [busy, setBusyState] = useState<Busy>(null);
   const setBusy = (next: Busy) => {
     setBusyState(next);

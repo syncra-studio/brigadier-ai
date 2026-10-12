@@ -4,8 +4,10 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { type ComposerTarget, ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { ConversationToolbar } from "@/app/conversation/ConversationToolbar";
 import { updateDraft } from "@/app/conversation/draftSetup";
+import { MentionMemory } from "@/app/conversation/Mentions";
 import { NewTabTools } from "@/app/conversation/NewTabTools";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
 import { PreviewChip } from "@/app/conversation/PreviewChip";
@@ -42,6 +44,11 @@ mockIPC((command, args) => {
   if (req.method === "previewLog") return { method: req.method, tail: "", url: null };
   return { method: req.method };
 });
+
+const mentions = new MentionMemory();
+// Only the mention memory is read by the panes.
+const target = { mentions } as unknown as ComposerTarget;
+const previews = useBoard.getState().board!.previews;
 
 function Fixture() {
   const [kind, setKind] = useState<"session" | "draft" | "chat">("session");
@@ -83,30 +90,41 @@ function Fixture() {
     at(3700, () => { seen.composerRight = right(); click("Close right panel"); click("Context worker"); });
     at(4000, () => { seen.contextWorkerRight = right(); click("Open plan"); });
     at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click(); });
-    at(4700, () => { seen.previewPopover = !!document.querySelector('[aria-label="Previews"]'); seen.previewRight = right(); click("Files"); document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); setKind("draft"); });
+    at(4700, () => { seen.previewPopover = !!document.querySelector('[aria-label="Previews"]'); seen.previewRight = right(); click("Files"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } }); });
+    at(4850, () => { useBoard.setState({ board: { ...useBoard.getState().board!, previews } }); });
+    at(5000, () => { seen.previewReopened = !!document.querySelector('[aria-label="Previews"]'); setKind("draft"); });
     const buttons = (scope: string) => [...document.querySelectorAll(`${scope} button`)].map((button) => button.textContent?.trim());
-    at(5100, () => { seen.draftControls = controls(); seen.draftRight = right(); click("Files"); });
-    at(5500, () => {
+    at(5200, () => { seen.draftControls = controls(); seen.draftRight = right(); click("Files"); });
+    at(5600, () => {
       seen.draftFiles = pane(); seen.draftTree = document.querySelector('[data-slot="workspace-pane"] [role="tree"]')?.textContent;
       document.querySelector<HTMLButtonElement>('[data-slot="workspace-pane"] button[title="package.json"]')?.click();
     });
-    at(5800, () => { seen.draftComposer = runtime.thread.composer.getState().text; click("Source"); });
+    at(5900, () => { seen.draftComposer = runtime.thread.composer.getState().text; seen.draftMention = [...mentions.known()]; click("Source"); });
     at(6200, () => {
       seen.draftSource = buttons('[data-slot="source-panel"]'); seen.draftCommitBox = !!document.querySelector('[aria-label="Commit message"]');
-      seen.draftNote = !!document.querySelector('[data-slot="own-copy-note"]'); updateDraft("project", { environment: "newWorktree" });
+      seen.draftNote = !!document.querySelector('[data-slot="own-copy-note"]');
+      const box = document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "Unsent message");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+      click("Source");
     });
-    at(6500, () => {
+    at(6400, () => { seen.closedSource = pane(); click("Source"); });
+    at(6600, () => {
+      seen.keptMessage = document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')?.value;
+      updateDraft("project", { environment: "newWorktree" });
+    });
+    at(6900, () => {
       seen.worktreeSource = buttons('[data-slot="source-panel"]'); seen.worktreeCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent; setKind("chat");
     });
-    at(6700, () => { click("Context"); });
-    at(6900, () => { seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context"); });
-    at(7300, () => { seen.contextClosed = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed"); click("Context"); });
-    at(7700, () => { seen.contextOpened = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") ?? "false"; const board = useBoard.getState().board!; useBoard.setState({ board: { ...board, context: { usedTokens: 1200, windowTokens: 10000 } } }); });
-    at(8100, () => { seen.chatUsage = document.querySelector('[data-slot="summary-card"]')?.textContent; setResult(JSON.stringify(seen)); });
+    at(7100, () => { click("Context"); });
+    at(7300, () => { seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context"); });
+    at(7700, () => { seen.contextClosed = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed"); click("Context"); });
+    at(8100, () => { seen.contextOpened = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") ?? "false"; const board = useBoard.getState().board!; useBoard.setState({ board: { ...board, context: { usedTokens: 1200, windowTokens: 10000 } } }); });
+    at(8500, () => { seen.chatUsage = document.querySelector('[data-slot="summary-card"]')?.textContent; setResult(JSON.stringify(seen)); });
     return () => timers.forEach(clearTimeout);
   }, [seen, runtime]);
-  return <AssistantRuntimeProvider runtime={runtime}>
+  return <AssistantRuntimeProvider runtime={runtime}><ComposerTargetContext.Provider value={target}>
     <WorkspacePaneContext.Provider value={workspace}><RightSidebarContext.Provider value={panel}>
       <div className="bg-background text-foreground flex h-screen">
         <main className="flex min-w-0 flex-1 flex-col">
@@ -132,6 +150,6 @@ function Fixture() {
       </div>
       {result && <pre id="toolbar-result">{result}</pre>}
     </RightSidebarContext.Provider></WorkspacePaneContext.Provider>
-  </AssistantRuntimeProvider>;
+  </ComposerTargetContext.Provider></AssistantRuntimeProvider>;
 }
 createRoot(document.getElementById("root")!).render(<SidebarProvider defaultOpen={false}><Fixture /></SidebarProvider>);

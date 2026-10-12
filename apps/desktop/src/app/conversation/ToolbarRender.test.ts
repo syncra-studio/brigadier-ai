@@ -20,12 +20,16 @@ test("toolbar order, docked pane, Files search, draft project folder and worker/
   assert.equal(seen.workerTab, "workers");
   assert.equal(seen.planTab, "plan");
   assert.equal(seen.previewPopover, true);
+  assert.equal(seen.previewReopened, false, "a chip cleared while open comes back closed");
   assert.equal(seen.draftFiles, "files");
   assert.match(String(seen.draftTree), /src.*package\.json/);
   assert.equal(seen.draftComposer, "@package.json ");
+  assert.deepEqual(seen.draftMention, [{ type: "file", path: "package.json" }]);
   assert.ok((seen.draftSource as string[]).includes("Stage all"), "a local draft stages in the project folder");
   assert.equal(seen.draftCommitBox, true);
   assert.equal(seen.draftNote, false);
+  assert.equal(seen.closedSource, null);
+  assert.equal(seen.keptMessage, "Unsent message", "closing Source keeps the unsent commit message");
   assert.match(String(seen.worktreeNote), /own copy/);
   assert.ok(!(seen.worktreeSource as string[]).some((label) => /Stage|Discard/.test(label ?? "")), "a worktree draft only reads");
   assert.equal(seen.worktreeCommitBox, false);
