@@ -32,6 +32,9 @@ test("the sidebar toggle is one plain button, with no tip", async () => {
   }
 });
 
+/** An icon's drawing: its paths' data, in order. */
+const paths = (html: string) => html.match(/ d="[^"]+"/g)?.join("") ?? "";
+
 test("the right sidebar's icon is the left sidebar toggle's, mirrored, open and closed alike", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
@@ -39,7 +42,6 @@ test("the right sidebar's icon is the left sidebar toggle's, mirrored, open and 
     const render = (open: boolean, side: "left" | "right") => ReactDOMServer.renderToStaticMarkup(
       React.createElement(SidebarGlyph, { open, side }),
     );
-    const paths = (html: string) => html.match(/ d="[^"]+"/g)?.join("") ?? "";
     for (const open of [true, false]) {
       const left = render(open, "left");
       const right = render(open, "right");
