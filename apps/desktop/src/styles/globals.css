@@ -620,7 +620,6 @@
 .session-tab-title {
   mask-image: var(--session-tab-title-mask);
 }
-.browser-toolbar {
-  display: grid;
-  grid-template-columns: var(--browser-toolbar-columns);
+.browser-address-field {
+  mask-image: var(--browser-address-mask);
 }

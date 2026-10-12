@@ -78,10 +78,13 @@
  *               rounded-session-tab           a session tab's corners
  *               ease-session-tab              a session tab growing or shrinking
  *               --session-tab-title-mask      the fade at a long tab title's end
- *               browser-{controls,address}    the Browser tab's toolbar: the least for each side's
- *                                             buttons, the most for the address field, laid out
- *                                             by --browser-toolbar-columns (`.browser-toolbar`)
- *               w-browser-menu, h-browser-menu-item, rounded-browser-menu  its page menu
+ *               max-w-browser-address         the Browser tab's address field at its widest (770px)
+ *               text-browser                  its address and its ⋯ menu's rows (13px)
+ *               --browser-address-mask        the fade at the address field's end
+ *                                             (`.browser-address-field`)
+ *               w-browser-site-info           the popover of its site information button
+ *               h-browser-zoom, w-browser-zoom-value  the ⋯ menu's zoom stepper and its 100%
+ *               w-browser-menu, h-browser-menu-item, rounded-browser-menu  its ⋯ menu
  *               browser-{pane,tab-min,tab-max,composer}  the Browser tab's pane, its tabs' least
  *                                             and most, its composer
  *               max-w-new-tab-tools           the New tab page's tool grid (--container-new-tab-tools)
@@ -312,6 +315,16 @@
   --spacing-browser-menu: 15rem;
   --spacing-browser-menu-item: 1.8125rem;
   --radius-browser-menu: 1.25rem;
+  /* The Browser tab's toolbar, as the reference app's measures (the bar, its pills and buttons
+     use h-12, h-control-md and size-icon-button-md): the address field's widest, its 13px text,
+     the site information popover, and the ⋯ menu's zoom stepper (26 high, 100% in 44). */
+  --spacing-browser-address: 48.125rem;
+  --text-browser: 0.8125rem;
+  --text-browser--line-height: 1.125rem;
+  --spacing-browser-site-info: 20rem;
+  --spacing-browser-zoom: 1.625rem;
+  --spacing-browser-zoom-value: 2.75rem;
+  --browser-address-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
   /* Bottom shell sessions keep the native terminal's measurements at either density. */
   --spacing-terminal-header: 2.5rem;
   --spacing-terminal-tab-height: 2rem;
@@ -356,11 +369,8 @@
   --text-session-tab: 0.8125rem;
   --text-session-tab--line-height: 1.125rem;
   --radius-session-tab: 0.625rem;
-  --spacing-browser-controls: 6rem;
-  --spacing-browser-address: 40rem;
   --container-new-tab-tools: 40rem;
   --session-tab-title-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
-  --browser-toolbar-columns: minmax(var(--spacing-browser-controls), 1fr) minmax(0, var(--spacing-browser-address)) minmax(var(--spacing-browser-controls), 1fr);
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;
   --spacing-user-message: 22.5rem;
@@ -796,6 +806,8 @@
   --text-sm--line-height: 1.125rem;
   --text-session-tab: 0.75rem;
   --text-session-tab--line-height: 1rem;
+  --text-browser: 0.75rem;
+  --text-browser--line-height: 1rem;
   --text-base: 0.875rem;
   --text-base--line-height: 1.3125rem;
   --text-lg: 1rem;

@@ -20,8 +20,13 @@ import {
 import { pickFolder } from "@/ipc/client";
 import type { LinkTarget } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
+import {
+  setClearingBrowsingData as setClearing,
+  showBrowserSettingsView as setView,
+  useBrowserSettingsView,
+} from "@/state/browserSettings";
 import { setSetting } from "@/state/settings";
-import { type Selection, useApp } from "@/state/store";
+import { useApp } from "@/state/store";
 
 /** The Browser page's rows, for the page and for Settings search. */
 export const BROWSER_ROWS = {
@@ -67,8 +72,6 @@ export const BROWSER_ROWS = {
   },
 } as const;
 
-type SubView = "history" | "downloads" | "sites";
-
 const PAGE_DESCRIPTION = "The built-in browser, where links open, and what it keeps.";
 const OFF_NOTE = "The built-in browser is off: links open in your default browser, and agents are told it isn't there.";
 
@@ -83,12 +86,12 @@ export function BrowserPage() {
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
   const shown = useApp((s) => s.selection);
-  // A sub-view lasts while Settings shows what it was opened under: Browser picked again in the
-  // sidebar opens the page itself.
-  const [opened, setOpened] = useState<{ view: SubView; under: Selection } | null>(null);
+  // A sub-view or the Clear dialog lasts while Settings shows what it was opened under (see
+  // state/browserSettings.ts): Browser picked again in the sidebar opens the page itself.
+  const opened = useBrowserSettingsView((s) => s.opened);
+  const clearingUnder = useBrowserSettingsView((s) => s.clearing);
   const view = opened?.under === shown ? opened.view : "page";
-  const setView = (next: SubView | "page") => setOpened(next === "page" ? null : { view: next, under: shown });
-  const [clearing, setClearing] = useState(false);
+  const clearing = clearingUnder !== null && clearingUnder === shown;
   const [cleared, setCleared] = useState(0);
   const clearDialog = (
     <ClearBrowsingDataDialog

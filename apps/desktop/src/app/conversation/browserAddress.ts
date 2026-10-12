@@ -24,15 +24,38 @@ export function browserAddress(typed: string): string | null {
 }
 
 /**
- * What the address bar shows while nobody types in it: the whole URL with Show full URL on,
- * else only the site (the path, query and fragment show once the field is focused).
+ * What the address bar shows while nobody types in it: the site without `https://` or `www.`,
+ * and with Show full URL on its path, query and fragment too (a bare `/` path dropped). The
+ * whole URL shows once the field is focused. Other addresses (about:blank) show as they are.
  */
 export function shownAddress(url: string, full: boolean): string {
-  if (full || !url) return url;
+  let parsed: URL;
   try {
-    const { protocol, host } = new URL(url);
-    return protocol === "http:" || protocol === "https:" ? host : url;
+    parsed = new URL(url);
   } catch {
     return url;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return url;
+  const site = parsed.host.replace(/^www\./i, "");
+  if (!full) return site;
+  const rest = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  return rest === "/" ? site : site + rest;
+}
+
+/** Local development hosts: http there is the norm, not a warning. */
+const LOCAL_HOST = /^(localhost|.+\.localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1\])$/i;
+
+/**
+ * How the site information button reads a page: https is secure; http is not, unless the page
+ * is on this computer; anything else (the New tab page, about:blank) has no site to describe.
+ */
+export function siteSecurity(url: string): "secure" | "insecure" | "local" | null {
+  try {
+    const { protocol, hostname } = new URL(url);
+    if (protocol === "https:") return "secure";
+    if (protocol === "http:") return LOCAL_HOST.test(hostname) ? "local" : "insecure";
+    return null;
+  } catch {
+    return null;
   }
 }

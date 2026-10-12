@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserAddress, shownAddress, webAddress } from "./browserAddress";
+import { browserAddress, shownAddress, siteSecurity, webAddress } from "./browserAddress";
 
 test("address entry opens web URLs and local hosts directly", () => {
   for (const [typed, expected] of [
@@ -25,10 +25,26 @@ test("only address entry searches; blocked-page validation stays unchanged", () 
   assert.equal(webAddress("file:///private/notes"), null);
 });
 
-test("without Show full URL the address bar shows only the site until focused", () => {
-  const url = "https://example.com:8443/a/b?q=1#top";
+test("the idle address drops https://, www. and a bare trailing slash; Show full URL keeps the rest", () => {
+  const url = "https://www.example.com:8443/a/b?q=1#top";
   assert.equal(shownAddress(url, false), "example.com:8443");
-  assert.equal(shownAddress(url, true), url);
+  assert.equal(shownAddress(url, true), "example.com:8443/a/b?q=1#top");
+  assert.equal(shownAddress("https://example.com/", false), "example.com");
+  assert.equal(shownAddress("https://example.com/", true), "example.com");
+  assert.equal(shownAddress("https://example.com/docs/", true), "example.com/docs/");
+  assert.equal(shownAddress("https://example.com/?q=1", true), "example.com/?q=1");
+  assert.equal(shownAddress("http://localhost:5173/checkout", false), "localhost:5173");
+  assert.equal(shownAddress("http://localhost:5173/checkout", true), "localhost:5173/checkout");
   assert.equal(shownAddress("", false), "");
   assert.equal(shownAddress("about:blank", false), "about:blank");
+  assert.equal(shownAddress("about:blank", true), "about:blank");
+});
+
+test("site information: https is secure, http is not unless it is on this computer", () => {
+  assert.equal(siteSecurity("https://example.com/"), "secure");
+  assert.equal(siteSecurity("http://example.com/"), "insecure");
+  for (const local of ["http://localhost:3000/", "http://127.0.0.1:1420/", "http://[::1]:8080/", "http://0.0.0.0/", "http://app.localhost/"])
+    assert.equal(siteSecurity(local), "local", local);
+  assert.equal(siteSecurity(""), null);
+  assert.equal(siteSecurity("about:blank"), null);
 });

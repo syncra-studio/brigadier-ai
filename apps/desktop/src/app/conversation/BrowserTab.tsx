@@ -1,22 +1,30 @@
 import {
   ArrowLeft,
   ArrowRight,
-  ExternalLink,
+  ArrowUpRight,
   DotsHorizontal,
   Globe,
+  Info,
+  Lock,
+  Minus,
+  Plus,
   Reload,
+  Warning,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import { browserAddress, shownAddress, webAddress } from "./browserAddress";
+import { browserAddress, shownAddress, siteSecurity, webAddress } from "./browserAddress";
 
+import { Spinner } from "@/components/glyphs/spinner";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { browserGo, browserPlace, openUrl } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
@@ -25,6 +33,8 @@ import {
   openPage,
   useBrowsers,
 } from "@/state/browsers";
+import { openSettings } from "@/state/actions";
+import { openBrowserSettings } from "@/state/browserSettings";
 import { useBrowserOn } from "@/state/links";
 import { useApp } from "@/state/store";
 import { cn } from "@/lib/utils";
@@ -85,6 +95,149 @@ function failed(cause: unknown) {
 
 function openOutside(url: string) {
   openUrl(url).catch(failed);
+}
+
+/** Back, Forward and Reload: round, and faint while they can't act. */
+const NAV_BUTTON = "rounded-full disabled:opacity-40 disabled:text-muted-foreground";
+
+/** What the site information popover says of each kind of page. */
+const SECURITY = {
+  secure: {
+    label: "View site information",
+    Icon: Lock,
+    title: "Connection is secure",
+    detail: "Passwords, card numbers and anything else you send this site stay private on the way there.",
+  },
+  insecure: {
+    label: "Not secure, view site information",
+    Icon: Warning,
+    title: "Connection is not secure",
+    detail: "Don't enter passwords, card numbers or other private information here: others on the network could read them.",
+  },
+  local: {
+    label: "View site information",
+    Icon: Info,
+    title: "Connection is not secure",
+    detail: "This page comes from your own computer, so what you send it doesn't travel over the network.",
+  },
+} as const;
+
+/**
+ * The address field's start: a lock for https (shown while the pointer is over the field), "Not
+ * secure" for http, nothing on the New tab page. It opens what is known of the connection.
+ */
+function SiteInfo({ url }: { url: string }) {
+  const security = siteSecurity(url);
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const [open, setOpen] = useState(false);
+  if (!security) return null;
+  const { label, Icon, title, detail } = SECURITY[security];
+  let host = url;
+  try {
+    host = new URL(url).host;
+  } catch {
+    // siteSecurity read it already.
+  }
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <TooltipIconButton
+          tooltip={label}
+          size="icon-md"
+          data-slot="browser-site-info"
+          data-security={security}
+          className={cn(
+            "shrink-0 rounded-full",
+            security === "insecure"
+              ? "text-destructive w-auto gap-1 px-2 text-xs"
+              : "opacity-0 group-hover/address:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100",
+          )}
+        >
+          <Icon />
+          {security === "insecure" && <span aria-hidden>Not secure</span>}
+        </TooltipIconButton>
+      </PopoverTrigger>
+      <PopoverContent align="start" aria-label="Site information" className="w-browser-site-info p-3">
+        <p className="text-browser truncate font-medium">{host}</p>
+        <div className="mt-3 flex items-start gap-2">
+          <Icon aria-hidden className={cn("size-icon-md mt-0.5 shrink-0", security === "insecure" && "text-destructive")} />
+          <div className="min-w-0">
+            <p className="text-browser">{title}</p>
+            <p className="text-muted-foreground mt-0.5 text-xs">{detail}</p>
+          </div>
+        </div>
+        {mac && (
+          <>
+            <div className="bg-border -mx-3 my-3 h-px" />
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                openBrowserSettings("sites");
+              }}
+              className="hover:bg-foreground/8 text-browser h-browser-menu-item -mx-1 flex w-full items-center rounded-capsule px-1"
+            >
+              Site settings
+            </button>
+          </>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** A ⋯ menu row the shell's page does natively; D2 brings them to life. */
+const NATIVE_ITEM = "data-[disabled]:opacity-40";
+
+/**
+ * The ⋯ menu: the page's own actions, then where the browser's data lives in Settings.
+ * Find in page, Print, Zoom and the screenshot wait for the page to do them natively
+ * (`data-native`), so they show disabled for now.
+ */
+function BrowserOptions() {
+  const mac = useApp((s) => s.info?.platform === "macos");
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <TooltipIconButton tooltip="Browser options" size="icon-lg" className="shrink-0 rounded-full">
+          <DotsHorizontal />
+        </TooltipIconButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        data-slot="browser-options"
+        className="w-browser-menu rounded-browser-menu [&_[role=menuitem]]:h-browser-menu-item [&_[role=menuitem]]:text-browser"
+      >
+        <DropdownMenuItem disabled data-native="find" className={NATIVE_ITEM}>Find in page</DropdownMenuItem>
+        <DropdownMenuItem disabled data-native="print" className={NATIVE_ITEM}>Print</DropdownMenuItem>
+        <DropdownMenuSeparator className="mx-2" />
+        <div role="group" aria-label="Zoom" data-native="zoom" className="text-browser flex h-browser-menu-item items-center gap-1 ps-2 pe-1">
+          <span className="flex-1">Zoom</span>
+          <div className="border-border bg-foreground/5 flex h-browser-zoom items-center rounded-lg border text-xs">
+            <button type="button" disabled aria-label="Zoom out" className="flex size-6 items-center justify-center disabled:opacity-40">
+              <Minus className="size-icon-sm" />
+            </button>
+            <span className="border-border w-browser-zoom-value border-x text-center tabular-nums">100%</span>
+            <button type="button" disabled aria-label="Zoom in" className="flex size-6 items-center justify-center disabled:opacity-40">
+              <Plus className="size-icon-sm" />
+            </button>
+          </div>
+          <button type="button" disabled aria-label="Reset zoom" className="flex size-6 items-center justify-center rounded-full disabled:opacity-40">
+            <Reload className="size-icon-sm" />
+          </button>
+        </div>
+        <DropdownMenuSeparator className="mx-2" />
+        <DropdownMenuItem disabled data-native="screenshot" className={NATIVE_ITEM}>Take a screenshot</DropdownMenuItem>
+        <DropdownMenuSeparator className="mx-2" />
+        {mac && <DropdownMenuItem onSelect={() => openSettings("browserImport")}>Import Browser Data…</DropdownMenuItem>}
+        <DropdownMenuItem onSelect={() => openBrowserSettings("downloads")}>Downloads</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openBrowserSettings("history")}>History</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openBrowserSettings("clear")}>Clear browsing data</DropdownMenuItem>
+        <DropdownMenuSeparator className="mx-2" />
+        <DropdownMenuItem onSelect={() => openBrowserSettings()}>Browser settings</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 export function BrowserTab({
@@ -201,62 +354,54 @@ export function BrowserTab({
     browserGo(conversationId, action).catch(failed);
   };
 
+  const url = page?.url ?? "";
+  const editing = focused || typed !== null;
+  // What Open in external browser opens: what is being typed, else the page.
+  const outside = (typed !== null ? browserAddress(typed) : null) ?? (url || null);
+  const loading = page?.loading === true;
+
   return (
     <div data-pane="browser" data-active={active || undefined} className="@container/new-tab flex min-h-0 flex-1 flex-col">
-      <div data-slot="browser-toolbar" className="browser-toolbar border-border flex shrink-0 items-center gap-3 border-b px-3 py-2">
-        <div className="browser-navigation bg-muted/60 flex shrink-0 items-center justify-self-start rounded-full p-0.5">
-            <TooltipIconButton
-              tooltip="Back"
-              className="size-7 rounded-full"
-              disabled={!embedded || !made}
-              onClick={() => act("back")}
-            >
-              <ArrowLeft />
-            </TooltipIconButton>
-            <TooltipIconButton
-              tooltip="Forward"
-              className="size-7 rounded-full"
-              disabled={!embedded || !made}
-              onClick={() => act("forward")}
-            >
-              <ArrowRight />
-            </TooltipIconButton>
-            {page?.loading ? (
-              <TooltipIconButton
-                tooltip="Stop"
-                className="size-7 rounded-full"
-                onClick={() => act("stop")}
-              >
-                <X />
-              </TooltipIconButton>
-            ) : (
-              <TooltipIconButton
-                tooltip="Reload"
-                className="size-7 rounded-full"
-                disabled={!embedded || !made}
-                onClick={() => act("reload")}
-              >
-                <Reload />
-              </TooltipIconButton>
-            )}
-          </div>
+      <div data-slot="browser-toolbar" className="@container/browser-toolbar border-border flex h-12 shrink-0 items-center gap-1.5 border-b p-2">
+        <div role="group" aria-label="Navigation" data-slot="browser-navigation" className="bg-muted/60 flex h-control-md shrink-0 items-center rounded-full p-0.5">
+          <TooltipIconButton tooltip="Back" size="icon-md" className={NAV_BUTTON} disabled={!embedded || !made} onClick={() => act("back")}>
+            <ArrowLeft />
+          </TooltipIconButton>
+          <TooltipIconButton tooltip="Forward" size="icon-md" className={NAV_BUTTON} disabled={!embedded || !made} onClick={() => act("forward")}>
+            <ArrowRight />
+          </TooltipIconButton>
+          <span aria-hidden className="bg-border mx-1 h-4 w-px shrink-0" />
+          {/* While the page loads the spinner stands in for Reload, and stops the load. */}
+          <TooltipIconButton
+            tooltip={loading ? "Stop loading" : "Reload"}
+            size="icon-md"
+            className={NAV_BUTTON}
+            aria-busy={loading}
+            disabled={!embedded || !made}
+            onClick={() => act(loading ? "stop" : "reload")}
+          >
+            {loading ? <Spinner className="animate-spin" /> : <Reload />}
+          </TooltipIconButton>
+        </div>
         <form
-          className="w-full min-w-0 flex-1"
+          className="flex min-w-0 flex-1 justify-center px-1 @max-sm/browser-toolbar:px-0"
           onSubmit={(event) => {
             event.preventDefault();
-            go(typed ?? page?.url ?? "");
+            go(typed ?? url);
           }}
         >
-          <label
+          <div
+            data-slot="browser-address"
             title={page?.title || undefined}
-            className="bg-muted/60 flex h-8 items-center gap-1.5 rounded-full px-3 focus-within:ring-1 focus-within:ring-ring"
+            className="group/address bg-muted/60 ring-border flex h-control-md w-full max-w-browser-address min-w-0 items-center rounded-full p-0.5 ring-1 ring-inset"
           >
+            {!editing && <SiteInfo url={url} />}
             <input
               ref={field}
               // ⌘T opens the tab to type an address at once.
               // oxlint-disable-next-line jsx-a11y/no-autofocus
               autoFocus={active && !made}
-              value={typed ?? (focused ? page?.url ?? "" : shownAddress(page?.url ?? "", fullUrl))}
+              value={typed ?? (focused ? url : shownAddress(url, fullUrl))}
               placeholder="Search or enter a URL"
               aria-label="Address"
               spellCheck={false}
@@ -277,42 +422,26 @@ export function BrowserTab({
                 }
               }}
               className={cn(
-                "placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none",
-                !made && "text-center",
+                "browser-address-field text-browser placeholder:text-muted-foreground h-full min-w-0 flex-1 bg-transparent px-2 outline-none",
+                // Idle, the site sits in the middle; focused, the address reads from its start.
+                focused ? "text-start" : "text-center",
               )}
             />
-          </label>
+            {outside && (url || typed !== null) && (
+              <TooltipIconButton
+                tooltip="Open in external browser"
+                size="icon-md"
+                className="shrink-0 rounded-full @max-lg/browser-toolbar:hidden"
+                // Typing goes on after the click.
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => openOutside(outside)}
+              >
+                <ArrowUpRight />
+              </TooltipIconButton>
+            )}
+          </div>
         </form>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <TooltipIconButton
-              tooltip="Browser options"
-              className="browser-options size-8 justify-self-end rounded-full"
-            >
-              <DotsHorizontal />
-            </TooltipIconButton>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            className="w-browser-menu rounded-browser-menu [&_[role=menuitem]]:h-browser-menu-item"
-          >
-            <DropdownMenuItem
-              disabled={!page?.url}
-              onSelect={() => page?.url && openOutside(page.url)}
-            >
-              <ExternalLink />
-              Open in external browser
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!page?.url}
-              onSelect={() => {
-                if (page?.url) void navigator.clipboard.writeText(page.url).catch(failed);
-              }}
-            >
-              Copy link
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <BrowserOptions />
       </div>
       {page?.blocked && (
         <div
