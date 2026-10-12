@@ -92,10 +92,11 @@ test("a late read from a removed checkout cannot be reused, even after the same 
   assert.deepEqual(cachedWorkspace(target)?.files?.files, ["current.ts"]);
 });
 
+const tree = (files: string[]) => ({ method: "getWorkspaceTree", tree: { files, truncated: false, ignored: [], ignoredTruncated: false } });
+
 test("a read begun before a change isn't shared after it: one more follows it, never alongside", async () => {
   const replies: ((value: unknown) => void)[] = [];
   mockIPC(() => new Promise((resolve) => { replies.push(resolve); }));
-  const tree = (files: string[]) => ({ method: "getWorkspaceTree", tree: { files, truncated: false, ignored: [], ignoredTruncated: false } });
   const before = readFiles(target);
   emitWorkspaceChanged(target);
   const after = readFiles(target);
