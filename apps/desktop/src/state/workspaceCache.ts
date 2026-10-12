@@ -108,21 +108,24 @@ export function useCachedEntry(key: string): WorkspaceEntry | undefined {
 /** How many times a watched checkout was said to change: a read begun before the last is stale. */
 let changes = 0;
 /** Reads already on their way, so a prefetch and a view opening share one, with when each began. */
-const reading = new Map<string, { promise: Promise<unknown>; seen: number }>();
+const reading = new Map<string, { promise: Promise<unknown>; seen: number | undefined }>();
 
 /**
- * One read for everything that asks while it runs. A read that began before the checkout last
- * changed may miss the change: what asks after it gets the next read, which starts when that one
- * ends (never two at once, so a burst of changes reads once per change at most).
+ * A read begun before a change gets one follow-up, shared by everything that asks until it
+ * starts. Record its generation when it starts, so all changes while it waited are covered.
  */
 function once<T>(id: string, read: () => Promise<T>): Promise<T> {
   const pending = reading.get(id);
-  if (pending?.seen === changes) return pending.promise as Promise<T>;
-  const begun = pending ? pending.promise.catch(() => undefined).then(read) : read();
-  const promise: Promise<T> = begun.finally(() => {
-    if (reading.get(id)?.promise === promise) reading.delete(id);
+  if (pending && (pending.seen === undefined || pending.seen === changes)) return pending.promise as Promise<T>;
+  const begun = pending ? pending.promise.catch(() => undefined).then(() => {
+    entry.seen = changes;
+    return read();
+  }) : read();
+  const promise = begun.finally(() => {
+    if (reading.get(id) === entry) reading.delete(id);
   });
-  reading.set(id, { promise, seen: changes });
+  const entry = { promise, seen: pending ? undefined : changes };
+  reading.set(id, entry);
   return promise;
 }
 

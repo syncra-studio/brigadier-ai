@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { Conversation, Environment, Project } from "@/ipc/generated";
-import { cachedWorkspace, checkoutKey, emitWorkspaceChanged, keepSource, readFiles, remembered, workspaceKey } from "./workspaceCache";
+import { cachedWorkspace, checkoutKey, emitWorkspaceChanged, keepSource, readFiles, readSource, remembered, workspaceKey } from "./workspaceCache";
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { useApp } from "@/state/store";
@@ -126,3 +126,38 @@ test("deleting and recreating a project or changing a session repo gives a new g
   useApp.setState({ conversations: { s: { ...conversation, setup: { ...conversation.setup!, repo: "/other" } as Conversation["setup"] } } });
   assert.notEqual(workspaceKey(target), old);
 });
+
+for (const kind of ["files", "source"] as const) {
+  test(`twenty changes during a slow ${kind} read share one follow-up that sees the latest change`, async () => {
+    const replies: (() => void)[] = [];
+    let latest = 0;
+    mockIPC(() => {
+      const seen = latest;
+      return new Promise((resolve) => {
+        replies.push(() => resolve(kind === "files" ? tree([`${seen}.ts`]) : { method: "getSourceState", state: { ...source, branch: `${seen}` } }));
+      });
+    });
+    const read = kind === "files" ? readFiles : readSource;
+    const before = read(target);
+    const after = [];
+    for (latest = 1; latest <= 20; latest++) {
+      emitWorkspaceChanged(target);
+      after.push(read(target));
+    }
+    latest = 20;
+    assert.equal(replies.length, 1, "only the original read has started");
+    // Drain every queued read so a failure leaves no requests hanging into another test.
+    replies[0]!();
+    await before;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    for (let index = 1; index < replies.length; index++) {
+      replies[index]!();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const results = await Promise.all(after);
+    assert.equal(replies.length, 2, "the burst queues just one follow-up");
+    for (const result of results) {
+      assert.deepEqual(result, kind === "files" ? { files: ["20.ts"], truncated: false, ignored: [] } : { ...source, branch: "20" });
+    }
+  });
+}
