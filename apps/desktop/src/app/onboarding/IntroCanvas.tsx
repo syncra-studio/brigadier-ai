@@ -2,11 +2,14 @@ import { useEffect, useRef } from "react";
 
 /**
  * The first launch's orb, the window it opens into and the waves on it, drawn live with WebGL
- * (no video or image files). A soft orb of pearl and silver light comes into focus at the
- * window's centre and idles there, slowly changing shape and growing, its light moving round
- * inside it. Then it opens out, blurred, into the window's rounded shape; its light settles
- * onto the shell's own dark, and faint light waves move over it, on a loop for as long as they
- * show. (Brigadier's mark, which comes up next, is the page's: Welcome.tsx.)
+ * (no video or image files). A faint glow at the window's centre grows into a soft, lumpy orb
+ * of pearl and silver light, always a little blurred, with lights moving round its rim; it
+ * idles there, slowly changing shape and settling a touch smaller. Just before it opens it
+ * swells and dims a little, then it bursts out, blurred, filling the window's rounded shape,
+ * which shows faintly around it as it grows. Its light spreads into a mist over the whole
+ * window, evens out and dims, and the shell's own dark comes into focus under it, with faint
+ * light waves moving over it, on a loop for as long as they show. (Brigadier's mark, which
+ * comes up next, is the page's: Welcome.tsx.)
  *
  * `start` is when the intro started (a `performance.now()` time); until then it draws nothing.
  * `settled` shows the waves alone, at once; `still` keeps them from moving (reduced motion).
@@ -14,24 +17,31 @@ import { useEffect, useRef } from "react";
  */
 
 /** The intro's beats the canvas draws, in seconds from its start (tokens.css lists them all). */
-const ORB_IN = 0.75;
-/** The orb comes into focus over this long. */
-const ORB_FOCUS = 0.45;
-/** The orb opens out into the window... */
-const OPEN = 4.25;
+const ORB_IN = 0.58;
+/** The orb's light comes up over this long, and it grows from a faint glow to its full size
+ *  over the longer one. */
+const ORB_LIGHT = 0.55;
+const ORB_GROW = 0.75;
+/** It swells a little over this long before it opens... */
+const SWELL = 0.23;
+/** ...opens out into the window (its rounded shape showing faintly a moment after)... */
+const OPEN = 4.07;
 /** ...filling it this long after... */
-const OPEN_FOR = 0.13;
-/** ...and its light settles onto the dark by here. */
-const SETTLED = 4.85;
-/** The window's chrome comes back. */
-export const WINDOW_SHAPED = 4.8;
-/** The waves come up on the dark over this span. */
-const WAVES_FROM = 4.4;
-const WAVES_TO = 5.8;
+const OPEN_FOR = 0.27;
+/** ...then its light evens out into a mist over the window... */
+const EVEN = { from: OPEN + 0.2, to: OPEN + 0.5 };
+/** ...and the shell's dark and its waves come into focus under it. */
+const SETTLE = { from: OPEN + 0.48, to: OPEN + 0.82 };
+/** The window's chrome, shadow and colour come back, as the dark comes into focus. */
+export const WINDOW_SHAPED = OPEN + 0.62;
 
-/** The orb's radius as a share of the window's width, as it comes in and as it opens. */
-const ORB_FROM = 0.075;
-const ORB_TO = 0.11;
+/** The orb's radius as a share of the window's width, grown, and as it has settled by the swell. */
+const ORB_FULL = 0.14;
+const ORB_IDLE = 0.122;
+/** A growing glow starts at this share of the orb's size. */
+const ORB_SEED = 0.25;
+/** The orb sits this share of the window's height above its centre. */
+const ORB_RISE = 0.03;
 /** The window's corner radius, in points, that the orb opens into. */
 const WINDOW_RADIUS = 12;
 /** The most device pixels drawn per point. */
@@ -43,7 +53,6 @@ const VERTEX = `#version 300 es
 in vec2 position;
 void main() { gl_Position = vec4(position, 0.0, 1.0); }
 `;
-
 // Everything is placed in points (CSS pixels), whatever the canvas's pixel density: `uDensity`
 // is the canvas's device pixels per point, and only edges' softness uses it.
 const FRAGMENT = `#version 300 es
@@ -53,10 +62,12 @@ uniform vec2 uDensity;
 uniform float uTime;
 uniform float uOrb;
 uniform float uRadius;
-uniform float uFocus;
+uniform vec2 uCentre;
+uniform float uSoft;
 uniform float uOpen;
-uniform float uBlur;
-uniform float uField;
+uniform float uBox;
+uniform float uEven;
+uniform float uSettle;
 uniform float uWaves;
 uniform float uCorner;
 uniform vec3 uDark;
@@ -125,41 +136,55 @@ float roundedBox(vec2 p, vec2 half_, float r) {
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
-// The orb's light at px (points from the centre): a soft body whose edge slowly changes shape,
-// a bright patch circling inside it and a dimmer one opposite, and a faint halo.
-vec4 orb(vec2 px, float R) {
-  float r = length(px);
-  vec2 dir = r > 0.0 ? px / r : vec2(1.0, 0.0);
+// The orb's light at c (points from its centre), premultiplied: a soft body whose edge is
+// lumpy and slowly changes shape, always a little blurred, with lights moving round its rim
+// and a deeper shade drifting through it. Its light is placed in the orb's own size, so as it
+// bursts out its lights spread with it, over the window.
+vec4 orb(vec2 c, float R) {
+  float r = length(c);
+  vec2 dir = r > 0.0 ? c / r : vec2(1.0, 0.0);
   float t = uTime;
-  float wobble = 0.1 * snoise(vec3(dir * 0.55, t * 0.2)) + 0.035 * snoise(vec3(dir * 1.1 + 4.0, t * 0.3));
-  float edge = R * (1.0 + wobble);
-  float soft = R * (0.42 + 0.9 * (1.0 - uFocus));
+  // Its outline: a few slow, rounded lobes, each growing and fading on its own.
+  float th = atan(dir.y, dir.x);
+  float lump = 0.1 * (0.6 + 0.6 * snoise(vec3(t * 0.21, 1.0, 0.0))) * sin(2.0 * th + t * 0.47 + 1.3)
+    + 0.08 * (0.6 + 0.6 * snoise(vec3(t * 0.17, 5.0, 0.0))) * sin(3.0 * th - t * 0.38 + 0.2)
+    + 0.04 * (0.6 + 0.6 * snoise(vec3(t * 0.25, 9.0, 0.0))) * sin(4.0 * th + t * 0.61 + 2.2);
+  float edge = R * (1.0 + lump);
+  float soft = R * uSoft;
   float body = 1.0 - smoothstep(edge - soft, edge + soft, r);
-  float halo = 0.3 * exp(-max(r - edge, 0.0) / (R * 0.8));
-  // The light moving round inside it.
-  float a = t * 2.0 * PI / 2.7;
-  vec2 bright = R * 0.42 * vec2(cos(a), sin(a * 0.83 + 0.6));
-  vec2 dim = -R * 0.38 * vec2(cos(a * 0.9 + 1.1), sin(a + 0.2));
-  float lit = exp(-dot(px - bright, px - bright) / (R * R * 0.22));
-  float shade = exp(-dot(px - dim, px - dim) / (R * R * 0.3));
-  float inner = 1.0 - smoothstep(0.0, edge, r);
-  vec3 col = mix(SILVER * 0.9, PEARL * 0.82, 0.55 * inner + 0.2);
-  col = mix(col, PEARL, 0.75 * lit) * (1.0 - 0.28 * shade);
-  float alpha = clamp(body * 0.96 + halo * (1.0 - body), 0.0, 1.0);
-  return vec4(col * alpha, alpha);
+  vec2 q = c / R;
+  float a = t * 2.0 * PI / 3.4;
+  vec2 rim1 = 0.6 * vec2(cos(a), sin(a * 0.9 + 0.5));
+  vec2 rim2 = 0.64 * vec2(cos(-a * 0.73 + 2.4), sin(-a * 0.81 + 1.9));
+  vec2 deep = 0.4 * vec2(cos(a * 0.55 + 4.0), sin(a * 0.6 + 1.0));
+  // The lights are smeared by the noise, so they're never round.
+  vec2 w = 0.12 * vec2(snoise(vec3(q * 0.8, t * 0.35)), snoise(vec3(q * 0.8 + 7.0, t * 0.35)));
+  float lit = exp(-dot(q + w - rim1, q + w - rim1) / 0.12) + 0.7 * exp(-dot(q + w - rim2, q + w - rim2) / 0.09);
+  float shade = exp(-dot(q + w - deep, q + w - deep) / 0.2);
+  float centre = exp(-dot(q, q) / 0.6);
+  vec3 col = mix(SILVER * 1.05, PEARL * 0.78, 0.45 + 0.25 * centre);
+  col = mix(col, PEARL, clamp(0.7 * lit, 0.0, 1.0)) * (1.0 - 0.2 * shade);
+  return vec4(col * body, body);
 }
 
-float waves(vec2 pt) {
-  // Broad, soft veils of light drifting over one another on the dark, faint enough that the
-  // title stays the brightest thing on screen.
+// Broad, soft veils of light drifting over one another on the dark, faint enough that the
+// title stays the brightest thing on screen; focus below 1 blurs them, wider and softer.
+float waves(vec2 pt, float focus) {
   vec2 uv = pt / uSize.y;
   float t = uTime * 0.06;
   vec2 q = vec2(fbm(vec3(uv * 0.55, t), 2), fbm(vec3(uv * 0.55 + vec2(5.2, 1.3), t + 3.0), 2));
   float f = fbm(vec3(uv * 0.75 + 0.9 * q, t * 1.3 + 7.0), 3);
-  return 0.015 * smoothstep(-0.7, -0.25, f)
-    + 0.03 * smoothstep(-0.3, 0.2, f)
-    + 0.065 * smoothstep(0.05, 0.5, f + 0.25 * q.x)
-    + 0.03 * smoothstep(0.35, 0.75, f + 0.2 * q.y);
+  float b = 0.5 * (1.0 - focus);
+  return 0.015 * smoothstep(-0.7 - b, -0.25 + b, f)
+    + 0.03 * smoothstep(-0.3 - b, 0.2 + b, f)
+    + 0.065 * smoothstep(0.05 - b, 0.5 + b, f + 0.25 * q.x)
+    + 0.03 * smoothstep(0.35 - b, 0.75 + b, f + 0.2 * q.y);
+}
+
+// The S-curve the orb bursts out on: a slow start, most of it in the middle, easing to a stop.
+float burst(float x) {
+  x = pow(clamp(x, 0.0, 1.0), 1.25);
+  return x * x * (3.0 - 2.0 * x);
 }
 
 void main() {
@@ -168,26 +193,27 @@ void main() {
   // Half a device pixel, in points: the softest an edge gets.
   float pixel = 0.5 / uDensity.x;
 
-  // The orb, before it opens.
-  vec4 light = uOrb > 0.0 ? orb(px, uRadius) * uOrb : vec4(0.0);
+  // The orb, growing out past the window's corners as it bursts.
+  float reach = length(uSize * 0.5) * 1.45;
+  float R = uOpen < 0.0 ? uRadius : mix(uRadius, reach, burst(uOpen));
+  vec4 light = orb(px - uCentre, R) * uOrb;
+  // Spread out, its light thins into a mist, which evens out and dims.
+  float spread = uOpen < 0.0 ? 0.0 : burst(uOpen);
+  light.rgb *= 1.0 - 0.4 * spread;
+  vec3 mist = mix(light.rgb, vec3(0.32, 0.33, 0.36) * light.a, uEven);
 
-  // Opening: a growing blurred circle, held inside the window's rounded shape, of the orb's
-  // light settling onto the dark.
-  float reach = length(uSize * 0.5) * 1.15;
-  float grow = 1.0 - pow(1.0 - clamp(uOpen, 0.0, 1.0), 3.0);
-  float circle = length(px) - mix(uRadius, reach, grow);
+  // The window's rounded shape: it shows faintly round the growing orb, then holds all of it.
   float box = roundedBox(px, uSize * 0.5, uCorner);
-  float windowA = (1.0 - smoothstep(-uBlur, uBlur, max(circle, box))) * step(0.0, uOpen);
-  windowA *= 1.0 - smoothstep(-pixel, pixel, box);
-  // The orb's light, smeared over the window, fading as the dark settles.
-  vec2 uv = pt / uSize.y;
-  float cloud = 0.55 + 0.45 * snoise(vec3(uv * 1.3, uTime * 0.3));
-  vec3 field = mix(SILVER, PEARL, cloud) * (0.25 + 0.55 * cloud) * uField;
-  vec3 windowCol = uDark + (1.0 - uDark) * (waves(pt) * uWaves);
-  windowCol = windowCol * (1.0 - uField * 0.85) + field;
+  float inside = 1.0 - smoothstep(-pixel, pixel, box);
+  float shown = uOpen < 0.0 ? 1.0 : inside;
+  float boxA = uBox * inside;
+  vec3 col = mist * shown + uDark * boxA * (1.0 - light.a * shown);
+  float a = light.a * shown + boxA * (1.0 - light.a * shown);
 
-  vec3 col = light.rgb * (1.0 - windowA) + windowCol * windowA;
-  float a = light.a * (1.0 - windowA) + windowA;
+  // Under the mist, the shell's dark comes into focus, with its waves.
+  vec3 settled = uDark + (1.0 - uDark) * (waves(pt, uSettle) * uWaves);
+  col = mix(col, settled * inside, uSettle);
+  a = mix(a, inside, uSettle);
   // A little grain, so the faint waves don't band.
   float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
   col += grain / 255.0 * 1.5 * a;
@@ -201,31 +227,51 @@ const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 interface Frame {
   orb: number;
   radius: number;
-  focus: number;
+  centre: [number, number];
+  /** How blurred the orb's edge is, as a share of its radius. */
+  soft: number;
   /** 0 → 1 as the orb opens out (negative before it). */
   open: number;
-  blur: number;
-  field: number;
+  box: number;
+  even: number;
+  settle: number;
   waves: number;
 }
 
-/** Everything drawn `t` seconds in (null: not started), on a canvas of `width` points. */
-function frame(t: number | null, settled: boolean, width: number): Frame {
-  const rest = { orb: 0, radius: ORB_FROM * width, focus: 1, blur: 1, field: 0 };
-  if (settled) return { ...rest, open: 1, waves: 1 };
-  if (t === null) return { ...rest, open: -1, waves: 0 };
-  const shown = ease(clamp01((t - ORB_IN) / ORB_FOCUS));
-  const settling = clamp01((t - OPEN - OPEN_FOR) / (SETTLED - OPEN - OPEN_FOR));
+/** Everything drawn `t` seconds in (null: not started), on a canvas of `width` × `height` points. */
+function frame(t: number | null, settled: boolean, width: number, height: number): Frame {
+  const rest = { orb: 0, radius: ORB_IDLE * width, centre: [0, 0] as [number, number], soft: 0.48, box: 1, even: 1 };
+  if (settled) return { ...rest, open: 1, settle: 1, waves: 1 };
+  if (t === null) return { ...rest, open: -1, box: 0, even: 0, settle: 0, waves: 0 };
+  // Growing from a faint glow, part S-curve and part easing out (as measured off the motion
+  // this follows), its light coming up quicker than its size; its edge firms up a little once
+  // grown, then softens again as it idles.
+  const since = t - ORB_IN;
+  const grow = (x: number) => 0.5 * (ease(x) + 1 - (1 - x) ** 2);
+  const size = grow(clamp01(since / ORB_GROW));
+  const light = 1 - (1 - clamp01(since / ORB_LIGHT)) ** 2;
+  const firm = ease(clamp01((since - 0.45) / 0.25)) * (1 - ease(clamp01((since - 1.15) / 0.35)));
+  // Idling, it settles a touch smaller; then it swells and dims a little just before it opens.
+  const idle = ease(clamp01((t - ORB_IN - ORB_GROW) / (OPEN - SWELL - ORB_IN - ORB_GROW)));
+  const swell = ease(clamp01((t - OPEN + SWELL) / SWELL));
+  const full = ORB_FULL + (ORB_IDLE - ORB_FULL) * idle;
+  const radius = width * full * (ORB_SEED + (1 - ORB_SEED) * size) * (1 + 0.17 * swell);
+  // It drifts a little round its place.
+  const drift = 0.016 * width;
+  const centre: [number, number] = [
+    drift * Math.sin(t * 0.9 + 0.4),
+    ORB_RISE * height + drift * 0.8 * Math.sin(t * 0.7 + 2.1),
+  ];
   return {
-    orb: t < OPEN + OPEN_FOR ? shown : 0,
-    // Slowly growing, and swelling a little as it opens.
-    radius: width * (ORB_FROM + (ORB_TO - ORB_FROM) * ease(clamp01((t - ORB_IN) / (OPEN - ORB_IN)))),
-    focus: shown,
+    orb: since < 0 ? 0 : light * (1 - 0.1 * swell),
+    radius,
+    centre,
+    soft: 0.48 + 0.12 * (1 - size) - 0.26 * firm,
     open: t < OPEN ? -1 : (t - OPEN) / OPEN_FOR,
-    // Blurred as it opens, sharp once settled.
-    blur: 1 + 70 * (1 - ease(settling)),
-    field: t < OPEN ? 0 : 1 - ease(settling),
-    waves: ease(clamp01((t - WAVES_FROM) / (WAVES_TO - WAVES_FROM))),
+    box: t < OPEN ? 0 : ease(clamp01((t - OPEN - 0.06) / 0.12)),
+    even: ease(clamp01((t - EVEN.from) / (EVEN.to - EVEN.from))),
+    settle: ease(clamp01((t - SETTLE.from) / (SETTLE.to - SETTLE.from))),
+    waves: 1,
   };
 }
 
@@ -286,10 +332,12 @@ export function IntroCanvas({
       time: uniform("uTime"),
       orb: uniform("uOrb"),
       radius: uniform("uRadius"),
-      focus: uniform("uFocus"),
+      centre: uniform("uCentre"),
+      soft: uniform("uSoft"),
       open: uniform("uOpen"),
-      blur: uniform("uBlur"),
-      field: uniform("uField"),
+      box: uniform("uBox"),
+      even: uniform("uEven"),
+      settle: uniform("uSettle"),
       waves: uniform("uWaves"),
       corner: uniform("uCorner"),
       dark: uniform("uDark"),
@@ -316,17 +364,19 @@ export function IntroCanvas({
         element.height = pixelsHigh;
       }
       gl.viewport(0, 0, pixelsWide, pixelsHigh);
-      const state = frame(begun === null ? null : (now - begun) / 1000, done, width);
+      const state = frame(begun === null ? null : (now - begun) / 1000, done, width, height);
       gl.uniform2f(u.size, width, height);
       // The actual device pixels per point, so everything lands where it would at 1×.
       gl.uniform2f(u.density, pixelsWide / Math.max(width, 1), pixelsHigh / Math.max(height, 1));
       gl.uniform1f(u.time, frozen ? 20 : (now - epoch) / 1000 + 20);
       gl.uniform1f(u.orb, state.orb);
       gl.uniform1f(u.radius, state.radius);
-      gl.uniform1f(u.focus, state.focus);
+      gl.uniform2f(u.centre, state.centre[0], state.centre[1]);
+      gl.uniform1f(u.soft, state.soft);
       gl.uniform1f(u.open, state.open);
-      gl.uniform1f(u.blur, state.blur);
-      gl.uniform1f(u.field, state.field);
+      gl.uniform1f(u.box, state.box);
+      gl.uniform1f(u.even, state.even);
+      gl.uniform1f(u.settle, state.settle);
       gl.uniform1f(u.waves, state.waves);
       gl.uniform1f(u.corner, WINDOW_RADIUS);
       gl.drawArrays(gl.TRIANGLES, 0, 3);

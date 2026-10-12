@@ -2,9 +2,9 @@
 //!
 //! On macOS the first launch holds the main window clear until the page is ready (shown, so
 //! its page runs and paints, but unseen and passing the mouse through), then stages it: the
-//! window appears with no title-bar buttons, shadow or background (so only the page's comet
+//! window appears with no title-bar buttons, shadow or background (so only the page's orb
 //! is seen), above a borderless black window over the screen below the menu bar that ignores
-//! the mouse and fades in to dim the desktop. When the mark's burst has opened the window, its
+//! the mouse and fades in to dim the desktop. When the orb's burst has filled the window, its
 //! chrome comes back (`intro_shaped`); then the dim fades out and closes for good
 //! (`intro_finish`).
 //!
@@ -72,7 +72,7 @@ fn unhold(app: &AppHandle) {
     let _ = app.run_on_main_thread(move || mac::unhold(&handle));
 }
 
-/// Whether the window is staged: its startup colour must not cover the page's comet.
+/// Whether the window is staged: its startup colour must not cover the page's orb.
 pub fn staged() -> bool {
     STAGED.load(Ordering::Acquire)
 }
@@ -109,7 +109,7 @@ pub async fn intro_begin(app: AppHandle) -> bool {
     true
 }
 
-/// The burst has opened the window: its title-bar buttons, shadow and colour come back.
+/// The orb's burst has filled the window: its title-bar buttons, shadow and colour come back.
 #[tauri::command]
 pub fn intro_shaped(app: AppHandle) {
     if !staged() {
@@ -179,8 +179,8 @@ mod mac {
     const DIM: f64 = 0.85;
     /// When the dim starts fading in, after the window is staged (just after the page's orb
     /// has come up: tokens.css), and how long it takes, in seconds.
-    const DIM_AFTER: f64 = 1.1;
-    const DIM_IN: f64 = 0.75;
+    const DIM_AFTER: f64 = 0.95;
+    const DIM_IN: f64 = 0.7;
 
     thread_local! {
         /// The dim over the desktop while the intro is staged (main thread only).
@@ -287,13 +287,16 @@ mod mac {
     }
 
     /// Restores the window in full and fades the dim out over `fade` seconds, then closes it.
-    /// The window stays above the dim until it has gone, so the dim never darkens it.
+    /// The window stays above the dim until it has gone, so the dim never darkens it, and
+    /// stays in front as it comes down to the normal level (another app may have become the
+    /// active one meanwhile, through a click on the dimmed desktop).
     pub fn finish(app: &AppHandle, fade_secs: f64) {
         shape(app);
         let window = main_window(app).map(|(_, ns_window)| ns_window);
         let lower = move || {
             if let Some(window) = &window {
                 window.setLevel(NSNormalWindowLevel);
+                window.orderFrontRegardless();
             }
         };
         let Some(dim) = DIM_WINDOW.with_borrow_mut(Option::take) else {
