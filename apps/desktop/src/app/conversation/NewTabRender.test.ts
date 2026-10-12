@@ -8,7 +8,7 @@ for (const reduced of [false, true]) {
     const seen = JSON.parse(await renderFixtureLive(t, "new-tab.html?drive=1", "new-tab-result", 60000, reduced)) as Record<string, unknown>;
     if (process.env.NEW_TAB_SEEN) console.log(JSON.stringify(seen, null, 2));
     assert.deepEqual(seen.sections, ["Tools", "Suggested"]);
-    assert.deepEqual(seen.tools, ["Terminal⌃`", "New page", "More tools…"]);
+    assert.deepEqual(seen.tools, ["Terminal⌃`", "New page", "Side chat⌥⌘S", "More tools…"]);
     assert.equal(seen.searchFields, 0, "search belongs to the browser toolbar");
     assert.deepEqual(seen.suggested, [{ title: "Latest site", url: "https://one.test/latest" }, { title: "Second site", url: "https://two.test/" }]);
     const requests = seen.historyCalls as { query: string; filter: string; limit: number }[];
@@ -27,7 +27,7 @@ for (const reduced of [false, true]) {
     assert.deepEqual(seen.dismissed, ["Second site"]);
     assert.deepEqual(seen.terminalOptions, ["Open bottom terminal"]);
     assert.equal(seen.bottomTerminal, true); assert.equal(seen.bottomKeptNewTab, "newTab");
-    assert.deepEqual(seen.more, ["Review changes⌃⇧G", "Find file⌘P", "Side chat⌥⌘S"]);
+    assert.deepEqual(seen.more, ["Review changes⌃⇧G", "Find file⌘P"]);
     assert.deepEqual(seen.files, { open: true, tab: "files", placeholder: "newTab" });
     assert.equal(seen.newPage, "page"); assert.equal(seen.terminal, "terminal"); assert.equal(seen.sideChat, "sideChat"); assert.equal(seen.review, "review");
     assert.equal((seen.siteTab as { kind: string; url: string }).kind, "browser"); assert.equal((seen.siteTab as { url: string }).url, "https://two.test/");

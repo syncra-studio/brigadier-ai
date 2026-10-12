@@ -121,7 +121,7 @@ function Fixture() {
       useSessionTabs.setState({ sessions: {} }); newSessionTab(ID, "newTab"); await wait(100);
       button("Terminal")?.click(); await wait(100); seen.terminal = currentTab()?.kind;
       useSessionTabs.setState({ sessions: {} }); newSessionTab(ID, "newTab"); await wait(100);
-      openMenu("More tools…"); await until(() => menuItems().length > 0); pick("Side chat"); await wait(100); seen.sideChat = currentTab()?.kind;
+      button("Side chat")?.click(); await wait(100); seen.sideChat = currentTab()?.kind;
       useSessionTabs.setState({ sessions: {} }); newSessionTab(ID, "newTab"); await wait(100);
       openMenu("More tools…"); await until(() => menuItems().length > 0); pick("Review changes"); await wait(100); seen.review = currentTab()?.kind;
       if (!params.has("empty")) {

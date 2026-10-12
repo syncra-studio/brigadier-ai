@@ -60,7 +60,6 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
   const tools = [
     { label: "Review changes", Icon: DiffGlyph, shortcut: "⌃⇧G", run: () => openReviewTab(conversationId, { type: "all" }, tabId) },
     { label: "Find file", Icon: Search, shortcut: "⌘P", disabled: !workspace?.enabled, run: () => workspace?.openFilesSearch(tabId) },
-    { label: "Side chat", Icon: Chat, shortcut: "⌥⌘S", disabled: archived, run: () => replaceNewTab(conversationId, tabId, "sideChat") },
   ];
   return (
     <div data-slot="new-tab-page" className="new-tab-page">
@@ -85,6 +84,12 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
             <div className="new-tab-card">
               <button type="button" onClick={() => replaceNewTab(conversationId, tabId, "page")} className="new-tab-tool">
                 <Document aria-hidden /><span className="new-tab-tool-label">New page</span>
+              </button>
+            </div>
+            <div className="new-tab-card">
+              <button type="button" aria-label="Side chat" disabled={archived} onClick={() => replaceNewTab(conversationId, tabId, "sideChat")} className="new-tab-tool">
+                <Chat aria-hidden /><span className="new-tab-tool-label">Side chat</span>
+                <Kbd>{shortcutLabel("⌥⌘S", mac)}</Kbd>
               </button>
             </div>
             <div className="new-tab-card">
