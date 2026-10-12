@@ -18,6 +18,8 @@ members = [
   "apps/desktop/src-tauri",
 ]
 default-members = ["crates/*"]
+# The computer-use helper is its own workspace, built by the desktop staging step.
+exclude = ["helpers/computer-use"]
 
 [workspace.package]
 version = "0.1.0"

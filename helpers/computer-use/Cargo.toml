@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/brigadier-cu",
+    "crates/cu-testkit",
+    "crates/cu-core",
+    "crates/platform-macos",
+    "crates/cursor-overlay",
+    "crates/pip-preview",
+]
+
+[workspace.package]
+version = "0.8.12"
+edition = "2021"
+authors = ["Brigadier contributors"]
+license = "MIT"
+repository = "https://github.com/stephen-golban/brigadier-ai"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
+hmac = "0.12"
+sha2 = "0.10"
+
+# Style and complexity lints the driving code does not follow. Correctness,
+# suspicious and perf lints stay on, and `cargo clippy -- -D warnings` gates them.
+[workspace.lints.clippy]
+style = { level = "allow", priority = -1 }
+complexity = { level = "allow", priority = -1 }
+too_many_arguments = "allow"
+missing_safety_doc = "allow"
+field_reassign_with_default = "allow"
+type_complexity = "allow"
+large_enum_variant = "allow"
+new_without_default = "allow"
+doc_lazy_continuation = "allow"
+doc_overindented_list_items = "allow"
+items_after_test_module = "allow"
+# The SkyLight wrappers take opaque event handles they only pass through.
+not_unsafe_ptr_arg_deref = "allow"

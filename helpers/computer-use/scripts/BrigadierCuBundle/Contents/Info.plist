@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Template for the "Brigadier Computer Use" helper app.
+
+    The desktop build copies this file into the staged bundle and rewrites
+    CFBundleIdentifier (release `ai.brigadier.computer-use`, development
+    `ai.brigadier.dev.computer-use`) and the version keys. macOS keys the
+    Accessibility and Screen Recording grants to that bundle id, so it
+    must never change.
+
+    The shim starts the daemon with `open -n -g -a <helper app> --args serve`
+    so the daemon is its own responsible process and macOS attributes the
+    grants to this bundle instead of the calling agent or terminal.
+
+    LSUIElement keeps the helper headless: no Dock icon, no menu bar.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>ai.brigadier.computer-use</string>
+    <key>CFBundleName</key>
+    <string>Brigadier Computer Use</string>
+    <key>CFBundleDisplayName</key>
+    <string>Brigadier Computer Use</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>brigadier-cu</string>
+    <!-- Contents/Resources/AppIcon.icns, shown in Finder and in the
+         Privacy & Security lists. -->
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <!-- Placeholders; the desktop build sets both to the app version. -->
+    <key>CFBundleShortVersionString</key>
+    <string>0.0.0-dev</string>
+    <key>CFBundleVersion</key>
+    <string>0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticTermination</key>
+    <true/>
+</dict>
+</plist>
