@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
+import { ThreadTitle, UNTITLED } from "@/app/TopBar";
 import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { takePaneClose } from "@/state/closedPanes";
@@ -60,9 +61,6 @@ import { useApp } from "@/state/store";
 import { useBrowsers } from "@/state/browsers";
 import { NewTabTools } from "./NewTabTools";
 
-/** The names the daemon gives a conversation until its first message titles it. */
-const UNTITLED = new Set(["New session", "New chat"]);
-
 function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
@@ -82,7 +80,10 @@ export function tabTitle(tab: SessionTab): string {
 
 /** Tabs share the available row, then scroll once they reach their minimum width. */
 const TAB =
-  "session-tab group/tab relative flex h-7 min-w-0 items-center gap-1 rounded-lg ps-2 pe-1 text-sm select-none";
+  "session-tab group/tab relative flex h-control-md min-w-0 items-center gap-1 rounded-session-tab ps-2.5 pe-1.75 select-none";
+
+/** After a close, how long the pointer may be away from the tabs before they take the room back. */
+const CLOSE_LOCK_MS = 300;
 
 /** Mouse down with the middle button would start autoscroll. */
 function noAutoscroll(event: ReactMouseEvent): void {
@@ -174,12 +175,13 @@ function TabMenu({
 }
 
 /**
- * A session's top bar as tabs: Chat first (its title, its ⋯ chat actions; never closed or
- * moved), then the files and the Review tab it opened, which shrink to their least and then
- * scroll. Click to show, drag to reorder, middle-click to close; a preview tab is in italic
- * until double-clicked. While the thread keeps something running for the user, its chip
- * ("web · Running · Stop") follows. `children` sit at the end: the summary toggle and the panel
- * buttons' room.
+ * A session's top bar. With nothing open it is a title, as a chat's is, with "+" at its end.
+ * Once something is, it turns into tabs: Chat first (its ⋯ chat actions; never closed or moved),
+ * then the tabs it opened, which shrink to their least and then scroll, and "+" right after them.
+ * Click to show, drag to reorder, middle-click or Delete to close; a preview tab is in italic
+ * until double-clicked. After a close the tabs keep their widths, so the next × lands under the
+ * pointer, until it leaves them. While the thread keeps something running for the user, its chip
+ * ("web · Running · Stop") follows. `children` sit at the end: the conversation's toolbar.
  */
 export function SessionTabBar({
   conversation,
@@ -191,7 +193,6 @@ export function SessionTabBar({
   children?: ReactNode;
 }) {
   const id = conversation.id;
-  const confirmClose = useTabCloseAsk((state) => state.confirm);
   const { tabs, active } = useSessionTabsOf(id);
   useMockupTab(id);
   const connection = useApp((s) => s.connection.status);
@@ -207,6 +208,8 @@ export function SessionTabBar({
     newSessionTab(id, kind, cwd);
   }, [id, archived, cwd, browserOn]);
   useTabKeys(id, archived, create);
+  const plain = tabs.length === 0;
+  const lock = useCloseLock(plain);
   const { listRef, shown, dragging, grip } = useDragReorder<SessionTab, HTMLDivElement>({
     items: tabs,
     idOf: (tab) => tab.id,
@@ -229,13 +232,43 @@ export function SessionTabBar({
     return () => observer.disconnect();
   }, [active]);
 
-  const title = UNTITLED.has(conversation.title) ? "Chat" : conversation.title;
   // On the button's release: the webview may never send `auxclick`.
   const middleClose = (tab: string) => (event: ReactMouseEvent) => {
     if (event.button !== 1) return;
     event.preventDefault();
+    lock.hold(tabs.length + 1);
     closeTab(id, tab);
   };
+  const newTab = (
+    <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className={plain ? undefined : "ms-0.5"}
+      onClick={() => { lock.release(); create("newTab"); }}><Plus /></TitlebarButton>
+  );
+  const connecting = connection !== "connected" && (
+    <Badge variant="warning" role="status" className="shrink-0">
+      {connection === "connecting" ? "Connecting to core…" : "Reconnecting to core…"}
+    </Badge>
+  );
+  const project = useApp((s) => conversation.projectId ? s.projects[conversation.projectId]?.name ?? null : null);
+
+  if (plain) {
+    return (
+      <header
+        data-tauri-drag-region
+        data-slot="session-tabs"
+        data-plain
+        className="h-titlebar ease-sidebar ps-clear-3 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
+      >
+        <ThreadTitle project={project} title={UNTITLED.has(conversation.title) ? "" : conversation.title}
+          session archived={archived} onRename={archived ? undefined : onRename} />
+        {connecting}
+        <PreviewChip conversationId={id} />
+        <ChatActions conversation={conversation} onRename={onRename} />
+        {newTab}
+        {children}
+        <CloseAsk />
+      </header>
+    );
+  }
 
   return (
     <header
@@ -249,8 +282,26 @@ export function SessionTabBar({
         tabIndex={-1}
         data-tauri-drag-region
         className="session-tab-list flex min-w-0 items-center gap-0.5"
-        style={{ "--session-tab-count": tabs.length + 1 } as CSSProperties}
+        style={{ "--session-tab-count": lock.count ?? tabs.length + 1 } as CSSProperties}
+        onPointerEnter={lock.stay}
+        onPointerLeave={lock.leave}
         onKeyDown={(event) => {
+          if (
+            (event.key === "Backspace" || event.key === "Delete") &&
+            !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey &&
+            event.target instanceof HTMLElement && event.target.getAttribute("role") === "tab"
+          ) {
+            // Delete closes the tab that has the keyboard (never Chat), then the keyboard goes
+            // to the tab in front.
+            const tab = event.target.closest<HTMLElement>("[data-tab-id]")?.dataset.tabId;
+            if (!tab || tab === CHAT_TAB) return;
+            event.preventDefault();
+            closeTab(id, tab);
+            // The tab now in front was already in the strip.
+            const front = sessionTabs(id).active;
+            event.currentTarget.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(front)}"] [role="tab"]`)?.focus();
+            return;
+          }
           // Alt+←/→ moved the tab itself (its drag handle's keys).
           if (event.defaultPrevented || event.altKey) return;
           if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -284,7 +335,7 @@ export function SessionTabBar({
             className={cn(
               TAB,
               active === CHAT_TAB
-                ? "bg-panel-tab text-foreground"
+                ? "bg-panel-tab shadow-panel-tab text-foreground"
                 : "text-toolbar-foreground hover:bg-toolbar-hover",
             )}
           >
@@ -294,13 +345,13 @@ export function SessionTabBar({
               aria-selected={active === CHAT_TAB}
               tabIndex={active === CHAT_TAB ? 0 : -1}
               title={archived ? `${conversation.title} (Archived)` : conversation.title}
-              aria-label={archived ? `${title} (Archived)` : undefined}
+              aria-label={archived ? "Chat (Archived)" : undefined}
               onClick={() => selectTab(id, CHAT_TAB)}
               onDoubleClick={archived ? undefined : onRename}
               className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
             >
               {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
-              <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">{title}</span>
+              <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">Chat</span>
             </button>
             <ChatActions
               conversation={conversation}
@@ -335,7 +386,7 @@ export function SessionTabBar({
                     className={cn(
                       TAB,
                       selected
-                        ? "bg-panel-tab text-foreground"
+                        ? "bg-panel-tab shadow-panel-tab text-foreground"
                         : "text-toolbar-foreground hover:bg-toolbar-hover",
                       "data-dragging:z-10 data-dragging:opacity-80",
                     )}
@@ -380,6 +431,7 @@ export function SessionTabBar({
                       aria-label={`Close ${name} tab`}
                       onClick={(event) => {
                         event.stopPropagation();
+                        lock.hold(tabs.length + 1);
                         closeTab(id, tab.id);
                       }}
                       className={cn(
@@ -396,32 +448,75 @@ export function SessionTabBar({
           </div>
         </div>
       </div>
-      <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} onClick={() => create("newTab")}><Plus /></TitlebarButton>
-      {connection !== "connected" && (
-        <Badge variant="warning" role="status" className="shrink-0">
-          {connection === "connecting" ? "Connecting to core…" : "Reconnecting to core…"}
-        </Badge>
-      )}
+      {newTab}
+      {connecting}
       <PreviewChip conversationId={id} />
       <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
       {children}
-      <Dialog open={confirmClose !== null} onOpenChange={(open) => { if (!open) useTabCloseAsk.setState({ confirm: null }); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Close unsaved files?</DialogTitle>
-            <DialogDescription>These files have unsaved changes. Keep them open to save your work, or close them without saving.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => useTabCloseAsk.setState({ confirm: null })}>Keep open</Button>
-            <Button variant="destructive" onClick={() => {
-              useTabCloseAsk.setState({ confirm: null });
-              confirmClose?.();
-            }}>Close without saving</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CloseAsk />
     </header>
   );
+}
+
+/** Asks before closing tabs with unsaved files. */
+function CloseAsk() {
+  const confirmClose = useTabCloseAsk((state) => state.confirm);
+  return (
+    <Dialog open={confirmClose !== null} onOpenChange={(open) => { if (!open) useTabCloseAsk.setState({ confirm: null }); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Close unsaved files?</DialogTitle>
+          <DialogDescription>These files have unsaved changes. Keep them open to save your work, or close them without saving.</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => useTabCloseAsk.setState({ confirm: null })}>Keep open</Button>
+          <Button variant="destructive" onClick={() => {
+            useTabCloseAsk.setState({ confirm: null });
+            confirmClose?.();
+          }}>Close without saving</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Keeps the tabs' widths after a close (their count as it was), so the next tab's × comes under
+ * the pointer. Let go once the pointer has been away from the tabs a moment, on a key or a
+ * scroll, when the window loses focus, or when no tab is left.
+ */
+function useCloseLock(plain: boolean) {
+  const [count, setCount] = useState<number | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const release = useCallback(() => {
+    clearTimeout(timer.current);
+    setCount(null);
+  }, []);
+  const locked = count !== null;
+  useEffect(() => {
+    if (!locked) return;
+    window.addEventListener("keydown", release, true);
+    window.addEventListener("wheel", release, true);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", release, true);
+      window.removeEventListener("wheel", release, true);
+      window.removeEventListener("blur", release);
+    };
+  }, [locked, release]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  if (plain && locked) setCount(null);
+  return {
+    count,
+    release,
+    hold: (current: number) => setCount((held) => held ?? current),
+    stay: () => clearTimeout(timer.current),
+    leave: () => {
+      if (!locked) return;
+      clearTimeout(timer.current);
+      timer.current = setTimeout(release, CLOSE_LOCK_MS);
+    },
+  };
 }
 
 function BrowserIcon({ tabId }: { tabId: string }) {

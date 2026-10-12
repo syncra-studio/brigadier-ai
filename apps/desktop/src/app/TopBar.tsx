@@ -7,7 +7,7 @@ import type { Lifecycle } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 
 /** The names the daemon gives a conversation until its first message titles it. */
-const UNTITLED = new Set(["New session", "New chat"]);
+export const UNTITLED = new Set(["New session", "New chat"]);
 
 /** The open thread's title, or "" while it has none of its own (drafts too). */
 function useTitle(): {
@@ -66,31 +66,7 @@ export function TopBar({
       data-tauri-drag-region
       className="h-titlebar ease-sidebar ps-clear-3 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
     >
-      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
-        {session && title && (
-          <Folder
-            aria-label={project ?? undefined}
-            className="text-muted-foreground size-icon-md shrink-0"
-          />
-        )}
-        {!title ? null : onRename ? (
-          <button
-            type="button"
-            title={project ? `${project} · Rename` : "Rename"}
-            onClick={onRename}
-            className="hover:text-foreground/80 min-w-0 truncate font-medium transition-colors"
-          >
-            {title}
-          </button>
-        ) : (
-          <span className="truncate font-medium">{title}</span>
-        )}
-        {lifecycle === "archived" && (
-          <Badge variant="outline" className="ms-1" title="Archived: restore it from Settings → Archived chats to continue.">
-            Archived
-          </Badge>
-        )}
-      </div>
+      <ThreadTitle project={project} title={title} session={session} archived={lifecycle === "archived"} onRename={onRename} />
 
       {connection !== "connected" && (
         <Badge variant="warning" role="status">
@@ -101,5 +77,45 @@ export function TopBar({
       )}
       {children}
     </header>
+  );
+}
+
+/**
+ * The thread's title where the header starts: a session's folder icon, the title (click to
+ * rename) and Archived when it is.
+ */
+export function ThreadTitle({ project, title, session, archived, onRename }: {
+  project: string | null;
+  title: string;
+  session: boolean;
+  archived: boolean;
+  onRename?: (() => void) | undefined;
+}) {
+  return (
+    <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
+      {session && title && (
+        <Folder
+          aria-label={project ?? undefined}
+          className="text-muted-foreground size-icon-md shrink-0"
+        />
+      )}
+      {!title ? null : onRename ? (
+        <button
+          type="button"
+          title={project ? `${project} · Rename` : "Rename"}
+          onClick={onRename}
+          className="hover:text-foreground/80 min-w-0 truncate font-medium transition-colors"
+        >
+          {title}
+        </button>
+      ) : (
+        <span className="truncate font-medium">{title}</span>
+      )}
+      {archived && (
+        <Badge variant="outline" className="ms-1" title="Archived: restore it from Settings → Archived chats to continue.">
+          Archived
+        </Badge>
+      )}
+    </div>
   );
 }

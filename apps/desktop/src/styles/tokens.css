@@ -72,7 +72,11 @@
  *                                             the strip evenly, at least session-tab-min and at
  *                                             most session-tab-max (the list grows to the tabs'
  *                                             count times session-tab-max); session-tab-separator
- *                                             is the rule between tabs
+ *                                             and h-session-tab-separator the rule between two
+ *                                             tabs in back (colour bg-session-tab-separator)
+ *               text-session-tab              a session tab's title (set by `.session-tab`)
+ *               rounded-session-tab           a session tab's corners
+ *               ease-session-tab              a session tab growing or shrinking
  *               --session-tab-title-mask      the fade at a long tab title's end
  *               browser-{controls,address}    the Browser tab's toolbar: the least for each side's
  *                                             buttons, the most for the address field, laid out
@@ -347,7 +351,11 @@
   /* A session's tab keeps room for a short name beside its icon and button. */
   --spacing-session-tab-min: 5.625rem;
   --spacing-session-tab-separator: 1px;
+  --spacing-session-tab-separator-height: 0.75rem;
   --spacing-session-tab-max: 15rem;
+  --text-session-tab: 0.8125rem;
+  --text-session-tab--line-height: 1.125rem;
+  --radius-session-tab: 0.625rem;
   --spacing-browser-controls: 6rem;
   --spacing-browser-address: 40rem;
   --container-new-tab-tools: 40rem;
@@ -471,6 +479,7 @@
   /* A section's list opening or closing (300ms); a disclosure chevron turning (150ms). */
   --ease-enter: cubic-bezier(0.19, 1, 0.22, 1);
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-session-tab: cubic-bezier(0.333, 0.667, 0.667, 1);
 
   --tracking-hero: -0.015em;
   --tracking-section: -0.01em;
@@ -530,6 +539,7 @@
   --color-toolbar-pressed: var(--toolbar-pressed);
   --color-toolbar-pressed-hover: var(--toolbar-pressed-hover);
   --color-panel-tab: var(--panel-tab);
+  --color-session-tab-separator: var(--session-tab-separator);
   --color-divider: var(--divider);
   --color-row-chevron: var(--row-chevron);
   --color-row-object: var(--row-object);
@@ -641,6 +651,8 @@
   /* The side panel's active tab: its fill, and its hairline (drawn by shadow-panel-tab). */
   --panel-tab: color-mix(in oklab, var(--foreground) 8%, transparent);
   --panel-tab-border: color-mix(in oklab, var(--foreground) 10%, transparent);
+  /* The rule between two session tabs in back. */
+  --session-tab-separator: color-mix(in oklab, var(--foreground) 8.2%, transparent);
   /* Blue: a switch that is on. */
   --toggle-on: oklch(0.63 0.18 259);
   /* Blue: a note's marker on a mockup, and the ring of a picked canvas tile. */
@@ -749,6 +761,7 @@
   --spacing-panel-resize-step: 0.5rem;
   --spacing-panel-tab: 13rem;
   --spacing-panel-tab-min: 4.75rem;
+  --spacing-session-tab-separator-height: 0.625rem;
   --spacing-user-message: 18.75rem;
 
   --radius-xs: 0.125rem;
@@ -780,6 +793,8 @@
   --text-xs--line-height: 0.9375rem;
   --text-sm: 0.8125rem;
   --text-sm--line-height: 1.125rem;
+  --text-session-tab: 0.75rem;
+  --text-session-tab--line-height: 1rem;
   --text-base: 0.875rem;
   --text-base--line-height: 1.3125rem;
   --text-lg: 1rem;
