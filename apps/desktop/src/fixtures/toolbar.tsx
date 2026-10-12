@@ -169,6 +169,7 @@ function Fixture() {
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyE", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
     });
     at(5600, () => {
+      seen.draftSourceCount = document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent ?? null;
       seen.draftFiles = pane(); seen.draftTree = document.querySelector('[data-slot="workspace-pane"] [role="tree"]')?.textContent;
       document.querySelector<HTMLButtonElement>('[data-slot="workspace-pane"] button[title="package.json"]')?.click();
     });
@@ -193,7 +194,9 @@ function Fixture() {
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
     });
     at(7000, () => {
-      seen.draftSearch = pane(); seen.searchKeyFocus = document.activeElement?.getAttribute("aria-label");
+      seen.draftSearch = pane();
+      seen.selectedTabs = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => [tab.getAttribute("aria-label"), tab.getAttribute("aria-selected"), getComputedStyle(tab).backgroundColor]);
+      seen.searchKeyFocus = document.activeElement?.getAttribute("aria-label");
       seen.draftSearchReplace = !!document.querySelector('[data-slot="workspace-pane"] input[aria-label="Replace"]');
       setKind("chat");
     });

@@ -13,7 +13,7 @@ import { browserFocus } from "@/ipc/client";
 import { CHAT_TAB, openFileTab, useSessionTabs } from "@/state/sessionTabs";
 import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, workspacePaneKey, type WorkspacePaneTab } from "@/state/workspacePane";
 import { useApp } from "@/state/store";
-import { prefetchWorkspace, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
+import { prefetchWorkspace, useCachedEntry, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
 
 
 /** The right sidebar's views, in its icon row's order. */
@@ -54,6 +54,9 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
     if (enabled && target) prefetchWorkspace(target);
   }, [enabled, target]);
   useEffect(prefetch, [prefetch, checkout]);
+  // How many files Source lists, for its icon.
+  const source = useCachedEntry(checkout)?.source;
+  const changed = useMemo(() => source ? new Set([...source.staged, ...source.changes].map((file) => file.path)).size : 0, [source]);
   // While it shows, the daemon says when the checkout changes, so the views refresh in place.
   // A new connection forgets the old one's watch, so it is asked again after reconnecting.
   const connected = useApp((s) => s.connection.status === "connected");
@@ -101,8 +104,8 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
   return useMemo(() => ({
     ...size, enabled, open: enabled && open, active, toggleOpen, select, openFilesSearch, prefetch,
     setOpen: setWorkspacePaneOpen, conversationId, projectId, searchRequest, searchHandled,
-    filePlaceholder: placeholder?.id === id ? placeholder.tabId : undefined, fileOpened, focusRequest,
-  }), [size, enabled, open, active, toggleOpen, select, openFilesSearch, conversationId, projectId, searchRequest, searchHandled, placeholder, id, fileOpened, prefetch, focusRequest]);
+    filePlaceholder: placeholder?.id === id ? placeholder.tabId : undefined, fileOpened, focusRequest, changed,
+  }), [size, enabled, open, active, toggleOpen, select, openFilesSearch, conversationId, projectId, searchRequest, searchHandled, placeholder, id, fileOpened, prefetch, focusRequest, changed]);
 }
 
 export const WorkspacePaneContext = createContext<ReturnType<typeof useWorkspacePane> | null>(null);
@@ -174,7 +177,7 @@ export function WorkspacePane() {
               {VIEWS.map(({ id, title, shortcut, Icon }, index) => (
                 <TitlebarButton key={id} role="tab" id={`workspace-pane-${id}`} aria-controls="workspace-pane-content"
                   aria-selected={pane.active === id} tabIndex={pane.active === id ? 0 : -1}
-                  className="aria-selected:bg-toolbar-pressed aria-selected:text-foreground"
+                  className="aria-selected:bg-toolbar-pressed aria-selected:text-foreground relative"
                   tooltip={title} shortcut={shortcutKeys(shortcut, mac)}
                   onClick={() => pane.select(id)}
                   onKeyDown={(event) => {
@@ -188,6 +191,12 @@ export function WorkspacePane() {
                     document.getElementById(`workspace-pane-${view.id}`)?.focus();
                   }}>
                   <Icon />
+                  {id === "source" && pane.changed > 0 && (
+                    <span aria-hidden data-slot="source-count"
+                      className="bg-link text-background absolute -end-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-2xs leading-none tabular-nums">
+                      {pane.changed > 99 ? "99+" : pane.changed}
+                    </span>
+                  )}
                 </TitlebarButton>
               ))}
             </TitlebarTips>

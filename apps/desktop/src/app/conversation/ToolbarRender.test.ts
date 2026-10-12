@@ -26,6 +26,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   for (const field of ["workerRight", "composerRight", "contextWorkerRight"]) assert.equal(seen[field], "expanded", field);
   assert.equal(seen.workerTab, "workers");
   assert.equal(seen.draftSearch, "search", "⇧⌘F shows Search");
+  assert.equal(seen.draftSourceCount, "1", "Source's icon counts the files it lists");
   assert.equal(seen.searchKeyFocus, "Search", "with its field taking the keyboard");
   assert.equal(seen.draftSearchReplace, false, "a draft making its own copy has no Replace");
   for (const field of ["dockClosedSlide", "dockOpenSlide"]) {
