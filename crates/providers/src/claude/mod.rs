@@ -26,7 +26,7 @@
 //! would let another model in too, or the project's own settings could widen the list, the
 //! worker runs without its Agent tool ([`sub_agents`]).
 
-mod files;
+pub(crate) mod files;
 pub mod parse;
 
 use std::collections::{HashMap, HashSet};
@@ -1001,6 +1001,7 @@ impl Provider for Claude {
                 .record(Artifact::ClaudeSession {
                     session_id: native_id.clone(),
                     home: self.account_home(),
+                    cwd: Some(cwd.display().to_string()),
                 })
                 .await?;
             for path in files::staging_dirs(&cwd) {
@@ -1754,6 +1755,7 @@ mod tests {
             .remove(vec![Artifact::ClaudeSession {
                 session_id: id,
                 home: Some(extra.display().to_string()),
+                cwd: None,
             }])
             .await
             .unwrap();
@@ -1899,6 +1901,7 @@ mod tests {
             effort: None,
             fast: false,
             origin: Origin::New,
+            ephemeral: false,
             access: Access::Full,
             append_system_prompt: None,
             mcp_servers: Vec::new(),

@@ -90,7 +90,7 @@ const MODE_LABELS: Record<Exclude<Mode, "inherit">, string> = {
 };
 
 /**
- * One kind of work, as a row of the Routing page's card: its name, what its next task would run
+ * One kind of work, as a row of Advanced routing's card: its name, what its next task would run
  * on and whether routing ranks the models (Automatic) or tries the user's list (Manual). Opening
  * it shows the order and why, the choice between the two, and its area overrides, everywhere or
  * in the chosen project.

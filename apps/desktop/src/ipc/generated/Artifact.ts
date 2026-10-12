@@ -14,8 +14,29 @@ startedAtMs: number | null, } | { "type": "claudeSession", sessionId: string,
 /**
  * The config directory of the account it ran on; absent: the user's own.
  */
-home?: string, } | { "type": "claudeProjectDir", path: string, } | { "type": "claudeStagingDir", path: string, } | { "type": "codexThread", threadId: string, 
+home?: string, 
+/**
+ * The folder it ran in, so its files are known as Brigadier's for good (absent in
+ * records older than this field).
+ */
+cwd?: string, } | { "type": "claudeProjectDir", path: string, } | { "type": "claudeStagingDir", path: string, } | { "type": "codexThread", threadId: string, 
 /**
  * The `CODEX_HOME` of the account it ran on; absent: the user's own.
  */
-home?: string, } | { "type": "codexGeneratedImages", path: string, } | { "type": "codexProjectTrust", path: string, } | { "type": "processesIn", dir: string, } | { "type": "worktree", repo: string, path: string, } | { "type": "scratchDir", path: string, } | { "type": "previewDataDir", path: string, identity: [number, number] | null, } | { "type": "claudeTempDir", path: string, } | { "type": "cliTrust", cli: TrustCli, file: string, folder: string, before: TrustBefore, };
+home?: string, 
+/**
+ * The folder it ran in (absent in records older than this field).
+ */
+cwd?: string, } | { "type": "codexGeneratedImages", path: string, } | { "type": "codexProjectTrust", path: string, } | { "type": "adopted", root: string, path: string, 
+/**
+ * Its identity when it was shown (device and inode, or volume and file index).
+ */
+identity: [number, number], 
+/**
+ * Why it is Brigadier's, as shown.
+ */
+evidence: string, 
+/**
+ * A folder removed only once empty (a CLI project folder whose files went with it).
+ */
+emptyOnly?: boolean, } | { "type": "processesIn", dir: string, } | { "type": "worktree", repo: string, path: string, } | { "type": "scratchDir", path: string, } | { "type": "previewDataDir", path: string, identity: [number, number] | null, } | { "type": "claudeTempDir", path: string, } | { "type": "cliTrust", cli: TrustCli, file: string, folder: string, before: TrustBefore, };

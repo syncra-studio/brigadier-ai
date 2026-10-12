@@ -83,6 +83,168 @@ pub fn app_folders(identifier: &str) -> Vec<AppFolder> {
     folders
 }
 
+/// Where the system and the webview keep Brigadier apps' rebuildable caches: never an app's
+/// persistent website data (local storage, IndexedDB, cookies) or its settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheRoots {
+    pub dirs: Vec<CacheDir>,
+}
+
+/// A folder holding per-app caches, and how they are named in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheDir {
+    pub root: PathBuf,
+    pub naming: CacheNaming,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheNaming {
+    /// `<root>/<identifier>`, all of it a cache (macOS `~/Library/Caches`, the per-user cache
+    /// folder; Linux `~/.cache`).
+    Whole,
+    /// `<root>/com.apple.WebKit.<process>+<identifier>`: the caches of the app's WebKit
+    /// processes (macOS per-user cache folder).
+    WebKitProcesses,
+    /// `<root>/<identifier>/EBWebView/…`: only WebView2's cache folders in it (Windows
+    /// `%LOCALAPPDATA%`).
+    WebView2,
+}
+
+/// The WebKit processes that keep caches of their own per app.
+const WEBKIT_PROCESSES: &[&str] = &[
+    "com.apple.WebKit.GPU+",
+    "com.apple.WebKit.Networking+",
+    "com.apple.WebKit.WebContent+",
+];
+/// WebView2's rebuildable caches under an app's `EBWebView` folder.
+const WEBVIEW2_CACHES: &[&str] = &[
+    "Default/Cache",
+    "Default/Code Cache",
+    "Default/GPUCache",
+    "GrShaderCache",
+    "ShaderCache",
+];
+
+impl CacheRoots {
+    /// This user's real cache folders.
+    pub fn system() -> Self {
+        let mut dirs = Vec::new();
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(home) = dirs::home_dir() {
+                dirs.push(CacheDir {
+                    root: home.join("Library").join("Caches"),
+                    naming: CacheNaming::Whole,
+                });
+            }
+            if let Some(user) = darwin_user_dir("DARWIN_USER_CACHE_DIR") {
+                dirs.push(CacheDir {
+                    root: user.clone(),
+                    naming: CacheNaming::Whole,
+                });
+                dirs.push(CacheDir {
+                    root: user,
+                    naming: CacheNaming::WebKitProcesses,
+                });
+            }
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(cache) = dirs::cache_dir() {
+            dirs.push(CacheDir {
+                root: cache,
+                naming: CacheNaming::Whole,
+            });
+        }
+        #[cfg(windows)]
+        if let Some(local) = dirs::data_local_dir() {
+            dirs.push(CacheDir {
+                root: local,
+                naming: CacheNaming::WebView2,
+            });
+        }
+        Self { dirs }
+    }
+
+    /// The same places under `home` instead of this user's home: a stand-in for tests and
+    /// isolated runs, so they only ever see what they seeded.
+    pub fn under(home: &std::path::Path) -> Self {
+        let dir = |root: PathBuf, naming| CacheDir { root, naming };
+        let dirs = if cfg!(target_os = "macos") {
+            let user = home.join("darwin-user-cache");
+            vec![
+                dir(home.join("Library").join("Caches"), CacheNaming::Whole),
+                dir(user.clone(), CacheNaming::Whole),
+                dir(user, CacheNaming::WebKitProcesses),
+            ]
+        } else if cfg!(windows) {
+            vec![dir(
+                home.join("AppData").join("Local"),
+                CacheNaming::WebView2,
+            )]
+        } else {
+            vec![dir(home.join(".cache"), CacheNaming::Whole)]
+        };
+        Self { dirs }
+    }
+}
+
+/// A Brigadier app's rebuildable cache folder, with the folder it must stay inside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentityCache {
+    pub identifier: String,
+    pub root: PathBuf,
+    pub path: PathBuf,
+}
+
+/// Every Brigadier app's cache folder under `roots`, by exact names only: the identifier must
+/// be one of Brigadier's ([`is_brigadier_identifier`]). Links are never taken for folders.
+pub fn identity_caches(roots: &CacheRoots) -> Vec<IdentityCache> {
+    let is_dir =
+        |path: &std::path::Path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir());
+    let mut found = Vec::new();
+    for CacheDir { root, naming } in &roots.dirs {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        let mut names: Vec<String> = entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        names.sort();
+        for name in names {
+            let identifier = match naming {
+                CacheNaming::Whole | CacheNaming::WebView2 => Some(name.as_str()),
+                CacheNaming::WebKitProcesses => WEBKIT_PROCESSES
+                    .iter()
+                    .find_map(|prefix| name.strip_prefix(prefix)),
+            };
+            let Some(identifier) = identifier.filter(|id| is_brigadier_identifier(id)) else {
+                continue;
+            };
+            let paths = match naming {
+                CacheNaming::WebView2 => WEBVIEW2_CACHES
+                    .iter()
+                    .map(|part| {
+                        part.split('/')
+                            .fold(root.join(&name).join("EBWebView"), |path, part| {
+                                path.join(part)
+                            })
+                    })
+                    .collect(),
+                _ => vec![root.join(&name)],
+            };
+            for path in paths.into_iter().filter(|path| is_dir(path)) {
+                found.push(IdentityCache {
+                    identifier: identifier.to_owned(),
+                    root: root.clone(),
+                    path,
+                });
+            }
+        }
+    }
+    found
+}
+
 /// This user's per-user folder the system names `key` (`getconf DARWIN_USER_CACHE_DIR`).
 #[cfg(target_os = "macos")]
 fn darwin_user_dir(key: &str) -> Option<PathBuf> {

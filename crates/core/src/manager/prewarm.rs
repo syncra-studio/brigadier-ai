@@ -219,16 +219,13 @@ impl SessionManager {
         let owner = format!("task:{}", task.id);
         let adopted = match warm {
             Some(warm) => match self.take_over(task, &warm).await {
-                Ok(Some((base, on_snapshot))) => {
+                Ok(Some((base, on_snapshot, branch))) => {
                     tracing::info!(task = %task.id, "the worker starts in the pre-warmed worktree");
                     return Some(Workspace {
                         repo: warm.repo,
                         worktree: Some(warm.worktree),
-                        branch: Some(super::workers::task_branch(
-                            &task.conversation_id,
-                            task.number,
-                            &task.title,
-                        )),
+                        // The branch it was put on, whatever the prefix is by now.
+                        branch: Some(branch),
                         base: Some(base),
                         on_snapshot,
                         target: Some(warm.target),
@@ -346,10 +343,10 @@ impl SessionManager {
     }
 
     /// Puts `warm` on `task`'s branch at the base its worker would get now, and returns that
-    /// base: when the session's branch moved on since the pre-warm was made, only the files that
+    /// base and the branch: when the session's branch moved on since the pre-warm was made, only the files that
     /// changed are checked out and the copied dependency installs and build caches stay. `None`
     /// when the session now works on another branch.
-    async fn take_over(&self, task: &Task, warm: &Warm) -> Result<Option<(Oid, bool)>> {
+    async fn take_over(&self, task: &Task, warm: &Warm) -> Result<Option<(Oid, bool, String)>> {
         let conversation = self.core.conversation(&task.conversation_id)?;
         let Some(Setup::Session { environment, .. }) = &conversation.setup else {
             return Ok(None);
@@ -363,20 +360,27 @@ impl SessionManager {
         let (base, on_snapshot) = self
             .worker_base(&task.conversation_id, &warm.repo, &target, true)
             .await?;
-        let branch = super::workers::task_branch(&task.conversation_id, task.number, &task.title);
-        let (git, worktree, made_at, from) = (
+        let branch = super::workers::task_branch(
+            &self.branch_prefix(&task.conversation_id).await,
+            &task.conversation_id,
+            task.number,
+            &task.title,
+        );
+        let (git, worktree, made_at, from, name) = (
             self.git.clone(),
             warm.worktree.clone(),
             warm.base.clone(),
             base.clone(),
+            branch.clone(),
         );
         blocking(move || {
             git.open_worktree(&worktree)
-                .and_then(|worktree| worktree.start_branch(&branch, &made_at, &from))
+                .and_then(|worktree| worktree.start_branch(&name, &made_at, &from))
                 .map_err(git_error)
         })
         .await?;
-        Ok(Some((base, on_snapshot)))
+        self.note_branch_made(&warm.repo, &branch).await;
+        Ok(Some((base, on_snapshot, branch)))
     }
 
     /// Session `id`'s open pre-warm once made: its reserved task id and its worktree.

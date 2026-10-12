@@ -102,7 +102,7 @@ before: number | null, limit: number, } | { "method": "readBlobText", hash: stri
 /**
  * Also stream daemon metrics once a second.
  */
-metrics: boolean, } | { "method": "setMetricsStreaming", enabled: boolean, } | { "method": "eventsSince", afterSeq: number, limit: number, } | { "method": "getDiagnostics" } | { "method": "probeBurst", count: number, intervalMs: number, } | { "method": "getKeepAwake" } | { "method": "setUpLidClosed" } | { "method": "getUpdates" } | { "method": "runUpdate", target: UpdateTarget, } | { "method": "getAccounts" } | { "method": "addAccount", provider: ProviderKind, cols: number, rows: number, } | { "method": "signInAccount", id: string, cols: number, rows: number, } | { "method": "removeAccount", id: string, } | { "method": "refreshAccounts" } | { "method": "getProviders" } | { "method": "refreshProviders", provider: ProviderKind | null, } | { "method": "getUsage", projectId: ProjectId | null, } | { "method": "previewRoutes", projectId: ProjectId | null, areas: Array<Area>, } | { "method": "checkRegistry" } | { "method": "refreshRankings" } | { "method": "getRankingsRefresh" } | { "method": "resetRankings" } | { "method": "debugInjectLimit", target: FaultTarget, provider: ProviderKind, 
+metrics: boolean, } | { "method": "setMetricsStreaming", enabled: boolean, } | { "method": "eventsSince", afterSeq: number, limit: number, } | { "method": "getDiagnostics" } | { "method": "probeBurst", count: number, intervalMs: number, } | { "method": "getKeepAwake" } | { "method": "setUpLidClosed" } | { "method": "getUpdates" } | { "method": "runUpdate", target: UpdateTarget, } | { "method": "getAccounts" } | { "method": "addAccount", provider: ProviderKind, cols: number, rows: number, } | { "method": "signInAccount", id: string, cols: number, rows: number, } | { "method": "removeAccount", id: string, } | { "method": "refreshAccounts" } | { "method": "getProviders" } | { "method": "refreshProviders", provider: ProviderKind | null, } | { "method": "getUsage", projectId: ProjectId | null, } | { "method": "getUsageActivity", days: number, } | { "method": "previewRoutes", projectId: ProjectId | null, areas: Array<Area>, } | { "method": "checkRegistry" } | { "method": "refreshRankings" } | { "method": "getRankingsRefresh" } | { "method": "resetRankings" } | { "method": "debugInjectLimit", target: FaultTarget, provider: ProviderKind, 
 /**
  * The window that runs out (`five_hour`, `seven_day`, `primary`, …).
  */
@@ -118,4 +118,9 @@ record: boolean, } | { "method": "resumeRawSession", id: RawSessionId, } | { "me
 /**
  * Only entries with a smaller `streamSeq` (for paging backwards).
  */
-before: number | null, limit: number, } | { "method": "replayFixture", fixtureId: string, } | { "method": "simulateUsageLimit", provider: ProviderKind, } | { "method": "getDaemonActivity" } | { "method": "scanStorage" } | { "method": "cleanStorage", scanId: string, items: Array<string>, } | { "method": "previewUninstall", app: UninstallApp, } | { "method": "uninstall", planId: string, keepData: boolean, deleteBranches: Array<BranchChoice>, } | { "method": "shutdown" };
+before: number | null, limit: number, } | { "method": "replayFixture", fixtureId: string, } | { "method": "simulateUsageLimit", provider: ProviderKind, } | { "method": "getDaemonActivity" } | { "method": "scanStorage", 
+/**
+ * The asking app's bundle identifier: its own caches are never offered. Without it, no
+ * app's caches are.
+ */
+app?: string, } | { "method": "cleanStorage", scanId: string, items: Array<string>, } | { "method": "previewUninstall", app: UninstallApp, } | { "method": "uninstall", planId: string, keepData: boolean, deleteBranches: Array<BranchChoice>, } | { "method": "shutdown" };

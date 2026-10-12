@@ -398,11 +398,11 @@ const CommitBox: FC<{
       push,
     })
       .then(({ outcome }) => {
-        toast(
-          outcome.pushed
-            ? `Committed and pushed to ${outcome.branch}`
-            : `Committed to ${outcome.branch}`,
-        );
+        const done = outcome.pushed
+          ? `Committed and pushed to ${outcome.branch}`
+          : `Committed to ${outcome.branch}`;
+        // Why the chosen writer model didn't write the message, when it didn't.
+        toast(outcome.note ? `${done}. ${outcome.note}` : done);
         setMessage("");
       })
       .catch((failure: unknown) => toast(`Failed to commit: ${reason(failure)}`, { tone: "error" }))

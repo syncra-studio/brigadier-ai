@@ -6,7 +6,8 @@ export type ToastAction = { label: string; run: () => void };
 export type Toast = {
   id: number;
   text: string;
-  tone: "success" | "error";
+  /** Done (green check), went wrong (red warning), or nothing happened (plain, an info mark). */
+  tone: "success" | "error" | "neutral";
   actions: ToastAction[];
 };
 

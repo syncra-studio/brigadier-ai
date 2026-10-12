@@ -1,5 +1,7 @@
 import type { ProviderKind, QuotaSnapshot, RawState } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
+import { usageTone } from "@/lib/quota";
+import { cn } from "@/lib/utils";
 
 export const PROVIDER_LABELS: Record<ProviderKind, string> = {
   claude: "Claude Code",
@@ -28,19 +30,20 @@ export function QuotaWindows({ quota }: { quota: QuotaSnapshot }) {
       )}
       {quota.windows.map((window) => {
         const used = Math.min(100, Math.max(0, window.usedPercent));
+        const usage = usageTone(used, { normal: { text: "text-muted-foreground", fill: "bg-primary" } });
         const resetsAt = window.resetsAtMs;
         return (
           <div key={window.id} className="flex flex-col gap-0.5">
             <div className="flex items-baseline gap-2">
               <span className="flex-1">{window.label}</span>
-              <span className="text-muted-foreground tabular-nums">
+              <span className={cn("tabular-nums", usage.text)}>
                 {Math.round(100 - used)}% left
                 {resetsAt !== null && ` · resets ${formatDateTime(resetsAt)}`}
               </span>
             </div>
             <div className="bg-muted h-1 overflow-hidden rounded-full">
               <div
-                className={used >= 90 ? "bg-destructive h-full" : "bg-primary h-full"}
+                className={cn("h-full", usage.fill)}
                 style={{ width: `${used}%` }}
               />
             </div>

@@ -31,7 +31,7 @@ export function NavHeader({ title, actions }: { title: ReactNode; actions?: Reac
 }
 
 /**
- * A titled section of the panel. With `onOpenChange` its title folds the list away (and opens
+ * A section of the panel, titled unless it is set apart by its gap alone. With `onOpenChange` its title folds the list away (and opens
  * it again): the list's height and opacity ease over 300ms, the chevron turns in 150ms.
  * `actions` show at the header's end while the section is hovered.
  */
@@ -42,7 +42,7 @@ export function NavSection({
   actions,
   children,
 }: {
-  title: string;
+  title?: string | undefined;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   actions?: ReactNode;
@@ -50,38 +50,40 @@ export function NavSection({
 }) {
   const id = useId();
   return (
-    <section aria-labelledby={id} className="group/section flex flex-col">
-      <div className="flex min-h-6 items-center gap-1 ps-2 pe-1.5 pb-1">
-        {onOpenChange ? (
-          <button
-            id={id}
-            type="button"
-            aria-expanded={open}
-            onClick={() => onOpenChange(!open)}
-            className="text-foreground/50 flex min-w-0 items-center gap-1 rounded-xs text-sm font-medium opacity-75"
-          >
-            <span className="truncate">{title}</span>
-            <ChevronDown
-              aria-hidden
-              className={cn(
-                "ease-standard size-icon-sm shrink-0 transition-[rotate,opacity] duration-150 motion-reduce:transition-none",
-                open
-                  ? "opacity-0 group-focus-within/section:opacity-100 group-hover/section:opacity-100"
-                  : "-rotate-90",
-              )}
-            />
-          </button>
-        ) : (
-          <h2 id={id} className="text-foreground/50 truncate text-sm font-medium opacity-75">
-            {title}
-          </h2>
-        )}
-        {actions && (
-          <div className="ms-auto flex shrink-0 items-center gap-0.5 opacity-0 group-focus-within/section:opacity-100 group-hover/section:opacity-100">
-            {actions}
-          </div>
-        )}
-      </div>
+    <section aria-labelledby={title ? id : undefined} className="group/section flex flex-col">
+      {title && (
+        <div className="flex min-h-6 items-center gap-1 ps-2 pe-1.5 pb-1">
+          {onOpenChange ? (
+            <button
+              id={id}
+              type="button"
+              aria-expanded={open}
+              onClick={() => onOpenChange(!open)}
+              className="text-foreground/50 flex min-w-0 items-center gap-1 rounded-xs text-sm font-medium opacity-75"
+            >
+              <span className="truncate">{title}</span>
+              <ChevronDown
+                aria-hidden
+                className={cn(
+                  "ease-standard size-icon-sm shrink-0 transition-[rotate,opacity] duration-150 motion-reduce:transition-none",
+                  open
+                    ? "opacity-0 group-focus-within/section:opacity-100 group-hover/section:opacity-100"
+                    : "-rotate-90",
+                )}
+              />
+            </button>
+          ) : (
+            <h2 id={id} className="text-foreground/50 truncate text-sm font-medium opacity-75">
+              {title}
+            </h2>
+          )}
+          {actions && (
+            <div className="ms-auto flex shrink-0 items-center gap-0.5 opacity-0 group-focus-within/section:opacity-100 group-hover/section:opacity-100">
+              {actions}
+            </div>
+          )}
+        </div>
+      )}
       <NavFold open={open}>{children}</NavFold>
     </section>
   );

@@ -28,17 +28,17 @@ import { confirmPending } from "@/state/shownIds";
 export type SettingsPageId =
   | "general"
   | "configuration"
-  | "conversations"
-  | "personalization"
   | "usage"
   | "providers"
-  | "accounts"
-  | "routing"
   | "git"
   | "computerUse"
   | "storage"
   | "inspector"
-  | "archived";
+  | "archived"
+  | "shortcuts"
+  | "voice"
+  | "browser"
+  | "browserImport";
 
 /**
  * What the main area shows. Drafts become real conversations on their first message. Settings
@@ -207,14 +207,34 @@ export const useApp = create<AppState>()(() => ({
     onboarded: false,
     keepAwake: "agents",
     keepAwakeLidClosed: false,
+    sendShortcut: "enter",
+    followUp: "queue",
+    notifyFinished: "background",
+    notifyNeedsYou: true,
     routingOverrides: [],
     routingRankings: [],
     disabledProviders: [],
     hiddenModels: [],
     knownModels: [],
     omitAiCoauthors: true,
+    gitWriter: null,
+    commitStyle: "repository",
+    commitInstructions: "",
+    prStyle: "repository",
+    prInstructions: "",
+    branchPrefix: "brigadier/",
+    reviewWork: true,
     accounts: [],
     switchAccounts: true,
+    dictationLanguage: "",
+    dictationWords: [],
+    dictationMicrophone: "",
+    browserEnabled: true,
+    webLinksIn: "system",
+    localLinksIn: "brigadier",
+    browserFullUrl: false,
+    browserDownloadsDir: "",
+    browserAskDownloads: false,
     settingsVersion: 1,
   },
   threads: {},
@@ -604,6 +624,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "cleanupRecorded":
     case "cleanupRemoved":
     case "branchesKept":
+    case "branchMade":
     case "cleanupRequested":
     case "cleanupCompleted":
     case "cleanupFinished":

@@ -1,12 +1,12 @@
 import {
   Archive,
-  AvatarProfile,
   Branch,
-  Chats,
   Cursor,
-  MemoryOnRemember,
+  Download,
+  Globe,
+  KeyboardShortcut,
+  Mic,
   Robot,
-  Shuffle,
   SettingsCog,
   SettingsSlider,
   Storage,
@@ -15,19 +15,19 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { lazy, type ComponentType, type SVGProps } from "react";
 
-import { ACCOUNTS_ROWS, AccountsPage } from "@/app/settings/AccountsPage";
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
+import { BROWSER_IMPORT_ROWS, BrowserImportPage } from "@/app/settings/BrowserImportPage";
+import { BROWSER_ROWS, BrowserPage } from "@/app/settings/BrowserPage";
 import { COMPUTER_USE_ROWS, ComputerUsePage } from "@/app/settings/ComputerUsePage";
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
-import { CONVERSATIONS_ROWS, ConversationsPage } from "@/app/settings/ConversationsPage";
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
-import { PERSONALIZATION_ROWS, PersonalizationPage } from "@/app/settings/PersonalizationPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
+import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
+import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
-import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/routing/RoutingPage";
 import { computerUseAvailable } from "@/state/computerAccess";
-import type { SettingsPageId } from "@/state/store";
+import { type SettingsPageId, useApp } from "@/state/store";
 
 /**
  * The pages of Settings, in the order the navigation lists them, each in its group. A page's
@@ -35,13 +35,21 @@ import type { SettingsPageId } from "@/state/store";
  * copy it renders, so the two never drift apart.
  */
 
-export type SettingsRowCopy = { readonly label: string; readonly description?: string };
+/** A row search finds; `target` is the row it brings into view, when that is another one. */
+export type SettingsRowCopy = {
+  readonly label: string;
+  readonly description?: string;
+  readonly target?: string;
+};
 
-export type SettingsGroup = "Personal" | "Agents" | "System" | "Archived";
+/** A group of the navigation; "end" is the last, set apart by its gap alone, without a title. */
+export type SettingsGroup = "Personal" | "Agents" | "Browser & Data" | "System" | "end";
 
 export type SettingsPageEntry = {
   id: SettingsPageId;
   label: string;
+  /** Names the page went by, which search still finds it under. */
+  formerly?: readonly string[];
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   group: SettingsGroup;
   component: ComponentType;
@@ -62,21 +70,25 @@ const InspectorPage = lazy(() =>
 
 // What search finds on the Inspector's page: its tabs.
 const INSPECTOR_ROWS: readonly SettingsRowCopy[] = [
-  { label: "Events", description: "The live event stream." },
-  { label: "Orchestrator", description: "The open session's orchestrator context." },
-  { label: "Project Brains", description: "What each project's Brain holds." },
-  { label: "Processes", description: "The processes Brigadier runs." },
-  { label: "Performance", description: "Metrics against the performance budgets." },
-  { label: "Providers", description: "Raw provider sessions." },
-  { label: "Routing preview", description: "What routing would pick." },
+  { label: "Events", description: "The live event stream" },
+  { label: "Orchestrator", description: "The open session's orchestrator context" },
+  { label: "Project Brains", description: "What each project's Brain holds" },
+  { label: "Processes", description: "The processes Brigadier runs" },
+  { label: "Performance", description: "Metrics against the performance budgets" },
+  { label: "Providers", description: "Raw provider sessions" },
+  { label: "Routing preview", description: "What routing would pick" },
 ];
 
 const USAGE_ROWS: readonly SettingsRowCopy[] = [
-  { label: "Usage windows", description: "How much of each agent's usage is left." },
-  { label: "Recent activity", description: "Hand-offs, and work waiting for quota." },
+  { label: "Usage windows", description: "How much of each agent's usage is left" },
 ];
 
-export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "System", "Archived"];
+export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "Browser & Data", "System", "end"];
+
+/** A group's title in the navigation; the last group has none. */
+export function groupTitle(group: SettingsGroup): string | undefined {
+  return group === "end" ? undefined : group;
+}
 
 export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   {
@@ -88,60 +100,46 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     rows: Object.values(GENERAL_ROWS),
   },
   {
+    id: "voice",
+    label: "Voice",
+    icon: Mic,
+    group: "Personal",
+    component: VoicePage,
+    rows: Object.values(VOICE_ROWS),
+  },
+  {
     id: "configuration",
     label: "Configuration",
+    formerly: ["Configurations", "Conversations", "Personalization"],
     icon: SettingsSlider,
     group: "Personal",
     component: ConfigurationPage,
     rows: Object.values(CONFIGURATION_ROWS),
   },
   {
-    id: "conversations",
-    label: "Conversations",
-    icon: Chats,
+    id: "shortcuts",
+    label: "Keyboard shortcuts",
+    icon: KeyboardShortcut,
     group: "Personal",
-    component: ConversationsPage,
-    rows: Object.values(CONVERSATIONS_ROWS),
-  },
-  {
-    id: "personalization",
-    label: "Personalization",
-    icon: MemoryOnRemember,
-    group: "Personal",
-    component: PersonalizationPage,
-    rows: Object.values(PERSONALIZATION_ROWS),
-  },
-  {
-    id: "usage",
-    label: "Usage",
-    icon: Usage,
-    group: "Personal",
-    component: UsagePage,
-    rows: USAGE_ROWS,
+    component: ShortcutsPage,
+    rows: SHORTCUTS_ROWS,
   },
   {
     id: "providers",
     label: "Providers",
+    formerly: ["Accounts", "Routing"],
     icon: Robot,
     group: "Agents",
     component: ProvidersPage,
     rows: Object.values(PROVIDERS_ROWS),
   },
   {
-    id: "accounts",
-    label: "Accounts",
-    icon: AvatarProfile,
+    id: "usage",
+    label: "Usage",
+    icon: Usage,
     group: "Agents",
-    component: AccountsPage,
-    rows: Object.values(ACCOUNTS_ROWS),
-  },
-  {
-    id: "routing",
-    label: "Routing",
-    icon: Shuffle,
-    group: "Agents",
-    component: RoutingPage,
-    rows: Object.values(ROUTING_PAGE_ROWS),
+    component: UsagePage,
+    rows: USAGE_ROWS,
   },
   {
     id: "git",
@@ -160,6 +158,24 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     rows: Object.values(COMPUTER_USE_ROWS),
     // Only where the system has computer use (macOS).
     shown: computerUseAvailable,
+  },
+  {
+    id: "browser",
+    label: "Browser",
+    icon: Globe,
+    group: "Browser & Data",
+    component: BrowserPage,
+    rows: Object.values(BROWSER_ROWS),
+  },
+  {
+    id: "browserImport",
+    label: "Import Browser Data",
+    icon: Download,
+    group: "Browser & Data",
+    component: BrowserImportPage,
+    rows: Object.values(BROWSER_IMPORT_ROWS),
+    // Importing reads other browsers' macOS profiles into WebKit's store: macOS only.
+    shown: () => useApp.getState().info?.platform === "macos",
   },
   {
     id: "storage",
@@ -181,7 +197,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     id: "archived",
     label: "Archived chats",
     icon: Archive,
-    group: "Archived",
+    group: "end",
     component: ArchivedPage,
     rows: Object.values(ARCHIVED_ROWS),
   },
@@ -210,7 +226,7 @@ export function searchSettings(query: string): SettingsSearchResult[] {
   const results: SettingsSearchResult[] = [];
   const pages = shownSettingsPages();
   for (const page of pages) {
-    if (matches(page.label)) results.push({ page, row: null });
+    if (matches([page.label, ...(page.formerly ?? [])].join(" "))) results.push({ page, row: null });
   }
   for (const page of pages) {
     for (const row of page.rows) {

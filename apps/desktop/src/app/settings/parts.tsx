@@ -1,9 +1,17 @@
-import { Check, ChevronDown, ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
+import {
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  MagnifyingGlassSearch,
+  XCircleFilled,
+} from "@openai/apps-sdk-ui/components/Icon";
 import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui";
-import { useId, type ComponentProps, type ReactNode } from "react";
+import { useId, useState, type ComponentProps, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
+import { useReveal } from "@/app/settings/reveal";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -35,6 +43,7 @@ export function SettingsPage({
   title,
   description,
   actions,
+  back,
   wide = false,
   scrollable = true,
   children,
@@ -42,6 +51,8 @@ export function SettingsPage({
   title: string;
   description?: ReactNode;
   actions?: ReactNode;
+  /** A page inside another: its name over the title goes back to it. */
+  back?: { label: string; onBack: () => void };
   /** A wider column, for a data page (tables, charts, panes). */
   wide?: boolean;
   /** Disable page scrolling when the content owns its bounded scroll areas. */
@@ -50,21 +61,39 @@ export function SettingsPage({
 }) {
   return (
     <div data-slot="settings-page" className="flex h-full flex-col">
-      {/* The page's toolbar strip, for dragging the window. */}
-      <div data-tauri-drag-region className="h-page-toolbar shrink-0" />
       <div
         className={cn(
           "min-h-0 flex-1",
           scrollable ? "overflow-y-auto [scrollbar-gutter:stable]" : "flex flex-col overflow-hidden",
         )}
       >
+        {/* The band under the titlebar's strip and over the title, for dragging the window.
+            Scrolling, the page passes under it to the top edge rather than being cut off below
+            it; the wheel over it still scrolls the page. */}
+        <div
+          data-tauri-drag-region
+          className={cn(
+            "h-settings-band shrink-0",
+            scrollable && "sticky top-0 z-20 -mb-settings-band",
+          )}
+        />
         <div
           className={cn(
-            "mx-auto flex w-full flex-col px-5 pt-4",
+            "mx-auto flex w-full flex-col px-5",
             wide ? "max-w-settings-wide" : "max-w-settings",
-            scrollable ? "pb-12" : "min-h-0 flex-1",
+            scrollable ? "pt-settings-top pb-12" : "min-h-0 flex-1 pt-4",
           )}
         >
+          {back && (
+            <button
+              type="button"
+              onClick={back.onBack}
+              className="text-foreground/65 hover:text-foreground text-label -ms-1 flex w-fit items-center gap-0.5"
+            >
+              <ChevronLeft aria-hidden className="size-icon-sm" />
+              {back.label}
+            </button>
+          )}
           <header className="flex shrink-0 items-start gap-4 py-3">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <h1 className="text-page-title font-medium">{title}</h1>
@@ -122,17 +151,24 @@ export function SettingsSection({
 
 /**
  * A page's power features, closed until asked for: "Advanced" and a line on what is inside,
- * then its sections.
+ * then its sections. It opens by itself when Settings brings one of its rows (`labels`) into
+ * view.
  */
 export function SettingsAdvanced({
   description,
+  labels = [],
   children,
 }: {
   description: string;
+  labels?: readonly string[];
   children: ReactNode;
 }) {
+  const revealing = useReveal((s) => s.label);
+  const [open, setOpen] = useState(false);
+  const holds = revealing !== null && labels.includes(revealing);
+  if (holds && !open) setOpen(true);
   return (
-    <Collapsible data-slot="settings-advanced">
+    <Collapsible data-slot="settings-advanced" open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className="group flex w-full items-start gap-2 rounded-xs text-start">
         <ChevronRight
           aria-hidden
@@ -167,10 +203,12 @@ export function SettingsCard({ children, className }: { children: ReactNode; cla
 /**
  * One setting: its label and description on the start, its control on the end. `htmlFor` ties
  * the label to a control with that id; without it, give the control its own label. `error` is
- * what the last change of it failed with.
+ * what the last change of it failed with. `setting` is the name search and links find it by,
+ * for a label that isn't plain text or changes as it is used.
  */
 export function SettingsRow({
   label,
+  setting,
   description,
   htmlFor,
   error,
@@ -178,6 +216,7 @@ export function SettingsRow({
   className,
 }: {
   label: ReactNode;
+  setting?: string;
   description?: ReactNode;
   htmlFor?: string;
   error?: string | null;
@@ -188,7 +227,7 @@ export function SettingsRow({
     <div
       data-slot="settings-row"
       // Settings search scrolls to the row it found by this.
-      data-setting={typeof label === "string" ? label : undefined}
+      data-setting={setting ?? (typeof label === "string" ? label : undefined)}
       className={cn("@container flex items-center justify-between gap-6 px-4 py-3", className)}
     >
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -389,5 +428,48 @@ export function SettingsButton({
       )}
       {...props}
     />
+  );
+}
+
+/** A search field over a list; Esc empties it before it leaves Settings. */
+export function SettingsSearch({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="rounded-capsule border-foreground/16 bg-foreground/8 flex h-8 min-w-0 flex-1 items-center gap-2 border px-2.5">
+      <MagnifyingGlassSearch aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
+      <input
+        type="search"
+        value={value}
+        placeholder={label}
+        aria-label={label}
+        spellCheck={false}
+        autoComplete="off"
+        className="placeholder:text-foreground/50 min-w-0 flex-1 bg-transparent text-sm outline-none [&::-webkit-search-cancel-button]:hidden"
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && value) {
+            event.stopPropagation();
+            onChange("");
+          }
+        }}
+      />
+      {value && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          className="text-foreground/50 hover:text-foreground flex shrink-0 items-center"
+          onClick={() => onChange("")}
+        >
+          <XCircleFilled className="size-icon-sm" />
+        </button>
+      )}
+    </label>
   );
 }

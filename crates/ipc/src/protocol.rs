@@ -21,7 +21,7 @@ use brigadier_core::{
     QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, RepoInfo,
     RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup, SetupRequest,
     SourceScope, SourceState, TaskId, ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView,
-    UsageView, WorkerDiff, WorkerPage,
+    UsageActivity, UsageView, WorkerDiff, WorkerPage,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -844,7 +844,8 @@ pub enum Request {
     RemoveAccount {
         id: String,
     },
-    /// Checks every account's login and quota again; results arrive as `accountsChecked`.
+    /// Checks every provider and every account's login and quota again; results arrive as
+    /// `accountsChecked`. Answers the check generation every account reaches once checked afresh.
     RefreshAccounts,
     /// Providers (login, models, quota), raw sessions and replayable fixtures.
     GetProviders,
@@ -860,6 +861,11 @@ pub enum Request {
     GetUsage {
         #[serde(default)]
         project_id: Option<ProjectId>,
+    },
+    /// The Usage page's Activity: each account's windows over the last `days` (at most 31), and
+    /// Brigadier's own use of it then.
+    GetUsageActivity {
+        days: u32,
     },
     /// What routing would choose for each task category right now, with its explanation, for
     /// a task in `projectId` touching `areas`. Starts nothing.
@@ -955,7 +961,13 @@ pub enum Request {
     /// Whether this daemon is in use: another Brigadier asks before offering to stop it.
     GetDaemonActivity,
     /// What Brigadier keeps on disk and what it can clean up (Settings → Storage).
-    ScanStorage,
+    ScanStorage {
+        /// The asking app's bundle identifier: its own caches are never offered. Without it, no
+        /// app's caches are.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        app: Option<String>,
+    },
     /// Removes the picked items of a scan (by the ids it gave them), each checked again first.
     CleanStorage {
         scan_id: String,
@@ -1322,13 +1334,18 @@ pub enum Response {
     RemoveAccount {
         settings: Box<Settings>,
     },
-    RefreshAccounts,
+    RefreshAccounts {
+        generation: u32,
+    },
     GetProviders {
         view: ProvidersView,
     },
     RefreshProviders,
     GetUsage {
         usage: Box<UsageView>,
+    },
+    GetUsageActivity {
+        activity: UsageActivity,
     },
     PreviewRoutes {
         routes: Vec<RoutePreview>,
@@ -1647,6 +1664,18 @@ pub struct DictationStatus {
     pub installed: bool,
     /// Its download is under way.
     pub downloading: bool,
+    /// The languages the speech engine knows, in its own order.
+    pub languages: Vec<DictationLanguage>,
+}
+
+/// A language dictation can listen for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DictationLanguage {
+    /// As the speech engine names it ("en").
+    pub code: String,
+    /// In English ("english"), as the speech engine has it.
+    pub name: String,
 }
 
 /// A step of a dictation or of the speech model's download.

@@ -700,6 +700,25 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
         "6",
         "the lead's fix after its review landed (\"hello\\n\")"
     );
+    // The reviews are one-shot: started ephemeral. The thread and its lead are resumed later.
+    let specs = flow.specs();
+    let one_shot = |spec: &brigadier_providers::SessionSpec| {
+        spec.append_system_prompt.as_deref() == Some(brigadier_review::REVIEW_ROLE)
+    };
+    let reviews: Vec<_> = specs.iter().filter(|(_, spec)| one_shot(spec)).collect();
+    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    assert!(reviews.iter().all(|(_, spec)| spec.ephemeral));
+    let resumable: Vec<_> = specs
+        .iter()
+        .filter(|(_, spec)| {
+            matches!(
+                spec.tools,
+                brigadier_providers::ToolSet::Thread | brigadier_providers::ToolSet::Lean
+            )
+        })
+        .collect();
+    assert!(resumable.len() >= 2, "{resumable:#?}");
+    assert!(resumable.iter().all(|(_, spec)| !spec.ephemeral));
     flow.stop().await;
 }
 
@@ -1583,8 +1602,20 @@ async fn archiving_a_session_ends_its_running_review() {
         "{:?}",
         review.state
     );
-    flow.until("the review's checkout to go", |_| !dir.exists())
-        .await;
+    // Once under heavy load the checkout stayed: a timeout names what is still recorded for
+    // the review and what git still lists.
+    let owner = format!("review:{}", review.id);
+    let deadline = tokio::time::Instant::now() + super::PATIENCE;
+    while dir.exists() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the review's checkout {} stayed; its cleanup records: {:?}; git's worktrees:\n{}",
+            dir.display(),
+            flow.manager.runtime.ledger().artifacts(&owner),
+            super::git(&flow.repo, &["worktree", "list"]),
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     flow.stop().await;
 }
 

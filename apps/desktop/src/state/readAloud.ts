@@ -1,14 +1,12 @@
-import { type SpeechSynthesisAdapter, WebSpeechSynthesisAdapter } from "@assistant-ui/react";
 import { useSyncExternalStore } from "react";
 
 /**
- * "Read aloud" under an answer, with the system's voices: one answer at a time.
- * Reading another stops the first.
+ * "Read aloud" under an answer, in the system's default voice: one answer at a time. Reading
+ * another stops the first.
  */
 
-const voice = new WebSpeechSynthesisAdapter();
 const listeners = new Set<() => void>();
-let current: { id: string; utterance: SpeechSynthesisAdapter.Utterance } | null = null;
+let current: { id: string; utterance: SpeechSynthesisUtterance } | null = null;
 
 function changed(): void {
   for (const listener of listeners) listener();
@@ -32,21 +30,28 @@ export function spokenText(markdown: string): string {
 
 /** Reads `text` as answer `id`, stopping whatever was being read. */
 export function readAloud(id: string, text: string): void {
-  current?.utterance.cancel();
-  const utterance = voice.speak(spokenText(text));
+  speak(id, spokenText(text));
+}
+
+function speak(id: string, text: string): void {
+  speechSynthesis.cancel();
+  // No voice is set: the system's default voice speaks.
+  const utterance = new SpeechSynthesisUtterance(text);
+  const ended = () => {
+    if (current?.utterance !== utterance) return;
+    current = null;
+    changed();
+  };
+  utterance.addEventListener("end", ended);
+  utterance.addEventListener("error", ended);
   current = { id, utterance };
-  utterance.subscribe(() => {
-    if (utterance.status.type === "ended" && current?.utterance === utterance) {
-      current = null;
-      changed();
-    }
-  });
+  speechSynthesis.speak(utterance);
   changed();
 }
 
 export function stopReading(): void {
-  current?.utterance.cancel();
   current = null;
+  speechSynthesis.cancel();
   changed();
 }
 

@@ -39,4 +39,9 @@ checking: boolean,
 /**
  * What went wrong when last checked.
  */
-error: string | null, };
+error: string | null, 
+/**
+ * The check generation its last finished check began in: a refresh answers a generation,
+ * and the account is checked afresh for it once this reaches it.
+ */
+checkedGeneration: number, };

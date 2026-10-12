@@ -13,7 +13,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, reopenTab, moveTab,
   selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs, useTabCloseAsk,
-  replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, MOCKUP_TAB } = await import("./sessionTabs");
+  replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs } = await import("./sessionTabs");
 const { editDocument, documentText, flushDocument, noteDocumentSave, documentIsSaved, documentRelativePath, discardDocument } = await import("./documentDrafts");
 
 test("side chat pruning preserves plain chats, unknown parents and referenced session chats", () => {
@@ -241,4 +241,22 @@ test("Cmd+T opens New tab; the native Ctrl+Backquote event opens Terminal", () =
     for (const modifier of ["shiftKey", "altKey", "metaKey"])
       assert.equal(sessionTabKey({ ...terminal, [modifier]: true }, mac), null);
   }
+});
+
+test("turning the browser off drops every Browser tab, and none can be reopened", () => {
+  const id = "browser-off";
+  const terminal = newSessionTab(id, "terminal");
+  const page = openBrowserTab(id, "http://localhost:5173/", true);
+  assert.deepEqual(sessionTabs(id).tabs.find((tab) => tab.id === page), {
+    kind: "browser", id: page, opener: terminal, url: "http://localhost:5173/", title: "", agent: true,
+  });
+  const closed = openBrowserTab(id, "https://example.com/");
+  closeTab(id, closed);
+  assert.equal(sessionTabs(id).active, page);
+  dropBrowserTabs();
+  assert.deepEqual(sessionTabs(id).tabs.map((tab) => tab.id), [terminal]);
+  // The tab in front was a Browser tab: the one that opened it shows.
+  assert.equal(sessionTabs(id).active, terminal);
+  assert.equal(reopenTab(id), false);
+  closeTab(id, terminal, true);
 });

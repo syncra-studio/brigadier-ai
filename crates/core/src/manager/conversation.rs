@@ -390,6 +390,12 @@ impl ConvLive {
         self.native_ids.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// The CLI session while it runs a turn.
+    pub(crate) async fn working_cli(&self) -> Option<Arc<Cli>> {
+        let state = self.state.lock().await;
+        if state.busy { state.cli.clone() } else { None }
+    }
+
     /// The CLI session while it runs no turn and isn't being closed.
     pub(crate) async fn idle_cli(&self) -> Option<Arc<Cli>> {
         let state = self.state.lock().await;
@@ -1871,6 +1877,10 @@ impl SessionManager {
                 launch = Some(started_for);
                 let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
                 let run = self.run_setting(&conv.id).await;
+                // Read before the prompt is: a switch in between is told again in a note.
+                let reviewed = self.reviews_on();
+                let writing = prompts::git_writing(&self.core.settings());
+                let browser = self.core.settings().browser_enabled;
                 let prompt = self
                     .thread_prompt(
                         &conversation,
@@ -1879,7 +1889,7 @@ impl SessionManager {
                         choice.provider,
                     )
                     .await;
-                let current = prompts::Current::session(
+                let mut current = prompts::Current::session(
                     &conversation,
                     self.repo_trust(&conv.id) != Some(false),
                     run.as_ref()
@@ -1888,6 +1898,9 @@ impl SessionManager {
                     preferences,
                     workspace.as_ref().map(super::thread::ThreadWorkspace::told),
                 );
+                current.review_work = reviewed;
+                current.git_writing = writing;
+                current.browser = browser;
                 // A Codex thread runs long commands through `run`; a Claude thread's own Bash
                 // output is trimmed by its hook (THREAD-PLAN.md Q4).
                 let commands = super::run::run_tools(choice.provider, permission);
@@ -1979,6 +1992,8 @@ impl SessionManager {
                 },
                 None => Origin::New,
             },
+            // Resumed on the next message, rebirth or restart.
+            ephemeral: false,
             // A Chat only searches the web.
             access: launch
                 .as_ref()
@@ -4209,7 +4224,7 @@ impl SessionManager {
                         .and_then(|launch| launch.workspace.as_ref())
                         .map(super::thread::ThreadWorkspace::told)
                 });
-                prompts::Current::session(
+                let mut current = prompts::Current::session(
                     &conversation,
                     self.repo_trust(&conv.id) != Some(false),
                     run.as_ref()
@@ -4217,7 +4232,11 @@ impl SessionManager {
                     self.core.settings().short_replies,
                     self.memory_lines(super::brain_jobs::MEMORY_BYTES).await,
                     workspace,
-                )
+                );
+                current.review_work = self.reviews_on();
+                current.git_writing = prompts::git_writing(&self.core.settings());
+                current.browser = self.core.settings().browser_enabled;
+                current
             }
             ConversationKind::Chat => {
                 prompts::Current::chat(self.memory_lines(super::brain_jobs::MEMORY_BYTES).await)

@@ -423,6 +423,8 @@ pub(crate) struct FakeBehavior {
     /// The next CLI start signals the first and waits for the second before it records
     /// anything.
     pub hold_start: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// The next login check of an extra account signals the first and waits for the second.
+    pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 /// Files a scripted CLI keeps in its own home, even when a session is shared.
@@ -485,6 +487,14 @@ impl Provider for FakeCli {
 
     fn status(&self) -> BoxFuture<'_, ProviderStatus> {
         Box::pin(async move {
+            let held = self
+                .account
+                .as_ref()
+                .and_then(|_| self.behavior.hold_status.lock().unwrap().take());
+            if let Some((reached, release)) = held {
+                reached.notify_one();
+                release.notified().await;
+            }
             ProviderStatus {
                 provider: self.kind,
                 path: Some("/fake".into()),
@@ -563,7 +573,9 @@ impl Provider for FakeCli {
                 brigadier_providers::model::Origin::Resume { native_id } => native_id.clone(),
                 _ => uuid::Uuid::new_v4().to_string(),
             };
-            if self.behavior.cleanup {
+            // Like Codex's adapter: an ephemeral thread is never saved, so nothing is recorded.
+            let saved = !(spec.ephemeral && self.kind == ProviderKind::Codex);
+            if self.behavior.cleanup && saved {
                 let home = self
                     .account
                     .as_ref()
@@ -572,10 +584,12 @@ impl Provider for FakeCli {
                     ProviderKind::Claude => Artifact::ClaudeSession {
                         session_id: native_id.clone(),
                         home,
+                        cwd: None,
                     },
                     ProviderKind::Codex => Artifact::CodexThread {
                         thread_id: native_id.clone(),
                         home,
+                        cwd: None,
                     },
                 };
                 ledger.record(artifact).await?;
@@ -643,8 +657,12 @@ impl Provider for FakeCli {
             }
             for artifact in artifacts {
                 let (id, home) = match artifact {
-                    Artifact::ClaudeSession { session_id, home } => (session_id, home),
-                    Artifact::CodexThread { thread_id, home } => (thread_id, home),
+                    Artifact::ClaudeSession {
+                        session_id, home, ..
+                    } => (session_id, home),
+                    Artifact::CodexThread {
+                        thread_id, home, ..
+                    } => (thread_id, home),
                     _ => continue,
                 };
                 let expected = self
@@ -1413,6 +1431,11 @@ impl Flow {
         }
     }
 
+    /// Every session the CLIs were started with, in order.
+    pub fn specs(&self) -> Vec<(ProviderKind, SessionSpec)> {
+        self.specs.lock().unwrap().clone()
+    }
+
     /// The sessions the thread's CLIs were started with, in order.
     pub fn thread_specs(&self) -> Vec<(ProviderKind, SessionSpec)> {
         self.specs
@@ -1525,6 +1548,10 @@ mod base_merge_tests;
 #[cfg(test)]
 mod brain_first_tests;
 #[cfg(test)]
+mod branch_prefix_tests;
+#[cfg(test)]
+mod browser_switch_tests;
+#[cfg(test)]
 mod card_tests;
 #[cfg(test)]
 mod checks_tests;
@@ -1538,6 +1565,8 @@ mod ending_tests;
 mod engine_tests;
 #[cfg(test)]
 mod findings_tests;
+#[cfg(test)]
+mod git_writing_tests;
 #[cfg(test)]
 mod held_merge_tests;
 #[cfg(test)]
@@ -1558,6 +1587,8 @@ mod resume_tests;
 #[cfg(test)]
 mod review_hold_tests;
 #[cfg(test)]
+mod review_switch_tests;
+#[cfg(test)]
 mod status_tests;
 #[cfg(test)]
 mod takeover_tests;
@@ -1569,3 +1600,5 @@ mod thread_tests;
 mod trim_tests;
 #[cfg(test)]
 mod trust_tests;
+#[cfg(test)]
+mod usage_tests;

@@ -23,8 +23,7 @@ import type {
   QuotaSnapshot,
 } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
-import { glance, tone, used } from "@/lib/quota";
-import { HEAT_LABELS } from "@/lib/routing";
+import { glance, usageLevel, used } from "@/lib/quota";
 import { cn } from "@/lib/utils";
 import { loadAccounts } from "@/state/accounts";
 import { loadProviders, openSettings, refreshProviders } from "@/state/actions";
@@ -113,17 +112,6 @@ function useUsageRefresh(): void {
   }, [connected]);
 }
 
-/**
- * An agent's tone: the quota monitor's heat when it has one (hot or limited show), else how
- * full its tightest window is.
- */
-function heatTone(overview: ProviderOverview, tightest: number): { text: string; fill: string } {
-  const heat = overview.usage?.heat;
-  if (heat === "limited") return { text: "text-destructive", fill: "bg-destructive" };
-  if (heat === "hot") return { text: "text-warning", fill: "bg-warning" };
-  return tone(tightest);
-}
-
 /** How the tightest agent stands, for the Usage row: what is left, and whether to warn. */
 function barStatus(shown: (ProviderOverview & { quota: QuotaSnapshot })[]): {
   label: string;
@@ -133,20 +121,15 @@ function barStatus(shown: (ProviderOverview & { quota: QuotaSnapshot })[]): {
   if (shown.some((overview) => (overview.usage?.limit ?? overview.quota.limit) !== null)) {
     return { label: "Usage · limit reached", alert: "text-destructive" };
   }
-  let tightest = 0;
-  let alert: "text-destructive" | "text-warning" | null = null;
-  for (const overview of shown) {
-    const percent = Math.max(...glance(overview.quota).map(used));
-    tightest = Math.max(tightest, percent);
-    const { text } = heatTone(overview, percent);
-    if (text === "text-destructive") alert = text;
-    else if (text === "text-warning" && alert === null) alert = text;
-  }
+  // Coloured by how much is used, like the agents' own CLIs: from 80% and from 90%.
+  const tightest = Math.max(...shown.map((overview) => Math.max(...glance(overview.quota).map(used))));
+  const level = usageLevel(tightest);
+  const alert = level === "danger" ? "text-destructive" : level === "warning" ? "text-warning" : null;
   return { label: `Usage · ${100 - tightest}% left`, alert };
 }
 
 /**
- * Usage at the sidebar's foot: its icon (tinted, with a dot, while an agent runs hot), and on
+ * Usage at the sidebar's foot: its icon (tinted, with a dot, from 80% used), and on
  * click each agent's windows, with the way to the Usage page.
  */
 export function UsageMenu() {
@@ -191,7 +174,7 @@ export function UsageMenu() {
   );
 }
 
-/** One agent in the menu: its name and heat, then a bar for each window worth a glance. */
+/** One agent in the menu: its name (and a reached limit), then a bar for each window worth a glance. */
 function ProviderUsage({
   overview,
   now,
@@ -200,24 +183,17 @@ function ProviderUsage({
   now: number;
 }) {
   const windows = glance(overview.quota);
-  const tightest = Math.max(...windows.map(used));
   const limit = overview.usage?.limit ?? overview.quota.limit;
-  const chip = heatTone(overview, tightest);
-  const heat = overview.usage?.heat;
   return (
     <div className="flex flex-col gap-1.5 px-2 py-1.5">
       <div className="flex items-center gap-2 text-sm">
         <ProviderGlyph provider={overview.provider} className="size-icon-sm shrink-0" />
         <span className="min-w-0 flex-1 truncate">{PROVIDER_LABELS[overview.provider]}</span>
-        {limit ? (
+        {limit && (
           <span className="text-destructive text-xs">
             Limit reached
             {limit.resetsAtMs !== null && ` · ${formatCountdown(limit.resetsAtMs, now)}`}
           </span>
-        ) : (
-          (heat === "hot" || heat === "limited") && (
-            <span className={cn("text-xs", chip.text)}>{HEAT_LABELS[heat]}</span>
-          )
         )}
       </div>
       {windows.map((window) => (
@@ -327,7 +303,7 @@ export function KeepAwakeMenu() {
             fill
             onChange={(value) => run(() => setKeepAwake(value))}
           />
-          <p className="text-muted-foreground text-xs">{option?.hint}.</p>
+          <p className="text-muted-foreground text-xs">{option?.hint}</p>
         </div>
 
         {status && status.lidClosed !== "unsupported" && (
@@ -338,7 +314,7 @@ export function KeepAwakeMenu() {
               </span>
               <span id={`${lidId}-hint`} className="text-muted-foreground text-xs">
                 {keepAwake === "off" && !status.forRun
-                  ? "Takes effect once keeping awake is on."
+                  ? "Takes effect once keeping awake is on"
                   : lidClosedHint(status, settingUp)}
               </span>
             </span>

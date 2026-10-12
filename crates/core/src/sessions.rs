@@ -214,6 +214,13 @@ impl Core {
             for file in &prefs.secret_files {
                 check_secret_path(file)?;
             }
+            if let Some(problem) = prefs
+                .branch_prefix
+                .as_deref()
+                .and_then(brigadier_git::branch_prefix_problem)
+            {
+                return Err(Error::Invalid(problem));
+            }
             project.prefs = prefs;
         }
         self.record(vec![(
@@ -1879,6 +1886,9 @@ impl Core {
     /// Writes settings a client sent: the models recorded as known since it read its copy
     /// stay known ([`crate::routing::availability::rebase`]).
     pub async fn update_settings(&self, settings: Settings) -> Result<Settings> {
+        if let Some(problem) = brigadier_git::branch_prefix_problem(&settings.branch_prefix) {
+            return Err(Error::Invalid(problem));
+        }
         let _writes = self.settings_writes.lock().await;
         let settings = crate::routing::availability::rebase(&self.settings(), settings);
         self.write_settings(settings).await

@@ -15,11 +15,11 @@ path: string | null, bytes: number,
  */
 reason: string, 
 /**
- * Checked by default: safe to remove.
+ * Part of the sweep (Free up space removes it): safe to remove.
  */
 checked: boolean, 
 /**
- * False: shown for information only; it can't be removed from here.
+ * False: kept on purpose (`reason` says why); it can't be removed from here.
  */
 selectable: boolean, 
 /**

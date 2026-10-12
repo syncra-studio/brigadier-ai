@@ -3,7 +3,9 @@
 
 use brigadier_providers::ProviderKind;
 
-use crate::model::{Conversation, Environment, PermissionLevel, Project, Setup};
+use crate::model::{
+    Conversation, Environment, GitStyle, PermissionLevel, Project, Settings, Setup,
+};
 use crate::tools::THREAD_TOOLS;
 use crate::work::{
     ArtifactRef, ContextInjection, InjectionKind, MockupPart, Report, Task, TaskKind, Told,
@@ -545,6 +547,66 @@ const RUN_OVER_LABEL: &str = "overnight run over";
 const PREFERENCES_LABEL: &str = "preferences";
 const WORKSPACE_LABEL: &str = "workspace";
 const REVISION_LABEL: &str = "instructions revision";
+const REVIEWS_ON_LABEL: &str = "reviews on";
+const REVIEWS_OFF_LABEL: &str = "reviews off";
+const GIT_WRITING_LABEL: &str = "git writing";
+const BROWSER_ON_LABEL: &str = "browser on";
+const BROWSER_OFF_LABEL: &str = "browser off";
+
+/// What the thread does while the user has reviews off; it replaces what its instructions say
+/// about reviews (Settings' "Review the work").
+pub(crate) const REVIEWS_OFF: &str = "Reviews are off (the user's setting): no landing, commit of your own or outline gets a review by the other vendor, review_plan starts none, and a verifier doesn't ask for one. Nothing waits for a review: judge the work yourself, from its report, its diff and its checks. A review that started before may still send its findings; weigh them as usual.";
+
+/// The thread's instructions while reviews are off, after what they say about reviews.
+pub(crate) fn reviews_off_section() -> String {
+    format!("\n\n{REVIEWS_OFF} This replaces what these instructions say about reviews.")
+}
+
+/// Tells a running thread the user switched reviews: its CLI keeps the instructions it
+/// started with.
+pub(crate) fn reviews_note(on: bool) -> String {
+    if on {
+        "[settings] The user turned reviews on. From now on, what your instructions say about reviews holds: every landing and every commit of your own gets one review by the other vendor in the background (nothing waits for it), and review_plan has a plan reviewed. Don't mention this note.".to_owned()
+    } else {
+        format!(
+            "[settings] The user turned reviews off. From now on, this replaces what your instructions say about reviews: {REVIEWS_OFF} Don't mention this note."
+        )
+    }
+}
+
+/// What a session does while the user has Brigadier's built-in browser off (Settings ›
+/// Browser). Instructions never mention the browser while it is on.
+pub(crate) const BROWSER_OFF: &str = "Brigadier's built-in browser is off (the user's setting): for you it doesn't exist. Never offer to open a page in it or say a page will open there; links and preview URLs you give the user open in their default browser.";
+
+/// The instructions' paragraph while the browser is off; nothing while it is on.
+pub(crate) fn browser_section(on: bool) -> String {
+    if on {
+        String::new()
+    } else {
+        format!("\n\n{BROWSER_OFF}")
+    }
+}
+
+/// Tells a running session the user switched Brigadier's built-in browser: its CLI keeps the
+/// instructions it started with.
+pub(crate) fn browser_note(on: bool) -> String {
+    if on {
+        "[settings] The user turned Brigadier's built-in browser back on: links and preview URLs you give the user may open in its Browser tab, which only the user uses (you can't see or drive it). This replaces what your instructions or earlier notes said about it. Don't mention this note.".to_owned()
+    } else {
+        format!(
+            "[settings] The user turned Brigadier's built-in browser off. From now on: {BROWSER_OFF} Don't mention this note."
+        )
+    }
+}
+
+/// Tells a running worker that builds the user switched reviews: its brief keeps what it said.
+pub(crate) fn worker_reviews_note(on: bool) -> &'static str {
+    if on {
+        "[settings] The user turned reviews on. Once your work is committed, call review_code once if you haven't, and fix the findings you agree with before your report; this replaces what your task says about reviews."
+    } else {
+        "[settings] The user turned reviews off. From now on, don't call review_code and don't wait for a review: nothing waits on one. A review already running may still send its findings; fix those you agree with if they arrive before your report, but don't wait for them. Once your checks pass and your evidence is in, call submit_report. This replaces what your task says about reviews."
+    }
+}
 
 /// The parts of a session's instructions that can change while its CLI session lives on, as
 /// they are now.
@@ -552,6 +614,13 @@ pub(crate) struct Current {
     pub chat: bool,
     pub today: String,
     pub short_replies: bool,
+    /// Whether the work is reviewed (Settings' "Review the work"); on unless set.
+    pub review_work: bool,
+    /// What the user's Git settings say about writing commits and pull requests
+    /// ([`git_writing`]); `None` while they follow the repository.
+    pub git_writing: Option<String>,
+    /// Whether Brigadier's built-in browser is on (Settings › Browser); on unless set.
+    pub browser: bool,
     pub permission: PermissionLevel,
     pub folder_trusted: bool,
     /// Where accepted work lands and the permission level, as the instructions say them
@@ -593,6 +662,9 @@ impl Current {
             chat: false,
             today: today(),
             short_replies,
+            review_work: true,
+            git_writing: None,
+            browser: true,
             permission,
             folder_trusted: trusted,
             plain: setting_texts(conversation, trusted, None),
@@ -608,6 +680,9 @@ impl Current {
             chat: true,
             today: today(),
             short_replies: false,
+            review_work: true,
+            git_writing: None,
+            browser: true,
             permission: PermissionLevel::ApproveForMe,
             folder_trusted: true,
             plain: (String::new(), String::new()),
@@ -636,6 +711,9 @@ impl Current {
             preferences: Some(preferences_fingerprint(&self.preferences)),
             workspace: self.workspace.clone(),
             revision: session.then(revision),
+            review_work: session.then_some(self.review_work),
+            git_writing: session.then(|| git_writing_fingerprint(self.git_writing.as_deref())),
+            browser: session.then_some(self.browser),
         }
     }
 }
@@ -709,6 +787,48 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
                 label: short_replies_label(now.short_replies),
                 told: Told {
                     short_replies: Some(now.short_replies),
+                    ..Told::default()
+                },
+            });
+        }
+        // Instructions from before the switch told every session that work is reviewed.
+        if told.review_work.unwrap_or(true) != now.review_work {
+            notes.push(Note {
+                text: reviews_note(now.review_work),
+                label: if now.review_work {
+                    REVIEWS_ON_LABEL
+                } else {
+                    REVIEWS_OFF_LABEL
+                },
+                told: Told {
+                    review_work: Some(now.review_work),
+                    ..Told::default()
+                },
+            });
+        }
+        // Instructions from before the setting told every session to follow the repository.
+        let writing = git_writing_fingerprint(now.git_writing.as_deref());
+        if told.git_writing.as_deref().unwrap_or("") != writing {
+            notes.push(Note {
+                text: git_writing_note(now.git_writing.as_deref()),
+                label: GIT_WRITING_LABEL,
+                told: Told {
+                    git_writing: Some(writing),
+                    ..Told::default()
+                },
+            });
+        }
+        // Instructions from before the setting never mentioned the browser: it was on.
+        if told.browser.unwrap_or(true) != now.browser {
+            notes.push(Note {
+                text: browser_note(now.browser),
+                label: if now.browser {
+                    BROWSER_ON_LABEL
+                } else {
+                    BROWSER_OFF_LABEL
+                },
+                told: Told {
+                    browser: Some(now.browser),
                     ..Told::default()
                 },
             });
@@ -839,6 +959,11 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
         told.workspace.clone_from(&older.workspace);
     }
     told.revision = told.revision.or(older.revision);
+    told.review_work = told.review_work.or(older.review_work);
+    if told.git_writing.is_none() {
+        told.git_writing.clone_from(&older.git_writing);
+    }
+    told.browser = told.browser.or(older.browser);
 }
 
 /// What the current CLI session was last told, from its log's instruction entries (logged at
@@ -903,6 +1028,9 @@ The user approved a mockup of this change: its screenshots are among your attach
 - Then save each pair side by side as compare-1.png, compare-2.png, … in your outputs folder: the mockup on the left, the live capture on the right, each labelled (for example a small HTML page showing both, screenshotted with a headless browser). Open each one and check both halves show.
 - Under verification, for each pair: the screen's name, the three files, what matches, and each difference with whether you fixed it or why it stays.";
 
+/// [`LEAD_STEPS`] while the user has reviews off: no review of its own.
+const LEAD_STEPS_UNREVIEWED: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. Reviews are off (the user's setting): don't call review_code. Once your checks pass and your evidence (screenshots, manual runs) is in, call submit_report at once: no more verifying, re-reading or screenshots after that.";
+
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
 - Your first message may start with what the Brain knows about your task: start from it. Before you read code, ask the Brain: query_brain (what earlier work found: modules, decisions, conventions). Then find the code with code_search (definitions and files by name), code_refs (where a symbol is defined and used) or project_map (the repository at a glance), never by shell listings and greps first. Then read only the lines you need (a line range, not the whole file): your context is precious.";
@@ -940,6 +1068,74 @@ fn preference_lines(preferences: &[String]) -> String {
     text
 }
 
+/// The Conventional Commits rules for a commit message.
+pub(crate) const CONVENTIONAL_COMMITS: &str = "Follow Conventional Commits 1.0.0: a subject `type(scope): description`, where type is one of feat, fix, docs, style, refactor, perf, test, build, ci, chore or revert, the scope is optional, and the description is imperative and lowercase with no period; a `!` after the type or scope and a `BREAKING CHANGE:` footer for a breaking change; then, only when the change needs it, a blank line and a short body.";
+
+/// The Conventional Commits rules for a pull request.
+const CONVENTIONAL_PRS: &str = "Give the title the Conventional Commits form `type(scope): description` (feat, fix, docs, refactor, perf, test, build, ci, chore…), and the body a short summary of what changed and why, then how it was tested.";
+
+/// How commit messages are to be written by `style` and the user's `instructions`; `None`:
+/// like the repository (empty custom instructions count as that).
+pub(crate) fn commit_rules(style: GitStyle, instructions: &str) -> Option<String> {
+    match style {
+        GitStyle::Repository => None,
+        GitStyle::Conventional => Some(CONVENTIONAL_COMMITS.to_owned()),
+        GitStyle::Custom => {
+            let text = instructions.trim();
+            (!text.is_empty()).then(|| format!("Follow the user's instructions:\n{text}"))
+        }
+    }
+}
+
+/// The same for a pull request's title and body.
+fn pr_rules(style: GitStyle, instructions: &str) -> Option<String> {
+    match style {
+        GitStyle::Repository => None,
+        GitStyle::Conventional => Some(CONVENTIONAL_PRS.to_owned()),
+        GitStyle::Custom => {
+            let text = instructions.trim();
+            (!text.is_empty()).then(|| format!("Follow the user's instructions:\n{text}"))
+        }
+    }
+}
+
+/// What the user's Git settings say about how an agent writes commit messages and pull
+/// requests; `None` while both follow the repository, which the instructions already ask.
+pub(crate) fn git_writing(settings: &Settings) -> Option<String> {
+    let commits = commit_rules(settings.commit_style, &settings.commit_instructions);
+    let prs = pr_rules(settings.pr_style, &settings.pr_instructions);
+    if commits.is_none() && prs.is_none() {
+        return None;
+    }
+    let repository = "Follow this repository's conventions (its recent history, its templates).";
+    Some(format!(
+        "Git writing (the user's settings; they win over what the repository does):\n- Commit messages: {}\n- Pull requests, title and body (only when the user asks you to open one): {}",
+        commits.as_deref().unwrap_or(repository),
+        prs.as_deref().unwrap_or(repository),
+    ))
+}
+
+/// The instructions' part about git writing, after the rest; empty while it says nothing.
+pub(crate) fn git_writing_section(settings: &Settings) -> String {
+    git_writing(settings).map_or_else(String::new, |text| format!("\n\n{text}"))
+}
+
+/// Tells a running session the user changed how it writes commit messages and pull requests:
+/// its CLI keeps the instructions it started with. `writing` is [`git_writing`] now.
+pub(crate) fn git_writing_note(writing: Option<&str>) -> String {
+    match writing {
+        Some(text) => format!(
+            "[settings] The user changed how commit messages and pull requests are written. From now on, this replaces what your instructions say about it:\n{text}\nDon't mention this note."
+        ),
+        None => "[settings] The user changed how commit messages and pull requests are written: from now on, follow this repository's conventions for both (its recent history, its templates), whatever your instructions or earlier notes said. Don't mention this note.".to_owned(),
+    }
+}
+
+/// [`git_writing`]'s fingerprint, as [`Told`] keeps it: empty while it says nothing.
+pub(crate) fn git_writing_fingerprint(writing: Option<&str>) -> String {
+    writing.map_or_else(String::new, |text| fingerprint(&[text]))
+}
+
 /// For a Codex worker that writes, while the user leaves AI co-authors out of commits (Claude
 /// is held to it by its settings instead).
 pub(crate) const NO_AI_COAUTHORS: &str =
@@ -966,8 +1162,9 @@ Rules:
 
 /// A worker's task, the first message of each new CLI session it gets (a successor's too):
 /// the date, the task and its kind, where it works (`repo_note`), the rules for that kind,
-/// `extra` (a review's or merge's brief, notes) and the spec.
-pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String {
+/// `extra` (a review's or merge's brief, notes) and the spec. `reviewed`: the user's "Review the
+/// work" setting, which decides whether a lead asks for its own review.
+pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: bool) -> String {
     let kind = match task.kind {
         TaskKind::Scout => {
             "scout: look around the repository and answer the question. Change nothing."
@@ -1023,7 +1220,12 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
             role = match task.role {
                 // A mockup is a quick look: no outline, no review until it lands.
                 _ if task.mockup == Some(MockupPart::Builds) => "",
-                Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => LEAD_STEPS,
+                Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement && reviewed => {
+                    LEAD_STEPS
+                }
+                Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => {
+                    LEAD_STEPS_UNREVIEWED
+                }
                 _ => "",
             }
         )
@@ -1413,7 +1615,11 @@ mod tests {
 
     /// What a worker reads before it starts: its system prompt, then its first message.
     fn worker(task: &Task) -> String {
-        format!("{}\n\n{}", worker_system(""), worker_brief(task, "", ""))
+        format!(
+            "{}\n\n{}",
+            worker_system(""),
+            worker_brief(task, "", "", true)
+        )
     }
 
     /// SESSION-FIXES-PLAN.md Q6.6: workers start from the brief's Brain section and write back
@@ -1563,7 +1769,12 @@ mod tests {
         assert!(!system.contains("Add the flag"));
         assert!(!system.contains("Today is"));
         assert!(system.ends_with(instructions));
-        let brief = worker_brief(&task("claude", Some("lead")), "Your worktree: /w/t1", "");
+        let brief = worker_brief(
+            &task("claude", Some("lead")),
+            "Your worktree: /w/t1",
+            "",
+            true,
+        );
         assert!(brief.starts_with("Today is "));
         assert!(brief.contains("Task task-1: Add the flag"));
         assert!(brief.contains("never send SIGCONT or any other signal to resume them"));
@@ -1602,7 +1813,7 @@ mod tests {
             brigadier_router::Area::Backend,
         ];
         assert!(checks_live(&ui));
-        let brief = worker_brief(&ui, "", &worker_computer(Some(&dev_app)));
+        let brief = worker_brief(&ui, "", &worker_computer(Some(&dev_app)), true);
         assert!(brief.contains("Checking it live (your change shows in an app)"));
         assert!(
             brief.contains(
@@ -1625,7 +1836,7 @@ mod tests {
         for task in [&backend, &scout, &merge] {
             assert!(!checks_live(task), "{:?}", task.kind);
         }
-        assert!(!worker_brief(&backend, "", "").contains("Checking it live"));
+        assert!(!worker_brief(&backend, "", "", true).contains("Checking it live"));
         // Open sessions hear it as revision 15, on a Mac only.
         let thread = revision_note(14, false).unwrap_or_default();
         let worker = revision_note(14, true).unwrap_or_default();
@@ -1645,7 +1856,7 @@ mod tests {
         operator.kind = TaskKind::Operate;
         operator.target = Some("TextEdit, the window \"Notes\"".into());
         operator.end_state = Some("The note reads \"hi\"".into());
-        let brief = worker_brief(&operator, "", "");
+        let brief = worker_brief(&operator, "", "", true);
         assert!(
             brief.contains(
                 "Target: TextEdit, the window \"Notes\"\nEnd state: The note reads \"hi\""
@@ -1669,7 +1880,7 @@ mod tests {
         assert!(!brief.contains("How to write code"));
         assert!(!brief.contains("tools.mcp__computer__act"));
         operator.route.choice.provider = ProviderKind::Codex;
-        let codex = worker_brief(&operator, "", "");
+        let codex = worker_brief(&operator, "", "", true);
         assert!(codex.contains("tools.mcp__computer__observe({window})"));
         assert!(codex.contains("actions: [{do: \"set_value\""));
         // The report's shape too, so it never lists the tools or guesses the report.
@@ -1680,7 +1891,7 @@ mod tests {
         // An argument error has no "failed" line: only the batch's own verdict counts.
         assert!(codex.contains("only if the act's text starts with \"All \""));
         // Other kinds hear none of it.
-        let lead = worker_brief(&task("claude", Some("lead")), "", "");
+        let lead = worker_brief(&task("claude", Some("lead")), "", "", true);
         assert!(!lead.contains("How to operate"));
     }
 
@@ -1691,7 +1902,7 @@ mod tests {
     fn a_mockup_brief_builds_a_preview_and_the_real_work_captures_the_live_app() {
         let mut mockup = task("claude", Some("lead"));
         mockup.mockup = Some(MockupPart::Builds);
-        let brief = worker_brief(&mockup, "", "");
+        let brief = worker_brief(&mockup, "", "", true);
         assert!(brief.contains("This task builds a mockup the user asked to see"));
         assert!(brief.contains("the project's real components and styles with fake data"));
         assert!(brief.contains("save them in your outputs folder as mockup-1.png"));
@@ -1705,7 +1916,7 @@ mod tests {
         real.mockup = Some(MockupPart::Matches {
             task: crate::work::TaskId("t2".into()),
         });
-        let brief = worker_brief(&real, "", "");
+        let brief = worker_brief(&real, "", "", true);
         assert!(brief.contains("The user approved a mockup of this change"));
         assert!(brief.contains("observe with save_as \"live-1.png\""));
         assert!(brief.contains("never the user's installed copy of the app or its data"));
@@ -1715,8 +1926,27 @@ mod tests {
         assert!(brief.contains("call review_code once"));
         assert!(!brief.contains("This task builds a mockup"));
 
-        let plain = worker_brief(&task("claude", Some("lead")), "", "");
+        let plain = worker_brief(&task("claude", Some("lead")), "", "", true);
         assert!(!plain.contains("mockup"));
+    }
+
+    #[test]
+    fn a_lead_asks_for_its_review_only_while_reviews_are_on() {
+        let lead = task("claude", Some("lead"));
+        let reviewed = worker_brief(&lead, "", "", true);
+        assert!(reviewed.contains("call review_code once"));
+        let unreviewed = worker_brief(&lead, "", "", false);
+        assert!(
+            !unreviewed.contains("call review_code once"),
+            "{unreviewed}"
+        );
+        assert!(
+            unreviewed.contains("Reviews are off (the user's setting): don't call review_code.")
+        );
+        assert!(unreviewed.contains("call submit_report at once"));
+        assert!(worker_reviews_note(false).contains("nothing waits on one"));
+        assert!(!worker_reviews_note(false).contains("no findings"));
+        assert!(worker_reviews_note(true).contains("call review_code once"));
     }
 }
 
@@ -2118,6 +2348,97 @@ mod environment_tests {
         assert!(on.contains("at most three lines"));
         assert!(!on.contains("Short replies (the user's setting)"));
         assert!(short_replies_note(false).contains("no longer apply"));
+    }
+
+    /// A running thread hears the user switched reviews, once; one told nothing yet of them
+    /// counts as told they're on, as every thread's instructions said before the switch.
+    #[test]
+    fn a_running_thread_hears_reviews_switched_once() {
+        let conversation = session("fullAccess");
+        let mut now = Current::session(&conversation, true, None, true, vec![], None);
+        let mut told = now.told();
+        told.review_work = None;
+        assert!(notes(&told, &now).is_empty(), "unknown counts as on");
+        now.review_work = false;
+        let off = notes(&told, &now);
+        assert_eq!(off.len(), 1, "{off:#?}");
+        assert!(
+            off[0]
+                .text
+                .starts_with("[settings] The user turned reviews off.")
+        );
+        assert!(off[0].text.contains(REVIEWS_OFF));
+        fill_told(&mut told, &off[0].told);
+        let mut after = off[0].told.clone();
+        fill_told(&mut after, &told);
+        assert!(notes(&after, &now).is_empty(), "told once");
+        now.review_work = true;
+        let on = notes(&after, &now);
+        assert_eq!(on.len(), 1, "{on:#?}");
+        assert!(
+            on[0]
+                .text
+                .starts_with("[settings] The user turned reviews on.")
+        );
+        assert_eq!(on[0].told.review_work, Some(true));
+        // A new thread is told as its instructions say.
+        assert_eq!(now.told().review_work, Some(true));
+    }
+
+    #[test]
+    fn a_running_session_hears_the_browser_switched_once() {
+        let conversation = session("fullAccess");
+        let mut now = Current::session(&conversation, true, None, true, vec![], None);
+        let mut told = now.told();
+        told.browser = None;
+        assert!(notes(&told, &now).is_empty(), "unknown counts as on");
+        now.browser = false;
+        let off = notes(&told, &now);
+        assert_eq!(off.len(), 1, "{off:#?}");
+        assert!(
+            off[0]
+                .text
+                .starts_with("[settings] The user turned Brigadier's built-in browser off.")
+        );
+        assert!(off[0].text.contains(BROWSER_OFF));
+        let mut after = off[0].told.clone();
+        fill_told(&mut after, &told);
+        assert!(notes(&after, &now).is_empty(), "told once");
+        now.browser = true;
+        let on = notes(&after, &now);
+        assert_eq!(on.len(), 1, "{on:#?}");
+        assert!(on[0].text.contains("back on"));
+        assert_eq!(on[0].told.browser, Some(true));
+        // A new session is told as its instructions say; a Chat never hears of it.
+        assert_eq!(now.told().browser, Some(true));
+        assert_eq!(Current::chat(vec![]).told().browser, None);
+    }
+
+    /// No agent can reach Brigadier's built-in browser: while it is on, nothing in the
+    /// instructions mentions it, so turning it off has nothing to take away but the note.
+    #[test]
+    fn instructions_never_mention_the_built_in_browser_while_it_is_on() {
+        let mentions = |text: &str| {
+            let text = text.to_lowercase();
+            ["built-in browser", "browser tab", "brigadier's browser"]
+                .iter()
+                .any(|phrase| text.contains(phrase))
+        };
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let prompt = thread(
+                &session("fullAccess"),
+                None,
+                &[],
+                None,
+                None,
+                provider,
+                true,
+            );
+            assert!(!mentions(&prompt), "{prompt}");
+        }
+        assert!(!mentions(&worker_system("")));
+        assert!(browser_section(true).is_empty());
+        assert!(mentions(&browser_section(false)));
     }
 
     fn session(permission: &str) -> Conversation {

@@ -55,6 +55,10 @@ pub(crate) fn row(category: TaskCategory) -> &'static Row {
             order: CLAUDE_FIRST,
             purpose: "orchestration",
         },
+        TaskCategory::GitText => &Row {
+            order: CLAUDE_FIRST,
+            purpose: "writing git text",
+        },
     }
 }
 

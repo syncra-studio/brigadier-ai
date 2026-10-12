@@ -175,6 +175,18 @@ fn limits(scope: &str, model: &str) -> bool {
     }
 }
 
+/// An account's email as the app shows it outside Settings › Providers: the first three
+/// characters of who, then dots, the domain's ending kept (`ste•••••@•••••.com`), like the
+/// app's own `maskEmail`. Text without an `@` comes back as it is.
+pub fn mask_email(email: &str) -> String {
+    let Some((who, domain)) = email.rsplit_once('@') else {
+        return email.to_owned();
+    };
+    let start: String = who.chars().take(3).collect();
+    let ending = domain.rfind('.').map_or("", |dot| &domain[dot..]);
+    format!("{start}•••••@•••••{ending}")
+}
+
 /// Where an account stands in the list: the user's own login first, then the extra ones as
 /// added.
 fn order(settings: &Settings, account: &AccountRef) -> usize {
@@ -193,6 +205,16 @@ fn order(settings: &Settings, account: &AccountRef) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_email_shows_only_its_start_and_ending() {
+        assert_eq!(
+            mask_email("stephen.golban@example.com"),
+            "ste•••••@•••••.com"
+        );
+        assert_eq!(mask_email("me@mail.example.co.uk"), "me•••••@•••••.uk");
+        assert_eq!(mask_email("Work account"), "Work account");
+    }
     use crate::model::AccountEntry;
     use brigadier_providers::{LimitHit, LimitKind, QuotaSource, QuotaWindow};
 

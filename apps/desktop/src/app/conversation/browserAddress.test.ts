@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserAddress, webAddress } from "./browserAddress";
+import { browserAddress, shownAddress, webAddress } from "./browserAddress";
 
 test("address entry opens web URLs and local hosts directly", () => {
   for (const [typed, expected] of [
@@ -23,4 +23,12 @@ test("only address entry searches; blocked-page validation stays unchanged", () 
   assert.equal(browserAddress("  "), null);
   assert.equal(webAddress("hello world"), null);
   assert.equal(webAddress("file:///private/notes"), null);
+});
+
+test("without Show full URL the address bar shows only the site until focused", () => {
+  const url = "https://example.com:8443/a/b?q=1#top";
+  assert.equal(shownAddress(url, false), "example.com:8443");
+  assert.equal(shownAddress(url, true), url);
+  assert.equal(shownAddress("", false), "");
+  assert.equal(shownAddress("about:blank", false), "about:blank");
 });

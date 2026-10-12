@@ -7,7 +7,7 @@ import { loadConversation, loadFullText, openConversation, switchBranch } from "
 import { currentStep, type RunStep, runSteps } from "@/app/conversation/phaseView";
 import { type Board, updateBoard, useBoard } from "@/state/board";
 import { setUpLidClosed, useKeepAwake } from "@/state/keepAwake";
-import { loadNotificationPermission, useNotifications } from "@/state/notifications";
+import { useNotificationPermission } from "@/state/notifications";
 import { emptyThread, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -169,24 +169,10 @@ export function useOvernightCards(conversationId: string): readonly OvernightCar
   const status = useKeepAwake((s) => s.status);
   const leadQuota = useApp((s) => s.conversations[conversationId]?.quotaWait);
   const runs = useMemo(() => currentRuns(board?.overnight ?? {}), [board?.overnight]);
-  const notifications = useNotifications((s) => s.permission);
   const hasRuns = runs.length > 0;
-  useEffect(() => {
-    if (!hasRuns) return;
-    // Asking the OS doesn't prompt; checked again while the card can be seen, so turning
-    // notifications on in System Settings (or answering Start's prompt) shows up here.
-    const load = () => {
-      if (!useApp.getState().windowVisible) return;
-      loadNotificationPermission().catch((error: unknown) => console.error("checking notifications failed", error));
-    };
-    load();
-    const timer = window.setInterval(load, 10_000);
-    window.addEventListener("focus", load);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", load);
-    };
-  }, [hasRuns]);
+  // Read again while the card can be seen, so turning notifications on in System Settings (or
+  // answering Start's prompt) shows up here.
+  const notifications = useNotificationPermission(hasRuns);
   const reports = useApp(useShallow((s) => runs.map((run) => {
     const message = s.threads[conversationId]?.items.find((item) => item.id === run.reportMessageId);
     if (!message) return undefined;

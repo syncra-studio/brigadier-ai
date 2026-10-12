@@ -42,16 +42,19 @@ docs/          plan and design notes
   The crate is pinned to the release `tauri-runtime-wry` uses, since two copies of wry would
   register the same native classes. Linux has no embedded page: its tab opens pages in the
   system browser.
-- `objc2`, `objc2-foundation`, `objc2-web-kit`, `block2` (macOS, the releases wry is built on):
-  the Browser tab's page gets its own WebKit UI delegate, because wry's grants every camera and
-  microphone request. Ours denies them without a prompt, sends popups to the system browser and
-  leaves file uploads to wry's. This module, `apps/desktop/src-tauri/src/browser_ui.rs`, is the
-  app shell's WebKit exception to the workspace's `unsafe_code = "deny"` (the sandbox crate's OS
-  calls are the only others): calling WebKit through objc2 needs `unsafe`. The `#[allow(unsafe_code)]` sits on that module alone, and each `unsafe` in it says
-  why it holds. WebKit asks macOS for the microphone before it asks the delegate, so the page
-  also gets a script, before any of its own and in every frame, that takes
-  `navigator.mediaDevices`, `getUserMedia` and the speech-recognition APIs away for good
-  (`NO_CAPTURE` in `browser.rs`). Windows' WebView2 asks the user itself.
+- `objc2`, `objc2-foundation`, `objc2-web-kit`, `objc2-app-kit`, `block2` (macOS, the releases
+  wry is built on): the Browser tab's page gets its own WebKit UI delegate, because wry's grants
+  every camera and microphone request. Ours answers them from the site's choice in Settings ›
+  Browser › Site settings (Allow, Block, or Ask: WebKit's own question), sends popups to the
+  system browser and leaves file uploads to wry's. The same module clears the browser's saved
+  WebKit data store, counts its sites and shows the save panel for downloads. This module,
+  `apps/desktop/src-tauri/src/browser_ui.rs`, is the app shell's WebKit exception to the
+  workspace's `unsafe_code = "deny"` (the sandbox crate's OS calls are the only others): calling
+  WebKit through objc2 needs `unsafe`. The `#[allow(unsafe_code)]` sits on that module alone, and
+  each `unsafe` in it says why it holds. The page also gets a script, before any of its own and
+  in every frame, that takes screen capture and the speech-recognition APIs away for good
+  (`NO_CAPTURE` in `browser.rs`); on Windows, whose WebView2 has no per-site choices here, it
+  takes the camera and microphone APIs away too.
 - Overnight run notifications use a small macOS UserNotifications adapter under the app's
   bundle identity, retaining a stable notification ID and session/run activation payload.
   `overnight_notifications.rs::mac` is the shell's other narrowly scoped unsafe exception:
@@ -209,6 +212,42 @@ sessions, answer their approval requests, simulate a usage-limit event and repla
 Recordings are scrubbed of personal data as they are written. The fixtures in
 `crates/providers/fixtures/` ship with the app.
 
+## Settings
+
+Settings' sidebar groups its pages: Personal (General, Voice, Configuration, Keyboard shortcuts),
+Agents (Providers, Usage, Git, Computer use), Browser & Data (Browser, Import Browser Data) and
+System (Storage, Inspector), then Archived chats on its own at the end. Configuration, Providers,
+Usage and Storage are covered where they come up above. A few more pages:
+
+- **General.** Appearance (density, and what stays when the sidebar is closed); Composer (the
+  send shortcut, Enter or ⌘Enter; whether a message sent while an agent works queues or steers
+  into the answer by default, the send key with ⌘ or ⇧⌘ doing the other for one message; the
+  context window ring); Notifications (when a finished chat or session notifies: only while
+  Brigadier is in the background, always or never; whether approvals and questions do; a row
+  pointing to System Settings while notifications are off); Power (keeping the computer awake,
+  with the lid closed too, hibernating idle chats, and Open at login: a login item on macOS, the
+  Run key on Windows, an XDG autostart entry on Linux); About (the version, the open source
+  licenses, Run setup again).
+- **Browser.** A switch turns Brigadier's own embedded browser on or off; off, it's absent
+  everywhere and agents are told. On: where to open web links (default: your own browser) and
+  local dev URLs (default: Brigadier's browser); Show full URL in the address bar; Clear browsing
+  data by time range; Browsing history, filterable by who opened the
+  page (All, an agent, or you); Downloads (save location, or ask each time, and a download
+  history); and, under Advanced, per-site camera and microphone choices (Ask, Allow, Block). Data
+  lives in a WebKit store per data folder, plus `<data>/browser/browser.sqlite` for history,
+  downloads and site choices.
+- **Import Browser Data** (macOS). Import… copies cookies and history from Safari and Chromium- or
+  Gecko-based browsers into the built-in browser, once; it needs Keychain access for a Chromium
+  browser's cookies and Full Disk Access for Safari or a Firefox-family profile macOS keeps from
+  other apps. While the browser is off, Import waits and the page links to Settings › Browser.
+- **Git.** Which CLI writes commits, commit-message instructions (follow the repository's own
+  style, Conventional Commits, or custom instructions), pull-request instructions, the branch
+  prefix Brigadier uses for its own branches, and a switch to leave out AI co-author lines.
+- **Voice.** Microphone, dictation language, a custom word list, and the local
+  speech-recognition model's download and status. Read aloud speaks in the system's default voice.
+- **Keyboard shortcuts.** A read-only list of the app's shortcuts.
+- **Archived chats.** The chats you've archived, to reopen or delete for good.
+
 ## Sessions
 
 A session is one orchestrator (Claude or Codex) with no built-in tools except the Brigadier MCP
@@ -217,7 +256,8 @@ plans, delegates tasks, answers workers' questions, accepts or rejects reports a
 session; only messages, reports, decisions and tool results enter its context, which the
 Inspector's **Orchestrator** tab shows. Workers run in their own worktrees under Brigadier's data
 directory, report through the same server, and never block the orchestrator. Every accepted
-write task is reviewed by the other vendor, then lands as one commit (with your git identity) on
+write task gets one review by the other vendor in the background (Settings → Configuration →
+"Review the work", on by default; off, no review starts and nothing waits for one), and lands as one commit (with your git identity) on
 your checked-out branch (local checkout) or on the session branch `brigadier/<session>/session`
 (new worktree), which lands on its base when the session finishes. Landing into your checkout is
 a fast-forward only; if you switched branches, the tip moved unexpectedly or an untracked or
@@ -372,7 +412,7 @@ nothing outside the project.
   changes, they are marked stale and answered as "may be outdated".
 - **Skeleton pass and enrichment.** After a project's first scan the cheapest model maps its
   modules, stack, conventions and build/run/verify recipe, read-only and sandboxed. With
-  Settings → Personalization → "Use spare quota to deepen the Brain" (on by default), quota that would expire
+  Settings → Configuration → Advanced → "Use spare quota to deepen the Brain" (on by default), quota that would expire
   unused (a usage window resetting within the hour with 40% left, the provider idle for 10
   minutes) refreshes stale nodes and fills gaps; it stops as soon as your own work starts.
 - **Rebirth.** The orchestrator never compacts its context. Past about 150k tokens its session
@@ -383,7 +423,7 @@ nothing outside the project.
   work (the handoff note and the swap) apart from the wait for the next turn.
 - **Personal Brain.** Preferences that hold in every project, from the orchestrator or from a
   Chat (`save_memory`, shown as Memory chips), are given to new orchestrators and Chats.
-  Settings → Personalization lists them. A project's conventions can be exported to a marked section of its
+  Settings → Configuration → Memories lists them. A project's conventions can be exported to a marked section of its
   `AGENTS.md`.
 
 Files: `brains/<project>/brain.sqlite` and `index.sqlite`, `brains/personal.sqlite`, and the
@@ -413,12 +453,15 @@ factors in its details).
 - **Outcomes.** Every model's run of a task is recorded per project in `routing.sqlite`
   (result, first review, rework, checks, time, tokens, quota share), and nudges that model's
   score for that kind of task in that project.
-- **Your routing.** Settings → Routing shows, for each kind of work, the models routing would
-  try next and why (Automatic), or lets you order them yourself with an effort for each
-  (Manual): the list is tried top-down, and with "Wait for these" work waits for those models
-  rather than going to others. Everywhere or per project, with area overrides. Rules there
-  (never, prefer or only a model, family or vendor) keep models from work, during fallback too.
-  No Fable, effort at most high, limits and cross-vendor review hold whatever you choose.
+- **Your routing.** Settings → Providers: each model has one "Use this model" switch (in the
+  pickers and given work), and "Who does what" picks a model per kind of work or leaves it on
+  Automatic. Under Advanced, each kind of work shows the models routing would try next and why
+  (Automatic), or lets you order them yourself with an effort for each (Manual): the list is
+  tried top-down, and with "Wait for these" work waits for those models rather than going to
+  others. Everywhere or per project, with area overrides. Rules there keep models from work,
+  during fallback too: "Don't give work" keeps a model from tasks while you can still pick it
+  for a chat or session, and never, prefer or only apply to a model, family or vendor. No
+  Fable, effort at most high, limits and cross-vendor review hold whatever you choose.
 - **Workers' sub-agents.** A Claude worker's own sub-agents run only on models its task could
   have gone to (your rules, hidden models, quality floors and limits included, never Fable).
   When Claude can't be held to exactly those, the worker has no sub-agents. Codex workers have

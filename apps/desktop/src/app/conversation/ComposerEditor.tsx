@@ -24,6 +24,7 @@ import {
   KEY_ARROW_DOWN_COMMAND,
   KEY_ARROW_UP_COMMAND,
   KEY_DOWN_COMMAND,
+  KEY_ENTER_COMMAND,
   type LexicalEditor,
   PASTE_COMMAND,
   PASTE_TAG,
@@ -34,6 +35,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
+import { enterAction } from "@/app/conversation/composerKeys";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import {
   imageMarkerAt,
@@ -70,6 +72,7 @@ import {
   useDictation,
 } from "@/state/dictation";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
+import { useApp } from "@/state/store";
 
 export type ComposerInputProps = {
   placeholder: string;
@@ -112,6 +115,8 @@ export default function ComposerEditor({
       autoFocus={autoFocus}
       // Esc stops only on a second press (useEscToStop).
       cancelOnEscape={false}
+      // Enter is ComposerKeys': it sends with the key chosen in Settings.
+      submitMode="none"
       aria-label="Message input"
     >
       <ComposerKeys formatter={formatter} deleted={deleted} />
@@ -195,6 +200,9 @@ function ComposerKeys({
       ),
     [editor, owner],
   );
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const sendShortcut = useApp((s) => s.settings.sendShortcut);
+  const followUp = useApp((s) => s.settings.followUp);
   const dictating = dictation.phase.type === "recording";
   // Pressed again while the model downloads or the microphone opens, it cancels (as the button does).
   const opening = dictation.phase.type === "downloading" || dictation.phase.type === "starting";
@@ -221,6 +229,24 @@ function ComposerKeys({
       editor.registerCommand(CUT_COMMAND, copy, COMMAND_PRIORITY_NORMAL),
       editor.registerCommand(KEY_ARROW_UP_COMMAND, arrow("ArrowUp"), COMMAND_PRIORITY_NORMAL),
       editor.registerCommand(KEY_ARROW_DOWN_COMMAND, arrow("ArrowDown"), COMMAND_PRIORITY_NORMAL),
+      // Below the input's own Enter handling, so an open mention or command menu takes Enter
+      // first. While an answer works, the other key sends the follow-up's other way.
+      editor.registerCommand(
+        KEY_ENTER_COMMAND,
+        (event) => {
+          if (!event || event.isComposing) return false;
+          const action = enterAction(event, mac, sendShortcut);
+          if (!action) return false;
+          event.preventDefault();
+          const thread = aui.thread().getState();
+          if (thread.isRunning && !thread.capabilities.queue) return true;
+          aui.composer().send(
+            action === "other" && thread.isRunning ? { steer: followUp === "queue" } : undefined,
+          );
+          return true;
+        },
+        COMMAND_PRIORITY_NORMAL,
+      ),
       editor.registerCommand(
         KEY_DOWN_COMMAND,
         (event) => {
@@ -275,6 +301,9 @@ function ComposerKeys({
     canDictate,
     dictating,
     opening,
+    mac,
+    sendShortcut,
+    followUp,
   ]);
   return null;
 }

@@ -58,7 +58,7 @@ function researcherName(refresh: RankingsRefresh, merged: readonly MergedModel[]
 }
 
 /** "Refresh rankings": starts a refresh, or shows that one is running. */
-export function RefreshRankingsButton({ rankings }: { rankings: RankingsRefreshView }) {
+function RefreshRankingsButton({ rankings }: { rankings: RankingsRefreshView }) {
   const { refresh, starting, start } = rankings;
   const running = refresh !== null && refreshRunning(refresh.state);
   return (
@@ -70,7 +70,7 @@ export function RefreshRankingsButton({ rankings }: { rankings: RankingsRefreshV
 }
 
 /** One line under the button: what the refresh is doing, or how the last one ended. */
-export function RefreshStatusLine({
+function RefreshStatusLine({
   rankings,
   merged,
 }: {
@@ -96,8 +96,9 @@ export function RefreshStatusLine({
 }
 
 /**
- * Under Advanced: which ratings are in use (with a way back to the published ones), the last
- * refresh with what it changed and its sources, and the model registry they build on.
+ * Under Advanced: Refresh rankings and how it is going, which ratings are in use (with a way
+ * back to the published ones), the last refresh with what it changed and its sources, and the
+ * model registry they build on.
  */
 export function RatingsSection({
   rankings,
@@ -115,7 +116,12 @@ export function RatingsSection({
   const running = refresh !== null && refreshRunning(refresh.state);
   const last = refresh && lastRefresh(refresh, researcherName(refresh, merged));
   return (
-    <SettingsSection title={RANKINGS_ROWS.ratings.label} description={RANKINGS_ROWS.ratings.description}>
+    <SettingsSection
+      title={RANKINGS_ROWS.ratings.label}
+      description={RANKINGS_ROWS.ratings.description}
+      actions={<RefreshRankingsButton rankings={rankings} />}
+    >
+      <RefreshStatusLine rankings={rankings} merged={merged} />
       <SettingsCard>
         {refresh && (
           <SettingsRow label="Ratings in use" description={overlayStatus(refresh)}>

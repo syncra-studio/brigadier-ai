@@ -12,30 +12,32 @@ import type {
 } from "@/ipc/generated";
 
 /**
- * Settings → Storage and Uninstall Brigadier…: the daemon scans, cleans and uninstalls; the
+ * Settings → Storage (Free up space) and Uninstall Brigadier…: the daemon scans, cleans and uninstalls; the
  * app previews and confirms, and picks items only by the ids a scan or a preview gave them.
  */
 
-export const useStorageUi = create<{ storageOpen: boolean; uninstallOpen: boolean }>(() => ({
-  storageOpen: false,
+export const useStorageUi = create<{ uninstallOpen: boolean }>(() => ({
   uninstallOpen: false,
 }));
 
-export function openStorage(): void {
-  useStorageUi.setState({ storageOpen: true, uninstallOpen: false });
-}
-
 export function openUninstall(): void {
-  useStorageUi.setState({ storageOpen: false, uninstallOpen: true });
+  useStorageUi.setState({ uninstallOpen: true });
 }
 
 export function closeStorageDialogs(): void {
-  useStorageUi.setState({ storageOpen: false, uninstallOpen: false });
+  useStorageUi.setState({ uninstallOpen: false });
 }
 
-/** What Brigadier keeps on disk and what it can clean up. */
+/**
+ * What Brigadier keeps on disk and what it can clean up. The daemon is told which app asks, so
+ * that app's own caches are never offered (without it, no app's caches are).
+ */
 export async function scanStorage(): Promise<StorageReport> {
-  return (await request({ method: "scanStorage" })).report;
+  const app = await invoke<UninstallApp>("uninstall_app").then(
+    (found) => found.identifier,
+    () => undefined,
+  );
+  return (await request(app ? { method: "scanStorage", app } : { method: "scanStorage" })).report;
 }
 
 /** Removes the picked items of a scan. */
@@ -60,4 +62,20 @@ export async function uninstall(
 /** Quits the app; the daemon drains and quits first. */
 export function quitApp(): Promise<void> {
   return invoke("quit_app");
+}
+
+/**
+ * Removes the dictation speech model through the same scan and clean as Free up space, which
+ * keeps it while a dictation or its download runs. Resolves when it is gone (or wasn't there).
+ */
+export async function removeSpeechModel(): Promise<void> {
+  const report = await scanStorage();
+  const model = report.items.find(
+    (item) => item.category === "models" && /[\\/]models[\\/]whisper[\\/]?$/.test(item.path ?? ""),
+  );
+  if (!model) return;
+  if (!model.selectable) throw new Error("Dictation is using it now. Try again when it has finished.");
+  const cleaned = await cleanStorage(report.scanId, [model.id]);
+  const failed = cleaned.failures[0];
+  if (failed) throw new Error(failed.error);
 }

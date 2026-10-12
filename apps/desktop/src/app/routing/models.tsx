@@ -58,6 +58,7 @@ const CATEGORY_HEADS: Record<TaskCategory, string> = {
   operate: "Use apps",
   chat: "Chat",
   orchestrate: "Orchestrate",
+  gitText: "Git text",
 };
 
 /** A kind of work counts among a model's best within this much of its top score. */
@@ -259,7 +260,7 @@ export function ModelRow({
   const projects = useApp((s) => s.projects);
   const ref = { provider: model.provider, id: model.id };
   const works = !model.excluded && mayWork(rules, ref);
-  // The Routing switch's own rules show as the switch, not as sentences here.
+  // A "Don't give work" rule shows as "gets no work" in the summary, not as a sentence here.
   const own = rules.filter(
     (rule) =>
       !blocksModel(rule, ref) &&

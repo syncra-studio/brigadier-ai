@@ -18,11 +18,13 @@ import type {
 } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { modelName } from "@/lib/setup";
+import { isNoWorkRule } from "@/lib/workRules";
 
 export { isFable } from "@/lib/setup";
+export { isNoWorkRule, noWorkRule, WORKER_CATEGORIES } from "@/lib/workRules";
 
 /**
- * Routing in words: the names the Usage page, worker cards, the Routing page and the
+ * Routing in words: the names the Usage page, worker cards, the Providers page and the
  * Inspector's preview share, and the sentences they build (hand-offs, rules, reset times).
  */
 
@@ -57,9 +59,10 @@ export const CATEGORY_LABELS: Record<TaskCategory, string> = {
   operate: "using apps",
   chat: "chat",
   orchestrate: "orchestration",
+  gitText: "writing git text",
 };
 
-/** The kinds of work the Routing page ranks (the orchestrator keeps its own picker). */
+/** The kinds of work the Providers page ranks (the orchestrator keeps its own picker). */
 export const RANKED_CATEGORIES: readonly TaskCategory[] = [
   "scout",
   "research",
@@ -73,18 +76,19 @@ export const RANKED_CATEGORIES: readonly TaskCategory[] = [
 
 /** What each kind of work is, under its heading. */
 export const KIND_HINTS: Record<TaskCategory, string> = {
-  scout: "Looks around the repository and answers a question.",
-  research: "Reads docs and the web.",
-  implement: "Changes code; lands as one commit.",
-  review: "Reviews another task's change or a plan.",
-  merge: "Resolves conflicts between a task and its target branch.",
-  verify: "Runs the project's checks.",
-  operate: "Uses apps on this Mac to reach a result; changes no code.",
-  chat: "Takes over a Chat whose model hits its limit.",
-  orchestrate: "Plans and delegates a session's work.",
+  scout: "Looks around the repository and answers a question",
+  research: "Reads docs and the web",
+  implement: "Changes code; lands as one commit",
+  review: "Reviews another task's change or a plan",
+  merge: "Resolves conflicts between a task and its target branch",
+  verify: "Runs the project's checks",
+  operate: "Uses apps on this Mac to reach a result; changes no code",
+  chat: "Takes over a Chat whose model hits its limit",
+  orchestrate: "Plans and delegates a session's work",
+  gitText: "Writes the commit messages Brigadier writes for you, on a fast, light model",
 };
 
-/** A kind of work in plain words, as the Routing page names it: "Write code". */
+/** A kind of work in plain words, as the Providers page names it: "Write code". */
 export const PLAIN_KIND_NAMES: Record<TaskCategory, string> = {
   scout: "Explore the code",
   research: "Research",
@@ -95,6 +99,7 @@ export const PLAIN_KIND_NAMES: Record<TaskCategory, string> = {
   operate: "Use apps",
   chat: "Take over a chat",
   orchestrate: "Plan and delegate",
+  gitText: "Write commit messages",
 };
 
 /** A kind of work as "best for …" reads it: "Best for writing code and reviewing changes". */
@@ -108,6 +113,7 @@ export const PLAIN_KIND_WORDS: Record<TaskCategory, string> = {
   operate: "using apps",
   chat: "chat",
   orchestrate: "planning",
+  gitText: "writing commit messages",
 };
 
 /** A quality tier in plain words, for the Models page. */
@@ -130,6 +136,7 @@ export const DEFAULT_FLOORS: Record<TaskCategory, QualityTier> = {
   operate: "strong",
   chat: "light",
   orchestrate: "strong",
+  gitText: "light",
 };
 
 const TIER_ORDER: readonly QualityTier[] = ["unrated", "light", "standard", "strong", "frontier"];
@@ -360,6 +367,7 @@ export function ruleSentence(
   groups: readonly ModelGroup[],
   projects: Record<string, Project>,
 ): string {
+  if (isNoWorkRule(rule)) return `Don't give ${targetName(rule.target, groups)} work`;
   const categories = rule.categories.map((category) => CATEGORY_LABELS[category]);
   const areas = rule.areas.map((area) => AREA_LABELS[area]);
   let scope = "";

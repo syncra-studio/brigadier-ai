@@ -30,11 +30,11 @@ import {
 export const COMPUTER_USE_ROWS = {
   accessibility: {
     label: "Control apps",
-    description: "Lets workers click, type and read app windows.",
+    description: "Lets workers click, type and read app windows",
   },
   screenRecording: {
     label: "See the screen",
-    description: "Lets workers look at app windows to check their work.",
+    description: "Lets workers look at app windows to check their work",
   },
 } as const;
 
