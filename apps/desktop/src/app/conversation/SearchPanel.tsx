@@ -1,5 +1,8 @@
 import { ChevronDown, ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
+import {
+  type FC, type KeyboardEvent, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+} from "react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import {
@@ -9,6 +12,7 @@ import { FileIcon } from "@/components/glyphs/fileIcons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { ReplaceOutcome, SearchFile, SearchLine, SearchQuery } from "@/ipc/generated";
+import { tokenPx } from "@/lib/tokens";
 import { useApp } from "@/state/store";
 import { onWorkspaceChanged, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import {
@@ -21,6 +25,8 @@ import {
  * whole word and regular expression, files to include and exclude, and Replace all. Results
  * come grouped by file as the daemon finds them; a line opens the file there. What was last
  * found shows at once when the view opens, and the search runs again when the checkout changes.
+ * Only the rows in view are drawn, so tens of thousands of matches scroll as smoothly as ten;
+ * the arrow keys move through all of them.
  */
 
 /** How long typing pauses before the search runs. */
@@ -104,6 +110,11 @@ export function SearchPanel({ target, onOpen, readOnly }: {
   }, [target]);
 
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = useCallback((path: string) => setCollapsed((current) => {
+    const next = new Set(current);
+    if (!next.delete(path)) next.add(path);
+    return next;
+  }), []);
   const [confirming, setConfirming] = useState<{ file?: string } | null>(null);
   const [replacing, setReplacing] = useState(false);
   const [outcome, setOutcome] = useState<ReplaceOutcome | { error: string } | null>(null);
@@ -157,11 +168,11 @@ export function SearchPanel({ target, onOpen, readOnly }: {
           </>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2" aria-busy={searching}>
-        {results?.error ? (
-          <p role="alert" className="text-destructive p-2 text-sm">{results.error}</p>
-        ) : results && (
-          <>
+      {results?.error ? (
+        <p role="alert" className="text-destructive p-2 text-sm">{results.error}</p>
+      ) : results && (
+        <>
+          <div className="flex shrink-0 flex-col px-2 pt-2" aria-busy={searching}>
             <div className="flex h-control-sm items-center gap-1 px-1">
               <p data-slot="search-summary" className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
                 {results.files.length === 0
@@ -181,21 +192,11 @@ export function SearchPanel({ target, onOpen, readOnly }: {
                 Only the first results are shown. Narrow the search to see the rest.
               </p>
             )}
-            <ul aria-label="Search results">
-              {results.files.map((file) => (
-                <FileGroup key={file.path} file={file} open={!collapsed.has(file.path)}
-                  onToggle={() => setCollapsed((current) => {
-                    const next = new Set(current);
-                    if (!next.delete(file.path)) next.add(file.path);
-                    return next;
-                  })}
-                  onOpen={onOpen}
-                  onReplace={canReplace ? () => setConfirming({ file: file.path }) : null} />
-              ))}
-            </ul>
-          </>
-        )}
-      </div>
+          </div>
+          <ResultList files={results.files} collapsed={collapsed} onToggle={toggle} onOpen={onOpen}
+            onReplace={canReplace ? (path) => setConfirming({ file: path }) : null} />
+        </>
+      )}
       <Dialog open={confirming !== null} onOpenChange={(open) => { if (!open) setConfirming(null); }}>
         <DialogContent>
           {results && (
@@ -273,47 +274,155 @@ const ReplaceNote: FC<{ outcome: ReplaceOutcome | { error: string } }> = ({ outc
   );
 };
 
-const FileGroup = memo(function FileGroup({ file, open, onToggle, onOpen, onReplace }: {
+/** One row of the results: a file's, or one of its matching lines. */
+type Row = { type: "file"; file: SearchFile } | { type: "line"; file: SearchFile; line: SearchLine };
+
+/**
+ * The results as rows, only those in view drawn. One row takes the keyboard (Tab lands on it):
+ * the arrow keys move it, Left closes a file or goes up to it, Right opens a file, Home and End
+ * go to either end, Enter opens a line or a file's group as a click does.
+ */
+function ResultList({ files, collapsed, onToggle, onOpen, onReplace }: {
+  files: SearchFile[];
+  collapsed: ReadonlySet<string>;
+  onToggle: (path: string) => void;
+  onOpen: OnOpen;
+  onReplace: ((path: string) => void) | null;
+}) {
+  const rows = useMemo(() => {
+    const list: Row[] = [];
+    for (const file of files) {
+      list.push({ type: "file", file });
+      if (!collapsed.has(file.path)) for (const line of file.lines) list.push({ type: "line", file, line });
+    }
+    return list;
+  }, [files, collapsed]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState(0);
+  const current = Math.max(0, Math.min(active, rows.length - 1));
+  const density = useApp((s) => s.settings.density);
+  // The app does not use React Compiler, so the virtualizer's unmemoizable API is fine here.
+  // oxlint-disable-next-line react/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => tokenPx("--spacing-control-sm"),
+    getItemKey: (index) => rowKey(rows[index]!),
+    overscan: 12,
+    // The row with the keyboard stays drawn while it scrolls out of view, so it keeps focus.
+    rangeExtractor: (range) => {
+      const drawn = defaultRangeExtractor(range);
+      if (rows.length && !drawn.includes(current)) drawn.push(current);
+      return drawn.toSorted((a, b) => a - b);
+    },
+  });
+  useLayoutEffect(() => {
+    virtualizer.measure();
+  }, [density, virtualizer]);
+  // A key moved the keyboard's row: it is brought into view, then focused once drawn.
+  const focusing = useRef(false);
+  useLayoutEffect(() => {
+    if (!focusing.current) return;
+    focusing.current = false;
+    scrollRef.current?.querySelector<HTMLElement>(`[data-index="${current}"] [data-row-button]`)?.focus();
+  });
+  const move = (index: number) => {
+    const next = Math.max(0, Math.min(index, rows.length - 1));
+    focusing.current = true;
+    setActive(next);
+    virtualizer.scrollToIndex(next);
+  };
+  const onKeyDown = (event: KeyboardEvent) => {
+    const row = rows[current];
+    if (!row || event.altKey || event.metaKey || event.ctrlKey) return;
+    let handled = true;
+    if (event.key === "ArrowDown") move(current + 1);
+    else if (event.key === "ArrowUp") move(current - 1);
+    else if (event.key === "Home") move(0);
+    else if (event.key === "End") move(rows.length - 1);
+    else if (event.key === "ArrowRight" && row.type === "file") {
+      if (collapsed.has(row.file.path)) onToggle(row.file.path);
+      else move(current + 1);
+    } else if (event.key === "ArrowLeft") {
+      if (row.type === "line") move(rows.findLastIndex((other, index) => index < current && other.type === "file"));
+      else if (!collapsed.has(row.file.path)) onToggle(row.file.path);
+    } else handled = false;
+    if (handled) event.preventDefault();
+  };
+  return (
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <ul role="tree" aria-label="Search results" onKeyDown={onKeyDown} className="relative w-full"
+        onFocus={(event) => {
+          const index = Number((event.target as HTMLElement).closest("[data-index]")?.getAttribute("data-index"));
+          if (Number.isInteger(index)) setActive(index);
+        }}
+        style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map((item) => {
+          const row = rows[item.index]!;
+          return (
+            <li key={item.key} role="treeitem" aria-level={row.type === "file" ? 1 : 2} data-index={item.index}
+              data-row={row.type} className="absolute inset-x-0 top-0" style={{ transform: `translateY(${item.start}px)` }}>
+              {row.type === "file" ? (
+                <FileRow file={row.file} open={!collapsed.has(row.file.path)} tabbable={item.index === current}
+                  onToggle={onToggle} onReplace={onReplace} />
+              ) : (
+                <LineRow file={row.file} line={row.line} tabbable={item.index === current} onOpen={onOpen} />
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function rowKey(row: Row): string {
+  return row.type === "file" ? row.file.path : `${row.file.path}:${row.line.line}`;
+}
+
+const FileRow = memo(function FileRow({ file, open, tabbable, onToggle, onReplace }: {
   file: SearchFile;
   open: boolean;
-  onToggle: () => void;
-  onOpen: OnOpen;
-  onReplace: (() => void) | null;
+  tabbable: boolean;
+  onToggle: (path: string) => void;
+  onReplace: ((path: string) => void) | null;
 }) {
   return (
-    <li>
-      <div className="group/file hover:bg-muted rounded-control flex h-control-sm items-center">
-        <button type="button" title={file.path} aria-expanded={open} onClick={onToggle}
-          className="flex h-full min-w-0 flex-1 items-center gap-1.5 ps-1 text-start text-sm">
-          {open ? <ChevronDown className="size-icon-xs shrink-0" /> : <ChevronRight className="size-icon-xs shrink-0" />}
-          <FileIcon name={file.path} />
-          {/* A long name shrinks only once its folder has gone. */}
-          <span className="min-w-0 truncate">{baseName(file.path)}</span>
-          <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{dirName(file.path)}</span>
-        </button>
-        {onReplace && (
-          <TooltipIconButton tooltip="Replace in this file" size="icon-xs" onClick={onReplace}
-            className="hidden group-focus-within/file:inline-flex group-hover/file:inline-flex">
-            <ReplaceAllGlyph />
-          </TooltipIconButton>
-        )}
-        <span className="bg-muted text-muted-foreground me-1 shrink-0 rounded-full px-1.5 text-xs tabular-nums">{file.matches}</span>
-      </div>
-      {open && (
-        <ul aria-label={`Matches in ${baseName(file.path)}`}>
-          {file.lines.map((line) => (
-            <li key={line.line}>
-              <button type="button" title={`${file.path}:${line.line}`}
-                onClick={() => onOpen(file.path, line.line, false)}
-                onDoubleClick={() => onOpen(file.path, line.line, true)}
-                className="hover:bg-muted rounded-control flex h-control-sm w-full items-center ps-8 pe-2 text-start text-sm">
-                <Preview line={line} />
-              </button>
-            </li>
-          ))}
-        </ul>
+    <div className="group/file hover:bg-muted rounded-control flex h-control-sm items-center">
+      <button type="button" data-row-button title={file.path} aria-expanded={open} tabIndex={tabbable ? 0 : -1}
+        onClick={() => onToggle(file.path)}
+        className="flex h-full min-w-0 flex-1 items-center gap-1.5 ps-1 text-start text-sm">
+        {open ? <ChevronDown className="size-icon-xs shrink-0" /> : <ChevronRight className="size-icon-xs shrink-0" />}
+        <FileIcon name={file.path} />
+        {/* A long name shrinks only once its folder has gone. */}
+        <span className="min-w-0 truncate">{baseName(file.path)}</span>
+        <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{dirName(file.path)}</span>
+      </button>
+      {onReplace && (
+        <TooltipIconButton tooltip="Replace in this file" size="icon-xs" tabIndex={tabbable ? 0 : -1}
+          onClick={() => onReplace(file.path)}
+          className="hidden group-focus-within/file:inline-flex group-hover/file:inline-flex">
+          <ReplaceAllGlyph />
+        </TooltipIconButton>
       )}
-    </li>
+      <span className="bg-muted text-muted-foreground me-1 shrink-0 rounded-full px-1.5 text-xs tabular-nums">{file.matches}</span>
+    </div>
+  );
+});
+
+const LineRow = memo(function LineRow({ file, line, tabbable, onOpen }: {
+  file: SearchFile;
+  line: SearchLine;
+  tabbable: boolean;
+  onOpen: OnOpen;
+}) {
+  return (
+    <button type="button" data-row-button title={`${file.path}:${line.line}`} tabIndex={tabbable ? 0 : -1}
+      onClick={() => onOpen(file.path, line.line, false)}
+      onDoubleClick={() => onOpen(file.path, line.line, true)}
+      className="hover:bg-muted rounded-control flex h-control-sm w-full items-center ps-8 pe-2 text-start text-sm">
+      <Preview line={line} />
+    </button>
   );
 });
 
