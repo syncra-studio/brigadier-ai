@@ -174,9 +174,12 @@ function TabMenu({
   );
 }
 
-/** The rule between the bar's own controls and the toolbar's. */
-function BarDivider() {
-  return <span aria-hidden data-bar-divider className="bg-session-tab-separator mx-0.5 h-4 w-px shrink-0" />;
+/** The rule between the bar's own controls and the toolbar's; `hidden` fades it but keeps its place. */
+function BarDivider({ hidden = false }: { hidden?: boolean }) {
+  return (
+    <span aria-hidden data-bar-divider data-hidden={hidden || undefined}
+      className="bg-session-tab-separator mx-0.5 h-4 w-px shrink-0 transition-opacity duration-150 data-hidden:opacity-0 motion-reduce:transition-none" />
+  );
 }
 
 /**
@@ -244,6 +247,18 @@ export function SessionTabBar({
       list.removeEventListener("transitionend", reveal);
     };
   }, [active, tabCount]);
+
+  // The rule before the toolbar shows once the tabs fill the bar, when no room is left after "+".
+  const [gap, setGap] = useState<HTMLDivElement | null>(null);
+  const [full, setFull] = useState(false);
+  useLayoutEffect(() => {
+    if (!gap) return;
+    const measure = () => setFull(gap.getBoundingClientRect().width < 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(gap);
+    return () => observer.disconnect();
+  }, [gap]);
 
   // On the button's release: the webview may never send `auxclick`.
   const middleClose = (tab: string) => (event: ReactMouseEvent) => {
@@ -465,8 +480,8 @@ export function SessionTabBar({
       {newTab}
       {connecting}
       <PreviewChip conversationId={id} />
-      <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
-      <BarDivider />
+      <div ref={setGap} data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
+      <BarDivider hidden={!full} />
       {children}
     </header>
   );

@@ -106,6 +106,8 @@ function Fixture() {
       seen.plusAfterLast = Math.round(box(newTab())!.left - box(last)!.right);
       seen.plusFarFromContext = Math.round(box(context())!.left - box(newTab())!.right);
       seen.openedControls = controls();
+      // Room is left after "+": no rule before the toolbar.
+      seen.dividerWithRoom = bar().querySelector("[data-bar-divider]")!.hasAttribute("data-hidden");
       const tab = getComputedStyle(last);
       seen.measure = { height: parseFloat(tab.height), radius: parseFloat(tab.borderTopLeftRadius), font: parseFloat(tab.fontSize) };
       seen.activeShadow = tab.boxShadow !== "none";
@@ -123,6 +125,8 @@ function Fixture() {
       seen.besideActive = separator(tabEl(third!.id));
       seen.activeNone = separator(tabEl(fourth!.id));
       seen.before = widths();
+      // The tabs fill the bar: the rule shows.
+      seen.dividerWhenFull = !bar().querySelector("[data-bar-divider]")!.hasAttribute("data-hidden");
       // Chat is in back here: its ⋯ still shows.
       seen.chatActions = getComputedStyle([...bar().querySelectorAll('[role="tablist"] button')].find((button) => button.textContent === "Chat actions")!).opacity;
       seen.clamped = widths().every((width) => width >= 89 && width <= 241);

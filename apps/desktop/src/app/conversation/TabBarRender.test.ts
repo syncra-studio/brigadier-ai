@@ -16,6 +16,8 @@ for (const compact of [false, true]) {
     assert.deepEqual(seen.openedLabels, ["Tidy the release notes", "New tab"], "the chat's tab carries its title");
     const opened = seen.openedControls as string[];
     assert.deepEqual(opened.slice(opened.indexOf("New tab"), opened.indexOf("Context") + 1).filter((label) => label === "|" || label === "New tab" || label === "Context"), ["New tab", "|", "Context"], `+ follows the tabs, a divider leads the toolbar: ${opened}`);
+    assert.equal(seen.dividerWithRoom, true, "with room after +, the divider before the toolbar is hidden");
+    assert.equal(seen.dividerWhenFull, true, "once the tabs fill the bar, the divider shows");
     // 6 px, scaled with the density.
     assert.equal(seen.plusAfterLast, compact ? 5 : 6, "+ comes right after the last tab");
     assert.ok(Number(seen.plusFarFromContext) > 100, "+ is no longer at the end");
