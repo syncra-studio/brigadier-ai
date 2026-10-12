@@ -282,7 +282,7 @@ test("an interview is one block: two answered rounds and a steer, each round a r
   // Neither round stays out of the fold: both fold with the work once it is done.
   assert.ok(block.cards.every((card) => !card.keep));
   assert.equal(turnActivity(sequence).length, 3);
-  assert.deepEqual([first, second].map(questionRowWords), ["Asked 3 questions", "Asked 3 questions"]);
+  assert.deepEqual([first, second].map(questionRowWords), ["Asked: Question 1? +2 more → Yes", "Asked: Question 1? +2 more → No"]);
 });
 
 test("a question card's row says what it asks, what it asked, and the recommended answer", () => {
@@ -291,7 +291,7 @@ test("a question card's row says what it asks, what it asked, and the recommende
   const withdrawn = { ...open, answeredAtMs: 2 };
   assert.equal(questionRowWords(withdrawn), "Asked 2 questions · withdrawn");
   const single = { ...roundCard("q2", "r", 1, 1, ["No"]), items: [], text: "Ship it?", options: ["Yes", "No"], recommended: 0, answers: [], answer: "No" };
-  assert.equal(questionRowWords(single), "Asked a question");
+  assert.equal(questionRowWords(single), "Asked: Ship it? → No");
   const [item] = questionRound(single);
   assert.ok(item);
   assert.equal(item.text, "Ship it?");

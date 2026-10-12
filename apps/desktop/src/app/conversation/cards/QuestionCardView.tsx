@@ -4,19 +4,22 @@ import { memo } from "react";
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import {
   answerWords,
+  askedRow,
   questionAnswers,
   questionRound,
   questionRowWords,
 } from "@/app/conversation/cards/questionRound";
 import { CHEVRON, OPENS, ROW, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
+import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 
 /**
  * A question card in the thread's work: one row. While its card waits in the composer's place,
- * "Asking questions"; once answered, "Asked 3 questions", which opens to each question and the
- * answer given; withdrawn when the user changed the request that asked.
+ * "Asking questions"; once answered, "Asked: Watch CI for d177d69? → Watch" (the first question
+ * in one line, "+2 more" for a round, the answer as a chip), which opens to each question and
+ * the answer given; withdrawn when the user changed the request that asked.
  */
 export const QuestionCardView = memo(function QuestionCardView({ cardId }: { cardId: string }) {
   const question = useBoard((s) => s.board?.questions[cardId]);
@@ -33,11 +36,29 @@ export const QuestionCardView = memo(function QuestionCardView({ cardId }: { car
     );
   }
   const round = questionRound(question);
+  const asked = askedRow(question);
   return (
     <Collapsible data-slot="question-row">
-      <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
+      <CollapsibleTrigger
+        title={round.map((item) => item.text).join("\n")}
+        aria-label={words}
+        className={cn(ROW, ROW_TOGGLE)}
+      >
         {icon}
-        <span className="truncate">{words}</span>
+        {asked ? (
+          <>
+            <span className="truncate">
+              Asked: <CodeSpans text={asked.asked} />
+              {asked.more > 0 && ` +${asked.more} more`}
+            </span>
+            <span aria-hidden className="text-foreground/40 shrink-0">→</span>
+            <Badge data-slot="question-answer" variant="secondary" className="max-w-40">
+              <span className="truncate">{asked.answer}</span>
+            </Badge>
+          </>
+        ) : (
+          <span className="truncate">{words}</span>
+        )}
         <ChevronRight aria-hidden className={CHEVRON} />
       </CollapsibleTrigger>
       <CollapsibleContent className={OPENS}>
