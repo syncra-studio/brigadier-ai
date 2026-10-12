@@ -117,6 +117,84 @@ fn a_page_is_created_read_saved_listed_and_deleted() {
     assert_eq!(listed[0].id, other.id);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_page_id_cannot_read_or_overwrite_a_symlink_outside_the_pages_folder() {
+    use std::os::unix::fs::symlink;
+
+    let folder = Folder::new();
+    let pages = folder.pages();
+    let page = pages.create().unwrap();
+    let outside = folder.0.join("outside.md");
+    fs::write(&outside, "outside private text").unwrap();
+    fs::remove_file(pages.inner.path(&page.id)).unwrap();
+    symlink(&outside, pages.inner.path(&page.id)).unwrap();
+
+    assert!(pages.read(&page.id).is_err());
+    assert!(pages.list().unwrap().is_empty());
+    assert!(
+        pages
+            .write(
+                &page.id,
+                &content("", None, "replacement"),
+                &revision(b"outside private text")
+            )
+            .is_err()
+    );
+    pages.inner.refresh(&page.id);
+    assert_ne!(
+        lock(&pages.inner.known).get(&page.id),
+        Some(&revision(b"outside private text"))
+    );
+    pages.delete(&page.id).unwrap();
+    assert_eq!(fs::read_to_string(outside).unwrap(), "outside private text");
+}
+
+#[test]
+fn concurrent_writes_to_one_revision_save_one_side_and_conflict_the_other() {
+    let folder = Folder::new();
+    let pages = Arc::new(folder.pages());
+    let page = pages.create().unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let writes: Vec<_> = ["one", "two"]
+        .into_iter()
+        .map(|body| {
+            let pages = pages.clone();
+            let page = page.clone();
+            let barrier = barrier.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                pages
+                    .write(&page.id, &content("", None, body), &page.revision)
+                    .unwrap()
+            })
+        })
+        .collect();
+    barrier.wait();
+    let outcomes: Vec<_> = writes
+        .into_iter()
+        .map(|write| write.join().unwrap())
+        .collect();
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, PageWriteOutcome::Saved { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, PageWriteOutcome::Conflict { .. }))
+            .count(),
+        1
+    );
+    assert!(matches!(
+        pages.read(&page.id).unwrap().content.body.as_str(),
+        "one" | "two"
+    ));
+}
+
 #[test]
 fn the_list_puts_the_most_recently_changed_page_first() {
     let folder = Folder::new();

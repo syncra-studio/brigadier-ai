@@ -14,7 +14,7 @@ mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
@@ -311,7 +311,29 @@ impl Inner {
     }
 
     fn read_bytes(&self, id: &str) -> Result<Vec<u8>, PageError> {
-        fs::read(self.path(id)).map_err(|error| {
+        let read = || -> io::Result<Vec<u8>> {
+            let path = self.path(id);
+            // A correctly named symlink is still not a page: never follow it outside the
+            // folder, including when another program swaps it after the metadata check.
+            if !fs::symlink_metadata(&path)?.file_type().is_file() {
+                return Err(io::Error::other("the page is not a regular file"));
+            }
+            let mut options = OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                options.custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK);
+            }
+            let mut file = options.open(path)?;
+            if !file.metadata()?.is_file() {
+                return Err(io::Error::other("the page is not a regular file"));
+            }
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        };
+        read().map_err(|error| {
             if error.kind() == io::ErrorKind::NotFound {
                 PageError::NotFound(id.to_owned())
             } else {
@@ -425,9 +447,9 @@ impl Inner {
     fn refresh(&self, id: &str) {
         let page_lock = self.page_lock(id);
         let _held = lock(&page_lock);
-        match fs::read(self.path(id)) {
+        match self.read_bytes(id) {
             Ok(bytes) => self.observe(id, Some(&revision(&bytes)), true),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => self.observe(id, None, true),
+            Err(PageError::NotFound(_)) => self.observe(id, None, true),
             Err(error) => tracing::debug!(%error, id, "could not read a changed page"),
         }
     }
