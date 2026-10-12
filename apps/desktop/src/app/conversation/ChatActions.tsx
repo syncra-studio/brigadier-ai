@@ -3,6 +3,7 @@ import {
   Archive,
   BranchAlt,
   Copy,
+  Dock,
   DotsHorizontal,
   Folder,
   Pencil,
@@ -15,7 +16,6 @@ import { FORK_PLACES } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
 import { NameDialog } from "@/app/NameDialog";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { TerminalGlyph } from "@/components/glyphs/codicons";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -218,7 +218,7 @@ export const ChatActions: FC<{
                     <DropdownMenuItem
                       onSelect={() => void openFolder(directory, "Terminal").catch(fail)}
                     >
-                      <TerminalGlyph />
+                      <Dock />
                       Terminal
                     </DropdownMenuItem>
                   )}

@@ -1,4 +1,4 @@
-import { Archive, Chat, ChatCompose, Globe, Plus, SquarePlus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, ChatCompose, Dock, Globe, Plus, SquarePlus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -13,7 +13,6 @@ import {
 } from "react";
 
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
-import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { TitlebarButton } from "@/components/titlebar-button";
 import { ThreadTitle, UNTITLED } from "@/app/TopBar";
 import { sessionTabKey } from "@/state/sessionTabKeys";
@@ -446,7 +445,7 @@ export function SessionTabBar({
                         <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
                       ) : tab.kind === "newTab" ? <Globe className="size-icon-sm shrink-0" />
                         : tab.kind === "browser" ? <BrowserTabIcon tabId={tab.id} />
-                        : tab.kind === "terminal" ? <TerminalGlyph className="size-icon-sm shrink-0" />
+                        : tab.kind === "terminal" ? <Dock className="size-icon-sm shrink-0" />
                         : tab.kind === "sideChat" ? <ChatCompose className="size-icon-sm shrink-0" />
                         : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />
                         : tab.kind === "mockup" ? <MockupTabIcon conversationId={id} /> : (

@@ -1,6 +1,7 @@
 import {
   Check,
   Commit,
+  Dock,
   Globe,
   Sparkle,
   X,
@@ -14,7 +15,6 @@ import {
   ApprovalCard,
   ApprovalCardCode,
 } from "@/components/assistant-ui/elements/approval-card";
-import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { DECIDERS } from "@/components/transcript/TranscriptRow";
 import { Badge } from "@/components/ui/badge";
 import type { CardState } from "@/ipc/generated";
@@ -78,7 +78,7 @@ function describe(
     case "cli": {
       const { request } = subject;
       return {
-        icon: <TerminalGlyph />,
+        icon: <Dock />,
         title: `Allow ${request.tool}?`,
         subtitle: byline(by, request.reason),
         body: (

@@ -1,6 +1,7 @@
 import {
   Book,
   CheckCircle,
+  Dock,
   EditPencil,
   Globe,
   PlayCircle,
@@ -11,7 +12,6 @@ import {
 import type { FC } from "react";
 
 import type { WorkKind } from "@/app/conversation/activity/words";
-import { TerminalGlyph } from "@/components/glyphs/codicons";
 
 /**
  * The one row recipe of a thread's activity (THREAD-UX-PLAN.md §3.7), the lead's and a worker's
@@ -44,7 +44,7 @@ export const OPENS =
 export const WORK_ICONS: Record<WorkKind, FC<{ className?: string }>> = {
   read: Book,
   edit: EditPencil,
-  run: TerminalGlyph,
+  run: Dock,
   code: Search,
   web: Globe,
   memory: Sparkle,

@@ -1,4 +1,4 @@
-import { ChatCompose, ChevronDown, Document, DotsHorizontal, Globe, Grid, Search, X } from "@openai/apps-sdk-ui/components/Icon";
+import { ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Globe, Grid, Search, X } from "@openai/apps-sdk-ui/components/Icon";
 import { useContext, useEffect, useState } from "react";
 
 import { WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
@@ -6,7 +6,6 @@ import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { pageList } from "@/ipc/client";
@@ -70,7 +69,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
           <div data-slot="new-tab-tools" className="new-tab-grid">
             <div className="new-tab-card">
               <button type="button" aria-label="Terminal" disabled={archived} onClick={() => replaceNewTab(conversationId, tabId, "terminal", cwd)} className="new-tab-tool">
-                <TerminalGlyph aria-hidden /><span className="new-tab-tool-label">Terminal</span>
+                <Dock aria-hidden /><span className="new-tab-tool-label">Terminal</span>
                 <Kbd>{shortcutLabel("⌃`", mac)}</Kbd>
               </button>
               <DropdownMenu>

@@ -2,6 +2,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Commit,
+  Dock,
   Globe,
   Key,
   PencilSquare,
@@ -43,7 +44,6 @@ import {
   staggered,
 } from "@/components/assistant-ui/elements/action-card";
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
-import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -311,7 +311,7 @@ function describe(
       const edits = request.kind === "fileChange" || request.paths.length > 0;
       const web = request.tool === "SandboxNetworkAccess" || /web|fetch|search|network/i.test(request.tool);
       const [icon, kind] = request.command
-        ? [<TerminalGlyph key="icon" />, "Terminal"]
+        ? [<Dock key="icon" />, "Terminal"]
         : edits
           ? [<PencilSquare key="icon" />, "Edit files"]
           : web
@@ -350,7 +350,7 @@ function describe(
     }
     case "outwardCommand":
       return {
-        icon: <TerminalGlyph />,
+        icon: <Dock />,
         kind: "Terminal",
         title: "Allow this command? It reaches outside this computer.",
         body: <ActionCardCode>{shownCommand(subject.argv.map(quote).join(" "))}</ActionCardCode>,
