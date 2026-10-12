@@ -310,11 +310,17 @@ async fn resolve(flow: &Flow) -> String {
 /// Waits for the review of the landing at `tip` to end: a held merge waits for it
 /// (SESSION-FIXES-PLAN.md Q3).
 async fn review_ended(flow: &Flow, tip: &str) {
+    // Every review, not only this tip's: a held merge waits while any review of the
+    // session's work runs, and a slow machine can still be running another.
     flow.until("the landing's review to end", |board| {
         board
             .reviews
             .values()
             .any(|review| review.tip == tip && review.state != crate::work::ReviewState::Running)
+            && board
+                .reviews
+                .values()
+                .all(|review| review.state != crate::work::ReviewState::Running)
     })
     .await;
     flow.settled().await;
