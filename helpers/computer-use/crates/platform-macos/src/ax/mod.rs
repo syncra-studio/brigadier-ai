@@ -18,6 +18,7 @@
 
 pub mod bindings;
 pub mod cache;
+pub(crate) mod offspace;
 pub mod tree;
 
 pub use cache::ElementCache;

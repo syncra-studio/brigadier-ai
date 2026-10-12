@@ -37,6 +37,10 @@ the repository's `THIRD_PARTY_NOTICES.md`. Changes from the original:
   agents are told to pass theirs on every call.
 - The bundle explains its Apple Events use, so macOS can ask before browser
   page actions control Safari or Chrome.
+- Windows on another Space (an app launched in the background while the
+  user works in a full-screen app) are found by remote token
+  (`ax/offspace.rs`), so they can be read, captured and driven without
+  switching Spaces.
 - Development builds of Brigadier stay targetable; the user's release
   Brigadier is not.
 

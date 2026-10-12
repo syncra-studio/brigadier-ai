@@ -13,6 +13,7 @@
 use core_foundation::{
     array::CFArrayRef,
     base::{CFRelease, CFRetain, CFTypeID, CFTypeRef},
+    data::CFDataRef,
     string::CFStringRef,
 };
 use std::os::raw::{c_int, c_void};
@@ -85,6 +86,14 @@ extern "C" {
     /// Private SPI: maps an AX window element to its CGWindowID.
     /// Stable since macOS 10.9; used by yabai, Hammerspoon, Accessibility Inspector.
     pub fn _AXUIElementGetWindow(element: AXUIElementRef, window_id: *mut u32) -> AXError;
+
+    /// Private SPI: builds an element from its 20-byte remote token (pid, 0,
+    /// `'coco'`, element id). It is the only way to reach the windows an app
+    /// keeps on another Space: AppKit leaves them out of `AXWindows`.
+    pub fn _AXUIElementCreateWithRemoteToken(token: CFDataRef) -> AXUIElementRef;
+    pub fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> AXError;
+    /// Per-element request timeout in seconds; 0 restores the system default.
+    pub fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, seconds: f32) -> AXError;
 }
 
 /// Hit-test one process's accessibility tree at a screen point. The returned
@@ -496,32 +505,58 @@ pub unsafe fn ax_get_window_id(element: AXUIElementRef) -> Option<u32> {
     }
 }
 
-/// Read the `AXWindows` attribute of an application element.
-/// Unlike `AXChildren`, this returns the window list regardless of whether
-/// the app is frontmost. Returns a Vec of retained AXUIElementRefs.
+/// Every window element of an application: `AXWindows`, plus the focused and
+/// main windows, plus windows found by remote token. AppKit leaves windows on
+/// another Space out of `AXWindows` (an app launched in the background while
+/// the user works in a full-screen app opens there), so the union is what
+/// lets an agent read and drive them without switching Spaces. Each element is
+/// retained; the caller releases it.
 pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
-    let attr = CFStr::new("AXWindows");
-    let mut value: CFTypeRef = std::ptr::null();
-    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value);
-    if err != kAXErrorSuccess || value.is_null() {
-        return vec![];
+    let mut windows = copy_element_array_attr(element, "AXWindows");
+    let mut known: Vec<Option<u32>> = windows.iter().map(|w| ax_get_window_id(*w)).collect();
+    let mut keep = |w: AXUIElementRef, windows: &mut Vec<AXUIElementRef>| {
+        let id = ax_get_window_id(w);
+        let duplicate = windows.iter().any(|&existing| {
+            core_foundation::base::CFEqual(existing as CFTypeRef, w as CFTypeRef) != 0
+        }) || (id.is_some() && known.contains(&id));
+        if duplicate || copy_string_attr(w, "AXRole").as_deref() != Some("AXWindow") {
+            CFRelease(w as CFTypeRef);
+        } else {
+            known.push(id);
+            windows.push(w);
+        }
+    };
+    for attr in ["AXFocusedWindow", "AXMainWindow"] {
+        if let Some(w) = copy_element_attr(element, attr) {
+            keep(w, &mut windows);
+        }
     }
-    let cf_array_type_id = CFArray::<CFTypeRef>::type_id();
-    if core_foundation::base::CFGetTypeID(value) != cf_array_type_id {
-        CFRelease(value);
-        return vec![];
+    let mut pid = 0;
+    if AXUIElementGetPid(element, &mut pid) == kAXErrorSuccess && pid > 0 {
+        let have: Vec<u32> = windows
+            .iter()
+            .filter_map(|w| ax_get_window_id(*w))
+            .collect();
+        for w in super::offspace::windows_by_token(pid, &have) {
+            keep(w, &mut windows);
+        }
     }
-    let arr = CFArray::<CFTypeRef>::wrap_under_create_rule(value as _);
-    let ax_type_id = AXUIElementGetTypeID();
-    (0..arr.len())
-        .filter_map(|i| {
-            let item = *arr.get(i)?;
-            if core_foundation::base::CFGetTypeID(item) == ax_type_id {
-                CFRetain(item);
-                Some(item as AXUIElementRef)
-            } else {
-                None
-            }
-        })
-        .collect()
+    windows
+}
+
+/// A remote token: pid, four zero bytes, `'coco'`, then the element id.
+pub(crate) fn remote_token(pid: i32, element_id: u64) -> [u8; 20] {
+    let mut token = [0u8; 20];
+    token[0..4].copy_from_slice(&pid.to_ne_bytes());
+    token[8..12].copy_from_slice(&0x636f_636f_i32.to_ne_bytes());
+    token[12..20].copy_from_slice(&element_id.to_ne_bytes());
+    token
+}
+
+/// The element for remote token `element_id` in `pid`, retained.
+pub(crate) unsafe fn element_from_token(pid: i32, element_id: u64) -> Option<AXUIElementRef> {
+    use core_foundation::{base::TCFType, data::CFData};
+    let data = CFData::from_buffer(&remote_token(pid, element_id));
+    let element = _AXUIElementCreateWithRemoteToken(data.as_concrete_TypeRef());
+    (!element.is_null()).then_some(element)
 }
