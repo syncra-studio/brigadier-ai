@@ -33,7 +33,7 @@ impl StatusClock {
     }
 
     /// Tests: when the user last saw something new in `request`.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn shown_at(&self, request: &str) -> Option<i64> {
         self.shown.get(request).copied()
     }
