@@ -112,7 +112,7 @@ async fn a_hung_background_job_still_gets_the_worker_nudged() {
     flow.say("Read the files.").await;
     let board = flow.settled().await;
     assert_eq!(Flow::task(&board, 1).state, TaskState::Done);
-    let inputs = inputs.lock().unwrap();
+    let inputs = inputs.lock().unwrap().clone();
     assert_eq!(inputs.len(), 2);
     assert!(
         inputs[1].contains("without calling submit_report"),
