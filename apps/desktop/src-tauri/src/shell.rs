@@ -43,6 +43,8 @@ const FLUSH_TIMEOUT: Duration = Duration::from_millis(1500);
 const FLUSH_PAGES: &str = "flush-pages";
 /// The flush waiting for the window's answer: its token and who hears the answer.
 static FLUSH: Mutex<Option<(u64, oneshot::Sender<()>)>> = Mutex::new(None);
+/// A window close and a quit must each finish their save request before the next replaces it.
+static FLUSH_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static NEXT_FLUSH: AtomicU64 = AtomicU64::new(1);
 
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -432,11 +434,15 @@ pub fn browser_menu(app: &AppHandle, on: bool) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Closing the window hides it when the menu-bar item can bring it back; without one (a
-/// desktop with no tray host) closing quits.
+/// Closing the window saves its pages before hiding it when the menu-bar item can bring it
+/// back; without one (a desktop with no tray host) closing quits.
 pub fn close_main(app: &AppHandle) {
     if IN_MENU_BAR.load(Ordering::Acquire) {
-        hide_main(app);
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            flush_pages(&app).await;
+            hide_main(&app);
+        });
     } else {
         quit(app, 0);
     }
@@ -498,6 +504,7 @@ async fn flush_pages(app: &AppHandle) {
     if crate::overnight_notifications::is_host() || main_window(app).is_none() {
         return;
     }
+    let _held = FLUSH_GATE.lock().await;
     let token = NEXT_FLUSH.fetch_add(1, Ordering::Relaxed);
     let (answered, answer) = oneshot::channel();
     *FLUSH
