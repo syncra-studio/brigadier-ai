@@ -856,21 +856,23 @@
 /* ── First launch ───────────────────────────────────────────────────────────────────────────
    The welcome intro and the setup after it (styles/onboarding.css, app/onboarding), from the
    moment the intro starts. The comet's beats are drawn by app/onboarding/IntroCanvas.tsx: it
-   streaks in from 0.25 s, reaches the centre at 2.2 s and has become the mark by 2.9 s, which
-   flares out at 3.5 s and has all but filled the window at 3.9 s, when the window's chrome
-   comes back (src-tauri/src/intro.rs dims the desktop from 0 s). The welcome sound's beats
-   match (scripts/render-welcome-sound.mjs: LAND, FLARE, HEADING, CONTINUE). */
+   streaks in from 0.25 s, reaches the centre at 2.2 s and has become the crisp mark by 2.9 s,
+   which holds, draws in at 3.55 s and bursts at 3.68 s; the shockwave passes the window's
+   corners by 4.05 s, when the window's chrome comes back (src-tauri/src/intro.rs dims the
+   desktop from 0 s), and the waves come up by 5.2 s. The welcome sound's beats match
+   (scripts/render-welcome-sound.mjs: LAND, COLLAPSE, BURST, HEADING, CONTINUE). */
 :root {
   /* The desktop's dim lifts from here, over this long. */
-  --intro-dim-lift-at: 4.4s;
+  --intro-dim-lift-at: 4.5s;
   --intro-dim-lift: 1.85s;
-  /* The heading, then its line, a letter at a time (app/onboarding/StaggerText.tsx). */
-  --intro-heading: 4.6s;
+  /* The title, a letter at a time, one line after the other (app/onboarding/StaggerText.tsx). */
+  --intro-heading: 4.7s;
   --intro-letter-stagger: 35ms;
-  --intro-line-at: 5.2s;
-  --intro-line-stagger: 14ms;
-  --intro-continue: 6.5s;
+  /* The button under it. */
+  --intro-continue: 6.4s;
   --intro-continue-in: 0.45s;
+  /* The welcome's black cross-fading into the name step's backdrop. */
+  --intro-to-name: 0.6s;
   --intro-ease: cubic-bezier(0.22, 1, 0.36, 1);
   /* The mark above the name field. */
   --intro-mark-size: 8.5rem;
@@ -880,7 +882,11 @@
   --onboarding-rise: 0.5rem;
   --onboarding-stagger: 50ms;
   --onboarding-heading: clamp(1.75rem, 3vw, 2.5rem);
-  /* The welcome's heading and the name's question, larger than a step's. */
+  /* The name's question, larger than a step's. */
   --welcome-heading: clamp(2.25rem, 4.5vw, 3.25rem);
+  /* The welcome's two-line title, and the button's distance under it. */
+  --welcome-title: clamp(2.75rem, 6vw, 4.75rem);
+  --welcome-title-tracking: -0.035em;
+  --welcome-title-gap: 1.75rem;
   --onboarding-heading-tracking: -0.035em;
 }

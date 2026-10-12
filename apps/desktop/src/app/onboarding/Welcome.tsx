@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
+import { ArrowRight } from "@openai/apps-sdk-ui/components/Icon";
 
 import { errorText } from "@/app/dialogs/fields";
 import { IntroCanvas, WINDOW_SHAPED } from "@/app/onboarding/IntroCanvas";
@@ -20,8 +21,11 @@ const STAGE_PAINT_MS = 50;
 /** The desktop's dim fading out, early (Escape, the window ending it). */
 const QUICK_LIFT_MS = 300;
 
-const HEADING = "Welcome to Brigadier";
-const LINE = "Your next idea starts here.";
+/**
+ * The welcome's title, a line at a time: the first shorter than the second. Others to try:
+ * ["Let us", "command your fleet."], ["Trust us to", "command your fleet."].
+ */
+const TITLE = ["Let Brigadier", "command your fleet."] as const;
 
 /** A time token from tokens.css ("2.2s", "450ms") in milliseconds. */
 function tokenMs(name: string): number {
@@ -43,12 +47,12 @@ function setPageStaged(staged: boolean): void {
 /**
  * The first launch's welcome, then the name. The intro starts with its sound. On macOS's
  * first launch the desktop dims and the window shows only a comet, which streaks in and
- * becomes Brigadier's mark, then flares open into the window; the window's chrome comes back
- * around faint white waves on the shell's dark. As the dim lifts, "Welcome to Brigadier" and
- * its line come in a letter at a time, and Continue appears last; only then can it be used
- * (Enter too, as it takes the focus). Elsewhere it plays the same inside the window, without
- * the dim. Escape shows the end at once, as reduced motion does. The name step shows the mark
- * above the question.
+ * becomes Brigadier's mark, crisp and white; the mark bursts like a star, and its shockwave
+ * opens the window, pure black; the window's chrome comes back around faint white waves. As
+ * the dim lifts, the title comes in a letter at a time, and the button under it appears last;
+ * only then can it be used (Enter too, as it takes the focus). Elsewhere it plays the same
+ * inside the window, without the dim. Escape shows the end at once, as reduced motion does.
+ * The name step fades in over the setup's own backdrop and shows the mark above the question.
  */
 export function Welcome({
   step,
@@ -210,27 +214,22 @@ export function Welcome({
         />
       )}
       {step === "intro" ? (
-        <>
-          <div className="welcome-copy">
-            <DialogTitle asChild>
-              <h1 className="welcome-heading" aria-label={HEADING}>
-                <StaggerText
-                  text={HEADING}
-                  play={playing}
-                  delayMs={tokenMs("--intro-heading")}
-                  staggerMs={tokenMs("--intro-letter-stagger")}
-                />
-              </h1>
-            </DialogTitle>
-            <p className="welcome-line text-muted-foreground mt-3 text-lg" aria-label={LINE}>
-              <StaggerText
-                text={LINE}
-                play={playing}
-                delayMs={tokenMs("--intro-line-at")}
-                staggerMs={tokenMs("--intro-line-stagger")}
-              />
-            </p>
-          </div>
+        <div className="welcome-copy">
+          <DialogTitle asChild>
+            <h1 className="welcome-title" aria-label={TITLE.join(" ")}>
+              {TITLE.map((line, index) => (
+                <span key={line} className="welcome-title-line">
+                  <StaggerText
+                    text={line}
+                    play={playing}
+                    // The second line follows on from the first's last letter.
+                    delayMs={tokenMs("--intro-heading") + lettersBefore(index) * tokenMs("--intro-letter-stagger")}
+                    staggerMs={tokenMs("--intro-letter-stagger")}
+                  />
+                </span>
+              ))}
+            </h1>
+          </DialogTitle>
           <div
             className="welcome-continue"
             onAnimationEnd={(event) => {
@@ -239,9 +238,9 @@ export function Welcome({
               }
             }}
           >
-            <ContinueButton ready={ready} onClick={onContinue} />
+            <ContinueButton ready={ready} arrow onClick={onContinue} />
           </div>
-        </>
+        </div>
       ) : (
         <>
           <div className="welcome-mark" aria-hidden>
@@ -254,14 +253,22 @@ export function Welcome({
   );
 }
 
+/** How many letters (spaces aside) the title's lines before `line` hold. */
+function lettersBefore(line: number): number {
+  return TITLE.slice(0, line).reduce((sum, text) => sum + text.replaceAll(" ", "").length, 0);
+}
+
 function ContinueButton({
   ready,
   busy = false,
+  arrow = false,
   onClick,
   form,
 }: {
   ready: boolean;
   busy?: boolean;
+  /** Just an arrow (and the key), not the word. */
+  arrow?: boolean;
   onClick?: () => void;
   form?: string;
 }) {
@@ -273,15 +280,16 @@ function ContinueButton({
   return (
     <Button
       ref={button}
-      size="lg"
+      size={arrow ? "default" : "lg"}
       type={form ? "submit" : "button"}
       form={form}
       disabled={!ready || busy}
       onClick={onClick}
-      className="min-w-32 gap-2"
+      aria-label={arrow ? "Continue" : undefined}
+      className={arrow ? "gap-2 px-4" : "min-w-32 gap-2"}
     >
       {busy && <Spinner className="animate-spin" />}
-      Continue
+      {arrow ? <ArrowRight /> : "Continue"}
       <Kbd>⏎</Kbd>
     </Button>
   );
