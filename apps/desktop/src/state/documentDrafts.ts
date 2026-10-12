@@ -6,7 +6,7 @@
 const PREFIX = "brigadier.document.";
 
 export function documentText(id: string): string {
-  try { return localStorage.getItem(PREFIX + id) ?? ""; } catch { return ""; }
+  return localStorage.getItem(PREFIX + id) ?? "";
 }
 
 /** Whether the draft is what was last saved to its file (never saved: whether it is empty). */
@@ -25,13 +25,12 @@ export function discardDocument(id: string): void {
   } catch (error) { console.error("Could not remove the document draft", error); }
 }
 
-/** Drafts no tab is waiting to move into a page. */
-export function pruneDocumentDrafts(ids: Set<string>): void {
-  try {
-    for (const key of Object.keys(localStorage)) {
-      if (!key.startsWith(PREFIX)) continue;
-      const id = key.slice(PREFIX.length).replace(/\.saved$/, "");
-      if (!ids.has(id)) localStorage.removeItem(key);
-    }
-  } catch (error) { console.error("Could not remove abandoned document drafts", error); }
+/** Drafts may outlive their closed tab: migrate their unsaved text too, before removing keys. */
+export function documentDraftIds(): string[] {
+  const ids: string[] = [];
+  for (let at = 0; at < localStorage.length; at += 1) {
+    const key = localStorage.key(at);
+    if (key?.startsWith(PREFIX) && !key.endsWith(".saved")) ids.push(key.slice(PREFIX.length));
+  }
+  return ids;
 }

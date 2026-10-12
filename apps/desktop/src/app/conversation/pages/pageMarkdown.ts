@@ -39,7 +39,7 @@ import {
   TableNode,
   TableRowNode,
 } from "@lexical/table";
-import { $isElementNode, $isTextNode, type Klass, type LexicalNode } from "lexical";
+import { $isTextNode, type Klass, type LexicalNode } from "lexical";
 
 /**
  * A page's body is plain Markdown on disk. Every block and style the editor offers has a
@@ -86,7 +86,8 @@ const TABLE_ROW = /^\|(.*)\|\s*$/;
 
 function cells(line: string): string[] {
   const inner = TABLE_ROW.exec(line)?.[1] ?? "";
-  return inner.split(/(?<!\\)\|/).map((cell) => cell.trim().replaceAll("\\|", "|"));
+  return inner.split(/(?<!\\)\|/).map((cell) => cell.trim().replaceAll("\\|", "|")
+    .replaceAll("<br>", "\n").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&"));
 }
 
 function $cell(text: string, header: boolean): TableCellNode {
@@ -98,12 +99,13 @@ function $cell(text: string, header: boolean): TableCellNode {
 /** A GitHub-style table: a header row, the `| --- |` line, then the rows. */
 const TABLE: MultilineElementTransformer = {
   dependencies: [TableNode, TableRowNode, TableCellNode],
-  export: (node, exportChildren) => {
+  export: (node) => {
     if (!$isTableNode(node)) return null;
     const rows = node.getChildren().filter($isTableRowNode).map((row) =>
       row.getChildren().filter($isTableCellNode).map((cell) =>
-        cell.getChildren().map((child) => ($isElementNode(child) ? exportChildren(child) : child.getTextContent()))
-          .join(" ").replaceAll("\n", " ").replaceAll("|", "\\|")));
+        $convertToMarkdownString(PAGE_TRANSFORMERS, cell)
+          .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+          .replaceAll("\n", "<br>").replaceAll("|", "\\|")));
     const width = Math.max(1, ...rows.map((row) => row.length));
     const line = (row: string[]) => `| ${Array.from({ length: width }, (_, at) => row[at] ?? "").join(" | ")} |`;
     const [head = [], ...body] = rows;

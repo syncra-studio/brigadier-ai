@@ -9,6 +9,8 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
   getItem: (key: string) => data.get(key) ?? null,
   setItem: (key: string, value: string) => data.set(key, value),
   removeItem: (key: string) => data.delete(key),
+  get length() { return data.size; },
+  key: (at: number) => [...data.keys()][at] ?? null,
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, closeOtherTabs, reopenTab, moveTab,
@@ -150,6 +152,22 @@ test("old New file drafts migrate: dirty ones and outside saves become pages, cl
   // A second run makes no second page for the tabs already moved.
   await migrateDrafts(ipc);
   assert.equal(made, 6);
+});
+
+test("unsaved drafts whose tab was closed survive rehydration and become recent pages", async () => {
+  data.clear();
+  useSessionTabs.setState({ sessions: {} });
+  data.set("brigadier.document.document:closed-dirty", "last unsaved words");
+  data.set("brigadier.document.document:closed-dirty.saved", "previous words");
+  await useSessionTabs.persist.rehydrate();
+  assert.equal(documentText("document:closed-dirty"), "last unsaved words");
+  const written: string[] = [];
+  await migrateDrafts({
+    create: async () => ({ id: "orphan-copy", revision: "r0", content: { title: "", emoji: null, body: "" }, createdMs: 0, updatedMs: 0 }),
+    write: async (_id, content) => { written.push(content.body); return { type: "saved", revision: "r1" }; },
+  });
+  assert.deepEqual(written, ["last unsaved words"]);
+  assert.equal(data.has("brigadier.document.document:closed-dirty"), false);
 });
 
 test("OSC folders reject remote hosts and decode Windows drive paths", () => {

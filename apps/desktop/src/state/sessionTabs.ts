@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { notePaneClose } from "@/state/closedPanes";
-import { discardDocument, documentIsSaved, pruneDocumentDrafts } from "@/state/documentDrafts";
+import { discardDocument, documentIsSaved } from "@/state/documentDrafts";
 
 /**
  * A session's tabs over its main area: Chat (the conversation, always first and never
@@ -101,7 +101,6 @@ export const useSessionTabs = create<{ sessions: Record<string, SessionTabs> }>(
           session.tabs.flatMap((tab) => tab.kind === "page" && tab.draft ? [tab.draft] : [])));
         for (const session of Object.values(previous)) for (const tab of session.tabs as (SessionTab | LegacyDocumentTab)[])
           if (tab.kind === "document" && !waiting.has(tab.id)) discardDocument(tab.id);
-        pruneDocumentDrafts(waiting);
       } catch { /* Retain draft keys when storage is unavailable. */ }
       return { sessions };
     },

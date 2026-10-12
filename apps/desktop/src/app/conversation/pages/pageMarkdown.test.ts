@@ -4,7 +4,8 @@ import { test } from "node:test";
 import { createHeadlessEditor } from "@lexical/headless";
 import { $isListNode, type ListItemNode, type ListNode } from "@lexical/list";
 import { $isHeadingNode } from "@lexical/rich-text";
-import { $getRoot, type ElementNode } from "lexical";
+import { $createLineBreakNode, $createParagraphNode, $createTextNode, $getRoot, type ElementNode } from "lexical";
+import { $createTableCellNode, $createTableNode, $createTableRowNode } from "@lexical/table";
 
 import { $exportPage, $importPage, PAGE_NODES } from "./pageMarkdown";
 
@@ -40,6 +41,28 @@ test("a second round trip changes nothing", () => {
 
 test("an empty page stays empty", () => {
   assert.equal(roundTrip(""), "");
+});
+
+test("a table cell keeps line breaks, paragraphs, styles and literal HTML across reloads", () => {
+  const editor = createHeadlessEditor({ nodes: PAGE_NODES, onError: (error) => { throw error; } });
+  editor.update(() => {
+    const cell = $createTableCellNode(1).append(
+      $createParagraphNode().append($createTextNode("first").toggleFormat("bold"), $createLineBreakNode(), $createTextNode("second")),
+      $createParagraphNode().append($createTextNode("literal <br> & <u>")),
+    );
+    $getRoot().append($createTableNode().append($createTableRowNode().append(cell)));
+  }, { discrete: true });
+  const markdown = editor.getEditorState().read(() => $exportPage());
+  assert.equal(markdown, "| **first**<br>second<br><br>literal &lt;br&gt; &amp; &lt;u&gt; |\n| --- |");
+  editor.update(() => $importPage(markdown), { discrete: true });
+  assert.equal(editor.getEditorState().read(() => $exportPage()), markdown);
+  editor.getEditorState().read(() => {
+    const table = $getRoot().getFirstChild<ElementNode>()!;
+    const row = table.getFirstChild<ElementNode>()!;
+    const cell = row.getFirstChild<ElementNode>()!;
+    assert.equal(cell.getChildrenSize(), 2);
+    assert.equal(cell.getFirstChild<ElementNode>()!.getChildren()[1]!.getType(), "linebreak");
+  });
 });
 
 test("each Markdown block becomes its own editor block, not a paragraph of its text", () => {

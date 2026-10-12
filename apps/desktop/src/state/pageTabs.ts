@@ -1,6 +1,6 @@
 import { pageCreate, pageWrite } from "@/ipc/client";
 import type { Page, PageContent, PageWriteOutcome } from "@/ipc/generated";
-import { discardDocument, documentText } from "@/state/documentDrafts";
+import { discardDocument, documentDraftIds, documentIsSaved, documentText } from "@/state/documentDrafts";
 import { changeSessionTab, type PageTabState, useSessionTabs } from "@/state/sessionTabs";
 
 /**
@@ -44,6 +44,14 @@ export function ensurePage(tab: PageTabState, ipc: MakeIpc = { create: pageCreat
 export function migrateDrafts(ipc?: MakeIpc): Promise<void> {
   const waiting = Object.values(useSessionTabs.getState().sessions).flatMap((session) =>
     session.tabs.flatMap((tab) => tab.kind === "page" && !tab.pageId && tab.draft ? [tab] : []));
+  const referenced = new Set(waiting.map((tab) => tab.draft));
+  try {
+    for (const draft of documentDraftIds()) {
+      if (!referenced.has(draft) && !documentIsSaved(draft)) {
+        waiting.push({ kind: "page", id: draft, opener: null, pageId: null, title: "", draft });
+      }
+    }
+  } catch (error) { console.error("Could not read the old document drafts", error); }
   return Promise.allSettled(waiting.map((tab) => ensurePage(tab, ipc))).then((results) => {
     for (const result of results) if (result.status === "rejected") console.error("Could not move a draft into a page", result.reason);
   });

@@ -77,7 +77,8 @@ function set(id: string, change: Partial<PageEdit>): void {
 }
 
 function settle(id: string, sent: PageContent, revision: string): void {
-  const now = get(id)!;
+  const now = get(id);
+  if (!now) return;
   const clean = samePage(now.content, sent);
   set(id, { revision, dirty: !clean, error: null });
   writeRecovery(id, clean ? null : { base: revision, content: now.content });
@@ -98,6 +99,7 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
   /** Each page's saves run one after another. */
   const chains = new Map<string, Promise<void>>();
   const loads = new Map<string, Promise<void>>();
+  const openings = new Map<string, number>();
   /** A change heard while a save was running, checked once it ends. */
   const pendingChange = new Map<string, string | null>();
 
@@ -110,6 +112,7 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
 
   /** Reads the page; a newer recovery copy wins, or shows as a conflict if the file moved on. */
   function open(id: string): Promise<void> {
+    openings.set(id, (openings.get(id) ?? 0) + 1);
     if (get(id) && get(id)!.status !== "failed") return loads.get(id) ?? Promise.resolve();
     usePageEdits.setState(({ pages }) => ({ pages: { ...pages, [id]: {
       status: "loading", content: EMPTY_PAGE, revision: "", dirty: false, conflict: null, error: null, version: 0,
@@ -228,7 +231,11 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
     const copy = await ipc.create();
     const outcome = await ipc.write(copy.id, { ...current.content, title: current.content.title ? `${current.content.title} (copy)` : "" }, copy.revision);
     if (outcome.type !== "saved") throw new Error("Could not save the copy.");
-    if (current.conflict) takeTheirs(id);
+    // Typing can continue while the copy is being saved. Only discard the exact snapshot
+    // that reached the copy; later edits still need their recovery copy and conflict choice.
+    const now = get(id);
+    if (!now || !samePage(now.content, current.content)) return copy.id;
+    if (now.conflict) takeTheirs(id);
     else {
       set(id, { dirty: false, error: null });
       writeRecovery(id, null);
@@ -238,9 +245,10 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
 
   /** The editor closed; what is waiting is saved first. */
   function close(id: string): Promise<void> {
+    const opening = openings.get(id);
     return flush(id).finally(() => {
       const current = get(id);
-      if (current && !current.dirty && !current.conflict) {
+      if (openings.get(id) === opening && current && !current.dirty && !current.conflict) {
         usePageEdits.setState(({ pages }) => {
           const { [id]: _gone, ...rest } = pages;
           return { pages: rest };

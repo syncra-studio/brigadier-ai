@@ -44,6 +44,63 @@ function fakeDaemon() {
 const text = (body: string, title = "") => ({ title, emoji: null, body });
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("reopening while the previous tab flushes keeps the reopened editor", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  daemon.put("reopen", text("base"));
+  const saving = gate();
+  const started = gate();
+  const editing = createPageEditing({ ...daemon.ipc, write: async (id, content, base) => {
+    started.resolve();
+    await saving.promise;
+    return daemon.ipc.write(id, content, base);
+  } }, 10_000);
+  await editing.open("reopen");
+  editing.edit("reopen", text("last edit"));
+  const closing = editing.close("reopen");
+  await started.promise;
+  await editing.open("reopen");
+  saving.resolve();
+  await closing;
+  assert.equal(usePageEdits.getState().pages.reopen?.content.body, "last edit");
+  editing.edit("reopen", text("next edit"));
+  await editing.flush("reopen");
+  assert.equal(daemon.pages.get("reopen")!.content.body, "next edit");
+});
+
+test("typing while Keep both saves a copy retains the later edits and recovery", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  daemon.put("copying", text("base"));
+  const saving = gate();
+  const started = gate();
+  const editing = createPageEditing({ ...daemon.ipc, write: async (id, content, base) => {
+    if (id !== "copying") { started.resolve(); await saving.promise; }
+    return daemon.ipc.write(id, content, base);
+  } }, 10_000);
+  await editing.open("copying");
+  editing.edit("copying", text("mine"));
+  daemon.put("copying", text("theirs"));
+  await editing.flush("copying");
+  const copying = editing.keepBoth("copying");
+  await started.promise;
+  editing.edit("copying", text("mine plus later typing"));
+  saving.resolve();
+  const copy = await copying;
+  assert.equal(daemon.pages.get(copy)!.content.body, "mine");
+  assert.equal(daemon.pages.get("copying")!.content.body, "theirs");
+  assert.equal(usePageEdits.getState().pages.copying!.content.body, "mine plus later typing");
+  assert.equal(usePageEdits.getState().pages.copying!.dirty, true);
+  assert.ok(data.get("brigadier.page.copying")?.includes("mine plus later typing"));
+  await editing.keepMine("copying");
+});
+
 test("edits save once typing stops, one save per pause, based on the last revision", async () => {
   data.clear();
   const daemon = fakeDaemon();
