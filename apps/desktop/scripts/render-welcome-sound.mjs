@@ -27,7 +27,7 @@ const DURATION = 10.8;
  * When the comet has become the mark, the mark draws in, it bursts, the title starts and its
  * button appears, in seconds.
  */
-const LAND = 2.9;
+const LAND = 2.8;
 const COLLAPSE = 3.55;
 const BURST = 3.68;
 const HEADING = 4.7;

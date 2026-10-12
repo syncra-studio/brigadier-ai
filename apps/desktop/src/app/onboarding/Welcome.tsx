@@ -280,13 +280,13 @@ function ContinueButton({
   return (
     <Button
       ref={button}
-      size={arrow ? "default" : "lg"}
+      size="lg"
       type={form ? "submit" : "button"}
       form={form}
       disabled={!ready || busy}
       onClick={onClick}
       aria-label={arrow ? "Continue" : undefined}
-      className={arrow ? "gap-2 px-4" : "min-w-32 gap-2"}
+      className={arrow ? "gap-2 px-5" : "min-w-32 gap-2"}
     >
       {busy && <Spinner className="animate-spin" />}
       {arrow ? <ArrowRight /> : "Continue"}
