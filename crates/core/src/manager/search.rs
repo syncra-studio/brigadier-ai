@@ -3,6 +3,7 @@
 //! as the search found them. It reads what git would (ignored files and `.git` stay out) and
 //! never writes outside the checkout.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
@@ -101,17 +102,24 @@ impl SessionManager {
         let git = self.git.clone();
         let write = move |dir: PathBuf| {
             blocking(move || {
-                let root = git.open(&dir).map_err(git_error)?.root().to_path_buf();
-                Ok(replace(&root, &matcher, &replacement, files))
+                let repo = git.open(&dir).map_err(git_error)?;
+                let root = repo.root().to_path_buf();
+                let eligible: HashSet<_> = repo
+                    .files(usize::MAX, None)
+                    .map_err(git_error)?
+                    .0
+                    .into_iter()
+                    .collect();
+                Ok(replace(&root, &matcher, &replacement, files, &eligible))
             })
         };
         match target {
             WorkspaceTarget::Conversation { conversation_id } => {
                 let _fence = self.enter(conversation_id)?;
                 // Not the repository a session that makes its own copy hasn't made yet.
-                let (dir, _) = self.checkout(conversation_id)?;
                 let conv = self.conv(conversation_id)?;
                 let _landing = conv.merge_lock.lock().await;
+                let (dir, _) = self.checkout(conversation_id)?;
                 write(dir).await
             }
             WorkspaceTarget::Project { project_id } => {
@@ -415,6 +423,7 @@ fn replace(
     matcher: &Matcher,
     replacement: &str,
     files: Vec<ReplaceFile>,
+    eligible: &HashSet<String>,
 ) -> ReplaceOutcome {
     let mut outcome = ReplaceOutcome {
         files: 0,
@@ -422,7 +431,12 @@ fn replace(
         skipped: Vec::new(),
     };
     for file in files {
-        match replace_file(root, matcher, replacement, &file) {
+        let result = if !eligible.contains(&file.path) || !matcher.wants(&file.path) {
+            Err("it is not included in the checkout's searchable files".into())
+        } else {
+            replace_file(root, matcher, replacement, &file)
+        };
+        match result {
             Ok(count) => {
                 outcome.files += 1;
                 outcome.matches = outcome.matches.saturating_add(count);
@@ -486,6 +500,10 @@ fn checkout_file(root: &Path, path: &str) -> std::result::Result<PathBuf, String
     }
     let root = root.canonicalize().map_err(|err| err.to_string())?;
     let full = root.join(relative).canonicalize().map_err(|_| outside())?;
+    // Search never follows links. Replace must not turn a listed link into a write to its target.
+    if full != root.join(relative) {
+        return Err(outside());
+    }
     let inside = full.strip_prefix(&root).map_err(|_| outside())?;
     if inside.components().any(|part| part.as_os_str() == ".git") || !full.is_file() {
         return Err(outside());
@@ -500,10 +518,14 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let temp = dir.join(format!(
         ".{}.replace-{}",
         name.to_string_lossy(),
-        std::process::id()
+        uuid::Uuid::new_v4()
     ));
+    // Exclusive creation refuses existing files and symlinks, even if a name is guessed.
+    let mut out = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
     let result = (|| {
-        let mut out = fs::File::create(&temp)?;
         out.write_all(bytes)?;
         out.sync_all()?;
         fs::set_permissions(&temp, fs::metadata(path)?.permissions())?;

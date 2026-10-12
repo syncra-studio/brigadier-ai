@@ -233,6 +233,10 @@ async fn replace_rewrites_only_files_unchanged_since_the_search() {
     let (flow, target) = flow("search-replace").await;
     let repo = flow.repo.clone();
     write(&repo, "a.txt", "let foo_1 = foo_2;\nfoo_3x\n");
+    let outside = repo.parent().unwrap().join("atomic-replace-outside.txt");
+    std::fs::write(&outside, "keep\n").unwrap();
+    let old_temp = repo.join(format!(".a.txt.replace-{}", std::process::id()));
+    std::os::unix::fs::symlink(&outside, &old_temp).unwrap();
     write(&repo, "b.txt", "foo_9\n");
     write(&repo, "c.txt", "cost foo_1\n");
     let pattern = SearchQuery {
@@ -268,6 +272,15 @@ async fn replace_rewrites_only_files_unchanged_since_the_search() {
         .await
         .unwrap();
     assert_eq!((outcome.files, outcome.matches), (1, 2));
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep\n");
+    assert!(
+        std::fs::symlink_metadata(&old_temp)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    std::fs::remove_file(&old_temp).unwrap();
+    std::fs::remove_file(&outside).unwrap();
     assert_eq!(
         outcome
             .skipped
@@ -319,12 +332,19 @@ async fn replace_keeps_inside_the_checkout() {
     let hash = blake3::hash(b"hit\n").to_hex().to_string();
     std::os::unix::fs::symlink(&outside, repo.join("link.txt")).unwrap();
     write(&repo, ".git/hit.txt", "hit\n");
+    write(&repo, ".gitignore", "ignored/\n");
+    write(&repo, "ignored/private.txt", "hit\n");
+    write(&repo, "excluded.txt", "hit\n");
+    std::os::unix::fs::symlink(repo.join(".git"), repo.join("git-alias")).unwrap();
     let paths = [
         "../search-replace-outside.txt".to_owned(),
         outside.to_string_lossy().into_owned(),
         ".git/hit.txt".to_owned(),
         "link.txt".to_owned(),
         "missing.txt".to_owned(),
+        "ignored/private.txt".to_owned(),
+        "excluded.txt".to_owned(),
+        "git-alias/hit.txt".to_owned(),
     ];
     let listed = paths
         .iter()
@@ -336,12 +356,28 @@ async fn replace_keeps_inside_the_checkout() {
         .collect();
     let outcome = flow
         .manager
-        .replace_in_files(&target, query("hit"), "x".into(), listed)
+        .replace_in_files(
+            &target,
+            SearchQuery {
+                exclude: "excluded.txt".into(),
+                ..query("hit")
+            },
+            "x".into(),
+            listed,
+        )
         .await
         .unwrap();
     assert_eq!(outcome.files, 0);
     assert_eq!(outcome.skipped.len(), paths.len());
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "hit\n");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("ignored/private.txt")).unwrap(),
+        "hit\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("excluded.txt")).unwrap(),
+        "hit\n"
+    );
     assert_eq!(
         std::fs::read_to_string(repo.join(".git/hit.txt")).unwrap(),
         "hit\n"

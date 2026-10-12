@@ -132,6 +132,7 @@ async fn a_folder_is_read_only_inside_the_checkout() {
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("secret.txt"), "keep").unwrap();
     std::os::unix::fs::symlink(&outside, repo.join("target/escape")).unwrap();
+    std::os::unix::fs::symlink(repo.join(".git"), repo.join("git-alias")).unwrap();
 
     let folder = flow
         .manager
@@ -161,6 +162,7 @@ async fn a_folder_is_read_only_inside_the_checkout() {
         "target/../..",
         "./target",
         "target/escape",
+        "git-alias",
         "target/out.txt",
         "missing",
     ] {

@@ -116,7 +116,13 @@ fn read_folder(root: &Path, path: &str) -> Result<WorkspaceFolder> {
             unreadable(err)
         }
     })?;
-    if !full.starts_with(&root) || full == root || !full.is_dir() {
+    if !full.starts_with(&root)
+        || full == root
+        || full
+            .strip_prefix(&root)
+            .is_ok_and(|path| path.components().any(|part| part.as_os_str() == ".git"))
+        || !full.is_dir()
+    {
         return Err(outside());
     }
     let mut entries: Vec<WorkspaceEntry> = std::fs::read_dir(&full)
@@ -179,7 +185,7 @@ impl WorkspaceWatch {
         let watcher = watcher(&root, &status_files, events_tx)
             .inspect_err(|err| tracing::warn!(%err, root = %root.display(), "watching a checkout failed; reading it again every so often"))
             .ok();
-        let watching = watcher.is_some();
+        let mut watching = watcher.is_some();
         let thread_stop = stop.clone();
         let spawned = thread::Builder::new()
             .name("workspace-watcher".into())
@@ -218,6 +224,10 @@ impl WorkspaceWatch {
                             Ok(event) => batch.push(event),
                             Err(_) => break,
                         }
+                    }
+                    if batch.iter().any(|event| event.is_err()) {
+                        // A backend that fails after starting must also get the poll fallback.
+                        watching = false;
                     }
                     if !batch.iter().any(|event| filter.counts(event)) {
                         continue;
@@ -293,6 +303,7 @@ impl ChangeFilter {
 
     fn counts(&self, event: &notify::Result<notify::Event>) -> bool {
         match event {
+            Ok(event) if matches!(event.kind, notify::EventKind::Access(_)) => false,
             Ok(event) if !event.need_rescan() => {
                 event.paths.iter().any(|path| self.counts_path(path))
             }
@@ -362,5 +373,33 @@ mod tests {
         let mut rescan = notify::Event::new(notify::EventKind::Other);
         rescan = rescan.set_flag(notify::event::Flag::Rescan);
         assert!(filter.counts(&Ok(rescan)));
+        let access = notify::Event::new(notify::EventKind::Access(notify::event::AccessKind::Any))
+            .add_path(PathBuf::from("/repo/README.md"));
+        assert!(
+            !filter.counts(&Ok(access)),
+            "reading the tree must not trigger another refresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_watch_polls_and_drop_stops_its_thread() {
+        let path = std::env::temp_dir().join(format!(
+            "shell-tabs-sidebar-watch-missing-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut watch = WorkspaceWatch::start(path, Vec::new(), Vec::new(), || None);
+        let stop = watch.stop.clone();
+        assert!(watch._watcher.is_none());
+        assert_eq!(
+            tokio::time::timeout(POLL + Duration::from_secs(2), watch.changed())
+                .await
+                .unwrap(),
+            Some(())
+        );
+        drop(watch);
+        assert!(stop.load(Ordering::SeqCst));
+        // The thread's own stop reference goes away within its bounded receive/sleep.
+        tokio::time::sleep(SETTLE * 3).await;
+        assert_eq!(Arc::strong_count(&stop), 1);
     }
 }
