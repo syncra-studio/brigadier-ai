@@ -1357,6 +1357,25 @@ pub fn read_pid_file(pid_file_path: &str) -> Option<u32> {
         .and_then(|s| s.trim().parse().ok())
 }
 
+/// A request that never reached the daemon: nothing it asked for ran, so it
+/// can be sent again safely. [`send_request`] returns it inside its error.
+#[derive(Debug)]
+pub struct NotDelivered(pub String);
+
+impl std::fmt::Display for NotDelivered {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NotDelivered {}
+
+/// Whether `error` from [`send_request`] means the request never reached the
+/// daemon. Any later failure may come after the daemon acted on it.
+pub fn never_delivered(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<NotDelivered>().is_some()
+}
+
 /// Send a request to the daemon and return the response.
 /// Uses a 3-second connect timeout (by polling) and a 10-second read timeout.
 #[cfg(unix)]
@@ -1366,7 +1385,7 @@ pub fn send_request(socket_path: &str, req: &DaemonRequest) -> anyhow::Result<Da
     use std::time::{Duration, Instant};
 
     let mut stream = UnixStream::connect(socket_path)
-        .map_err(|e| anyhow::anyhow!("connect to {socket_path}: {e}"))?;
+        .map_err(|e| anyhow::Error::new(NotDelivered(format!("connect to {socket_path}: {e}"))))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     // Per-read timeout acts as a liveness poll, NOT a hard cap on the whole
     // response: an AX-heavy `get_window_state` (slow tree walk) or a multi-MB

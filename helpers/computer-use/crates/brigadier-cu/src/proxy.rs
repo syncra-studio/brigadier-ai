@@ -31,7 +31,9 @@ use cu_core::protocol::{ToolCall, ToolResult};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, warn};
 
-use crate::serve::{send_request, serialize_request, DaemonProfile, DaemonRequest, DaemonResponse};
+use crate::serve::{
+    never_delivered, send_request, serialize_request, DaemonProfile, DaemonRequest, DaemonResponse,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ControlConnectionState {
@@ -263,6 +265,7 @@ pub async fn run_proxy(
                             call,
                             wait_for_grants,
                         } => {
+                            let read_only = tool_is_read_only(tools_list, &call.name);
                             match ensure_daemon_started(
                                 &socket_path,
                                 &mut daemon_state,
@@ -288,13 +291,15 @@ pub async fn run_proxy(
                                         &socket_path,
                                         &session_id,
                                         &control_ready_rx,
+                                        read_only,
                                     )
                                     .await;
                                     match first {
                                         Forwarded::Done(response) => response,
-                                        // The daemon went away under this call. Bring up a
-                                        // replacement and retry the call once; report the
-                                        // original failure only if recovery fails.
+                                        // The daemon went away under a call that is safe to
+                                        // send again. Bring up a replacement and retry it
+                                        // once; report the original failure only if recovery
+                                        // fails.
                                         Forwarded::Lost(failure) => {
                                             crate::journal::record_event(
                                                 "helper_recovery",
@@ -321,6 +326,7 @@ pub async fn run_proxy(
                                                     &socket_path,
                                                     &session_id,
                                                     &control_ready_rx,
+                                                    read_only,
                                                 )
                                                 .await
                                                 {
@@ -758,14 +764,27 @@ async fn send_daemon_request_async(
     socket_path: &str,
     request: DaemonRequest,
     context: &str,
-) -> Result<DaemonResponse, String> {
+) -> Result<DaemonResponse, TransportFailure> {
     let socket = socket_path.to_owned();
     let blocking = tokio::task::spawn_blocking(move || send_request(&socket, &request)).await;
     match blocking {
-        Err(error) => Err(format!("internal join error {context}: {error}")),
-        Ok(Err(error)) => Err(format!("daemon transport error {context}: {error}")),
+        Err(error) => Err(TransportFailure {
+            message: format!("internal join error {context}: {error}"),
+            delivered: true,
+        }),
+        Ok(Err(error)) => Err(TransportFailure {
+            message: format!("daemon transport error {context}: {error}"),
+            delivered: !never_delivered(&error),
+        }),
         Ok(Ok(response)) => Ok(response),
     }
+}
+
+/// A call that got no answer from the daemon.
+struct TransportFailure {
+    message: String,
+    /// The request may have reached the daemon, so what it asked for may have run.
+    delivered: bool,
 }
 
 /// The target guard on the proxy side: refuse before anything reaches the
@@ -800,7 +819,7 @@ async fn call_daemon_tool(
     session_id: &str,
     name: &str,
     mut args: serde_json::Value,
-) -> Result<DaemonResponse, String> {
+) -> Result<DaemonResponse, TransportFailure> {
     // The model never sets the target scope; this process's env does.
     let allowed_targets = cu_core::target_policy::allowed_from_env();
     if let Err(refusal) = proxy_target_guard(name, &args, &allowed_targets) {
@@ -1256,6 +1275,7 @@ async fn handle_proxy_request(
         "tools/call" => match req.tool_call() {
             Err(e) => Response::error(id, -32602, format!("Invalid params: {e}")),
             Ok(call) => {
+                let read_only = tool_is_read_only(cached_tools_list, &call.name);
                 match forward_tool_call(
                     id,
                     call.name,
@@ -1263,6 +1283,7 @@ async fn handle_proxy_request(
                     socket_path,
                     session_id,
                     control_ready,
+                    read_only,
                 )
                 .await
                 {
@@ -1443,6 +1464,8 @@ async fn forward_action_group(
             let response = match send_request(&socket, &action.request) {
                 Ok(response) => response,
                 Err(error) => {
+                    // Nothing ran yet only if the first step never reached the daemon.
+                    let nothing_ran = results.is_empty() && never_delivered(&error);
                     return Err((
                         format!(
                             "Computer Use transport failed at perform_actions step {index} \
@@ -1450,6 +1473,7 @@ async fn forward_action_group(
                             action.tool
                         ),
                         results,
+                        nothing_ran,
                     ));
                 }
             };
@@ -1500,7 +1524,7 @@ async fn forward_action_group(
             ));
         }
         // Nothing ran yet, so the whole group can be retried safely.
-        Ok(Err((message, results))) if results.is_empty() => {
+        Ok(Err((message, results, true))) => {
             return Forwarded::Lost(action_group_error_response(
                 id,
                 message,
@@ -1508,7 +1532,7 @@ async fn forward_action_group(
                 results,
             ));
         }
-        Ok(Err((message, results))) => {
+        Ok(Err((message, results, false))) => {
             return Forwarded::Done(action_group_error_response(
                 id,
                 message,
@@ -1551,8 +1575,9 @@ async fn forward_action_group(
 enum Forwarded {
     /// The daemon handled the call (successfully or not).
     Done(Response),
-    /// The daemon could not be reached before any part of the call ran. The
-    /// response describes the failure if a retry is impossible.
+    /// The daemon went away and sending the call again is safe: it never
+    /// reached the daemon, or it only reads. The response describes the
+    /// failure if a retry is impossible.
     Lost(Response),
 }
 
@@ -1563,6 +1588,7 @@ async fn forward_tool_call(
     socket_path: &str,
     session_id: &str,
     control_ready: &tokio::sync::watch::Receiver<ControlConnectionState>,
+    read_only: bool,
 ) -> Forwarded {
     if let Err(error) = wait_for_control_connection(control_ready.clone()).await {
         return Forwarded::Lost(Response::error(
@@ -1581,8 +1607,36 @@ async fn forward_tool_call(
     let args = enforce_proxy_session_identity(args, session_id, managed_session);
     match call_daemon_tool(socket_path, session_id, &name, args).await {
         Ok(response) => Forwarded::Done(daemon_response_to_mcp(id, &name, response)),
-        Err(error) => Forwarded::Lost(Response::error(id, -32603, error)),
+        Err(failure) if read_only || !failure.delivered => {
+            Forwarded::Lost(Response::error(id, -32603, failure.message))
+        }
+        // Sending it again could repeat an action that already happened.
+        Err(failure) => Forwarded::Done(Response::error(
+            id,
+            -32603,
+            format!(
+                "Brigadier Computer Use stopped while running `{name}`, so it may or may not \
+                 have taken effect. Take a fresh get_window_state before trying it again; the \
+                 next call starts the helper again. ({})",
+                failure.message
+            ),
+        )),
     }
+}
+
+/// Whether `tools_list` marks `name` read-only, so repeating it changes nothing.
+fn tool_is_read_only(tools_list: &serde_json::Value, name: &str) -> bool {
+    tools_list
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool.get("name").and_then(serde_json::Value::as_str) == Some(name))
+        })
+        .and_then(|tool| tool.pointer("/annotations/readOnlyHint"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn daemon_response_to_mcp(
@@ -1712,6 +1766,55 @@ fn enforce_proxy_session_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_read_only_tool_counts_as_safe_to_repeat() {
+        let tools = serde_json::json!({"tools": [
+            {"name": "get_window_state", "annotations": {"readOnlyHint": true}},
+            {"name": "type_text", "annotations": {"readOnlyHint": false}},
+            {"name": "click"},
+        ]});
+        assert!(tool_is_read_only(&tools, "get_window_state"));
+        assert!(!tool_is_read_only(&tools, "type_text"));
+        assert!(!tool_is_read_only(&tools, "click"));
+        assert!(!tool_is_read_only(&tools, "unknown"));
+    }
+
+    /// A request that reached the daemon may have run even when no answer came back; only one
+    /// that never connected is known to have done nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_request_counts_as_undelivered_only_when_it_never_connected() {
+        use std::io::BufRead;
+        let dir = std::env::temp_dir().join(format!("cu-proxy-delivery-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("d.sock");
+        let socket_path = socket.to_str().unwrap().to_owned();
+        let request = DaemonRequest {
+            method: "call".into(),
+            name: Some("type_text".into()),
+            args: Some(serde_json::json!({})),
+            session_id: None,
+        };
+
+        let error = send_request(&socket_path, &request).unwrap_err();
+        assert!(never_delivered(&error), "{error}");
+
+        // A daemon that reads the request and dies before answering.
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let daemon = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(&stream)
+                .read_line(&mut line)
+                .unwrap();
+            line
+        });
+        let error = send_request(&socket_path, &request).unwrap_err();
+        assert!(!never_delivered(&error), "{error}");
+        assert!(daemon.join().unwrap().contains("type_text"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
