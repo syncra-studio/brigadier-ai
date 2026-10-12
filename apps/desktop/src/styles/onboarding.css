@@ -3,7 +3,7 @@
 
    The intro, from the moment it starts (`data-started` on `.welcome`): the orb, the window it
    opens into and the waves on the shell's dark are drawn on `.welcome-canvas` (IntroCanvas.tsx);
-   the mark comes up out of a blur and goes (`.welcome-intro-mark`); the title comes in a letter
+   the mark comes up, glowing, and fades away (`.welcome-intro-mark`); the title comes in a letter
    at a time (StaggerText.tsx); the button under it comes in last, and its animation ending is
    what makes it usable. Escape (`data-settled`) and reduced motion show the end of all that at
    once. */
@@ -52,8 +52,8 @@
   overflow: visible;
 }
 
-/* The intro's mark, small at the window's centre: it comes up out of a blur as Brigadier's
-   signature sounds, is held, then blurs away (only while the intro plays). */
+/* The intro's mark at the window's centre, a crisp white with a soft glow: it comes up quickly,
+   to be read just as the music drops, is held, then fades away (only while the intro plays). */
 .welcome-intro-mark {
   position: absolute;
   top: 50%;
@@ -62,6 +62,7 @@
   aspect-ratio: 1;
   translate: -50% -50%;
   color: #fff;
+  filter: var(--intro-held-mark-glow);
   opacity: 0;
   pointer-events: none;
 }
@@ -181,29 +182,26 @@ html[data-intro="staged"] #root {
   visibility: hidden;
 }
 
-/* Its share of --intro-mark-for: in over the first 18 %, held to 88 %, then away. */
+/* Its share of --intro-mark-for: in over the first 6.5 % (0.14 s, read clearly from about
+   0.12 s), held to 69 %, then a plain fade out over the last 0.65 s. */
 @keyframes intro-mark {
   0% {
     opacity: 0;
-    filter: blur(14px);
-    scale: 0.9;
-    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+    scale: 0.97;
+    animation-timing-function: cubic-bezier(0.4, 0, 0.3, 1);
   }
-  18% {
+  6.5% {
     opacity: 1;
-    filter: blur(0);
     scale: 1;
   }
-  88% {
+  69% {
     opacity: 1;
-    filter: blur(0);
     scale: 1;
-    animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
   }
   100% {
     opacity: 0;
-    filter: blur(16px);
-    scale: 1.06;
+    scale: 1;
   }
 }
 

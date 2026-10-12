@@ -2,20 +2,23 @@
 //
 //   node scripts/render-welcome-sound.mjs [out.m4a]
 //
-// A build-up and a signature, in D, played on sampled instruments: the FluidR3 Mono GM SoundFont
+// A short orchestral piece in D, played on sampled instruments: the FluidR3 Mono GM SoundFont
 // (MIT licence; see NOTICE.md next to the sound), rendered offline by spessasynth_core, with a
-// faint synthesized shimmer high above. The SoundFont isn't kept in the repo: it's downloaded
+// faint synthesized shimmer at its end. The SoundFont isn't kept in the repo: it's downloaded
 // once into a cache and checked against its SHA-256 (or set BRIGADIER_SOUNDFONT to a local copy).
+// It builds, drops, then rings out:
 //   - Before the drop there is no beat. Low strings and a low brass pedal on D rise from
 //     silence before anything is seen; trembling strings and violins join as the orb comes up
 //     and idles, open fifths with no third (so it never settles), leaning on a suspended G.
 //     A timpani roll and a cymbal swell grow towards the moment the orb opens into the window
 //     (OPEN) and crest with it; then the music breathes in.
-//   - As Brigadier's mark comes up in the window (DROP), Brigadier's signature sounds: a struck,
-//     resonant bloom on D that rings long (SIGNATURE picks which of the three below).
-//   - It doesn't go on as a score. What it leaves rings on as one slow, breathing resonance,
-//     with no beat and no tune, under the title (HEADING); a single soft bell touches its button
-//     (CONTINUE); then it settles and fades to silence a few seconds later.
+//   - The drop comes as Brigadier's mark comes up in the window (DROP): the whole orchestra on
+//     a full D major chord, timpani and a soft cymbal under it. While the mark is held, the
+//     cellos drive in eighths under the chord and the timpani marks the half bar.
+//   - Once the mark has gone (HIDDEN) the motion stops. The strings' chord, held from the
+//     drop, rings on as one slow resonance, with no beat and no tune: it breathes in and out
+//     under the title (HEADING), joined by RESONANCE's voices and a faint shimmer high above;
+//     a single soft note touches the button (CONTINUE), then it settles and fades to silence.
 // Those times match the intro's (IntroCanvas.tsx, and the --intro-* tokens in tokens.css).
 //
 // Writes a WAV, then encodes it to AAC with macOS's afconvert (on other systems the WAV is
@@ -32,13 +35,13 @@ import { audioToWav, SoundBankLoader, SpessaSynthProcessor } from "spessasynth_c
 const OUT = resolve(process.argv[2] ?? new URL("../src/app/onboarding/welcome-sound.m4a", import.meta.url).pathname);
 
 /**
- * Brigadier's signature, after the burst:
- *   "A", the bloom: one chord, struck low and bright, that the brass and strings swell out of;
- *   "B", the rise: three notes climbing in fifths (D, A, E), stacking into the same bloom;
- *   "C", the bells: bells and voices on one chord, blooming into a choir.
- * The intro ships A. To hear another, set BRIGADIER_WELCOME_SIGNATURE or change this, and render.
+ * What joins the strings' chord once the mark has gone:
+ *   "A", light: a soft halo pad under the strings, and the shimmer above;
+ *   "B", air: the chord opens to bare fifths with high strings floating over them;
+ *   "C", voices: a choir takes the chord from the strings, with soft voices above.
+ * The intro ships A. To hear another, set BRIGADIER_WELCOME_RESONANCE or change this, and render.
  */
-const SIGNATURE = process.env.BRIGADIER_WELCOME_SIGNATURE ?? "A";
+const RESONANCE = process.env.BRIGADIER_WELCOME_RESONANCE ?? "A";
 
 /** The SoundFont: FluidR3 Mono GM 2.312, as MuseScore 2.1 ships it, and its SHA-256. */
 const SOUNDFONT_URL = "https://github.com/musescore/MuseScore/raw/2.1/share/sound/FluidR3Mono_GM.sf3";
@@ -49,18 +52,20 @@ const SR = 44_100;
 const ORB = 0.58;
 const OPEN = 4.07;
 const DROP = 4.8;
-/** The title's first letter, and its button. */
-const HEADING = 7.2;
-const CONTINUE = 9;
-/** The resonance settles from here and has faded to silence by the end. */
+/** The beat and the bar after the drop (100 beats a minute, four to a bar). */
+const BEAT = 60 / 100;
+const BAR = 4 * BEAT;
+/** The mark has faded out: the motion stops and the resonance takes over. */
+const HIDDEN = 6.75;
+/** The title comes in on the bar after the drop; its button on that bar's last beat. */
+const HEADING = DROP + BAR;
+const CONTINUE = HEADING + 3 * BEAT;
+/** The resonance settles from here and has faded to silence by SILENT. */
 const SETTLE = CONTINUE + 0.8;
 const SILENT = CONTINUE + 4.2;
 const DURATION = SILENT + 0.4;
-/**
- * The loudest sample before the drop, as a fraction of full scale (about -13 dBFS): the
- * build-up stays exactly as loud as it was first made, whichever signature follows it.
- */
-const BUILD_PEAK = 0.22309069335;
+/** The loudest sample, as a fraction of full scale (about -7.5 dBFS). */
+const PEAK = 0.42;
 
 // ── The score, as timed MIDI messages ───────────────────────────────────────────────────────
 const events = [];
@@ -69,7 +74,6 @@ const NOTE_OFF = 0x80;
 const CONTROL = 0xb0;
 const PROGRAM = 0xc0;
 const EXPRESSION = 11;
-const REVERB = 91;
 
 /** The sampled instruments' attacks take about this long to speak: notes start this early. */
 const SPEAK = 0.008;
@@ -82,9 +86,9 @@ function note(channel, at, length, pitch, velocity) {
 function control(channel, at, number, value) {
   events.push({ at, order: 0, message: [CONTROL | channel, number, Math.round(Math.min(127, Math.max(0, value)))] });
 }
-/** A smooth change of a controller (the expression, by default) from `from` to `to`. */
-function ramp(channel, start, end, from, to, number = EXPRESSION) {
-  for (let at = start; at <= end + 1e-9; at += 0.02) {
+/** A smooth change of a controller (the expression, by default) from `from` to `to`, cut short at `until`. */
+function ramp(channel, start, end, from, to, number = EXPRESSION, until = Infinity) {
+  for (let at = start; at <= end + 1e-9 && at < until; at += 0.02) {
     const x = Math.min(1, (at - start) / (end - start));
     control(channel, at, number, from + (to - from) * x * x * (3 - 2 * x));
   }
@@ -102,15 +106,15 @@ const HORNS = 3; // French Horn
 const TROMBONES = 4; // Trombone
 const TUBA = 5; // Tuba
 const TIMPANI = 6; // Timpani
-const VIBES = 7; // Vibraphone
-const VOICES = 8; // Voice Oohs
+const BRASS = 7; // Brass Section
+const CELLOS = 8; // Cello
 const DRUMS = 9; // the percussion kit (cymbals)
-const PIANO = 10; // Grand Piano, its lowest notes
-const HARP = 11; // Harp
-const BELLS = 12; // Tubular Bells
-const CELESTA = 13; // Celesta
-const CHOIR = 14; // Choir Aahs
-const PAD = 15; // Halo Pad
+const PAD = 10; // Halo Pad
+const HIGH_STRINGS = 11; // Slow Strings
+const CHOIR = 12; // Choir Aahs
+const VOICES = 13; // Voice Oohs
+const CELESTA = 14; // Celesta
+const HARP = 15; // Harp
 const PROGRAMS = {
   [VIOLINS]: 48,
   [LOW_STRINGS]: 48,
@@ -119,14 +123,14 @@ const PROGRAMS = {
   [TROMBONES]: 57,
   [TUBA]: 58,
   [TIMPANI]: 47,
-  [VIBES]: 11,
-  [VOICES]: 53,
-  [PIANO]: 0,
-  [HARP]: 46,
-  [BELLS]: 14,
-  [CELESTA]: 8,
-  [CHOIR]: 52,
+  [BRASS]: 61,
+  [CELLOS]: 42,
   [PAD]: 94,
+  [HIGH_STRINGS]: 49,
+  [CHOIR]: 52,
+  [VOICES]: 53,
+  [CELESTA]: 8,
+  [HARP]: 46,
 };
 const PANS = {
   [VIOLINS]: 44,
@@ -136,23 +140,23 @@ const PANS = {
   [TROMBONES]: 76,
   [TUBA]: 70,
   [TIMPANI]: 64,
-  [VIBES]: 54,
-  [VOICES]: 72,
+  [BRASS]: 60,
+  [CELLOS]: 84,
   [DRUMS]: 66,
-  [PIANO]: 62,
-  [HARP]: 40,
-  [BELLS]: 70,
-  [CELESTA]: 58,
-  [CHOIR]: 56,
   [PAD]: 64,
+  [HIGH_STRINGS]: 36,
+  [CHOIR]: 56,
+  [VOICES]: 72,
+  [CELESTA]: 58,
+  [HARP]: 40,
 };
 for (let channel = 0; channel < 16; channel++) {
   if (channel in PROGRAMS) events.push({ at: 0, order: -1, message: [PROGRAM | channel, PROGRAMS[channel]] });
   control(channel, 0, 7, 100); // volume
   control(channel, 0, 10, PANS[channel]);
-  control(channel, 0, REVERB, 72);
+  control(channel, 0, 91, channel < PAD ? 72 : 110); // reverb: the resonance's own voices sit further back
   control(channel, 0, 93, 0); // chorus
-  control(channel, 0, EXPRESSION, 100);
+  control(channel, 0, EXPRESSION, channel < PAD ? 100 : 0);
 }
 const CRASH = 49;
 const RIDE = 51;
@@ -193,125 +197,104 @@ for (let at = OPEN - 1.6; at < OPEN; at += 1 / 22) {
   note(DRUMS, at, 0.3, RIDE, Math.round(5 + 50 * x ** 2.2));
 }
 note(DRUMS, OPEN, 2, CRASH, 48);
-// The build-up's strings let go as the drop comes (their last moment, as first made).
-control(TREMOLO, DROP - 0.01, EXPRESSION, 92);
 
-// ── The signature, as the mark comes up ─────────────────────────────────────────────────────
-// Each is struck on the drop: something low and heavy (timpani, the piano's lowest D) under
-// something bright (harp, bells, celesta), so it's heard at once, then the sustained voices
-// swell out of the strike and ring on. Whatever is still held when the strike has faded
-// becomes the resonance below, so the two are one sound.
+// ── The drop: the whole orchestra on D major ────────────────────────────────────────────────
+for (const channel of [VIOLINS, LOW_STRINGS, TREMOLO, HORNS, TROMBONES, TUBA, BRASS]) control(channel, DROP - 0.01, EXPRESSION, 92);
+note(TIMPANI, DROP, 1.5, 38, 96);
+note(DRUMS, DROP, 2.5, CRASH, 48);
+note(TUBA, DROP, 2 * BEAT, 38, 84); // D2
+[50, 54, 57].forEach((pitch) => note(TROMBONES, DROP, 2 * BEAT, pitch, 76)); // D3 F#3 A3
+[57, 62, 66].forEach((pitch) => note(HORNS, DROP, 2 * BEAT, pitch, 86)); // A3 D4 F#4
+[62, 66, 69].forEach((pitch) => note(BRASS, DROP, 1.5 * BEAT, pitch, 54)); // D4 F#4 A4
+// The strings' chord is held on, through the resonance after the mark (the violins' below).
+[38, 50].forEach((pitch) => note(LOW_STRINGS, DROP, SILENT - DROP, pitch, 86)); // D2 D3
+ramp(HORNS, DROP + 0.3, DROP + 2 * BEAT, 92, 80);
+ramp(TROMBONES, DROP + 0.3, DROP + 2 * BEAT, 92, 78);
+ramp(VIOLINS, DROP + 0.4, HEADING - 0.1, 92, 78, EXPRESSION, HIDDEN);
 
-/** Brass and strings held as one chord on `pitches`, swelling from `from` to a peak at `peakAt`, then easing back to `rest`. */
-function bloom(channel, pitches, velocity, { from, peak, peakAt, rest, restAt, until = SILENT }) {
-  control(channel, DROP - 0.01, EXPRESSION, from);
-  ramp(channel, DROP, peakAt, from, peak);
-  ramp(channel, peakAt + 0.05, restAt, peak, rest);
-  pitches.forEach((pitch) => note(channel, DROP, until - DROP, pitch, velocity));
-}
+// ── The motion, while the mark is held ──────────────────────────────────────────────────────
+// The cellos' eighths on D, driving, leaning on the first and the fourth beats; the timpani on
+// the half bar, under the horns' D major. They stop as the mark goes.
+const EIGHTHS = [96, 52, 66, 50, 82, 54, 64, 58];
+EIGHTHS.forEach((weight, eighth) => {
+  const at = DROP + (eighth * BEAT) / 2;
+  if (at < HIDDEN) note(CELLOS, at, BEAT / 2 - 0.06, 50, Math.round(weight * (eighth < 4 ? 0.75 : 0.88)));
+});
+note(TIMPANI, DROP + 2 * BEAT, 1, 45, 70);
+[57, 62, 66].forEach((pitch) => note(HORNS, DROP + 2 * BEAT, 2 * BEAT - 0.05, pitch, 58)); // A3 D4 F#4
 
-/** What each signature leaves sounding: the channels that breathe on, and the shimmer's notes above. */
-const SIGNATURES = {
-  // One bloom: D with its ninth, struck low (timpani, piano) and bright (a rolled harp chord,
-  // a bell on the octave), then brass and strings swelling out of it.
-  A() {
-    note(TIMPANI, DROP, 3.5, 38, 96); // D2
-    [26, 38].forEach((pitch) => note(PIANO, DROP, 5, pitch, 92)); // D1 D2
-    [50, 57, 64, 66, 69, 74].forEach((pitch, k) => note(HARP, DROP + k * 0.014, 5, pitch, 96 - k * 4)); // D3 A3 E4 F#4 A4 D5
-    note(BELLS, DROP, 6, 74, 72); // D5
-    note(DRUMS, DROP, 3, CRASH, 30);
-    for (const channel of [HORNS, TROMBONES, TUBA, HARP, BELLS, PIANO]) control(channel, DROP - 0.01, REVERB, 104);
-    bloom(TUBA, [38], 78, { from: 46, peak: 110, peakAt: DROP + 0.7, rest: 0, restAt: DROP + 5, until: DROP + 5.2 });
-    bloom(TROMBONES, [50, 57], 74, { from: 40, peak: 112, peakAt: DROP + 0.75, rest: 0, restAt: DROP + 5, until: DROP + 5.2 });
-    bloom(HORNS, [64, 66, 69], 84, { from: 44, peak: 116, peakAt: DROP + 0.8, rest: 0, restAt: DROP + 5.4, until: DROP + 5.6 });
-    bloom(LOW_STRINGS, [38, 45], 84, { from: 60, peak: 104, peakAt: DROP + 1, rest: 72, restAt: DROP + 3.5 });
-    bloom(VIOLINS, [76, 78, 81, 86], 72, { from: 50, peak: 100, peakAt: DROP + 1.1, rest: 64, restAt: DROP + 3.6 });
-    return { breathing: [VIOLINS, LOW_STRINGS], shimmer: [86, 90, 93, 100], accent: 93 };
-  },
-  // A rise in fifths: D, A, then E, each held, stacking into the same open chord; the third
-  // lands later than the second and the bloom swells out of it.
-  B() {
-    const RISE = [
-      [0, 62, 88], // D4, as the mark comes up
-      [0.28, 69, 94], // A4
-      [0.64, 76, 104], // E5, the landing
-    ];
-    note(TIMPANI, DROP, 3, 38, 90); // D2
-    [26, 38].forEach((pitch) => note(PIANO, DROP, 4.5, pitch, 86)); // D1 D2
-    for (const channel of [HORNS, TROMBONES, TUBA, HARP, BELLS, PIANO, CELESTA]) control(channel, DROP - 0.01, REVERB, 104);
-    control(HORNS, DROP - 0.01, EXPRESSION, 100);
-    ramp(HORNS, DROP + 1.4, DROP + 5.6, 100, 0);
-    for (const [after, pitch, velocity] of RISE) {
-      const at = DROP + after;
-      note(HORNS, at, DROP + 5.8 - at, pitch, velocity);
-      note(HARP, at, 4, pitch - 12, velocity - 6);
-      note(HARP, at, 4, pitch, velocity - 12);
-      note(CELESTA, at, 3, pitch + 12, Math.round(velocity * 0.5));
-    }
-    const LAND = DROP + 0.64;
-    note(BELLS, LAND, 6, 76, 70); // E5
-    note(TIMPANI, LAND, 3, 45, 64); // A2
-    note(DRUMS, LAND, 3, CRASH, 28);
-    // The bloom out of the landing: D with its ninth, brass and strings.
-    const out = (peakAt) => ({ peakAt: LAND + peakAt });
-    bloom(TUBA, [38], 72, { from: 0, peak: 100, ...out(0.7), rest: 0, restAt: DROP + 5, until: DROP + 5.2 });
-    bloom(TROMBONES, [50, 57], 68, { from: 0, peak: 102, ...out(0.75), rest: 0, restAt: DROP + 5, until: DROP + 5.2 });
-    bloom(LOW_STRINGS, [38, 45], 84, { from: 50, peak: 104, ...out(0.9), rest: 72, restAt: DROP + 3.8 });
-    bloom(VIOLINS, [66, 69, 76, 81], 68, { from: 0, peak: 96, ...out(1), rest: 64, restAt: DROP + 3.9 });
-    return { breathing: [VIOLINS, LOW_STRINGS], shimmer: [88, 93, 98, 100], accent: 88 };
-  },
-  // Bells and voices: a tubular bell's D over its fifth, vibraphone and celesta ringing the
-  // chord above, a choir swelling out of the strike and staying, voices above it.
-  C() {
-    note(TIMPANI, DROP, 3, 38, 74); // D2
-    note(PIANO, DROP, 4.5, 26, 80); // D1
-    note(BELLS, DROP, 7, 62, 96); // D4
-    note(BELLS, DROP, 7, 69, 74); // A4
-    [74, 78, 81, 88].forEach((pitch) => note(VIBES, DROP, 6, pitch, 80)); // D5 F#5 A5 E6
-    [86, 93].forEach((pitch) => note(CELESTA, DROP, 3, pitch, 54)); // D6 A6
-    for (const channel of [BELLS, VIBES, CELESTA, CHOIR, VOICES, PIANO, PAD]) control(channel, DROP - 0.01, REVERB, 110);
-    bloom(CHOIR, [50, 57, 66, 76], 96, { from: 24, peak: 118, peakAt: DROP + 1.1, rest: 84, restAt: DROP + 3.8 });
-    bloom(VOICES, [69, 74], 80, { from: 0, peak: 104, peakAt: DROP + 1.6, rest: 70, restAt: DROP + 4 });
-    bloom(PAD, [38, 45], 76, { from: 30, peak: 96, peakAt: DROP + 1.2, rest: 78, restAt: DROP + 3.5 });
-    bloom(LOW_STRINGS, [38], 72, { from: 50, peak: 92, peakAt: DROP + 1, rest: 66, restAt: DROP + 3.5 });
-    return { breathing: [CHOIR, VOICES, PAD, LOW_STRINGS], shimmer: [86, 90, 93, 98], accent: 90 };
-  },
-};
-if (!(SIGNATURE in SIGNATURES)) throw new Error(`no signature ${SIGNATURE}: A, B or C`);
-const after = SIGNATURES[SIGNATURE]();
-
-// ── The resonance ───────────────────────────────────────────────────────────────────────────
-// No beat and no tune: what the signature left holds on, its loudness breathing slowly in and
-// out, each part in its own time, while a soft pad joins underneath; from SETTLE it all eases
-// down to silence.
+// ── The resonance, once the mark has gone ───────────────────────────────────────────────────
+// No beat and no tune. Each part's loudness breathes slowly in and out in its own time, from
+// where it was to its own level, and from SETTLE everything eases down to silence.
 const settle = (at) => 1 - smooth((at - SETTLE) / (SILENT - 0.2 - SETTLE));
-after.breathing.forEach((channel, k) => {
-  const from = DROP + 3.8 + k * 0.1;
-  const period = 3.4 + k * 0.9;
+/** `channel`'s expression from `from`: easing from `start` to `level` over `arrive` seconds, breathing up to `depth` above it every `period`. */
+function breathe(channel, from, start, level, depth, period, arrive = 1.6) {
   for (let at = from; at <= SILENT; at += 0.04) {
     const breath = 0.5 - 0.5 * Math.cos((2 * Math.PI * (at - from)) / period);
-    control(channel, at, EXPRESSION, (66 + 18 * breath) * settle(at));
-  }
-});
-if (SIGNATURE !== "C") {
-  control(PAD, 0, REVERB, 110);
-  control(PAD, DROP + 1.4, EXPRESSION, 0);
-  [50, 57, 64].forEach((pitch) => note(PAD, DROP + 1.5, SILENT - DROP - 1.5, pitch, 70)); // D3 A3 E4
-  for (let at = DROP + 1.5; at <= SILENT; at += 0.04) {
-    const breath = 0.5 - 0.5 * Math.cos((2 * Math.PI * (at - DROP - 1.5)) / 4.6);
-    control(PAD, at, EXPRESSION, smooth((at - DROP - 1.5) / 2.5) * (70 + 22 * breath) * settle(at));
+    const arrived = smooth((at - from) / arrive);
+    control(channel, at, EXPRESSION, (start + (level - start) * arrived + depth * arrived * breath) * settle(at));
   }
 }
-// The button: one soft celesta note high in the chord.
-control(CELESTA, CONTINUE - 0.1, REVERB, 120);
-note(CELESTA, CONTINUE, 2.5, after.accent, 40);
+/** The violins' expression where their ramp was cut, as the resonance takes them over. */
+const VIOLINS_AT_HIDDEN = 92 + (78 - 92) * smooth((HIDDEN - DROP - 0.4) / (HEADING - 0.1 - DROP - 0.4));
+
+const RESONANCES = {
+  // Light: the strings breathe on the chord, a halo pad swells in under them, and the shimmer
+  // (D, F#, A and E, high) drifts over the top.
+  A: {
+    shimmer: [86, 90, 93, 100],
+    accent: [CELESTA, 93], // A6
+    play() {
+      breathe(VIOLINS, HIDDEN, VIOLINS_AT_HIDDEN, 72, 14, 3.8);
+      breathe(LOW_STRINGS, HIDDEN, 92, 70, 10, 5.1, 2.2);
+      [50, 57, 66].forEach((pitch) => note(PAD, HIDDEN - 0.3, SILENT - HIDDEN + 0.3, pitch, 72)); // D3 A3 F#4
+      breathe(PAD, HIDDEN - 0.3, 0, 78, 16, 4.6, 2.5);
+    },
+  },
+  // Air: the violins' third falls away, leaving bare fifths; slow strings float a fifth and a
+  // ninth above them, and the shimmer sits higher still.
+  B: {
+    shimmer: [93, 98, 100, 105],
+    accent: [HARP, 86], // D6
+    violinsLetGo: { 78: HIDDEN + 1.8 },
+    play() {
+      breathe(VIOLINS, HIDDEN, VIOLINS_AT_HIDDEN, 70, 18, 3.4);
+      breathe(LOW_STRINGS, HIDDEN, 92, 66, 12, 5.6, 2.2);
+      [81, 88].forEach((pitch) => note(HIGH_STRINGS, HIDDEN + 0.4, SILENT - HIDDEN - 0.4, pitch, 64)); // A5 E6
+      breathe(HIGH_STRINGS, HIDDEN + 0.4, 0, 68, 18, 4.2, 2.8);
+    },
+  },
+  // Voices: a choir swells into the chord as the strings thin under it, soft voices on the
+  // octave and fifth above, the shimmer quieter.
+  C: {
+    shimmer: [86, 90, 93, 98],
+    accent: [CELESTA, 90], // F#6
+    play() {
+      breathe(VIOLINS, HIDDEN, VIOLINS_AT_HIDDEN, 46, 10, 4.1, 3);
+      breathe(LOW_STRINGS, HIDDEN, 92, 60, 8, 5.3, 2.5);
+      [50, 57, 62, 66].forEach((pitch) => note(CHOIR, HIDDEN - 0.4, SILENT - HIDDEN + 0.4, pitch, 84)); // D3 A3 D4 F#4
+      breathe(CHOIR, HIDDEN - 0.4, 0, 86, 16, 4.4, 2.2);
+      [74, 81].forEach((pitch) => note(VOICES, HIDDEN + 0.5, SILENT - HIDDEN - 0.5, pitch, 70)); // D5 A5
+      breathe(VOICES, HIDDEN + 0.5, 0, 70, 18, 3.7, 2.6);
+    },
+  },
+};
+if (!(RESONANCE in RESONANCES)) throw new Error(`no resonance ${RESONANCE}: A, B or C`);
+const resonance = RESONANCES[RESONANCE];
+// The violins' D major from the drop, held to the end unless the resonance lets one go sooner.
+[74, 78, 81].forEach((pitch) => note(VIOLINS, DROP, (resonance.violinsLetGo?.[pitch] ?? SILENT) - DROP, pitch, 80)); // D5 F#5 A5
+resonance.play();
+// The button: one soft, high note in the chord.
+const [accentChannel, accentPitch] = resonance.accent;
+control(accentChannel, CONTINUE - 0.1, EXPRESSION, 100);
+note(accentChannel, CONTINUE, 2.5, accentPitch, 40);
 
 /**
  * The shimmer, synthesized: soft pairs of sine tones high above the chord, each pair a little
  * out of tune with itself so it slowly beats, each swelling and fading in its own time.
  */
 function shimmer(left, right, pitches) {
-  const from = DROP + 1.2;
+  const from = HIDDEN;
   pitches.forEach((pitch, k) => {
     const frequency = 440 * 2 ** ((pitch - 69) / 12);
     const pan = 0.5 + 0.32 * Math.sin(1 + k * 2.4);
@@ -364,34 +347,30 @@ for (let start = 0; start < N; start += BLOCK) {
   while (next < events.length && events[next].at <= until) synth.processMessage(new Uint8Array(events[next++].message));
   synth.process(left, right, start, Math.min(BLOCK, N - start));
 }
-shimmer(left, right, after.shimmer);
+shimmer(left, right, resonance.shimmer);
 
 // ── The whole ───────────────────────────────────────────────────────────────────────────────
-// A quiet fade to silence at the end, no clicks, at the build-up's level.
-const BUILT = Math.round(SR * (DROP - 0.012));
-let build = 0;
+// A quiet fade to silence at the end, no clicks, at the planned peak.
+let peak = 0;
 for (const out of [left, right]) {
   for (let i = 0; i < N; i++) {
     const time = i / SR;
     const end = Math.min(1, Math.max(0, (DURATION - time) / 1.2));
     out[i] *= end * end * (3 - 2 * end) * Math.min(1, time / 0.01);
-    if (i < BUILT) build = Math.max(build, Math.abs(out[i]));
+    peak = Math.max(peak, Math.abs(out[i]));
   }
 }
-let peak = 0;
 let squares = 0;
 for (const out of [left, right]) {
   for (let i = 0; i < N; i++) {
-    out[i] = (out[i] / build) * BUILD_PEAK;
-    peak = Math.max(peak, Math.abs(out[i]));
+    out[i] = (out[i] / peak) * PEAK;
     squares += out[i] * out[i];
   }
 }
-if (peak >= 0.5) throw new Error(`the signature peaks at ${(20 * Math.log10(peak)).toFixed(1)} dBFS, above -6`);
 const rms = Math.sqrt(squares / (N * 2));
 const wav = Buffer.from(audioToWav([left, right], SR));
-console.log(`signature ${SIGNATURE}: peak ${(20 * Math.log10(peak)).toFixed(1)} dBFS, rms ${(20 * Math.log10(rms)).toFixed(1)} dBFS, ${DURATION.toFixed(2)} s`);
-console.log(`orb ${ORB}, open ${OPEN}, drop ${DROP}, heading ${HEADING}, continue ${CONTINUE}, settle ${SETTLE}, silent ${SILENT}`);
+console.log(`resonance ${RESONANCE}: peak ${(20 * Math.log10(PEAK)).toFixed(1)} dBFS, rms ${(20 * Math.log10(rms)).toFixed(1)} dBFS, ${DURATION.toFixed(2)} s`);
+console.log(`orb ${ORB}, open ${OPEN}, drop ${DROP}, hidden ${HIDDEN}, heading ${HEADING.toFixed(3)}, continue ${CONTINUE.toFixed(3)}, silent ${SILENT.toFixed(3)}`);
 
 if (process.platform !== "darwin") {
   const out = OUT.replace(/\.m4a$/, ".wav");
