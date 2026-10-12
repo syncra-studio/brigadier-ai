@@ -12,9 +12,10 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, closeOtherTabs, reopenTab, moveTab,
-  selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs, useTabCloseAsk,
+  selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs,
   replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs } = await import("./sessionTabs");
-const { editDocument, documentText, flushDocument, noteDocumentSave, documentIsSaved, documentRelativePath, discardDocument } = await import("./documentDrafts");
+const { documentText, documentIsSaved } = await import("./documentDrafts");
+const { migrateDrafts } = await import("./pageTabs");
 
 test("side chat pruning preserves plain chats, unknown parents and referenced session chats", () => {
   const conversations = [
@@ -47,25 +48,6 @@ test("the Mockup tab appears at each mockup moment without taking the front, sta
   assert.deepEqual(restored, { tabs: [{ kind: "mockup", id: MOCKUP_TAB, opener: CHAT_TAB }], active: MOCKUP_TAB, mockup: "task-1/v2" });
 });
 
-test("empty new files close without confirmation while edited files ask", () => {
-  const id = newSessionTab("empty", "document");
-  assert.equal(documentIsSaved(id), true);
-  assert.equal(documentIsSaved(id, "/saved.txt"), false);
-  closeTab("empty", id);
-  assert.equal(useTabCloseAsk.getState().confirm, null);
-  assert.equal(sessionTabs("empty").tabs.length, 0);
-  const edited = newSessionTab("empty", "document");
-  editDocument(edited, "unsaved"); flushDocument(edited);
-  closeTab("empty", edited);
-  assert.equal(typeof useTabCloseAsk.getState().confirm, "function");
-  assert.equal(sessionTabs("empty").tabs.length, 1);
-  useTabCloseAsk.setState({ confirm: null });
-  editDocument(edited, ""); flushDocument(edited);
-  closeTab("empty", edited);
-  assert.equal(useTabCloseAsk.getState().confirm, null);
-  assert.equal(sessionTabs("empty").tabs.length, 0);
-});
-
 test("multiple tools insert after the front tab; closing returns to the opener and undo restores the position", () => {
   const a = newSessionTab("order", "terminal");
   const b = newSessionTab("order", "browser");
@@ -90,53 +72,84 @@ test("multiple tools insert after the front tab; closing returns to the opener a
   assert.equal(sessionTabs("order").active, CHAT_TAB);
 });
 
-test("restore retains URL, cwd, side conversation, order and draft; saved documents restore only inside checkout", async () => {
+test("restore retains URL, cwd, side conversation and order", () => {
   const browser = newSessionTab("restore", "browser");
   const terminal = newSessionTab("restore", "terminal", "/workspace");
   const side = newSessionTab("restore", "sideChat");
-  const draft = newSessionTab("restore", "document");
-  editDocument(draft, "keep my text"); flushDocument(draft);
+  const page = newSessionTab("restore", "page");
   changeSessionTab("restore", browser, (tab) => tab.kind === "browser" ? { ...tab, url: "http://localhost:3000", title: "Preview" } : tab);
-  const inside = newSessionTab("restore", "document");
-  noteDocumentSave(inside, "");
-  changeSessionTab("restore", inside, (tab) => tab.kind === "document" ? { ...tab, savedPath: "/workspace/notes.txt", relativePath: "notes.txt" } : tab);
-  const outside = newSessionTab("restore", "document");
-  noteDocumentSave(outside, "");
-  changeSessionTab("restore", outside, (tab) => tab.kind === "document" ? { ...tab, savedPath: "/elsewhere/notes.txt" } : tab);
   const saved = JSON.parse(data.get("brigadier.sessionTabs")!).state.sessions;
-  assert.equal(JSON.stringify(saved).includes("keep my text"), false);
   const restored = restoreSessionTabs(saved, documentIsSaved).restore!;
-  assert.deepEqual(restored.tabs.map((tab) => tab.id), [browser, terminal, side, draft, "file:notes.txt"]);
-  assert.equal(restored.active, CHAT_TAB);
-  assert.equal(documentText(draft), "keep my text");
-  assert.deepEqual(restored.tabs.slice(0, 3), sessionTabs("restore").tabs.slice(0, 3));
-  useSessionTabs.setState({ sessions: {} });
-  data.set("brigadier.sessionTabs", JSON.stringify({ state: { sessions: saved }, version: 1 }));
-  await useSessionTabs.persist.rehydrate();
-  assert.equal(data.has("brigadier.document." + inside + ".saved"), false);
-  await useSessionTabs.persist.rehydrate();
-  assert.deepEqual(sessionTabs("restore").tabs.map((tab) => tab.id), restored.tabs.map((tab) => tab.id));
+  assert.deepEqual(restored.tabs.map((tab) => tab.id), [browser, terminal, side, page]);
+  assert.deepEqual(restored.tabs, sessionTabs("restore").tabs.map((tab) => tab.kind === "terminal" ? { ...tab, title: "" } : tab));
 });
 
-test("edits after saving survive restoration inside and outside a checkout", () => {
-  for (const relativePath of ["notes.txt", null]) {
-    const id = newSessionTab("dirty", "document");
-    editDocument(id, "saved"); noteDocumentSave(id, "saved");
-    changeSessionTab("dirty", id, (tab) => tab.kind === "document" ? { ...tab, savedPath: "/work/notes.txt", relativePath } : tab);
-    editDocument(id, "edited after saving"); flushDocument(id);
-    const restored = restoreSessionTabs({ dirty: sessionTabs("dirty") }, documentIsSaved).dirty!;
-    const tab = restored.tabs.find((entry) => entry.id === id)!;
-    assert.equal(tab.kind, "document");
-    assert.equal(tab.kind === "document" && tab.savedPath, null);
-    assert.equal(documentText(id), "edited after saving");
-    discardDocument(id);
-    assert.equal(data.has("brigadier.document." + id), false);
-    assert.equal(data.has("brigadier.document." + id + ".saved"), false);
-  }
-  assert.equal(documentRelativePath("C:\\work", "c:\\work\\notes.txt"), "notes.txt");
-  assert.equal(documentRelativePath("/work", "/worker/notes.txt"), null);
-  assert.equal(documentRelativePath("/work/", "/work/notes.txt"), "notes.txt");
-  assert.equal(documentRelativePath("/", "/notes.txt"), "notes.txt");
+/** An old "New file" tab as storage holds it, with its draft and what was last saved. */
+function legacyDocument(id: string, text: string, saved: string | null, savedPath: string | null, relativePath: string | null) {
+  data.set(`brigadier.document.${id}`, text);
+  if (saved !== null) data.set(`brigadier.document.${id}.saved`, saved);
+  return { kind: "document", id, opener: CHAT_TAB, name: savedPath ? savedPath.split("/").pop()! : "Untitled", savedPath, relativePath };
+}
+
+test("old New file drafts migrate: dirty ones and outside saves become pages, clean checkout saves become files", async () => {
+  data.clear();
+  const tabs = [
+    legacyDocument("document:dirty-unsaved", "never saved text", null, null, null),
+    legacyDocument("document:dirty-inside", "edited after saving", "saved", "/work/notes.md", "notes.md"),
+    legacyDocument("document:dirty-outside", "edited elsewhere", "saved", "/elsewhere/plan.txt", null),
+    legacyDocument("document:clean-inside", "same", "same", "/work/clean.md", "clean.md"),
+    legacyDocument("document:clean-outside", "outside text", "outside text", "/elsewhere/keep.txt", null),
+    legacyDocument("document:empty", "", null, null, null),
+  ];
+  const sessions = { legacy: { tabs: tabs as never[], active: "document:clean-inside" } };
+  useSessionTabs.setState({ sessions: {} });
+  data.set("brigadier.sessionTabs", JSON.stringify({ state: { sessions }, version: 1 }));
+  await useSessionTabs.persist.rehydrate();
+  const restored = sessionTabs("legacy");
+  assert.deepEqual(restored.tabs.map((tab) => [tab.kind, tab.id]), [
+    ["page", "document:dirty-unsaved"], ["page", "document:dirty-inside"], ["page", "document:dirty-outside"],
+    ["file", "file:clean.md"], ["page", "document:clean-outside"], ["page", "document:empty"],
+  ]);
+  assert.equal(restored.active, "file:clean.md", "the tab in front follows its file");
+  const pages = restored.tabs.filter((tab) => tab.kind === "page");
+  assert.deepEqual(pages.map((tab) => tab.kind === "page" && [tab.title, tab.draft, tab.pageId]), [
+    ["", "document:dirty-unsaved", null], ["notes", "document:dirty-inside", null], ["plan", "document:dirty-outside", null],
+    ["keep", "document:clean-outside", null], ["", "document:empty", null],
+  ]);
+  // Every draft a page tab still waits for is kept; the file tab's draft is gone.
+  for (const tab of pages) assert.ok(data.has(`brigadier.document.${tab.kind === "page" ? tab.draft : ""}`));
+  assert.equal(data.has("brigadier.document.document:clean-inside"), false);
+  assert.equal(data.has("brigadier.document.document:clean-inside.saved"), false);
+  // Restoring again (the next launch) changes nothing and drops nothing.
+  await useSessionTabs.persist.rehydrate();
+  assert.deepEqual(sessionTabs("legacy"), restored);
+  assert.equal(documentText("document:dirty-outside"), "edited elsewhere");
+
+  const writes: { id: string; body: string; title: string }[] = [];
+  let made = 0;
+  const ipc = {
+    create: async () => ({ id: `page-${++made}`, revision: "r0", content: { title: "", emoji: null, body: "" }, createdMs: 0, updatedMs: 0 }),
+    write: async (id: string, content: { title: string; body: string }) => {
+      if (content.body === "edited elsewhere") throw new Error("Disk full");
+      writes.push({ id, body: content.body, title: content.title });
+      return { type: "saved" as const, revision: "r1" };
+    },
+  };
+  await migrateDrafts(ipc);
+  assert.deepEqual(writes.map((write) => [write.title, write.body]), [
+    ["", "never saved text"], ["notes", "edited after saving"], ["keep", "outside text"], ["", ""],
+  ]);
+  const after = sessionTabs("legacy").tabs.filter((tab) => tab.kind === "page");
+  assert.deepEqual(after.map((tab) => tab.kind === "page" && [tab.pageId !== null, tab.draft ?? null]), [
+    [true, null], [true, null], [false, "document:dirty-outside"], [true, null], [true, null],
+  ]);
+  assert.equal(data.has("brigadier.document.document:dirty-unsaved"), false, "a moved draft is removed only once its page is saved");
+  assert.equal(documentText("document:dirty-outside"), "edited elsewhere", "a failed move keeps the draft");
+  await useSessionTabs.persist.rehydrate();
+  assert.equal(documentText("document:dirty-outside"), "edited elsewhere", "and a later launch keeps it too");
+  // A second run makes no second page for the tabs already moved.
+  await migrateDrafts(ipc);
+  assert.equal(made, 6);
 });
 
 test("OSC folders reject remote hosts and decode Windows drive paths", () => {
@@ -151,7 +164,7 @@ test("shortcut modifiers match exactly on each platform and reject composition a
   const key = { code: "KeyT", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, isComposing: false };
   assert.deepEqual(sessionTabKey(key, true), { type: "new", kind: "newTab" });
   assert.deepEqual(sessionTabKey({ ...key, code: "KeyB", shiftKey: true }, true), { type: "new", kind: "browser" });
-  for (const [code, kind] of [["KeyN", "document"], ["KeyS", "sideChat"]]) {
+  for (const [code, kind] of [["KeyN", "page"], ["KeyS", "sideChat"]]) {
     assert.deepEqual(sessionTabKey({ ...key, code: code!, altKey: true }, true), { type: "new", kind });
     const ctrl = { ...key, code: code!, metaKey: false, ctrlKey: true, altKey: true };
     assert.deepEqual(sessionTabKey(ctrl, false), { type: "new", kind });
@@ -167,7 +180,7 @@ test("shortcut modifiers match exactly on each platform and reject composition a
 
 test("New tab inserts after the current tab, restores as New tab, and reopens after closing", async () => {
   const first = newSessionTab("new", "browser");
-  const last = newSessionTab("new", "document");
+  const last = newSessionTab("new", "page");
   selectTab("new", first);
   const id = newSessionTab("new", "newTab");
   assert.deepEqual(sessionTabs("new").tabs.map((tab) => tab.id), [first, id, last]);
@@ -179,13 +192,12 @@ test("New tab inserts after the current tab, restores as New tab, and reopens af
   assert.equal(sessionTabs("new").tabs[1]?.kind, "newTab");
   closeTab("new", id);
   assert.equal(sessionTabs("new").active, first);
-  assert.equal(useTabCloseAsk.getState().confirm, null);
   reopenTab("new");
   assert.equal(sessionTabs("new").tabs[1]?.kind, "newTab");
 });
 
 test("New tab tools replace in place, preserving identity and opener", () => {
-  for (const kind of ["terminal", "sideChat", "document", "browser"] as const) {
+  for (const kind of ["terminal", "sideChat", "page", "browser"] as const) {
     const session = `replace-${kind}`;
     const opener = newSessionTab(session, "browser");
     const id = newSessionTab(session, "newTab");
@@ -258,7 +270,7 @@ test("turning the browser off drops every Browser tab, and none can be reopened"
   // The tab in front was a Browser tab: the one that opened it shows.
   assert.equal(sessionTabs(id).active, terminal);
   assert.equal(reopenTab(id), false);
-  closeTab(id, terminal, true);
+  closeTab(id, terminal);
 });
 
 test("closing the other tabs keeps Chat and the tab in front; from Chat it leaves Chat alone, and they reopen", () => {

@@ -271,7 +271,7 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         ("terminal-alternate", "Terminal", "Ctrl+`"),
         ("new", "New tab", "CmdOrCtrl+T"),
         ("new-side-chat", "New side chat", "Alt+CmdOrCtrl+S"),
-        ("new-file", "New file", "Alt+CmdOrCtrl+N"),
+        ("new-page", "New page", "Alt+CmdOrCtrl+N"),
         ("save", "Save file", "CmdOrCtrl+S"),
         ("save-as", "Save file as…", "CmdOrCtrl+Shift+S"),
         ("files", "Find file", "CmdOrCtrl+P"),

@@ -12,8 +12,6 @@ import {
   useRef,
 } from "react";
 
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
 import { ThreadTitle, UNTITLED } from "@/app/TopBar";
@@ -55,7 +53,6 @@ import {
   stepTab,
   tabOrder,
   useSessionTabsOf,
-  useTabCloseAsk,
 } from "@/state/sessionTabs";
 import { useBrowserOn } from "@/state/links";
 import { useApp } from "@/state/store";
@@ -74,7 +71,7 @@ export function tabTitle(tab: SessionTab): string {
   if (tab.kind === "browser") return tab.title || tab.url || "New browser";
   if (tab.kind === "terminal") return tab.title || (tab.cwd ? baseName(tab.cwd) : "Terminal");
   if (tab.kind === "sideChat") return tab.title || "Side chat";
-  if (tab.kind === "document") return tab.name;
+  if (tab.kind === "page") return tab.title || "Untitled page";
   if (tab.kind === "mockup") return "Mockup";
   return baseName(tab.path);
 }
@@ -283,7 +280,6 @@ export function SessionTabBar({
         {children}
         <BarDivider />
         {newTab}
-        <CloseAsk />
       </header>
     );
   }
@@ -435,7 +431,7 @@ export function SessionTabBar({
                         : tab.kind === "browser" ? <BrowserTabIcon tabId={tab.id} />
                         : tab.kind === "terminal" ? <Terminal className="size-icon-sm shrink-0" />
                         : tab.kind === "sideChat" ? <Chat className="size-icon-sm shrink-0" />
-                        : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" />
+                        : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />
                         : tab.kind === "mockup" ? <MockupTabIcon conversationId={id} /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
                       )}
@@ -472,7 +468,6 @@ export function SessionTabBar({
       <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
       <BarDivider />
       {children}
-      <CloseAsk />
     </header>
   );
 }
@@ -525,28 +520,6 @@ function AnimatedTab({ closing, ref: triggerRef, ...props }: React.ComponentProp
   return <div ref={attach} data-closing={closing || undefined} {...props} />;
 }
 
-/** Asks before closing tabs with unsaved files. */
-function CloseAsk() {
-  const confirmClose = useTabCloseAsk((state) => state.confirm);
-  return (
-    <Dialog open={confirmClose !== null} onOpenChange={(open) => { if (!open) useTabCloseAsk.setState({ confirm: null }); }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Close unsaved files?</DialogTitle>
-          <DialogDescription>These files have unsaved changes. Keep them open to save your work, or close them without saving.</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => useTabCloseAsk.setState({ confirm: null })}>Keep open</Button>
-          <Button variant="destructive" onClick={() => {
-            useTabCloseAsk.setState({ confirm: null });
-            confirmClose?.();
-          }}>Close without saving</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 /**
  * Keeps the tabs' widths after a close (their count as it was), so the next tab's × comes under
  * the pointer. Let go once the pointer has been away from the tabs a moment, on a key or a
@@ -597,7 +570,7 @@ const BrowserTab = lazy(() => import("./BrowserTab").then((module) => ({ default
 const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ default: module.SideChatTab })));
 const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
 const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default: module.MockupView })));
-const DocumentTabView = lazy(() => import("./DocumentTabView").then((module) => ({ default: module.DocumentTabView })));
+const PageTabView = lazy(() => import("./pages/PageTabView").then((module) => ({ default: module.PageTabView })));
 
 /**
  * The session's open tabs over its conversation, which stays as it was (scrolled, its draft
@@ -639,7 +612,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
               ) : tab.kind === "terminal" ? (
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
-                : <DocumentTabView conversationId={conversationId} tab={tab} active={shown} />}
+                : <PageTabView conversationId={conversationId} tab={tab} active={shown} />}
             </Suspense>
           </div>
         );

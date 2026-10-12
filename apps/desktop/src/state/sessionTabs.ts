@@ -55,14 +55,23 @@ export type TerminalTabState = {
 export type SideChatTabState = {
   kind: "sideChat"; id: string; opener: string | null; conversationId: string | null; title: string;
 };
-export type DocumentTab = {
+export type PageTabState = {
+  kind: "page"; id: string; opener: string | null;
+  /** Null until the daemon has made the page: a new one, or an old draft moving in. */
+  pageId: string | null;
+  /** The page's title as last seen, for the tab before the page loads. */
+  title: string;
+  /** An old "New file" draft (its key in local storage) whose text becomes this page. */
+  draft?: string;
+};
+/** A tab of the old plain-text "New file", only ever read back from storage to be migrated. */
+export type LegacyDocumentTab = {
   kind: "document"; id: string; opener: string | null; name: string;
-  /** Display only. Rust owns the authority to save to this path. */
   savedPath: string | null; relativePath: string | null;
 };
 export type MockupTabState = { kind: "mockup"; id: typeof MOCKUP_TAB; opener: string | null };
-export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | DocumentTab | MockupTabState | NewTabState;
-export type NewTabKind = "newTab" | "terminal" | "browser" | "sideChat" | "document";
+export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | NewTabState;
+export type NewTabKind = "newTab" | "terminal" | "browser" | "sideChat" | "page";
 
 export type SessionTabs = {
   /** The tabs after Chat, in order. */
@@ -84,12 +93,15 @@ export const useSessionTabs = create<{ sessions: Record<string, SessionTabs> }>(
       const sessions = restoreSessionTabs(previous, documentIsSaved);
       // Store the converted tabs before dropping their drafts, including if the user quits
       // without touching a tab. A failed storage write must leave the draft recoverable.
+      // Only drafts that became checkout files go now; the rest wait in their page tab until
+      // the daemon has saved them as pages.
       try {
         localStorage.setItem("brigadier.sessionTabs", JSON.stringify({ state: { sessions }, version: 1 }));
-        for (const session of Object.values(previous)) for (const tab of session.tabs)
-          if (tab.kind === "document" && tab.savedPath && documentIsSaved(tab.id, tab.savedPath)) discardDocument(tab.id);
-        pruneDocumentDrafts(new Set(Object.values(sessions).flatMap((session) =>
-          session.tabs.filter((tab) => tab.kind === "document").map((tab) => tab.id))));
+        const waiting = new Set(Object.values(sessions).flatMap((session) =>
+          session.tabs.flatMap((tab) => tab.kind === "page" && tab.draft ? [tab.draft] : [])));
+        for (const session of Object.values(previous)) for (const tab of session.tabs as (SessionTab | LegacyDocumentTab)[])
+          if (tab.kind === "document" && !waiting.has(tab.id)) discardDocument(tab.id);
+        pruneDocumentDrafts(waiting);
       } catch { /* Retain draft keys when storage is unavailable. */ }
       return { sessions };
     },
@@ -141,7 +153,7 @@ function makeTab(id: string, opener: string | null, kind: NewTabKind, cwd: strin
     : kind === "browser" ? { ...base, kind, url: "", title: "" }
     : kind === "terminal" ? { ...base, kind, cwd, title: "" }
     : kind === "sideChat" ? { ...base, kind, conversationId: crypto.randomUUID(), title: "" }
-    : { ...base, kind, name: "Untitled", savedPath: null, relativePath: null };
+    : { ...base, kind, pageId: null, title: "" };
 }
 
 /** A new Browser tab showing `url`, after the tab in front. */
@@ -189,6 +201,32 @@ export function replaceNewTab(conversationId: string, id: string, kind: Exclude<
       return next.kind === "browser" ? { ...next, url } : next;
     }),
   }));
+}
+
+/**
+ * Shows page `pageId`: the tab already showing it, else `replace` (a New tab) turned into it,
+ * else a new tab after the one in front. Returns the tab's ID.
+ */
+export function openPageTab(conversationId: string, pageId: string, title: string, replace?: string): string {
+  let shown = "";
+  update(conversationId, (current) => {
+    const existing = current.tabs.find((tab) => tab.kind === "page" && tab.pageId === pageId);
+    if (existing) {
+      shown = existing.id;
+      const tabs = replace ? current.tabs.filter((tab) => !(tab.id === replace && tab.kind === "newTab")) : current.tabs;
+      return { ...current, tabs, active: existing.id };
+    }
+    const placeholder = replace ? current.tabs.find((tab) => tab.id === replace && tab.kind === "newTab") : undefined;
+    if (placeholder) {
+      shown = placeholder.id;
+      return { ...current, active: placeholder.id, tabs: current.tabs.map((tab) =>
+        tab.id === placeholder.id ? { kind: "page", id: tab.id, opener: tab.opener, pageId, title } : tab) };
+    }
+    shown = `page:${crypto.randomUUID()}`;
+    const tab: PageTabState = { kind: "page", id: shown, opener: current.active, pageId, title };
+    return { tabs: insertAfterActive(current, tab), active: shown };
+  });
+  return shown;
 }
 
 /** File and Review keep their canonical IDs; an existing destination keeps its position. */
@@ -351,29 +389,19 @@ function remember(conversationId: string, gone: SessionTab[]): void {
   closed.set(conversationId, list);
 }
 
-export const useTabCloseAsk = create<{ confirm: (() => void) | null }>(() => ({ confirm: null }));
-
-function askToClose(tabs: SessionTab[], confirm: () => void): boolean {
-  if (!tabs.some((tab) => tab.kind === "document" && !documentIsSaved(tab.id, tab.savedPath))) return false;
-  useTabCloseAsk.setState({ confirm });
-  return true;
-}
-
-export function closeTab(conversationId: string, id: string, confirmed = false): void {
+export function closeTab(conversationId: string, id: string): void {
   if (id === CHAT_TAB) return;
   const current = sessionTabs(conversationId);
   const tab = current.tabs.find((entry) => entry.id === id);
   if (!tab) return;
-  if (!confirmed && askToClose([tab], () => closeTab(conversationId, id, true))) return;
   const tabs = current.tabs.filter((entry) => entry.id !== id);
   remember(conversationId, [tab]);
   update(conversationId, () => ({ tabs, active: afterClose(current, tabs, tab) }));
 }
 
 /** Closes every tab but Chat and `id`. */
-export function closeOtherTabs(conversationId: string, id: string, confirmed = false): void {
+export function closeOtherTabs(conversationId: string, id: string): void {
   const current = sessionTabs(conversationId);
-  if (!confirmed && askToClose(current.tabs.filter((tab) => tab.id !== id), () => closeOtherTabs(conversationId, id, true))) return;
   remember(
     conversationId,
     current.tabs.filter((tab) => tab.id !== id),
@@ -385,10 +413,9 @@ export function closeOtherTabs(conversationId: string, id: string, confirmed = f
 }
 
 /** Closes the tabs to the right of `id` (every tab, for Chat). */
-export function closeTabsToTheRight(conversationId: string, id: string, confirmed = false): void {
+export function closeTabsToTheRight(conversationId: string, id: string): void {
   const current = sessionTabs(conversationId);
   const at = id === CHAT_TAB ? -1 : current.tabs.findIndex((tab) => tab.id === id);
-  if (!confirmed && askToClose(current.tabs.slice(at + 1), () => closeTabsToTheRight(conversationId, id, true))) return;
   const kept = current.tabs.slice(0, at + 1);
   remember(conversationId, current.tabs.slice(at + 1));
   update(conversationId, () => ({
@@ -450,18 +477,28 @@ export function selectTabNumber(conversationId: string, number: number): void {
   if (id) selectTab(conversationId, id);
 }
 
-/** Only clean saved documents return as checkout files. Dirty drafts need a new native save grant. */
+/** Turns an old document's file name into a page title. */
+export function draftTitle(name: string): string {
+  return name === "Untitled" ? "" : name.replace(/\.[^.]+$/, "") || name;
+}
+
+/**
+ * Old "New file" tabs from storage: a clean one saved inside the checkout opens as that file;
+ * every other one (unsaved edits, never saved, or saved outside the checkout) becomes a page
+ * that takes the draft's text, so no text and no tab is lost.
+ */
 export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSaved: (id: string, savedPath: string | null) => boolean = () => false): Record<string, SessionTabs> {
   return Object.fromEntries(Object.entries(sessions).map(([id, session]) => {
     const remapped = new Map<string, string>();
-    const tabs = session.tabs.flatMap((tab): SessionTab[] => {
+    const tabs = (session.tabs as (SessionTab | LegacyDocumentTab)[]).flatMap((tab): SessionTab[] => {
       if (tab.kind === "terminal") return [{ ...tab, title: "" }];
-      if (tab.kind !== "document" || !tab.savedPath) return [tab];
-      if (!isSaved(tab.id, tab.savedPath)) return [{ ...tab, savedPath: null, relativePath: null }];
-      if (!tab.relativePath) return [];
-      const file = { kind: "file" as const, id: fileId(tab.relativePath), path: tab.relativePath, preview: false, line: null, reveal: 0, opener: tab.opener };
-      remapped.set(tab.id, file.id);
-      return [file];
+      if (tab.kind !== "document") return [tab];
+      if (tab.savedPath && tab.relativePath && isSaved(tab.id, tab.savedPath)) {
+        const file = { kind: "file" as const, id: fileId(tab.relativePath), path: tab.relativePath, preview: false, line: null, reveal: 0, opener: tab.opener };
+        remapped.set(tab.id, file.id);
+        return [file];
+      }
+      return [{ kind: "page", id: tab.id, opener: tab.opener, pageId: null, title: draftTitle(tab.name), draft: tab.id }];
     }).filter((tab, index, list) => list.findIndex((entry) => entry.id === tab.id) === index)
       .map((tab) => ({ ...tab, opener: tab.opener ? remapped.get(tab.opener) ?? tab.opener : null }));
     const active = remapped.get(session.active) ?? session.active;

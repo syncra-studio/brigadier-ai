@@ -1,7 +1,6 @@
-import { forgetDocument, request } from "@/ipc/client";
+import { request } from "@/ipc/client";
 import type { Conversation, TerminalInfo } from "@/ipc/generated";
 import { closePage, useBrowsers } from "@/state/browsers";
-import { discardDocument } from "@/state/documentDrafts";
 import { changeSessionTab, discardTab, dropBrowserTabs, onDiscardTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { abandonedSideChats } from "@/state/sideChats";
@@ -92,10 +91,6 @@ function deleteSideChat(id: string): void {
   void request({ method: "delete", ids: [id] }).catch(console.error);
 }
 onDiscardTab((tab) => {
-  if (tab.kind === "document") {
-    discardDocument(tab.id);
-    void forgetDocument(tab.id).catch(console.error);
-  }
   if (tab.kind === "sideChat" && tab.conversationId && !Object.values(useSessionTabs.getState().sessions)
     .some((session) => session.tabs.some((entry) => entry.kind === "sideChat" && entry.conversationId === tab.conversationId)))
     deleteSideChat(tab.conversationId);

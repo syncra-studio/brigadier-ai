@@ -72,11 +72,9 @@ try {
   check('Reload restores navigated tab; close releases native page with newTab-prefixed ID');
   await menu('new'); await field().waitFor(); before=await state();
   assert.equal(before.tabs.find(t=>t.id===before.active).kind,'newTab');
-  await activePane().getByRole('button',{name:'New file'}).click(); await page.getByRole('textbox',{name:'Untitled',exact:true}).waitFor();
-  now=await state(); assert.equal(now.active,before.active);assert.equal(now.tabs.find(t=>t.id===now.active).kind,'document');
-  await page.getByRole('textbox',{name:'Untitled',exact:true}).fill('keep edits');await menu('close');
-  await page.getByRole('dialog',{name:'Close unsaved files?'}).waitFor(); await page.getByRole('button',{name:'Keep open',exact:true}).click();
-  check('Native Cmd+T creates New tab; New file replaces in place; dirty-file confirmation preserved');
+  await activePane().getByRole('button',{name:'New page'}).click(); await settle();
+  now=await state(); assert.equal(now.active,before.active);assert.equal(now.tabs.find(t=>t.id===now.active).kind,'page');
+  check('Native Cmd+T creates New tab; New page replaces it in place');
   await menu('new');await field().waitFor(); before=await state();
   await activePane().getByRole('button',{name:'Review changes'}).click();await settle();now=await state();
   assert.equal(now.active,'review');assert.equal(now.tabs.some(t=>t.id===before.active),false);

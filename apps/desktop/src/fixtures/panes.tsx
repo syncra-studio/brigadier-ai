@@ -20,7 +20,6 @@ import {
 } from "@/app/conversation/SidePanel";
 import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
 import { newSessionTab, useSessionTabs, useSessionTabsOf, selectTab, closeTab } from "@/state/sessionTabs";
-import { editDocument, documentText } from "@/state/documentDrafts";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
@@ -264,7 +263,7 @@ function Fixture() {
     Object.assign(window, {
       panes: {
         panel, useApp,
-        useSessionTabs, newSessionTab, selectTab, closeTab, editDocument, documentText,
+        useSessionTabs, newSessionTab, selectTab, closeTab,
         agents,
         setKind,
         setConversationId,

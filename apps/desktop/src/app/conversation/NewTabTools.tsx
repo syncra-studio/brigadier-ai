@@ -80,7 +80,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
               </DropdownMenu>
             </div>
             <div className="new-tab-card">
-              <button type="button" onClick={() => replaceNewTab(conversationId, tabId, "document")} className="new-tab-tool">
+              <button type="button" onClick={() => replaceNewTab(conversationId, tabId, "page")} className="new-tab-tool">
                 <Document aria-hidden /><span className="new-tab-tool-label">New page</span>
               </button>
             </div>

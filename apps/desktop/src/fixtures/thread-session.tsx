@@ -174,7 +174,7 @@ if (tabFixture && !sessionTabs(id).tabs.length && conversation.kind === "session
   const count = Number(query.get("tabs"));
   for (let index = 0; index < count; index++) {
     if (index === 0) openReviewTab(id, { type: "all" });
-    else newSessionTab(id, index === count - 1 ? "newTab" : index % 2 ? "browser" : "document");
+    else newSessionTab(id, index === count - 1 ? "newTab" : index % 2 ? "browser" : "page");
   }
 }
 

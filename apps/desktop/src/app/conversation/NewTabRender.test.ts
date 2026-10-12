@@ -29,7 +29,7 @@ for (const reduced of [false, true]) {
     assert.equal(seen.bottomTerminal, true); assert.equal(seen.bottomKeptNewTab, "newTab");
     assert.deepEqual(seen.more, ["Review changes⌃⇧G", "Find file⌘P", "Side chat⌥⌘S"]);
     assert.deepEqual(seen.files, { open: true, tab: "files", placeholder: "newTab" });
-    assert.equal(seen.newPage, "document"); assert.equal(seen.terminal, "terminal"); assert.equal(seen.sideChat, "sideChat"); assert.equal(seen.review, "review");
+    assert.equal(seen.newPage, "page"); assert.equal(seen.terminal, "terminal"); assert.equal(seen.sideChat, "sideChat"); assert.equal(seen.review, "review");
     assert.equal((seen.siteTab as { kind: string; url: string }).kind, "browser"); assert.equal((seen.siteTab as { url: string }).url, "https://two.test/");
     assert.equal(seen.clearedSuggested, true);
     const spinner = seen.spinner as Record<string, unknown>;

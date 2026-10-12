@@ -101,7 +101,7 @@ test("session tab shortcuts are what the tab keys handler does, on both platform
     "new-tab": { type: "new", kind: "newTab" },
     "new-browser": { type: "new", kind: "browser" },
     "new-side-chat": { type: "new", kind: "sideChat" },
-    "new-file": { type: "new", kind: "document" },
+    "new-page": { type: "new", kind: "page" },
     close: { type: "close" },
     "close-others": { type: "closeOthers" },
     previous: { type: "step", step: -1 },

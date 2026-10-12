@@ -1,28 +1,15 @@
-import { create } from "zustand";
+/**
+ * What is left of the old plain-text "New file" drafts, kept in local storage under their tab's
+ * ID: read once to move them into pages (`pageTabs.ts`), then removed.
+ */
 
 const PREFIX = "brigadier.document.";
-const pending = new Map<string, ReturnType<typeof setTimeout>>();
-export const useDocumentDrafts = create<{ texts: Record<string, string> }>(() => ({ texts: {} }));
 
 export function documentText(id: string): string {
-  const current = useDocumentDrafts.getState().texts[id];
-  if (current !== undefined) return current;
   try { return localStorage.getItem(PREFIX + id) ?? ""; } catch { return ""; }
 }
 
-export function flushDocument(id: string): void {
-  clearTimeout(pending.get(id));
-  pending.delete(id);
-  try { localStorage.setItem(PREFIX + id, documentText(id)); }
-  catch (error) { console.error("Could not preserve the document draft", error); }
-}
-
-/** Kept outside the tabs blob, alongside the draft, so later edits survive a restart. */
-export function noteDocumentSave(id: string, text: string): void {
-  try { localStorage.setItem(PREFIX + id + ".saved", text); }
-  catch (error) { console.error("Could not preserve the document save state", error); }
-}
-
+/** Whether the draft is what was last saved to its file (never saved: whether it is empty). */
 export function documentIsSaved(id: string, savedPath: string | null = null): boolean {
   try {
     const saved = localStorage.getItem(PREFIX + id + ".saved");
@@ -32,38 +19,13 @@ export function documentIsSaved(id: string, savedPath: string | null = null): bo
 }
 
 export function discardDocument(id: string): void {
-  clearTimeout(pending.get(id));
-  pending.delete(id);
-  useDocumentDrafts.setState(({ texts }) => {
-    const { [id]: _gone, ...rest } = texts;
-    return { texts: rest };
-  });
   try {
     localStorage.removeItem(PREFIX + id);
     localStorage.removeItem(PREFIX + id + ".saved");
   } catch (error) { console.error("Could not remove the document draft", error); }
 }
 
-export function documentRelativePath(root: string | null | undefined, path: string): string | null {
-  if (!root) return null;
-  const directory = root.replaceAll("\\", "/").replace(/\/$/, "") + "/";
-  const file = path.replaceAll("\\", "/");
-  const windows = /^[A-Za-z]:\//.test(directory) || directory.startsWith("//");
-  return (windows ? file.toLowerCase().startsWith(directory.toLowerCase()) : file.startsWith(directory))
-    ? file.slice(directory.length) : null;
-}
-
-export function editDocument(id: string, text: string): void {
-  useDocumentDrafts.setState(({ texts }) => ({ texts: { ...texts, [id]: text } }));
-  clearTimeout(pending.get(id));
-  pending.set(id, setTimeout(() => flushDocument(id), 250));
-}
-
-if (typeof window !== "undefined" && window.addEventListener) {
-  window.addEventListener("pagehide", () => { for (const id of pending.keys()) flushDocument(id); });
-}
-
-/** Closed drafts have no persisted tab to reopen after a restart. */
+/** Drafts no tab is waiting to move into a page. */
 export function pruneDocumentDrafts(ids: Set<string>): void {
   try {
     for (const key of Object.keys(localStorage)) {
