@@ -236,6 +236,8 @@ mockIPC(
     if (req.method === "openSideChat") return { method: req.method, conversation: { ...conversation, id: req.sideChatId, kind: "chat", title: "Side chat", sideOf: req.conversationId } };
     if (req.method === "listFiles")
       return { method: req.method, files: ["README.md", "package.json", "src/app.tsx", "src/styles.css"], truncated: false };
+    if (req.method === "getWorkspaceTree")
+      return { method: req.method, tree: { files: ["README.md", "package.json", "src/app.tsx", "src/styles.css"], truncated: false, ignored: [], ignoredTruncated: false } };
     if (req.method === "getSourceState")
       return { method: req.method, state: {
         branch: "sidebar-redesign", remote: null, upstream: null, ahead: 0, staged: [],

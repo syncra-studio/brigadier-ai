@@ -35,6 +35,7 @@ const files = Array.from({ length: 1500 }, (_, index) =>
 const changes: SourceFile[] = files.slice(0, 12).map((path, index) => ({ path, oldPath: null, status: index % 3 ? "modified" : "untracked" }));
 const answer = (req: Request): unknown => {
   if (req.method === "listFiles") return { method: req.method, files, truncated: false };
+  if (req.method === "getWorkspaceTree") return { method: req.method, tree: { files, truncated: false, ignored: [], ignoredTruncated: false } };
   if (req.method === "getSourceState") return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes } };
   return { method: req.method };
 };

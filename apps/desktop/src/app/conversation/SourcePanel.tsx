@@ -10,7 +10,8 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
-import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
+import { LETTERS } from "@/app/conversation/sourceStatus";
+import { FileIcon } from "@/components/glyphs/fileIcons";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
@@ -24,8 +25,8 @@ import {
 } from "@/components/ui/dialog";
 import { Kbd } from "@/components/ui/kbd";
 import { request } from "@/ipc/client";
-import { keepSource, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
-import type { CommitOutcome, SourceChange, SourceFile, SourceScope, SourceState, SourceStatus } from "@/ipc/generated";
+import { keepSource, onWorkspaceChanged, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
+import type { CommitOutcome, SourceChange, SourceFile, SourceScope, SourceState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
 import { noteSourceState, setReviewScope } from "@/state/review";
@@ -92,9 +93,6 @@ function targetKey(target: SourceTarget): string {
   return target.type === "conversation" ? target.conversationId : `project:${target.projectId}`;
 }
 
-/** How often the panel reads the checkout again while it shows: agents change files meanwhile. */
-const REFRESH_MS = 4000;
-
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -108,19 +106,9 @@ function dirName(path: string): string {
   return slash < 0 ? "" : path.slice(0, slash);
 }
 
-const LETTERS: Record<SourceStatus, { letter: string; label: string; className: string }> = {
-  modified: { letter: "M", label: "Modified", className: "text-warning" },
-  added: { letter: "A", label: "Added", className: "text-success" },
-  deleted: { letter: "D", label: "Deleted", className: "text-destructive" },
-  renamed: { letter: "R", label: "Renamed", className: "text-link" },
-  copied: { letter: "C", label: "Copied", className: "text-link" },
-  typeChanged: { letter: "T", label: "Type changed", className: "text-warning" },
-  untracked: { letter: "U", label: "Untracked", className: "text-success" },
-  conflicted: { letter: "!", label: "Conflicted", className: "text-destructive" },
-};
 
 /**
- * The checkout's state: what was last read of it at once, read again now, while it shows, and as
+ * The checkout's state: what was last read of it at once, read again now, when it changes, and as
  * the board changes it.
  */
 function useSourceState(target: SourceTarget) {
@@ -152,15 +140,14 @@ function useSourceState(target: SourceTarget) {
   }, [changeKey, load]);
   useEffect(() => {
     load();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") load();
-    }, REFRESH_MS);
+    // Agents change files meanwhile: the sidebar's watch says when.
+    const unsubscribe = onWorkspaceChanged(cacheTarget, load);
     window.addEventListener("focus", load);
     return () => {
-      window.clearInterval(timer);
+      unsubscribe();
       window.removeEventListener("focus", load);
     };
-  }, [load]);
+  }, [load, cacheTarget]);
   const set = (next: SourceState) => {
     if (workspaceKey(cacheTarget) !== key) return;
     keepSource(cacheTarget, next, key);
@@ -355,7 +342,7 @@ const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; children: Rea
   const status = LETTERS[file.status];
   const name = (
     <>
-      <FileTypeIcon name={file.path} className="size-icon-sm shrink-0" />
+      <FileIcon name={file.path} />
       <span className={cn("shrink-0", file.status === "deleted" && "line-through")}>
         {baseName(file.path)}
       </span>

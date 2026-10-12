@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { Conversation, Project, SourceState } from "@/ipc/generated";
+import type { Conversation, Project, SourceState, WorkspaceFolder } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { useApp } from "@/state/store";
 
@@ -9,7 +9,8 @@ export type WorkspaceTarget =
   | { type: "conversation"; conversationId: string }
   | { type: "project"; projectId: string };
 
-export type FileList = { files: string[]; truncated: boolean };
+/** A checkout's files, and (from the right sidebar's read) what it ignores: folders end in `/`. */
+export type FileList = { files: string[]; truncated: boolean; ignored?: string[] };
 
 /** What was last read of one checkout, so the right sidebar's first frame shows it. */
 export type WorkspaceEntry = { files?: FileList; source?: SourceState };
@@ -115,18 +116,20 @@ function once<T>(id: string, read: () => Promise<T>): Promise<T> {
   return next;
 }
 
-function sameFiles(a: FileList | undefined, b: FileList): boolean {
-  return !!a && a.truncated === b.truncated && a.files.length === b.files.length && a.files.every((file, index) => file === b.files[index]);
+function sameList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  return a === b || (!!a && !!b && a.length === b.length && a.every((item, index) => item === b[index]));
 }
 
-/** Reads a target's files and keeps them; an unchanged list keeps its old identity. */
+function sameFiles(a: FileList | undefined, b: FileList): boolean {
+  return !!a && a.truncated === b.truncated && sameList(a.files, b.files) && sameList(a.ignored, b.ignored);
+}
+
+/** Reads a target's files and what it ignores, and keeps them; an unchanged list keeps its old identity. */
 export function readFiles(target: WorkspaceTarget): Promise<FileList> {
   const key = workspaceKey(target);
   return once(`files:${key}`, async () => {
-    const { files, truncated } = target.type === "conversation"
-      ? await request({ method: "listFiles", conversationId: target.conversationId, query: null })
-      : await request({ method: "listProjectFiles", projectId: target.projectId, query: null });
-    const list = { files, truncated };
+    const { tree } = await request({ method: "getWorkspaceTree", target });
+    const list = { files: tree.files, truncated: tree.truncated, ignored: tree.ignored };
     const kept = useWorkspaceCache.getState().entries[key]?.files;
     if (sameFiles(kept, list)) return kept!;
     if (workspaceKey(target) === key) remember(key, { files: list });
@@ -160,4 +163,44 @@ export function prefetchWorkspace(target: WorkspaceTarget): void {
   if (entry) remember(workspaceKey(target), {});
   if (!entry?.files) readFiles(target).catch(() => undefined);
   if (!entry?.source) readSource(target).catch(() => undefined);
+}
+
+/** Reads one folder of a target's checkout from disk: an ignored folder opened in the tree. */
+export async function readFolder(target: WorkspaceTarget, path: string): Promise<WorkspaceFolder> {
+  const { folder } = await request({ method: "listWorkspaceFolder", target, path });
+  return folder;
+}
+
+function sameTarget(a: WorkspaceTarget, b: WorkspaceTarget): boolean {
+  return a.type === "conversation"
+    ? b.type === "conversation" && a.conversationId === b.conversationId
+    : b.type === "project" && a.projectId === b.projectId;
+}
+
+const changeListeners = new Set<(target: WorkspaceTarget) => void>();
+
+/**
+ * Hears when the daemon says a target's checkout changed (its files, index or HEAD), while the
+ * right sidebar watches it. Returns the unsubscribe.
+ */
+export function onWorkspaceChanged(target: WorkspaceTarget, listener: () => void): () => void {
+  const heard = (changed: WorkspaceTarget) => {
+    if (sameTarget(changed, target)) listener();
+  };
+  changeListeners.add(heard);
+  return () => {
+    changeListeners.delete(heard);
+  };
+}
+
+/** Passes a change from the bridge to every listener. */
+export function emitWorkspaceChanged(target: WorkspaceTarget): void {
+  for (const listener of changeListeners) listener(target);
+}
+
+/** Watches a target's checkout while the right sidebar shows it; null stops. */
+export function watchWorkspace(target: WorkspaceTarget | null): void {
+  request({ method: "watchWorkspace", target }).catch((error: unknown) => {
+    console.error("watching the checkout failed", error);
+  });
 }

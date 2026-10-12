@@ -85,9 +85,9 @@ test("a late read from a removed checkout cannot be reused, even after the same 
   useApp.setState({ conversations: session(worktree("/copies/s")) });
   const current = readFiles(target);
   assert.equal(replies.length, 2, "a new generation never shares the earlier request");
-  replies[1]!({ method: "listFiles", files: ["current.ts"], truncated: false });
+  replies[1]!({ method: "getWorkspaceTree", tree: { files: ["current.ts"], truncated: false, ignored: [], ignoredTruncated: false } });
   await current;
-  replies[0]!({ method: "listFiles", files: ["old.ts"], truncated: false });
+  replies[0]!({ method: "getWorkspaceTree", tree: { files: ["old.ts"], truncated: false, ignored: [], ignoredTruncated: false } });
   await Promise.all([first, shared]);
   assert.deepEqual(cachedWorkspace(target)?.files?.files, ["current.ts"]);
 });
