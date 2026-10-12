@@ -866,8 +866,8 @@
 :root {
   /* The mark at the window's centre: up from here, read clearly at 4.8 s as the music drops,
      held, faded out by the end (6.75 s, when the music's motion stops). */
-  --intro-mark-at: 4.66s;
-  --intro-mark-for: 2.09s;
+  --intro-mark-at: 4.7s;
+  --intro-mark-for: 2.05s;
   --intro-held-mark-size: clamp(6.5rem, 11vw, 11rem);
   --intro-held-mark-glow: drop-shadow(0 0 0.5rem rgb(255 255 255 / 0.5)) drop-shadow(0 0 2.5rem rgb(255 255 255 / 0.2));
   /* The desktop's dim lifts from here, over this long, while the mark is held. */

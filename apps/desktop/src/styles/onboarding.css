@@ -182,19 +182,19 @@ html[data-intro="staged"] #root {
   visibility: hidden;
 }
 
-/* Its share of --intro-mark-for: in over the first 6.5 % (0.14 s, read clearly from about
-   0.12 s), held to 69 %, then a plain fade out over the last 0.65 s. */
+/* Its share of --intro-mark-for: in over the first 6.8 % (0.14 s, read clearly from about
+   0.1 s), held to 68 %, then a plain fade out over the last 0.65 s. */
 @keyframes intro-mark {
   0% {
     opacity: 0;
     scale: 0.97;
     animation-timing-function: cubic-bezier(0.4, 0, 0.3, 1);
   }
-  6.5% {
+  6.8% {
     opacity: 1;
     scale: 1;
   }
-  69% {
+  68% {
     opacity: 1;
     scale: 1;
     animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);

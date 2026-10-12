@@ -39,9 +39,9 @@ const OUT = resolve(process.argv[2] ?? new URL("../src/app/onboarding/welcome-so
  *   "A", light: a soft halo pad under the strings, and the shimmer above;
  *   "B", air: the chord opens to bare fifths with high strings floating over them;
  *   "C", voices: a choir takes the chord from the strings, with soft voices above.
- * The intro ships A. To hear another, set BRIGADIER_WELCOME_RESONANCE or change this, and render.
+ * The intro ships B. To hear another, set BRIGADIER_WELCOME_RESONANCE or change this, and render.
  */
-const RESONANCE = process.env.BRIGADIER_WELCOME_RESONANCE ?? "A";
+const RESONANCE = process.env.BRIGADIER_WELCOME_RESONANCE ?? "B";
 
 /** The SoundFont: FluidR3 Mono GM 2.312, as MuseScore 2.1 ships it, and its SHA-256. */
 const SOUNDFONT_URL = "https://github.com/musescore/MuseScore/raw/2.1/share/sound/FluidR3Mono_GM.sf3";
