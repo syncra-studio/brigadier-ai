@@ -188,11 +188,11 @@ pub fn allows_trials(category: TaskCategory) -> bool {
 }
 
 /// A category's default effort, fitted to its floor: a verifier that runs at low effort tends
-/// to call checks met that it never ran, and code is written and reviewed at high effort. A
-/// scout is a chore and runs at low.
+/// to call checks met that it never ran, an operator at low misreads the screens it acts on,
+/// and code is written and reviewed at high effort. A scout is a chore and runs at low.
 fn at_least(category: TaskCategory, effort: &'static str) -> &'static str {
     let floor = match category {
-        TaskCategory::Verify => "medium",
+        TaskCategory::Verify | TaskCategory::Operate => "medium",
         TaskCategory::Implement | TaskCategory::Review | TaskCategory::Merge => "high",
         TaskCategory::Scout => return "low",
         _ => return effort,
@@ -1587,6 +1587,14 @@ fn effort(
     notes: &mut Vec<String>,
 ) -> Option<String> {
     let pinned = query.pin.as_ref().and_then(|pin| pin.effort.as_deref());
+    // Operating apps never runs below medium, even when the orchestrator asks for less.
+    let pinned = pinned.map(|asked| {
+        if query.category == TaskCategory::Operate && table::rank(asked) < table::rank("medium") {
+            "medium"
+        } else {
+            asked
+        }
+    });
     let registry_effort = pick
         .model
         .default_effort
@@ -2330,6 +2338,19 @@ mod tests {
             (ProviderKind::Claude, "haiku", Some("medium"))
         );
         assert_eq!(route.tier, QualityTier::Strong);
+        // An orchestrator asking for low still gets medium; high stays high.
+        let mut pinned = operate_query(&registry, &models, &both);
+        for (asked, runs) in [("low", "medium"), ("high", "high")] {
+            pinned.pin = Some(Pin {
+                effort: Some(asked.into()),
+                ..Default::default()
+            });
+            assert_eq!(
+                routed(&pinned).effort.as_deref(),
+                Some(runs),
+                "asked {asked}"
+            );
+        }
     }
 
     /// With only Codex set up, operating apps stays on a Codex model at the operate floor,
