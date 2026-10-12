@@ -251,6 +251,7 @@ impl SessionManager {
             append_system_prompt: Some(RESEARCH_ROLE.to_owned()),
             mcp_servers: Vec::new(),
             tools: ToolSet::Web,
+            skill_plugins: Vec::new(),
             add_dirs: Vec::new(),
             env: Vec::new(),
             unset_env: Vec::new(),

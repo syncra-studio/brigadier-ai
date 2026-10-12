@@ -6,9 +6,15 @@
 // For `universal-apple-darwin` both architectures are built and merged with `lipo`; the
 // per-architecture binaries are staged too because each architecture's build script
 // copies its own sidecar.
+//
+// On macOS it also builds the computer-use helper from helpers/computer-use and assembles
+// src-tauri/binaries/Brigadier Computer Use.app, which bundle.macOS.files puts in
+// Contents/Helpers. Its bundle id is `--helper-id` (the dev config passes the dev id) and never
+// changes, because macOS keys the Accessibility and Screen Recording grants to it. It is signed
+// with APPLE_SIGNING_IDENTITY when set, otherwise ad hoc.
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, chmodSync, mkdirSync } from "node:fs";
+import { copyFileSync, chmodSync, cpSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -72,4 +78,65 @@ if (target === "universal-apple-darwin") {
   console.log(`staged ${universal}`);
 } else {
   stage(build(target), target);
+}
+
+const helperName = "Brigadier Computer Use";
+const helperBin = "brigadier-cu";
+const helperDir = resolve(repoRoot, "helpers/computer-use");
+// The helper is its own workspace; its output lives beside the main build's.
+const helperTargetDir = join(targetDir, "computer-use");
+
+/** Builds the helper for `triple` and returns the path of the produced binary. */
+function buildHelper(triple) {
+  const cargoArgs = ["build", "--locked", "-p", helperBin, "--bin", helperBin];
+  if (release) cargoArgs.push("--release");
+  cargoArgs.push("--target-dir", helperTargetDir);
+  const crossTarget = triple !== host;
+  if (crossTarget) cargoArgs.push("--target", triple);
+  execFileSync("cargo", cargoArgs, { cwd: helperDir, stdio: "inherit" });
+  return join(helperTargetDir, crossTarget ? triple : "", profile, helperBin);
+}
+
+/** Assembles and signs the helper bundle around `binary`. */
+function stageHelper(binary) {
+  const id = flag("--helper-id") || "ai.brigadier.computer-use";
+  const version = JSON.parse(readFileSync(resolve(here, "../package.json"), "utf8")).version;
+  const template = join(helperDir, "scripts/BrigadierCuBundle");
+  const app = join(binariesDir, `${helperName}.app`);
+  rmSync(app, { recursive: true, force: true });
+  cpSync(template, app, { recursive: true });
+  mkdirSync(join(app, "Contents/MacOS"), { recursive: true });
+  copyFileSync(binary, join(app, "Contents/MacOS", helperBin));
+  chmodSync(join(app, "Contents/MacOS", helperBin), 0o755);
+  copyFileSync(
+    resolve(here, "../src-tauri/icons/icon.icns"),
+    join(app, "Contents/Resources/AppIcon.icns"),
+  );
+  const plist = join(app, "Contents/Info.plist");
+  for (const [key, value] of [
+    ["CFBundleIdentifier", id],
+    ["CFBundleShortVersionString", version],
+    ["CFBundleVersion", version],
+  ]) {
+    execFileSync("plutil", ["-replace", key, "-string", value, plist], { stdio: "inherit" });
+  }
+  const identity = process.env.APPLE_SIGNING_IDENTITY || "-";
+  const signArgs = ["--force", "--sign", identity, "--identifier", id, "--options", "runtime"];
+  signArgs.push("--entitlements", join(helperDir, "scripts/BrigadierCu.entitlements"));
+  // A Developer ID signature carries a secure timestamp; an ad hoc one can't.
+  signArgs.push(identity === "-" ? "--timestamp=none" : "--timestamp");
+  execFileSync("codesign", [...signArgs, app], { stdio: "inherit" });
+  console.log(`staged ${app} (${id})`);
+}
+
+if (target.includes("apple-darwin")) {
+  if (target === "universal-apple-darwin") {
+    const arm = buildHelper("aarch64-apple-darwin");
+    const intel = buildHelper("x86_64-apple-darwin");
+    const universal = join(helperTargetDir, `${helperBin}-universal`);
+    execFileSync("lipo", ["-create", "-output", universal, arm, intel], { stdio: "inherit" });
+    stageHelper(universal);
+  } else {
+    stageHelper(buildHelper(target));
+  }
 }

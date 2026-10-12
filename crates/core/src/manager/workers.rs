@@ -1707,6 +1707,12 @@ impl SessionManager {
             extra.push_str("\n\n");
             extra.push_str(prompts::BROWSER_OFF);
         }
+        // Computer use (a GUI job has its tools loaded from the start).
+        let computer = self.computer_use_kit(task.kind == TaskKind::Operate).await;
+        if computer.is_some() {
+            extra.push_str("\n\n");
+            extra.push_str(prompts::COMPUTER_USE);
+        }
         if self.held_by_plan_mode(task).await {
             extra.push_str("\n\n");
             extra.push_str(super::phases::PLAN_MODE_HOLD);
@@ -1760,8 +1766,14 @@ impl SessionManager {
         );
         // B7: the grant is a secret too.
         secret_values.push(worker_grant.clone());
-        let mcp_servers =
+        let mut mcp_servers =
             vec![self.brigadier_server(worker_grant.clone(), WORKER_TOOL_TIMEOUT_SECS, true)];
+        let mut skill_plugins = Vec::new();
+        if let Some(kit) = computer {
+            secret_values.push(kit.token);
+            mcp_servers.push(kit.server);
+            skill_plugins.push(kit.plugin);
+        }
         let env = worker_env(&workspace.scratch);
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
@@ -1814,6 +1826,7 @@ impl SessionManager {
             append_system_prompt: Some(prompt),
             mcp_servers,
             tools: ToolSet::Lean,
+            skill_plugins,
             add_dirs: match (&home, &workspace.worktree) {
                 (Some(_), Some(worktree)) => vec![worktree.clone()],
                 _ => Vec::new(),

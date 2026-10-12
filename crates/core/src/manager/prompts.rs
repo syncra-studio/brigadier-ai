@@ -597,6 +597,9 @@ pub(crate) fn reviews_note(on: bool) -> String {
 /// Browser). Instructions never mention the browser while it is on.
 pub(crate) const BROWSER_OFF: &str = "Brigadier's built-in browser is off (the user's setting): for you it doesn't exist. Never offer to open a page in it or say a page will open there; links and preview URLs you give the user open in their default browser.";
 
+/// What an agent with the `computer` tools is told about them.
+pub(crate) const COMPUTER_USE: &str = "You can see and drive apps on this Mac with the `computer` tools. They work in the background: the user's windows stay where they are and their pointer doesn't move. Before your first one, load the `computer-use` skill and follow it. Use them when the job needs an app's interface (operating an app, checking a change in the running app); never bring a window to the front unless asked.";
+
 /// The instructions' paragraph while the browser is off; nothing while it is on.
 pub(crate) fn browser_section(on: bool) -> String {
     if on {

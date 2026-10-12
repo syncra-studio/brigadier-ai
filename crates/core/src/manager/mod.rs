@@ -28,6 +28,7 @@ mod ci;
 mod clean_up;
 mod closing;
 mod cold;
+mod computer_use;
 mod context_pack;
 mod conversation;
 pub(crate) mod decisions;
@@ -190,6 +191,8 @@ pub struct SessionManager {
     machine: Arc<crate::machine::MachineWatch>,
     /// Conversations being archived or deleted: their fences and cleanups.
     closing: closing::Closing,
+    /// The computer-use helper's copy in the data folder ([`computer_use`]).
+    computer_use: computer_use::ComputerUse,
     /// Where "Open in terminal" runs a worker's session (the daemon's terminals).
     terminal_host: std::sync::OnceLock<Arc<dyn takeover::TerminalHost>>,
     /// The user's pages, which a thread may read and change from the page's own composer.
@@ -283,6 +286,7 @@ impl SessionManager {
             overnight: overnight::Runs::default(),
             machine,
             closing: closing::Closing::default(),
+            computer_use: computer_use::ComputerUse::default(),
             terminal_host: std::sync::OnceLock::new(),
             pages: std::sync::OnceLock::new(),
             #[cfg(test)]

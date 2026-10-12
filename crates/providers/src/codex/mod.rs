@@ -852,6 +852,17 @@ async fn open_thread(
     // Where a command may ask for more folders or the network (the feature, see
     // [`profile_config`]), Brigadier's reviewer must read what it asks for.
     rpc.initialize(profiled && spec.auto_review).await?;
+    // Brigadier's own skills join the ones Codex finds itself, for this app-server only.
+    if !spec.skill_plugins.is_empty() {
+        let roots: Vec<String> = spec
+            .skill_plugins
+            .iter()
+            .map(|plugin| plugin.join("skills").display().to_string())
+            .collect();
+        let _: Value = rpc
+            .call("skills/extraRoots/set", &json!({ "extraRoots": roots }))
+            .await?;
+    }
     let config = thread_config(rpc, spec, cwd, profile).await?;
     // Only a folder Brigadier created may have its trust entry recorded and undone. Codex keys
     // trust on the main checkout for a worktree, which is the user's: watched, never touched.
@@ -2159,6 +2170,7 @@ mod tests {
             append_system_prompt: None,
             mcp_servers: Vec::new(),
             tools,
+            skill_plugins: Vec::new(),
             add_dirs: Vec::new(),
             env: Vec::new(),
             unset_env: Vec::new(),

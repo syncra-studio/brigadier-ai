@@ -747,6 +747,9 @@ pub struct Settings {
     /// Brigadier's built-in browser exists (Settings › Browser). Off, there is no Browser tab,
     /// shortcut or menu item, links open in the default browser, and sessions are told.
     pub browser_enabled: bool,
+    /// Agents can see and drive apps on this Mac (Settings › Computer use): every worker and
+    /// thread gets the `computer` tools and the `computer-use` skill. macOS only.
+    pub computer_use: bool,
     /// Where web links open while the browser is on.
     pub web_links_in: LinkTarget,
     /// Where local development URLs (localhost and loopback addresses) open while the browser
@@ -888,6 +891,7 @@ impl Default for Settings {
             dictation_words: Vec::new(),
             dictation_microphone: String::new(),
             browser_enabled: true,
+            computer_use: true,
             web_links_in: LinkTarget::System,
             local_links_in: LinkTarget::Brigadier,
             browser_full_url: false,

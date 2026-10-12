@@ -22,7 +22,10 @@
     "targets": ["app", "dmg"],
     "macOS": {
       "entitlements": "Entitlements.plist",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "files": {
+        "Helpers/Brigadier Computer Use.app": "binaries/Brigadier Computer Use.app"
+      }
     }
   }
 }

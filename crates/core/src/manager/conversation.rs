@@ -1995,7 +1995,20 @@ impl SessionManager {
             }
         };
 
-        let grant_redactor = super::secrets::redactor(grant_values.clone());
+        let (mut prompt, mut mcp) = (prompt, mcp);
+        // The thread drives apps itself only for a quick look; its skill and tools load when used.
+        let mut skill_plugins = Vec::new();
+        let mut redacted = grant_values.clone();
+        if conv.kind == ConversationKind::Session
+            && let Some(kit) = self.computer_use_kit(false).await
+        {
+            prompt.push_str("\n\n");
+            prompt.push_str(prompts::COMPUTER_USE);
+            redacted.push(kit.token);
+            mcp.push(kit.server);
+            skill_plugins.push(kit.plugin);
+        }
+        let grant_redactor = super::secrets::redactor(redacted);
         let fresh = std::mem::take(&mut conv.state.lock().await.fresh);
         let mut resume = if fresh {
             None
@@ -2038,6 +2051,7 @@ impl SessionManager {
             },
             // The workspace is the thread's to work in, never its own to clean up: it is not
             // recorded under the thread's owner.
+            skill_plugins,
             add_dirs: launch
                 .as_ref()
                 .and_then(|launch| launch.workspace.as_ref())
