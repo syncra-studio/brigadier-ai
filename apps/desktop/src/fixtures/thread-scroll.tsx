@@ -362,12 +362,12 @@ const steps = {
       bottomFade: round(fade(".thread-bottom-fade") - footer),
     };
   },
-  /** The button's threshold and place. */
+  /** The button's threshold and place: the last row 8px, then 9px, under the composer's top. */
   async button() {
-    await userScroll(max() - 8);
+    await userScroll(max() - 84 - 8);
     await settle(250);
     const at8 = buttonState();
-    await userScroll(max() - 9);
+    await userScroll(max() - 84 - 9);
     await settle(250);
     const at9 = buttonState();
     return { at8, at9 };

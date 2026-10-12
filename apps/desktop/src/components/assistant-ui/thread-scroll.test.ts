@@ -96,6 +96,7 @@ class Fake {
       rows: () => this.rows,
       content: () => this.content,
       padding: () => this.padding,
+      footer: () => this.footer,
       turnTop: () => TURN_TOP,
       setRoom: (px: number) => {
         this.room = px;
@@ -246,13 +247,14 @@ test("following starts when the user scrolls to the bottom and stops when they s
   assert.equal(scroller.following, false);
 });
 
-test("the button shows past the bottom's threshold, and glides to the bottom to follow", () => {
+test("the button shows once the last row reaches under the composer, and glides to the bottom to follow", () => {
   const fake = new Fake();
   conversation(fake, 10);
   const scroller = open(fake);
-  userScroll(fake, scroller, fake.max - AT_BOTTOM_PX);
+  // Scrolled up through the gap above the composer, the last row is still in view.
+  userScroll(fake, scroller, fake.max - COMPOSER_GAP - AT_BOTTOM_PX);
   assert.equal(scroller.contentBelow(), false);
-  userScroll(fake, scroller, fake.max - AT_BOTTOM_PX - 1);
+  userScroll(fake, scroller, fake.max - COMPOSER_GAP - AT_BOTTOM_PX - 1);
   assert.equal(scroller.contentBelow(), true);
   userScroll(fake, scroller, 500);
   reduced = false;
@@ -356,6 +358,33 @@ test("a sent message settles at its place under the view's top, with room for it
   answer.height += 300;
   scroller.resized();
   assert.equal(fake.scrollTop, fake.max);
+});
+
+test("a turn ending in the gap above a grown composer shows no button; one reaching under it does", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  expectSentTurn(id, "sent");
+  const user = fake.row("sent", 60, "user");
+  const answer = fake.row("answer", 40);
+  fake.rows.push(user, answer);
+  scroller.rowsChanged();
+  flushFrames(scroller);
+  // A question docks over the composer: the footer grows and the turn's last line, still in
+  // view, ends inside the gap above it.
+  fake.footer += 220;
+  scroller.resized();
+  const footerTop = () => VIEW_TOP + fake.clientHeight - fake.footer;
+  answer.height += footerTop() - 40 - answer.getBoundingClientRect().bottom;
+  scroller.resized();
+  assert.equal(footerTop() - answer.getBoundingClientRect().bottom, 40);
+  assert.equal(scroller.contentBelow(), false);
+  // Reaching under the footer, it is hidden: the button shows.
+  answer.height += 60;
+  scroller.resized();
+  assert.ok(answer.getBoundingClientRect().bottom > footerTop() + AT_BOTTOM_PX);
+  assert.equal(scroller.contentBelow(), true);
 });
 
 test("in an empty conversation a sent message sits at the top padding", () => {

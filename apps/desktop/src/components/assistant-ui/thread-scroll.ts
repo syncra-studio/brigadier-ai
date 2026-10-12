@@ -13,7 +13,8 @@
  *   below it (the newest turn's minimum height) that its answer fills as it streams. The room
  *   lasts while the turn runs: once it ends, only what keeps the view still is left, and that
  *   only shrinks.
- * - The scroll button shows while a row reaches below the view, never for the room alone.
+ * - The scroll button shows while a row reaches under the floating footer or below the view,
+ *   never for the room alone or for content in the gap above the footer, which stays in view.
  * - Each conversation's place is kept for the app's run, by row id, and restored on return.
  * - While the thread is hidden (`display: none`, under a fullscreen side panel) nothing is measured
  *   or kept; shown again, it is put back where it was, or at the bottom if it was there.
@@ -55,6 +56,8 @@ export type ThreadLayout = {
   content: () => number;
   /** The bottom padding: the floating footer's height and the gap above it. */
   padding: () => number;
+  /** The floating footer's height: what hides the content under it. */
+  footer: () => number;
   /** How far under the view's top a sent message's row settles. */
   turnTop: (row: RowBox) => number;
   /** The room after the rows. */
@@ -125,7 +128,7 @@ export class ThreadScroller {
   private roomMax: number | null = null;
   /** The thread works on its newest turn. */
   private running = false;
-  /** A row reaches below the view's bottom (above the floating footer). */
+  /** A row reaches under the floating footer: some of it is hidden. */
   private below = false;
   /** A fold in the newest turn was clicked at the view's end: it follows if the end stays in view. */
   private foldAtEnd = false;
@@ -145,7 +148,10 @@ export class ThreadScroller {
     return this.lastDistance;
   }
 
-  /** Whether a row reaches below the view (the room alone doesn't count): the scroll button shows. */
+  /**
+   * Whether a row is hidden under the footer or below the view (the room and the gap above the
+   * footer don't count): the scroll button shows.
+   */
   contentBelow = (): boolean => this.below;
 
   subscribe = (listener: () => void): (() => void) => {
@@ -581,7 +587,8 @@ export class ThreadScroller {
     const viewRect = viewport.getBoundingClientRect();
     const viewTop = viewRect.top;
     const lastBottom = rows.at(-1)?.getBoundingClientRect().bottom;
-    this.below = lastBottom !== undefined && lastBottom > viewRect.bottom - layout.padding() + AT_BOTTOM_PX;
+    // Content in the gap above the footer is in view; only what reaches under the footer is hidden.
+    this.below = lastBottom !== undefined && lastBottom > viewRect.bottom - layout.footer() + AT_BOTTOM_PX;
     // The first row whose bottom is below the view's top: the rows are in order.
     let low = 0;
     let high = rows.length;

@@ -179,6 +179,7 @@ function useThreadScroll(
         rows: () => rows,
         content: () => spacer.getBoundingClientRect().bottom - column.getBoundingClientRect().top,
         padding: () => pad.offsetHeight,
+        footer: () => footer.offsetHeight,
         turnTop: (row) =>
           row instanceof HTMLElement ? Number.parseFloat(getComputedStyle(row).scrollMarginTop) || 0 : 0,
         setRoom: (px) => {
