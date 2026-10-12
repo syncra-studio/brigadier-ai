@@ -59,8 +59,8 @@ import {
 } from "@/state/sessionTabs";
 import { useBrowserOn } from "@/state/links";
 import { useApp } from "@/state/store";
-import { useBrowsers } from "@/state/browsers";
 import { NewTabTools } from "./NewTabTools";
+import { BrowserTabIcon } from "./BrowserTabIcon";
 
 function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
@@ -432,7 +432,7 @@ export function SessionTabBar({
                       {tab.kind === "file" ? (
                         <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
                       ) : tab.kind === "newTab" ? <Globe className="size-icon-sm shrink-0" />
-                        : tab.kind === "browser" ? <BrowserIcon tabId={tab.id} />
+                        : tab.kind === "browser" ? <BrowserTabIcon tabId={tab.id} />
                         : tab.kind === "terminal" ? <Terminal className="size-icon-sm shrink-0" />
                         : tab.kind === "sideChat" ? <Chat className="size-icon-sm shrink-0" />
                         : tab.kind === "document" ? <Document className="size-icon-sm shrink-0" />
@@ -584,14 +584,6 @@ function useCloseLock(plain: boolean) {
       timer.current = setTimeout(release, CLOSE_LOCK_MS);
     },
   };
-}
-
-function BrowserIcon({ tabId }: { tabId: string }) {
-  const favicon = useBrowsers((s) => s.pages[tabId]?.favicon);
-  const [failed, setFailed] = useState<string | null>(null);
-  return favicon && favicon !== failed
-    ? <img src={favicon} alt="" className="size-icon-sm shrink-0" onError={() => setFailed(favicon)} />
-    : <Globe aria-hidden className="size-icon-sm shrink-0" />;
 }
 
 const FileTabView = lazy(() =>
