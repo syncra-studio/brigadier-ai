@@ -15,7 +15,8 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, closeOtherTabs, reopenTab, moveTab,
   selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs,
-  replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs } = await import("./sessionTabs");
+  replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs,
+  sideChatName, sideChatTitle } = await import("./sessionTabs");
 const { documentText, documentIsSaved } = await import("./documentDrafts");
 const { migrateDrafts } = await import("./pageTabs");
 
@@ -72,6 +73,33 @@ test("multiple tools insert after the front tab; closing returns to the opener a
   assert.equal(sessionTabs("order").active, c);
   stepTab("order", 1);
   assert.equal(sessionTabs("order").active, CHAT_TAB);
+});
+
+function sideNames() {
+  return sessionTabs("sides").tabs.map((tab) => tab.kind === "sideChat" ? sideChatName(tab, sessionTabs("sides").tabs) : tab.kind);
+}
+
+test("side chat tabs read Side chat alone, and their title or opening number beside others", () => {
+  const opened = (id: string, at: number) => changeSessionTab("sides", id, (tab) => tab.kind === "sideChat" ? { ...tab, opened: at } : tab);
+  const first = newSessionTab("sides", "sideChat");
+  opened(first, 1);
+  assert.deepEqual(sideNames(), ["Side chat"]);
+  changeSessionTab("sides", first, (tab) => tab.kind === "sideChat" ? { ...tab, title: sideChatTitle("  \n Why does   the build\tfail?\nmore") } : tab);
+  assert.deepEqual(sideNames(), ["Side chat"]);
+  const second = newSessionTab("sides", "sideChat");
+  opened(second, 2);
+  newSessionTab("sides", "terminal");
+  const third = newSessionTab("sides", "sideChat");
+  opened(third, 3);
+  assert.deepEqual(sideNames(), ["Why does the build fail?", "Side chat 2", "terminal", "Side chat 3"]);
+  moveTab("sides", third, 0);
+  changeSessionTab("sides", first, (tab) => tab.kind === "sideChat" ? { ...tab, title: "" } : tab);
+  assert.deepEqual(sideNames(), ["Side chat 3", "Side chat", "Side chat 2", "terminal"]);
+  changeSessionTab("sides", second, (tab) => tab.kind === "sideChat" ? { ...tab, title: sideChatTitle("x".repeat(80)) } : tab);
+  assert.equal(sideNames()[2], `${"x".repeat(59)}…`);
+  closeTab("sides", third);
+  closeTab("sides", second);
+  assert.deepEqual(sideNames(), ["Side chat", "terminal"]);
 });
 
 test("restore retains URL, cwd, side conversation and order", () => {

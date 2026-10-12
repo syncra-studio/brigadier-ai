@@ -9,7 +9,7 @@ import {
   createSideBoard,
   disposeSideBoard,
 } from "@/state/board";
-import { changeSessionTab, type SideChatTabState } from "@/state/sessionTabs";
+import { changeSessionTab, sideChatTitle, type SideChatTabState } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 /**
@@ -19,7 +19,7 @@ import { useApp } from "@/state/store";
 export function SideChatTab({ conversationId, tab }: { conversationId: string; tab: SideChatTabState }) {
   const firstMessage = useApp((state) => tab.conversationId ? state.threads[tab.conversationId]?.items.find((item) => item.role === "user")?.text : undefined);
   useEffect(() => {
-    if (!tab.title && firstMessage) changeSessionTab(conversationId, tab.id, (current) => current.kind === "sideChat" ? { ...current, title: firstMessage.trim().split("\n")[0]!.slice(0, 120) } : current);
+    if (!tab.title && firstMessage) changeSessionTab(conversationId, tab.id, (current) => current.kind === "sideChat" ? { ...current, title: sideChatTitle(firstMessage) } : current);
   }, [conversationId, tab.id, tab.title, firstMessage]);
   const [side, setSide] = useState<{ id: string; store: BoardStore } | null>(null);
   const [error, setError] = useState<string | null>(null);

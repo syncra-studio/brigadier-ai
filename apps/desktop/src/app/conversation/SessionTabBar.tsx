@@ -1,4 +1,4 @@
-import { Archive, Chat, Globe, Terminal, Plus, SquarePlus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, ChatCompose, Globe, Terminal, Plus, SquarePlus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -49,6 +49,7 @@ import {
   type SessionTab,
   selectTab,
   selectTabNumber,
+  sideChatName,
   sessionTabs,
   stepTab,
   tabOrder,
@@ -63,14 +64,14 @@ function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
-export function tabTitle(tab: SessionTab): string {
+export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "review") {
     return tab.target.type === "all" ? "Review" : `${baseName(tab.target.path)} (diff)`;
   }
   if (tab.kind === "newTab") return "New tab";
   if (tab.kind === "browser") return tab.title || tab.url || "New browser";
   if (tab.kind === "terminal") return tab.title || (tab.cwd ? baseName(tab.cwd) : "Terminal");
-  if (tab.kind === "sideChat") return tab.title || "Side chat";
+  if (tab.kind === "sideChat") return sideChatName(tab, tabs);
   if (tab.kind === "page") return tab.title || "Untitled page";
   if (tab.kind === "mockup") return "Mockup";
   return baseName(tab.path);
@@ -399,7 +400,7 @@ export function SessionTabBar({
             {shown.map((tab) => {
               const index = tabs.findIndex((entry) => entry.id === tab.id);
               const selected = tab.id === active;
-              const name = tabTitle(tab);
+              const name = tabTitle(tab, tabs);
               const handlers = grip(tab.id, index);
               return (
                 <TabMenu key={tab.id} conversationId={id} tab={tab}>
@@ -426,7 +427,7 @@ export function SessionTabBar({
                       role="tab"
                       aria-selected={selected}
                       tabIndex={selected ? 0 : -1}
-                      title={tab.kind === "file" ? tab.path : name}
+                      title={tab.kind === "file" ? tab.path : tab.kind === "sideChat" && tab.title ? `Side chat · ${tab.title}` : name}
                       onPointerDown={handlers.onPointerDown}
                       onPointerMove={handlers.onPointerMove}
                       onPointerUp={handlers.onPointerUp}
@@ -445,7 +446,7 @@ export function SessionTabBar({
                       ) : tab.kind === "newTab" ? <Globe className="size-icon-sm shrink-0" />
                         : tab.kind === "browser" ? <BrowserTabIcon tabId={tab.id} />
                         : tab.kind === "terminal" ? <Terminal className="size-icon-sm shrink-0" />
-                        : tab.kind === "sideChat" ? <Chat className="size-icon-sm shrink-0" />
+                        : tab.kind === "sideChat" ? <ChatCompose className="size-icon-sm shrink-0" />
                         : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />
                         : tab.kind === "mockup" ? <MockupTabIcon conversationId={id} /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
@@ -603,7 +604,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
           <div
             key={tab.id}
             role="tabpanel"
-            aria-label={tabTitle(tab)}
+            aria-label={tabTitle(tab, tabs)}
             inert={!shown}
             className={cn("bg-background absolute inset-0 flex flex-col", !shown && "invisible")}
           >

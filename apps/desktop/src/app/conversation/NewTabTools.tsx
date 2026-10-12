@@ -1,4 +1,4 @@
-import { Chat, ChevronDown, Document, DotsHorizontal, Globe, Grid, Search, Terminal, X } from "@openai/apps-sdk-ui/components/Icon";
+import { ChatCompose, ChevronDown, Document, DotsHorizontal, Globe, Grid, Search, Terminal, X } from "@openai/apps-sdk-ui/components/Icon";
 import { useContext, useEffect, useState } from "react";
 
 import { WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
@@ -88,7 +88,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
             </div>
             <div className="new-tab-card">
               <button type="button" aria-label="Side chat" disabled={archived} onClick={() => replaceNewTab(conversationId, tabId, "sideChat")} className="new-tab-tool">
-                <Chat aria-hidden /><span className="new-tab-tool-label">Side chat</span>
+                <ChatCompose aria-hidden /><span className="new-tab-tool-label">Side chat</span>
                 <Kbd>{shortcutLabel("⌥⌘S", mac)}</Kbd>
               </button>
             </div>

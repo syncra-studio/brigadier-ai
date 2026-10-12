@@ -54,6 +54,8 @@ export type TerminalTabState = {
 };
 export type SideChatTabState = {
   kind: "sideChat"; id: string; opener: string | null; conversationId: string | null; title: string;
+  /** When it was opened (ms), which numbers untitled side chats. Older tabs go by their place. */
+  opened?: number;
 };
 export type PageTabState = {
   kind: "page"; id: string; opener: string | null;
@@ -151,8 +153,27 @@ function makeTab(id: string, opener: string | null, kind: NewTabKind, cwd: strin
   return kind === "newTab" ? { ...base, kind }
     : kind === "browser" ? { ...base, kind, url: "", title: "" }
     : kind === "terminal" ? { ...base, kind, cwd, title: "" }
-    : kind === "sideChat" ? { ...base, kind, conversationId: crypto.randomUUID(), title: "" }
+    : kind === "sideChat" ? { ...base, kind, conversationId: crypto.randomUUID(), title: "", opened: Date.now() }
     : { ...base, kind, pageId: null, title: "" };
+}
+
+/** A side chat's title from its first message: the first line with text, on one line, at most 60 characters. */
+export function sideChatTitle(message: string): string {
+  const line = (message.split("\n").find((each) => each.trim()) ?? message).split(/\s+/).filter(Boolean).join(" ");
+  const chars = [...line];
+  return chars.length <= 60 ? line : `${chars.slice(0, 59).join("")}…`;
+}
+
+/**
+ * What a Side chat tab reads. Alone it is just "Side chat"; beside others each shows its own
+ * title, or until it has one "Side chat 2", "Side chat 3"… in the order they were opened.
+ */
+export function sideChatName(tab: SideChatTabState, tabs: readonly SessionTab[]): string {
+  const sideChats = tabs.filter((each): each is SideChatTabState => each.kind === "sideChat");
+  if (sideChats.length < 2) return "Side chat";
+  if (tab.title) return tab.title;
+  const order = sideChats.toSorted((a, b) => (a.opened ?? 0) - (b.opened ?? 0)).findIndex((each) => each.id === tab.id);
+  return order > 0 ? `Side chat ${order + 1}` : "Side chat";
 }
 
 /** A new Browser tab showing `url`, after the tab in front. */
