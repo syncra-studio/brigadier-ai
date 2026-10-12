@@ -16,9 +16,9 @@ const ENGINE_BRANCHES: [&str; 2] = ["brigadier", "overnight"];
 
 /// The refs a session on `own` may not move in the repository whose shared git folder is
 /// `common`: every engine branch but its own, and each of `targets` (the branches its work
-/// lands on, which only the engine moves). Below Full access `packed-refs` is protected too;
-/// at Full access it stays writable, so the user's own branch work isn't broken, and the
-/// ref check catches a hand edit.
+/// lands on, which only the engine moves, and those the engine's records show it made).
+/// Below Full access `packed-refs` is protected too; at Full access it stays writable, so the
+/// user's own branch work isn't broken, and the ref check catches a hand edit.
 ///
 /// Every other checkout's own git folder (`<common>/worktrees/<name>`: its HEAD and index) is
 /// protected as well, `own_git_dir` given back: `git worktree remove` deletes it even when
@@ -167,7 +167,14 @@ impl SessionManager {
             return Protection::default();
         };
         let mut targets = self.landing_targets(id);
-        for target in extra_targets {
+        // Every branch Brigadier's records show it made in this repository, as other sessions'
+        // branches take Settings › Git's prefix rather than `brigadier/`.
+        let ownership = self.runtime.ledger().branch_ownership();
+        let mut made = ownership.made_in(checkout);
+        if let Some(main) = repo.common_dir().parent() {
+            made.extend(ownership.made_in(main));
+        }
+        for target in extra_targets.iter().chain(&made) {
             if !targets.contains(target) {
                 targets.push(target.clone());
             }

@@ -1689,12 +1689,24 @@ impl SessionManager {
                 self.task_live(task).told_browser(browser);
             }
             // A resumed or forked session keeps the instructions it started with: it hears
-            // what changed since, once (SESSION-FIXES-PLAN.md §6).
+            // what changed since, once (SESSION-FIXES-PLAN.md §6), and the user's settings
+            // where they differ from what it was told (unknown counts as their defaults).
             (_, Some(first)) => {
-                if let Some(note) = prompts::revision_note(task.told_revision.unwrap_or(0), true) {
+                let live = self.task_live(task);
+                let notes: Vec<String> = [
+                    prompts::revision_note(task.told_revision.unwrap_or(0), true),
+                    live.reviews_note(task, self.reviews_on())
+                        .map(str::to_owned),
+                    live.git_writing_note(task, writing.as_deref()),
+                    live.browser_note(browser),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                if !notes.is_empty() {
                     first
                         .parts
-                        .insert(0, brigadier_providers::InputPart::Text(note));
+                        .insert(0, brigadier_providers::InputPart::Text(notes.join("\n\n")));
                 }
             }
             (_, None) => {}

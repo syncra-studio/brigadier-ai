@@ -637,10 +637,9 @@ impl SessionManager {
         // Held until the review is recorded and spawned, as switching reviews holds it: a
         // review starts entirely before the switch or not at all after it.
         let _held = self.reviews.lock().await;
-        if !self.reviews_on() {
-            return Ok(None);
-        }
         let board = self.core.board(&new.conversation_id).await?;
+        // A range reviewed already keeps its review whatever the switch says now: a landed
+        // worker stays held for its findings until they settle.
         if new.kind == ReviewKind::Code
             && let Some(known) = review_of(board.reviews.values(), &new.base.0, &new.tip.0)
         {
@@ -653,6 +652,9 @@ impl SessionManager {
                 self.store_review(&known).await?;
             }
             return Ok(Some((known, false)));
+        }
+        if !self.reviews_on() {
+            return Ok(None);
         }
         let reviewer = other_vendor(new.author.provider);
         let mut review = ReviewRun {
@@ -1472,6 +1474,13 @@ impl SessionManager {
                     // to report instead, and hears why.
                     tell.push((live, task, false));
                 }
+            }
+        }
+        if !on {
+            // A merge held for a review still running goes ahead now.
+            let held: Vec<ConversationId> = self.convs_lock().keys().cloned().collect();
+            for id in held {
+                self.check_held_merge(&id).await;
             }
         }
         for (live, task, released) in tell {
