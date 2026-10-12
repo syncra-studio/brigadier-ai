@@ -191,6 +191,11 @@ browserEnabled: boolean,
  */
 computerUse: boolean, 
 /**
+ * While computer use is on, a menu-bar item lists the agents using apps on this Mac, with
+ * a way to stop each.
+ */
+computerUseMenuBar: boolean, 
+/**
  * Where web links open while the browser is on.
  */
 webLinksIn: LinkTarget, 

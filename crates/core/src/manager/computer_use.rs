@@ -25,9 +25,11 @@ use super::SessionManager;
 /// The MCP server's name: tools reach the model as `mcp__computer__<tool>`.
 pub(crate) const SERVER_NAME: &str = "computer";
 /// The helper app's bundle name, in Brigadier.app and in the data folder.
-const HELPER_APP: &str = "Brigadier Computer Use.app";
+pub(super) const HELPER_APP: &str = "Brigadier Computer Use.app";
 /// The helper's executable inside its bundle.
-const HELPER_BIN: &str = "brigadier-cu";
+pub(super) const HELPER_BIN: &str = "brigadier-cu";
+/// The permissions the helper last read, which it keeps in its home.
+pub(super) const PERMISSIONS_FILE: &str = "permissions.json";
 /// Overrides where the helper app is found (a development checkout's staged bundle).
 const HELPER_APP_ENV: &str = "BRIGADIER_CU_APP";
 /// The skill every agent gets, Brigadier's own workflow for the tools.
@@ -42,7 +44,7 @@ pub(crate) struct ComputerUse {
 }
 
 #[derive(Clone)]
-struct Placed {
+pub(super) struct Placed {
     /// The bundled helper it was copied from, and that bundle's executable's change time: a
     /// different one (an update) is placed again.
     source: PathBuf,
@@ -127,7 +129,7 @@ impl SessionManager {
 impl ComputerUse {
     /// The placed helper, placing it first when this is the first use or the bundle changed.
     #[cfg(target_os = "macos")]
-    async fn ready(&self, daemon_exe: &Path, data_dir: &Path) -> Result<Placed, String> {
+    pub(super) async fn ready(&self, daemon_exe: &Path, data_dir: &Path) -> Result<Placed, String> {
         let source = bundled_helper(daemon_exe)
             .ok_or_else(|| "the helper app is missing from this install".to_owned())?;
         let stamp = executable_stamp(&source);
@@ -149,7 +151,7 @@ impl ComputerUse {
 
     /// Computer use is macOS only.
     #[cfg(not(target_os = "macos"))]
-    async fn ready(&self, _: &Path, _: &Path) -> Result<Placed, String> {
+    pub(super) async fn ready(&self, _: &Path, _: &Path) -> Result<Placed, String> {
         Err("computer use needs macOS".to_owned())
     }
 }
@@ -159,7 +161,7 @@ impl ComputerUse {
 /// A development daemon run from the checkout (`target/debug/brigadierd`) uses the bundle the
 /// desktop build staged there (`apps/desktop/src-tauri/binaries/…`).
 #[cfg(target_os = "macos")]
-fn bundled_helper(daemon_exe: &Path) -> Option<PathBuf> {
+pub(super) fn bundled_helper(daemon_exe: &Path) -> Option<PathBuf> {
     if let Some(app) = std::env::var_os(HELPER_APP_ENV).filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(app)).filter(|app| app.exists());
     }

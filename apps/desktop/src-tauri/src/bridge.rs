@@ -404,6 +404,11 @@ impl Bridge {
             ServerFrame::Search { id, update } => {
                 self.emit(BridgeEvent::Search { id, update });
             }
+            ServerFrame::ComputerUse { status } => {
+                self.emit(BridgeEvent::ComputerUse { status });
+            }
+            // The setup window opens from the shell (a later step); nothing to show yet.
+            ServerFrame::ComputerUseSetupNeeded => {}
             ServerFrame::Closing => return Some("daemon is shutting down".into()),
             ServerFrame::Welcome { .. } => return Some("unexpected second welcome".into()),
         }

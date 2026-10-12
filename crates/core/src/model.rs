@@ -750,6 +750,9 @@ pub struct Settings {
     /// Agents can see and drive apps on this Mac (Settings › Computer use): every worker and
     /// thread gets the `computer` tools and the `computer-use` skill. macOS only.
     pub computer_use: bool,
+    /// While computer use is on, a menu-bar item lists the agents using apps on this Mac, with
+    /// a way to stop each.
+    pub computer_use_menu_bar: bool,
     /// Where web links open while the browser is on.
     pub web_links_in: LinkTarget,
     /// Where local development URLs (localhost and loopback addresses) open while the browser
@@ -892,6 +895,7 @@ impl Default for Settings {
             dictation_microphone: String::new(),
             browser_enabled: true,
             computer_use: true,
+            computer_use_menu_bar: true,
             web_links_in: LinkTarget::System,
             local_links_in: LinkTarget::Brigadier,
             browser_full_url: false,

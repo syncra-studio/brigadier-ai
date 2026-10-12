@@ -233,6 +233,7 @@ export const useApp = create<AppState>()(() => ({
     dictationMicrophone: "",
     browserEnabled: true,
     computerUse: true,
+    computerUseMenuBar: true,
     webLinksIn: "system",
     localLinksIn: "brigadier",
     browserFullUrl: false,

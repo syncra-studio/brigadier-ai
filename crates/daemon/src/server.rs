@@ -8,9 +8,9 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use brigadier_core::heap;
-use brigadier_core::manager::SessionManager;
 use brigadier_core::manager::search::SearchRun;
 use brigadier_core::manager::workspace::WorkspaceWatch;
+use brigadier_core::manager::{ComputerNews, SessionManager};
 use brigadier_core::pages::{PageChange, PageError, Pages};
 use brigadier_core::runtime::{Runtime, StartRaw};
 use brigadier_core::{
@@ -200,6 +200,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         dictation_feed: None,
         dictations: Started::new(daemon.dictation.clone()),
         page_feed: None,
+        computer_feed: None,
         workspace_watch: None,
         search: None,
         searches: 0,
@@ -237,6 +238,8 @@ struct Session {
     dictations: Started,
     /// Page changes, once subscribed to the live feed.
     page_feed: Option<broadcast::Receiver<PageChange>>,
+    /// Computer use's news, once subscribed to the live feed.
+    computer_feed: Option<broadcast::Receiver<ComputerNews>>,
     /// The checkout this connection's right sidebar shows, watched while it shows.
     workspace_watch: Option<(WorkspaceTarget, WorkspaceWatch)>,
     /// The right sidebar's search running for this connection, by its id.
@@ -348,6 +351,17 @@ impl Session {
                         self.writer.write(&ServerFrame::PageChanged { id, revision }).await?;
                     }
                 }
+                news = next_computer_news(&mut self.computer_feed) => {
+                    match news {
+                        Some(ComputerNews::Status(status)) => {
+                            self.writer.write(&ServerFrame::ComputerUse { status }).await?;
+                        }
+                        Some(ComputerNews::SetupNeeded) => {
+                            self.writer.write(&ServerFrame::ComputerUseSetupNeeded).await?;
+                        }
+                        None => {}
+                    }
+                }
                 target = next_workspace_change(&mut self.workspace_watch) => {
                     if let Some(target) = target {
                         self.writer.write(&ServerFrame::WorkspaceChanged { target }).await?;
@@ -385,6 +399,9 @@ impl Session {
                 self.set_metrics(metrics);
                 if self.page_feed.is_none() {
                     self.page_feed = Some(self.daemon.pages.subscribe());
+                }
+                if self.computer_feed.is_none() {
+                    self.computer_feed = Some(self.daemon.sessions.subscribe_computer_use());
                 }
                 self.subscribe(after_seq).await.map_err(internal)
             }
@@ -1055,6 +1072,23 @@ async fn next_dictation_update(
     }
 }
 
+async fn next_computer_news(
+    feed: &mut Option<broadcast::Receiver<ComputerNews>>,
+) -> Option<ComputerNews> {
+    match feed {
+        Some(rx) => match rx.recv().await {
+            Ok(news) => Some(news),
+            // Only the newest status matters, and the next one follows.
+            Err(RecvError::Lagged(_)) => None,
+            Err(RecvError::Closed) => {
+                *feed = None;
+                None
+            }
+        },
+        None => std::future::pending().await,
+    }
+}
+
 async fn next_page_change(
     feed: &mut Option<broadcast::Receiver<PageChange>>,
 ) -> Option<PageChange> {
@@ -1430,6 +1464,39 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::CloseTerminal { terminal_id } => {
             daemon.terminals.close(&terminal_id);
             Response::CloseTerminal
+        }
+        Request::GetComputerUse => Response::GetComputerUse {
+            computer_use: heap(|| sessions.computer_use_status()).await,
+        },
+        Request::GrantComputerPermission { permission } => {
+            heap(|| sessions.grant_computer_permission(permission))
+                .await
+                .map_err(computer_error)?;
+            Response::GrantComputerPermission
+        }
+        Request::CheckComputerUse => Response::CheckComputerUse {
+            computer_use: heap(|| sessions.check_computer_use())
+                .await
+                .map_err(computer_error)?,
+        },
+        Request::ConfirmComputerCapture => {
+            let (computer_use, problem) = heap(|| sessions.confirm_computer_capture())
+                .await
+                .map_err(computer_error)?;
+            Response::ConfirmComputerCapture {
+                computer_use,
+                problem,
+            }
+        }
+        Request::StopComputerSession {
+            session,
+            bundle_id,
+            app,
+        } => {
+            heap(|| sessions.stop_computer_session(&session, bundle_id.as_deref(), &app))
+                .await
+                .map_err(computer_error)?;
+            Response::StopComputerSession
         }
         Request::GetDictation
         | Request::DownloadDictationModel
@@ -1898,6 +1965,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                     .supervisor
                     .spawn(async move { sessions.git_writing_switched().await });
             }
+            if before.computer_use != settings.computer_use {
+                // The helper stops, and running agents' calls are refused, until it is on again.
+                let (sessions, on) = (daemon.sessions.clone(), settings.computer_use);
+                daemon
+                    .supervisor
+                    .spawn(async move { sessions.computer_use_turned(on).await });
+            }
             if before.browser_enabled != settings.browser_enabled {
                 // Workers at work hear it at once; threads before their next turn.
                 let sessions = daemon.sessions.clone();
@@ -2194,6 +2268,11 @@ async fn on_pages<T: Send + 'static>(
             message: format!("the page request stopped: {error}"),
         })?
         .map_err(IpcError::from)
+}
+
+/// A computer-use request that didn't work, in the helper's own words.
+fn computer_error(message: String) -> IpcError {
+    IpcError::from(brigadier_core::Error::Invalid(message))
 }
 
 /// A path as one word for the shell a setup terminal runs in (PowerShell on Windows, where

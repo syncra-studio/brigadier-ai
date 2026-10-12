@@ -1571,6 +1571,8 @@ mod card_tests;
 mod checks_tests;
 #[cfg(test)]
 mod clean_up_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod computer_host_tests;
 #[cfg(test)]
 mod ending_tests;
 #[cfg(test)]

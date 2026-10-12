@@ -57,6 +57,10 @@ pub enum BridgeEvent {
         id: u32,
         update: brigadier_core::SearchUpdate,
     },
+    /// Computer use changed: permissions, setup or the agents using apps.
+    ComputerUse {
+        status: brigadier_core::ComputerUseStatus,
+    },
     /// The window was hidden or shown; pause sampling while hidden.
     WindowVisibility {
         visible: bool,

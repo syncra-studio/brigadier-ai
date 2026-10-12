@@ -14,16 +14,16 @@ use brigadier_core::storage::{
 };
 use brigadier_core::{
     AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog,
-    CheckoutFile, CommitOutcome, ConventionsExport, Conversation, ConversationActivity,
-    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat, FolderCheck,
-    FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message, MessagePage,
-    MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, ProbeBurst, Project,
-    ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
-    QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile,
-    ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, SearchQuery,
-    SearchUpdate, Settings, Setup, SetupRequest, SourceChange, SourceScope, SourceState, TaskId,
-    ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff,
-    WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus, ConventionsExport,
+    Conversation, ConversationActivity, ConversationId, ConversationKind, ConversationStatus,
+    ConversationView, DiffStat, FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitState,
+    Mention, Message, MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId,
+    ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView,
+    PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
+    ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
+    SearchQuery, SearchUpdate, Settings, Setup, SetupRequest, SourceChange, SourceScope,
+    SourceState, TaskId, ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView, UsageActivity,
+    UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -340,6 +340,27 @@ pub enum Request {
     /// Ends a terminal's shell.
     CloseTerminal {
         terminal_id: String,
+    },
+    /// Computer use as Settings › Computer use shows it. Never starts the helper: permissions
+    /// come from a helper already running, or from what it last wrote.
+    GetComputerUse,
+    /// Asks macOS for `permission`, from the helper (it is the app that holds the grant).
+    /// Starts the helper if needed.
+    GrantComputerPermission {
+        permission: ComputerPermission,
+    },
+    /// Checks the permissions again, refreshing the helper only when macOS needs that to see a
+    /// new Screen Recording grant.
+    CheckComputerUse,
+    /// Takes one test picture, to confirm screen capture works end to end; setup is finished
+    /// once it does. macOS may ask the user about it the first time.
+    ConfirmComputerCapture,
+    /// Ends `session`'s control of `app`: its further actions there are refused, and the agent
+    /// is told the user stopped it.
+    StopComputerSession {
+        session: String,
+        bundle_id: Option<String>,
+        app: String,
     },
     /// Whether dictation (the composer's Dictate button) can run, and its speech model.
     GetDictation,
@@ -1137,6 +1158,19 @@ pub enum Response {
     ResizeTerminal,
     ClearTerminal,
     CloseTerminal,
+    GetComputerUse {
+        computer_use: ComputerUseStatus,
+    },
+    GrantComputerPermission,
+    CheckComputerUse {
+        computer_use: ComputerUseStatus,
+    },
+    ConfirmComputerCapture {
+        computer_use: ComputerUseStatus,
+        /// Why screen capture didn't work, when it didn't.
+        problem: Option<String>,
+    },
+    StopComputerSession,
     GetDictation {
         dictation: DictationStatus,
     },
@@ -1636,6 +1670,14 @@ pub enum ServerFrame {
         id: u32,
         update: SearchUpdate,
     },
+    /// Computer use changed: permissions, setup or the agents using apps. Sent to every
+    /// subscribed connection. Live only.
+    ComputerUse {
+        status: ComputerUseStatus,
+    },
+    /// An agent needs computer use and its setup isn't finished: the app opens the setup
+    /// window. Live only.
+    ComputerUseSetupNeeded,
     /// The daemon is shutting down; the connection closes next.
     Closing,
 }
