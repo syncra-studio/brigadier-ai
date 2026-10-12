@@ -69,10 +69,15 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
   // Finished workers leave the composer's strip once answered; they stay here, counted.
   const done = useBoard((s) =>
     s.board?.conversationId === conversationId ? Object.values(s.board.tasks).filter(workerDone).length : 0);
+  // The left column and the docked pane leave room for where this column ends up, as this one
+  // does for the left column: its full width while open, none while closed. That width is read
+  // off the contents, which keep it while the column's width animates, so opening and closing
+  // write it once rather than restyling the whole window on every frame of the slide.
+  const open = panel?.open ?? false;
   useLayoutEffect(() => {
-    const element = column.current;
-    const left = element?.closest<HTMLElement>('[data-slot="sidebar-wrapper"]');
-    if (!element || !left) return;
+    const element = content.current;
+    const left = column.current?.closest<HTMLElement>('[data-slot="sidebar-wrapper"]');
+    if (!open || !element || !left) return;
     const measure = () => left.style.setProperty("--right-sidebar-shown", `${element.getBoundingClientRect().width}px`);
     measure();
     const observer = new ResizeObserver(measure);
@@ -81,7 +86,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
       observer.disconnect();
       left.style.removeProperty("--right-sidebar-shown");
     };
-  }, []);
+  }, [open]);
   const [mounted, setMounted] = useState(panel?.open ?? false);
   if (panel?.open && !mounted) setMounted(true);
   useEffect(() => {

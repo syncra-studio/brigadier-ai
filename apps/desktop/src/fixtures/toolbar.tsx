@@ -84,9 +84,31 @@ function Fixture() {
       const find = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Find file"));
       find?.click();
     });
-    at(2800, () => { seen.findFileFocused = document.activeElement?.getAttribute("aria-label"); click("Thread worker"); });
-    at(3100, () => { seen.workerRight = right(); seen.workerTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); });
-    at(3400, () => { seen.closedRight = right(); click("Composer worker"); });
+    // The right panel slides like the left one: its column's width animates on the same spring,
+    // the panel stays in the page while closed, and the room it takes is its full width from the
+    // moment it opens rather than the sliding width, frame by frame.
+    const shown = () => document.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]')?.style.getPropertyValue("--right-sidebar-shown");
+    const slide = () => {
+      const reveal = document.querySelector('[data-slot="right-sidebar"] > div')!;
+      const probe = document.body.appendChild(document.createElement("div"));
+      probe.style.transitionTimingFunction = "var(--ease-sidebar)";
+      const { transitionProperty, transitionDuration, transitionTimingFunction } = getComputedStyle(reveal);
+      const sidebarEase = getComputedStyle(probe).transitionTimingFunction;
+      probe.remove();
+      return { transitionProperty, transitionDuration, sidebarEase: transitionTimingFunction === sidebarEase, reducedMotion: reveal.className.includes("motion-reduce:transition-none") };
+    };
+    at(2800, () => {
+      seen.findFileFocused = document.activeElement?.getAttribute("aria-label"); seen.closedSlide = slide(); click("Thread worker");
+      // Once the click's update is in, before any frame of the slide.
+      setTimeout(() => { seen.openingShown = shown(); });
+    });
+    at(3100, () => {
+      seen.workerRight = right(); seen.workerTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane");
+      seen.openShown = shown(); seen.openSlide = slide();
+      seen.openWidth = `${document.querySelector('[data-slot="right-sidebar"] > div > div')!.getBoundingClientRect().width}px`;
+      click("Close right panel"); setTimeout(() => { seen.closingShown = shown(); });
+    });
+    at(3400, () => { seen.closedRight = right(); seen.closedShown = shown(); click("Composer worker"); });
     at(3700, () => { seen.composerRight = right(); click("Close right panel"); click("Context worker"); });
     at(4000, () => { seen.contextWorkerRight = right(); click("Open plan"); });
     at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click(); });

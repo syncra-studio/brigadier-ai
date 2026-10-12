@@ -18,6 +18,15 @@ test("toolbar order, docked pane, Files search, draft project folder and worker/
   assert.equal(seen.removedMenu, null);
   for (const field of ["workerRight", "composerRight", "contextWorkerRight"]) assert.equal(seen[field], "expanded", field);
   assert.equal(seen.workerTab, "workers");
+  for (const field of ["closedSlide", "openSlide"]) {
+    assert.deepEqual(seen[field], { transitionProperty: "width", transitionDuration: "0.3s", sidebarEase: true, reducedMotion: true },
+      `${field}: the right panel's width slides on the left sidebar's spring, and not with reduced motion`);
+  }
+  assert.ok(Number.parseFloat(String(seen.openWidth)) > 0);
+  assert.equal(seen.openingShown, seen.openWidth, "the thread makes room for the panel's full width as it starts opening, not frame by frame");
+  assert.equal(seen.openShown, seen.openWidth);
+  assert.equal(seen.closingShown, "", "closing gives the room back at once");
+  assert.equal(seen.closedShown, "");
   assert.equal(seen.planTab, "plan");
   assert.equal(seen.previewPopover, true);
   assert.equal(seen.previewReopened, false, "a chip cleared while open comes back closed");
