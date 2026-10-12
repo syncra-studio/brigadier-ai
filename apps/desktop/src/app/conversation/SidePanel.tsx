@@ -1,6 +1,7 @@
 import { Terminal } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useMemo, useState } from "react";
 import { BarItem } from "@/app/BarItem";
+import { useWorkspacePane } from "@/app/conversation/WorkspacePane";
 import { useRightSidebar } from "@/app/conversation/RightSidebar";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { TitlebarButton } from "@/components/titlebar-button";
@@ -20,8 +21,9 @@ export function shortcutLabel(keys: string, mac: boolean): string {
 }
 
 /** Shared right-sidebar selection and shortcuts; there is no legacy side-panel slot. */
-export function useSidePanel(conversationId: string | null, enabled: boolean, embedded = false) {
-  const rightSidebar = useRightSidebar(conversationId, enabled);
+export function useSidePanel(conversationId: string | null, enabled: boolean, embedded = false, projectId: string | null = null) {
+  const rightSidebar = useRightSidebar(conversationId, enabled && conversationId !== null);
+  const workspace = useWorkspacePane(conversationId, projectId, enabled);
   const [worker, setWorker] = useState<string | null>(null);
   const [scope, setScope] = useState(conversationId);
   if (scope !== conversationId) { setScope(conversationId); setWorker(null); }
@@ -38,16 +40,13 @@ export function useSidePanel(conversationId: string | null, enabled: boolean, em
         if (closed) event.preventDefault();
       }
       if (!enabled || !conversationId) return;
-      if (command && !event.shiftKey && !event.altKey && event.code === "KeyP") {
-        event.preventDefault(); openTab("files", true);
-      }
       if (event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey && event.code === "KeyG") {
         event.preventDefault(); openReviewTab(conversationId, { type: "all" });
       }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [conversationId, enabled, embedded, mac, openTab]);
+  }, [conversationId, enabled, embedded, mac]);
   const agents = useMemo(() => ({
     panel: open && active === "workers" ? worker : undefined,
     setPanel: (next: AgentsPanelState) => {
@@ -55,7 +54,7 @@ export function useSidePanel(conversationId: string | null, enabled: boolean, em
       setWorker(next); openTab("workers");
     },
   }), [open, active, worker, setOpen, openTab]);
-  return { panel: rightSidebar, agents };
+  return { panel: rightSidebar, agents, workspace };
 }
 
 export function TerminalButton() {

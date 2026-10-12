@@ -6,7 +6,7 @@ export type WorkspacePaneState = { open: boolean; tabs: Record<string, Workspace
 export const WORKSPACE_PANE_KEY = "brigadier.workspacePane";
 export const WORKSPACE_PANE_WIDTH_KEY = "brigadier.workspacePaneWidth";
 
-export function toolbarToggles(kind: "chat" | "session"): readonly string[] {
+export function toolbarToggles(kind: "chat" | "session"): readonly ("context" | "files" | "source" | "terminal")[] {
   return kind === "session" ? ["context", "files", "source", "terminal"] : ["context", "terminal"];
 }
 

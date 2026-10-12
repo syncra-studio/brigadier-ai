@@ -1,7 +1,7 @@
 import { Chat, Document, DotsHorizontal, Search, Terminal } from "@openai/apps-sdk-ui/components/Icon";
 import { useContext } from "react";
 
-import { RightSidebarContext } from "@/app/conversation/RightSidebar";
+import { WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
@@ -14,14 +14,14 @@ import { setTerminalOpen } from "@/state/terminalPlaces";
 
 /** A tool consumes the New tab in place; Find file waits for the user to pick a file. */
 export function NewTabTools({ conversationId, tabId }: { conversationId: string; tabId: string }) {
-  const sidebar = useContext(RightSidebarContext);
+  const workspace = useContext(WorkspacePaneContext);
   const cwd = useCheckoutRoot();
   const mac = useApp((s) => s.info?.platform === "macos");
   const archived = useApp((s) => s.conversations[conversationId]?.lifecycle === "archived");
   const tools = [
     { label: "Review changes", Icon: DiffGlyph, shortcut: "⌃⇧G", run: () => openReviewTab(conversationId, { type: "all" }, tabId) },
     { label: "Terminal", Icon: Terminal, shortcut: "⌃`", disabled: archived, run: () => replaceNewTab(conversationId, tabId, "terminal", cwd) },
-    { label: "Find file", Icon: Search, shortcut: "⌘P", disabled: !sidebar?.enabled, run: () => sidebar?.openTab("files", true, tabId) },
+    { label: "Find file", Icon: Search, shortcut: "⌘P", disabled: !workspace?.enabled, run: () => workspace?.openFilesSearch(tabId) },
     { label: "Side chat", Icon: Chat, shortcut: "⌥⌘S", disabled: archived, run: () => replaceNewTab(conversationId, tabId, "sideChat") },
     { label: "New file", Icon: Document, shortcut: "⌥⌘N", run: () => replaceNewTab(conversationId, tabId, "document") },
   ];

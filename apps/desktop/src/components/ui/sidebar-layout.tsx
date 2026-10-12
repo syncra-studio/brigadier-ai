@@ -72,13 +72,15 @@ export function SidebarReveal({ open, hidden, resizing, children, side = "left" 
 
 /** The grab area straddling the panel's edge: drag to resize, below half the minimum to close. */
 export function SidebarResizeHandle({
-  setWidth, setOpen, resizing, setResizing, side = "left",
+  setWidth, setOpen, resizing, setResizing, side = "left", label, belowToolbar = false,
 }: {
   setWidth: (width: number | null) => void;
   setOpen: (open: boolean) => void;
   resizing: boolean;
   setResizing: (resizing: boolean) => void;
   side?: "left" | "right";
+  label?: string;
+  belowToolbar?: boolean;
 }) {
   const start = React.useRef<{ x: number; width: number } | null>(null);
   const latest = React.useRef<number | null>(null);
@@ -108,7 +110,7 @@ export function SidebarResizeHandle({
     }
     latest.current = Math.min(Math.max(wanted, min), max);
     event.currentTarget.parentElement
-      ?.closest<HTMLElement>(side === "right" ? "[data-slot=right-sidebar]" : "[data-slot=sidebar-wrapper]")
+      ?.closest<HTMLElement>(side === "right" ? "[data-slot=right-sidebar], [data-slot=workspace-pane]" : "[data-slot=sidebar-wrapper]")
       ?.style.setProperty(side === "right" ? "--right-sidebar-width" : "--sidebar-width", `${latest.current}px`);
   };
 
@@ -126,7 +128,7 @@ export function SidebarResizeHandle({
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label={side === "right" ? "Resize right sidebar" : "Resize sidebar"}
+      aria-label={label ?? (side === "right" ? "Resize right sidebar" : "Resize sidebar")}
       data-slot="sidebar-resize-handle"
       data-resizing={resizing || undefined}
       onPointerDown={onPointerDown}
@@ -134,7 +136,8 @@ export function SidebarResizeHandle({
       onPointerUp={end}
       onPointerCancel={end}
       className={cn(
-        "group/resize w-resize-handle top-titlebar absolute bottom-0 z-10 flex cursor-col-resize justify-center",
+        "group/resize w-resize-handle absolute bottom-0 z-10 flex cursor-col-resize justify-center",
+        belowToolbar ? "top-0" : "top-titlebar",
         side === "right" ? "start-0 -translate-x-1/2 rtl:translate-x-1/2" : "end-0 translate-x-1/2 rtl:-translate-x-1/2",
       )}
     >

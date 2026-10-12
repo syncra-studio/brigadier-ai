@@ -21,6 +21,6 @@ test("Running renders all states and controls pause, resume, stop, clear and the
   assert.deepEqual(seen.cleared, ["preview-4", "preview-3"]);
   assert.ok(!seen.stopped.includes("Stop") && !seen.stopped.includes("Pause"));
   assert.equal(seen.allStopped, true);
-  assert.match(seen.empty, /Previews started by this session appear here/);
+  assert.match(seen.empty, /No previews/);
   assert.deepEqual(seen.calls, ["pausePreview", "resumePreview", "pausePreview", "clearPreviews", "stopPreview", "stopPreview", "clearPreviews"]);
 });

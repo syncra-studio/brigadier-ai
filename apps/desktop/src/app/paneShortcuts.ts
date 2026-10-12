@@ -29,7 +29,6 @@ export const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?
   back: { code: "BracketLeft" },
   forward: { code: "BracketRight" },
   sidebar: { code: "KeyB" },
-  "right-sidebar": { code: "KeyB", alt: true },
   // The app and File menus' own items, sent as keys only while Settings records a key press.
   settings: { code: "Comma" },
   "open-folder": { code: "KeyO" },

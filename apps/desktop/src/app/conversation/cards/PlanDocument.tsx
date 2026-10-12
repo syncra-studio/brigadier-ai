@@ -8,7 +8,6 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
-import { rightSidebarToggleLabel } from "@/state/rightSidebar";
 import { type PlanDoc, type PlanDocRef, planDoc, showPlanDoc, usePlanTab } from "@/state/planDoc";
 
 /**
@@ -150,7 +149,7 @@ export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
         <>
           <CopyPlan markdown={doc.markdown} />
           <TooltipIconButton
-            tooltip={inPanel ? rightSidebarToggleLabel(true) : "Open in right sidebar"}
+            tooltip={inPanel ? "Close right panel" : "Open in right sidebar"}
             side="top"
             className="text-foreground/50 hover:text-foreground [&_svg]:size-icon-sm"
             onClick={inPanel ? () => rightSidebar?.setOpen(false) : open}

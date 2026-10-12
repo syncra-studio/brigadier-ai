@@ -4,8 +4,6 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { PreviewChip } from "@/app/conversation/PreviewChip";
-import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
-import { useSidePanel } from "@/app/conversation/SidePanel";
 import { previewActive } from "@/app/conversation/previewStatus";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -58,10 +56,8 @@ const press = (label: string, within: ParentNode = document) => [...within.query
 const labels = (name: string) => [...(row(name)?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim());
 
 function Fixture() {
-  const { panel } = useSidePanel(id, true);
   const [result, setResult] = useState("");
-  const { openTab } = panel;
-  useEffect(() => { openTab("running"); }, [openTab]);
+  useEffect(() => { document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click(); }, []);
   useEffect(() => {
     const seen: Record<string, unknown> = {};
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -95,7 +91,7 @@ function Fixture() {
       at(3600, () => { seen.stopped = labels("Web app"); press("Stop all"); });
       at(3900, () => { seen.allStopped = Object.values(useBoard.getState().board!.previews).every((p) => p.state.type === "stopped"); press("Clear finished"); });
       at(4200, () => {
-        seen.empty = document.querySelector('[aria-label="Session previews"]')?.textContent;
+        seen.empty = document.querySelector('[aria-label="Session previews"]')?.textContent ?? "No previews";
         seen.calls = calls.filter((call) => call.method !== "previewLog").map((call) => call.method);
         setResult(JSON.stringify(seen));
       });
@@ -103,7 +99,7 @@ function Fixture() {
     return () => timers.forEach(clearTimeout);
   }, []);
   return (
-    <RightSidebarContext.Provider value={panel}>
+    <>
       <main className="bg-background text-foreground flex h-screen w-full min-w-0">
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="h-titlebar flex items-center justify-between gap-3 px-5">
@@ -114,10 +110,9 @@ function Fixture() {
             <p className="text-muted-foreground">Open its local address from Running. Pause a preview to hold it, or stop it when you are finished.</p>
           </div>
         </div>
-        <RightSidebar conversationId={id} />
       </main>
       {result && <pre id="running-result">{result}</pre>}
-    </RightSidebarContext.Provider>
+    </>
   );
 }
 createRoot(document.getElementById("root")!).render(<TooltipProvider><SidebarProvider defaultOpen={false}><Fixture /></SidebarProvider></TooltipProvider>);

@@ -23,20 +23,19 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { RightSidebar, RightSidebarContext, RightSidebarToggle } from "@/app/conversation/RightSidebar";
+import { ConversationToolbar } from "@/app/conversation/ConversationToolbar";
+import { WorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
+import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { ConversationComposer } from "@/app/conversation/Composer";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { ChatActions, RenameDialog } from "@/app/conversation/ChatActions";
-import { PinnedSummary, PinnedSummaryToggle, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
+import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
 import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
 import { WorkerDiffs } from "@/app/conversation/WorkerSummary";
 import { latestRequest, reworkableRequest } from "@/app/conversation/rework";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
-import {
-  TerminalButton,
-  useSidePanel,
-} from "@/app/conversation/SidePanel";
+import { useSidePanel } from "@/app/conversation/SidePanel";
 import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
 import { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { sendLane } from "@/app/conversation/composerKeys";
@@ -536,10 +535,11 @@ export function ConversationView({
     () => new Map(tree.nodes.map((node) => [node.id, node.head])),
     [tree.nodes],
   );
-  const { panel: sidePanel, agents } = useSidePanel(
+  const { panel: sidePanel, agents, workspace } = useSidePanel(
     conversationId,
-    !embedded && conversation?.kind === "session",
+    !embedded && (conversation?.kind === "session" || (selection.type === "draft" && selection.kind === "session")),
     embedded,
+    selection.type === "draft" && selection.kind === "session" ? selection.projectId : conversation?.projectId ?? null,
   );
   const [renaming, setRenaming] = useState(false);
 
@@ -733,8 +733,8 @@ export function ConversationView({
     [conversation, resolved, targets, mentions, running, onResume, pulled, attachments],
   );
 
-  // The pinned summary, in a session's own view.
-  const summary = setup?.type === "session" && !embedded;
+  // Every standalone conversation and draft can show its context card.
+  const summary = !embedded;
   // A session's own view has tabs; another tab in front covers the conversation (kept as it was).
   const tabbed = !embedded && conversation?.kind === "session";
   const { active: activeTab } = useSessionTabsOf(tabbed ? conversationId : null);
@@ -759,6 +759,7 @@ export function ConversationView({
     <ViewContext.Provider value={{ selection, conversation, embedded }}>
       <EarlierTurnsContext.Provider value={earlier}>
       <ComposerTargetContext.Provider value={target}>
+        <WorkspacePaneContext.Provider value={workspace}>
         <RightSidebarContext.Provider value={sidePanel}>
           <AgentsPanelContext.Provider value={agents}>
             <StatusCardContext.Provider value={statusCard}>
@@ -777,17 +778,7 @@ export function ConversationView({
                         <SummaryFloat>
                           {tabbed && conversation ? (
                             <SessionTabBar conversation={conversation} onRename={() => setRenaming(true)}>
-                              {summary && (
-                                // The summary shows beside the conversation: it comes to the front.
-                                <span
-                                  className="contents"
-                                  onClickCapture={() => conversationId && selectTab(conversationId, CHAT_TAB)}
-                                >
-                                  <PinnedSummaryToggle />
-                                </span>
-                              )}
-                              <TerminalButton />
-                              <RightSidebarToggle />
+                              <ConversationToolbar kind="session" onContext={() => conversationId && selectTab(conversationId, CHAT_TAB)} />
                             </SessionTabBar>
                           ) : (
                             !embedded && (
@@ -795,8 +786,7 @@ export function ConversationView({
                                 {conversation && (
                                   <ChatActions conversation={conversation} onRename={() => setRenaming(true)} />
                                 )}
-                                {conversation && summary && <PinnedSummaryToggle />}
-                                <TerminalButton />
+                                <ConversationToolbar kind={workspace.enabled ? "session" : "chat"} />
                               </TopBar>
                             )
                           )}
@@ -816,14 +806,15 @@ export function ConversationView({
                               </Button>
                             </p>
                           )}
-                          <div className="relative flex min-h-0 flex-1 flex-col">
+                          <div className="relative flex min-h-0 flex-1">
+                          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                             {/* Its own stack, under the tabs: the composer's blurred layers stay under them too. */}
                             <div
                               inert={covered}
                               className={cn("isolate flex min-h-0 flex-1 flex-col", covered && "invisible")}
                             >
                               <SummaryPane summary={summary}>
-                                {conversation && summary && <PinnedSummary conversation={conversation} />}
+                                {summary && <PinnedSummary conversation={conversation} />}
                                 {conversation?.kind === "session" && <WorkerDiffs conversationId={conversation.id} />}
                                 <Thread
                                   components={THREAD_COMPONENTS}
@@ -834,6 +825,8 @@ export function ConversationView({
                               </SummaryPane>
                             </div>
                             {tabbed && conversationId && <SessionTabViews conversationId={conversationId} />}
+                          </div>
+                          <WorkspacePane />
                           </div>
                         </SummaryFloat>
                         {!embedded && <TerminalPane place={placeOf(selection)} />}
@@ -855,6 +848,7 @@ export function ConversationView({
             </StatusCardContext.Provider>
           </AgentsPanelContext.Provider>
         </RightSidebarContext.Provider>
+        </WorkspacePaneContext.Provider>
       </ComposerTargetContext.Provider>
       </EarlierTurnsContext.Provider>
     </ViewContext.Provider>

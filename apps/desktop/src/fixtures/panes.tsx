@@ -12,7 +12,8 @@ import { createRoot } from "react-dom/client";
 
 import { TitlebarNav } from "@/app/AppSidebar";
 import { revealApp } from "@/lib/splash";
-import { RightSidebar, RightSidebarContext, RightSidebarToggle } from "@/app/conversation/RightSidebar";
+import { WorkspacePane, WorkspacePaneContext, WorkspacePaneToggle } from "@/app/conversation/WorkspacePane";
+import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
 import {
   TerminalButton,
   useSidePanel,
@@ -253,7 +254,7 @@ function Fixture() {
   const [kind, setKind] = useState<"session" | "chat" | null>("session");
   const [conversationId, setConversationId] = useState(id);
   const sidebar = useSidebar();
-  const { panel, agents } = useSidePanel(kind === null ? null : conversationId, kind === "session");
+  const { panel, agents, workspace } = useSidePanel(kind === null ? null : conversationId, kind === "session");
   usePaneShortcuts();
   const runtime = useExternalStoreRuntime<ThreadMessage>({
     messages: [],
@@ -283,6 +284,7 @@ function Fixture() {
   useEffect(() => { useApp.setState({ selection: kind === null ? { type: "none" } : { type: "conversation", id: conversationId }, conversations: { ...useApp.getState().conversations, [conversationId]: { ...conversation, id: conversationId, kind: kind ?? "session" } } }); }, [kind, conversationId]);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <WorkspacePaneContext.Provider value={workspace}>
       <RightSidebarContext.Provider value={panel}>
         <AgentsPanelContext.Provider value={agents}>
           <div className="relative flex h-screen w-full min-w-0">
@@ -304,16 +306,16 @@ function Fixture() {
                   className="flex min-w-0 flex-1 flex-col"
                 >
                   {kind === "session" ? <SessionTabBar conversation={{ ...conversation, id: conversationId, title }} onRename={() => setRenaming(true)}>
-                    <TerminalButton /><RightSidebarToggle />
+                    <WorkspacePaneToggle tab="files" /><WorkspacePaneToggle tab="source" /><TerminalButton />
                   </SessionTabBar> : <header className="h-titlebar ps-clear-3 flex items-center"><span className="flex-1">{kind === "chat" ? "Plain chat" : "Home"}</span><TerminalButton /></header>}
                   {renaming && <div role="dialog" aria-label="Rename session" className="bg-background absolute inset-8 z-50 p-4"><input aria-label="Session title" value={title} onChange={(event) => setTitle(event.target.value)} /><button onClick={() => setRenaming(false)}>Done</button></div>}
-                  <div className="relative flex min-h-0 flex-1 flex-col">
+                  <div className="relative flex min-h-0 flex-1"><div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                   <div inert={kind === "session" && active !== "chat"} className={`flex min-h-0 flex-1 flex-col gap-5 overflow-auto px-5 py-8 text-sm ${kind === "session" && active !== "chat" ? "invisible" : ""}`}>
                     <p className="self-end rounded-control bg-muted px-4 py-2">
                       Give each tool its own pane.
                     </p>
                     <p>
-                      Files, Source and Workers live in the right sidebar.
+                      Files and Source dock beside the workspace. Worker clicks open the right panel.
                       The terminal stays at the bottom.
                     </p>
                     <button
@@ -344,6 +346,7 @@ function Fixture() {
                   </div>
                   {kind === "session" && <SessionTabViews key={conversationId} conversationId={conversationId} />}
                   </div>
+                  <WorkspacePane /></div>
                   <TerminalPane place={`conv:${conversationId}`} />
                 </div>
               </div>
@@ -352,6 +355,7 @@ function Fixture() {
           </div>
         </AgentsPanelContext.Provider>
         </RightSidebarContext.Provider>
+      </WorkspacePaneContext.Provider>
     </AssistantRuntimeProvider>
   );
 }

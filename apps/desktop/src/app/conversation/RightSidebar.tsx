@@ -1,4 +1,4 @@
-import { Agent, Branch, Folders, Lightbulb, PlayCircle, SidebarFloatingRight, SidebarRight } from "@openai/apps-sdk-ui/components/Icon";
+import { Agent, Lightbulb, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type CSSProperties, createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { WorkersTab } from "@/app/conversation/Agents";
@@ -8,23 +8,13 @@ import { SidebarReveal, SidebarResizeHandle, useSidebarChoice, useSidebarWidth }
 import { useSidebar } from "@/components/ui/sidebar";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
-import { isRightSidebarKey, rightSidebarFolds, rightSidebarToggleLabel, type RightSidebarTab, selectRightSidebarTab, setRightSidebarOpen, useRightSidebarState } from "@/state/rightSidebar";
+import { rightSidebarFolds, type RightSidebarTab, selectRightSidebarTab, setRightSidebarOpen, useRightSidebarState } from "@/state/rightSidebar";
 import { useBoard } from "@/state/board";
-import { useApp } from "@/state/store";
 import { usePlanTab } from "@/state/planDoc";
-import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 
-const FilesTab = lazy(() => import("@/app/conversation/FilesTab").then((m) => ({ default: m.FilesTab })));
-const SourcePanel = lazy(() => import("@/app/conversation/SourcePanel").then((m) => ({ default: m.SourcePanel })));
 const PlanTab = lazy(() => import("@/app/conversation/PlanTab").then((m) => ({ default: m.PlanTab })));
-const RunningTab = lazy(() => import("@/app/conversation/RunningTab").then((m) => ({ default: m.RunningTab })));
-const TABS = [
-  { id: "files", title: "Files", Icon: Folders },
-  { id: "source", title: "Source", Icon: Branch },
-  { id: "workers", title: "Workers", Icon: Agent },
-  { id: "running", title: "Running", Icon: PlayCircle },
-] as const;
-/** Plan joins the tabs once a plan has been opened in it, from its card or the context card. */
+const TABS = [{ id: "workers", title: "Workers", Icon: Agent }] as const;
+/** Plan joins the tabs only after the user opens a plan. */
 const WITH_PLAN = [...TABS, { id: "plan", title: "Plan", Icon: Lightbulb }] as const;
 
 export function useRightSidebar(conversationId: string | null, enabled: boolean) {
@@ -47,79 +37,33 @@ export function useRightSidebar(conversationId: string | null, enabled: boolean)
       window.removeEventListener("resize", measure);
     };
   }, [enabled, left.open]);
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
   const wideOpen = useRightSidebarState((s) => s.open);
-  const active = useRightSidebarState((s) => conversationId ? s.tabs[conversationId] ?? "files" : "files");
-  const { open, setOpen, toggleSidebar } = useSidebarChoice(wideOpen, setRightSidebarOpen, false, fold);
+  const active = useRightSidebarState((s) => conversationId ? s.tabs[conversationId] ?? "workers" : "workers");
+  const { open, setOpen } = useSidebarChoice(wideOpen, setRightSidebarOpen, false, fold);
   const { width, setWidth, resizing, setResizing } = useSidebarWidth("brigadier.rightSidebarWidth");
-  const [searchRequest, setSearchRequest] = useState(0);
-  const [filePlaceholder, setFilePlaceholder] = useState<{ conversationId: string; tabId: string } | null>(null);
-  const sessionActive = useSessionTabs((s) => conversationId ? s.sessions[conversationId]?.active ?? CHAT_TAB : CHAT_TAB);
-  if (filePlaceholder && (!open || active !== "files" || sessionActive !== filePlaceholder.tabId || conversationId !== filePlaceholder.conversationId))
-    setFilePlaceholder(null);
-  const fileOpened = useCallback(() => setFilePlaceholder(null), []);
-  const searchHandled = useCallback(() => setSearchRequest(0), []);
-  const mac = useApp((s) => s.info?.platform === "macos");
   const selectTab = useCallback((tab: RightSidebarTab) => {
     if (enabled && conversationId) selectRightSidebarTab(conversationId, tab);
   }, [conversationId, enabled]);
-  const openTab = useCallback((tab: RightSidebarTab, search = false, replaceTabId?: string) => {
-    if (!enabled) return;
+  const openTab = useCallback((tab: RightSidebarTab) => {
+    if (!enabled || !conversationId) return;
     selectTab(tab);
+    setOpenedFor(conversationId);
     setOpen(true);
-    if (search) {
-      setSearchRequest((value) => value + 1);
-      setFilePlaceholder(replaceTabId && conversationId ? { conversationId, tabId: replaceTabId } : null);
-    }
-  }, [enabled, selectTab, setOpen, conversationId]);
-  useEffect(() => {
-    if (!enabled) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isRightSidebarKey(event, mac)) return;
-      event.preventDefault();
-      if (!event.repeat) toggleSidebar();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [enabled, mac, toggleSidebar]);
+  }, [enabled, conversationId, selectTab, setOpen]);
   return useMemo(() => ({
-    width, setWidth, resizing, setResizing, enabled, open: enabled && open, active,
-    setOpen, toggleSidebar, selectTab, openTab, searchRequest, searchHandled,
-    filePlaceholder: filePlaceholder?.conversationId === conversationId ? filePlaceholder.tabId : undefined, fileOpened,
-  }), [width, setWidth, resizing, setResizing, enabled, open, active, setOpen,
-    toggleSidebar, selectTab, openTab, searchRequest, searchHandled, filePlaceholder, conversationId, fileOpened]);
+    width, setWidth, resizing, setResizing, enabled, open: enabled && open && openedFor === conversationId, active,
+    setOpen, selectTab, openTab,
+  }), [width, setWidth, resizing, setResizing, enabled, open, openedFor, conversationId, active, setOpen, selectTab, openTab]);
 }
 
 export const RightSidebarContext = createContext<ReturnType<typeof useRightSidebar> | null>(null);
-
-export function RightSidebarToggle() {
-  const rightSidebar = useContext(RightSidebarContext);
-  const mac = useApp((s) => s.info?.platform === "macos");
-  if (!rightSidebar?.enabled) return null;
-  return (
-    <>
-      {!rightSidebar.open && <span aria-hidden className="w-icon-button-md shrink-0" />}
-      {/* Fixed to the window edge, just like the left titlebar controls, throughout the spring. */}
-      <div className="h-titlebar end-surface-inset fixed top-0 z-30 flex items-center pe-1">
-        <TitlebarTips>
-          <TitlebarButton
-            data-slot="right-sidebar-toggle"
-            tooltip={rightSidebarToggleLabel(rightSidebar.open)}
-            shortcut={mac ? "⌥⌘B" : "Ctrl+Alt+B"}
-            aria-expanded={rightSidebar.open}
-            onClick={rightSidebar.toggleSidebar}
-          >
-            {rightSidebar.open ? <SidebarRight /> : <SidebarFloatingRight />}
-          </TitlebarButton>
-        </TitlebarTips>
-      </div>
-    </>
-  );
-}
 
 /** The full-height right column. Closing reveals no strip and installs no hover trigger. */
 export function RightSidebar({ conversationId }: { conversationId: string }) {
   const panel = useContext(RightSidebarContext);
   const content = useRef<HTMLDivElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
   const column = useRef<HTMLDivElement>(null);
   const tabs: readonly (typeof WITH_PLAN)[number][] = usePlanTab((s) => s.shown[conversationId] !== undefined) ? WITH_PLAN : TABS;
   // Finished workers leave the composer's strip once answered; they stay here, counted.
@@ -141,9 +85,10 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
   const [mounted, setMounted] = useState(panel?.open ?? false);
   if (panel?.open && !mounted) setMounted(true);
   useEffect(() => {
-    if (!panel?.open && content.current?.contains(document.activeElement)) {
-      Array.from(document.querySelectorAll<HTMLElement>('[data-slot="right-sidebar-toggle"]'))
-        .find((button) => button.getClientRects().length > 0)?.focus({ preventScroll: true });
+    if (panel?.open) {
+      returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    } else if (content.current?.contains(document.activeElement)) {
+      returnFocus.current?.focus({ preventScroll: true });
     }
   }, [panel?.open]);
   if (!panel?.enabled) return null;
@@ -160,7 +105,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
     >
       <SidebarReveal side="right" open={panel.open} hidden={!panel.open} resizing={panel.resizing}>
         <div ref={content} className="right-sidebar-panel-width flex h-full flex-col">
-          <div role="tablist" aria-label="Right sidebar" data-tauri-drag-region className="h-titlebar flex shrink-0 items-center gap-1 ps-2 pe-icon-button-lg">
+          <div role="tablist" aria-label="Right sidebar" data-tauri-drag-region className="h-titlebar flex shrink-0 items-center gap-1 px-2">
             <TitlebarTips>
               {tabs.map(({ id, title, Icon }, index) => (
                 <TitlebarButton
@@ -188,6 +133,10 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
                 </TitlebarButton>
               ))}
             </TitlebarTips>
+            <span className="flex-1" />
+            <TitlebarTips>
+              <TitlebarButton tooltip="Close right panel" onClick={() => panel.setOpen(false)}><X /></TitlebarButton>
+            </TitlebarTips>
           </div>
           <div
             id="right-sidebar-content"
@@ -200,11 +149,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
             )}
           >
             {mounted && <Suspense fallback={null}>
-              {panel.active === "files" ? <FilesTab conversationId={conversationId} searchRequest={panel.searchRequest} onSearchHandled={panel.searchHandled} replaceTabId={panel.filePlaceholder} onFileOpened={panel.fileOpened} />
-                : panel.active === "source" ? <SourcePanel conversationId={conversationId} />
-                  : panel.active === "plan" ? <PlanTab conversationId={conversationId} />
-                  : panel.active === "running" ? <RunningTab conversationId={conversationId} />
-                  : <WorkersTab conversationId={conversationId} />}
+              {panel.active === "plan" ? <PlanTab conversationId={conversationId} /> : <WorkersTab conversationId={conversationId} />}
             </Suspense>}
           </div>
         </div>

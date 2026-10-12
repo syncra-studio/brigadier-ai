@@ -145,11 +145,11 @@ function hostOf(url: string): string {
  * The session's sources, listed in the pinned card: links in the user's messages (as soon as
  * they are sent) and pages the orchestrator read, first seen first.
  */
-function useSources(conversationId: string): string[] {
+function useSources(conversationId: string, session = true): string[] {
   const messages = useApp((s) => s.threads[conversationId]?.items);
   const read = useBoard(
     useShallow((s) =>
-      s.board?.conversationId === conversationId
+      session && s.board?.conversationId === conversationId
         ? s.board.orchestratorSteps.flatMap((step) =>
             step.kind.type === "readPage" ? [step.kind.url] : [],
           )
@@ -292,8 +292,8 @@ function WaitingOnYou({ conversationId }: { conversationId: string }) {
   );
 }
 
-function Sources({ conversationId }: { conversationId: string }) {
-  const sources = useSources(conversationId);
+function Sources({ conversationId, session = true }: { conversationId: string; session?: boolean }) {
+  const sources = useSources(conversationId, session);
   const aui = useAui();
   if (sources.length === 0) return null;
   const add = () => {
@@ -634,7 +634,7 @@ function SummaryCard({
 export function PinnedSummary({
   conversation,
 }: {
-  conversation: Conversation;
+  conversation: Conversation | null;
 }) {
   const shown = useApp((s) => s.pinnedSummary);
   const float = useSummary((s) => s.layout === "float");
@@ -642,7 +642,7 @@ export function PinnedSummary({
   // The cards stay for their easing in and out; what they show is kept only while they can be seen.
   const [content, setContent] = useState(visible);
   if (visible && !content) setContent(true);
-  const { ref: stack, onScroll } = useKeptScroll(`${conversation.id}/column`, visible && content);
+  const { ref: stack, onScroll } = useKeptScroll(`${conversation?.id ?? "draft"}/column`, visible && content);
   useEffect(() => {
     if (visible || !content) return;
     let current = true;
@@ -655,14 +655,13 @@ export function PinnedSummary({
       current = false;
     };
   }, [visible, content, stack]);
-  if (conversation.setup?.type !== "session") return null;
 
   return (
     <>
       <div className="pointer-events-none absolute inset-y-0 end-0 z-10 flex max-w-full flex-col">
         <aside
           ref={stack}
-          aria-label="Session summary"
+          aria-label="Context"
           aria-hidden={!visible || undefined}
           data-state={shown ? "open" : "closed"}
           onScroll={onScroll}
@@ -684,12 +683,12 @@ export function PinnedSummary({
  * under the top bar, reaching at most the window's bottom inset. The top bar's button, Escape or a
  * click elsewhere closes it.
  */
-function FloatingSummary({ conversation }: { conversation: Conversation }) {
-  const { ref, onScroll } = useKeptScroll(`${conversation.id}/column`, true);
+function FloatingSummary({ conversation }: { conversation: Conversation | null }) {
+  const { ref, onScroll } = useKeptScroll(`${conversation?.id ?? "draft"}/column`, true);
   // A row that opens the side panel (the workers, a worker) moves on to it: the summary closes
   // rather than stay where it opened, over the panel, and focus stays off the top bar's button.
   const rightSidebar = useContext(RightSidebarContext);
-  const { active: mainTab } = useSessionTabsOf(conversation.id);
+  const { active: mainTab } = useSessionTabsOf(conversation?.id ?? "draft");
   const { panel: worker } = useContext(AgentsPanelContext);
   const panel = `${rightSidebar?.open}/${rightSidebar?.active}/${worker}/${mainTab}`;
   const shownPanel = useRef(panel);
@@ -709,7 +708,7 @@ function FloatingSummary({ conversation }: { conversation: Conversation }) {
         side="bottom"
         align="end"
         sideOffset={0}
-        aria-label="Session summary"
+        aria-label="Context"
         onScroll={onScroll}
         // Focus the summary itself, not its first button (whose tip would open with it).
         onOpenAutoFocus={(event) => {
@@ -833,7 +832,41 @@ function ReviewLineRow({ line }: { line: ReviewLine }) {
  * the session's plan as one of its sections), then the run's card. `active` while they can be
  * seen, for their scroll offsets.
  */
-function SummaryContent({
+function SummaryContent({ conversation, active }: { conversation: Conversation | null; active: boolean }) {
+  if (!conversation) return <SummaryCard scrollKey="draft/context" active={active}>
+    <p className="text-muted-foreground p-4 text-sm">Nothing here yet</p>
+  </SummaryCard>;
+  return conversation.kind === "session" ? <SessionSummaryContent conversation={conversation} active={active} />
+    : <ChatSummaryContent conversation={conversation} active={active} />;
+}
+
+/** Plain chats expose their own sources, attachments and usage, without session sections. */
+function ChatSummaryContent({ conversation, active }: { conversation: Conversation; active: boolean }) {
+  const sources = useSources(conversation.id, false);
+  const attachments = useApp(useShallow((s) => [...new Map((s.threads[conversation.id]?.items ?? [])
+    .flatMap((item) => item.attachments).map((attachment) => [attachment.id, attachment])).values()]));
+  const context = useBoard((s) => s.board?.conversationId === conversation.id ? s.board.context : null);
+  const waiting = useBoard(useShallow((s) => s.board?.conversationId === conversation.id
+    ? Object.values(s.board.waiting).filter((item) => item.source.type === "computer") : NO_WAITING));
+  const empty = sources.length === 0 && attachments.length === 0 && !context && waiting.length === 0;
+  return <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
+    <div className="flex flex-col py-2.5">
+      {empty && <p className="text-muted-foreground px-4 py-1.5 text-sm">Nothing here yet</p>}
+      {waiting.length > 0 && <SummarySection foldKey="waiting" title="Waiting on you" count={waiting.length}>
+        {waiting.map((item) => <ComputerAccessRow key={item.id} what={item.what} />)}
+      </SummarySection>}
+      <Sources conversationId={conversation.id} session={false} />
+      {attachments.length > 0 && <SummarySection foldKey="attachments" title="Attachments" count={attachments.length}>
+        {attachments.map((attachment) => <SummaryRow key={attachment.id}>{attachment.name}</SummaryRow>)}
+      </SummarySection>}
+      {context && <SummarySection foldKey="usage" title="Context usage">
+        <SummaryRow>{context.usedTokens.toLocaleString()} tokens used</SummaryRow>
+      </SummarySection>}
+    </div>
+  </SummaryCard>;
+}
+
+function SessionSummaryContent({
   conversation,
   active,
 }: {
@@ -947,7 +980,8 @@ export function PinnedSummaryToggle() {
   if (!float) {
     return (
       <TooltipIconButton
-        tooltip="Toggle pinned summary"
+        tooltip="Context"
+        aria-label="Context"
         size="icon-md"
         aria-pressed={pinned}
         className={cn(pinned && "bg-muted")}
@@ -960,7 +994,8 @@ export function PinnedSummaryToggle() {
   return (
     <PopoverTrigger asChild>
       <TooltipIconButton
-        tooltip="Toggle summary"
+        tooltip="Context"
+        aria-label="Context"
         size="icon-md"
         aria-pressed={floating}
         className={cn(floating && "bg-muted")}
