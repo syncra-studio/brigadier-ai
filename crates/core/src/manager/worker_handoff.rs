@@ -13,7 +13,8 @@
 //!   fresh session gets the note and the last messages word for word, and searches the rest.
 //! - **No checks run twice.** checks.md lists each check whose latest run passed and the files
 //!   changed since the tree it passed on, so the fresh session reruns only the checks those
-//!   changes cover (SESSION-FIXES-PLAN.md Q6.4).
+//!   changes cover (SESSION-FIXES-PLAN.md Q6.4). Ignored files (`.env`) are outside the tree:
+//!   checks.md says so, and run_check's cache key still has them.
 //! - **Same model, same attempt.** It is not a reroute: the task keeps its model, attempt and
 //!   access. A limit or error hand-on still wins when both are due.
 //! - **Stalls too.** The stall watchdog ([`super::watchdog`]) hands a worker that went silent
@@ -581,7 +582,8 @@ fn checks_text(checks: &[PassedCheck]) -> String {
         "# Checks that passed\n\nEach check this task ran whose latest run passed (exit 0), \
          newest first, with the files changed since the files it passed on. Rerun only a check \
          whose changed files it covers; one with nothing changed passed on these same files, \
-         and run_check answers it from its cache.\n",
+         and run_check answers it from its cache. Git doesn't see ignored files such as .env: \
+         if one a check reads changed since, rerun it too.\n",
     );
     for check in checks {
         let place = if check.workdir.is_empty() {
@@ -874,6 +876,7 @@ mod tests {
              changed since.\n"
         ));
         assert!(text.contains("`f29.rs` and 2 more.\n"), "{text}");
+        assert!(text.contains("if one a check reads changed since, rerun it too."));
         assert!(!text.contains("`f30.rs`"));
     }
 
