@@ -31,3 +31,25 @@ test("the sidebar toggle is one plain button, with no tip", async () => {
     Object.assign(globals, saved);
   }
 });
+
+test("the right sidebar's icon is the left sidebar toggle's, mirrored, open and closed alike", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { SidebarGlyph } = await server.ssrLoadModule("/src/app/SidebarToggle.tsx");
+    const render = (open: boolean, side: "left" | "right") => ReactDOMServer.renderToStaticMarkup(
+      React.createElement(SidebarGlyph, { open, side }),
+    );
+    const paths = (html: string) => html.match(/ d="[^"]+"/g)?.join("") ?? "";
+    for (const open of [true, false]) {
+      const left = render(open, "left");
+      const right = render(open, "right");
+      assert.ok(paths(left), "the icon draws");
+      assert.equal(paths(right), paths(left), `${open ? "open" : "closed"}: the same drawing`);
+      assert.doesNotMatch(left, /-scale-x-100/);
+      assert.match(right, /class="[^"]*-scale-x-100/, "mirrored");
+    }
+    assert.notEqual(paths(render(true, "right")), paths(render(false, "right")), "open and closed differ, as on the left");
+  } finally {
+    await server.close();
+  }
+});

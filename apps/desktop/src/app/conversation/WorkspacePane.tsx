@@ -5,7 +5,8 @@ import { ProjectDraftPane } from "@/app/conversation/ProjectDraftPane";
 import { SearchPanel } from "@/app/conversation/SearchPanel";
 import { SourcePanel } from "@/app/conversation/SourcePanel";
 import { shortcutKeys } from "@/app/shortcutCatalog";
-import { FilesGlyph, SearchGlyph, SidebarRightGlyph, SidebarRightOffGlyph, SourceControlGlyph } from "@/components/glyphs/codicons";
+import { SidebarGlyph } from "@/app/SidebarToggle";
+import { FilesGlyph, SearchGlyph, SourceControlGlyph } from "@/components/glyphs/codicons";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { cn } from "@/lib/utils";
@@ -114,7 +115,7 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
 
 export const WorkspacePaneContext = createContext<ReturnType<typeof useWorkspacePane> | null>(null);
 
-/** The toolbar's right sidebar toggle: its glyph shows the sidebar out or in. */
+/** The toolbar's right sidebar toggle: the left sidebar toggle's icon, mirrored. */
 export function WorkspacePaneToggle() {
   const pane = useContext(WorkspacePaneContext);
   const mac = useApp((s) => s.info?.platform === "macos");
@@ -122,7 +123,7 @@ export function WorkspacePaneToggle() {
   return (
     <TitlebarButton tooltip="Right sidebar" shortcut={shortcutKeys("right-sidebar", mac)}
       aria-pressed={pane.open} aria-controls="workspace-pane-content" onPointerEnter={pane.prefetch} onClick={pane.toggleOpen}>
-      {pane.open ? <SidebarRightGlyph /> : <SidebarRightOffGlyph />}
+      <SidebarGlyph side="right" open={pane.open} />
     </TitlebarButton>
   );
 }
