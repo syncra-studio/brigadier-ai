@@ -13,7 +13,7 @@ Screen Recording to the outermost app bundle.
 
 ## Origin
 
-Forked from an MIT-licensed driver at release tag `v0.8.12`, commit
+Forked from an MIT-licensed driver at its release 0.8.12, commit
 `e8a8dbfd45a5d050058e7340f97ffe6f157c3128`. The licence and copyright are in
 the repository's `THIRD_PARTY_NOTICES.md`. Changes from the original:
 
@@ -30,8 +30,13 @@ the repository's `THIRD_PARTY_NOTICES.md`. Changes from the original:
   (`BRIGADIER_CU_SOCKET_AUTH_TOKEN`, or `<home>/auth`).
 - `supervisor.rs`: the MCP shim starts the daemon on demand under a
   cross-process lock, replaces a dead or hung daemon (checking the recorded
-  PID's executable and start time before signalling it), and retries a call
-  that lost the daemon once.
+  PID's executable and start time before signalling it), and retries once a
+  call that lost the daemon, but only one that never reached it or that only
+  reads, so an action never runs twice.
+- Any tool accepts a `session` argument (ignored where it has no use), since
+  agents are told to pass theirs on every call.
+- The bundle explains its Apple Events use, so macOS can ask before browser
+  page actions control Safari or Chrome.
 - Development builds of Brigadier stay targetable; the user's release
   Brigadier is not.
 
