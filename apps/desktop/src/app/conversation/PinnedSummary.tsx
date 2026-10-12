@@ -43,7 +43,7 @@ import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { ComputerAccessRow } from "@/app/conversation/ComputerAccessRow";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
-import { useSessionTabsOf } from "@/state/sessionTabs";
+import { CHAT_TAB, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
@@ -685,21 +685,25 @@ export function PinnedSummary({
  */
 function FloatingSummary({ conversation }: { conversation: Conversation | null }) {
   const { ref, onScroll } = useKeptScroll(`${conversation?.id ?? "draft"}/column`, true);
-  // A row that opens the side panel (the workers, a worker) moves on to it: the summary closes
-  // rather than stay where it opened, over the panel, and focus stays off the top bar's button.
+  // A row that opens the side panel (the workers, a worker) or a tab moves on to it: the summary
+  // closes rather than stay where it opened, over the panel, and focus stays off the top bar's
+  // button. Coming back to the chat, as the button itself does from another tab, is not moving on.
   const rightSidebar = useContext(RightSidebarContext);
   const { active: mainTab } = useSessionTabsOf(conversation?.id ?? "draft");
   const { panel: worker } = useContext(AgentsPanelContext);
-  const panel = `${rightSidebar?.open}/${rightSidebar?.active}/${worker}/${mainTab}`;
+  const panel = `${rightSidebar?.open}/${rightSidebar?.active}/${worker}`;
   const shownPanel = useRef(panel);
+  const shownTab = useRef(mainTab);
   const movedOn = useRef(false);
   useEffect(() => {
-    if (panel !== null && panel !== shownPanel.current && useSummary.getState().floating) {
+    const away = panel !== shownPanel.current || (mainTab !== shownTab.current && mainTab !== CHAT_TAB);
+    if (away && useSummary.getState().floating) {
       movedOn.current = true;
       useSummary.setState({ floating: false });
     }
     shownPanel.current = panel;
-  }, [panel]);
+    shownTab.current = mainTab;
+  }, [panel, mainTab]);
   return (
     <>
       <PopoverAnchor className="pointer-events-none absolute end-0 top-0 size-0" />
