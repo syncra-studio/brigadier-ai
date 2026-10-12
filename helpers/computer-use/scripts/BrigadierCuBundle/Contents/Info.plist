@@ -46,6 +46,10 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <!-- Browser page actions run scripts in Safari or Chrome through Apple
+         Events; without this text macOS refuses them instead of asking. -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Brigadier's agents read and operate web pages in your browser when you ask them to.</string>
     <key>NSSupportsAutomaticTermination</key>
     <true/>
 </dict>
