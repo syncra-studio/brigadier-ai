@@ -52,37 +52,42 @@ function upsertJob(jobs: readonly BrainJob[], job: BrainJob): BrainJob[] {
   return [job, ...others].toSorted((a, b) => b.startedAtMs - a.startedAtMs);
 }
 
-/**
- * Keeps the newer copy of each task. Events arrive in order, so one wins a timestamp tie; a
- * snapshot may have been read before an event applied meanwhile, so it loses one.
- */
-function mergeTasks(
-  known: Record<string, Task>,
-  tasks: readonly Task[],
-  from: "events" | "snapshot",
-): Record<string, Task> {
+/** Keeps the newer copy of each task; events arrive in order, so the later one wins a tie. */
+function applyTasks(known: Record<string, Task>, tasks: readonly Task[]): Record<string, Task> {
   const merged = { ...known };
   for (const task of tasks) {
     const held = merged[task.id];
-    const newer =
-      !held || (from === "events" ? held.updatedAtMs <= task.updatedAtMs : held.updatedAtMs < task.updatedAtMs);
-    if (newer) merged[task.id] = task;
+    if (!held || held.updatedAtMs <= task.updatedAtMs) merged[task.id] = task;
   }
   return merged;
 }
 
+/** Session task reads in flight, each collecting the task updates that arrive meanwhile. */
+const taskReads = new Set<{ conversationId: string; tasks: Task[] }>();
+
 /**
  * Lists a session's workers for the Brain tab: reads its tasks once (and again when the bridge
  * resyncs, on reconnecting or after missing events); task events keep them current in between.
+ * A read replaces what was held, so an update the feed missed comes back even when it tied with
+ * one it delivered; updates that arrived while it was read are applied again, since the read
+ * may predate them.
  */
 export async function watchSessionTasks(conversationId: string): Promise<void> {
   if (useBrain.getState().sessionTasks?.conversationId !== conversationId) {
     useBrain.setState({ sessionTasks: { conversationId, tasks: {} } });
   }
-  const { view } = await request({ method: "getConversation", id: conversationId, limit: 1 });
+  const read = { conversationId, tasks: [] as Task[] };
+  taskReads.add(read);
+  let view;
+  try {
+    ({ view } = await request({ method: "getConversation", id: conversationId, limit: 1 }));
+  } finally {
+    taskReads.delete(read);
+  }
+  const snapshot = Object.fromEntries(view.tasks.map((task) => [task.id, task]));
   useBrain.setState((state) =>
     state.sessionTasks?.conversationId === conversationId
-      ? { sessionTasks: { conversationId, tasks: mergeTasks(state.sessionTasks.tasks, view.tasks, "snapshot") } }
+      ? { sessionTasks: { conversationId, tasks: applyTasks(snapshot, read.tasks) } }
       : state,
   );
 }
@@ -101,15 +106,17 @@ export function unwatchSessionTasks(conversationId: string): void {
 
 /** Folds the watched session's task updates into its tasks (one update per batch). */
 function applyTaskEvents(envelopes: readonly EventEnvelope[]): void {
+  const updates = envelopes.flatMap(({ event }) => (event.type === "taskUpdated" ? [event.task] : []));
+  for (const read of taskReads) {
+    read.tasks.push(...updates.filter((task) => task.conversationId === read.conversationId));
+  }
   const watched = useBrain.getState().sessionTasks;
   if (!watched) return;
-  const tasks = envelopes.flatMap(({ event }) =>
-    event.type === "taskUpdated" && event.task.conversationId === watched.conversationId ? [event.task] : [],
-  );
+  const tasks = updates.filter((task) => task.conversationId === watched.conversationId);
   if (tasks.length === 0) return;
   useBrain.setState((state) =>
     state.sessionTasks?.conversationId === watched.conversationId
-      ? { sessionTasks: { ...state.sessionTasks, tasks: mergeTasks(state.sessionTasks.tasks, tasks, "events") } }
+      ? { sessionTasks: { ...state.sessionTasks, tasks: applyTasks(state.sessionTasks.tasks, tasks) } }
       : state,
   );
 }

@@ -4,7 +4,13 @@ import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
 type Row = { name: string; low: boolean; use: string };
-type Rendering = { first: { picker: string; rows: Row[] }; updated: Row[]; reloaded: Row[]; calls: string[] };
+type Rendering = {
+  first: { picker: string; rows: Row[] };
+  updated: Row[];
+  reloaded: Row[];
+  raced: Row[];
+  calls: string[];
+};
 
 async function render(t: Parameters<typeof renderFixturePage>[0], query: string): Promise<Rendering> {
   // The page's dump is HTML: its ">" comes back escaped.
@@ -23,7 +29,8 @@ const longRefactor: Row = {
 // The real Brain tab in Chromium over a faked daemon. Settings opened from a session, with no
 // Brain picked before, shows that session's project's Brain and its workers' counters: one read
 // of the session's tasks, kept current by task events (an older copy never rolls one back), and
-// read again as the bridge resyncs, where a snapshot that ties with an applied update loses.
+// read again as the bridge resyncs: the read brings back an update the feed missed even at the
+// moment of one it delivered, and an update that arrived during the read is applied again.
 test("the Brain tab opened from a session lists its workers and keeps them current", { timeout: 60000 }, async (t) => {
   const rendering = await render(t, "from=session");
   assert.deepEqual(rendering.first, {
@@ -32,8 +39,14 @@ test("the Brain tab opened from a session lists its workers and keeps them curre
   });
   const updated = [{ name: "task-1 Add mul", low: false, use: added(4, 2, 45) }, longRefactor];
   assert.deepEqual(rendering.updated, updated);
-  assert.deepEqual(rendering.reloaded, updated);
-  assert.deepEqual(rendering.calls, ["getBrain calc", "getConversation session", "getConversation session"]);
+  assert.deepEqual(rendering.reloaded, [{ name: "task-1 Add mul", low: false, use: added(5, 2, 50) }, longRefactor]);
+  assert.deepEqual(rendering.raced, [{ name: "task-1 Add mul", low: false, use: added(6, 3, 55) }, longRefactor]);
+  assert.deepEqual(rendering.calls, [
+    "getBrain calc",
+    "getConversation session",
+    "getConversation session",
+    "getConversation session",
+  ]);
 });
 
 test("the Brain tab lists no workers for a chat, another project's session or another Brain picked", { timeout: 60000 }, async (t) => {

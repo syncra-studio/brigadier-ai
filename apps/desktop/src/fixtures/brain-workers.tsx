@@ -5,8 +5,9 @@
  * ?from=session (the default) | chat | other: Settings opened from a session of the project, a
  * chat, or a session of another project. ?pick=<key>: a Brain picked before (calc, other or
  * personal).
- * ?drive=1 records what the tab shows, sends task updates, reads the tasks again as the bridge's
- * resync does (its later snapshot ties with the update), and writes what it saw to
+ * ?drive=1 records what the tab shows, sends task updates, reads the tasks again twice as the
+ * bridge's resync does (first bringing back an update the feed missed, at the same moment as one
+ * it delivered; then with an update arriving during the read), and writes what it saw to
  * #brain-workers-result (BrainWorkersRender.test.ts reads it).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -60,6 +61,12 @@ if (pick) selectBrain(pick);
 openSettings("inspector");
 
 const calls: string[] = [];
+const send = (tasks: Task[]) =>
+  applyBrainEvents(
+    tasks.map(
+      (t, i) => ({ seq: 100 + i, stream: `conversation:${t.conversationId}`, streamSeq: i, atMs: 0, event: { type: "taskUpdated", task: t } }) as EventEnvelope,
+    ),
+  );
 let reads = 0;
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
@@ -68,19 +75,29 @@ mockIPC((command, payload) => {
     case "getBrain":
       calls.push(`getBrain ${req.projectId ?? "personal"}`);
       return { method: req.method, overview: { ...overview, projectId: req.projectId } };
-    case "getConversation":
+    case "getConversation": {
       calls.push(`getConversation ${req.id}`);
+      const read = reads++;
+      // The first read; then one after the feed missed an update at 20, the moment of the one it
+      // delivered; then one taken before an update at 30 that arrives while it is read.
+      const t1 =
+        read === 0
+          ? task("t1", 1, "Add mul", { queries: 3, factsIn: 2, factsOut: 1, calls: 40 }, 10)
+          : read === 1
+            ? task("t1", 1, "Add mul", { queries: 5, factsIn: 2, factsOut: 2, calls: 50 }, 20)
+            : task("t1", 1, "Add mul", { queries: 5, factsIn: 2, factsOut: 2, calls: 50 }, 30);
+      if (read === 2) send([task("t1", 1, "Add mul", { queries: 6, factsIn: 2, factsOut: 3, calls: 55 }, 30)]);
       return {
         method: req.method,
         view: {
           tasks: [
-            // A later read was taken before the update at 20 applied: a tie it must lose.
-            task("t1", 1, "Add mul", { queries: 3, factsIn: 2, factsOut: 1, calls: 40 }, reads++ === 0 ? 10 : 20),
+            t1,
             task("t2", 2, "Long refactor", { queries: 0, factsIn: 0, factsOut: 0, calls: 80 }, 10),
             task("t3", 3, "Before counters", undefined, 10),
           ],
         },
       };
+    }
     default:
       return { method: req.method };
   }
@@ -108,11 +125,7 @@ function Fixture() {
         const updated = task("t1", 1, "Add mul", { queries: 4, factsIn: 2, factsOut: 2, calls: 45 }, 20);
         const stale = task("t2", 2, "Long refactor", { queries: 9, factsIn: 9, factsOut: 9, calls: 9 }, 5);
         const elsewhere = { ...task("t9", 9, "Other session", { queries: 1, factsIn: 0, factsOut: 0, calls: 1 }, 20), conversationId: "chat" };
-        applyBrainEvents(
-          [updated, stale, elsewhere].map(
-            (t, i) => ({ seq: 100 + i, stream: `conversation:${t.conversationId}`, streamSeq: i, atMs: 0, event: { type: "taskUpdated", task: t } }) as EventEnvelope,
-          ),
-        );
+        send([updated, stale, elsewhere]);
       }),
       at(900, () => {
         seen.updated = rows();
@@ -120,6 +133,10 @@ function Fixture() {
       }),
       at(1300, () => {
         seen.reloaded = rows();
+        void reloadSessionTasks();
+      }),
+      at(1700, () => {
+        seen.raced = rows();
         seen.calls = calls;
         setResult(JSON.stringify(seen));
       }),
