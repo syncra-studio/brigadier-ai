@@ -3,6 +3,9 @@
  * (App.tsx) around a project session with a long thread, over IPC answered here. Run live by
  * ShellRender.test.ts, which turns the wheel and resizes the window for it (fixtures/input.ts).
  *
+ * Without `drive` it only opens a long page and a New tab beside the chat, for a look at it in
+ * the real window (a dev build whose window opens this page).
+ *
  * `?drive=layout` opens and closes the right panels (Files, Workers, both) with the sidebar
  * expanded and folded, and in a narrow window, measuring every titlebar control on every frame:
  * none moves, the panels open below the titlebar, the left sidebar keeps its width; and where
@@ -88,6 +91,13 @@ useApp.setState((state) => ({
   pinnedSummary: layout,
 }));
 useSessionTabs.setState({ sessions: {} });
+// Opened as is (a dev window pointed at this page, for a look at the real window): a long page
+// and a New tab beside the chat.
+if (!query.has("drive")) {
+  openPageTab(ID, PAGE, "Long page");
+  newSessionTab(ID, "newTab");
+  selectTab(ID, "chat");
+}
 
 const body = Array.from({ length: 80 }, (_, index) => `Line ${index + 1} of a long page, longer than the window.`).join("\n\n");
 const page: Page = { id: PAGE, content: { title: "Long page", emoji: null, body } as PageContent, revision: "r1", createdMs: 0, updatedMs: start } as Page;
