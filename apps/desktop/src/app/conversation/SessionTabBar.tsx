@@ -100,7 +100,8 @@ function useTabKeys(conversationId: string, archived: boolean, create: (kind: Ne
       if (event.defaultPrevented || event.isComposing) return;
       const target = event.target instanceof Element ? event.target : document.activeElement;
       if (!mac && target?.closest('[data-slot="terminal-pane"], [data-main-terminal]')) return;
-      if (target?.closest('[data-slot="terminal-pane"]') && ["KeyW", "BracketLeft", "BracketRight"].includes(event.code)) return;
+      // ⌥⌘W is the session's own, even there.
+      if (!event.altKey && target?.closest('[data-slot="terminal-pane"]') && ["KeyW", "BracketLeft", "BracketRight"].includes(event.code)) return;
       const command = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
       if (command && !event.altKey && event.shiftKey && event.code === "KeyT") {
         event.preventDefault(); event.stopPropagation();
@@ -114,6 +115,7 @@ function useTabKeys(conversationId: string, archived: boolean, create: (kind: Ne
       event.preventDefault(); event.stopPropagation();
       if (action.type === "new") create(action.kind);
       if (action.type === "close") closeTab(conversationId, sessionTabs(conversationId).active);
+      if (action.type === "closeOthers") closeOtherTabs(conversationId, sessionTabs(conversationId).active);
       if (action.type === "number") selectTabNumber(conversationId, action.number);
       if (action.type === "step") stepTab(conversationId, action.step);
     };

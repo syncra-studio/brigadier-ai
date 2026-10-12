@@ -3,7 +3,7 @@ import type { NewTabKind } from "./sessionTabs";
 type Key = Pick<KeyboardEvent, "code" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey" | "isComposing"> & {
   getModifierState?: (key: string) => boolean;
 };
-export type TabAction = { type: "new"; kind: NewTabKind } | { type: "close" } |
+export type TabAction = { type: "new"; kind: NewTabKind } | { type: "close" } | { type: "closeOthers" } |
   { type: "number"; number: number } | { type: "step"; step: 1 | -1 };
 
 export function sessionTabKey(event: Key, mac: boolean): TabAction | null {
@@ -17,6 +17,9 @@ export function sessionTabKey(event: Key, mac: boolean): TabAction | null {
     if (event.shiftKey) return null;
     if (event.code === "KeyS") return { type: "new", kind: "sideChat" };
     if (event.code === "KeyN") return { type: "new", kind: "document" };
+    if (event.code === "KeyW") return { type: "closeOthers" };
+    if (event.code === "ArrowLeft" || event.code === "ArrowRight")
+      return { type: "step", step: event.code === "ArrowLeft" ? -1 : 1 };
     return null;
   }
   if (event.shiftKey) {

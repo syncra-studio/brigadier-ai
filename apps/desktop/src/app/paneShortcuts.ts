@@ -23,8 +23,11 @@ export const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?
   "cycle-previous": { code: "Tab", control: true, shift: true },
   ...Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`tab-${index + 1}`, { code: `Digit${index + 1}` }])),
   close: { code: "KeyW" },
+  "close-others": { code: "KeyW", alt: true },
   previous: { code: "BracketLeft", shift: true },
   next: { code: "BracketRight", shift: true },
+  "previous-tab": { code: "ArrowLeft", alt: true },
+  "next-tab": { code: "ArrowRight", alt: true },
   // The View menu's.
   back: { code: "BracketLeft" },
   forward: { code: "BracketRight" },

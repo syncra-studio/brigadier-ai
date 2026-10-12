@@ -11,7 +11,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
   removeItem: (key: string) => data.delete(key),
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
-const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, reopenTab, moveTab,
+const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, closeOtherTabs, reopenTab, moveTab,
   selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs, useTabCloseAsk,
   replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs } = await import("./sessionTabs");
 const { editDocument, documentText, flushDocument, noteDocumentSave, documentIsSaved, documentRelativePath, discardDocument } = await import("./documentDrafts");
@@ -259,4 +259,20 @@ test("turning the browser off drops every Browser tab, and none can be reopened"
   assert.equal(sessionTabs(id).active, terminal);
   assert.equal(reopenTab(id), false);
   closeTab(id, terminal, true);
+});
+
+test("closing the other tabs keeps Chat and the tab in front; from Chat it leaves Chat alone, and they reopen", () => {
+  newSessionTab("others", "browser");
+  const second = newSessionTab("others", "terminal");
+  newSessionTab("others", "sideChat");
+  selectTab("others", second);
+  closeOtherTabs("others", sessionTabs("others").active);
+  assert.deepEqual(sessionTabs("others").tabs.map((tab) => tab.id), [second]);
+  assert.equal(sessionTabs("others").active, second);
+  selectTab("others", CHAT_TAB);
+  closeOtherTabs("others", sessionTabs("others").active);
+  assert.deepEqual(sessionTabs("others").tabs, [], "the top bar is a title again");
+  assert.equal(sessionTabs("others").active, CHAT_TAB);
+  assert.equal(reopenTab("others"), true);
+  assert.deepEqual(sessionTabs("others").tabs.map((tab) => tab.id), [second]);
 });

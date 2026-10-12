@@ -262,6 +262,9 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
             "CmdOrCtrl+Shift+[",
         ),
         ("next", "Next tab, page or terminal", "CmdOrCtrl+Shift+]"),
+        ("previous-tab", "Previous tab", "Alt+CmdOrCtrl+Left"),
+        ("next-tab", "Next tab", "Alt+CmdOrCtrl+Right"),
+        ("close-others", "Close other tabs", "Alt+CmdOrCtrl+W"),
     ] {
         panes.append(
             &MenuItemBuilder::with_id(format!("pane:{id}"), title)

@@ -23,14 +23,17 @@ const press = (code: string, key: string, mods: { ctrl?: boolean; alt?: boolean;
   metaKey: mods.cmd ?? false,
 });
 
-const CODE_OF: Record<string, string> = { "[": "BracketLeft", "]": "BracketRight", "`": "Backquote", Tab: "Tab", ",": "Comma" };
+const CODE_OF: Record<string, string> = { "[": "BracketLeft", "]": "BracketRight", "`": "Backquote", Tab: "Tab", ",": "Comma", "←": "ArrowLeft", "→": "ArrowRight" };
 const codeOf = (key: string) => CODE_OF[key] ?? (/^\d$/.test(key) ? `Digit${key}` : `Key${key}`);
+
+const ARROWS: Record<string, string> = { Left: "←", Right: "→" };
 
 /** A Tauri accelerator ("Alt+CmdOrCtrl+S") in the catalog's notation. */
 const accelerator = (text: string) => {
   const parts = text.split("+");
   const has = (name: string) => parts.includes(name);
-  return `${has("Ctrl") ? "⌃" : ""}${has("Alt") ? "⌥" : ""}${has("Shift") ? "⇧" : ""}${has("CmdOrCtrl") ? "⌘" : ""}${parts.at(-1)}`;
+  const key = parts.at(-1) ?? "";
+  return `${has("Ctrl") ? "⌃" : ""}${has("Alt") ? "⌥" : ""}${has("Shift") ? "⇧" : ""}${has("CmdOrCtrl") ? "⌘" : ""}${ARROWS[key] ?? key}`;
 };
 
 const ids = (found: { id: string }[]) => found.map((s) => s.id);
@@ -72,6 +75,13 @@ test("the native menu's accelerators are the catalog's keys", () => {
   assert.match(shell, /"Open Folder…"\)\s*\.accelerator\("CmdOrCtrl\+O"\)/);
   assert.match(shell, /"Close Window"\)\s*\.accelerator\("CmdOrCtrl\+Shift\+W"\)/);
   assert.match(shell, /"Close tab, page or terminal"\)\s*\.accelerator\("CmdOrCtrl\+W"\)/);
+  // A second key of a row has its own item.
+  for (const [item, id] of [["previous-tab", "previous"], ["next-tab", "next"]] as const) {
+    const shortcut = SHORTCUTS.find((s) => s.id === id);
+    assert.equal(menu.get(item), shortcut?.keys[1], item);
+    const stroke = parseStroke(shortcut?.keys[1] ?? "");
+    assert.deepEqual(MENU_KEYS[item], { code: codeOf(stroke.key), alt: true }, item);
+  }
 });
 
 test("session tab shortcuts are what the tab keys handler does, on both platforms", () => {
@@ -81,6 +91,7 @@ test("session tab shortcuts are what the tab keys handler does, on both platform
     "new-side-chat": { type: "new", kind: "sideChat" },
     "new-file": { type: "new", kind: "document" },
     close: { type: "close" },
+    "close-others": { type: "closeOthers" },
     previous: { type: "step", step: -1 },
     next: { type: "step", step: 1 },
     "cycle-next": { type: "step", step: 1 },

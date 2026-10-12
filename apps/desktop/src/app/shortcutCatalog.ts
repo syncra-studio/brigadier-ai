@@ -69,9 +69,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "new-side-chat", name: "New side chat", line: "Ask something beside the session", area: "Tabs and panes", keys: ["⌥⌘S"], menu: "new-side-chat" },
   { id: "new-file", name: "New file", line: "Start a new document in a tab", area: "Tabs and panes", keys: ["⌥⌘N"], menu: "new-file" },
   { id: "close", name: "Close tab", line: "Close the tab, page or terminal in front", area: "Tabs and panes", keys: ["⌘W"], menu: "close" },
+  { id: "close-others", name: "Close other tabs", line: "Close every tab but Chat and the one in front", area: "Tabs and panes", keys: ["⌥⌘W"], menu: "close-others" },
+  { id: "close-focused", name: "Close focused tab", line: "Close the tab that has the keyboard in the tab strip", area: "Tabs and panes", keys: ["⌫"] },
   { id: "reopen", name: "Reopen closed tab", line: "Bring back the last tab, page or terminal closed", area: "Tabs and panes", keys: ["⇧⌘T"], menu: "reopen" },
-  { id: "previous", name: "Previous tab", line: "Show the tab, page or terminal to the left", area: "Tabs and panes", keys: ["⇧⌘["], menu: "previous" },
-  { id: "next", name: "Next tab", line: "Show the tab, page or terminal to the right", area: "Tabs and panes", keys: ["⇧⌘]"], menu: "next" },
+  { id: "previous", name: "Previous tab", line: "Show the tab, page or terminal to the left", area: "Tabs and panes", keys: ["⇧⌘[", "⌥⌘←"], menu: "previous" },
+  { id: "next", name: "Next tab", line: "Show the tab, page or terminal to the right", area: "Tabs and panes", keys: ["⇧⌘]", "⌥⌘→"], menu: "next" },
   { id: "cycle-next", name: "Next session tab", line: "Go round the session's tabs", area: "Tabs and panes", keys: ["⌃Tab"], menu: "cycle-next" },
   {
     id: "cycle-previous",
