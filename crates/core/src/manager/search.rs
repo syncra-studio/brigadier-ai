@@ -673,9 +673,31 @@ fn rename_into(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn rename_into(from: &Path, to: &Path) -> std::io::Result<()> {
-    // Windows' rename refuses an existing destination.
-    fs::rename(from, to)
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "MoveFileW"]
+        fn move_file(from: *const u16, to: *const u16) -> i32;
+    }
+    let wide = |path: &Path| -> std::io::Result<Vec<u16>> {
+        let mut name: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if name.contains(&0) {
+            return Err(std::io::ErrorKind::InvalidInput.into());
+        }
+        name.push(0);
+        Ok(name)
+    };
+    let (from, to) = (wide(from)?, wide(to)?);
+    // SAFETY: both paths are NUL-terminated and live for the entire call. MoveFileW refuses
+    // an existing destination; std::fs::rename can overwrite it on Windows too.
+    if unsafe { move_file(from.as_ptr(), to.as_ptr()) } != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 #[cfg(not(any(
