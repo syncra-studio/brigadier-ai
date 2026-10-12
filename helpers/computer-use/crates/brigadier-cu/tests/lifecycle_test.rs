@@ -114,8 +114,8 @@ fn spawn_daemon(home: &std::path::Path) -> std::process::Child {
 /// removes the home, even when an assertion fails.
 struct Cleanup(std::process::Child, std::path::PathBuf);
 
-impl Drop for Cleanup {
-    fn drop(&mut self) {
+impl Cleanup {
+    fn kill_daemon(&mut self) {
         if let Some(pid) = std::fs::read_to_string(self.1.join("cu.pid"))
             .ok()
             .and_then(|pid| pid.trim().parse::<libc::pid_t>().ok())
@@ -124,6 +124,19 @@ impl Drop for Cleanup {
         }
         let _ = self.0.kill();
         let _ = self.0.wait();
+    }
+
+    /// Kills the daemon and starts a fresh one on the same home, as a
+    /// recovery would.
+    fn replace(&mut self) {
+        self.kill_daemon();
+        self.0 = spawn_daemon(&self.1);
+    }
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        self.kill_daemon();
         let _ = std::fs::remove_dir_all(&self.1);
     }
 }
@@ -167,6 +180,15 @@ fn the_daemon_reports_its_build_refuses_calls_while_off_and_probes_hung_when_sto
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
+    // What it reads about its permissions is kept for Brigadier to show
+    // without starting a daemon.
+    let status = host(&home, &["request", "permissions_status"]);
+    assert!(status["accessibility"].is_boolean(), "{status}");
+    let kept: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join("permissions.json")).unwrap()).unwrap();
+    assert_eq!(kept["accessibility"], status["accessibility"]);
+    assert_eq!(kept["screen_recording"], status["screen_recording"]);
+
     // The running daemon is from no staged build. Against a staged bundle
     // on disk (an update arrived), it is from another build and must go.
     assert_eq!(host(&home, &["probe"])["current"], true);
@@ -201,4 +223,124 @@ fn the_daemon_reports_its_build_refuses_calls_while_off_and_probes_hung_when_sto
     assert!(probed.elapsed().as_secs() < 5);
     unsafe { libc::kill(pid, libc::SIGCONT) };
     assert_eq!(host(&home, &["probe"])["state"], "healthy");
+}
+
+/// One request on its own connection, as a shim's per-call connection.
+fn daemon_request(home: &std::path::Path, request: serde_json::Value) -> serde_json::Value {
+    let mut stream = std::os::unix::net::UnixStream::connect(home.join("cu.sock")).unwrap();
+    writeln!(stream, "{request}").unwrap();
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+/// A shim's control connection for `session`, kept open while it lives.
+fn control_connection(home: &std::path::Path, session: &str) -> std::os::unix::net::UnixStream {
+    let mut stream = std::os::unix::net::UnixStream::connect(home.join("cu.sock")).unwrap();
+    writeln!(
+        stream,
+        "{}",
+        serde_json::json!({"method": "session_begin", "session_id": session})
+    )
+    .unwrap();
+    let mut line = String::new();
+    BufReader::new(stream.try_clone().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert!(line.contains("session_begin"), "{line}");
+    stream
+}
+
+fn wait_healthy(home: &std::path::Path) {
+    let started = std::time::Instant::now();
+    while host(home, &["probe"])["state"] != "healthy" {
+        assert!(
+            started.elapsed().as_secs() < 15,
+            "the daemon never answered"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn stop_using_an_app_holds_after_the_helper_is_replaced_and_only_for_that_agent() {
+    let home = std::env::temp_dir().join(format!("cu-lifecycle-stop-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let finder: i64 = String::from_utf8(
+        Command::new("pgrep")
+            .args(["-x", "Finder"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .lines()
+    .next()
+    .expect("Finder runs")
+    .parse()
+    .unwrap();
+    let mut cleanup = Cleanup(spawn_daemon(&home), home.clone());
+    wait_healthy(&home);
+
+    let minted = format!("brigadier-itest-mcp-{}-1", std::process::id());
+    let control = control_connection(&home, &minted);
+    let call = |host_session: &str| {
+        daemon_request(
+            &home,
+            serde_json::json!({
+                "method": "call",
+                "name": "get_screen_size",
+                "args": {"pid": finder, "_host_session": host_session},
+                "session_id": minted,
+            }),
+        )
+    };
+    let first = call("brigadier-itest");
+    assert_eq!(first["ok"], true, "{first}");
+    assert_ne!(
+        first["result"]["structuredContent"]["error"],
+        "stopped_by_user"
+    );
+    let listed = host(&home, &["request", "agent_sessions"]);
+    assert!(listed.to_string().contains("brigadier-itest"), "{listed}");
+    assert!(listed.to_string().contains("com.apple.finder"), "{listed}");
+
+    // The user chooses Stop using Finder.
+    let stopped = host(
+        &home,
+        &[
+            "request",
+            "stop_app",
+            r#"{"session":"brigadier-itest","bundle_id":"com.apple.finder","app":"Finder"}"#,
+        ],
+    );
+    assert_eq!(stopped["stopped"], true, "{stopped}");
+    let refused = call("brigadier-itest");
+    assert_eq!(
+        refused["result"]["structuredContent"]["error"], "stopped_by_user",
+        "{refused}"
+    );
+    assert!(refused["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("stopped you from using Finder"));
+
+    // The helper is replaced; the agent's shim reconnects and acts again.
+    assert!(home.join("stopped.json").exists());
+    drop(control);
+    cleanup.replace();
+    wait_healthy(&home);
+    let _control = control_connection(&home, &minted);
+    let still = call("brigadier-itest");
+    assert_eq!(
+        still["result"]["structuredContent"]["error"], "stopped_by_user",
+        "{still}"
+    );
+    // Another agent may still use Finder.
+    let other = call("brigadier-itest-other");
+    assert_ne!(
+        other["result"]["structuredContent"]["error"], "stopped_by_user",
+        "{other}"
+    );
+    drop(cleanup);
 }

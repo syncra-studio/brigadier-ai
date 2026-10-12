@@ -38,6 +38,10 @@ the repository's `THIRD_PARTY_NOTICES.md`. Changes from the original:
   request also fails when the daemon's main loop has stopped running. While
   `<home>/off` exists (computer use turned off in Brigadier), shims refuse
   calls and never start a daemon, and the daemon refuses calls.
+- `agent_apps.rs`: the apps each Brigadier agent is using (`agent_sessions`),
+  and "Stop using <app>" (`stop_app`), kept in `<home>/stopped.json` so it
+  holds after the helper is replaced, until the agent exits. The daemon also
+  keeps the permissions it last read in `<home>/permissions.json`.
 - `host.rs`: `brigadier-cu host probe|ensure|restart|stop|off|on|request`,
   how Brigadier's daemon (which the socket's signature check would refuse)
   asks things of the helper.

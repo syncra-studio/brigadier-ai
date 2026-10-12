@@ -147,6 +147,33 @@ pub fn start_main_loop_heartbeat() {
         });
 }
 
+/// The file holding the permissions the daemon last saw, so Brigadier can
+/// show them without starting a daemon.
+pub const PERMISSIONS_FILE: &str = "permissions.json";
+
+/// Records what the daemon just read about its permissions, when it changed.
+pub fn record_permissions(accessibility: bool, screen_recording: bool) {
+    static LAST: std::sync::Mutex<Option<(bool, bool)>> = std::sync::Mutex::new(None);
+    let Ok(mut last) = LAST.lock() else { return };
+    if *last == Some((accessibility, screen_recording)) {
+        return;
+    }
+    let record = serde_json::json!({
+        "accessibility": accessibility,
+        "screen_recording": screen_recording,
+        "pid": std::process::id(),
+        "build_id": own_build_id(),
+        "checked_at_ms": now_ms(),
+    });
+    let path = home().join(PERMISSIONS_FILE);
+    let partial = path.with_extension(format!("json.{}", std::process::id()));
+    if std::fs::write(&partial, record.to_string()).is_ok()
+        && std::fs::rename(&partial, &path).is_ok()
+    {
+        *last = Some((accessibility, screen_recording));
+    }
+}
+
 /// This helper's home directory.
 pub fn home() -> PathBuf {
     pip_preview::home::home()

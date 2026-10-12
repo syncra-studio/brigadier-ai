@@ -52,6 +52,39 @@ pub fn enforce_native(tool: &str, args: &Value, allowed: &[String]) -> Result<()
     )
 }
 
+/// The app a call acts on, if it names one: by pid, by window, or (for
+/// `launch_app`) by bundle id or name. Listing tools name none.
+pub fn target_app(tool: &str, args: &Value) -> Option<TargetIdentity> {
+    if matches!(tool, "list_windows" | "list_apps") {
+        return None;
+    }
+    if let Some(pid) = args.get("pid").and_then(Value::as_i64) {
+        return app_for_pid(pid);
+    }
+    if let Some(window_id) = args.get("window_id").and_then(Value::as_u64) {
+        return pid_for_window(window_id).and_then(app_for_pid);
+    }
+    if tool == "launch_app" {
+        if let Some(bundle_id) = args.get("bundle_id").and_then(Value::as_str) {
+            return Some(TargetIdentity {
+                name: bundle_id.to_owned(),
+                bundle_id: Some(bundle_id.to_owned()),
+                pid: None,
+            });
+        }
+        if let Some(name) = args.get("name").and_then(Value::as_str) {
+            let name = name.trim_end_matches(".app");
+            let name = name.rsplit('/').next().unwrap_or(name);
+            return Some(TargetIdentity {
+                name: name.to_owned(),
+                bundle_id: None,
+                pid: None,
+            });
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,6 +98,21 @@ mod tests {
             refused.structured_content.unwrap()["code"],
             "target_not_allowed"
         );
+    }
+
+    #[test]
+    fn a_call_names_its_app_by_pid_window_or_launch_reference() {
+        assert_eq!(target_app("list_apps", &json!({"pid": 1})), None);
+        assert_eq!(target_app("get_window_state", &json!({"pid": 1})), None);
+        let launched =
+            target_app("launch_app", &json!({"bundle_id": "com.apple.TextEdit"})).unwrap();
+        assert_eq!(launched.bundle_id.as_deref(), Some("com.apple.TextEdit"));
+        let named = target_app(
+            "launch_app",
+            &json!({"name": "/System/Applications/TextEdit.app"}),
+        )
+        .unwrap();
+        assert_eq!(named.name, "TextEdit");
     }
 
     #[test]

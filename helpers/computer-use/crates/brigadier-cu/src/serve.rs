@@ -1289,6 +1289,7 @@ fn daemon_permission_status(
     external_permission_ready: bool,
 ) -> serde_json::Value {
     let status = platform_macos::permissions::current_status();
+    crate::lifecycle::record_permissions(status.accessibility, status.screen_recording);
     let panel = platform_macos::permissions::panel::lifecycle();
     let recovery = platform_macos::permissions::gate::recovery_lifecycle();
     serde_json::json!({
@@ -2157,6 +2158,42 @@ pub async fn run_serve_with_owner(
                                     (serde_json::to_string(&response).unwrap() + "\n").as_bytes()
                                 ).await;
                             }
+                            "agent_sessions" => {
+                                let resp = DaemonResponse::ok(crate::agent_apps::list());
+                                let _ = writer.write_all(
+                                    (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                ).await;
+                            }
+                            "stop_app" => {
+                                let field = |key: &str| {
+                                    req.args
+                                        .as_ref()
+                                        .and_then(|args| args.get(key))
+                                        .and_then(serde_json::Value::as_str)
+                                        .filter(|value| !value.is_empty())
+                                        .map(str::to_owned)
+                                };
+                                let resp = match (host_request_authorized, field("session"), field("app")) {
+                                    (false, _, _) => DaemonResponse::err(
+                                        "Unauthorized host-only daemon request".to_owned(),
+                                        77,
+                                    ),
+                                    (true, Some(session), Some(app)) => {
+                                        let stop = crate::agent_apps::stop(&session, field("bundle_id"), app);
+                                        DaemonResponse::ok(serde_json::json!({
+                                            "stopped": true,
+                                            "shims": stop.shims,
+                                        }))
+                                    }
+                                    _ => DaemonResponse::err(
+                                        "stop_app needs `session` and `app`".to_owned(),
+                                        64,
+                                    ),
+                                };
+                                let _ = writer.write_all(
+                                    (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                ).await;
+                            }
                             "health" => {
                                 // A daemon whose main loop stopped running is
                                 // hung even though this socket thread answers.
@@ -2393,6 +2430,34 @@ pub async fn run_serve_with_owner(
                                     ).await;
                                     continue;
                                 }
+                                // Note the app a Brigadier agent acts on, and refuse
+                                // one the user stopped it from using.
+                                #[cfg(target_os = "macos")]
+                                if let Some(host_session) = args
+                                    .get(cu_core::HOST_SESSION_ARG)
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::to_owned)
+                                {
+                                    let app = platform_macos::target_guard::target_app(&tool_name, &args)
+                                        .map(|target| crate::agent_apps::App {
+                                            name: target.name,
+                                            bundle_id: target.bundle_id,
+                                            pid: target.pid,
+                                        });
+                                    if let Some(message) =
+                                        crate::agent_apps::note_call(&host_session, activity_peer_pid, app)
+                                    {
+                                        let resp = DaemonResponse::ok(serde_json::json!({
+                                            "content": [{"type": "text", "text": message}],
+                                            "isError": true,
+                                            "structuredContent": {"error": "stopped_by_user", "message": message},
+                                        }));
+                                        let _ = writer.write_all(
+                                            (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                        ).await;
+                                        continue;
+                                    }
+                                }
                                 // Activity log (computer-use.md section 4): the
                                 // gate refuses calls the user stopped or paused
                                 // and records every call that runs.
@@ -2478,6 +2543,9 @@ pub async fn run_serve_with_owner(
                                         cu_core::session::hold_session(sid);
                                     }
                                     control_session_id = Some(sid.to_owned());
+                                    if let Some(host) = crate::agent_apps::host_session_of(sid) {
+                                        crate::agent_apps::shim_connected(host, activity_peer_pid);
+                                    }
                                 }
                                 let resp = DaemonResponse::ok(
                                     serde_json::json!({
@@ -2546,6 +2614,7 @@ pub async fn run_serve_with_owner(
                     // idempotent, so racing a legacy explicit session_end is
                     // benign.
                     if let Some(sid) = control_session_id {
+                        crate::agent_apps::shim_gone(activity_peer_pid);
                         cu_core::session::release_session(&sid);
                         {
                             // stop_owner can SYNCHRONOUSLY finalize the recording's
