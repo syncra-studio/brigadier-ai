@@ -6,7 +6,7 @@
 const PREFIX = "brigadier.document.";
 
 export function documentText(id: string): string {
-  return localStorage.getItem(PREFIX + id) ?? "";
+  return localStorage.getItem(PREFIX + id) ?? localStorage.getItem(PREFIX + id + ".saved") ?? "";
 }
 
 /** Whether the draft is what was last saved to its file (never saved: whether it is empty). */

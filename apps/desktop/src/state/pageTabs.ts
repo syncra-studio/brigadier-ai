@@ -17,21 +17,26 @@ type MakeIpc = {
 /** The page made for each tab, so a reopened or remounted tab never makes a second one. */
 const making = new Map<string, Promise<string>>();
 
+function attachPage(tabId: string, pageId: string): string {
+  for (const [conversationId, session] of Object.entries(useSessionTabs.getState().sessions)) {
+    if (!session.tabs.some((entry) => entry.id === tabId && entry.kind === "page" && !entry.pageId)) continue;
+    changeSessionTab(conversationId, tabId, (current) => current.kind === "page" && !current.pageId
+      ? { kind: "page", id: current.id, opener: current.opener, pageId, title: current.title } : current);
+  }
+  return pageId;
+}
+
 export function ensurePage(tab: PageTabState, ipc: MakeIpc = { create: pageCreate, write: pageWrite }): Promise<string> {
   if (tab.pageId) return Promise.resolve(tab.pageId);
   const pending = making.get(tab.id);
-  if (pending) return pending;
+  if (pending) return pending.then((pageId) => attachPage(tab.id, pageId));
   const made = (async () => {
     const page = await ipc.create();
     if (tab.draft) {
       const outcome = await ipc.write(page.id, { title: tab.title, emoji: null, body: documentText(tab.draft) }, page.revision);
       if (outcome.type !== "saved") throw new Error("Could not move the draft into a page.");
     }
-    for (const [conversationId, session] of Object.entries(useSessionTabs.getState().sessions)) {
-      if (!session.tabs.some((entry) => entry.id === tab.id)) continue;
-      changeSessionTab(conversationId, tab.id, (current) => current.kind === "page"
-        ? { kind: "page", id: current.id, opener: current.opener, pageId: page.id, title: current.title } : current);
-    }
+    attachPage(tab.id, page.id);
     if (tab.draft) discardDocument(tab.draft);
     return page.id;
   })();

@@ -18,7 +18,7 @@ const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, closeOtherTab
   replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs,
   sideChatName, sideChatTitle } = await import("./sessionTabs");
 const { documentText, documentIsSaved } = await import("./documentDrafts");
-const { migrateDrafts } = await import("./pageTabs");
+const { ensurePage, migrateDrafts } = await import("./pageTabs");
 
 test("side chat pruning preserves plain chats, unknown parents and referenced session chats", () => {
   const conversations = [
@@ -196,6 +196,43 @@ test("unsaved drafts whose tab was closed survive rehydration and become recent 
   });
   assert.deepEqual(written, ["last unsaved words"]);
   assert.equal(data.has("brigadier.document.document:closed-dirty"), false);
+});
+
+test("reopening a draft after its page was made while closed attaches the saved page", async () => {
+  data.clear();
+  const draft = "document:closed-during-create";
+  const tab = { kind: "page" as const, id: draft, opener: CHAT_TAB, pageId: null, title: "Recovered", draft };
+  useSessionTabs.setState({ sessions: { creation: { tabs: [tab], active: tab.id } } });
+  data.set(`brigadier.document.${draft}`, "Kept draft text");
+  let creates = 0;
+  const writes: string[] = [];
+  const ipc = {
+    create: async () => { creates += 1; return { id: "a".repeat(32), revision: "r0", content: { title: "", emoji: null, body: "" }, createdMs: 0, updatedMs: 0 }; },
+    write: async (_id: string, content: { body: string }) => { writes.push(content.body); return { type: "saved" as const, revision: "r1" }; },
+  };
+  const pending = ensurePage(tab, ipc);
+  closeTab("creation", tab.id);
+  await pending;
+  assert.equal(data.has(`brigadier.document.${draft}`), false, "the draft is durable before its key goes");
+  assert.equal(reopenTab("creation"), true);
+  const reopened = sessionTabs("creation").tabs[0]!;
+  assert.equal(reopened.kind, "page");
+  if (reopened.kind !== "page") throw new Error("Expected a page");
+  await ensurePage(reopened, ipc);
+  const attached = sessionTabs("creation").tabs[0]!;
+  assert.equal(attached.kind === "page" && attached.pageId, "a".repeat(32));
+  assert.equal(creates, 1);
+  assert.deepEqual(writes, ["Kept draft text"]);
+});
+
+test("a legacy draft with only its saved snapshot still preserves the saved text", () => {
+  data.clear();
+  data.set("brigadier.document.snapshot-only.saved", "Saved outside the checkout");
+  assert.equal(documentText("snapshot-only"), "Saved outside the checkout");
+  assert.equal(documentIsSaved("snapshot-only", "/elsewhere/notes.txt"), true);
+  data.set("brigadier.document.snapshot-only", "");
+  assert.equal(documentText("snapshot-only"), "", "an explicitly emptied draft stays empty");
+  assert.equal(documentIsSaved("snapshot-only", "/elsewhere/notes.txt"), false);
 });
 
 test("OSC folders reject remote hosts and decode Windows drive paths", () => {
