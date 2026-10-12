@@ -6,7 +6,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   const seen = JSON.parse(await renderFixturePage(t, "toolbar.html", "toolbar-result", 9500)) as Record<string, unknown>;
   assert.deepEqual(seen.sessionControls, ["Context", "Terminal", "Right sidebar"]);
   assert.deepEqual(seen.draftControls, ["Context", "Terminal", "Right sidebar"]);
-  assert.deepEqual(seen.views, ["Files", "Source"]);
+  assert.deepEqual(seen.views, ["Files", "Search", "Source"]);
   assert.deepEqual(seen.chatControls, ["Context", "Terminal"]);
   assert.equal(seen.files, "files");
   assert.equal(seen.closedFiles, null);
@@ -25,6 +25,9 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   for (const field of ["initialRight", "filesRight", "removedKeyRight", "closedRight", "previewRight"]) assert.equal(seen[field], "collapsed", field);
   for (const field of ["workerRight", "composerRight", "contextWorkerRight"]) assert.equal(seen[field], "expanded", field);
   assert.equal(seen.workerTab, "workers");
+  assert.equal(seen.draftSearch, "search", "⇧⌘F shows Search");
+  assert.equal(seen.searchKeyFocus, "Search", "with its field taking the keyboard");
+  assert.equal(seen.draftSearchReplace, false, "a draft making its own copy has no Replace");
   for (const field of ["dockClosedSlide", "dockOpenSlide"]) {
     assert.deepEqual(seen[field], { transitionProperty: "width", transitionDuration: "0.3s", sidebarEase: true, reducedMotion: true },
       `${field}: the right sidebar stays in the page and its width slides on the left sidebar's spring, and not with reduced motion`);

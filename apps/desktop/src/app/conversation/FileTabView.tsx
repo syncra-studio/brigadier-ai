@@ -32,6 +32,7 @@ import { useCheckoutChanges } from "@/state/board";
 import type { FileTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
+import { onWorkspaceChanged } from "@/state/workspaceCache";
 
 /**
  * A file tab: one of the session checkout's files, read only, with its line numbers and
@@ -109,8 +110,13 @@ export function FileTabView({
     if (!active) return;
     const readAgain = () => setAgain((count) => count + 1);
     window.addEventListener("focus", readAgain);
-    return () => window.removeEventListener("focus", readAgain);
-  }, [active]);
+    // The right sidebar hears the checkout change while it shows (a replace there, say).
+    const unsubscribe = onWorkspaceChanged({ type: "conversation", conversationId }, readAgain);
+    return () => {
+      window.removeEventListener("focus", readAgain);
+      unsubscribe();
+    };
+  }, [active, conversationId]);
   const read = useFile(conversationId, tab.path, again);
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const mac = useApp((s) => s.info?.platform === "macos");

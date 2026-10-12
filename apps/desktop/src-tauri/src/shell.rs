@@ -259,6 +259,7 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
                 ("sidebar", "Toggle Sidebar", "CmdOrCtrl+B"),
                 ("right-sidebar", "Toggle Right Sidebar", "Alt+CmdOrCtrl+B"),
                 ("show-files", "Files", "CmdOrCtrl+Shift+E"),
+                ("show-search", "Search", "CmdOrCtrl+Shift+F"),
                 ("show-source", "Source", "Ctrl+Shift+G"),
                 ("back", "Back", "CmdOrCtrl+["),
                 ("forward", "Forward", "CmdOrCtrl+]"),

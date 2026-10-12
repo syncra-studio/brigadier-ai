@@ -2,14 +2,15 @@ import { createContext, type CSSProperties, useCallback, useContext, useEffect, 
 
 import { FilesTab } from "@/app/conversation/FilesTab";
 import { ProjectDraftPane } from "@/app/conversation/ProjectDraftPane";
+import { SearchPanel } from "@/app/conversation/SearchPanel";
 import { SourcePanel } from "@/app/conversation/SourcePanel";
 import { shortcutKeys } from "@/app/shortcutCatalog";
-import { FilesGlyph, SidebarRightGlyph, SidebarRightOffGlyph, SourceControlGlyph } from "@/components/glyphs/codicons";
+import { FilesGlyph, SearchGlyph, SidebarRightGlyph, SidebarRightOffGlyph, SourceControlGlyph } from "@/components/glyphs/codicons";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { cn } from "@/lib/utils";
 import { browserFocus } from "@/ipc/client";
-import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
+import { CHAT_TAB, openFileTab, useSessionTabs } from "@/state/sessionTabs";
 import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, workspacePaneKey, type WorkspacePaneTab } from "@/state/workspacePane";
 import { useApp } from "@/state/store";
 import { prefetchWorkspace, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
@@ -18,6 +19,7 @@ import { prefetchWorkspace, useCheckoutKey, watchWorkspace, type WorkspaceTarget
 /** The right sidebar's views, in its icon row's order. */
 const VIEWS = [
   { id: "files", title: "Files", shortcut: "show-files", Icon: FilesGlyph },
+  { id: "search", title: "Search", shortcut: "show-search", Icon: SearchGlyph },
   { id: "source", title: "Source", shortcut: "show-source", Icon: SourceControlGlyph },
 ] as const satisfies readonly { id: WorkspacePaneTab; title: string; shortcut: string; Icon: unknown }[];
 
@@ -70,14 +72,13 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
     if (mac && !document.hasFocus()) void browserFocus(null).then(act).catch(act);
     else act();
   }, [mac]);
-  // A view's key opens the sidebar on it; pressed again while it shows, it takes the keyboard there.
+  // A view's key opens the sidebar on it; pressed again while it shows, it takes the keyboard
+  // there. Search's takes it at once, in its field.
+  const [focusRequest, setFocusRequest] = useState(0);
   const show = useCallback((tab: WorkspacePaneTab) => {
-    if (open && active === tab) {
-      document.getElementById("workspace-pane-content")
-        ?.querySelector<HTMLElement>('input, textarea, button, [tabindex="0"]')?.focus({ preventScroll: true });
-    } else {
-      select(tab);
-    }
+    const shown = open && active === tab;
+    if (!shown) select(tab);
+    if (shown || tab === "search") setFocusRequest((count) => count + 1);
   }, [open, active, select]);
   useEffect(() => {
     if (!enabled) return;
@@ -100,8 +101,8 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
   return useMemo(() => ({
     ...size, enabled, open: enabled && open, active, toggleOpen, select, openFilesSearch, prefetch,
     setOpen: setWorkspacePaneOpen, conversationId, projectId, searchRequest, searchHandled,
-    filePlaceholder: placeholder?.id === id ? placeholder.tabId : undefined, fileOpened,
-  }), [size, enabled, open, active, toggleOpen, select, openFilesSearch, conversationId, projectId, searchRequest, searchHandled, placeholder, id, fileOpened, prefetch]);
+    filePlaceholder: placeholder?.id === id ? placeholder.tabId : undefined, fileOpened, focusRequest,
+  }), [size, enabled, open, active, toggleOpen, select, openFilesSearch, conversationId, projectId, searchRequest, searchHandled, placeholder, id, fileOpened, prefetch, focusRequest]);
 }
 
 export const WorkspacePaneContext = createContext<ReturnType<typeof useWorkspacePane> | null>(null);
@@ -151,6 +152,13 @@ export function WorkspacePane() {
     const timer = setTimeout(() => setShown(false), ms);
     return () => clearTimeout(timer);
   }, [open, shown]);
+  // Once the view a key asked for shows, its first control takes the keyboard.
+  const focusRequest = pane?.focusRequest ?? 0;
+  useEffect(() => {
+    if (!focusRequest) return;
+    document.getElementById("workspace-pane-content")
+      ?.querySelector<HTMLElement>('input, textarea, button, [tabindex="0"]')?.focus({ preventScroll: true });
+  }, [focusRequest]);
   if (!pane?.enabled) return null;
   return (
     <aside ref={column} aria-label="Right sidebar" data-slot="workspace-pane" data-state={open ? "expanded" : "collapsed"}
@@ -190,7 +198,8 @@ export function WorkspacePane() {
             {shown && (pane.conversationId ? (
               pane.active === "files" ? <FilesTab key={pane.conversationId} conversationId={pane.conversationId} searchRequest={pane.searchRequest}
                 onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />
-                : <SourcePanel key={pane.conversationId} target={{ type: "conversation", conversationId: pane.conversationId }} />
+                : pane.active === "search" ? <SessionSearch key={pane.conversationId} conversationId={pane.conversationId} />
+                  : <SourcePanel key={pane.conversationId} target={{ type: "conversation", conversationId: pane.conversationId }} />
             ) : pane.projectId && <ProjectDraftPane key={`project:${pane.projectId}`} projectId={pane.projectId} tab={pane.active}
               searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />)}
           </div>
@@ -199,4 +208,15 @@ export function WorkspacePane() {
       {open && <SidebarResizeHandle {...pane} side="right" label="Resize right sidebar" />}
     </aside>
   );
+}
+
+/** A session's Search: a result opens its file at the line; no Replace before its own copy exists. */
+function SessionSearch({ conversationId }: { conversationId: string }) {
+  const target = useMemo(() => ({ type: "conversation", conversationId }) as const, [conversationId]);
+  const waiting = useApp((s) => {
+    const setup = s.conversations[conversationId]?.setup;
+    return setup?.type === "session" && setup.environment.type === "newWorktree" && !setup.environment.path;
+  });
+  const open = useCallback((path: string, line: number, keep: boolean) => openFileTab(conversationId, path, { line, preview: !keep }), [conversationId]);
+  return <SearchPanel target={target} onOpen={open} readOnly={waiting} />;
 }

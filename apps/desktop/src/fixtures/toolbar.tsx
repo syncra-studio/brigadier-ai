@@ -188,7 +188,14 @@ function Fixture() {
     });
     at(6900, () => {
       seen.worktreeSource = buttons('[data-slot="source-panel"]'); seen.worktreeCommitBox = !!document.querySelector('[aria-label="Commit message"]');
-      seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent; setKind("chat");
+      seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent;
+      // ⇧⌘F shows Search with its field taking the keyboard; a draft making its own copy has no Replace.
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+    });
+    at(7000, () => {
+      seen.draftSearch = pane(); seen.searchKeyFocus = document.activeElement?.getAttribute("aria-label");
+      seen.draftSearchReplace = !!document.querySelector('[data-slot="workspace-pane"] input[aria-label="Replace"]');
+      setKind("chat");
     });
     at(7100, () => { click("Context"); });
     at(7300, () => { seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context"); });

@@ -45,6 +45,7 @@ export const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?
   sidebar: { code: "KeyB" },
   "right-sidebar": { code: "KeyB", alt: true },
   "show-files": { code: "KeyE", shift: true },
+  "show-search": { code: "KeyF", shift: true },
   "show-source": { code: "KeyG", control: true, shift: true },
   // The app and File menus' own items, sent as keys only while Settings records a key press.
   settings: { code: "Comma" },

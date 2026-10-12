@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type WorkspacePaneTab = "files" | "source";
+export type WorkspacePaneTab = "files" | "search" | "source";
 export type WorkspacePaneState = { open: boolean; tabs: Record<string, WorkspacePaneTab> };
 export const WORKSPACE_PANE_KEY = "brigadier.workspacePane";
 export const WORKSPACE_PANE_WIDTH_KEY = "brigadier.workspacePaneWidth";
@@ -20,7 +20,7 @@ export function columnsFit(windowWidth: number, leftWidth: number, threadMin: nu
 }
 
 export function isWorkspacePaneTab(tab: unknown): tab is WorkspacePaneTab {
-  return tab === "files" || tab === "source";
+  return tab === "files" || tab === "search" || tab === "source";
 }
 
 export function workspacePaneState(saved: unknown): WorkspacePaneState {
@@ -68,12 +68,13 @@ export function setWorkspacePaneOpen(next: boolean | ((open: boolean) => boolean
   useWorkspacePaneState.setState(({ open }) => ({ open: typeof next === "function" ? next(open) : next }));
 }
 
-/** What a key press asks of the right sidebar: ⌥⌘B shows or hides it, ⇧⌘E shows Files, ⌃⇧G Source. */
+/** What a key press asks of the right sidebar: ⌥⌘B shows or hides it, ⇧⌘E shows Files, ⇧⌘F Search, ⌃⇧G Source. */
 export function workspacePaneKey(event: KeyboardEvent, mac: boolean): "toggle" | WorkspacePaneTab | null {
   if (event.isComposing || event.getModifierState?.("AltGraph")) return null;
   const command = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
   if (command && event.altKey && !event.shiftKey && event.code === "KeyB") return "toggle";
   if (command && event.shiftKey && !event.altKey && event.code === "KeyE") return "files";
+  if (command && event.shiftKey && !event.altKey && event.code === "KeyF") return "search";
   if (event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey && event.code === "KeyG") return "source";
   return null;
 }
