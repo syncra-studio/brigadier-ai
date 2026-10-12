@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
-test("toolbar order, docked pane, Files search and worker/plan-only right panel routes", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "toolbar.html", "toolbar-result", 8500)) as Record<string, unknown>;
+test("toolbar order, docked pane, Files search, draft project folder and worker/plan-only right panel routes", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "toolbar.html", "toolbar-result", 9500)) as Record<string, unknown>;
   assert.deepEqual(seen.sessionControls, ["Context", "Files", "Source", "Terminal"]);
   assert.deepEqual(seen.draftControls, ["Context", "Files", "Source", "Terminal"]);
   assert.deepEqual(seen.chatControls, ["Context", "Terminal"]);
@@ -21,7 +21,14 @@ test("toolbar order, docked pane, Files search and worker/plan-only right panel 
   assert.equal(seen.planTab, "plan");
   assert.equal(seen.previewPopover, true);
   assert.equal(seen.draftFiles, "files");
-  assert.match(String(seen.draftUnavailable), /No files/);
+  assert.match(String(seen.draftTree), /src.*package\.json/);
+  assert.equal(seen.draftComposer, "@package.json ");
+  assert.ok((seen.draftSource as string[]).includes("Stage all"), "a local draft stages in the project folder");
+  assert.equal(seen.draftCommitBox, true);
+  assert.equal(seen.draftNote, false);
+  assert.match(String(seen.worktreeNote), /own copy/);
+  assert.ok(!(seen.worktreeSource as string[]).some((label) => /Stage|Discard/.test(label ?? "")), "a worktree draft only reads");
+  assert.equal(seen.worktreeCommitBox, false);
   assert.equal(seen.chatPane, null);
   assert.match(String(seen.chatText), /Nothing here yet/);
   assert.doesNotMatch(String(seen.chatText), /Plan|Workers/);

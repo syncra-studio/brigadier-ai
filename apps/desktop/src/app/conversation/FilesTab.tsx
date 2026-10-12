@@ -5,19 +5,19 @@ import {
   FolderOpen,
   Search,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCheckoutFiles } from "@/app/conversation/Mentions";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { fuzzyMatch } from "@/components/assistant-ui/elements/fuzzy-match";
-import { listFiles } from "@/state/actions";
+import { listFiles, listProjectFiles } from "@/state/actions";
 import { openFileTab, replaceNewTabWithFile } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 /**
  * The Files panel (⌘P): the session checkout's files as a tree with a search field. A click
  * opens a file in the preview tab (in italic, the next click takes its place); a double click
- * or Enter opens it for good.
+ * or Enter opens it for good. Before a session starts it lists its project folder's files.
  */
 
 /** Opens `path`: in the preview tab, or with `keep` in a tab of its own. */
@@ -28,7 +28,13 @@ const RESULTS = 100;
 /** How long typing pauses before the daemon searches a checkout too big to list whole. */
 const SEARCH_DELAY_MS = 150;
 
-/** The folders open in each session's tree, kept while the app runs. */
+/** A checkout's files as listed (at most so many), and whether there were more. */
+type FileList = { files: string[]; truncated: boolean };
+
+/** The files matching a query in the whole checkout. */
+type Search = (query: string) => Promise<FileList>;
+
+/** The folders open in each session's (or project folder's) tree, kept while the app runs. */
 const openFolders = new Map<string, Set<string>>();
 
 function baseName(path: string): string {
@@ -91,9 +97,14 @@ export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled, r
   replaceTabId?: string | undefined;
   onFileOpened?: (() => void) | undefined;
 }) {
+  const conversation = useApp((s) => s.conversations[conversationId]);
+  const list = useCheckoutFiles(conversation ?? null);
+  const search = useCallback((query: string) => listFiles(conversationId, query), [conversationId]);
   return (
     <FileBrowser
-      conversationId={conversationId}
+      scope={conversationId}
+      list={list}
+      search={search}
       searchRequest={searchRequest}
       onSearchHandled={onSearchHandled}
       onOpen={(path, keep) => {
@@ -105,13 +116,64 @@ export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled, r
   );
 }
 
+/**
+ * The Files pane before a session starts: its project folder's files. There are no tabs yet, so
+ * opening a file is up to `onOpen`.
+ */
+export function ProjectFiles({ projectId, searchRequest, onSearchHandled, onOpen }: {
+  projectId: string;
+  searchRequest: number;
+  onSearchHandled: () => void;
+  onOpen: (path: string) => void;
+}) {
+  const list = useProjectFiles(projectId);
+  const search = useCallback((query: string) => listProjectFiles(projectId, query), [projectId]);
+  return (
+    <FileBrowser
+      scope={`project:${projectId}`}
+      list={list}
+      search={search}
+      searchRequest={searchRequest}
+      onSearchHandled={onSearchHandled}
+      onOpen={(path) => onOpen(path)}
+    />
+  );
+}
+
+/** A project folder's files: read when shown, and again when the window comes back. */
+function useProjectFiles(projectId: string): FileList | null {
+  const [read, setRead] = useState<{ projectId: string; list: FileList } | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      listProjectFiles(projectId)
+        .then((list) => live && setRead({ projectId, list }))
+        .catch((error: unknown) => {
+          console.error("listing the project's files failed", error);
+          if (live) setRead((previous) => previous?.projectId === projectId ? previous : { projectId, list: { files: [], truncated: false } });
+        });
+    void load();
+    window.addEventListener("focus", load);
+    return () => {
+      live = false;
+      window.removeEventListener("focus", load);
+    };
+  }, [projectId]);
+  return read?.projectId === projectId ? read.list : null;
+}
+
 function FileBrowser({
-  conversationId,
+  scope,
+  list,
+  search: searchFiles,
   onOpen,
   searchRequest,
   onSearchHandled,
 }: {
-  conversationId: string;
+  /** Whose files: what the open folders are remembered under. */
+  scope: string;
+  list: FileList | null;
+  search: Search;
   onOpen: OnOpen;
   searchRequest: number;
   onSearchHandled?: (() => void) | undefined;
@@ -123,16 +185,14 @@ function FileBrowser({
       onSearchHandled?.();
     }
   }, [searchRequest, onSearchHandled]);
-  const conversation = useApp((s) => s.conversations[conversationId]);
-  const list = useCheckoutFiles(conversation ?? null);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<ReadonlySet<string>>(
-    () => openFolders.get(conversationId) ?? new Set(),
+    () => openFolders.get(scope) ?? new Set(),
   );
   const [active, setActive] = useState(0);
   const tree = useMemo(() => buildTree(list?.files ?? []), [list]);
   const rows = useMemo(() => visibleRows(tree, open), [tree, open]);
-  const searched = useSearchedFiles(conversationId, list?.truncated ?? false, query.trim());
+  const searched = useSearchedFiles(scope, searchFiles, list?.truncated ?? false, query.trim());
   const results = useMemo(() => {
     const want = query.trim();
     if (!want || !list) return null;
@@ -153,7 +213,7 @@ function FileBrowser({
     const next = new Set(open);
     if (next.has(path)) next.delete(path);
     else next.add(path);
-    openFolders.set(conversationId, next);
+    openFolders.set(scope, next);
     setOpen(next);
   };
 
@@ -240,24 +300,24 @@ function FileBrowser({
  * When the checkout has more files than the list holds, the files matching `query` from the
  * whole checkout, searched by the daemon once typing pauses; null otherwise, or until then.
  */
-function useSearchedFiles(conversationId: string, truncated: boolean, query: string): string[] | null {
-  const [found, setFound] = useState<{ conversationId: string; query: string; files: string[] } | null>(
+function useSearchedFiles(scope: string, search: Search, truncated: boolean, query: string): string[] | null {
+  const [found, setFound] = useState<{ scope: string; query: string; files: string[] } | null>(
     null,
   );
   useEffect(() => {
     if (!truncated || !query) return;
     let live = true;
     const timer = setTimeout(() => {
-      listFiles(conversationId, query)
-        .then(({ files }) => live && setFound({ conversationId, query, files }))
+      search(query)
+        .then(({ files }) => live && setFound({ scope, query, files }))
         .catch(() => undefined);
     }, SEARCH_DELAY_MS);
     return () => {
       live = false;
       clearTimeout(timer);
     };
-  }, [conversationId, truncated, query]);
-  return truncated && found?.conversationId === conversationId && found.query === query
+  }, [scope, search, truncated, query]);
+  return truncated && found?.scope === scope && found.query === query
     ? found.files
     : null;
 }

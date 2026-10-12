@@ -8,7 +8,7 @@ import {
   Undo,
   UploadDocuments,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, type ReactNode, useCallback, useEffect, useState } from "react";
+import { type FC, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Kbd } from "@/components/ui/kbd";
 import { request } from "@/ipc/client";
-import type { SourceFile, SourceScope, SourceState, SourceStatus } from "@/ipc/generated";
+import type { CommitOutcome, SourceChange, SourceFile, SourceScope, SourceState, SourceStatus } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
 import { noteSourceState, setReviewScope } from "@/state/review";
@@ -38,7 +38,52 @@ import { toast } from "@/state/toasts";
  * its letter (M, A, D, R…), to open as a diff in the Review tab, stage or unstage, or discard;
  * then a commit message (blank: a fast model writes one from the staged diff), Commit, and
  * Commit & push when the branch has a remote.
+ *
+ * Before a session starts it shows its project's folder instead. A session that will work in
+ * that folder can stage and commit there already (there is no Review tab yet); one that will
+ * make its own copy only reads it.
  */
+
+/** Whose changes the panel shows: a session's checkout, or the project folder of one not started. */
+export type SourceTarget =
+  | { type: "conversation"; conversationId: string }
+  | { type: "project"; projectId: string; readOnly: boolean };
+
+/** The panel's reads and changes, sent for its target. */
+function sourceCalls(target: SourceTarget) {
+  return target.type === "conversation"
+    ? sessionCalls(target.conversationId)
+    : projectCalls(target.projectId);
+}
+
+function sessionCalls(conversationId: string) {
+  return {
+    read: () => request({ method: "getSourceState", conversationId }),
+    change: (change: SourceChange): Promise<{ state: SourceState }> =>
+      change.type === "stage"
+        ? request({ method: "stageFiles", conversationId, paths: change.paths })
+        : change.type === "unstage"
+          ? request({ method: "unstageFiles", conversationId, paths: change.paths })
+          : request({ method: "discardFiles", conversationId, scope: change.scope, paths: change.paths }),
+    commit: (message: string | null, push: boolean): Promise<{ outcome: CommitOutcome }> =>
+      request({ method: "commitChanges", conversationId, message, includeUnstaged: false, push }),
+  };
+}
+
+function projectCalls(projectId: string) {
+  return {
+    read: () => request({ method: "getProjectSourceState", projectId }),
+    change: (change: SourceChange): Promise<{ state: SourceState }> =>
+      request({ method: "changeProjectSource", projectId, change }),
+    commit: (message: string | null, push: boolean): Promise<{ outcome: CommitOutcome }> =>
+      request({ method: "commitProjectChanges", projectId, message, includeUnstaged: false, push }),
+  };
+}
+
+/** The session a target belongs to, if it has started. */
+function sessionOf(target: SourceTarget): string | null {
+  return target.type === "conversation" ? target.conversationId : null;
+}
 
 /** How often the panel reads the checkout again while it shows: agents change files meanwhile. */
 const REFRESH_MS = 4000;
@@ -68,20 +113,27 @@ const LETTERS: Record<SourceStatus, { letter: string; label: string; className: 
 };
 
 /** The checkout's state, read now, again while it shows, and as the board changes it. */
-function useSourceState(conversationId: string) {
+function useSourceState(target: SourceTarget) {
   const [read, setRead] = useState<{ state: SourceState | null; error: string | null }>({
     state: null,
     error: null,
   });
-  const changeKey = useCheckoutChanges(conversationId);
+  const conversationId = sessionOf(target);
+  const projectId = target.type === "project" ? target.projectId : null;
+  const changeKey = useCheckoutChanges(conversationId ?? "");
+  const calls = useMemo(
+    () => (conversationId ? sessionCalls(conversationId) : projectCalls(projectId ?? "")),
+    [conversationId, projectId],
+  );
   const load = useCallback(() => {
-    request({ method: "getSourceState", conversationId })
+    calls
+      .read()
       .then(({ state }) => {
         setRead({ state, error: null });
-        noteSourceState(conversationId, state);
+        if (conversationId) noteSourceState(conversationId, state);
       })
       .catch((error: unknown) => setRead((current) => ({ state: current.state, error: reason(error) })));
-  }, [conversationId]);
+  }, [calls, conversationId]);
   // A landing, Undo or Reapply changes the checkout at once.
   useEffect(() => {
     if (changeKey) load();
@@ -99,23 +151,27 @@ function useSourceState(conversationId: string) {
   }, [load]);
   const set = (state: SourceState) => {
     setRead({ state, error: null });
-    noteSourceState(conversationId, state);
+    if (conversationId) noteSourceState(conversationId, state);
   };
   return { ...read, set, load };
 }
 
 type Discarding = { scope: SourceScope; files: SourceFile[] };
 
-export function SourcePanel({ conversationId }: { conversationId: string }) {
-  const { state, error, set, load } = useSourceState(conversationId);
+export function SourcePanel({ target }: { target: SourceTarget }) {
+  const { state, error, set, load } = useSourceState(target);
+  const conversationId = sessionOf(target);
+  const readOnly = target.type === "project" && target.readOnly;
+  const calls = sourceCalls(target);
   const [busy, setBusy] = useState(false);
   // A commit reads the staged diff for its message, then commits the index: it stays as is.
   const [committing, setCommitting] = useState(false);
   const locked = busy || committing;
   const [discarding, setDiscarding] = useState<Discarding | null>(null);
-  const review = (path: string, staged: boolean) => {
-    openReviewTab(conversationId, { type: "file", path, staged });
-  };
+  // A diff opens in the session's Review tab; before it starts there is none.
+  const review = conversationId
+    ? (path: string, staged: boolean) => openReviewTab(conversationId, { type: "file", path, staged })
+    : null;
 
   const act = (run: () => Promise<{ state: SourceState }>, failed: string) => {
     setBusy(true);
@@ -125,18 +181,12 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
       .finally(() => setBusy(false));
   };
   const stage = (paths: string[] | null) =>
-    act(() => request({ method: "stageFiles", conversationId, paths }), "Failed to stage");
+    act(() => calls.change({ type: "stage", paths }), "Failed to stage");
   const unstage = (paths: string[] | null) =>
-    act(() => request({ method: "unstageFiles", conversationId, paths }), "Failed to unstage");
+    act(() => calls.change({ type: "unstage", paths }), "Failed to unstage");
   const discard = ({ scope, files }: Discarding, all: boolean) =>
     act(
-      () =>
-        request({
-          method: "discardFiles",
-          conversationId,
-          scope,
-          paths: all ? null : files.map((file) => file.path),
-        }),
+      () => calls.change({ type: "discard", scope, paths: all ? null : files.map((file) => file.path) }),
       "Failed to discard",
     );
 
@@ -146,13 +196,17 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
 
   return (
     <div data-slot="source-panel" className="flex min-h-0 flex-1 flex-col">
-      <CommitBox
-        conversationId={conversationId}
-        state={state}
-        staging={busy}
-        onCommitting={setCommitting}
-        onCommitted={load}
-      />
+      {readOnly ? (
+        <OwnCopyNote state={state} />
+      ) : (
+        <CommitBox
+          target={target}
+          state={state}
+          staging={busy}
+          onCommitting={setCommitting}
+          onCommitted={load}
+        />
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {error && !state && <p className="text-destructive p-2 text-sm">{error}</p>}
         {state && staged.length === 0 && changes.length === 0 && (
@@ -163,7 +217,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
             title="Staged"
             files={staged}
             actions={
-              <TooltipIconButton
+              !readOnly && <TooltipIconButton
                 tooltip="Unstage all"
                 size="icon-xs"
                 disabled={locked}
@@ -177,8 +231,9 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
               <FileRow
                 key={`staged:${file.path}`}
                 file={file}
-                onOpen={() => review(file.path, true)}
+                onOpen={review ? () => review(file.path, true) : null}
               >
+                {!readOnly && <>
                 <TooltipIconButton
                   tooltip="Discard"
                   size="icon-xs"
@@ -195,6 +250,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
                 >
                   <Minus />
                 </TooltipIconButton>
+                </>}
               </FileRow>
             ))}
           </Group>
@@ -204,7 +260,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
             title="Changes"
             files={changes}
             actions={
-              <TooltipIconButton
+              !readOnly && <TooltipIconButton
                 tooltip="Stage all"
                 size="icon-xs"
                 disabled={locked}
@@ -218,8 +274,9 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
               <FileRow
                 key={`changes:${file.path}`}
                 file={file}
-                onOpen={() => review(file.path, false)}
+                onOpen={review ? () => review(file.path, false) : null}
               >
+                {!readOnly && <>
                 <TooltipIconButton
                   tooltip="Discard"
                   size="icon-xs"
@@ -236,6 +293,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
                 >
                   <Plus />
                 </TooltipIconButton>
+                </>}
               </FileRow>
             ))}
           </Group>
@@ -273,27 +331,35 @@ const Group: FC<{ title: string; files: SourceFile[]; actions: ReactNode; childr
   </section>
 );
 
-/** A changed file: click to open its diff; its actions show on hover. */
-const FileRow: FC<{ file: SourceFile; onOpen: () => void; children: ReactNode }> = ({
+/** A changed file: click to open its diff (once there is a Review tab); its actions show on hover. */
+const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; children: ReactNode }> = ({
   file,
   onOpen,
   children,
 }) => {
   const status = LETTERS[file.status];
+  const name = (
+    <>
+      <FileTypeIcon name={file.path} className="size-icon-sm shrink-0" />
+      <span className={cn("shrink-0", file.status === "deleted" && "line-through")}>
+        {baseName(file.path)}
+      </span>
+      <span className="text-muted-foreground min-w-0 truncate text-xs">{dirName(file.path)}</span>
+    </>
+  );
+  const title = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
+  const look = "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm ps-2 text-start text-sm";
   return (
     <li className="group/source-row hover:bg-muted rounded-control flex h-control-sm items-center gap-1 pe-1">
-      <button
-        type="button"
-        title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
-        onClick={onOpen}
-        className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm ps-2 text-start text-sm"
-      >
-        <FileTypeIcon name={file.path} className="size-icon-sm shrink-0" />
-        <span className={cn("shrink-0", file.status === "deleted" && "line-through")}>
-          {baseName(file.path)}
+      {onOpen ? (
+        <button type="button" title={title} onClick={onOpen} className={look}>
+          {name}
+        </button>
+      ) : (
+        <span title={title} className={look}>
+          {name}
         </span>
-        <span className="text-muted-foreground min-w-0 truncate text-xs">{dirName(file.path)}</span>
-      </button>
+      )}
       <span className="hidden shrink-0 items-center group-focus-within/source-row:flex group-hover/source-row:flex">
         {children}
       </span>
@@ -371,13 +437,14 @@ type Busy = null | "commit" | "commitAndPush";
  * Settings › Git switch), Commit ⌘⏎, Commit & push when the branch has a remote, and Review all.
  */
 const CommitBox: FC<{
-  conversationId: string;
+  target: SourceTarget;
   state: SourceState | null;
   /** A stage, unstage or discard is under way. */
   staging: boolean;
   onCommitting: (committing: boolean) => void;
   onCommitted: () => void;
-}> = ({ conversationId, state, staging, onCommitting, onCommitted }) => {
+}> = ({ target, state, staging, onCommitting, onCommitted }) => {
+  const conversationId = sessionOf(target);
   const [message, setMessage] = useState("");
   const [busy, setBusyState] = useState<Busy>(null);
   const setBusy = (next: Busy) => {
@@ -390,13 +457,8 @@ const CommitBox: FC<{
   const commit = (push: boolean) => {
     if (nothing || busy || staging) return;
     setBusy(push ? "commitAndPush" : "commit");
-    request({
-      method: "commitChanges",
-      conversationId,
-      message: message.trim() || null,
-      includeUnstaged: false,
-      push,
-    })
+    sourceCalls(target)
+      .commit(message.trim() || null, push)
       .then(({ outcome }) => {
         const done = outcome.pushed
           ? `Committed and pushed to ${outcome.branch}`
@@ -425,16 +487,18 @@ const CommitBox: FC<{
           </span>
         )}
         <span className="flex-1" />
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={() => {
-            setReviewScope(conversationId, { type: "uncommitted" });
-            openReviewTab(conversationId, { type: "all" });
-          }}
-        >
-          Review all
-        </Button>
+        {conversationId && (
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => {
+              setReviewScope(conversationId, { type: "uncommitted" });
+              openReviewTab(conversationId, { type: "all" });
+            }}
+          >
+            Review all
+          </Button>
+        )}
       </div>
       <textarea
         rows={3}
@@ -498,3 +562,19 @@ const CommitBox: FC<{
     </div>
   );
 };
+
+/**
+ * Over a project folder's changes when the session will make its own copy: the folder's branch,
+ * and that the session's work won't land here, so nothing here can be changed from this pane.
+ */
+const OwnCopyNote: FC<{ state: SourceState | null }> = ({ state }) => (
+  <div className="border-border flex shrink-0 flex-col gap-1 border-b p-2">
+    <div className="text-muted-foreground flex h-control-sm items-center gap-1.5 px-1 text-sm">
+      <Branch className="size-icon-sm shrink-0" />
+      <span className="text-foreground min-w-0 truncate">{state?.branch ?? "…"}</span>
+    </div>
+    <p data-slot="own-copy-note" className="text-muted-foreground px-1 text-xs">
+      This session will work in its own copy
+    </p>
+  </div>
+);

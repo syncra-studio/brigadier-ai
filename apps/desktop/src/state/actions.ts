@@ -319,6 +319,15 @@ export async function listFiles(
   return { files, truncated };
 }
 
+/** A project folder's files, for the Files pane of a session not started yet. */
+export async function listProjectFiles(
+  projectId: string,
+  query: string | null = null,
+): Promise<{ files: string[]; truncated: boolean }> {
+  const { files, truncated } = await request({ method: "listProjectFiles", projectId, query });
+  return { files, truncated };
+}
+
 /** Rates an answer: a message id, or `task:<id>` for a worker's report. */
 export async function rateMessage(
   conversationId: string,

@@ -1,5 +1,5 @@
 import { Branch, Folders } from "@openai/apps-sdk-ui/components/Icon";
-import { createContext, lazy, Suspense, type CSSProperties, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, lazy, Suspense, type CSSProperties, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { TitlebarButton } from "@/components/titlebar-button";
 import { SidebarResizeHandle, useSidebarWidth } from "@/components/ui/sidebar-layout";
@@ -9,6 +9,7 @@ import { useApp } from "@/state/store";
 
 const FilesTab = lazy(() => import("@/app/conversation/FilesTab").then((m) => ({ default: m.FilesTab })));
 const SourcePanel = lazy(() => import("@/app/conversation/SourcePanel").then((m) => ({ default: m.SourcePanel })));
+const ProjectDraftPane = lazy(() => import("@/app/conversation/ProjectDraftPane").then((m) => ({ default: m.ProjectDraftPane })));
 
 export function useWorkspacePane(conversationId: string | null, projectId: string | null, enabled: boolean) {
   const id = conversationId ?? `draft:${projectId ?? "none"}`;
@@ -62,17 +63,8 @@ export function WorkspacePaneToggle({ tab }: { tab: WorkspacePaneTab }) {
   );
 }
 
-export type ProjectDraftPaneProps = {
-  projectId: string;
-  tab: WorkspacePaneTab;
-  searchRequest: number;
-  onSearchHandled: () => void;
-};
-
-/** B2 supplies project-scoped Files and Source through renderProjectDraftPane. */
-export function WorkspacePane({ renderProjectDraftPane }: {
-  renderProjectDraftPane?: (props: ProjectDraftPaneProps) => ReactNode;
-}) {
+/** Files or Source for the open session, or before it starts for its project's folder. */
+export function WorkspacePane() {
   const pane = useContext(WorkspacePaneContext);
   if (!pane?.open) return null;
   return (
@@ -85,32 +77,12 @@ export function WorkspacePane({ renderProjectDraftPane }: {
           {pane.conversationId ? (
             pane.active === "files" ? <FilesTab conversationId={pane.conversationId} searchRequest={pane.searchRequest}
               onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />
-              : <SourcePanel conversationId={pane.conversationId} />
-          ) : pane.projectId && renderProjectDraftPane ? renderProjectDraftPane({ projectId: pane.projectId,
-            tab: pane.active, searchRequest: pane.searchRequest, onSearchHandled: pane.searchHandled })
-            : <DraftPaneUnavailable tab={pane.active} searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />}
+              : <SourcePanel target={{ type: "conversation", conversationId: pane.conversationId }} />
+          ) : pane.projectId && <ProjectDraftPane projectId={pane.projectId} tab={pane.active}
+            searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />}
         </Suspense>
       </div>
       <SidebarResizeHandle {...pane} side="right" label="Resize workspace pane" belowToolbar />
     </aside>
-  );
-}
-
-function DraftPaneUnavailable({ tab, searchRequest, onSearchHandled }: Omit<ProjectDraftPaneProps, "projectId">) {
-  const search = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (tab === "files" && searchRequest > 0) {
-      search.current?.focus({ preventScroll: true });
-      onSearchHandled();
-    }
-  }, [tab, searchRequest, onSearchHandled]);
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {tab === "files" && <div className="border-border border-b p-2">
-        <input ref={search} aria-label="Search files" placeholder="Search files"
-          className="border-border rounded-control h-control-md w-full border bg-transparent px-2 text-sm" />
-      </div>}
-      <p className="text-muted-foreground p-4 text-sm">{tab === "files" ? "No files" : "Source unavailable"}</p>
-    </div>
   );
 }

@@ -104,6 +104,11 @@ export type ResolvedDraft = {
   noModel: boolean;
 };
 
+/** Where a draft session will work: the composer's choice, then the project's last one. */
+export function draftEnvironment(draft: DraftSetup, project: Project | null): EnvironmentKind {
+  return draft.environment ?? project?.prefs.environment ?? "localCheckout";
+}
+
 /** Resolves a draft's setup: the composer's choices, then the project's, then the defaults. */
 export function useResolvedDraft(selection: Selection): ResolvedDraft {
   const projectId =
@@ -121,7 +126,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
   const model = resolveModel(draft.model, kind, project, settings, groups);
   const defaultModel = resolveModel(null, kind, project, settings, groups);
   const permission = resolvePermission(draft.permission, settings);
-  const environment = draft.environment ?? project?.prefs.environment ?? "localCheckout";
+  const environment = draftEnvironment(draft, project);
   const current = repo.info?.currentBranch ?? null;
   const picked = draft.branch ?? current;
   const branch = draft.newBranch ?? picked;

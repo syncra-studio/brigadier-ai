@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ConversationToolbar } from "@/app/conversation/ConversationToolbar";
+import { updateDraft } from "@/app/conversation/draftSetup";
 import { NewTabTools } from "@/app/conversation/NewTabTools";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
 import { PreviewChip } from "@/app/conversation/PreviewChip";
@@ -35,6 +36,9 @@ mockIPC((command, args) => {
   const req = (args as { request: Request }).request;
   if (req.method === "listFiles") return { method: req.method, files: ["README.md"], truncated: false };
   if (req.method === "getSourceState") return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes: [] } };
+  if (req.method === "listProjectFiles") return { method: req.method, files: ["src/app.ts", "package.json"], truncated: false };
+  if (req.method === "getProjectSourceState") return { method: req.method, state: { branch: "trunk", remote: null, upstream: null, ahead: 0, staged: [],
+    changes: [{ path: "src/app.ts", oldPath: null, status: "modified" }] } };
   if (req.method === "previewLog") return { method: req.method, tail: "", url: null };
   return { method: req.method };
 });
@@ -80,15 +84,28 @@ function Fixture() {
     at(4000, () => { seen.contextWorkerRight = right(); click("Open plan"); });
     at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click(); });
     at(4700, () => { seen.previewPopover = !!document.querySelector('[aria-label="Previews"]'); seen.previewRight = right(); click("Files"); document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); setKind("draft"); });
+    const buttons = (scope: string) => [...document.querySelectorAll(`${scope} button`)].map((button) => button.textContent?.trim());
     at(5100, () => { seen.draftControls = controls(); seen.draftRight = right(); click("Files"); });
-    at(5500, () => { seen.draftFiles = pane(); seen.draftUnavailable = document.querySelector('[data-slot="workspace-pane"]')?.textContent; setKind("chat"); });
-    at(5700, () => { click("Context"); });
-    at(5900, () => { seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context"); });
-    at(6300, () => { seen.contextClosed = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed"); click("Context"); });
-    at(6700, () => { seen.contextOpened = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") ?? "false"; const board = useBoard.getState().board!; useBoard.setState({ board: { ...board, context: { usedTokens: 1200, windowTokens: 10000 } } }); });
-    at(7100, () => { seen.chatUsage = document.querySelector('[data-slot="summary-card"]')?.textContent; setResult(JSON.stringify(seen)); });
+    at(5500, () => {
+      seen.draftFiles = pane(); seen.draftTree = document.querySelector('[data-slot="workspace-pane"] [role="tree"]')?.textContent;
+      document.querySelector<HTMLButtonElement>('[data-slot="workspace-pane"] button[title="package.json"]')?.click();
+    });
+    at(5800, () => { seen.draftComposer = runtime.thread.composer.getState().text; click("Source"); });
+    at(6200, () => {
+      seen.draftSource = buttons('[data-slot="source-panel"]'); seen.draftCommitBox = !!document.querySelector('[aria-label="Commit message"]');
+      seen.draftNote = !!document.querySelector('[data-slot="own-copy-note"]'); updateDraft("project", { environment: "newWorktree" });
+    });
+    at(6500, () => {
+      seen.worktreeSource = buttons('[data-slot="source-panel"]'); seen.worktreeCommitBox = !!document.querySelector('[aria-label="Commit message"]');
+      seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent; setKind("chat");
+    });
+    at(6700, () => { click("Context"); });
+    at(6900, () => { seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context"); });
+    at(7300, () => { seen.contextClosed = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed"); click("Context"); });
+    at(7700, () => { seen.contextOpened = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") ?? "false"; const board = useBoard.getState().board!; useBoard.setState({ board: { ...board, context: { usedTokens: 1200, windowTokens: 10000 } } }); });
+    at(8100, () => { seen.chatUsage = document.querySelector('[data-slot="summary-card"]')?.textContent; setResult(JSON.stringify(seen)); });
     return () => timers.forEach(clearTimeout);
-  }, [seen]);
+  }, [seen, runtime]);
   return <AssistantRuntimeProvider runtime={runtime}>
     <WorkspacePaneContext.Provider value={workspace}><RightSidebarContext.Provider value={panel}>
       <div className="bg-background text-foreground flex h-screen">
