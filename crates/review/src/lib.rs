@@ -186,9 +186,19 @@ fn finding(line: &str) -> Option<Finding> {
         .unwrap_or((rest, None));
     Some(Finding {
         severity: format!("P{digit}"),
-        title: title.trim_matches('`').to_owned(),
+        title: unwrap_code_span(title).to_owned(),
         location,
     })
+}
+
+/// A title that is one code span as a whole loses its backticks; any other keeps them all, so
+/// "`--version` ignores extra args" stays markdown the app renders.
+fn unwrap_code_span(title: &str) -> &str {
+    title
+        .strip_prefix('`')
+        .and_then(|inner| inner.strip_suffix('`'))
+        .filter(|inner| !inner.is_empty() && !inner.contains('`'))
+        .unwrap_or(title)
 }
 
 /// What `codex exec --json` printed, as far as a review needs it.
@@ -972,6 +982,13 @@ exit 1"#
         assert_eq!(claude[0].severity, "P0");
         assert_eq!(claude[0].title, "Leaks the token");
         assert_eq!(claude[0].location.as_deref(), Some("crates/x/src/y.rs:1"));
+        // Backticks stay unless the whole title is one code span.
+        let spans = split_findings(
+            "- [P3] `--version` ignores extra args — cli.ts:6\n- [P2] `foo` — a.rs:1\n- [P2] `a` and `b` — a.rs:2",
+        );
+        assert_eq!(spans[0].title, "`--version` ignores extra args");
+        assert_eq!(spans[1].title, "foo");
+        assert_eq!(spans[2].title, "`a` and `b`");
     }
 
     #[test]

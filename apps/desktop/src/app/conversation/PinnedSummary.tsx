@@ -1,7 +1,6 @@
 import { useAui } from "@assistant-ui/react";
 import {
   Branch,
-  ChevronRight,
   Copy,
   DotsHorizontal,
   FolderOpen,
@@ -12,7 +11,6 @@ import {
   PullRequestDraft,
   PullRequestMerged,
   PullRequestOpen,
-  ShieldCheck,
   Tasks,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
@@ -38,7 +36,7 @@ import {
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
 import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
-import { type ReviewLine, useReviewLines } from "@/app/conversation/reviewStatus";
+import { ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { ComputerAccessRow } from "@/app/conversation/ComputerAccessRow";
@@ -763,67 +761,6 @@ function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) 
     >
       {branch}
     </SummaryRow>
-  );
-}
-
-/**
- * The code reviews' outcome, quietly: of the work since the last merge, and of the work that
- * merge took, which keeps its line (a review may still run when the user merges) until the next.
- * The counts are the thread's: what it recorded of each finding (SESSION-FIXES-PLAN.md Q7).
- */
-function ReviewRows({ conversationId }: { conversationId: string }) {
-  const { merged, current } = useReviewLines(conversationId);
-  return (
-    <>
-      {merged && <ReviewLineRow line={merged} />}
-      {current && <ReviewLineRow line={current} />}
-    </>
-  );
-}
-
-/** A review line; a click lists its findings and what became of each. */
-function ReviewLineRow({ line }: { line: ReviewLine }) {
-  const [open, setOpen] = useState(false);
-  if (line.findings.length === 0) {
-    return (
-      <SummaryRow data-slot="review-line" icon={<ShieldCheck />} muted>
-        {line.text}
-      </SummaryRow>
-    );
-  }
-  return (
-    <>
-      <SummaryRowButton
-        data-slot="review-line"
-        aria-expanded={open}
-        icon={<ShieldCheck />}
-        muted
-        onClick={() => setOpen(!open)}
-        meta={<ChevronRight aria-hidden className={cn("size-chevron transition-[rotate] duration-200 motion-reduce:transition-none", open && "rotate-90")} />}
-      >
-        {line.text}
-      </SummaryRowButton>
-      {open && (
-        <ul data-slot="review-findings" className="flex flex-col gap-1.5 ps-9 pe-3 pt-1 pb-2 text-sm">
-          {line.findings.map((finding) => (
-            <li key={finding.id} className="flex min-w-0 items-baseline gap-1.5">
-              <span className="text-muted-foreground shrink-0 font-mono text-xs">{finding.id}</span>
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="text-foreground/90 wrap-break-word">{finding.title}</span>
-                <span className={cn("text-xs wrap-break-word", finding.open ? "text-foreground/80" : "text-muted-foreground")}>
-                  {finding.status}
-                </span>
-                {finding.location && (
-                  <span title={finding.location} className="text-muted-foreground truncate font-mono text-xs">
-                    {finding.location}
-                  </span>
-                )}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </>
   );
 }
 
