@@ -177,6 +177,9 @@ struct ConvState {
     /// Requests whose last turn ended on [`prompts::QUIET`], or said nothing: the thread left
     /// its answer to what wakes it next (see `requests::owed_a_turn`).
     deferred: HashSet<String>,
+    /// Requests a turn has answered (it ended with something said, not [quiet]). A later turn
+    /// for a late event that ends quietly leaves that answer standing: it doesn't defer them.
+    answered: HashSet<String>,
     /// The last error the running turn reported.
     turn_error: Option<String>,
     /// That error, not yet said anywhere: the running turn's request shows it when it fails,
@@ -3389,15 +3392,22 @@ impl SessionManager {
             // pushes the orchestrator past it before the user answers (see `asked_user`).
             let reply = state.last_reply.take();
             // A turn that ended on [quiet], or said nothing, left the request's answer to what
-            // wakes the thread next: a review of its work still running keeps it working.
+            // wakes the thread next: a review of its work still running keeps it working. A
+            // request answered by an earlier turn keeps that answer: a quiet turn for a late
+            // report or addendum doesn't reopen it.
             if let Some(request) = &served {
                 let quiet = reply
                     .as_deref()
                     .is_none_or(|reply| reply.trim_end().ends_with(prompts::QUIET));
                 if status == TurnStatus::Completed && quiet {
-                    state.deferred.insert(request.clone());
+                    if !state.answered.contains(request) {
+                        state.deferred.insert(request.clone());
+                    }
                 } else {
                     state.deferred.remove(request);
+                    if status == TurnStatus::Completed {
+                        state.answered.insert(request.clone());
+                    }
                 }
             }
             if conv.kind == ConversationKind::Session
