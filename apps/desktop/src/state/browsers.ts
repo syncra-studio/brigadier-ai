@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { stepZoom } from "@/app/conversation/browserKeys";
 
 import { browserClose, browserNavigate, browserOpen, browserZoom, revealPath } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
@@ -95,6 +96,10 @@ export async function openPage(
       else if (event.type === "downloaded") downloaded(event.path, event.ok);
       else if (event.type === "escape") {
         if (findState(id).open) closeFind(id);
+      }
+      else if (event.type === "zoomIn") {
+        const zoom = useBrowsers.getState().pages[id]?.zoom ?? 1;
+        zoomPage(id, stepZoom(zoom, 1)).catch(() => {});
       }
       else update(id, { blocked: event.url, loading: false });
     });

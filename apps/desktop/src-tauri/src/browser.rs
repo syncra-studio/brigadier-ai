@@ -261,13 +261,20 @@ const FAVICON: &str = r#"(() => {
   }, { once: true });
 })();"#;
 
-/// Escape has no menu accelerator: forward it from every frame of the native page. This
-/// message can only close the sender's find bar, and gives the page no app commands.
+/// Keys without matching menu accelerators, from every frame of the native page. These
+/// messages only close the sender's find bar or zoom its page, and expose no app commands.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-const PAGE_ESCAPE: &str = r#"(() => {
+const PAGE_KEYS: &str = r#"(() => {
   const send = window.ipc.postMessage.bind(window.ipc);
   window.addEventListener("keydown", (event) => {
-    if (event.isTrusted && event.key === "Escape") send("browser:escape");
+    if (!event.isTrusted) return;
+    if (event.key === "Escape") send("browser:escape");
+    // The menu's Cmd+= does not match Cmd+Shift+= (the + key) in a native page.
+    if (event.metaKey && !event.ctrlKey && !event.altKey &&
+        ((event.shiftKey && event.code === "Equal") || event.code === "NumpadAdd")) {
+      event.preventDefault();
+      send("browser:zoom-in");
+    }
   }, true);
 })();"#;
 
@@ -466,7 +473,7 @@ mod embedded {
     use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder};
 
     use super::{
-        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, PAGE_ESCAPE, Visit, allowed, failed,
+        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, PAGE_KEYS, Visit, allowed, failed,
         favicon_data, web_page,
     };
     use crate::shell::MAIN_WINDOW;
@@ -519,7 +526,7 @@ mod embedded {
             .get_webview_window(MAIN_WINDOW)
             .ok_or_else(|| failed("the window is gone"))?;
         let opener = app.clone();
-        let (on_load, on_title, on_blocked, on_download, on_escape, on_favicon) = (
+        let (on_load, on_title, on_blocked, on_download, on_key, on_favicon) = (
             events.clone(),
             events.clone(),
             events.clone(),
@@ -557,12 +564,16 @@ mod embedded {
             .with_incognito(saved.is_none())
             .with_initialization_script_for_main_only(NO_CAPTURE, false)
             .with_initialization_script_for_main_only(FAVICON, true)
-            .with_initialization_script_for_main_only(PAGE_ESCAPE, false)
+            .with_initialization_script_for_main_only(PAGE_KEYS, false)
             .with_ipc_handler(move |request| {
                 let url = request.uri().to_string();
                 let data_url = request.into_body();
                 if data_url == "browser:escape" {
-                    let _ = on_escape.send(BrowserEvent::Escape);
+                    let _ = on_key.send(BrowserEvent::Escape);
+                    return;
+                }
+                if data_url == "browser:zoom-in" {
+                    let _ = on_key.send(BrowserEvent::ZoomIn);
                     return;
                 }
                 if !web_page(&url) || !favicon_data(&data_url) {

@@ -90,6 +90,8 @@ pub enum BrowserEvent {
     Downloaded { path: String, ok: bool },
     /// Escape in the native page closes this tab's find bar.
     Escape,
+    /// The shifted + key zooms the sender's page in, like the = menu accelerator.
+    ZoomIn,
 }
 
 /// What finding text in a Browser tab's page came to.
