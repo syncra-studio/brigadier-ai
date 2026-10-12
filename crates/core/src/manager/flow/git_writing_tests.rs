@@ -682,3 +682,73 @@ async fn a_project_folder_lists_stages_and_commits_before_a_session_starts() {
     assert_eq!(writes.lock().unwrap().len(), 1);
     flow.stop().await;
 }
+
+/// A project's folder is acted on only through its own changes: a path out of the folder is
+/// refused, a link to a file outside is discarded as the link (its target stays), and a project
+/// that doesn't exist is refused before anything runs.
+#[tokio::test]
+async fn a_project_folder_stays_inside_itself() {
+    use crate::model::ProjectId;
+    use crate::work::{SourceChange, SourceScope};
+
+    let flow = Flow::start(
+        "git-writer-project-bounds",
+        Options::default(),
+        writing(&Writes::default(), |_| Reply::text("unused")),
+    )
+    .await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .expect("a session has a project");
+    let manager = &flow.manager;
+    // Beside the repository, in the flow's own scratch folder.
+    let secret = flow.repo.parent().unwrap().join("secret.txt");
+    std::fs::write(&secret, "keep\n").unwrap();
+
+    for path in ["../secret.txt", "/etc/hosts", ".git/config", "a/../../x"] {
+        let refused = manager
+            .change_project_source(
+                &project,
+                SourceChange::Discard {
+                    scope: SourceScope::Unstaged,
+                    paths: Some(vec![path.to_owned()]),
+                },
+            )
+            .await;
+        assert!(refused.is_err(), "{path} was accepted");
+    }
+
+    std::os::unix::fs::symlink(&secret, flow.repo.join("link.txt")).unwrap();
+    manager
+        .change_project_source(
+            &project,
+            SourceChange::Discard {
+                scope: SourceScope::Unstaged,
+                paths: Some(vec!["link.txt".to_owned()]),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!flow.repo.join("link.txt").exists());
+    assert_eq!(std::fs::read_to_string(&secret).unwrap(), "keep\n");
+
+    let missing = ProjectId("no-such-project".into());
+    assert!(manager.list_project_files(&missing, None).await.is_err());
+    assert!(manager.project_source_state(&missing).await.is_err());
+    assert!(
+        manager
+            .change_project_source(&missing, SourceChange::Stage { paths: None })
+            .await
+            .is_err()
+    );
+    assert!(
+        manager
+            .commit_project_changes(&missing, Some("x".into()), false, false)
+            .await
+            .is_err()
+    );
+    flow.stop().await;
+}
