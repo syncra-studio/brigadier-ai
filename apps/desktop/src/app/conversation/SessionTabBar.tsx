@@ -1,4 +1,4 @@
-import { Archive, Chat, ChatCompose, Dock, Globe, Plus, SquarePlus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, ChatCompose, Dock, Globe, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -14,7 +14,7 @@ import {
 
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
-import { ThreadTitle, UNTITLED } from "@/app/TopBar";
+import { UNTITLED } from "@/app/TopBar";
 import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { takePaneClose } from "@/state/closedPanes";
@@ -184,10 +184,9 @@ function BarDivider({ hidden = false }: { hidden?: boolean }) {
 }
 
 /**
- * A session's top bar. With nothing open it is a title, as a chat's is, with its ⋯ and the toolbar
- * at the end and "+" last. Once something is open it turns into tabs: the chat first, under its
- * title with its ⋯ (never closed or moved), then the tabs it opened, which shrink to their least
- * and then scroll, and "+" right after them.
+ * A session's top bar: always tabs, the chat first under its title with its ⋯ (never closed or
+ * moved), even when it is the only one, then the tabs it opened, which shrink to their least and
+ * then scroll, and "+" right after them.
  * Click to show, drag to reorder, middle-click or Delete to close; a preview tab is in italic
  * until double-clicked. After a close the tabs keep their widths, so the next × lands under the
  * pointer, until it leaves them. While the thread keeps something running for the user, its chip
@@ -219,8 +218,7 @@ export function SessionTabBar({
   }, [id, archived, cwd, browserOn]);
   useTabKeys(id, archived, create);
   const presence = useTabPresence(tabs);
-  const plain = presence.tabs.length === 0;
-  const lock = useCloseLock(plain);
+  const lock = useCloseLock(presence.tabs.length === 0);
   const { listRef, shown, dragging, grip } = useDragReorder<SessionTab, HTMLDivElement>({
     items: presence.tabs,
     idOf: (tab) => tab.id,
@@ -269,36 +267,15 @@ export function SessionTabBar({
     closeTab(id, tab);
   };
   const newTab = (
-    <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className={plain ? undefined : "ms-0.5"}
-      onClick={() => { lock.release(); create("newTab"); }}>{plain ? <SquarePlus /> : <Plus />}</TitlebarButton>
+    <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className="ms-0.5"
+      onClick={() => { lock.release(); create("newTab"); }}><Plus /></TitlebarButton>
   );
   const connecting = connection !== "connected" && (
     <Badge variant="warning" role="status" className="shrink-0">
       {connection === "connecting" ? "Connecting to core…" : "Reconnecting to core…"}
     </Badge>
   );
-  const project = useApp((s) => conversation.projectId ? s.projects[conversation.projectId]?.name ?? null : null);
   const chatTitle = UNTITLED.has(conversation.title) ? "Chat" : conversation.title;
-
-  if (plain) {
-    return (
-      <header
-        data-tauri-drag-region
-        data-slot="session-tabs"
-        data-plain
-        className="h-titlebar ease-sidebar ps-clear-3 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
-      >
-        <ThreadTitle project={project} title={UNTITLED.has(conversation.title) ? "" : conversation.title}
-          session archived={archived} onRename={archived ? undefined : onRename} />
-        {connecting}
-        <PreviewChip conversationId={id} />
-        <ChatActions conversation={conversation} onRename={onRename} />
-        {children}
-        <BarDivider />
-        {newTab}
-      </header>
-    );
-  }
 
   return (
     <header
@@ -541,7 +518,7 @@ function AnimatedTab({ closing, ref: triggerRef, ...props }: React.ComponentProp
  * the pointer. Let go once the pointer has been away from the tabs a moment, on a key or a
  * scroll, when the window loses focus, or when no tab is left.
  */
-function useCloseLock(plain: boolean) {
+function useCloseLock(alone: boolean) {
   const [count, setCount] = useState<number | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const release = useCallback(() => {
@@ -561,7 +538,7 @@ function useCloseLock(plain: boolean) {
     };
   }, [locked, release]);
   useEffect(() => () => clearTimeout(timer.current), []);
-  if (plain && locked) setCount(null);
+  if (alone && locked) setCount(null);
   return {
     count,
     release,

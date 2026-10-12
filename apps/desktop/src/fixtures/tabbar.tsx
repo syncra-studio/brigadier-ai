@@ -93,14 +93,15 @@ function Fixture() {
     const newTab = () => bar().querySelector<HTMLButtonElement>('button[aria-label="New tab"]')!;
     const context = () => document.querySelector<HTMLButtonElement>('button[aria-label="Context"]')!;
     at(500, () => {
+      // Alone, the chat is still a tab: its ⋯ inside it, "+" right after it.
       seen.plain = bar().hasAttribute("data-plain");
-      seen.plainTabs = bar().querySelectorAll('[role="tab"]').length;
-      seen.plainTitle = bar().textContent;
-      seen.plainControls = controls();
+      seen.aloneLabels = labels();
+      seen.aloneChatActions = [...tabEl("chat").querySelectorAll("button")].some((button) => button.textContent === "Chat actions");
+      seen.aloneControls = controls();
+      seen.alonePlusAfterChat = Math.round(box(newTab())!.left - box(tabEl("chat"))!.right);
       newTab().click();
     });
     at(900, () => {
-      seen.opened = bar().hasAttribute("data-plain");
       seen.openedLabels = labels();
       const last = contentTabs().at(-1)!;
       seen.plusAfterLast = Math.round(box(newTab())!.left - box(last)!.right);
@@ -167,7 +168,7 @@ function Fixture() {
       for (const tab of sessionTabs(id).tabs) closeTab(id, tab.id);
     });
     at(3400, () => {
-      seen.back = bar().hasAttribute("data-plain");
+      seen.back = { plain: bar().hasAttribute("data-plain"), labels: labels() };
       setResult(JSON.stringify(seen));
     });
     return () => timers.forEach(clearTimeout);
@@ -241,8 +242,8 @@ async function checkMotionAndMenu() {
   seen.closingRetained = !!closing;
   seen.closingInert = closing?.inert ?? false;
   seen.closeDuration = closing ? getComputedStyle(closing).transitionDuration : null;
-  await ready(() => bar().hasAttribute("data-plain"));
-  seen.lastReturnsPlain = true;
+  await ready(() => !bar().querySelector("[data-closing]") && bar().querySelectorAll('[role="tab"]').length === 1);
+  seen.lastLeavesChat = bar().querySelector('[role="tab"]')?.closest("[data-tab-id]")?.getAttribute("data-tab-id") === "chat";
   await menu("reopen");
   seen.reopened = sessionTabs(id).active === first!.id;
   seen.forwarded = forwarded;
