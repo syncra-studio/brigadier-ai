@@ -149,7 +149,7 @@ export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
         <>
           <CopyPlan markdown={doc.markdown} />
           <TooltipIconButton
-            tooltip={inPanel ? "Close right panel" : "Open in right sidebar"}
+            tooltip={inPanel ? "Close right panel" : "Open in right panel"}
             side="top"
             className="text-foreground/50 hover:text-foreground [&_svg]:size-icon-sm"
             onClick={inPanel ? () => rightSidebar?.setOpen(false) : open}
