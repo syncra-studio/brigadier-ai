@@ -98,13 +98,13 @@ How to work:
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
-- Land finished work with land_phase (no phase needed). Each landing and each commit of yours gets one background review by the other vendor (none for a tip already reviewed, or for what a worker committed after its own review_code); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
+- Land finished work with land_phase (no phase needed). Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
 - "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). Offer propose_merge only once no worker writes. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
-- Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`. A commit that only fixes review findings names them too, `--trailer "{FIXES_TRAILER}: R2.2, R2.3"`: no review of its own, only a re-check of the `high` ones, and a held merge covers it.
+- Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`. One fixing only findings adds `--trailer "{FIXES_TRAILER}: R2.2, R2.3"`; a held merge covers it.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with @remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
 - Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
-- Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. After your own `git push`, call ci_status and do what it says. On [ci … failed], fix it and land the fix the way the watched branch takes changes: a session branch directly; a base branch like `main` only through the usual merge into it here, then push that branch, never a commit the local branch doesn't have. Then call watch_ci again without asking: the user's yes to watching covers the push and the watch, nothing else, and the merge follows its usual rules. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
+- Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. After your own `git push`, call ci_status and do what it says. On [ci … failed], fix it on that branch (`main` only through the usual merge into it here), push it and call watch_ci again without asking: the user's yes to watching covers that, nothing else. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Tools return at once; never wait or poll. Reports, questions, reviews and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report].
 - Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder.
 - Brigadier cleans up after you; use clean_up only if the user asks. Never delete branches, worktrees or temp folders by hand: "Operation not permitted" on another session's branch or folder is Brigadier protecting it, so leave it.{GRILLING}
@@ -1943,7 +1943,7 @@ mod environment_tests {
                     assert!(prompt.contains("only in files you have already read"));
                     assert!(prompt.contains(&format!("--trailer \"{THREAD_TRAILER}\"")));
                     assert!(prompt.contains("How to write code:"));
-                    assert!(prompt.contains("none for a tip already reviewed, or for what a worker committed after its own review_code"));
+                    assert!(prompt.contains("a tip already reviewed isn't reviewed again"));
                     assert!(prompt.contains("none of it is a fixed step"));
                     for name in [
                         "delegate_task",
@@ -2040,9 +2040,7 @@ mod environment_tests {
             assert!(text.contains("Never delete branches, worktrees or temp folders by hand"));
             // After its own push, the thread looks at CI (Q1).
             assert!(text.contains("After your own `git push`, call "));
-            assert!(
-                text.contains("only through the usual merge into it here, then push that branch")
-            );
+            assert!(text.contains("(`main` only through the usual merge into it here), push it"));
             // It routes live looks to the workers (computer use).
             assert!(text.contains("screenshots in the chat only if the user asked; a worker's live check is evidence in its report"));
             assert_eq!(
@@ -2069,8 +2067,9 @@ mod environment_tests {
         // the suggest_full_access hint of the sandboxed levels, bug 8's check prefixes, and
         // the review findings the thread records and sends back to their worker, Q7 and Q6.1,
         // and bug 4's late-event rule, Q3's held merge, Q1's CI watch, Q9's lines
-        // while work runs, bug 6's clean_up and computer use's routing, and Q10's mockup offer).
-        assert!(codex.len() < 15_100, "{}", codex.len());
+        // while work runs, bug 6's clean_up and computer use's routing, Q10's mockup offer, and
+        // the tour's CI fix through the merge and finding-fix trailer).
+        assert!(codex.len() < 15_200, "{}", codex.len());
     }
 
     #[test]
@@ -2450,9 +2449,8 @@ mod environment_tests {
             ProviderKind::Claude,
             true,
         );
-        assert!(prompt.contains("or for what a worker committed after its own review_code"));
         assert!(prompt.contains(&format!(
-            "--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`: no review of its own"
+            "--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it"
         )));
     }
 

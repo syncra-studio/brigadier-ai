@@ -167,6 +167,13 @@ impl Parser {
         let mut out = Vec::new();
         match str_of(&value, "type") {
             Some("stream_event") => {
+                // Claude answers in a turn it started on its own (a background job of its own
+                // ended): nothing of ours was echoed to start it.
+                if str_of(&value, "parent_tool_use_id").is_none()
+                    && value.pointer("/event/type").and_then(Value::as_str) == Some("message_start")
+                {
+                    self.begin_turn(&mut out);
+                }
                 if let Some(event) = value.get("event") {
                     self.stream_event(event, &mut out);
                 }
@@ -344,6 +351,8 @@ impl Parser {
             progress(value, out);
             return;
         }
+        // A turn Claude started on its own, without partial messages.
+        self.begin_turn(out);
         let message_id = str_of(&message, "id").unwrap_or("message").to_owned();
         let Some(blocks) = message.get("content").and_then(Value::as_array) else {
             return;
@@ -460,13 +469,7 @@ impl Parser {
             if text.starts_with("<local-command-") {
                 return;
             }
-            if !self.turn_active {
-                self.turn_active = true;
-                self.turn_error = false;
-                self.interrupting = false;
-                self.turn_started_ms = Some(now_ms());
-                out.push(Output::Event(ProviderEvent::TurnStarted { turn_id: None }));
-            }
+            self.begin_turn(out);
             out.push(Output::Event(ProviderEvent::Message {
                 item_id: str_of(value, "uuid").unwrap_or_default().to_owned(),
                 role: Role::User,
@@ -722,21 +725,38 @@ impl Parser {
             }
             // A background task or sub-agent at work.
             Some("task_started" | "task_progress") => progress(value, out),
+            // Its background jobs (commands, sub-agents) still running, all of them each time.
+            // One that ends starts a turn of its own.
+            Some("background_tasks_changed") => {
+                let running = value
+                    .get("tasks")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
+                out.push(Output::Event(ProviderEvent::BackgroundJobs {
+                    running: u32::try_from(running).unwrap_or(u32::MAX),
+                }));
+            }
             _ => {}
         }
+    }
+
+    /// A turn starts, unless one already runs.
+    fn begin_turn(&mut self, out: &mut Vec<Output>) {
+        if self.turn_active {
+            return;
+        }
+        self.turn_active = true;
+        self.turn_error = false;
+        self.interrupting = false;
+        self.turn_started_ms = Some(now_ms());
+        out.push(Output::Event(ProviderEvent::TurnStarted { turn_id: None }));
     }
 
     /// Claude began compacting: in the running turn when it compacts on its own, else in a
     /// turn of its own (Claude echoes the `/compact` only once it is done).
     fn compaction_started(&mut self, out: &mut Vec<Output>) {
         let automatic = !std::mem::take(&mut self.compact_asked);
-        if !self.turn_active {
-            self.turn_active = true;
-            self.turn_error = false;
-            self.interrupting = false;
-            self.turn_started_ms = Some(now_ms());
-            out.push(Output::Event(ProviderEvent::TurnStarted { turn_id: None }));
-        }
+        self.begin_turn(out);
         self.compacting = Some(automatic);
         out.push(Output::Event(ProviderEvent::CompactionStarted {
             automatic,
@@ -1560,6 +1580,9 @@ mod tests {
     #[test]
     fn a_tool_is_visible_before_its_arguments_finish_and_updates_once() {
         let mut parser = Parser::live();
+        // In a turn, as every tool call is.
+        let echo = json!({"type":"user", "isReplay":true, "message":{"role":"user", "content":"Delegate it."}});
+        parser.feed(&echo.to_string());
         let start = json!({"type":"stream_event", "event":{"type":"content_block_start", "index":1,
             "content_block":{"type":"tool_use", "id":"call", "name":"mcp__brigadier__delegate_task", "input":{}}}});
         let events = parser.feed(&start.to_string());
@@ -1681,6 +1704,57 @@ mod tests {
             "tool_use_id": "toolu_4",
         });
         assert_eq!(progress(&mut parser, task), ["toolu_4"]);
+    }
+
+    /// A turn can end while Claude's own background job still runs: Claude says how many run,
+    /// and the job's end starts a turn of its own, with no message of ours echoed. Shapes as
+    /// Claude Code 2.1.296 streams them (`run_in_background` Bash).
+    #[test]
+    fn a_background_jobs_end_starts_a_turn_of_its_own() {
+        let mut parser = Parser::live();
+        let jobs = |parser: &mut Parser, tasks: Value| -> Vec<u32> {
+            let line =
+                json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": tasks });
+            parser
+                .feed(&line.to_string())
+                .into_iter()
+                .filter_map(|output| match output {
+                    Output::Event(ProviderEvent::BackgroundJobs { running }) => Some(running),
+                    _ => None,
+                })
+                .collect()
+        };
+        let task = json!({ "task_id": "b3dwmq6fl", "task_type": "local_bash",
+                           "description": "Sleep 8 seconds then echo finished" });
+        assert_eq!(jobs(&mut parser, json!([task])), [1]);
+        let result = json!({ "type": "result", "subtype": "success", "is_error": false, "result": "waiting" });
+        parser.feed(&result.to_string());
+        assert!(!parser.turn_active());
+        let notification = json!({ "type": "system", "subtype": "task_notification",
+                                   "task_id": "b3dwmq6fl", "status": "completed" });
+        assert!(parser.feed(&notification.to_string()).is_empty());
+        assert_eq!(jobs(&mut parser, json!([])), [0]);
+        assert!(!parser.turn_active());
+        let reply = json!({ "type": "assistant", "parent_tool_use_id": null,
+                            "message": { "id": "m9", "content": [{ "type": "text", "text": "seen" }] } });
+        let outputs = parser.feed(&reply.to_string());
+        assert!(matches!(
+            outputs.as_slice(),
+            [
+                Output::Event(ProviderEvent::TurnStarted { .. }),
+                Output::Event(ProviderEvent::Message { text, .. }),
+            ] if text == "seen"
+        ));
+        assert!(parser.turn_active());
+        // Partial messages start it at the first one.
+        parser.feed(&result.to_string());
+        let start = json!({ "type": "stream_event", "parent_tool_use_id": null,
+                            "event": { "type": "message_start", "message": { "id": "m10" } } });
+        let outputs = parser.feed(&start.to_string());
+        assert!(matches!(
+            outputs.as_slice(),
+            [Output::Event(ProviderEvent::TurnStarted { .. })]
+        ));
     }
 
     /// Claude's `result` leaves its subagents (the Agent tool) out of `usage`: a turn's usage

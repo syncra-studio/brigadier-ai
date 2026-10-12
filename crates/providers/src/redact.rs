@@ -536,6 +536,7 @@ pub fn redact_event(redactor: &Redactor, event: &mut ProviderEvent) {
         | ProviderEvent::CompactionStarted { .. }
         | ProviderEvent::RateLimits { .. }
         | ProviderEvent::Progress { .. }
+        | ProviderEvent::BackgroundJobs { .. }
         | ProviderEvent::TurnCompleted { .. } => {}
         ProviderEvent::MessageDelta { text, .. }
         | ProviderEvent::Message { text, .. }

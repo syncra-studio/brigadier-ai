@@ -2528,7 +2528,7 @@ impl SessionManager {
             tokio::select! {
                 event = events.recv() => match event {
                     // Never stored.
-                    Some(ProviderEvent::Progress { .. }) => {}
+                    Some(ProviderEvent::Progress { .. } | ProviderEvent::BackgroundJobs { .. }) => {}
                     // Only a session's thread keeps what it read (a Chat only searches the web).
                     Some(event @ ProviderEvent::Looked { .. }) => {
                         if conv.kind == ConversationKind::Session {

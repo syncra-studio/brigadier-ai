@@ -595,6 +595,12 @@ pub enum ProviderEvent {
     Progress {
         item_id: String,
     },
+    /// How many of the CLI's own background jobs (commands, sub-agents) still run. Each one
+    /// that ends starts a turn of its own, so a session that ended its turn with jobs running
+    /// still has work coming. Never stored.
+    BackgroundJobs {
+        running: u32,
+    },
     FileChanges {
         item_id: String,
         changes: Vec<FileChange>,

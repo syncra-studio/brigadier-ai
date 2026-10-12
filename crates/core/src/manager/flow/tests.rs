@@ -1,5 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use brigadier_providers::{ProviderEvent, TurnStatus};
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
@@ -12,6 +14,112 @@ where
     Fut: std::future::Future<Output = Reply> + Send + 'static,
 {
     Arc::new(move |turn| Box::pin(f(turn)))
+}
+
+/// The worker's side of a scripted run where the worker ends its first turn to wait for its
+/// own background job. `ends` says whether the job ends (and its end starts a turn that
+/// reports) or hangs (the wait runs out and the worker is nudged, then reports).
+fn waits_for_its_job(ends: bool, inputs: Arc<Mutex<Vec<String>>>) -> Script {
+    script(move |turn| {
+        let inputs = inputs.clone();
+        async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("[report task-1") {
+                    return Reply::text("Finished.");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "high", "title": "Read files", "kind": "scout",
+                               "spec": "Read the files."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            let first = inputs.lock().unwrap().is_empty();
+            inputs.lock().unwrap().push(turn.input.clone());
+            if !first {
+                let reply = turn
+                    .call("submit_report", json!({"summary": "Read the files."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Reported.");
+            }
+            let events = turn.events.clone();
+            let _ = events
+                .send(ProviderEvent::BackgroundJobs { running: 1 })
+                .await;
+            if ends {
+                // The job ends after the turn: its CLI starts a turn of its own.
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let _ = events
+                        .send(ProviderEvent::BackgroundJobs { running: 0 })
+                        .await;
+                    let _ = events
+                        .send(ProviderEvent::TurnStarted { turn_id: None })
+                        .await;
+                    let reply = turn
+                        .call("submit_report", json!({"summary": "Read the files."}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    let _ = events
+                        .send(ProviderEvent::TurnCompleted {
+                            turn_id: None,
+                            status: TurnStatus::Completed,
+                            duration_ms: Some(1),
+                            usage: None,
+                        })
+                        .await;
+                });
+            }
+            Reply::text("Waiting for my background job; its end starts my next turn.")
+        }
+    })
+}
+
+/// A worker that ends its turn to wait for its own background job (a sub-agent or command run
+/// in the background) is neither nudged nor failed as "stopped without a report": the job's
+/// end starts its next turn, which reports.
+#[tokio::test]
+async fn a_worker_waiting_for_its_own_background_job_is_not_failed() {
+    let inputs = Arc::new(Mutex::new(Vec::new()));
+    let flow = Flow::start(
+        "background-job",
+        Options::default(),
+        waits_for_its_job(true, inputs.clone()),
+    )
+    .await;
+    flow.say("Read the files.").await;
+    let board = flow.settled().await;
+    assert_eq!(Flow::task(&board, 1).state, TaskState::Done);
+    assert_eq!(inputs.lock().unwrap().len(), 1, "never nudged");
+    flow.stop().await;
+}
+
+/// A background job that never ends still gets caught: once the worker stays silent too long,
+/// its wait counts as a turn without a report, and it is nudged.
+#[tokio::test]
+async fn a_hung_background_job_still_gets_the_worker_nudged() {
+    let inputs = Arc::new(Mutex::new(Vec::new()));
+    let flow = Flow::start(
+        "background-hung",
+        Options::default(),
+        waits_for_its_job(false, inputs.clone()),
+    )
+    .await;
+    flow.say("Read the files.").await;
+    let board = flow.settled().await;
+    assert_eq!(Flow::task(&board, 1).state, TaskState::Done);
+    let inputs = inputs.lock().unwrap();
+    assert_eq!(inputs.len(), 2);
+    assert!(
+        inputs[1].contains("without calling submit_report"),
+        "{}",
+        inputs[1]
+    );
+    flow.stop().await;
 }
 
 /// An error that fails a request's turn is said once, by the failed request: no notice above
