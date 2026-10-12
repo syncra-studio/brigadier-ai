@@ -1,5 +1,5 @@
 import { DotsHorizontal, Eye, EyeOff, Plus } from "@openai/apps-sdk-ui/components/Icon";
-import { type ReactNode, useCallback, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
@@ -28,12 +28,30 @@ import {
   renameAccount,
   signInAccount,
 } from "@/state/accounts";
+import { closeSetupTerminal } from "@/state/onboarding";
 
 /** How long after its sign-in ends an account may take to read as signed in. */
 const SIGN_IN_SLACK_MS = 2000;
 
 /** Which account rows show their email: the page's own state, so leaving it hides them again. */
 export type Revealed = { has: (key: string) => boolean; toggle: (key: string) => void };
+
+/** The account rows showing their email, kept only while the page showing them is open. */
+export function useRevealedEmails(): Revealed {
+  const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set());
+  return useMemo(
+    () => ({
+      has: (key: string) => shown.has(key),
+      toggle: (key: string) =>
+        setShown((current) => {
+          const next = new Set(current);
+          if (!next.delete(key)) next.add(key);
+          return next;
+        }),
+    }),
+    [shown],
+  );
+}
 
 /** The key a row's reveal goes by: the account's id, or the provider's own login. */
 export function revealKey(view: AccountView): string {
@@ -64,6 +82,14 @@ export function ProviderAccounts({
   const label = PROVIDER_LABELS[provider];
   const [signing, setSigning] = useState<SigningIn | null>(null);
   const signingId = useRef<string | null>(null);
+  // Off the page: a new account added only after that goes again with its sign-in.
+  const left = useRef(false);
+  useEffect(() => {
+    left.current = false;
+    return () => {
+      left.current = true;
+    };
+  }, []);
   const start = (id: string | null) => {
     signingId.current = id;
     setSigning({ id, fresh: id === null, exitedAtMs: null });
@@ -74,6 +100,11 @@ export function ProviderAccounts({
       const id = signingId.current;
       if (id !== null) return signInAccount(id, cols, rows);
       const { account, terminal } = await addAccount(provider, cols, rows);
+      if (left.current) {
+        closeSetupTerminal(terminal.id);
+        void removeAccount(account.id).catch(() => {});
+        throw new Error("The page closed before the sign-in started.");
+      }
       signingId.current = account.id;
       setSigning((current) => current && { ...current, id: account.id });
       return terminal;
@@ -107,6 +138,13 @@ export function ProviderAccounts({
     }
     void refreshAccounts().catch(() => {});
   };
+  // Leaving with a sign-in under way (another page, the setup closing) cancels it as closing
+  // its row does, so a new account that never signed in doesn't stay behind.
+  const cancel = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    cancel.current = active ? close : null;
+  });
+  useEffect(() => () => cancel.current?.(), []);
 
   return (
     <SettingsCard>

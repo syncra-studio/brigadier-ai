@@ -62,6 +62,19 @@ docs/          plan and design notes
   `overnight_notifications.rs::mac` is the shell's other narrowly scoped unsafe exception:
   its C strings live through each call, Objective-C copies them, and callback tickets carry
   no borrowed pointers. The desktop notification plugin handles the other platforms.
+- `objc2-quartz-core` (macOS, the release wry is built on) with more of `objc2-app-kit`: the
+  first launch's intro holds the window clear (shown, unseen, passing the mouse through) until
+  the page is ready, then shows it with no title-bar buttons, shadow or background above a
+  borderless black window that dims the desktop below the menu bar, ignores the mouse and fades
+  in and out (an AppKit animation with its own easing curve). `apps/desktop/src-tauri/src/intro.rs::mac` is the shell's third narrowly scoped
+  unsafe exception: it retains the main window's NSWindow from Tauri on the main thread, makes
+  the dim window there and keeps it when closed, as it holds it. Hiding the window, a page load
+  and a deadline all end the intro natively, so it never depends on the page to clean up.
+- `spessasynth_core` (a dev dependency of the desktop app, Apache-2.0): renders the first
+  launch's welcome music offline (`apps/desktop/scripts/render-welcome-sound.mjs`) on the
+  sampled instruments of the FluidR3 Mono GM SoundFont (MIT). The SoundFont is downloaded by the
+  script and checked against its SHA-256, never committed; only the rendered
+  `welcome-sound.m4a` ships, with its notice in `apps/desktop/src/app/onboarding/NOTICE.md`.
 - `whisper-rs` (whisper.cpp), `ureq`, `sha2` (brigadierd): dictation turns speech into text on
   this computer; the audio never leaves it. The composer's webview records the microphone and
   streams 16 kHz PCM to the daemon, which feeds it to a short-lived `brigadierd transcribe`

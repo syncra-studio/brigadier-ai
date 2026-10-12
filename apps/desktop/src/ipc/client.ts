@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   AppInfo,
@@ -81,6 +82,34 @@ export function appReady(readyMs: number): Promise<number> {
 /** The startup screen has gone: the window drops its startup backdrop. */
 export function startupFinished(): Promise<void> {
   return invoke("startup_finished");
+}
+
+/**
+ * The first launch's intro, from the window's side (src-tauri/src/intro.rs). Begin stages the
+ * held window and shows it, answering whether it did (`false`: play it inside the window).
+ */
+export function introBegin(): Promise<boolean> {
+  return invoke<boolean>("intro_begin");
+}
+
+/** The burst has opened the window: its own chrome comes back. */
+export function introShaped(): Promise<void> {
+  return invoke("intro_shaped");
+}
+
+/** Ends the intro: the window is restored and the desktop's dim fades out over `fadeMs`. */
+export function introFinish(fadeMs: number): Promise<void> {
+  return invoke("intro_finish", { fadeMs });
+}
+
+/** Shows a window held for the intro normally, without it. */
+export function introRelease(): Promise<void> {
+  return invoke("intro_release");
+}
+
+/** The window ended the intro itself (hidden, or past its deadline). */
+export function onIntroEnded(listener: () => void): Promise<UnlistenFn> {
+  return listen("intro-ended", () => listener());
 }
 
 export function smokeFinish(

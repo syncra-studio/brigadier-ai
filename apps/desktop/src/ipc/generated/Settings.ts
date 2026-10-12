@@ -90,9 +90,18 @@ branchPrefix: string,
  */
 reviewWork: boolean, 
 /**
- * The first-run setup (agents, then projects) was finished or skipped.
+ * The first-run setup (welcome, name, agents, then projects) was finished or skipped.
  */
 onboarded: boolean, 
+/**
+ * The first launch's welcome intro was played through to its Continue, so a setup left
+ * halfway picks up after it.
+ */
+introSeen: boolean, 
+/**
+ * What the user asked to be called (first-run setup, Settings › General). Empty: not given.
+ */
+userName: string, 
 /**
  * When the computer is kept from sleeping.
  */

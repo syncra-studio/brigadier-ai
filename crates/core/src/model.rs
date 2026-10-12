@@ -689,8 +689,13 @@ pub struct Settings {
     /// review starts and nothing waits for one (THREAD-PLAN.md §2 Q12).
     #[serde(default = "default_true")]
     pub review_work: bool,
-    /// The first-run setup (agents, then projects) was finished or skipped.
+    /// The first-run setup (welcome, name, agents, then projects) was finished or skipped.
     pub onboarded: bool,
+    /// The first launch's welcome intro was played through to its Continue, so a setup left
+    /// halfway picks up after it.
+    pub intro_seen: bool,
+    /// What the user asked to be called (first-run setup, Settings › General). Empty: not given.
+    pub user_name: String,
     /// When the computer is kept from sleeping.
     pub keep_awake: KeepAwake,
     /// While kept awake, closing the lid doesn't sleep the computer either (macOS: sleep is
@@ -864,6 +869,8 @@ impl Default for Settings {
             branch_prefix: DEFAULT_BRANCH_PREFIX.to_owned(),
             review_work: true,
             onboarded: false,
+            intro_seen: false,
+            user_name: String::new(),
             keep_awake: KeepAwake::default(),
             keep_awake_lid_closed: false,
             send_shortcut: SendShortcut::default(),

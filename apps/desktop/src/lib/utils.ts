@@ -55,6 +55,7 @@ const twMerge = extendTailwindMerge({
         "traffic-lights",
         "setup",
         "setup-card",
+        "agent-mark",
         "summary-inset",
         "browser-address",
         "browser-site-info",
@@ -71,7 +72,7 @@ const twMerge = extendTailwindMerge({
         "notice-close",
         "notice-close-icon",
       ],
-      container: ["thread", "setup", "summary", "summary-stack", "settings", "settings-wide"],
+      container: ["thread", "setup", "onboarding", "onboarding-agents", "onboarding-detail", "summary", "summary-stack", "settings", "settings-wide"],
       radius: [
         "document",
         "control",

@@ -11,6 +11,7 @@ mod browser;
 mod browser_import;
 mod browser_store;
 mod documents;
+mod intro;
 // WebKit's narrow unsafe boundary (the workspace denies it): see its header and the README.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
@@ -420,7 +421,8 @@ fn startup_backdrop(app: &tauri::AppHandle) -> Option<tauri::utils::config::Wind
 
 /// The window's colour once the app covers it, as before the startup screen had a backdrop
 /// (`backgroundColor` in tauri.conf.json): a resize never shows through to the desktop.
-const WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0x0f, 0x0f, 0x0e, 0xff);
+pub(crate) const WINDOW_BACKGROUND: tauri::window::Color =
+    tauri::window::Color(0x0f, 0x0f, 0x0e, 0xff);
 
 /// Takes the startup backdrop off `window`. Tauri's `set_effects(None)` clears it only on
 /// Windows, so on macOS the blur views it added are removed here: all of them, so none is left
@@ -452,7 +454,8 @@ fn clear_backdrop(window: &tauri::Window) {
 /// The startup screen has gone and the app covers the window: its backdrop goes too.
 #[tauri::command]
 fn startup_finished(app: tauri::AppHandle, window: tauri::Window) {
-    if startup_backdrop(&app).is_some() {
+    // A staged intro keeps the window clear until its burst has opened it (intro.rs).
+    if startup_backdrop(&app).is_some() && !intro::staged() {
         clear_backdrop(&window);
         if let Err(err) = window.set_background_color(Some(WINDOW_BACKGROUND)) {
             tracing::warn!(error = %err, "could not set the window's colour");
@@ -587,7 +590,9 @@ fn main() {
     if cfg!(debug_assertions) && context.config().identifier == RELEASE_IDENTIFIER {
         context.config_mut().identifier = DEBUG_IDENTIFIER.to_owned();
     }
-    if intent.is_some() {
+    // The first launch's intro shows the window itself, once the page is ready (intro.rs).
+    let hold_for_intro = intro::should_hold(first_launch, smoke, intent.is_some());
+    if intent.is_some() || hold_for_intro {
         for window in &mut context.config_mut().app.windows {
             window.visible = false;
         }
@@ -646,6 +651,9 @@ fn main() {
             if intent.is_some() {
                 shell::hide_main(app.handle());
             }
+            if hold_for_intro {
+                intro::hold(app.handle());
+            }
             if intent.is_none()
                 && let Ok(cwd) = std::env::current_dir()
             {
@@ -668,6 +676,8 @@ fn main() {
             if webview.label() == shell::MAIN_WINDOW
                 && payload.event() == tauri::webview::PageLoadEvent::Started
             {
+                // A new page has no intro playing: one staged for the last ends here.
+                intro::interrupt(webview.app_handle());
                 // A new page in the app's webview knows none of the Browser tabs' pages: drop them.
                 let _ = webview.app_handle().run_on_main_thread(browser::close_all);
                 // It starts on the startup screen again, which needs the backdrop behind it
@@ -712,6 +722,10 @@ fn main() {
             login_item::open_login_items,
             app_ready,
             startup_finished,
+            intro::intro_begin,
+            intro::intro_shaped,
+            intro::intro_finish,
+            intro::intro_release,
             smoke_finish,
             pick_folder,
             pick_folders,

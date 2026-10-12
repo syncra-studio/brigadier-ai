@@ -40,6 +40,10 @@ import { useApp } from "@/state/store";
 
 /** The General page's rows, for the page and for Settings search. */
 export const GENERAL_ROWS = {
+  name: {
+    label: "Your name",
+    description: "What Brigadier calls you",
+  },
   density: {
     label: "Density",
     description: "Smaller controls and tighter spacing across the app",
@@ -137,6 +141,7 @@ function AppearanceSection() {
   return (
     <SettingsSection title="Appearance">
       <SettingsCard>
+        <NameRow />
         <SettingsRow
           label={GENERAL_ROWS.density.label}
           description={GENERAL_ROWS.density.description}
@@ -161,6 +166,50 @@ function AppearanceSection() {
         </SettingsRow>
       </SettingsCard>
     </SettingsSection>
+  );
+}
+
+/** The name the app calls the user by: saved as it's left or on Enter; Escape undoes the typing. */
+function NameRow() {
+  const id = useId();
+  const name = useApp((s) => s.settings.userName);
+  // What is typed, while it differs from the setting.
+  const [typed, setTyped] = useState<string | null>(null);
+  const save = useAction();
+
+  const commit = () => {
+    if (typed === null) return;
+    const value = typed.trim();
+    setTyped(null);
+    if (value !== name) save.run(() => setSetting("userName", value));
+  };
+
+  return (
+    <SettingsRow
+      label={GENERAL_ROWS.name.label}
+      description={GENERAL_ROWS.name.description}
+      htmlFor={id}
+      error={save.error}
+    >
+      <Input
+        id={id}
+        autoComplete="given-name"
+        maxLength={80}
+        placeholder="Your name"
+        value={typed ?? name}
+        className="border-input bg-popover h-control-md rounded-control text-label w-48 px-2.5"
+        onChange={(event) => setTyped(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") commit();
+          if (event.key === "Escape") {
+            // Esc here undoes the typing rather than leaving Settings.
+            event.stopPropagation();
+            setTyped(null);
+          }
+        }}
+      />
+    </SettingsRow>
   );
 }
 

@@ -6,7 +6,8 @@ import { useEffect, useRef, useState, type FC, type SVGProps } from "react";
  * also draws the app and menu-bar icons), in the current colour, sized by the caller. The new
  * chat's hero shows it above the heading and spins it while hovered: the columns drift
  * rightward through the disc's outline like a turning globe, each taking the height of the
- * column ahead as it goes, then coast to rest on the master's pose.
+ * column ahead as it goes, then coast to rest on the master's pose. The first launch's intro
+ * turns it the same way once its strokes have gathered.
  */
 
 /** The strokes and bars stand in columns this far apart, the first centred at x 27.2. */
@@ -113,11 +114,17 @@ const markPaths = (offset: number) => {
 type BrigadierGlyphProps = SVGProps<SVGSVGElement> & {
   /** Spin the disc while the pointer is over it. */
   spinOnHover?: boolean;
+  /** Spin the disc while true (the first launch's intro turns it once). */
+  spinning?: boolean;
 };
 
-export const BrigadierGlyph: FC<BrigadierGlyphProps> = ({ spinOnHover = false, ...props }) => {
+export const BrigadierGlyph: FC<BrigadierGlyphProps> = ({
+  spinOnHover = false,
+  spinning = false,
+  ...props
+}) => {
   const [hovered, setHovered] = useState(false);
-  const { stripes, coreBars } = markPaths(useSpinOffset(spinOnHover && hovered));
+  const { stripes, coreBars } = markPaths(useSpinOffset(spinning || (spinOnHover && hovered)));
   return (
     <svg
       viewBox="0 0 256 256"

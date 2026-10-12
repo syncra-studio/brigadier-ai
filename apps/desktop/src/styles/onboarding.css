@@ -1,0 +1,248 @@
+/* The first launch (app/onboarding): the welcome intro, the name, then the setup steps. Its
+   timings and sizes are the "First launch" tokens in tokens.css.
+
+   The intro, from the moment it starts (`data-started` on `.welcome`): the orb, the window it
+   opens into and the waves on the shell's dark are drawn on `.welcome-canvas` (IntroCanvas.tsx);
+   the mark comes up, glowing, and fades away (`.welcome-intro-mark`); the title comes in a letter
+   at a time (StaggerText.tsx); the button under it comes in last, and its animation ending is
+   what makes it usable. Escape (`data-settled`) and reduced motion show the end of all that at
+   once. */
+
+.welcome {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.welcome-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transition: opacity var(--intro-to-name) var(--intro-ease);
+}
+
+/* Continuing, then behind the name, the waves fade out (then go), leaving the same dark; the
+   title and its button fade out first. */
+.welcome:is([data-leaving], [data-step="name"]) .welcome-canvas {
+  opacity: 0;
+}
+
+.welcome[data-leaving] .welcome-copy {
+  opacity: 0;
+  transition: opacity var(--intro-leave) var(--intro-ease);
+}
+
+.welcome-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--intro-mark-size);
+  height: var(--intro-mark-size);
+  margin: calc(var(--intro-mark-size) / -2) 0 0 calc(var(--intro-mark-size) / -2);
+  color: var(--foreground);
+  pointer-events: none;
+}
+
+.welcome-mark > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* The intro's mark at the window's centre, a crisp white with a soft glow: it comes up quickly,
+   to be read just as the music drops, is held, then fades away (only while the intro plays). */
+.welcome-intro-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--intro-held-mark-size);
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  color: #fff;
+  filter: var(--intro-held-mark-glow);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.welcome-intro-mark > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.welcome[data-started]:not([data-settled]) .welcome-intro-mark {
+  animation: intro-mark var(--intro-mark-for) linear var(--intro-mark-at) both;
+}
+
+/* Above the name, the mark rests over the question. */
+.welcome[data-step="name"] .welcome-mark {
+  transform: translateY(-5.5rem) scale(var(--intro-mark-rest));
+  animation: onboarding-in var(--onboarding-step-in) var(--intro-ease) both;
+}
+
+/* The heading and its line, centred; or the name form, below the mark's rest. */
+.welcome-copy {
+  position: absolute;
+  top: calc(50% - 1rem);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: min(var(--container-onboarding), calc(100% - 4rem));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.welcome[data-step="intro"] .welcome-copy {
+  top: 50%;
+  translate: 0 -50%;
+  width: calc(100% - 4rem);
+}
+
+/* The welcome's title: big, bold and white, two centred lines. */
+.welcome-title {
+  font-family: var(--font-display);
+  font-size: var(--welcome-title);
+  line-height: 1.04;
+  letter-spacing: var(--welcome-title-tracking);
+  font-weight: 700;
+  color: #fff;
+}
+
+.welcome-title-line {
+  display: block;
+}
+
+.welcome-heading {
+  font-size: var(--welcome-heading);
+  line-height: 1.15;
+  letter-spacing: var(--onboarding-heading-tracking);
+  font-weight: 500;
+}
+
+.stagger-word {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.stagger-char {
+  display: inline-block;
+  transform-origin: 0 100%;
+}
+
+/* Level with the steps' footer buttons (parts.tsx: pb-8, gap-3, then a text-xs note), so
+   Continue doesn't jump going from the name to the agents. */
+.welcome-continue {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--spacing) * 11 + var(--text-xs--line-height));
+  translate: -50% 0;
+}
+
+/* On the welcome, the button sits right under the title. */
+.welcome[data-step="intro"] .welcome-continue {
+  position: static;
+  translate: none;
+  margin-top: var(--welcome-title-gap);
+}
+
+/* ── Before it starts: nothing but the backdrop ───────────────────────────────────────── */
+
+.welcome[data-step="intro"]:not([data-started], [data-settled]) :is(.welcome-copy, .welcome-continue) {
+  opacity: 0;
+}
+
+/* ── Playing ───────────────────────────────────────────────────────────────────────────── */
+
+.welcome[data-step="intro"][data-started]:not([data-settled]) .welcome-continue {
+  animation: intro-continue-in var(--intro-continue-in) var(--intro-ease) var(--intro-continue) both;
+}
+
+/* ── The name, after the intro ─────────────────────────────────────────────────────────── */
+
+.welcome[data-step="name"] .welcome-copy {
+  animation: onboarding-in var(--onboarding-step-in) var(--intro-ease) both;
+}
+
+/* ── While the window is staged (intro.rs), the page is clear but for the orb ───────────── */
+
+html[data-intro="staged"],
+html[data-intro="staged"] body,
+html[data-intro="staged"] [data-slot="dialog-overlay"],
+html[data-intro="staged"] [data-slot="dialog-content"] {
+  background: transparent;
+  backdrop-filter: none;
+}
+
+html[data-intro="staged"] #root {
+  visibility: hidden;
+}
+
+/* Its share of --intro-mark-for: in over the first 6.8 % (0.14 s, read clearly from about
+   0.1 s), held to 68 %, then a plain fade out over the last 0.65 s. */
+@keyframes intro-mark {
+  0% {
+    opacity: 0;
+    scale: 0.97;
+    animation-timing-function: cubic-bezier(0.4, 0, 0.3, 1);
+  }
+  6.8% {
+    opacity: 1;
+    scale: 1;
+  }
+  68% {
+    opacity: 1;
+    scale: 1;
+    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  }
+  100% {
+    opacity: 0;
+    scale: 1;
+  }
+}
+
+@keyframes intro-continue-in {
+  from {
+    opacity: 0;
+    filter: blur(8px);
+    scale: 0.94;
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    scale: 1;
+  }
+}
+
+/* ── The setup's steps: their lines come in one after another ────────────────────────────── */
+
+.onboarding-step > * {
+  animation: onboarding-in var(--onboarding-step-in) var(--intro-ease) both;
+}
+.onboarding-step > :nth-child(2) { animation-delay: var(--onboarding-stagger); }
+.onboarding-step > :nth-child(3) { animation-delay: calc(var(--onboarding-stagger) * 2); }
+.onboarding-step > :nth-child(n + 4) { animation-delay: calc(var(--onboarding-stagger) * 3); }
+
+.onboarding-heading {
+  font-size: var(--onboarding-heading);
+  line-height: 1.2;
+  letter-spacing: var(--onboarding-heading-tracking);
+  font-weight: 500;
+}
+
+@keyframes onboarding-in {
+  from { opacity: 0; translate: 0 var(--onboarding-rise); }
+  to { opacity: 1; translate: 0 0; }
+}
+
+/* Welcome.tsx settles the intro at once under reduced motion; nothing else moves either. */
+@media (prefers-reduced-motion: reduce) {
+  .welcome *,
+  .onboarding-step > * {
+    animation: none !important;
+  }
+}

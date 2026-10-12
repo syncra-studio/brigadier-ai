@@ -7,7 +7,7 @@ import { useApp } from "@/state/store";
 
 /**
  * The first-run setup: the coding agents (install, sign in), then the projects to add. It
- * shows until finished or skipped once, and again when asked for from Settings.
+ * shows until finished (it can't be skipped), and again when asked for from Settings.
  */
 
 export const useOnboarding = create<{ reopened: boolean }>(() => ({ reopened: false }));

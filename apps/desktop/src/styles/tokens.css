@@ -99,6 +99,9 @@
  *                                             Inspector)
  *               max-w-setup, h-setup          the first-run setup sheet (near full window, capped)
  *               setup-card                    a setup card's minimum width in its auto-filled grid
+ *               max-w-onboarding{,-agents,-detail}  the first-run setup's headings, its two
+ *                                             agent columns, an agent's own page
+ *               size-agent-mark               an agent's large logo in the setup
  *   Radii       rounded-control (buttons, inputs), rounded-surface (menus, popovers),
  *               rounded-dialog, rounded-thread (message bubbles), rounded-composer (the composer
  *               card), rounded-rail (the rail's top corners), rounded-menu (menus), rounded-tooltip,
@@ -392,6 +395,7 @@
   --session-tab-title-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;
+  --spacing-agent-mark: 4.5rem;
   --spacing-user-message: 22.5rem;
   /* Placeholder height for off-screen messages skipped by content-visibility. */
 
@@ -401,6 +405,9 @@
   --container-md: 28rem;
   --container-lg: 32rem;
   --container-setup: min(68rem, calc(100vw - 2rem));
+  --container-onboarding: 45rem;
+  --container-onboarding-agents: 39rem;
+  --container-onboarding-detail: 44rem;
   --container-thread: 52rem;
   --container-settings: 60rem;
   --container-settings-wide: 80rem;
@@ -901,4 +908,53 @@
   /* When "Still starting…" appears (lib/splash.ts gives up waiting at the same time). */
   --splash-late-after: 10s;
   --splash-foot-gap: 1.25rem;
+}
+
+/* ── First launch ───────────────────────────────────────────────────────────────────────────
+   The welcome intro and the setup after it (styles/onboarding.css, app/onboarding), from the
+   moment the intro starts, with its music. The orb and the window it opens into are drawn by
+   app/onboarding/IntroCanvas.tsx: the orb grows into sight from 0.58 s and idles, swells, then
+   bursts out into the window at 4.07 s, filling it by 4.34 s; its light evens out into a mist
+   and the dark comes into focus under it by 4.89 s. The window's chrome comes back at 4.69 s
+   (src-tauri/src/intro.rs dims the desktop from 0.95 s). The welcome sound's moments match
+   (scripts/render-welcome-sound.mjs): the music drops at 4.8 s, as the mark is read; its
+   motion stops as the mark has faded (6.75 s) and its chord rings on under the title from
+   7.2 s; a soft note marks the button at 9 s. */
+:root {
+  /* The mark at the window's centre: up from here, read clearly at 4.8 s as the music drops,
+     held, faded out by the end (6.75 s, when the music's motion stops). */
+  --intro-mark-at: 4.7s;
+  --intro-mark-for: 2.05s;
+  --intro-held-mark-size: clamp(6.5rem, 11vw, 11rem);
+  --intro-held-mark-glow: drop-shadow(0 0 0.5rem rgb(255 255 255 / 0.5)) drop-shadow(0 0 2.5rem rgb(255 255 255 / 0.2));
+  /* The desktop's dim lifts from here, over this long, while the mark is held. */
+  --intro-dim-lift-at: 5.45s;
+  --intro-dim-lift: 0.8s;
+  /* The title, a letter at a time, one line after the other (app/onboarding/StaggerText.tsx):
+     its first letter is seen about 0.12 s after it starts, at 7.2 s. */
+  --intro-heading: 7.08s;
+  --intro-letter-stagger: 35ms;
+  /* The button under it, seen from about 0.03 s after it starts (its note at 9 s). */
+  --intro-continue: 8.97s;
+  --intro-continue-in: 0.45s;
+  /* Continuing: the title fades out, then the name comes in, as the welcome's waves fade
+     from the dark they share with the name step. */
+  --intro-leave: 0.25s;
+  --intro-to-name: 0.6s;
+  --intro-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* The mark above the name field. */
+  --intro-mark-size: 8.5rem;
+  --intro-mark-rest: 0.7;
+  /* A step of the setup coming in: its lines rise this far, this far apart. */
+  --onboarding-step-in: 0.35s;
+  --onboarding-rise: 0.5rem;
+  --onboarding-stagger: 50ms;
+  --onboarding-heading: clamp(1.75rem, 3vw, 2.5rem);
+  /* The name's question, larger than a step's. */
+  --welcome-heading: clamp(2.25rem, 4.5vw, 3.25rem);
+  /* The welcome's two-line title, and the button's distance under it. */
+  --welcome-title: clamp(2.75rem, 6vw, 4.75rem);
+  --welcome-title-tracking: -0.035em;
+  --welcome-title-gap: 1.75rem;
+  --onboarding-heading-tracking: -0.035em;
 }

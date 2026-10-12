@@ -310,6 +310,9 @@ importers:
       oxlint:
         specifier: 1.85.0
         version: 1.85.0
+      spessasynth_core:
+        specifier: 4.3.22
+        version: 4.3.22
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
@@ -3158,6 +3161,12 @@ packages:
 
   space-separated-tokens@2.0.2:
     resolution: {integrity: sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q==}
+
+  spessasynth_core@4.3.22:
+    resolution: {integrity: sha512-qP6NkcZLmTLIs9fCUh2IhZRkd3Junwu8ppD4K0l/0R+Lo4P48d4Rbe8YQ8RlEYyRKFz8HcPM75sXYVQLAb7k4A==}
+
+  stb-vorbis@0.0.6:
+    resolution: {integrity: sha512-CyvjJEGROIdnuZknwFvdOfMIO1ssUxO2OawsXCR3IlbJ8z2IMBjDe8FDxFJqBfLgf1ZOdqvoHAYx3Xk8q9rbbg==}
 
   stringify-entities@4.0.4:
     resolution: {integrity: sha512-IwfBptatlO+QCJUo19AqvrPNqlVMpW9YEL2LIVY+Rpv2qsjCGxaDLNRgeGsQWJhfItebuJhsGSLjaBbNSQ+ieg==}
@@ -6534,6 +6543,12 @@ snapshots:
   source-map-js@1.2.1: {}
 
   space-separated-tokens@2.0.2: {}
+
+  spessasynth_core@4.3.22:
+    dependencies:
+      stb-vorbis: 0.0.6
+
+  stb-vorbis@0.0.6: {}
 
   stringify-entities@4.0.4:
     dependencies:
