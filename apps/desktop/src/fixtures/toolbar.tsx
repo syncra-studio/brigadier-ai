@@ -21,6 +21,7 @@ import type { Conversation, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { showPlanDoc } from "@/state/planDoc";
 import { useApp } from "@/state/store";
+import { emitWorkspaceChanged } from "@/state/workspaceCache";
 
 const id = "toolbar-fixture";
 const conversation: Conversation = { id, kind: "chat", title: "Toolbar", projectId: null,
@@ -34,6 +35,7 @@ useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: { previe
   state: { type: "running" }, startedAtMs: 0, endedAtMs: null,
 } } } });
 let keyboardReturns = 0;
+let projectChanged = false;
 mockIPC((command, args) => {
   if (command === "browser_focus" && (args as { id: string | null }).id === null) keyboardReturns++;
   if (command !== "ipc_request") return null;
@@ -44,7 +46,8 @@ mockIPC((command, args) => {
   if (req.method === "getSourceState") return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes: [] } };
   if (req.method === "listProjectFiles") return { method: req.method, files: ["src/app.ts", "package.json"], truncated: false };
   if (req.method === "getProjectSourceState") return { method: req.method, state: { branch: "trunk", remote: null, upstream: null, ahead: 0, staged: [],
-    changes: [{ path: "src/app.ts", oldPath: null, status: "modified" }] } };
+    changes: [{ path: "src/app.ts", oldPath: null, status: "modified" },
+      ...(projectChanged ? [{ path: "new.ts", oldPath: null, status: "untracked" }] : [])] } };
   if (req.method === "pageList") return { method: req.method, pages: [] };
   if (req.method === "previewLog") return { method: req.method, tail: "", url: null };
   return { method: req.method };
@@ -192,9 +195,15 @@ function Fixture() {
       seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent;
       // ⇧⌘F shows Search with its field taking the keyboard; a draft making its own copy has no Replace.
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+      useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
+    });
+    at(6850, () => {
+      projectChanged = true;
+      emitWorkspaceChanged({ type: "project", projectId: "project" });
     });
     at(7000, () => {
       seen.draftSearch = pane();
+      seen.sourceCountInSearch = document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent;
       seen.selectedTabs = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => [tab.getAttribute("aria-label"), tab.getAttribute("aria-selected"), getComputedStyle(tab).backgroundColor]);
       seen.searchKeyFocus = document.activeElement?.getAttribute("aria-label");
       seen.draftSearchReplace = !!document.querySelector('[data-slot="workspace-pane"] input[aria-label="Replace"]');

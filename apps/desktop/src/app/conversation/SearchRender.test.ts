@@ -14,6 +14,8 @@ test("Search streams grouped results, opens a line, asks again on its options, r
   assert.deepEqual(seen.opened, [["src/app.ts", 3, false]], "a line opens its file there, in the preview tab");
   assert.equal(seen.matchCase, true, "an option asks again");
   assert.equal(seen.replaceTypingSearched, false, "typing a replacement doesn't search");
+  assert.equal(seen.fileConfirm, "Replace 2 matches in 1 file?");
+  assert.equal(seen.noReplaceBeforeConfirm, true);
   assert.equal(seen.confirm, "Replace 3 matches in 2 files?");
   assert.deepEqual(seen.replace, {
     replacement: "bar", matchCase: true,

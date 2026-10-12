@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import type { ReplaceOutcome, SearchFile, SearchQuery, SearchUpdate } from "@/ipc/generated";
 import { request } from "@/ipc/client";
-import { CHECKOUTS_KEPT, emitWorkspaceChanged, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
+import { CACHE_BYTES, CHECKOUTS_KEPT, emitWorkspaceChanged, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
 
 /** What the Search view's fields hold. */
 export type SearchForm = {
@@ -56,10 +56,17 @@ export function sameQuery(a: SearchQuery | null | undefined, b: SearchQuery | nu
  * The state after an update of the search with results for `id`: the newest entry, the oldest
  * past the limit gone. Only the few Searches used last keep their results.
  */
-export function kept(state: SearchState, id: string, change: Partial<Entry>, limit = CHECKOUTS_KEPT): SearchState {
+export function kept(state: SearchState, id: string, change: Partial<Entry>, limit = CHECKOUTS_KEPT, byteLimit = CACHE_BYTES): SearchState {
   const order = [...state.order.filter((other) => other !== id), id];
   const entries = { ...state.entries, [id]: { form: EMPTY_FORM, results: null, ...state.entries[id], ...change } };
   for (const gone of order.splice(0, Math.max(0, order.length - limit))) delete entries[gone];
+  let bytes = order.reduce((sum, key) => sum + JSON.stringify(entries[key]?.results).length * 2, 0);
+  // The active query can be shown while mounted; older results must fit the retained budget.
+  for (const key of order) {
+    if (bytes <= byteLimit || key === id) break;
+    bytes -= JSON.stringify(entries[key]?.results).length * 2;
+    entries[key] = { ...entries[key]!, results: null };
+  }
   return { entries, order };
 }
 
@@ -90,6 +97,7 @@ export function runSearch(target: WorkspaceTarget, query: SearchQuery): void {
   const owner = searchId(target);
   const checkout = workspaceKey(target);
   const token = {};
+  early.clear();
   running = { token, id: null, owner, fresh: true };
   patch(owner, (entry) => ({
     results: entry.results?.checkout === checkout
@@ -97,7 +105,10 @@ export function runSearch(target: WorkspaceTarget, query: SearchQuery): void {
       : { checkout, query, files: [], done: null, error: null },
   }));
   request({ method: "startSearch", target, query }).then(({ id }) => {
-    if (running?.token !== token) return;
+    if (running?.token !== token) {
+      request({ method: "cancelSearch", id }).catch(() => undefined);
+      return;
+    }
     running.id = id;
     const waiting = early.get(id) ?? [];
     early.clear();
@@ -113,9 +124,13 @@ export function runSearch(target: WorkspaceTarget, query: SearchQuery): void {
 
 /** Stops a target's search, if it runs; what it found so far stays. */
 export function stopSearch(target: WorkspaceTarget): void {
-  if (running?.owner !== searchId(target)) return;
+  const owner = searchId(target);
+  const results = useWorkspaceSearch.getState().entries[owner]?.results;
+  if (results && JSON.stringify(results).length * 2 > CACHE_BYTES) patch(owner, { results: null });
+  if (running?.owner !== owner) return;
   if (running.id !== null) request({ method: "cancelSearch", id: running.id }).catch(() => undefined);
   running = null;
+  early.clear();
 }
 
 /** Stops a target's search and forgets its results: the query was cleared. */

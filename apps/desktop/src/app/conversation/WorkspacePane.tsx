@@ -13,7 +13,7 @@ import { browserFocus } from "@/ipc/client";
 import { CHAT_TAB, openFileTab, useSessionTabs } from "@/state/sessionTabs";
 import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, workspacePaneKey, type WorkspacePaneTab } from "@/state/workspacePane";
 import { useApp } from "@/state/store";
-import { prefetchWorkspace, useCachedEntry, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
+import { onWorkspaceChanged, prefetchWorkspace, readSource, useCachedEntry, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
 
 
 /** The right sidebar's views, in its icon row's order. */
@@ -68,6 +68,10 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
     return () => watchWorkspace(null);
   }, [watching]);
   useEffect(watch, [watch, checkout]);
+  useEffect(() => {
+    if (!watching) return;
+    return onWorkspaceChanged(watching, () => { readSource(watching).catch(() => undefined); });
+  }, [watching]);
   const mac = useApp((s) => s.info?.platform === "macos");
   // A native browser page has its own first responder. DOM focus alone cannot take the
   // keyboard back from it when a menu key opens the sidebar's filter or focuses a view.

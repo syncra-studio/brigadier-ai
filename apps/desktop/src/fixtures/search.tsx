@@ -94,6 +94,13 @@ function Fixture() {
       type(field("session", "Replace"), "bar");
       await sleep(400);
       seen.replaceTypingSearched = starts().length !== 2;
+      button("session", "Replace in this file")!.click();
+      await until(() => !!document.querySelector('[role="dialog"]'));
+      seen.fileConfirm = document.querySelector('[role="dialog"] h2')?.textContent;
+      seen.noReplaceBeforeConfirm = !asked.some((req) => req.method === "replaceInFiles");
+      [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Cancel")!.click();
+      await until(() => !document.querySelector('[role="dialog"][data-state="open"]'));
+      await sleep(100);
       button("session", "Replace all")!.click();
       await until(() => !!document.querySelector('[role="dialog"]'));
       seen.confirm = document.querySelector('[role="dialog"] h2')?.textContent;

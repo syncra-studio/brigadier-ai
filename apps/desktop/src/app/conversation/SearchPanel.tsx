@@ -94,14 +94,14 @@ export function SearchPanel({ target, onOpen, readOnly }: {
   }, [target]);
 
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<{ file?: string } | null>(null);
   const [replacing, setReplacing] = useState(false);
   const [outcome, setOutcome] = useState<ReplaceOutcome | { error: string } | null>(null);
   const matches = results?.files.reduce((sum, file) => sum + file.matches, 0) ?? 0;
   const searching = !!results && !results.done && !results.error;
   const replace = (file?: string) => {
-    if (!results) return;
-    setConfirming(false);
+    if (!results || !canReplace) return;
+    setConfirming(null);
     setReplacing(true);
     replaceResults(target, results, form.replace, file)
       .then(setOutcome)
@@ -110,6 +110,8 @@ export function SearchPanel({ target, onOpen, readOnly }: {
   };
   // Only what a finished search found, for the query the fields hold.
   const canReplace = !readOnly && !!results?.done && results.files.length > 0 && !replacing && sameQuery(results.query, query);
+  const confirmedFiles = results?.files.filter((file) => !confirming?.file || file.path === confirming.file) ?? [];
+  const confirmedMatches = confirmedFiles.reduce((sum, file) => sum + file.matches, 0);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -126,8 +128,8 @@ export function SearchPanel({ target, onOpen, readOnly }: {
           </p>
         ) : (
           <Field label="Replace" value={form.replace} onChange={(value) => set({ replace: value })}
-            onEnter={() => canReplace && setConfirming(true)}>
-            <TooltipIconButton tooltip="Replace all" size="icon-xs" disabled={!canReplace} onClick={() => setConfirming(true)}>
+            onEnter={() => canReplace && setConfirming({})}>
+            <TooltipIconButton tooltip="Replace all" size="icon-xs" disabled={!canReplace} onClick={() => setConfirming({})}>
               <ReplaceAllGlyph />
             </TooltipIconButton>
           </Field>
@@ -178,19 +180,19 @@ export function SearchPanel({ target, onOpen, readOnly }: {
                     return next;
                   })}
                   onOpen={onOpen}
-                  onReplace={canReplace ? () => replace(file.path) : null} />
+                  onReplace={canReplace ? () => setConfirming({ file: file.path }) : null} />
               ))}
             </ul>
           </>
         )}
       </div>
-      <Dialog open={confirming} onOpenChange={setConfirming}>
+      <Dialog open={confirming !== null} onOpenChange={(open) => { if (!open) setConfirming(null); }}>
         <DialogContent>
           {results && (
             <>
               <DialogHeader>
                 <DialogTitle>
-                  Replace {plural(matches, "match", "matches")} in {plural(results.files.length, "file")}?
+                  Replace {plural(confirmedMatches, "match", "matches")} in {plural(confirmedFiles.length, "file")}?
                 </DialogTitle>
                 <DialogDescription>
                   {form.replace ? <>Each becomes “{form.replace}”.</> : "Each is deleted."} Files changed since the
@@ -198,8 +200,8 @@ export function SearchPanel({ target, onOpen, readOnly }: {
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
-                <Button variant="ghost" onClick={() => setConfirming(false)}>Cancel</Button>
-                <Button onClick={() => replace()}>Replace</Button>
+                <Button variant="ghost" onClick={() => setConfirming(null)}>Cancel</Button>
+                <Button disabled={!canReplace || confirmedFiles.length === 0} onClick={() => replace(confirming?.file)}>Replace</Button>
               </DialogFooter>
             </>
           )}
