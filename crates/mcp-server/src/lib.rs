@@ -120,7 +120,13 @@ fn reply_result(reply: ToolReply) -> CallToolResult {
             )
         })
         .collect();
-    content.push(ContentBlock::text(reply.text));
+    // An error with no words fails the model's whole turn (the API refuses an empty error result).
+    let text = if reply.is_error && reply.text.trim().is_empty() {
+        "The tool failed without saying why.".to_string()
+    } else {
+        reply.text
+    };
+    content.push(ContentBlock::text(text));
     let mut result = if reply.is_error {
         CallToolResult::error(content)
     } else {
@@ -217,5 +223,19 @@ mod tests {
         assert_eq!(content[1]["text"], "window w2 · image i1");
         // The engine's time rides in `_meta`, out of the model's content.
         assert_eq!(result["_meta"]["brigadier/engine_ms"], 1.25);
+    }
+
+    /// The API refuses an error result with no words, failing the model's whole turn.
+    #[test]
+    fn an_error_reply_is_never_empty() {
+        let result = serde_json::to_value(text_result("  ".into(), true)).unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["content"][0]["text"],
+            "The tool failed without saying why."
+        );
+        // A reply that isn't an error may be empty.
+        let result = serde_json::to_value(text_result(String::new(), false)).unwrap();
+        assert_eq!(result["content"][0]["text"], "");
     }
 }

@@ -385,6 +385,18 @@ pub enum ApprovalDecision {
     },
 }
 
+/// What a Deny with no words tells the model. The CLI puts a deny's message into an error tool
+/// result verbatim, and the API refuses an empty one, failing the whole turn.
+pub const DECLINED: &str = "The user declined this. Don't try it again; tell the user what you were going to do and that you didn't do it.";
+
+/// The words a user's Deny sends the model: their reason when they gave one, never nothing.
+pub fn user_deny_message(reason: &str) -> String {
+    match reason.trim() {
+        "" => DECLINED.to_string(),
+        reason => format!("The user declined this: {reason}"),
+    }
+}
+
 /// Who answered an approval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
