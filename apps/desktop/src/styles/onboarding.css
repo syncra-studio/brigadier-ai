@@ -28,9 +28,15 @@ html:not([data-intro="staged"]) .welcome[data-step="intro"] {
   background: #000;
 }
 
-/* Behind the name, the black and its waves cross-fade into the setup's backdrop (then go). */
-.welcome[data-step="name"] .welcome-canvas {
+/* Continuing, then behind the name, the black and its waves cross-fade into the setup's
+   backdrop (then go); the title and its button fade out first. */
+.welcome:is([data-leaving], [data-step="name"]) .welcome-canvas {
   opacity: 0;
+}
+
+.welcome[data-leaving] .welcome-copy {
+  opacity: 0;
+  transition: opacity var(--intro-leave) var(--intro-ease);
 }
 
 .welcome-mark {

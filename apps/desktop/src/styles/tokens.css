@@ -871,7 +871,9 @@
   /* The button under it. */
   --intro-continue: 6.4s;
   --intro-continue-in: 0.45s;
-  /* The welcome's black cross-fading into the name step's backdrop. */
+  /* Continuing: the title fades out, then the name comes in, as the welcome's black
+     cross-fades into the name step's backdrop. */
+  --intro-leave: 0.25s;
   --intro-to-name: 0.6s;
   --intro-ease: cubic-bezier(0.22, 1, 0.36, 1);
   /* The mark above the name field. */

@@ -52,7 +52,8 @@ function setPageStaged(staged: boolean): void {
  * the dim lifts, the title comes in a letter at a time, and the button under it appears last;
  * only then can it be used (Enter too, as it takes the focus). Elsewhere it plays the same
  * inside the window, without the dim. Escape shows the end at once, as reduced motion does.
- * The name step fades in over the setup's own backdrop and shows the mark above the question.
+ * Continuing fades the title and the black out, and the name step comes in over the setup's
+ * own backdrop, with the mark above the question.
  */
 export function Welcome({
   step,
@@ -76,6 +77,13 @@ export function Welcome({
   const [canvasShown, setCanvasShown] = useState(step === "intro");
   // The window is staged for the intro (intro.rs) until its dim starts lifting.
   const staged = useRef(false);
+  // Continuing: the title and the black fade out before the name comes in.
+  const [leaving, setLeaving] = useState(false);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onContinueRef = useRef(onContinue);
+  useEffect(() => {
+    onContinueRef.current = onContinue;
+  }, [onContinue]);
   const onSoundRef = useRef(onSound);
   useEffect(() => {
     onSoundRef.current = onSound;
@@ -183,9 +191,16 @@ export function Welcome({
     };
   }, [step, settled, settle]);
 
+  const leave = useCallback(() => {
+    if (leaveTimer.current) return;
+    setLeaving(true);
+    leaveTimer.current = setTimeout(() => onContinueRef.current(), reducedMotion() ? 0 : tokenMs("--intro-leave"));
+  }, []);
+
   // Leaving with the window still staged (the setup closed) restores it.
   useEffect(
     () => () => {
+      if (leaveTimer.current) clearTimeout(leaveTimer.current);
       setPageStaged(false);
       if (staged.current) void introFinish(0).catch((error: unknown) => console.error(error));
     },
@@ -199,6 +214,7 @@ export function Welcome({
       data-step={step}
       data-started={start !== null || undefined}
       data-settled={settled || undefined}
+      data-leaving={(step === "intro" && leaving) || undefined}
       data-tauri-drag-region
     >
       {canvasShown && (
@@ -238,7 +254,7 @@ export function Welcome({
               }
             }}
           >
-            <ContinueButton ready={ready} arrow onClick={onContinue} />
+            <ContinueButton ready={ready} arrow onClick={leave} />
           </div>
         </div>
       ) : (
