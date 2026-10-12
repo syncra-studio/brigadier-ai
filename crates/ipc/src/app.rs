@@ -88,6 +88,8 @@ pub enum BrowserEvent {
     Blocked { url: String },
     /// A download finished (`ok`) or failed, saved at `path`.
     Downloaded { path: String, ok: bool },
+    /// Escape in the native page closes this tab's find bar.
+    Escape,
 }
 
 /// What finding text in a Browser tab's page came to.

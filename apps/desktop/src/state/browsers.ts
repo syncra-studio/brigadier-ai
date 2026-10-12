@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import { browserClose, browserNavigate, browserOpen, browserZoom, revealPath } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
-import { forgetFind } from "@/state/browserFind";
+import { closeFind, findState, forgetFind } from "@/state/browserFind";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -93,6 +93,9 @@ export async function openPage(
         if (faviconFits(useBrowsers.getState().pages[id], event.url)) update(id, { favicon: event.dataUrl });
       }
       else if (event.type === "downloaded") downloaded(event.path, event.ok);
+      else if (event.type === "escape") {
+        if (findState(id).open) closeFind(id);
+      }
       else update(id, { blocked: event.url, loading: false });
     });
     if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }

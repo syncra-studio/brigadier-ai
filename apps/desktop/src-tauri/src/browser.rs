@@ -261,6 +261,16 @@ const FAVICON: &str = r#"(() => {
   }, { once: true });
 })();"#;
 
+/// Escape has no menu accelerator: forward it from every frame of the native page. This
+/// message can only close the sender's find bar, and gives the page no app commands.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const PAGE_ESCAPE: &str = r#"(() => {
+  const send = window.ipc.postMessage.bind(window.ipc);
+  window.addEventListener("keydown", (event) => {
+    if (event.isTrusted && event.key === "Escape") send("browser:escape");
+  }, true);
+})();"#;
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn favicon_data(value: &str) -> bool {
     value.len() <= 16 * 1024
@@ -456,8 +466,8 @@ mod embedded {
     use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder};
 
     use super::{
-        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, Visit, allowed, failed, favicon_data,
-        web_page,
+        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, PAGE_ESCAPE, Visit, allowed, failed,
+        favicon_data, web_page,
     };
     use crate::shell::MAIN_WINDOW;
 
@@ -509,7 +519,8 @@ mod embedded {
             .get_webview_window(MAIN_WINDOW)
             .ok_or_else(|| failed("the window is gone"))?;
         let opener = app.clone();
-        let (on_load, on_title, on_blocked, on_download, on_favicon) = (
+        let (on_load, on_title, on_blocked, on_download, on_escape, on_favicon) = (
+            events.clone(),
             events.clone(),
             events.clone(),
             events.clone(),
@@ -546,9 +557,14 @@ mod embedded {
             .with_incognito(saved.is_none())
             .with_initialization_script_for_main_only(NO_CAPTURE, false)
             .with_initialization_script_for_main_only(FAVICON, true)
+            .with_initialization_script_for_main_only(PAGE_ESCAPE, false)
             .with_ipc_handler(move |request| {
                 let url = request.uri().to_string();
                 let data_url = request.into_body();
+                if data_url == "browser:escape" {
+                    let _ = on_escape.send(BrowserEvent::Escape);
+                    return;
+                }
                 if !web_page(&url) || !favicon_data(&data_url) {
                     return;
                 }

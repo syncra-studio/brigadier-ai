@@ -316,7 +316,7 @@
   --spacing-browser-menu: 15rem;
   --spacing-browser-menu-item: 1.8125rem;
   --radius-browser-menu: 1.25rem;
-  /* The Browser tab's toolbar, as the reference app's measures (the bar, its pills and buttons
+  /* The Browser tab's toolbar dimensions (the bar, its pills and buttons
      use h-12, h-control-md and size-icon-button-md): the address field's widest, its 13px text,
      the site information popover, and the ⋯ menu's zoom stepper (26 high, 100% in 44). */
   --spacing-browser-address: 48.125rem;
@@ -325,7 +325,7 @@
   --spacing-browser-site-info: 20rem;
   --spacing-browser-zoom: 1.625rem;
   --spacing-browser-zoom-value: 2.75rem;
-  /* The page's find bar, as the reference app's measures: 340 wide, a 44 high row. */
+  /* The page's find bar: 340 wide, a 44 high row. */
   --spacing-browser-find: 21.25rem;
   --spacing-browser-find-row: 2.75rem;
   --browser-address-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
