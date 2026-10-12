@@ -259,6 +259,19 @@ impl Board {
                         matches!(&known.kind, crate::work::OrchestratorStepKind::CiWatch { repo: r, sha: s, branch: b, .. } if r == repo && s == sha && b == branch)
                     })
                 {
+                    // Watched again from a later request: the row is that request's now, so it
+                    // works while the watch runs. An earlier watch's update doesn't take it back.
+                    let started = |request: &Option<String>| {
+                        request
+                            .as_ref()
+                            .and_then(|id| self.requests.get(id))
+                            .map(|request| (request.started_at_ms, request.id.clone()))
+                    };
+                    if step.request_id.is_some()
+                        && started(&step.request_id) > started(&known.request_id)
+                    {
+                        known.request_id = step.request_id;
+                    }
                     // Its result row keeps when it ended: the app shows the result for a
                     // moment after that, a reopened conversation too.
                     if matches!(&step.kind, crate::work::OrchestratorStepKind::CiWatch { result: Some(_), .. }) {
