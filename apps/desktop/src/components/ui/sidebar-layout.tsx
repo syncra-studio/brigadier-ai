@@ -64,7 +64,7 @@ export function SidebarReveal({ open, hidden, resizing, children, side = "left",
 }) {
   return (
     <div inert={hidden} className={cn(
-      "h-full overflow-hidden transition-[width] duration-300 ease-sidebar motion-reduce:transition-none",
+      "h-full overflow-clip transition-[width] duration-300 ease-sidebar motion-reduce:transition-none",
       open ? (width ?? (side === "right" ? "right-sidebar-panel-width" : "sidebar-panel-width")) : hidden ? "w-0" : "w-sidebar-strip",
       resizing && "transition-none",
     )}>

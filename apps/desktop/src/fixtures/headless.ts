@@ -216,6 +216,21 @@ export async function renderFixtureLive(t: TestContext, page: string, resultId: 
       replies.set(++id, resolve);
       socket.send(JSON.stringify({ id, method, params }));
     });
+  // What a page can't do itself, done for it as a user's input would be (`fixtureInput`, in
+  // fixtures/input.ts): a wheel turned over a point, or the window resized.
+  socket.addEventListener("message", (event) => {
+    const message = JSON.parse(String(event.data)) as { method?: string; params?: { name: string; payload: string } };
+    if (message.method !== "Runtime.bindingCalled" || message.params?.name !== "fixtureInput") return;
+    const asked = JSON.parse(message.params.payload) as
+      { id: number; type: "wheel"; x: number; y: number; deltaX?: number; deltaY?: number } | { id: number; type: "viewport"; width: number; height: number };
+    const done = () => call("Runtime.evaluate", { expression: `window.fixtureInputDone?.(${asked.id})` });
+    const act = asked.type === "wheel"
+      ? call("Input.dispatchMouseEvent", { type: "mouseWheel", x: asked.x, y: asked.y, deltaX: asked.deltaX ?? 0, deltaY: asked.deltaY ?? 0 })
+      : call("Emulation.setDeviceMetricsOverride", { width: asked.width, height: asked.height, deviceScaleFactor: 1, mobile: false });
+    void act.then(done);
+  });
+  await call("Runtime.enable", {});
+  await call("Runtime.addBinding", { name: "fixtureInput" });
   // The page acts as the focused one, as a window in front is: headless Chrome gives none the
   // window's focus, so a field's focus() would fire no focus event.
   await call("Emulation.setFocusEmulationEnabled", { enabled: true });
@@ -235,3 +250,4 @@ export async function renderFixtureLive(t: TestContext, page: string, resultId: 
     `Chrome's log:\n${browserLog.slice(-4000)}`,
   ].join("\n"));
 }
+

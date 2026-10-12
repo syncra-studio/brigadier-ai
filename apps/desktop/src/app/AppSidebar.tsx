@@ -95,7 +95,7 @@ export function TitlebarNav() {
   const shortcuts = useShortcuts();
   const can = useCanStep();
   return (
-    <div className="h-titlebar-toggle start-titlebar-start absolute top-0 z-20 flex items-center gap-1.5">
+    <div data-slot="titlebar-nav" className="h-titlebar-toggle start-titlebar-start absolute top-0 z-20 flex items-center gap-1.5">
       <TitlebarTips>
         <TitlebarButton
           tooltip="Back"

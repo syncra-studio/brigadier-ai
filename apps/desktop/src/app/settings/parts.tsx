@@ -67,9 +67,9 @@ export function SettingsPage({
           scrollable ? "overflow-y-auto [scrollbar-gutter:stable]" : "flex flex-col overflow-hidden",
         )}
       >
-        {/* The band under the titlebar's strip and over the title, for dragging the window.
-            Scrolling, the page passes under it to the top edge rather than being cut off below
-            it; the wheel over it still scrolls the page. */}
+        {/* The band at the page's top, under the titlebar and over the title, for dragging the
+            window. Scrolling, the page passes under it up to the titlebar's bottom edge; the
+            wheel over it still scrolls the page. */}
         <div
           data-tauri-drag-region
           className={cn(

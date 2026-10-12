@@ -173,16 +173,14 @@ export function App() {
             <div className="relative flex h-full min-w-0 flex-1 flex-col">
               {selection.type === "settings" ? (
                 <>
-                  {/* The page's strip of the titlebar: only Terminal. It lies over the page, whose
-                      own band under it drags the window and lets the page scroll to the top edge. */}
-                  <div className="h-titlebar pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-end pe-1">
-                    <div className="pointer-events-auto">
-                      <TitlebarTips>
-                        <TerminalButton />
-                      </TitlebarTips>
-                    </div>
+                  {/* The page's strip of the titlebar: only Terminal. The page scrolls below it,
+                      clipped at its bottom edge. */}
+                  <div data-tauri-drag-region className="h-titlebar flex shrink-0 items-center justify-end pe-1">
+                    <TitlebarTips>
+                      <TerminalButton />
+                    </TitlebarTips>
                   </div>
-                  <div className="min-h-0 flex-1">
+                  <div className="min-h-0 flex-1 overflow-clip">
                     <Suspense fallback={null}>
                       <SettingsView page={selection.page} />
                     </Suspense>

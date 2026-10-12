@@ -477,13 +477,20 @@
   * {
     @apply border-border;
   }
+  /* The window never scrolls, only panes inside it do. Nothing reaches past it to scroll it:
+     the root holds whatever is positioned with no box of its own to hold it (the thread's
+     screen reader labels, far down its scroll), and every box up to the window clips, so not
+     even a script can scroll one. Nor does a wheel past a pane's end bounce it. */
   html,
   body,
   #root {
-    @apply h-full;
+    @apply h-full w-full overflow-clip;
   }
   html {
     @apply overscroll-none;
+  }
+  #root {
+    @apply relative;
   }
   body {
     @apply bg-background text-foreground font-sans text-sm antialiased select-none;
