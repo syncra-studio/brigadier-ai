@@ -58,7 +58,6 @@ import { ModelSelector } from "@/components/assistant-ui/elements/model-selector
 import { ContextRing } from "@/components/assistant-ui/context-ring";
 import { ShieldExclamation } from "@/components/glyphs/permission-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
-import { Button } from "@/components/ui/button";
 import type { Conversation } from "@/ipc/generated";
 import type { ComposerProps } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -293,9 +292,9 @@ function ComposerContextRing() {
 const closedNotices = new Set<string>();
 
 /**
- * The "Full access is on" card above the composer, while a session's workers run without the
- * OS sandbox. × closes it for this conversation; "Don't show again" turns it off in Settings,
- * where it can be turned back on.
+ * The Full access line above the composer, while a session's workers run without the OS
+ * sandbox: one calm row like the notices above it. × closes it for this conversation; "Don't
+ * show again" turns it off in Settings, where it can be turned back on.
  */
 function FullAccessNotice({ conversation }: { conversation: Conversation }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
@@ -310,42 +309,38 @@ function FullAccessNotice({ conversation }: { conversation: Conversation }) {
     <section
       aria-label="Full access is on"
       data-slot="full-access-notice"
-      className="@container/notice animate-rail-open bg-rail border-foreground/10 rounded-surface mb-2 border px-4 py-3 text-sm motion-reduce:animate-none"
+      className="bg-muted text-foreground rounded-control mb-2 flex items-center gap-2 px-3 py-1.5 text-xs"
     >
-      {/* Narrow, the buttons go under the text, so the text keeps the width to read. */}
-      <div className="flex flex-col gap-2 @lg/notice:flex-row @lg/notice:items-center @lg/notice:gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <ShieldExclamation className="size-icon-md shrink-0" />
-          <div className="min-w-0 flex-1">
-            <p className="font-medium">Full access is on</p>
-            <p className="text-muted-foreground">
-              Brigadier’s workers can edit any file and run commands with internet access without
-              your approval. This increases the risk of data loss, exposed information, and
-              unexpected changes.{" "}
-              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={openPermissionsHelp}>
-                Learn more
-              </button>{" "}
-              about elevated risks.
-            </p>
-          </div>
-        </div>
-        <div className="border-foreground/10 flex shrink-0 items-center justify-end gap-1 @lg/notice:self-stretch @lg/notice:border-s @lg/notice:ps-3">
-          <Button
-            size="xs"
-            className="rounded-capsule"
-            onClick={() =>
-              void setSetting("showFullAccessNotice", false).catch(
-                (error: unknown) => console.error("couldn't save the setting", error),
-              )
-            }
-          >
-            Don’t show again
-          </Button>
-          <TooltipIconButton tooltip="Close" side="bottom" className="rounded-capsule" onClick={close}>
-            <X />
-          </TooltipIconButton>
-        </div>
-      </div>
+      <ShieldExclamation aria-hidden className="text-muted-foreground size-icon-xs shrink-0" />
+      <p className="min-w-0 flex-1">
+        Full access: workers run without asking.{" "}
+        <button
+          type="button"
+          className="text-muted-foreground hover:text-foreground underline underline-offset-2"
+          onClick={openPermissionsHelp}
+        >
+          Learn more
+        </button>
+      </p>
+      <button
+        type="button"
+        className="text-muted-foreground hover:text-foreground shrink-0"
+        onClick={() =>
+          void setSetting("showFullAccessNotice", false).catch(
+            (error: unknown) => console.error("couldn't save the setting", error),
+          )
+        }
+      >
+        Don’t show again
+      </button>
+      <button
+        type="button"
+        aria-label="Close"
+        className="text-muted-foreground hover:text-foreground shrink-0"
+        onClick={close}
+      >
+        <X className="size-icon-xs" />
+      </button>
     </section>
   );
 }

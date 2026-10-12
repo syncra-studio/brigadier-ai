@@ -44,7 +44,7 @@ export const CONVERSATIONS_ROWS = {
   fullAccessNotice: {
     label: "Show the Full access notice",
     description:
-      "A card above the composer while a conversation's workers run without the OS sandbox.",
+      "A line above the composer while a conversation's workers run without the OS sandbox.",
   },
 } as const;
 
