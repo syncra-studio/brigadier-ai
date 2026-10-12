@@ -14,6 +14,45 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
+/// An error that fails a request's turn is said once, by the failed request: no notice above
+/// the composer repeats it, and the failed run names the request so the app adds no line of
+/// its own.
+#[tokio::test]
+async fn a_turns_error_is_said_once_by_its_request() {
+    const ERROR: &str = "API Error: 400 messages.15.content.0.tool_result: content cannot be empty";
+    let flow = Flow::start(
+        "turn-error-once",
+        Options::default(),
+        script(|_turn| async { Reply::failed(ERROR) }),
+    )
+    .await;
+    flow.say("Install cowsay.").await;
+    let board = flow
+        .until("the request failed", |board| {
+            board
+                .requests
+                .values()
+                .any(|request| matches!(request.state, RequestState::Failed { .. }))
+        })
+        .await;
+    let request = board.requests.values().next().unwrap();
+    assert_eq!(
+        request.state,
+        RequestState::Failed {
+            error: ERROR.into()
+        }
+    );
+    flow.settled().await;
+    let events = flow.events().await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, crate::model::DomainEvent::ConversationNotice { .. })),
+        "no notice repeats it"
+    );
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn a_scout_reports_under_memory_warning_and_the_answer_ends_the_request() {
     let flow = Flow::start(
@@ -597,8 +636,9 @@ fn reports_in(input: &str) -> Vec<u32> {
 /// which can't commit from its sandbox, so Brigadier commits for it) asks for its own review
 /// (review_code), which returns at once; the review comes from the other vendor, reads its
 /// work in a checkout of its own, and its findings reach the lead as a message. Then the
-/// orchestrator lands it, and the landing gets its own background review. No verifier, no
-/// reviewer task, no cards.
+/// orchestrator lands it: the lead's own review is the change's one review, so the landing,
+/// with the lead's fix after it, gets none of its own (SESSION-FIXES-PLAN.md Q6.1). No
+/// verifier, no reviewer task, no cards.
 #[tokio::test]
 async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() {
     let flow = Flow::start(
@@ -660,8 +700,8 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
     .await;
     flow.say("Add a greeting file and merge it.").await;
     flow.settled().await;
-    // The lead's own review and the landing's.
-    let board = reviews_ended(&flow, 2).await;
+    // The lead's own review only.
+    let board = reviews_ended(&flow, 1).await;
     let lead = Flow::task(&board, 1);
     assert_eq!(
         board.tasks.len(),
@@ -669,24 +709,29 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
         "a lead only: no verifier, no reviewer task"
     );
     assert_eq!(lead.state, TaskState::Landed);
-    let mut reviews: Vec<_> = board.reviews.values().collect();
-    reviews.sort_by_key(|review| review.started_at_ms);
-    assert_eq!(reviews.len(), 2, "{reviews:#?}");
-    for review in &reviews {
-        assert_eq!(review.kind, crate::work::ReviewKind::Code);
-        assert_eq!(review.author, lead.route.choice.provider);
-        assert_ne!(review.reviewer, lead.route.choice.provider);
-        assert_eq!(review.task_id.as_ref(), Some(&lead.id));
-    }
+    let reviews: Vec<_> = board.reviews.values().collect();
     assert_eq!(
-        reviews[0].state,
+        reviews.len(),
+        1,
+        "no second review at landing: {reviews:#?}"
+    );
+    let review = reviews[0];
+    assert_eq!(review.kind, crate::work::ReviewKind::Code);
+    assert_eq!(review.author, lead.route.choice.provider);
+    assert_ne!(review.reviewer, lead.route.choice.provider);
+    assert_eq!(review.task_id.as_ref(), Some(&lead.id));
+    assert_eq!(
+        review.state,
         crate::work::ReviewState::Findings { count: 1 }
     );
-    assert_eq!(reviews[1].state, crate::work::ReviewState::Clean);
+    // It read the lead's work before its fix, which landed after it.
+    assert_ne!(lead.landed.as_deref(), Some(review.tip.as_str()));
     assert_eq!(
-        lead.landed.as_deref(),
-        Some(reviews[1].tip.as_str()),
-        "the landing's review reads what landed"
+        review.notify,
+        crate::work::ReviewFor::Worker {
+            task_id: lead.id.clone()
+        },
+        "its findings were the lead's to weigh, not the thread's to record"
     );
     assert!(board.plans.is_empty(), "a small request has no phases");
     assert!(board.approvals.is_empty(), "no cards");
@@ -700,6 +745,73 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
         "6",
         "the lead's fix after its review landed (\"hello\\n\")"
     );
+    flow.stop().await;
+}
+
+/// A lead whose own review came back clean and that committed more after it: the landing's
+/// review reads only those later commits, not the change its own review already read.
+#[tokio::test]
+async fn after_a_clean_own_review_only_the_later_commits_are_reviewed_at_landing() {
+    let flow = Flow::start(
+        "own-review-clean",
+        Options {
+            reviews: Some(script(|_| async { Reply::text("No findings.") })),
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if let Some(n) = reports_in(&turn.input).first() {
+                    let reply = turn
+                        .call("land_phase", json!({"task": format!("task-{n}")}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Added the greeting.");
+                }
+                if turn.input.contains("[review ") {
+                    return Reply::text("[quiet]");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "medium", "title": "Add a greeting", "kind": "implement",
+                               "spec": "Create hello.txt.", "provider": "codex"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            turn.write("hello.txt", "hello\n");
+            let review = own_review(&turn).await;
+            assert!(review.contains("found nothing"), "{review}");
+            // More work after the clean review: nobody has read it yet.
+            turn.write("bye.txt", "bye\n");
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "Added hello.txt and bye.txt.",
+                           "changes": ["hello.txt", "bye.txt"]}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Add a greeting file.").await;
+    flow.settled().await;
+    let board = reviews_ended(&flow, 2).await;
+    let lead = Flow::task(&board, 1);
+    assert_eq!(lead.state, TaskState::Landed);
+    let mut reviews: Vec<_> = board.reviews.values().collect();
+    reviews.sort_by_key(|review| review.number);
+    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    assert_eq!(reviews[0].state, crate::work::ReviewState::Clean);
+    assert_eq!(
+        (reviews[1].base.as_str(), reviews[1].tip.as_str()),
+        (reviews[0].tip.as_str(), lead.landed.as_deref().unwrap()),
+        "the landing's review starts where the lead's own ended"
+    );
+    assert_eq!(reviews[1].notify, crate::work::ReviewFor::Orchestrator);
     flow.stop().await;
 }
 
@@ -942,7 +1054,10 @@ async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
     .await;
     flow.say("Add a greeting file and merge it.").await;
     flow.settled().await;
-    let board = reviews_ended(&flow, 2).await;
+    // The verifier's own review is the change's one review: the fix it made after it lands
+    // with no second one.
+    let board = reviews_ended(&flow, 1).await;
+    assert_eq!(board.reviews.len(), 1, "one review: {:?}", board.reviews);
     let lead = Flow::task(&board, 1);
     let verifier = Flow::task(&board, 2);
     assert_eq!(board.tasks.len(), 2, "a lead and the verifier it was given");

@@ -875,6 +875,36 @@ pub(crate) fn short_sha(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
 }
 
+/// A push that put on the remote's `branch` a commit the local `branch` doesn't have (a fix
+/// pushed with `HEAD:main` from the session branch): the two have parted, and the thread is told
+/// to land it here too. Empty when the local branch has it, or there is no local branch.
+async fn parted_note(repo: &Path, branch: &str, sha: &str) -> String {
+    let local = format!("refs/heads/{branch}");
+    let has = |args: Vec<&str>| {
+        let mut command = tokio::process::Command::new("git");
+        command.arg("-C").arg(repo).args(args).stdin(Stdio::null());
+        async move { command.output().await.is_ok_and(|out| out.status.success()) }
+    };
+    if branch.is_empty()
+        || !has(vec!["rev-parse", "--verify", "--quiet", &local]).await
+        || has(vec!["merge-base", "--is-ancestor", sha, &local]).await
+    {
+        return String::new();
+    }
+    format!(
+        "\nThe local `{branch}` doesn't have {}: this push skipped the merge here. Land it in `{branch}` through the usual merge before anything else, so the two don't part.",
+        short_sha(sha)
+    )
+}
+
+/// What the thread does on a red run: the fix reaches the watched branch the way its changes
+/// always do, so a base branch here and on the remote never part.
+pub(crate) const FIX_THE_FAILURE: &str = "\nFix the failure (a worker, or a tiny fix of your own) and land it the way the watched branch takes changes: a session branch directly; a base branch like `main` only through the usual merge into it here, then push that branch, never a commit the local branch doesn't have. Then watch again: the user's yes to watching covers the push and the watch, and nothing else; the merge follows its usual rules.";
+
+/// How the thread says a CI result that isn't a failure to fix: the request's answer when it
+/// has none yet, else one update line under it (`prompts::LATE_EVENT`), never a new ending.
+pub(crate) const AFTER_THE_ANSWER: &str = "If you already answered this request, write one `Update:` line with the result, never a new ending; otherwise tell the user the result in one line.";
+
 /// The line that tells the thread how a watch ended.
 pub(crate) fn outcome_envelope(sha: &str, outcome: &Outcome) -> String {
     let short = short_sha(sha);
@@ -1013,7 +1043,8 @@ impl super::SessionManager {
     ) -> Result<String> {
         let (repo, url, sha) = self.ci_push(id, &push).await?;
         let short = short_sha(&sha);
-        Ok(match probe(&repo, &url, &sha, self.gh().as_ref()).await {
+        let parted = parted_note(&repo, push.branch.trim(), &sha).await;
+        let status = match probe(&repo, &url, &sha, self.gh().as_ref()).await {
             Probe::Watchable { repo, .. } => format!(
                 "watchable: {repo} runs GitHub Actions on {short}. Ask the user once with ask_user, \"Watch CI for {short}?\" with Watch and No. On Watch, call watch_ci with the same remote, branch and sha; on No, say nothing more about it."
             ),
@@ -1025,7 +1056,8 @@ impl super::SessionManager {
             Probe::NoCi => {
                 "no CI: the pushed commit has no CI files. Say nothing about CI.".to_owned()
             }
-        })
+        };
+        Ok(status + &parted)
     }
 
     /// `watch_ci`: starts watching the push's runs, shown live as a `CiWatch` row, and returns
@@ -1071,8 +1103,9 @@ impl super::SessionManager {
         let id = id.clone();
         let timing = Timing::default();
         let reply = format!(
-            "Watching CI for {short} on `{branch}`: the user sees the runs live, and the result comes as a [ci {short} …] message. Reply {} meanwhile.",
-            super::prompts::QUIET
+            "Watching CI for {short} on `{branch}`: the user sees the runs live, and the result comes as a [ci {short} …] message. Reply {} meanwhile.{}",
+            super::prompts::QUIET,
+            parted_note(&dir, &branch, &sha).await
         );
         let watching = tokio::spawn(async move {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Progress>();
@@ -1139,12 +1172,9 @@ impl super::SessionManager {
                     {
                         text.push_str(&format!("\nThe whole failing log: {}", path.display()));
                     }
-                    text.push_str("\nFix the failure (a worker, or a tiny fix of your own), push the fix to the same branch and watch again: the user's yes to watching covers that, and nothing else.");
+                    text.push_str(FIX_THE_FAILURE);
                 }
-                Outcome::GhUnavailable { .. } => {
-                    text.push_str("\nTell the user in one line.");
-                }
-                _ => text.push_str("\nTell the user the result in one line."),
+                _ => text.push_str(&format!("\n{AFTER_THE_ANSWER}")),
             }
             this.deliver_for(
                 &id,
@@ -1165,9 +1195,10 @@ impl super::SessionManager {
         Ok(reply)
     }
 
-    /// Ends the conversation's CI watches when it closes, or after a restart cut them off:
-    /// their tasks stop, and a row still checking reads "stopped", so no watch is left that
-    /// never ends.
+    /// Ends the conversation's CI watches when it closes, after a restart cut them off, or
+    /// when the user presses Stop: their tasks stop, and a row still checking reads "stopped",
+    /// so no watch is left that never ends, and none wakes the thread later. The requests they
+    /// kept working settle.
     pub(crate) async fn stop_ci_watches(&self, id: &crate::model::ConversationId) {
         if let Ok(conv) = self.conv(id) {
             for watch in conv.ci_watches.lock().unwrap().drain(..) {
@@ -1188,6 +1219,7 @@ impl super::SessionManager {
             })
             .map(|step| step.kind.clone())
             .collect();
+        let ended = !open.is_empty();
         for mut kind in open {
             if let crate::work::OrchestratorStepKind::CiWatch {
                 waiting, result, ..
@@ -1197,6 +1229,9 @@ impl super::SessionManager {
                 *result = Some("stopped".into());
             }
             self.orchestrator_step(id, kind).await;
+        }
+        if ended {
+            self.settle_requests(id).await;
         }
     }
 
@@ -2194,6 +2229,27 @@ exit "$code"
             git(dir, &["add", "-A"]);
             git(dir, &["commit", "-q", "-m", "x"]);
             git(dir, &["rev-parse", "HEAD"])
+        }
+
+        /// A fix pushed with `HEAD:main` from a session branch leaves the local `main` behind:
+        /// the thread hears it. A push the local branch has, or of a branch with no local one,
+        /// says nothing.
+        #[tokio::test]
+        async fn a_push_the_local_branch_lacks_is_named() {
+            let fake = FakeGh::new("parted");
+            let repo = fake.path().join("repo");
+            let base = repo_with(&repo, &[]);
+            assert_eq!(parted_note(&repo, "main", &base).await, "");
+            git(&repo, &["checkout", "-q", "-b", "brigadier/x/session"]);
+            std::fs::write(repo.join("fix"), "x\n").unwrap();
+            git(&repo, &["add", "-A"]);
+            git(&repo, &["commit", "-q", "-m", "fix"]);
+            let fix = git(&repo, &["rev-parse", "HEAD"]);
+            let note = parted_note(&repo, "main", &fix).await;
+            assert!(note.contains("The local `main` doesn't have"), "{note}");
+            assert!(note.contains(short_sha(&fix)), "{note}");
+            assert_eq!(parted_note(&repo, "brigadier/x/session", &fix).await, "");
+            assert_eq!(parted_note(&repo, "release", &fix).await, "");
         }
 
         #[tokio::test]

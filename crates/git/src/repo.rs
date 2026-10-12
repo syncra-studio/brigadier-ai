@@ -1962,6 +1962,36 @@ mod tests {
     }
 
     #[test]
+    fn a_trailers_values_are_listed_per_commit() {
+        let (dir, git) = test_git("trailer-values");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        fs::write(root.join("a.txt"), "a\n").expect("a file");
+        let start = repo.commit_changes("Add a", true).expect("a commit");
+        fs::write(root.join("a.txt"), "b\n").expect("a change");
+        repo.commit_changes(
+            "Change a\n\nBrigadier-Author: thread\nBrigadier-Fixes: R2.2, R2.3",
+            true,
+        )
+        .expect("a commit");
+        fs::write(root.join("a.txt"), "c\n").expect("a change");
+        let tip = repo
+            .commit_changes("Change a again\n\nBrigadier-Author: thread", true)
+            .expect("a commit");
+        assert_eq!(
+            repo.trailer_values(&start, &tip, "Brigadier-Fixes")
+                .unwrap(),
+            vec![Vec::<String>::new(), vec!["R2.2, R2.3".to_owned()]]
+        );
+        assert!(
+            repo.trailer_values(&tip, &tip, "Brigadier-Fixes")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn the_lines_of_the_commits_with_a_trailer_are_counted() {
         let (dir, git) = test_git("trailer-stat");
         let root = dir.join("repo");

@@ -522,8 +522,11 @@ noticed.
      and the key lines of `gh run view <id> --repo R --log-failed` (trimmed, the full log as an artifact). Or
      `[ci 97c298d5 · passed · 5 jobs]`.
    - `gh` missing or signed out mid-watch: the tool says so and the thread tells the user in one line.
-3. **On red,** the thread fixes the failure (a worker, or a tiny fix), pushes the fix to the same branch and watches
-   again, as decided. The user's yes to watching covers re-pushing fixes for that run's failures, and nothing else.
+3. **On red,** the thread fixes the failure (a worker, or a tiny fix) and lands it the way the watched branch takes
+   changes: a session branch directly; a base branch like `main` only through the usual local merge into it (review
+   and merge rules unchanged), then that branch is pushed. A fix never goes straight to the remote branch, leaving the
+   local one behind (the user's decision, 2026-10-12, after the tour). The user's yes to watching covers the push and
+   the watch again, and nothing else.
    On green it reports the result.
 
 **Verify.**

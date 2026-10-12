@@ -1,7 +1,9 @@
 //! User requests: what one user message set in motion, and when it is over.
 //!
 //! A request works while its turn runs, while an envelope or message for it waits for a turn,
-//! or while a task it started runs. It waits while something it opened needs the user (a
+//! or while a task it started runs; and, unless it was stopped or failed, while Brigadier still
+//! owes it a turn (a CI watch, a held merge, a review its thread left the answer to: see
+//! [`owed_a_turn`]). It waits while something it opened needs the user (a
 //! card, a paused worker, a landing on hold, in an overnight run something only the user can
 //! do), and, unless
 //! it was stopped or failed, while a plan of it waits for a revision the orchestrator did not
@@ -13,14 +15,18 @@
 use std::collections::HashSet;
 
 use super::SessionManager;
-use super::conversation::Envelope;
+use super::conversation::{ConvLive, Envelope};
 use super::decisions::waiting_run;
+use super::landing::{findings_now, pending_merge};
 use super::prompts;
 use super::workers::relanding_pending;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind};
 use crate::overnight::{OvernightRun, OvernightState};
-use crate::work::{CardState, PlanState, QuestionKind, RequestState, Task, TaskId, TaskState};
+use crate::work::{
+    CardState, OrchestratorStepKind, PlanState, QuestionKind, RequestState, ReviewRun, ReviewState,
+    Task, TaskId, TaskState,
+};
 
 impl SessionManager {
     /// What a request waits for, if anything. A question in the thread's text makes nothing
@@ -155,16 +161,7 @@ impl SessionManager {
                 state
             } else if activity.running.as_deref() == Some(id)
                 || (activity.carried.contains(id) && outcome.is_none())
-                || tasks_in(&board, id, |state| {
-                    matches!(
-                        state,
-                        TaskState::Queued
-                            | TaskState::Starting
-                            | TaskState::Running
-                            | TaskState::Landing
-                    )
-                })
-                || relanding_in(&board, id)
+                || runs_in(&board, id)
             {
                 // A fix Brigadier checks and lands once its worker's turn is over still works.
                 RequestState::Working
@@ -181,6 +178,15 @@ impl SessionManager {
                 RequestState::Stopped | RequestState::Failed { .. }
             ) {
                 request.state.clone()
+            } else if owed_a_turn(
+                &board,
+                id,
+                activity.deferred.contains(id),
+                activity.reviews_due,
+            ) {
+                // Brigadier wakes the thread for it later: its answer isn't written yet, so it
+                // isn't over between turns. A stop or a failure above wins.
+                RequestState::Working
             } else {
                 RequestState::Done
             };
@@ -213,6 +219,31 @@ impl SessionManager {
         if waiting && !self.answer_working(conversation_id).await {
             self.kick(&conv);
         }
+    }
+
+    /// The newest answer, when nothing but what Brigadier owes it keeps it working: no turn,
+    /// message, worker or wait of it is under way. The user's Stop has no turn to interrupt
+    /// for it, so it ends it.
+    pub(super) async fn owed_only(&self, conv: &ConvLive) -> Option<String> {
+        let board = self.core.board(&conv.id).await.ok()?;
+        let latest = board.latest_request()?;
+        if latest.state != RequestState::Working {
+            return None;
+        }
+        let activity = conv.request_activity().await;
+        let id = latest.id.as_str();
+        let under_way = activity.running.as_deref() == Some(id)
+            || activity.carried.contains(id)
+            || runs_in(&board, id)
+            || blocked_on_the_thread(&board, id);
+        (!under_way
+            && owed_a_turn(
+                &board,
+                id,
+                activity.deferred.contains(id),
+                activity.reviews_due,
+            ))
+        .then(|| latest.id.clone())
     }
 
     /// What a turn tells the orchestrator besides user messages: each envelope, labelled when
@@ -353,6 +384,71 @@ fn tasks_in(board: &Board, request: &str, matches: impl Fn(TaskState) -> bool) -
         .tasks
         .values()
         .any(|task| task.request_id.as_deref() == Some(request) && matches(task.state))
+}
+
+/// Whether a task of the request runs, lands, or is about to (a fix Brigadier checks and
+/// lands once its worker's turn is over).
+fn runs_in(board: &Board, request: &str) -> bool {
+    tasks_in(board, request, |state| {
+        matches!(
+            state,
+            TaskState::Queued | TaskState::Starting | TaskState::Running | TaskState::Landing
+        )
+    }) || relanding_in(board, request)
+}
+
+/// Whether Brigadier still owes the request a turn: something under way will wake the thread
+/// for it with what its answer needs (w43 bug 2). Between turns such a request isn't over, so
+/// its block doesn't fold on a line written mid-way. It is owed one for:
+/// - a CI watch started in it with no result yet: the result comes as a `[ci …]` message;
+/// - the user's merge held in it (SESSION-FIXES-PLAN.md Q3) while a writer works or a review
+///   of the session's work runs (stored or not yet): their end tells the thread `[merge due]`
+///   or `[merge stopped]`. Once neither runs the thread has heard what the merge waits for;
+/// - a review of its work still running (a landing's, a fix's re-check, the thread's own
+///   commits'), or a landing's review not stored yet, when its last turn ended on [quiet]
+///   (`deferred`): the thread left its answer to the review's end. A review that runs on after
+///   the thread answered is a late event and holds nothing up; its findings make the request
+///   work again and come as an update line (SESSION-FIXES-PLAN.md bug 4).
+///
+/// A request stopped or failed stays so whatever it is owed (see `settle_requests`); the
+/// user's Stop also ends its watches and held merge (`SessionManager::interrupt`).
+pub(super) fn owed_a_turn(board: &Board, request: &str, deferred: bool, reviews_due: bool) -> bool {
+    let watched = board.orchestrator_steps.iter().any(|step| {
+        step.request_id.as_deref() == Some(request)
+            && matches!(
+                step.kind,
+                OrchestratorStepKind::CiWatch { result: None, .. }
+            )
+    });
+    let held = pending_merge(board).is_some_and(|held| held.request.as_deref() == Some(request))
+        && (board.tasks.values().any(|task| {
+            task.kind.writes()
+                && matches!(
+                    task.state,
+                    TaskState::Queued
+                        | TaskState::Starting
+                        | TaskState::Running
+                        | TaskState::Landing
+                )
+        }) || findings_now(board).running
+            || reviews_due);
+    let reviewed = deferred
+        && (board.reviews.values().any(|review| {
+            review.state == ReviewState::Running
+                && review_request(board, review).as_deref() == Some(request)
+        }) || (reviews_due && tasks_in(board, request, |state| state == TaskState::Landed)));
+    watched || held || reviewed
+}
+
+/// The request a review belongs to: its own, else its task's.
+fn review_request(board: &Board, review: &ReviewRun) -> Option<String> {
+    review.request_id.clone().or_else(|| {
+        review
+            .task_id
+            .as_ref()
+            .and_then(|task| board.tasks.get(task))
+            .and_then(|task| task.request_id.clone())
+    })
 }
 
 /// Whether a task of the request is blocked on the thread's answer. A lead whose outline is
@@ -734,6 +830,131 @@ mod tests {
             "{note}"
         );
         assert!(!note.contains("running"), "{note}");
+    }
+
+    /// A step of the thread's, filed under `request`.
+    fn step_of(request: &str, kind: OrchestratorStepKind) -> crate::work::OrchestratorStep {
+        crate::work::OrchestratorStep {
+            request_id: Some(request.into()),
+            kind,
+            at_ms: 0,
+            position: 0,
+        }
+    }
+
+    fn watch(result: Option<&str>) -> OrchestratorStepKind {
+        OrchestratorStepKind::CiWatch {
+            repo: "o/n".into(),
+            branch: "main".into(),
+            sha: "97c298d5".into(),
+            waiting: false,
+            runs: Vec::new(),
+            result: result.map(str::to_owned),
+            consent: None,
+        }
+    }
+
+    fn held_merge() -> OrchestratorStepKind {
+        OrchestratorStepKind::MergeHeld {
+            branch: "brigadier/c/session".into(),
+            base: "main".into(),
+            asked_in: "m1".into(),
+            consented_at_ms: 0,
+            condition: crate::work::MergeCondition::WorkersFinish,
+            waiting: Vec::new(),
+            tip: String::new(),
+        }
+    }
+
+    /// A code review for the thread, filed under `request` (none: under its task's).
+    fn review_of(id: &str, request: Option<&str>, task: Option<&Task>) -> ReviewRun {
+        ReviewRun {
+            id: id.into(),
+            conversation_id: ConversationId("c".into()),
+            request_id: request.map(str::to_owned),
+            task_id: task.map(|task| task.id.clone()),
+            kind: crate::work::ReviewKind::Code,
+            base: "a".into(),
+            tip: "b".into(),
+            author: brigadier_providers::ProviderKind::Claude,
+            reviewer: brigadier_providers::ProviderKind::Codex,
+            reviewer_model: None,
+            notify: crate::work::ReviewFor::Orchestrator,
+            state: ReviewState::Running,
+            started_at_ms: 0,
+            ended_at_ms: None,
+            findings: None,
+            number: 1,
+            items: Vec::new(),
+        }
+    }
+
+    /// What wakes the thread later keeps its request working between turns (w43 bug 2): a CI
+    /// watch with no result, a held merge while a writer or a review runs, and a review the
+    /// thread left its answer to. A review after the answer is a late event and holds nothing.
+    #[test]
+    fn a_request_is_owed_a_turn_for_a_watch_a_held_merge_or_a_review_it_waits_for() {
+        let owed = |board: &Board, request: &str, deferred: bool| {
+            owed_a_turn(board, request, deferred, false)
+        };
+        // A CI watch, until its result.
+        let mut board = Board::default();
+        board.orchestrator_steps.push(step_of("r1", watch(None)));
+        assert!(owed(&board, "r1", false));
+        assert!(!owed(&board, "r2", false));
+        board.orchestrator_steps[0].kind = watch(Some("passed"));
+        assert!(!owed(&board, "r1", false));
+
+        // A held merge, while what it waits for runs: then the thread is told of it.
+        let mut board = Board::default();
+        board.orchestrator_steps.push(step_of("r1", held_merge()));
+        assert!(
+            !owed(&board, "r1", false),
+            "nothing runs: the thread has heard"
+        );
+        let writer = task_of("r0", TaskState::Running);
+        board.tasks.insert(writer.id.clone(), writer);
+        assert!(owed(&board, "r1", false), "a writer of an earlier request");
+        assert!(!owed(&board, "r0", false), "the merge is r1's");
+        board.tasks.clear();
+        assert!(
+            owed_a_turn(&board, "r1", false, true),
+            "a review not stored yet"
+        );
+        let review = review_of("rv0", Some("r0"), None);
+        board.reviews.insert(review.id.clone(), review);
+        assert!(owed(&board, "r1", false), "a review of the session's work");
+        board.orchestrator_steps.push(step_of(
+            "r1",
+            OrchestratorStepKind::MergeCancelled {
+                asked_in: "m1".into(),
+            },
+        ));
+        assert!(!owed(&board, "r1", false), "cancelled");
+
+        // A landing's review, only when the last turn left the answer to it.
+        let mut board = Board::default();
+        let landed = task_of("r1", TaskState::Landed);
+        board.tasks.insert(landed.id.clone(), landed.clone());
+        let review = review_of("rv1", None, Some(&landed));
+        board.reviews.insert(review.id.clone(), review.clone());
+        assert!(owed(&board, "r1", true));
+        assert!(!owed(&board, "r1", false), "a late review after the answer");
+        assert!(!owed(&board, "r2", true));
+        let mut ended = review;
+        ended.state = ReviewState::Clean;
+        board.reviews.insert(ended.id.clone(), ended);
+        assert!(!owed(&board, "r1", true));
+        // One not stored yet counts for a request with a landing.
+        assert!(owed_a_turn(&board, "r1", true, true));
+        assert!(!owed_a_turn(&board, "r2", true, true));
+
+        // A review of the thread's own commits, by its request.
+        let mut board = Board::default();
+        let review = review_of("rv2", Some("r1"), None);
+        board.reviews.insert(review.id.clone(), review);
+        assert!(owed(&board, "r1", true));
+        assert!(!owed(&board, "r1", false));
     }
 
     #[test]

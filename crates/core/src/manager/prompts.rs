@@ -98,13 +98,13 @@ How to work:
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
-- Land finished work with land_phase (no phase needed). Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
+- Land finished work with land_phase (no phase needed). Each landing and each commit of yours gets one background review by the other vendor (none for a tip already reviewed, or for what a worker committed after its own review_code); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
 - "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). Offer propose_merge only once no worker writes. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
-- Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`.
+- Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`. A commit that only fixes review findings names them too, `--trailer "{FIXES_TRAILER}: R2.2, R2.3"`: no review of its own, only a re-check of the `high` ones, and a held merge covers it.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with @remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
 - Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
-- Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. After your own `git push`, call ci_status and do what it says. On [ci … failed], fix it, push to the same branch and call watch_ci again without asking: the user's yes to watching covers that, nothing else. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
+- Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. After your own `git push`, call ci_status and do what it says. On [ci … failed], fix it and land the fix the way the watched branch takes changes: a session branch directly; a base branch like `main` only through the usual merge into it here, then push that branch, never a commit the local branch doesn't have. Then call watch_ci again without asking: the user's yes to watching covers the push and the watch, nothing else, and the merge follows its usual rules. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Tools return at once; never wait or poll. Reports, questions, reviews and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report].
 - Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder.
 - Brigadier cleans up after you; use clean_up only if the user asks. Never delete branches, worktrees or temp folders by hand: "Operation not permitted" on another session's branch or folder is Brigadier protecting it, so leave it.{GRILLING}
@@ -170,7 +170,7 @@ fn callable(text: &str, provider: ProviderKind) -> String {
 
 /// What the thread does with an event that arrives after its answer (bug 4): an update line
 /// only when the user must know, never a rewritten ending.
-pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a landing, a report's addendum) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), never a new ending. Otherwise reply [quiet].";
+pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a landing, a report's addendum, a CI result) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), never a new ending. Otherwise reply [quiet].";
 
 /// Where the thread sends a live look at an app (SESSION-FIXES-PLAN.md "Computer use"): to the
 /// workers, which have the computer tools, so screenshots stay out of its own context.
@@ -204,6 +204,11 @@ const PREVIEWS: &str = "\n- Use start_preview (foreground, no `&`), preview_log 
 /// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its commits get
 /// their own one-shot review.
 pub(crate) const THREAD_TRAILER: &str = "Brigadier-Author: thread";
+
+/// The trailer key with which a commit of the thread's names the review findings it fixes
+/// (`R2.2, R2.3`): such a commit gets no review of its own, only the re-check of those the
+/// thread recorded high, and a held merge's consent covers it.
+pub(crate) const FIXES_TRAILER: &str = "Brigadier-Fixes";
 
 /// How the instructions and the `[workspace]` note name the thread's workspace (`<path> @
 /// <branch>`, as [`Told::workspace`] keeps it).
@@ -403,6 +408,15 @@ pub(crate) struct Revision {
 
 /// The mockup offer's revision (Q10); its note and tests follow this number.
 pub(crate) const MOCKUP_REVISION: u32 = 16;
+/// A CI result after the answer is a late event: an update line, never a new ending.
+pub(crate) const CI_LATE_REVISION: u32 = 17;
+/// A CI fix for a base branch lands through the merge into it, never straight to the remote.
+pub(crate) const CI_FIX_REVISION: u32 = 18;
+/// A worker's own review is its landing's one review: its fixes after it get no second one.
+pub(crate) const OWN_REVIEW_REVISION: u32 = 19;
+/// The thread's commit that fixes review findings names them: a re-check of the high ones at
+/// most, and a held merge still covers it.
+pub(crate) const FINDING_FIX_REVISION: u32 = 20;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -494,6 +508,26 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: MOCKUP_REVISION,
         thread: "From now on, offer a mockup before a visible UI change that isn't a small fix (a new control, panel, screen or layout): one ask_user question, \"Want a mockup first?\", options Yes and Skip, recommending Yes when the look is still open and Skip when the request pins it down; say so if part of the screen can't be faked. Skip: work as usual. Yes: delegate_task with mockup: true; the user sees its screenshots in the Mockup tab, and you ask only what the picture can't show. Their notes come as one message with marked screenshots: send them to the same mockup worker with message_worker, which now takes attachments. On the user's yes to the real work, land the mockup and delegate the work with matches_mockup naming the mockup's task; it reports the live app beside the mockup. If they drop the idea, stop the mockup's worker.",
         worker: "From now on, observe takes save_as, a file name: it keeps that screenshot in your outputs folder for your report. A task that builds a mockup says so in its brief, and so does one that must match a mockup.",
+    },
+    Revision {
+        number: CI_LATE_REVISION,
+        thread: "From now on, a CI result ([ci … passed], [ci … failed]) that comes after your answer is a late event like a review: write one short update line (\"Update: CI passed on c9cb8b3.\"), never a new ending.",
+        worker: "",
+    },
+    Revision {
+        number: CI_FIX_REVISION,
+        thread: "From now on, on [ci … failed] for a base branch like `main`, the fix lands through the usual merge into it here, then you push that branch: never push a session branch's commit straight to the remote's `main`, which leaves the local one behind. A session branch still takes the fix directly.",
+        worker: "",
+    },
+    Revision {
+        number: OWN_REVIEW_REVISION,
+        thread: "From now on, a worker's own review (review_code) is its change's one review: when its work lands, what it committed after that review (its fixes) gets no second review. Only work it committed after a clean review gets a review of those commits alone.",
+        worker: "",
+    },
+    Revision {
+        number: FINDING_FIX_REVISION,
+        thread: "From now on, a commit of yours that only fixes review findings names them in a second trailer, `--trailer \"Brigadier-Fixes: R2.2, R2.3\"`: it gets no review of its own, only one re-check of those you record `high`, and a merge the user already said yes to still covers it, so never ask them again for it.",
+        worker: "",
     },
 ];
 
@@ -1372,6 +1406,14 @@ mod tests {
         assert!(LATE_EVENT.ends_with(&format!("Otherwise reply {QUIET}.")));
         assert!(LATE_EVENT.contains("one short update line"));
         assert!(LATE_EVENT.contains("never a new ending"));
+        // A CI result after the answer is one too, and its envelope says so (no second ending).
+        assert!(LATE_EVENT.contains("a CI result"));
+        assert!(crate::manager::ci::AFTER_THE_ANSWER.contains("one `Update:` line"));
+        assert!(
+            revision_note(CI_LATE_REVISION - 1, false).is_some_and(|note| note
+                .contains("a CI result")
+                && note.contains("never a new ending"))
+        );
         let envelope = late_findings_envelope(&task("claude", None), "All 4 tests pass.");
         assert!(
             envelope.starts_with("[report task-1 · addendum]"),
@@ -1901,7 +1943,7 @@ mod environment_tests {
                     assert!(prompt.contains("only in files you have already read"));
                     assert!(prompt.contains(&format!("--trailer \"{THREAD_TRAILER}\"")));
                     assert!(prompt.contains("How to write code:"));
-                    assert!(prompt.contains("a tip already reviewed isn't reviewed again"));
+                    assert!(prompt.contains("none for a tip already reviewed, or for what a worker committed after its own review_code"));
                     assert!(prompt.contains("none of it is a fixed step"));
                     for name in [
                         "delegate_task",
@@ -1998,7 +2040,9 @@ mod environment_tests {
             assert!(text.contains("Never delete branches, worktrees or temp folders by hand"));
             // After its own push, the thread looks at CI (Q1).
             assert!(text.contains("After your own `git push`, call "));
-            assert!(text.contains("push to the same branch and call "));
+            assert!(
+                text.contains("only through the usual merge into it here, then push that branch")
+            );
             // It routes live looks to the workers (computer use).
             assert!(text.contains("screenshots in the chat only if the user asked; a worker's live check is evidence in its report"));
             assert_eq!(
@@ -2371,6 +2415,47 @@ mod environment_tests {
         assert!(LEAD_STEPS.contains("may come back to you in this same session"));
     }
 
+    /// The review rules after the tour (a worker's own review is its landing's; the thread's
+    /// fix commit names its findings): a thread told the revision before each hears its note
+    /// once, a worker hears nothing, and a new thread's instructions say both.
+    #[test]
+    fn a_thread_told_the_revision_before_hears_the_review_rules_once() {
+        for number in [OWN_REVIEW_REVISION, FINDING_FIX_REVISION] {
+            let revision = REVISIONS
+                .iter()
+                .find(|revision| revision.number == number)
+                .expect("listed");
+            assert!(revision.worker.is_empty());
+            let note = revision_note(number - 1, false).unwrap();
+            assert!(note.contains(revision.thread), "{note}");
+            assert!(
+                revision_note(number, false).is_none_or(|later| !later.contains(revision.thread))
+            );
+        }
+        let own = &REVISIONS[OWN_REVIEW_REVISION as usize - 1];
+        assert!(own.thread.contains("gets no second review"));
+        let fixes = &REVISIONS[FINDING_FIX_REVISION as usize - 1];
+        assert!(
+            fixes
+                .thread
+                .contains(&format!("--trailer \"{FIXES_TRAILER}: R2.2, R2.3\""))
+        );
+        assert!(fixes.thread.contains("never ask them again"));
+        let prompt = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            Some("/work/session @ brigadier/flow"),
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(prompt.contains("or for what a worker committed after its own review_code"));
+        assert!(prompt.contains(&format!(
+            "--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`: no review of its own"
+        )));
+    }
+
     /// Q10's revision: a thread told the one before hears exactly the mockup offer, once, and
     /// a resumed worker its own line; one told it hears nothing. Relative to
     /// `MOCKUP_REVISION`, so a renumbering at merge changes only that const.
@@ -2380,25 +2465,29 @@ mod environment_tests {
             .iter()
             .find(|revision| revision.number == MOCKUP_REVISION)
             .expect("the mockup revision is listed");
-        assert_eq!(
-            REVISIONS.last().map(|revision| revision.number),
-            Some(MOCKUP_REVISION),
-            "the newest revision"
-        );
         let now = current("approveForMe", None, &[]);
         let mut older = now.told();
         older.revision = Some(MOCKUP_REVISION - 1);
         let sent = notes(&older, &now);
         assert_eq!(labels(&sent), vec![REVISION_LABEL]);
-        assert_eq!(sent[0].text, format!("[instructions] {}", mockup.thread));
+        // With the notes of any revision since, in one message.
+        assert!(
+            sent[0]
+                .text
+                .starts_with(&format!("[instructions] {}", mockup.thread))
+        );
+        assert_eq!(
+            Some(sent[0].text.clone()),
+            revision_note(MOCKUP_REVISION - 1, false)
+        );
         assert!(sent[0].text.contains("\"Want a mockup first?\""));
         assert!(sent[0].text.contains("delegate_task with mockup: true"));
         assert!(sent[0].text.contains("matches_mockup"));
-        assert_eq!(sent[0].told.revision, Some(MOCKUP_REVISION));
+        assert_eq!(sent[0].told.revision, Some(revision()));
         let mut heard = sent[0].told.clone();
         fill_told(&mut heard, &older);
         assert!(notes(&heard, &now).is_empty());
-        older.revision = Some(MOCKUP_REVISION);
+        older.revision = Some(revision());
         assert!(notes(&older, &now).is_empty());
 
         assert_eq!(
