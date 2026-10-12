@@ -144,16 +144,26 @@ impl ComputerUse {
 
 /// The helper bundled with this install: beside the daemon in Brigadier.app
 /// (`Contents/MacOS/brigadierd` → `Contents/Helpers/…`), or where [`HELPER_APP_ENV`] says.
+/// A development daemon run from the checkout (`target/debug/brigadierd`) uses the bundle the
+/// desktop build staged there (`apps/desktop/src-tauri/binaries/…`).
 #[cfg(target_os = "macos")]
 fn bundled_helper(daemon_exe: &Path) -> Option<PathBuf> {
     if let Some(app) = std::env::var_os(HELPER_APP_ENV).filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(app)).filter(|app| app.exists());
     }
-    daemon_exe
+    let dir = daemon_exe.parent()?;
+    let installed = dir
         .parent()
-        .and_then(Path::parent)
-        .map(|contents| contents.join("Helpers").join(HELPER_APP))
-        .filter(|app| app.exists())
+        .map(|contents| contents.join("Helpers").join(HELPER_APP));
+    let staged = cfg!(debug_assertions)
+        .then(|| dir.parent()?.parent())
+        .flatten()
+        .map(|checkout| {
+            checkout
+                .join("apps/desktop/src-tauri/binaries")
+                .join(HELPER_APP)
+        });
+    installed.into_iter().chain(staged).find(|app| app.exists())
 }
 
 #[cfg(target_os = "macos")]
@@ -484,5 +494,18 @@ mod tests {
             .join(HELPER_APP);
         std::fs::create_dir_all(&helper).unwrap();
         assert_eq!(bundled_helper(&exe), Some(helper));
+    }
+
+    #[test]
+    fn a_development_daemon_uses_the_bundle_staged_in_its_checkout() {
+        let dir = Scratch::new();
+        let exe = dir.path().join("target/debug/brigadierd");
+        assert_eq!(bundled_helper(&exe), None);
+        let staged = dir
+            .path()
+            .join("apps/desktop/src-tauri/binaries")
+            .join(HELPER_APP);
+        std::fs::create_dir_all(&staged).unwrap();
+        assert_eq!(bundled_helper(&exe), Some(staged));
     }
 }
