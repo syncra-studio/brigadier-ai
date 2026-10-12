@@ -16,6 +16,8 @@ import { applyBrainEvents } from "@/state/brain";
 import { applyEvents, useApp } from "@/state/store";
 import { startBrowserOptions } from "@/state/links";
 import { startMenuBar } from "@/state/menuBar";
+import { emitPageChanged } from "@/state/pageChanges";
+import { startPagesFlush } from "@/state/pagesFlush";
 import { applyUpdateEvents, loadUpdates } from "@/state/updates";
 import { applyUsageEvents } from "@/state/usage";
 import { onDictationDisconnected, onDictationUpdate } from "@/state/dictation";
@@ -116,6 +118,9 @@ function onBridgeEvent(message: BridgeEvent) {
     case "dictation":
       onDictationUpdate(message.update);
       break;
+    case "pageChanged":
+      emitPageChanged({ id: message.id, revision: message.revision });
+      break;
     case "windowVisibility":
       setSamplingPaused(!message.visible);
       useApp.setState({ windowVisible: message.visible });
@@ -139,6 +144,9 @@ function onBridgeEvent(message: BridgeEvent) {
 }
 
 export async function startBridge(): Promise<void> {
+  startPagesFlush().catch((error: unknown) => {
+    console.error("listening for the quit's page save failed", error);
+  });
   await subscribe(onBridgeEvent);
   startMenuBar();
   startBrowserOptions();

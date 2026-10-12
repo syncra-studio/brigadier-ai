@@ -7,6 +7,7 @@
 //! `method` tag, so TypeScript can pair them with `Extract<Response, { method: M }>`.
 
 use brigadier_brain::{BrainAnswer, BrainGraph, BrainQuery, Node, NodeFilter};
+use brigadier_core::pages::{Page, PageContent, PageError, PageSummary, PageWriteOutcome};
 use brigadier_core::storage::{
     BranchChoice, CleanReport, ProjectRemoval, RemoveProjectReport, StorageReport, UninstallApp,
     UninstallPlan, UninstallReport, UnlandedBranch,
@@ -32,7 +33,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -1011,6 +1012,25 @@ pub enum Request {
         keep_data: bool,
         delete_branches: Vec<BranchChoice>,
     },
+    /// Makes a new, empty page (a local Markdown document in the data folder).
+    PageCreate,
+    /// A page as it is on disk now.
+    PageRead {
+        id: String,
+    },
+    /// Saves a page's title, emoji and Markdown, if it is still at `baseRevision`; otherwise
+    /// nothing is written and the answer is a conflict with the page as it is now.
+    PageWrite {
+        id: String,
+        content: PageContent,
+        base_revision: String,
+    },
+    /// Every page, the most recently changed first.
+    PageList,
+    /// Deletes a page; one already gone is fine.
+    PageDelete {
+        id: String,
+    },
     /// Orderly quit: stop admitting writes, commit what is queued, acknowledge, exit.
     Shutdown,
 }
@@ -1444,6 +1464,19 @@ pub enum Response {
     Uninstall {
         report: UninstallReport,
     },
+    PageCreate {
+        page: Page,
+    },
+    PageRead {
+        page: Page,
+    },
+    PageWrite {
+        outcome: PageWriteOutcome,
+    },
+    PageList {
+        pages: Vec<PageSummary>,
+    },
+    PageDelete,
     Shutdown,
 }
 
@@ -1571,6 +1604,12 @@ pub enum ServerFrame {
     /// only: never stored.
     Dictation {
         update: DictationUpdate,
+    },
+    /// A page changed on disk: saved, edited by another program, or deleted (no `revision`).
+    /// Sent to every subscribed connection; editors showing an older revision read it again.
+    PageChanged {
+        id: String,
+        revision: Option<String>,
     },
     /// The daemon is shutting down; the connection closes next.
     Closing,
@@ -1764,6 +1803,20 @@ impl From<brigadier_core::Error> for IpcError {
             E::NotFound(_) => ErrorCode::NotFound,
             E::Invalid(_) | E::Provider(_) => ErrorCode::Invalid,
             E::Store(_) | E::Corrupt { .. } => ErrorCode::Internal,
+        };
+        Self {
+            code,
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<PageError> for IpcError {
+    fn from(err: PageError) -> Self {
+        let code = match &err {
+            PageError::NotFound(_) => ErrorCode::NotFound,
+            PageError::Invalid(_) => ErrorCode::Invalid,
+            PageError::Io { .. } => ErrorCode::Internal,
         };
         Self {
             code,

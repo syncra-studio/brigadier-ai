@@ -472,6 +472,7 @@ dependencies = [
  "jiff",
  "memchr",
  "nix 0.31.3",
+ "notify",
  "rusqlite",
  "rusqlite_migration",
  "schemars 1.2.2",

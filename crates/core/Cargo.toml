@@ -20,6 +20,8 @@ brigadier-store.workspace = true
 blake3.workspace = true
 jiff = "0.2.37"
 memchr.workspace = true
+# Pages: noticing edits made to the pages folder by other programs.
+notify = "8.2.0"
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 schemars.workspace = true

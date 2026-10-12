@@ -89,6 +89,12 @@ fn quit_app(app: tauri::AppHandle) {
     shell::quit(&app, 0);
 }
 
+/// The window saved its pages' pending edits, as a quit's `flush-pages` asked with `token`.
+#[tauri::command]
+fn pages_flushed(token: u64) {
+    shell::pages_flushed(token);
+}
+
 #[tauri::command]
 async fn ipc_request(state: State<'_, AppState>, request: Request) -> Result<Response, IpcError> {
     if matches!(request, Request::StartOvernight { .. }) {
@@ -695,6 +701,7 @@ fn main() {
             app_info,
             uninstall_app,
             quit_app,
+            pages_flushed,
             ipc_request,
             ipc_subscribe,
             notification_permission,

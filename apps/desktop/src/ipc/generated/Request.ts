@@ -15,6 +15,7 @@ import type { ForkPlace } from "./ForkPlace";
 import type { Mention } from "./Mention";
 import type { NodeFilter } from "./NodeFilter";
 import type { OvernightRunId } from "./OvernightRunId";
+import type { PageContent } from "./PageContent";
 import type { ProjectId } from "./ProjectId";
 import type { ProjectPatch } from "./ProjectPatch";
 import type { ProposedPlan } from "./ProposedPlan";
@@ -128,4 +129,4 @@ before: number | null, limit: number, } | { "method": "replayFixture", fixtureId
  * The asking app's bundle identifier: its own caches are never offered. Without it, no
  * app's caches are.
  */
-app?: string, } | { "method": "cleanStorage", scanId: string, items: Array<string>, } | { "method": "previewUninstall", app: UninstallApp, } | { "method": "uninstall", planId: string, keepData: boolean, deleteBranches: Array<BranchChoice>, } | { "method": "shutdown" };
+app?: string, } | { "method": "cleanStorage", scanId: string, items: Array<string>, } | { "method": "previewUninstall", app: UninstallApp, } | { "method": "uninstall", planId: string, keepData: boolean, deleteBranches: Array<BranchChoice>, } | { "method": "pageCreate" } | { "method": "pageRead", id: string, } | { "method": "pageWrite", id: string, content: PageContent, baseRevision: string, } | { "method": "pageList" } | { "method": "pageDelete", id: string, } | { "method": "shutdown" };

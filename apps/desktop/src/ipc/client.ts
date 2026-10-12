@@ -9,6 +9,10 @@ import type {
   BrowserOptions,
   ConventionsExport,
   IpcError,
+  Page,
+  PageContent,
+  PageSummary,
+  PageWriteOutcome,
   RunningChat,
   Request,
   Response,
@@ -301,4 +305,39 @@ export function saveDocument(id: string, text: string, directory: string | null,
 /** Release the native save grant when a document leaves the reopen history. */
 export function forgetDocument(id: string): Promise<void> {
   return invoke("forget_document", { id });
+}
+
+/** Makes a new, empty page: a local Markdown document the daemon keeps in the data folder. */
+export async function pageCreate(): Promise<Page> {
+  return (await request({ method: "pageCreate" })).page;
+}
+
+/** A page as it is on disk now; its `revision` is what the next `pageWrite` is based on. */
+export async function pageRead(id: string): Promise<Page> {
+  return (await request({ method: "pageRead", id })).page;
+}
+
+/** Saves a page if it is still at `baseRevision`; otherwise nothing is written and the outcome
+ * is a conflict carrying the page as it is now. */
+export async function pageWrite(
+  id: string,
+  content: PageContent,
+  baseRevision: string,
+): Promise<PageWriteOutcome> {
+  return (await request({ method: "pageWrite", id, content, baseRevision })).outcome;
+}
+
+/** Every page, the most recently changed first. */
+export async function pageList(): Promise<PageSummary[]> {
+  return (await request({ method: "pageList" })).pages;
+}
+
+/** Deletes a page; one already gone is fine. */
+export async function pageDelete(id: string): Promise<void> {
+  await request({ method: "pageDelete", id });
+}
+
+/** Answers a quit's `flush-pages` request: the pages' pending edits are saved. */
+export function pagesFlushed(token: number): Promise<void> {
+  return invoke("pages_flushed", { token });
 }

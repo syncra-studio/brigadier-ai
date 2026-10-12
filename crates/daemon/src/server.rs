@@ -9,6 +9,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use brigadier_core::heap;
 use brigadier_core::manager::SessionManager;
+use brigadier_core::pages::{PageChange, PageError, Pages};
 use brigadier_core::runtime::{Runtime, StartRaw};
 use brigadier_core::{
     Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId, Setup,
@@ -82,6 +83,8 @@ pub struct Daemon {
     pub uninstall: Uninstall,
     /// Newer versions of Brigadier and the agent CLIs, and the update running.
     pub updates: Updates,
+    /// The user's pages: local Markdown documents in the data folder.
+    pub pages: Arc<Pages>,
     next_connection: AtomicU64,
 }
 
@@ -100,6 +103,7 @@ impl Daemon {
         drained: watch::Receiver<bool>,
         dictation: Arc<Dictation>,
         awake: Arc<Awake>,
+        pages: Arc<Pages>,
     ) -> Self {
         let terminals = Arc::new(Terminals::with_platform(runtime.platform().clone()));
         Self {
@@ -120,6 +124,7 @@ impl Daemon {
             storage: Storage::default(),
             uninstall: Uninstall::default(),
             updates: Updates::default(),
+            pages,
             next_connection: AtomicU64::new(1),
         }
     }
@@ -195,6 +200,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         worker_terminals: HashMap::new(),
         dictation_feed: None,
         dictations: Started::new(daemon.dictation.clone()),
+        page_feed: None,
         late_tx,
         late,
     };
@@ -227,6 +233,8 @@ struct Session {
     /// The dictations this connection started: only their text is forwarded, and the ones
     /// still taking audio are dropped when it ends.
     dictations: Started,
+    /// Page changes, once subscribed to the live feed.
+    page_feed: Option<broadcast::Receiver<PageChange>>,
     /// Answers to slow requests (clones), which run beside the others, by request id.
     late_tx: mpsc::Sender<(u32, Result<Response, IpcError>)>,
     late: mpsc::Receiver<(u32, Result<Response, IpcError>)>,
@@ -327,6 +335,11 @@ impl Session {
                         }
                     }
                 }
+                change = next_page_change(&mut self.page_feed) => {
+                    if let Some(PageChange { id, revision }) = change {
+                        self.writer.write(&ServerFrame::PageChanged { id, revision }).await?;
+                    }
+                }
                 update = next_dictation_update(&mut self.dictation_feed) => {
                     if let Some(update) = update {
                         let ours = match &update {
@@ -352,6 +365,9 @@ impl Session {
         let outcome = match request {
             Request::Subscribe { after_seq, metrics } => {
                 self.set_metrics(metrics);
+                if self.page_feed.is_none() {
+                    self.page_feed = Some(self.daemon.pages.subscribe());
+                }
                 self.subscribe(after_seq).await.map_err(internal)
             }
             Request::SetMetricsStreaming { enabled } => {
@@ -941,6 +957,27 @@ async fn next_dictation_update(
             Ok(update) => Some(update),
             // Progress is superseded by the next update; the ends are rare enough not to lag.
             Err(RecvError::Lagged(_)) => None,
+            Err(RecvError::Closed) => {
+                *feed = None;
+                None
+            }
+        },
+        None => std::future::pending().await,
+    }
+}
+
+async fn next_page_change(
+    feed: &mut Option<broadcast::Receiver<PageChange>>,
+) -> Option<PageChange> {
+    match feed {
+        Some(rx) => match rx.recv().await {
+            Ok(change) => Some(change),
+            // Hundreds behind: some are missed. An editor still finds out at its next save,
+            // which the newer revision refuses as a conflict.
+            Err(RecvError::Lagged(missed)) => {
+                tracing::warn!(missed, "a connection missed page changes");
+                None
+            }
             Err(RecvError::Closed) => {
                 *feed = None;
                 None
@@ -2044,6 +2081,31 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             .await
             .map_err(invalid)?,
         },
+        Request::PageCreate => Response::PageCreate {
+            page: heap(|| on_pages(daemon, |pages| pages.create())).await?,
+        },
+        Request::PageRead { id } => Response::PageRead {
+            page: heap(|| on_pages(daemon, move |pages| pages.read(&id))).await?,
+        },
+        Request::PageWrite {
+            id,
+            content,
+            base_revision,
+        } => Response::PageWrite {
+            outcome: heap(|| {
+                on_pages(daemon, move |pages| {
+                    pages.write(&id, &content, &base_revision)
+                })
+            })
+            .await?,
+        },
+        Request::PageList => Response::PageList {
+            pages: heap(|| on_pages(daemon, |pages| pages.list())).await?,
+        },
+        Request::PageDelete { id } => {
+            heap(|| on_pages(daemon, move |pages| pages.delete(&id))).await?;
+            Response::PageDelete
+        }
         Request::Subscribe { .. }
         | Request::SetMetricsStreaming { .. }
         | Request::RefreshRankings
@@ -2054,6 +2116,22 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             });
         }
     })
+}
+
+/// Runs a page request's file work (reads, flushed saves) off the async runtime. The
+/// connection waits for it, so one window's saves land in the order it sent them.
+async fn on_pages<T: Send + 'static>(
+    daemon: &Arc<Daemon>,
+    work: impl FnOnce(&Pages) -> Result<T, PageError> + Send + 'static,
+) -> Result<T, IpcError> {
+    let pages = daemon.pages.clone();
+    tokio::task::spawn_blocking(move || work(&pages))
+        .await
+        .map_err(|error| IpcError {
+            code: ErrorCode::Internal,
+            message: format!("the page request stopped: {error}"),
+        })?
+        .map_err(IpcError::from)
 }
 
 /// A path as one word for the shell a setup terminal runs in (PowerShell on Windows, where

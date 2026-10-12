@@ -3,17 +3,27 @@
 //! Closing the window hides it (and the Dock icon on macOS); the app and `brigadierd` keep
 //! running in the menu bar. Quit (menu-bar item, Cmd+Q or a system quit) asks the daemon to
 //! drain and exit, waits for its acknowledgement, then exits the app.
+//!
+//! Before that, an orderly quit (Brigadier › Quit and Cmd+Q, the menu-bar item's Quit, closing
+//! the window where there is no menu-bar item, the app's own Quit) has the window save its
+//! pages' pending edits: it hears `flush-pages` with a token, saves, and answers
+//! `pages_flushed` with the token, or the quit goes on after [`FLUSH_TIMEOUT`]. A quit that
+//! can't wait for the window gets no flush: on macOS a system quit (the Dock's Quit,
+//! AppleScript, logout, restart) arrives only as the process exits, with the event loop that
+//! would carry the window's answer no longer turning; and a crash, a force quit or a kill
+//! signal end the app at once. The window keeps its own copy of unsaved edits for those.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use brigadier_ipc::app::{BridgeEvent, RunningChat};
-#[cfg(target_os = "macos")]
 use tauri::Emitter;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, WebviewWindow};
+use tokio::sync::oneshot;
 
 use crate::AppState;
 
@@ -27,6 +37,13 @@ const RUNNING_TITLE_CHARS: usize = 48;
 /// ending of CLI sessions (exit grace, process-group reap, last events stored) before its
 /// store drains; the daemon finishes quitting on its own if this runs out.
 const QUIT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Longest a quit waits for the window to save its pages' pending edits.
+const FLUSH_TIMEOUT: Duration = Duration::from_millis(1500);
+/// The window's event asking it to save its pages' pending edits now.
+const FLUSH_PAGES: &str = "flush-pages";
+/// The flush waiting for the window's answer: its token and who hears the answer.
+static FLUSH: Mutex<Option<(u64, oneshot::Sender<()>)>> = Mutex::new(None);
+static NEXT_FLUSH: AtomicU64 = AtomicU64::new(1);
 
 static QUITTING: AtomicBool = AtomicBool::new(false);
 static IN_MENU_BAR: AtomicBool = AtomicBool::new(false);
@@ -171,6 +188,9 @@ const UNINSTALL_ITEM: &str = "uninstall";
 /// Menu id of Brigadier › Settings….
 #[cfg(target_os = "macos")]
 const SETTINGS_ITEM: &str = "settings";
+/// Menu id of Brigadier › Quit.
+#[cfg(target_os = "macos")]
+const QUIT_ITEM: &str = "app-quit";
 
 /// The standard app menu with File › Open Folder… (⌘O) first. Choosing it has the webview ask
 /// for folders to add as projects.
@@ -216,6 +236,15 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
         let quit_at = app_menu.items()?.len().saturating_sub(1);
         app_menu.insert_items(&[&uninstall, &separator], quit_at)?;
+        // The standard Quit is the system's `terminate:`, which the app hears only as it exits,
+        // too late for the window to save its pages: ours quits the orderly way.
+        let quit_at = app_menu.items()?.len().saturating_sub(1);
+        app_menu.remove_at(quit_at)?;
+        let title = format!("Quit {}", app.package_info().name);
+        let quit = MenuItemBuilder::with_id(QUIT_ITEM, title)
+            .accelerator("CmdOrCtrl+Q")
+            .build(app)?;
+        app_menu.append(&quit)?;
     }
     // View › Toggle Sidebar, Back and Forward at its end; the webview handles them as keys.
     for item in menu.items()? {
@@ -304,6 +333,10 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
                 let _ = app.emit_to(MAIN_WINDOW, "pane-shortcut", key);
                 return;
             }
+        }
+        if event.id().as_ref() == QUIT_ITEM {
+            quit(app, 0);
+            return;
         }
         if event.id().as_ref() == "close-main-window" {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -440,25 +473,62 @@ fn notify_visibility(app: &AppHandle, visible: bool) {
     }
 }
 
-/// Orderly quit: the daemon drains and acknowledges, then the app exits with `code`.
+/// Orderly quit: the window saves its pages, the daemon drains and acknowledges, then the app
+/// exits with `code`.
 pub fn quit(app: &AppHandle, code: i32) {
     if QUITTING.swap(true, Ordering::AcqRel) {
         return;
     }
     EXIT_CODE.store(code, Ordering::Release);
-    if let Some(window) = main_window(app) {
-        let _ = window.hide();
-    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        // While the window is still shown and running, and the daemon still takes saves.
+        flush_pages(&app).await;
+        if let Some(window) = main_window(&app) {
+            let _ = window.hide();
+        }
         stop_daemon(&app).await;
         app.exit(code);
     });
 }
 
-/// The process is already exiting without an orderly quit: on macOS, `terminate:` (the app
-/// menu's Quit, the Dock, AppleScript, logout) skips `ExitRequested` and only surfaces as
-/// `RunEvent::Exit`. Runs the same drain-and-acknowledge before the process goes away.
+/// Asks the window to save its pages' pending edits and waits for its answer, at most
+/// [`FLUSH_TIMEOUT`].
+async fn flush_pages(app: &AppHandle) {
+    if crate::overnight_notifications::is_host() || main_window(app).is_none() {
+        return;
+    }
+    let token = NEXT_FLUSH.fetch_add(1, Ordering::Relaxed);
+    let (answered, answer) = oneshot::channel();
+    *FLUSH
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((token, answered));
+    if let Err(err) = app.emit_to(MAIN_WINDOW, FLUSH_PAGES, token) {
+        tracing::warn!(error = %err, "could not ask the window to save its pages");
+        return;
+    }
+    match tokio::time::timeout(FLUSH_TIMEOUT, answer).await {
+        Ok(Ok(())) => tracing::info!("the window saved its pages"),
+        _ => tracing::warn!("the window did not say its pages were saved; quitting anyway"),
+    }
+}
+
+/// The window's answer to `flush-pages`: its pages' pending edits are saved (or failed).
+pub fn pages_flushed(token: u64) {
+    let mut flush = FLUSH
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if flush.as_ref().is_some_and(|(waiting, _)| *waiting == token)
+        && let Some((_, answered)) = flush.take()
+    {
+        let _ = answered.send(());
+    }
+}
+
+/// The process is already exiting without an orderly quit: on macOS, `terminate:` (the Dock,
+/// AppleScript, logout) skips `ExitRequested` and only surfaces as `RunEvent::Exit`. Runs the
+/// same drain-and-acknowledge before the process goes away. The window's pages are not saved
+/// first: this blocks the event loop that would carry its answer.
 pub fn quit_on_exit(app: &AppHandle) {
     if QUITTING.swap(true, Ordering::AcqRel) {
         return;

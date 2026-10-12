@@ -9,4 +9,4 @@ import type { TerminalOutput } from "./TerminalOutput";
 /**
  * Frames sent by the daemon.
  */
-export type ServerFrame = { "type": "welcome", daemon: DaemonInfo, lastSeq: number, } | { "type": "response", id: number, result: Outcome, } | { "type": "event", event: EventEnvelope, } | { "type": "lagged", resumeAfter: number, } | { "type": "metrics", metrics: DaemonMetrics, } | { "type": "terminal", output: TerminalOutput, } | { "type": "dictation", update: DictationUpdate, } | { "type": "closing" };
+export type ServerFrame = { "type": "welcome", daemon: DaemonInfo, lastSeq: number, } | { "type": "response", id: number, result: Outcome, } | { "type": "event", event: EventEnvelope, } | { "type": "lagged", resumeAfter: number, } | { "type": "metrics", metrics: DaemonMetrics, } | { "type": "terminal", output: TerminalOutput, } | { "type": "dictation", update: DictationUpdate, } | { "type": "pageChanged", id: string, revision: string | null, } | { "type": "closing" };

@@ -395,6 +395,9 @@ impl Bridge {
             ServerFrame::Metrics { metrics } => self.emit(BridgeEvent::Metrics { metrics }),
             ServerFrame::Terminal { output } => self.emit(BridgeEvent::Terminal { output }),
             ServerFrame::Dictation { update } => self.emit(BridgeEvent::Dictation { update }),
+            ServerFrame::PageChanged { id, revision } => {
+                self.emit(BridgeEvent::PageChanged { id, revision });
+            }
             ServerFrame::Closing => return Some("daemon is shutting down".into()),
             ServerFrame::Welcome { .. } => return Some("unexpected second welcome".into()),
         }

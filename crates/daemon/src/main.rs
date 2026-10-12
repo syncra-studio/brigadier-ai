@@ -48,6 +48,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use brigadier_core::Core;
 use brigadier_core::manager::{ManagerConfig, SessionManager};
+use brigadier_core::pages::{PAGES_DIR, Pages};
 use brigadier_core::runtime::{Runtime, Spawner};
 use brigadier_ipc::protocol::{DaemonInfo, PROTOCOL_VERSION};
 use brigadier_ipc::{Listener, Token};
@@ -353,6 +354,7 @@ async fn run(
             platform.paths().data_dir.join("models"),
         )),
         awake.clone(),
+        Arc::new(Pages::open(platform.paths().data_dir.join(PAGES_DIR))),
     ));
     // "Open in terminal" runs a worker's session in the daemon's terminals.
     daemon.sessions.set_terminal_host(daemon.terminals.clone());

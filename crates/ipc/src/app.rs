@@ -42,6 +42,12 @@ pub enum BridgeEvent {
     Dictation {
         update: DictationUpdate,
     },
+    /// A page changed on disk (no `revision`: it was deleted). An editor showing an older
+    /// revision reads it again.
+    PageChanged {
+        id: String,
+        revision: Option<String>,
+    },
     /// The window was hidden or shown; pause sampling while hidden.
     WindowVisibility {
         visible: bool,
