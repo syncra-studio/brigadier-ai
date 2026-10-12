@@ -33,6 +33,14 @@ the repository's `THIRD_PARTY_NOTICES.md`. Changes from the original:
   PID's executable and start time before signalling it), and retries once a
   call that lost the daemon, but only one that never reached it or that only
   reads, so an action never runs twice.
+- `lifecycle.rs`: the desktop build stamps a build id into the bundle; a
+  healthy daemon from another build is replaced like a dead one. A `health`
+  request also fails when the daemon's main loop has stopped running. While
+  `<home>/off` exists (computer use turned off in Brigadier), shims refuse
+  calls and never start a daemon, and the daemon refuses calls.
+- `host.rs`: `brigadier-cu host probe|ensure|restart|stop|off|on|request`,
+  how Brigadier's daemon (which the socket's signature check would refuse)
+  asks things of the helper.
 - Any tool accepts a `session` argument (ignored where it has no use), since
   agents are told to pass theirs on every call.
 - The bundle explains its Apple Events use, so macOS can ask before browser

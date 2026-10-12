@@ -3,8 +3,8 @@
 //! Every MCP shim calls [`ensure`] before forwarding a tool call and again
 //! after a transport failure. The steps:
 //!
-//! 1. Probe the socket with a short deadline. A daemon that answers is used
-//!    as is.
+//! 1. Probe the socket with a short deadline. A daemon that answers, from
+//!    the build a fresh one would launch from, is used as is.
 //! 2. Otherwise take an exclusive `flock` on `<home>/lifecycle.lock`, so that
 //!    many shims recovering at once start one daemon between them, and probe
 //!    again: another shim may have finished the recovery while we waited.
@@ -14,9 +14,10 @@
 //!    PID is never signalled.
 //! 4. Launch a fresh daemon through LaunchServices and wait for it to answer.
 //!
-//! The seams later stages build on: [`probe`] (a watchdog can call it on a
-//! timer), [`stop_recorded_daemon`] (a version or permission change can force
-//! a replacement), and [`ensure`] itself.
+//! A healthy daemon from another build (the app was updated while it ran)
+//! is replaced the same way. Brigadier's watchdog uses [`probe`] and
+//! [`restart`]; turning computer use off goes through [`set_off`], under the
+//! same lock, so no shim starts a daemon while it is off.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -33,14 +34,22 @@ const LAUNCH_DEADLINE: Duration = Duration::from_secs(15);
 const BIND_GRACE: Duration = Duration::from_secs(3);
 
 /// What a single probe of the daemon socket found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Health {
-    /// The daemon answered a `list` request in time.
-    Healthy,
+    /// The daemon answered a `health` request in time, reporting the build
+    /// it started from.
+    Healthy { build_id: Option<String> },
     /// Nothing accepts connections on the socket.
     Absent,
-    /// Something accepts connections but did not answer in time.
+    /// Something accepts connections but did not answer in time, or its main
+    /// loop has stopped running.
     Hung,
+}
+
+impl Health {
+    pub fn is_healthy(&self) -> bool {
+        matches!(self, Self::Healthy { .. })
+    }
 }
 
 /// Probe the daemon socket once, never waiting longer than [`PROBE_DEADLINE`].
@@ -49,7 +58,7 @@ pub fn probe(socket_path: &str) -> Health {
         return Health::Absent;
     };
     let request = DaemonRequest {
-        method: "list".into(),
+        method: "health".into(),
         name: None,
         args: None,
         session_id: None,
@@ -63,8 +72,8 @@ pub fn probe(socket_path: &str) -> Health {
     {
         return Health::Hung;
     }
-    let mut response = Vec::with_capacity(4096);
-    let mut chunk = [0u8; 4096];
+    let mut response = Vec::with_capacity(512);
+    let mut chunk = [0u8; 512];
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() || stream.set_read_timeout(Some(remaining)).is_err() {
@@ -75,15 +84,7 @@ pub fn probe(socket_path: &str) -> Health {
             Ok(n) => {
                 response.extend_from_slice(&chunk[..n]);
                 if let Some(end) = response.iter().position(|&b| b == b'\n') {
-                    let answered_ok = serde_json::from_slice::<serde_json::Value>(&response[..end])
-                        .ok()
-                        .and_then(|v| v.get("ok").and_then(serde_json::Value::as_bool))
-                        .unwrap_or(false);
-                    return if answered_ok {
-                        Health::Healthy
-                    } else {
-                        Health::Hung
-                    };
+                    return health_from_answer(&response[..end]);
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
@@ -92,16 +93,68 @@ pub fn probe(socket_path: &str) -> Health {
     }
 }
 
-/// Make sure a healthy daemon answers on `socket_path`, starting or replacing
-/// it if needed. Blocking; call it from a blocking context.
+/// A `health` answer: healthy with its build id, or hung when it says no (a
+/// silent main loop) or isn't an answer at all.
+fn health_from_answer(line: &[u8]) -> Health {
+    let Ok(answer) = serde_json::from_slice::<serde_json::Value>(line) else {
+        return Health::Hung;
+    };
+    if answer.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Health::Hung;
+    }
+    Health::Healthy {
+        build_id: answer
+            .pointer("/result/build_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+    }
+}
+
+/// Whether a healthy daemon reporting `build_id` is from another build than
+/// the bundle a fresh one would launch from.
+fn from_another_build(build_id: Option<&str>) -> bool {
+    let on_disk = crate::lifecycle::launch_bundle()
+        .as_deref()
+        .and_then(crate::lifecycle::bundle_build_id);
+    crate::lifecycle::needs_replacement(build_id, on_disk.as_deref())
+}
+
+/// Whether the daemon on `socket_path` is healthy and from the right build.
+pub fn is_current(socket_path: &str) -> bool {
+    match probe(socket_path) {
+        Health::Healthy { build_id } => !from_another_build(build_id.as_deref()),
+        _ => false,
+    }
+}
+
+/// Make sure a healthy daemon from the right build answers on `socket_path`,
+/// starting or replacing it if needed. Blocking; call it from a blocking
+/// context. Refuses while computer use is turned off.
 pub fn ensure(socket_path: &str, claude_code_compat: bool) -> anyhow::Result<()> {
-    if probe(socket_path) == Health::Healthy {
+    let off = || crate::lifecycle::is_off(&crate::lifecycle::home());
+    if off() {
+        anyhow::bail!(crate::lifecycle::OFF_MESSAGE);
+    }
+    if is_current(socket_path) {
         return Ok(());
     }
     let _lock = LifecycleLock::acquire(&lock_path(socket_path))?;
+    // Turning off takes the same lock, so this holds until it is turned on.
+    if off() {
+        anyhow::bail!(crate::lifecycle::OFF_MESSAGE);
+    }
     let pid_file = crate::cli::daemon_pid_file_path(Some(socket_path));
     match probe(socket_path) {
-        Health::Healthy => return Ok(()),
+        Health::Healthy { build_id } => {
+            if !from_another_build(build_id.as_deref()) {
+                return Ok(());
+            }
+            crate::journal::record_event(
+                "helper_recovery",
+                "daemon is from another build; replacing it",
+            );
+            stop_recorded_daemon(&pid_file);
+        }
         Health::Hung => {
             crate::journal::record_event("helper_recovery", "daemon accepted but did not answer");
             stop_recorded_daemon(&pid_file);
@@ -114,7 +167,7 @@ pub fn ensure(socket_path: &str, claude_code_compat: bool) -> anyhow::Result<()>
                 let until = Instant::now() + BIND_GRACE;
                 while Instant::now() < until {
                     std::thread::sleep(Duration::from_millis(100));
-                    if probe(socket_path) == Health::Healthy {
+                    if is_current(socket_path) {
                         return Ok(());
                     }
                 }
@@ -123,10 +176,14 @@ pub fn ensure(socket_path: &str, claude_code_compat: bool) -> anyhow::Result<()>
             }
         }
     }
+    launch_and_wait(socket_path, claude_code_compat)
+}
+
+fn launch_and_wait(socket_path: &str, claude_code_compat: bool) -> anyhow::Result<()> {
     crate::cli::launch_daemon(socket_path, claude_code_compat)?;
     let until = Instant::now() + LAUNCH_DEADLINE;
     while Instant::now() < until {
-        if probe(socket_path) == Health::Healthy {
+        if probe(socket_path).is_healthy() {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -135,6 +192,41 @@ pub fn ensure(socket_path: &str, claude_code_compat: bool) -> anyhow::Result<()>
         "Brigadier Computer Use did not start within {}s",
         LAUNCH_DEADLINE.as_secs()
     )
+}
+
+/// Stop the daemon on `socket_path` and start a fresh one, under the
+/// lifecycle lock. For a watchdog that found it hung.
+pub fn restart(socket_path: &str) -> anyhow::Result<()> {
+    let _lock = LifecycleLock::acquire(&lock_path(socket_path))?;
+    if crate::lifecycle::is_off(&crate::lifecycle::home()) {
+        anyhow::bail!(crate::lifecycle::OFF_MESSAGE);
+    }
+    crate::journal::record_event("helper_recovery", "restarted by Brigadier's watchdog");
+    stop_recorded_daemon(&crate::cli::daemon_pid_file_path(Some(socket_path)));
+    launch_and_wait(socket_path, false)
+}
+
+/// Stop the daemon on `socket_path`, under the lifecycle lock.
+pub fn stop(socket_path: &str) -> anyhow::Result<()> {
+    let _lock = LifecycleLock::acquire(&lock_path(socket_path))?;
+    stop_recorded_daemon(&crate::cli::daemon_pid_file_path(Some(socket_path)));
+    Ok(())
+}
+
+/// Turn computer use off (stopping the daemon) or back on, under the
+/// lifecycle lock, so no shim starts a daemon in between.
+pub fn set_off(socket_path: &str, off: bool) -> anyhow::Result<()> {
+    let _lock = LifecycleLock::acquire(&lock_path(socket_path))?;
+    crate::lifecycle::set_off(&crate::lifecycle::home(), off)?;
+    if off {
+        stop_recorded_daemon(&crate::cli::daemon_pid_file_path(Some(socket_path)));
+    }
+    Ok(())
+}
+
+/// The recorded daemon's pid, when it is still ours and alive.
+pub fn running_daemon(socket_path: &str) -> Option<u32> {
+    recorded_daemon(&crate::cli::daemon_pid_file_path(Some(socket_path)))
 }
 
 /// The lock file guarding daemon start and restart for this socket.
@@ -268,6 +360,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let socket = dir.join("none.sock");
         assert_eq!(probe(socket.to_str().unwrap()), Health::Absent);
+        assert!(!is_current(socket.to_str().unwrap()));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -281,6 +374,26 @@ mod tests {
         assert_eq!(probe(socket.to_str().unwrap()), Health::Hung);
         assert!(started.elapsed() < PROBE_DEADLINE + Duration::from_secs(1));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_health_answer_carries_the_build_and_a_refusal_is_hung() {
+        assert_eq!(
+            health_from_answer(br#"{"ok":true,"result":{"build_id":"0.1-ab","pid":7}}"#),
+            Health::Healthy {
+                build_id: Some("0.1-ab".into())
+            }
+        );
+        assert_eq!(
+            health_from_answer(br#"{"ok":true,"result":{"pid":7}}"#),
+            Health::Healthy { build_id: None }
+        );
+        // A silent main loop, or a daemon too old to know `health`.
+        assert_eq!(
+            health_from_answer(br#"{"ok":false,"error":"the main loop has been silent"}"#),
+            Health::Hung
+        );
+        assert_eq!(health_from_answer(b"garbage"), Health::Hung);
     }
 
     #[test]

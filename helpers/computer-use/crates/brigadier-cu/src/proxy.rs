@@ -266,73 +266,87 @@ pub async fn run_proxy(
                             wait_for_grants,
                         } => {
                             let read_only = tool_is_read_only(tools_list, &call.name);
-                            match ensure_daemon_started(
-                                &socket_path,
-                                &mut daemon_state,
-                                &session_id,
-                                claude_code_compat,
-                                expected_profile,
-                                &control_ready_tx,
-                                wait_for_grants,
-                                &daemon_lifecycle_tx,
-                            )
-                            .await
-                            {
-                                Err(error) => Response::error(
+                            if crate::lifecycle::is_off(&crate::lifecycle::home()) {
+                                response_from_tool_result(
                                     id,
-                                    -32603,
-                                    format!("computer-use daemon failed to start: {error}"),
-                                ),
-                                Ok(()) => {
-                                    let first = forward_tool_call(
-                                        id.clone(),
-                                        call.name.clone(),
-                                        call.args.clone(),
-                                        &socket_path,
-                                        &session_id,
-                                        &control_ready_rx,
-                                        read_only,
-                                    )
-                                    .await;
-                                    match first {
-                                        Forwarded::Done(response) => response,
-                                        // The daemon went away under a call that is safe to
-                                        // send again. Bring up a replacement and retry it
-                                        // once; report the original failure only if recovery
-                                        // fails.
-                                        Forwarded::Lost(failure) => {
-                                            crate::journal::record_event(
-                                                "helper_recovery",
-                                                "daemon lost during a tool call; retrying once",
-                                            );
-                                            daemon_state.observe_daemon_loss();
-                                            match ensure_daemon_started(
-                                                &socket_path,
-                                                &mut daemon_state,
-                                                &session_id,
-                                                claude_code_compat,
-                                                expected_profile,
-                                                &control_ready_tx,
-                                                wait_for_grants,
-                                                &daemon_lifecycle_tx,
-                                            )
-                                            .await
-                                            {
-                                                Err(_) => failure,
-                                                Ok(()) => match forward_tool_call(
-                                                    id,
-                                                    call.name,
-                                                    call.args,
+                                    ToolResult::error(crate::lifecycle::OFF_MESSAGE),
+                                )
+                            } else {
+                                match ensure_daemon_started(
+                                    &socket_path,
+                                    &mut daemon_state,
+                                    &session_id,
+                                    claude_code_compat,
+                                    expected_profile,
+                                    &control_ready_tx,
+                                    wait_for_grants,
+                                    &daemon_lifecycle_tx,
+                                )
+                                .await
+                                {
+                                    Err(error) => response_from_tool_result(
+                                        id,
+                                        ToolResult::error(unavailable_message(&error)),
+                                    ),
+                                    Ok(()) => {
+                                        let first = forward_tool_call(
+                                            id.clone(),
+                                            call.name.clone(),
+                                            call.args.clone(),
+                                            &socket_path,
+                                            &session_id,
+                                            &control_ready_rx,
+                                            read_only,
+                                        )
+                                        .await;
+                                        match first {
+                                            Forwarded::Done(response) => response,
+                                            // The daemon went away under a call that is safe to
+                                            // send again. Bring up a replacement and retry it
+                                            // once; report the original failure only if recovery
+                                            // fails.
+                                            Forwarded::Lost(failure) => {
+                                                crate::journal::record_event(
+                                                    "helper_recovery",
+                                                    "daemon lost during a tool call; retrying once",
+                                                );
+                                                daemon_state.observe_daemon_loss();
+                                                match ensure_daemon_started(
                                                     &socket_path,
+                                                    &mut daemon_state,
                                                     &session_id,
-                                                    &control_ready_rx,
-                                                    read_only,
+                                                    claude_code_compat,
+                                                    expected_profile,
+                                                    &control_ready_tx,
+                                                    wait_for_grants,
+                                                    &daemon_lifecycle_tx,
                                                 )
                                                 .await
                                                 {
-                                                    Forwarded::Done(response)
-                                                    | Forwarded::Lost(response) => response,
-                                                },
+                                                    Err(error) => {
+                                                        drop(failure);
+                                                        response_from_tool_result(
+                                                            id,
+                                                            ToolResult::error(unavailable_message(
+                                                                &error,
+                                                            )),
+                                                        )
+                                                    }
+                                                    Ok(()) => match forward_tool_call(
+                                                        id,
+                                                        call.name,
+                                                        call.args,
+                                                        &socket_path,
+                                                        &session_id,
+                                                        &control_ready_rx,
+                                                        read_only,
+                                                    )
+                                                    .await
+                                                    {
+                                                        Forwarded::Done(response)
+                                                        | Forwarded::Lost(response) => response,
+                                                    },
+                                                }
                                             }
                                         }
                                     }
@@ -1060,7 +1074,7 @@ async fn ensure_daemon_started(
     wait_for_grants: bool,
     lifecycle_tx: &tokio::sync::mpsc::UnboundedSender<DaemonLifecycleEvent>,
 ) -> anyhow::Result<()> {
-    if crate::supervisor::probe(socket_path) != crate::supervisor::Health::Healthy {
+    if !crate::supervisor::is_current(socket_path) {
         // A replacement daemon needs a fresh control connection and, for the
         // next driving action, a fresh onboarding stability wait.
         state.observe_daemon_loss();
@@ -1143,7 +1157,7 @@ async fn wait_for_daemon_permission_readiness(
         if elapsed >= grants_deadline || (host_only_missing && elapsed >= host_only_deadline) {
             let message = permission_readiness_failure(last, external_permission_flow);
             crate::journal::record_event("permission_gate_refused", &message);
-            anyhow::bail!(message);
+            return Err(NotReady(message).into());
         }
         let sp = socket_path.to_owned();
         let sid = session_id.to_owned();
@@ -1173,6 +1187,34 @@ async fn wait_for_daemon_permission_readiness(
     }
 }
 
+/// Permissions or setup aren't ready: the message already tells the agent
+/// what is missing, so it reaches the agent as it is.
+#[derive(Debug)]
+struct NotReady(String);
+
+impl std::fmt::Display for NotReady {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NotReady {}
+
+/// The one error an agent sees when the helper couldn't be brought back.
+fn unavailable_message(error: &anyhow::Error) -> String {
+    if let Some(not_ready) = error.downcast_ref::<NotReady>() {
+        return not_ready.0.clone();
+    }
+    if crate::lifecycle::is_off(&crate::lifecycle::home()) {
+        return crate::lifecycle::OFF_MESSAGE.to_owned();
+    }
+    format!(
+        "Computer use isn't available right now: {error:#}. Brigadier tried to restart its \
+         computer-use helper and couldn't. Tell the user if this keeps happening; don't retry \
+         in a loop."
+    )
+}
+
 /// Name exactly which precondition is missing so the agent (and the journal)
 /// can tell a missing TCC grant from a host that has not republished readiness.
 #[cfg(target_os = "macos")]
@@ -1181,9 +1223,11 @@ fn permission_readiness_failure(
     external_permission_flow: bool,
 ) -> String {
     match last {
-        None => "Computer Use permissions are not ready: the Brigadier Computer Use helper did not \
+        None => {
+            "Computer Use permissions are not ready: the Brigadier Computer Use helper did not \
                  answer a permission status request. Open Brigadier Settings > Computer Use."
-            .to_owned(),
+                .to_owned()
+        }
         Some((accessibility, screen_recording, _)) if !accessibility || !screen_recording => {
             let mut missing = Vec::new();
             if !accessibility {
@@ -1199,10 +1243,10 @@ fn permission_readiness_failure(
                 missing.join(" and ")
             )
         }
-        Some(_) if external_permission_flow => "Computer Use onboarding is still in progress: \
-             Accessibility and Screen Recording are granted, but Brigadier has not marked setup \
-             complete for this helper. Open Brigadier Settings > Computer Use and turn Computer Use \
-             off and on to finish setup, then retry. This needs a person; do not retry in a loop."
+        Some(_) if external_permission_flow => "Computer use setup isn't finished: Accessibility \
+             and Screen Recording are granted, but screen capture hasn't been confirmed yet. Ask \
+             the user to finish setup in the window Brigadier opened (or Settings > Computer use > \
+             Finish setup…), then try again. This needs the user; don't retry in a loop."
             .to_owned(),
         Some(_) => "Computer Use permissions are not ready. Finish granting Accessibility and \
                     Screen Recording, then retry."

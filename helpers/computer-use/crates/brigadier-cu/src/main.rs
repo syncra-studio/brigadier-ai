@@ -29,7 +29,9 @@ mod activity_daemon;
 mod bundle;
 mod cli;
 mod doctor;
+mod host;
 mod journal;
+mod lifecycle;
 mod owner_watch;
 mod proxy;
 mod responsibility;
@@ -221,6 +223,7 @@ fn main() {
             journal::run_complain(text, tool, session);
             return;
         }
+        cli::Command::Host { subcommand, args } => host::run(&subcommand, &args),
         cli::Command::Journal { subcommand, args } => {
             journal::run_journal(&subcommand, &args);
             return;
@@ -408,6 +411,7 @@ fn main() {
             // the old join behavior and never touch NSApplication.
             if has_graphic_access {
                 platform_macos::pip::mark_appkit_main_loop_available();
+                lifecycle::start_main_loop_heartbeat();
             }
             if cursor_cfg.enabled && has_graphic_access {
                 // Render the agent-cursor overlay: park the main thread in the

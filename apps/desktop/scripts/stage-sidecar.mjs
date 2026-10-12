@@ -14,7 +14,8 @@
 // with APPLE_SIGNING_IDENTITY when set, otherwise ad hoc.
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, chmodSync, cpSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, chmodSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -112,6 +113,9 @@ function stageHelper(binary) {
     resolve(here, "../src-tauri/icons/icon.icns"),
     join(app, "Contents/Resources/AppIcon.icns"),
   );
+  // The build id: a running helper from any other build is replaced by this one.
+  const digest = createHash("sha256").update(readFileSync(binary)).digest("hex").slice(0, 16);
+  writeFileSync(join(app, "Contents/Resources/build-id"), `${version}-${digest}\n`);
   const plist = join(app, "Contents/Info.plist");
   for (const [key, value] of [
     ["CFBundleIdentifier", id],

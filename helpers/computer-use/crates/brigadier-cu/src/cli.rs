@@ -112,6 +112,11 @@ pub enum Command {
         subcommand: String,
         args: Vec<String>,
     },
+    /// `brigadier-cu host …`: Brigadier's own requests (see `host.rs`).
+    Host {
+        subcommand: String,
+        args: Vec<String>,
+    },
 }
 
 /// Flags whose next token is a value (not a subcommand).
@@ -392,6 +397,19 @@ pub fn parse_command() -> Command {
                 .cloned()
                 .collect();
             Command::Journal {
+                subcommand,
+                args: rest,
+            }
+        }
+        Some("host") => {
+            let subcommand = pos.next().unwrap_or("probe").to_string();
+            let rest: Vec<String> = args
+                .iter()
+                .skip_while(|a| *a != "host")
+                .skip(2)
+                .cloned()
+                .collect();
+            Command::Host {
                 subcommand,
                 args: rest,
             }

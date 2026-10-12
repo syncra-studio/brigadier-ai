@@ -2157,6 +2157,29 @@ pub async fn run_serve_with_owner(
                                     (serde_json::to_string(&response).unwrap() + "\n").as_bytes()
                                 ).await;
                             }
+                            "health" => {
+                                // A daemon whose main loop stopped running is
+                                // hung even though this socket thread answers.
+                                let silence = crate::lifecycle::main_loop_silence();
+                                let resp = if silence >= crate::lifecycle::MAIN_LOOP_STALL {
+                                    DaemonResponse::err(
+                                        format!(
+                                            "the main loop has been silent for {}s",
+                                            silence.as_secs()
+                                        ),
+                                        1,
+                                    )
+                                } else {
+                                    DaemonResponse::ok(serde_json::json!({
+                                        "build_id": crate::lifecycle::own_build_id(),
+                                        "pid": std::process::id(),
+                                        "main_loop_silence_ms": silence.as_millis() as u64,
+                                    }))
+                                };
+                                let _ = writer.write_all(
+                                    (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                ).await;
+                            }
                             "list" => {
                                 // Include full ToolDef (input_schema + annotation
                                 // hints + capabilities) so MCP proxy callers can
@@ -2285,6 +2308,18 @@ pub async fn run_serve_with_owner(
                                 ).await;
                             }
                             "call" => {
+                                // Turned off in Brigadier: holds even for agents
+                                // that were already running.
+                                if crate::lifecycle::is_off(&crate::lifecycle::home()) {
+                                    let resp = DaemonResponse::ok(serde_json::json!({
+                                        "content": [{"type": "text", "text": crate::lifecycle::OFF_MESSAGE}],
+                                        "isError": true,
+                                    }));
+                                    let _ = writer.write_all(
+                                        (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                    ).await;
+                                    continue;
+                                }
                                 let raw_name = req.name.as_deref().unwrap_or("").to_owned();
                                 // Deprecated alias: `type_text_chars` → `type_text`.
                                 // Mirrors Swift's `ToolRegistry.call` aliasing.
