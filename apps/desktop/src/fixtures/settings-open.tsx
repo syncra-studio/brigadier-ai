@@ -258,7 +258,9 @@ async function drive(): Promise<string> {
   document.querySelector<HTMLButtonElement>('button[aria-label="Settings"]')?.click();
   await frame();
   const settings = {
-    nav: document.querySelector('[data-slot="sidebar-panel"]')?.textContent?.includes("Back to app") ?? false,
+    nav: document.querySelector('[data-slot="sidebar-panel"]')?.textContent?.includes("Settings") ?? false,
+    // The titlebar's Back is the way back: the panel has no link of its own.
+    backToApp: document.querySelector('[data-slot="sidebar-panel"]')?.textContent?.includes("Back to app") ?? true,
     title: title(),
   };
   // Settings open and idle: the Inspector's code loads.

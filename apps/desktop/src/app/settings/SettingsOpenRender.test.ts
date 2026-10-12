@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
 type Seen = {
-  settings: { nav: boolean; title: string | null };
+  settings: { nav: boolean; backToApp: boolean; title: string | null };
   usage: { title: string | null; data: boolean; reading: boolean };
   computerUse: { title: string | null; status: string | null; readWaiting: boolean };
   computerUseRead: string | null;
@@ -22,7 +22,7 @@ test("settings and its pages show on the first frame, data filling in where it g
   const seen = JSON.parse(await renderFixtureLive(t, "settings-open.html?drive=1", "settings-open-result")) as Seen;
   assert.equal(seen.error, undefined);
   // Its code loaded at idle: the navigation and General, with no empty frame first.
-  assert.deepEqual(seen.settings, { nav: true, title: "General" });
+  assert.deepEqual(seen.settings, { nav: true, backToApp: false, title: "General" });
   // The usage read made at idle: Usage opens filled in.
   assert.deepEqual(seen.usage, { title: "Usage", data: true, reading: false });
   // The permissions read (which starts the helper) still on its way: the page and its rows
