@@ -6,10 +6,8 @@ import { createServer } from "vite";
 
 import type { AppInfo } from "@/ipc/generated";
 
-// Reading computer use's permissions starts its helper, so Settings must know whether to list
-// the page without one: the launch smoke check opens the Inspector, a Settings page, and a
-// helper started then took the CPU its timings measure.
-test("Settings lists computer use on macOS from the app's info, without reading its permissions", async () => {
+// Settings lists the Computer use page on macOS only, from the app's own info.
+test("Settings lists computer use on macOS from the app's info", async () => {
   const globals = globalThis as Record<string, unknown>;
   const saved = { document: globals.document, getComputedStyle: globals.getComputedStyle };
   globals.document = { documentElement: {} };
@@ -24,7 +22,6 @@ test("Settings lists computer use on macOS from the app's info, without reading 
       return shownSettingsPages().some((page: { id: string }) => page.id === "computerUse");
     };
 
-    // No permission read has answered in this process, and none is needed.
     assert.equal(on("macos"), true);
     assert.match(ReactDOMServer.renderToStaticMarkup(React.createElement(SettingsNav)), />Computer use</);
     assert.equal(on("linux"), false);

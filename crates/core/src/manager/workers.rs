@@ -1689,15 +1689,6 @@ impl SessionManager {
             (TaskKind::Merge, None) => self.base_merge_brief(task, &workspace).await,
             _ => String::new(),
         };
-        // A change that shows in an app is checked live with the computer tools
-        // (SESSION-FIXES-PLAN.md "Computer use").
-        if cfg!(target_os = "macos") && prompts::checks_live(task) {
-            let dev_app = workspace
-                .worktree
-                .as_deref()
-                .and_then(super::context_pack::dev_app_command);
-            extra.push_str(&prompts::worker_computer(dev_app.as_deref()));
-        }
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
         if omit_ai_coauthors && provider == ProviderKind::Codex && task.kind.writes() {
             extra.push_str("\n\n");
@@ -1769,37 +1760,9 @@ impl SessionManager {
         );
         // B7: the grant is a secret too.
         secret_values.push(worker_grant.clone());
-        let mut mcp_servers =
+        let mcp_servers =
             vec![self.brigadier_server(worker_grant.clone(), WORKER_TOOL_TIMEOUT_SECS, true)];
-        let mut env = worker_env(&workspace.scratch);
-        // Computer use (COMPUTER-USE-PLAN.md §4.6): its own grant, which can call the computer
-        // tools and nothing else, for the `computer` server and `brigadierd computer`.
-        if cfg!(target_os = "macos") {
-            let computer_grant = self.grants.issue(
-                grant_owner,
-                Role::Computer {
-                    conversation_id: conversation_id.clone(),
-                    task_id: task.id.clone(),
-                },
-            );
-            secret_values.push(computer_grant.clone());
-            env.push((super::computer::GRANT_ENV.into(), computer_grant.clone()));
-            env.extend([
-                (
-                    "BRIGADIER_COMPUTER_DATA_DIR".into(),
-                    self.data_dir.to_string_lossy().into_owned(),
-                ),
-                (
-                    "BRIGADIER_COMPUTER_CLI".into(),
-                    self.config.daemon_exe.to_string_lossy().into_owned(),
-                ),
-            ]);
-            mcp_servers.push(self.computer_server(
-                computer_grant,
-                WORKER_TOOL_TIMEOUT_SECS,
-                task.kind == TaskKind::Operate,
-            ));
-        }
+        let env = worker_env(&workspace.scratch);
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
         // Its own branch is the only ref it moves; the branch its work lands on is the engine's.
@@ -3565,15 +3528,6 @@ impl SessionManager {
         if let Some(message) = self.keep_last_message(&live, task.number).await {
             artifacts.push(message);
         }
-        // An operate worker's actions on the desktop, read from the action log rather than
-        // its own account, and its last screenshot.
-        let computer = if task.kind == TaskKind::Operate {
-            let (line, screenshot) = self.computer_report(conversation_id, &task).await;
-            artifacts.extend(screenshot);
-            Some(line)
-        } else {
-            None
-        };
         let outputs = files.outputs;
         // A gate member's report goes to its gate, not to the orchestrator.
         let reviewing = task.gate_link.is_some();
@@ -3644,9 +3598,6 @@ impl SessionManager {
             let mut shown = task.clone();
             reported(&mut shown);
             let mut text = prompts::report_envelope(&shown, &report, &route_label(&shown));
-            if let Some(line) = &computer {
-                text.push_str(&format!("\n{line}"));
-            }
             if unchanged {
                 text.push_str(&format!(
                     "\n[nothing to land task-{}] It changed no files, so it is done; there is nothing to land.",
@@ -4689,7 +4640,6 @@ impl SessionManager {
         self.task_ended_waiting(task, state).await;
         let owner = format!("task:{}", task.id);
         self.grants.revoke_owner(&owner);
-        self.computer.end_worker(&task.id).await;
         let leftovers = self.runtime.ledger().dispose(&owner).await;
         if !leftovers.is_clean() {
             tracing::warn!(task = %task.id, ?leftovers, "some of the task's leftovers will be retried at the next launch");

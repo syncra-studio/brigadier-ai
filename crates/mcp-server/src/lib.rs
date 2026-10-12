@@ -16,7 +16,6 @@
 //! (see [`schema`]).
 
 mod catalog;
-mod computer;
 pub mod schema;
 
 use std::sync::Arc;
@@ -39,8 +38,6 @@ const TOOLS_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// The name the CLIs know the server by (their tools show up as `mcp__brigadier__<tool>`).
 pub const SERVER_NAME: &str = "brigadier";
-/// The name of the computer-use server a worker's computer grant gets (`mcp__computer__<tool>`).
-pub const COMPUTER_SERVER_NAME: &str = "computer";
 
 /// Why a connection ended other than by the client closing it.
 #[derive(Debug, thiserror::Error)]
@@ -127,33 +124,17 @@ fn reply_result(reply: ToolReply) -> CallToolResult {
         reply.text
     };
     content.push(ContentBlock::text(text));
-    let mut result = if reply.is_error {
+    if reply.is_error {
         CallToolResult::error(content)
     } else {
         CallToolResult::success(content)
-    };
-    if let Some(us) = reply.engine_us {
-        let mut meta = rmcp::model::JsonObject::new();
-        meta.insert(
-            "brigadier/engine_ms".into(),
-            serde_json::json!(us as f64 / 1000.0),
-        );
-        result.meta = Some(rmcp::model::MetaObject(meta));
     }
-    result
 }
 
 impl ServerHandler for BrigadierServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
-            Implementation::new(
-                match self.role {
-                    Some(Role::Computer { .. }) => COMPUTER_SERVER_NAME,
-                    _ => SERVER_NAME,
-                },
-                env!("CARGO_PKG_VERSION"),
-            ),
-        )
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new(SERVER_NAME, env!("CARGO_PKG_VERSION")))
     }
 
     async fn initialize(
@@ -210,9 +191,7 @@ mod tests {
 
     #[test]
     fn a_reply_with_an_image_puts_it_first_as_base64() {
-        let mut reply =
-            ToolReply::ok("window w2 · image i1").with_image("image/png", vec![1, 2, 3]);
-        reply.engine_us = Some(1_250);
+        let reply = ToolReply::ok("window w2 · image i1").with_image("image/png", vec![1, 2, 3]);
         let result = serde_json::to_value(reply_result(reply)).unwrap();
         let content = result["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
@@ -221,8 +200,6 @@ mod tests {
         assert_eq!(content[0]["mimeType"], "image/png");
         assert_eq!(content[1]["type"], "text");
         assert_eq!(content[1]["text"], "window w2 · image i1");
-        // The engine's time rides in `_meta`, out of the model's content.
-        assert_eq!(result["_meta"]["brigadier/engine_ms"], 1.25);
     }
 
     /// The API refuses an error result with no words, failing the model's whole turn.

@@ -50,13 +50,6 @@ pub enum Role {
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`): it may only store the
     /// thread's command output, and calls no tools.
     OutputHook { conversation_id: ConversationId },
-    /// A worker's computer use (COMPUTER-USE-PLAN.md §4.6): the `computer` MCP server and
-    /// `brigadierd computer`. It can call the computer tools and nothing else; the worker's
-    /// own grant stays with the Brigadier server.
-    Computer {
-        conversation_id: ConversationId,
-        task_id: TaskId,
-    },
 }
 
 /// The command tools a thread has besides the orchestrator tools (THREAD-PLAN.md Q4): a Codex
@@ -1060,7 +1053,7 @@ pub struct SubmitReport {
 /// a model writing long items full of quotes and backticks sometimes emits a list as bare text,
 /// which breaks the call's JSON, while it writes a text field reliably. A list may hold objects
 /// too (`{"criterion", "status", "evidence"}`): a Codex worker spent 2–3 rejected calls a report
-/// guessing the shape (COMPUTER-USE-PLAN.md §8, Phase 4), so every item becomes a line.
+/// guessing the shape, so every item becomes a line.
 fn lines<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
@@ -1272,32 +1265,6 @@ pub enum ChatCall {
     SaveMemory(SaveMemory),
 }
 
-/// A computer-use call (COMPUTER-USE-PLAN.md §4.6).
-#[derive(Debug, Clone, PartialEq)]
-pub enum ComputerCall {
-    Apps,
-    Launch(brigadier_computer::wire::LaunchRequest),
-    /// `save_as`: also keep its screenshot under this file name in the worker's outputs folder.
-    Observe {
-        request: brigadier_computer::action::ObserveRequest,
-        save_as: Option<String>,
-    },
-    Act(brigadier_computer::action::ActRequest),
-    Zoom(brigadier_computer::action::ZoomRequest),
-}
-
-impl ComputerCall {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Apps => "apps",
-            Self::Launch(_) => "launch",
-            Self::Observe { .. } => "observe",
-            Self::Act(_) => "act",
-            Self::Zoom(_) => "zoom",
-        }
-    }
-}
-
 /// A tool call, for any role.
 #[derive(Debug, Clone)]
 pub enum ToolCall {
@@ -1305,7 +1272,6 @@ pub enum ToolCall {
     Worker(WorkerCall),
     Job(JobCall),
     Chat(ChatCall),
-    Computer(ComputerCall),
 }
 
 /// An image in a tool's reply.
@@ -1323,9 +1289,6 @@ pub struct ToolReply {
     pub is_error: bool,
     /// Shown to the model before the text (a screenshot reads best ahead of what it shows).
     pub images: Vec<ReplyImage>,
-    /// For a computer call, the time the helper's engine spent on it: the MCP result's
-    /// `_meta`, which models don't read, so the tool's own overhead can be measured (S6).
-    pub engine_us: Option<u64>,
 }
 
 impl ToolReply {
@@ -1334,7 +1297,6 @@ impl ToolReply {
             text: text.into(),
             is_error: false,
             images: Vec::new(),
-            engine_us: None,
         }
     }
 
@@ -1343,7 +1305,6 @@ impl ToolReply {
             text: text.into(),
             is_error: true,
             images: Vec::new(),
-            engine_us: None,
         }
     }
 

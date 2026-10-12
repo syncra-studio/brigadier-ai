@@ -18,7 +18,7 @@ import { lazy, type ComponentType, type SVGProps } from "react";
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
 import { BROWSER_IMPORT_ROWS, BrowserImportPage } from "@/app/settings/BrowserImportPage";
 import { BROWSER_ROWS, BrowserPage } from "@/app/settings/BrowserPage";
-import { COMPUTER_USE_ROWS, ComputerUsePage } from "@/app/settings/ComputerUsePage";
+import { COMPUTER_USE_ROWS, ComputerUsePage, computerUseAvailable } from "@/app/settings/ComputerUsePage";
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
@@ -26,7 +26,6 @@ import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
-import { computerUseAvailable } from "@/state/computerAccess";
 import { type SettingsPageId, useApp } from "@/state/store";
 
 /**
@@ -156,7 +155,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Agents",
     component: ComputerUsePage,
     rows: Object.values(COMPUTER_USE_ROWS),
-    // Only where the system has computer use (macOS).
+    // Only on macOS.
     shown: computerUseAvailable,
   },
   {

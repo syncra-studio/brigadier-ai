@@ -461,7 +461,6 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "brigadier-brain",
- "brigadier-computer",
  "brigadier-git",
  "brigadier-index",
  "brigadier-providers",
@@ -496,7 +495,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
- "brigadier-computer",
  "brigadier-core",
  "brigadier-index",
  "brigadier-ipc",
@@ -622,7 +620,6 @@ name = "brigadier-mcp-server"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
- "brigadier-computer",
  "brigadier-core",
  "rmcp",
  "schemars 1.2.2",

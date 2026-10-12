@@ -39,7 +39,6 @@ import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgres
 import { ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
-import { ComputerAccessRow } from "@/app/conversation/ComputerAccessRow";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { CHAT_TAB, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
@@ -200,8 +199,6 @@ function waitingFrom(
       return null;
     case "run":
       return "Declined during the overnight run";
-    case "computer":
-      return null;
   }
 }
 
@@ -220,7 +217,6 @@ function WaitingRow({
   const from = waitingFrom(item, tasks);
   const [open, setOpen] = useState(false);
   const { source } = item;
-  if (source.type === "computer") return <ComputerAccessRow what={item.what} />;
   return (
     <div className="flex flex-col">
       <SummaryRow
@@ -255,13 +251,13 @@ function WaitingRow({
 }
 
 /**
- * Whether an item shows: an overnight run's, since only a run keeps a list for the morning, and
- * computer use's permission ask, which closes by itself once allowed. A session lists nothing
- * else (its thread says it in its answer), so one listed before that shows nowhere.
+ * Whether an item shows: an overnight run's, since only a run keeps a list for the morning. A
+ * session lists nothing (its thread says it in its answer), so one listed before that shows
+ * nowhere.
  */
 function runItem(item: WaitingItem, tasks: Readonly<Record<string, Task>>): boolean {
   const { source } = item;
-  if (source.type === "run" || source.type === "computer") return true;
+  if (source.type === "run") return true;
   if (source.type === "task" || source.type === "landing") return !!tasks[source.taskId]?.run;
   return isRunRequest(item.requestId);
 }
@@ -787,15 +783,10 @@ function ChatSummaryContent({ conversation, active }: { conversation: Conversati
   const attachments = useApp(useShallow((s) => [...new Map((s.threads[conversation.id]?.items ?? [])
     .flatMap((item) => item.attachments).map((attachment) => [attachment.id, attachment])).values()]));
   const context = useBoard((s) => s.board?.conversationId === conversation.id ? s.board.context : null);
-  const waiting = useBoard(useShallow((s) => s.board?.conversationId === conversation.id
-    ? Object.values(s.board.waiting).filter((item) => item.source.type === "computer") : NO_WAITING));
-  const empty = sources.length === 0 && attachments.length === 0 && !context && waiting.length === 0;
+  const empty = sources.length === 0 && attachments.length === 0 && !context;
   return <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
     <div className="flex flex-col py-2.5">
       {empty && <p className="text-muted-foreground px-4 py-1.5 text-sm">Nothing here yet</p>}
-      {waiting.length > 0 && <SummarySection foldKey="waiting" title="Waiting on you" count={waiting.length}>
-        {waiting.map((item) => <ComputerAccessRow key={item.id} what={item.what} />)}
-      </SummarySection>}
       <Sources conversationId={conversation.id} session={false} />
       {attachments.length > 0 && <SummarySection foldKey="attachments" title="Attachments" count={attachments.length}>
         {attachments.map((attachment) => <SummaryRow key={attachment.id}>{attachment.name}</SummaryRow>)}

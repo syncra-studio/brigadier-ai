@@ -450,38 +450,6 @@ fn build(
     format!("{HEADER}{}", text.trim_end())
 }
 
-/// How the project at `worktree` starts its app for a live check, when the repository says
-/// (SESSION-FIXES-PLAN.md "Computer use"): Brigadier's own dev build, or a root `dev` script
-/// run with the package manager its lockfile names.
-pub(crate) fn dev_app_command(worktree: &Path) -> Option<String> {
-    let manifest = std::fs::read_to_string(worktree.join("package.json")).ok()?;
-    let manifest: serde_json::Value = serde_json::from_str(&manifest).ok()?;
-    let scripts = manifest.get("scripts")?;
-    let manager = [
-        ("pnpm-lock.yaml", "pnpm"),
-        ("yarn.lock", "yarn"),
-        ("bun.lockb", "bun"),
-        ("bun.lock", "bun"),
-    ]
-    .into_iter()
-    .find(|(lockfile, _)| worktree.join(lockfile).exists())
-    .map_or("npm", |(_, manager)| manager);
-    // The computer tools drive only a Brigadier the worker launched with them, so the dev
-    // build is opened by its launch, not by tools/open-dev-app.sh; a debug build without a
-    // data folder of its own opens on a throwaway one, never the installed app's.
-    if scripts.get("tauri:debug-app").is_some() && worktree.join("tools/open-dev-app.sh").exists() {
-        let app = worktree.join("target/debug/bundle/macos/Brigadier Dev.app");
-        return Some(format!(
-            "here: build it with `{manager} tauri:debug-app`, then open `{}` with the computer tools' launch; a debug build opens on a throwaway data folder of its own",
-            app.display()
-        ));
-    }
-    scripts
-        .get("dev")
-        .is_some()
-        .then(|| format!("here: `{manager} run dev`"))
-}
-
 /// The files `spec` names that the worktree has, repository-relative, in the order named:
 /// words with a `/` or a file extension, without quotes, backticks or a trailing
 /// `:line`.

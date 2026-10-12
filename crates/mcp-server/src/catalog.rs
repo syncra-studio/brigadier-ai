@@ -322,7 +322,6 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
     static CHECKER: OnceLock<Vec<Tool>> = OnceLock::new();
     static JOB: OnceLock<Vec<Tool>> = OnceLock::new();
     static CHAT: OnceLock<Vec<Tool>> = OnceLock::new();
-    static COMPUTER: OnceLock<Vec<Tool>> = OnceLock::new();
     match role {
         Role::Orchestrator { run, .. } => match run {
             RunTools::None => ORCHESTRATOR.get_or_init(orchestrator_tools),
@@ -357,7 +356,6 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
         Role::BrainJob { .. } => JOB.get_or_init(job_tools),
         Role::Chat { .. } => CHAT.get_or_init(chat_tools),
         Role::OutputHook { .. } => &[],
-        Role::Computer { .. } => COMPUTER.get_or_init(crate::computer::tools),
     }
 }
 
@@ -637,7 +635,6 @@ pub fn parse_call(
             _ => Err(unknown()),
         },
         Role::OutputHook { .. } => Err(unknown()),
-        Role::Computer { .. } => crate::computer::parse(name, arguments),
     }
 }
 
@@ -652,8 +649,7 @@ fn args<T: DeserializeOwned>(tool: &str, arguments: Value) -> Result<T, ParseErr
 }
 
 /// A well-formed call, added to an argument error where models guessed the shape: a Codex
-/// worker calling tools from code sees no schema, and spent 2–3 rejected calls a report
-/// (COMPUTER-USE-PLAN.md §8, Phase 4).
+/// worker calling tools from code sees no schema, and spent 2–3 rejected calls a report.
 fn example(tool: &str) -> Option<&'static str> {
     match tool {
         "submit_report" => Some(SUBMIT_REPORT_EXAMPLE),
@@ -903,7 +899,6 @@ mod tests {
             worker_tools(),
             job_tools(),
             chat_tools(),
-            crate::computer::tools(),
         ];
         for tool in lists.iter().flatten() {
             let text = format!(

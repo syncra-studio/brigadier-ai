@@ -305,6 +305,9 @@ impl Board {
                 ));
                 self.decisions.push(decision);
             }
+            // An item from a source Brigadier no longer has stays out of the list.
+            DomainEvent::WaitingOnYou { item }
+                if item.source == crate::work::WaitingSource::Retired => {}
             DomainEvent::WaitingOnYou { item } => {
                 self.waits_listed.insert(item.key.clone());
                 self.waiting.insert(item.id.clone(), item.clone());

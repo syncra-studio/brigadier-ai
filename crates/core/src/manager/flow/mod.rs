@@ -27,7 +27,7 @@ use crate::model::{
     PermissionLevel, SetupRequest,
 };
 use crate::runtime::{Runtime, Spawner};
-use crate::tools::{ComputerCall, OrchestratorCall, ToolCall, ToolHost, ToolReply, WorkerCall};
+use crate::tools::{OrchestratorCall, ToolCall, ToolHost, ToolReply, WorkerCall};
 use crate::work::{RequestState, Task};
 
 /// How long a scripted run may take before the test fails: only a hang takes this long. Every
@@ -57,8 +57,6 @@ pub(crate) struct Turn {
     /// Its CLI session.
     pub native_id: String,
     grant: String,
-    /// A worker's computer-use grant (macOS only).
-    computer_grant: String,
     host: Arc<SessionManager>,
     events: mpsc::Sender<ProviderEvent>,
     answers: Answers,
@@ -154,11 +152,6 @@ impl Turn {
     pub async fn call(&self, name: &str, args: Value) -> ToolReply {
         let call = tool_call(name, args, self.is_orchestrator());
         ToolHost::call(&*self.host, &self.grant, call).await
-    }
-
-    /// Calls a computer tool with the worker's computer grant, as its `computer` server would.
-    pub async fn computer(&self, call: ComputerCall) -> ToolReply {
-        ToolHost::call(&*self.host, &self.computer_grant, ToolCall::Computer(call)).await
     }
 
     /// Asks for approval to run `command` outside the sandbox, as a CLI would, and waits for
@@ -580,7 +573,6 @@ impl Provider for FakeCli {
                     .unwrap_or_default()
             };
             let grant = env("BRIGADIER_MCP_GRANT");
-            let computer_grant = env(crate::manager::computer::GRANT_ENV);
             let native_id = match &spec.origin {
                 brigadier_providers::model::Origin::Resume { native_id } => native_id.clone(),
                 _ => uuid::Uuid::new_v4().to_string(),
@@ -635,7 +627,6 @@ impl Provider for FakeCli {
                 cwd: spec.cwd.clone(),
                 add_dirs: spec.add_dirs.clone(),
                 grant,
-                computer_grant,
                 script,
                 host: self.host.clone(),
                 events: Mutex::new(Some(tx)),
@@ -769,7 +760,6 @@ struct FakeSession {
     cwd: PathBuf,
     add_dirs: Vec<PathBuf>,
     grant: String,
-    computer_grant: String,
     script: Script,
     host: Arc<OnceLock<Weak<SessionManager>>>,
     events: Mutex<Option<mpsc::Sender<ProviderEvent>>>,
@@ -854,7 +844,6 @@ impl ProviderSession for FakeSession {
                 account: self.account.clone(),
                 native_id: self.native_id.clone(),
                 grant: self.grant.clone(),
-                computer_grant: self.computer_grant.clone(),
                 host,
                 events: tx.clone(),
                 answers: self.answers.clone(),
@@ -1582,8 +1571,6 @@ mod card_tests;
 mod checks_tests;
 #[cfg(test)]
 mod clean_up_tests;
-#[cfg(all(test, target_os = "macos"))]
-mod computer_tests;
 #[cfg(test)]
 mod ending_tests;
 #[cfg(test)]

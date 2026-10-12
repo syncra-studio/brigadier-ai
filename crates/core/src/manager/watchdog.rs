@@ -916,7 +916,6 @@ mod tests {
             subject: ApprovalSubject::Action {
                 action: "Deploy to staging".into(),
                 details: String::new(),
-                live: false,
             },
             state,
             created_at_ms: created,

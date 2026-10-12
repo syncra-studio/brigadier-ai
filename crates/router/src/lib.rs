@@ -178,7 +178,7 @@ pub enum TaskCategory {
     Merge,
     /// Runs the project's checks.
     Verify,
-    /// Operates apps on the user's Mac through the computer tools; writes nothing that lands.
+    /// Operates apps on the user's Mac; writes nothing that lands.
     Operate,
     /// A plain conversation with the model (no orchestrator, no workers).
     Chat,

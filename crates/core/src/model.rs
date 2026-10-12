@@ -1182,15 +1182,6 @@ pub struct WorkerPage {
     pub has_more: bool,
 }
 
-/// A page of a worker's computer actions (its action log), oldest first.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ComputerPage {
-    pub actions: Vec<crate::work::ComputerAction>,
-    /// Where the next older page starts (`before`), when there is one.
-    pub earlier: Option<i64>,
-}
-
 /// A page of the orchestrator log, oldest first.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1919,12 +1910,6 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         output: crate::work::StoredOutput,
     },
-    /// A worker acted on the desktop (computer use's action log).
-    ComputerActed {
-        conversation_id: ConversationId,
-        task_id: TaskId,
-        action: crate::work::ComputerAction,
-    },
     /// A `run_check` call ran its command, or answered from the check cache (THREAD-PLAN.md
     /// Q8 lever 3, [`crate::manager::checks`]).
     CheckRan {
@@ -2018,6 +2003,11 @@ pub enum DomainEvent {
         index: u32,
         count: u32,
     },
+    /// A stored event of a kind Brigadier no longer has (a removed feature's): read back as
+    /// this and ignored, so old data still loads. Never written.
+    #[serde(other)]
+    #[ts(skip)]
+    Retired,
 }
 
 impl DomainEvent {
@@ -2073,7 +2063,6 @@ impl DomainEvent {
             Self::ReviewUpdated { .. } => "review.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::OutputStored { .. } => "output.stored",
-            Self::ComputerActed { .. } => "computer.acted",
             Self::CheckRan { .. } => "check.ran",
             Self::ThreadLooked { .. } => "thread.looked",
             Self::PreviewUpdated { .. } => "preview.updated",
@@ -2089,6 +2078,7 @@ impl DomainEvent {
             Self::WaitingResolved { .. } => "waiting.resolved",
             Self::OvernightUpdated { .. } => "overnight.updated",
             Self::Probe { .. } => "diag.probe",
+            Self::Retired => "retired",
         }
     }
 }

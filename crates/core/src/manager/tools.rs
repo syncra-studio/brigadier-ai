@@ -522,7 +522,6 @@ impl SessionManager {
                         ApprovalSubject::Action {
                             action: args.action,
                             details: args.details,
-                            live: false,
                         },
                     )
                 })
@@ -887,11 +886,6 @@ impl SessionManager {
                 Ok("Noted under Decided for you.".into())
             }
             NoteKind::Waiting => {
-                if self.computer_permission_asked(id, what).await {
-                    return Ok("It is already listed under Waiting on you: Brigadier asked for \
-                               computer use's permissions itself and closes that item once they're in."
-                        .into());
-                }
                 let added = self
                     .wait_on_user(id, request, WaitingSource::Orchestrator, what)
                     .await?;
