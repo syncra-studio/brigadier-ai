@@ -117,6 +117,14 @@ export function mentionsIn(
   return mentions;
 }
 
+/**
+ * The page a queued message was sent from, which it keeps when edited: no `@name` in the text
+ * stands for it.
+ */
+export function pageMentions(mentions: readonly Mention[] | undefined): Mention[] {
+  return mentions?.filter((mention) => mention.type === "page") ?? [];
+}
+
 /** The files and conversations the `@` menu put in the composer, by their `@name`. */
 export class MentionMemory {
   private readonly byLabel = new Map<string, Mention>();

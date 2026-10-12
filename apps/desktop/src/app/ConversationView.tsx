@@ -63,6 +63,7 @@ import { ViewContext } from "@/app/conversation/viewContext";
 import {
   MentionMemory,
   mentionsIn,
+  pageMentions,
   type MentionTarget,
   UserMessageText,
 } from "@/app/conversation/Mentions";
@@ -585,7 +586,7 @@ export function ConversationView({
       const known = [...mentions.known(), ...(slot?.mentions ?? [])];
       const into = sendLane(lane, { pulled: !!slot, followUp: useApp.getState().settings.followUp });
       send(
-        { text, attachments: refs, mentions: mentionsIn(text, targets, known) },
+        { text, attachments: refs, mentions: [...mentionsIn(text, targets, known), ...pageMentions(slot?.mentions)] },
         draftTarget ?? undefined,
         {
           lane: into,
@@ -639,7 +640,10 @@ export function ConversationView({
         void editQueued(conversationId, id, {
           text,
           attachments: queuedImageRefs(text, item?.attachments ?? [], attachments.messageRefs(text, message.attachments ?? [])),
-          mentions: mentionsIn(text, targets, [...mentions.known(), ...(item?.mentions ?? [])]),
+          mentions: [
+            ...mentionsIn(text, targets, [...mentions.known(), ...(item?.mentions ?? [])]),
+            ...pageMentions(item?.mentions),
+          ],
         }).catch(fail);
       },
       remove: (id) => {
