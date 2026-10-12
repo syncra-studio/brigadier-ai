@@ -99,7 +99,7 @@ export function WorkspacePane() {
       <SidebarReveal side="right" width="workspace-pane-width" open={open} hidden={!open} resizing={pane.resizing}>
         <div id="workspace-pane-content" data-pane={pane.active}
           className={cn(
-            "workspace-pane-width border-border bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col overflow-hidden border-s transition-opacity duration-150 motion-reduce:transition-none",
+            "workspace-pane-width border-border bg-background text-sidebar-foreground flex h-full min-h-0 flex-col overflow-hidden border-s transition-opacity duration-150 motion-reduce:transition-none",
             open ? "opacity-100" : "opacity-0",
           )}>
           {/* Keyed by whose files they are: one draft's list or message never shows for another. */}

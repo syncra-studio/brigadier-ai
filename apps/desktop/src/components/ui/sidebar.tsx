@@ -276,7 +276,7 @@ function SidebarPanel({
           <div
             data-sidebar="sidebar"
             className={cn(
-              "text-sidebar-foreground bg-sidebar rounded-s-page flex min-h-0 flex-1 flex-col",
+              "text-sidebar-foreground bg-background rounded-s-page flex min-h-0 flex-1 flex-col",
               className,
             )}
             {...props}
@@ -351,7 +351,7 @@ function SidebarPeek({
         data-slot="sidebar-peek"
         data-sidebar-peek-panel
         className={cn(
-          "sidebar-panel-width text-sidebar-foreground bg-sidebar shadow-menu top-titlebar absolute bottom-0 z-40 flex flex-col overflow-hidden motion-reduce:animate-none",
+          "sidebar-panel-width text-sidebar-foreground bg-background shadow-menu top-titlebar absolute bottom-0 z-40 flex flex-col overflow-hidden motion-reduce:animate-none",
           // Beside the strip it is the strip's own panel carried on: flush against it, square
           // where they meet with the strip's hairline kept, its edge and shadow on the far side
           // only. Hidden, it is a card.

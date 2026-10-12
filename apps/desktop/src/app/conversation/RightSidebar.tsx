@@ -149,7 +149,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
             aria-labelledby={`right-sidebar-${panel.active}`}
             data-pane={panel.active}
             className={cn(
-              "bg-sidebar text-sidebar-foreground rounded-e-page flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 motion-reduce:transition-none",
+              "bg-background text-sidebar-foreground rounded-e-page flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 motion-reduce:transition-none",
               panel.open ? "opacity-100" : "opacity-0",
             )}
           >
