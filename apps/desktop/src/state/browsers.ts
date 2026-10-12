@@ -1,7 +1,8 @@
 import { create } from "zustand";
 
-import { browserClose, browserNavigate, browserOpen, revealPath } from "@/ipc/client";
+import { browserClose, browserNavigate, browserOpen, browserZoom, revealPath } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
+import { forgetFind } from "@/state/browserFind";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -18,6 +19,8 @@ export type BrowserPage = {
   favicon?: string | null;
   /** The last navigation or download the tab refused, offered to the system browser. */
   blocked: string | null;
+  /** The page zoom (1 is 100%) the shell last said; it stays from page to page in the tab. */
+  zoom?: number;
 };
 
 /** The tabs whose page the shell has made, so it is told where to go, not made again. */
@@ -66,7 +69,14 @@ export async function openPage(
   useBrowsers.setState(({ pages }) => ({
     pages: {
       ...pages,
-      [id]: { url, title: page?.title ?? "", loading: true, blocked: null, ready: made.has(id) },
+      [id]: {
+        url,
+        title: page?.title ?? "",
+        loading: true,
+        blocked: null,
+        ready: made.has(id),
+        ...(page?.zoom === undefined ? {} : { zoom: page.zoom }),
+      },
     },
   }));
   try {
@@ -107,12 +117,18 @@ function downloaded(path: string, ok: boolean): void {
   });
 }
 
+/** Zooms the tab's page to `zoom` (1 is 100%), keeping what the shell says it came to. */
+export async function zoomPage(id: string, zoom: number): Promise<void> {
+  update(id, { zoom: await browserZoom(id, zoom) });
+}
+
 export function dismissBlocked(id: string): void {
   update(id, { blocked: null });
 }
 
 /** The tab closed, or its conversation did: the page and all it stored go. */
 export function closePage(id: string): void {
+  forgetFind(id);
   if (!useBrowsers.getState().pages[id]) return;
   made.delete(id);
   useBrowsers.setState(({ pages }) => {

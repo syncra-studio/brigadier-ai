@@ -26,7 +26,7 @@ export type Shortcut = {
    * One chip per key. "⌘1–9" is a range of digits; "Esc Esc" is two presses.
    */
   keys: readonly string[];
-  /** The Panes or View menu item (macOS) that owns the first key, as `MENU_KEYS` names it. */
+  /** The Panes, Browser or View menu item (macOS) that owns the first key, as `MENU_KEYS` names it. */
   menu?: string;
   /** Only on macOS (its menu bar holds it). */
   macOnly?: boolean;
@@ -128,14 +128,42 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // Files and browser
   { id: "save", name: "Save file", line: "Save the file in front", area: "Files and browser", keys: ["⌘S"], menu: "save" },
   { id: "save-as", name: "Save file as", line: "Save the file in front under a new name", area: "Files and browser", keys: ["⇧⌘S"], menu: "save-as" },
-  { id: "find", name: "Find in file", line: "Find text in the file in front", area: "Files and browser", keys: ["⌘F"] },
+  { id: "find", name: "Find", line: "Find text in the file or web page in front", area: "Files and browser", keys: ["⌘F"], menu: "find" },
+  { id: "find-next", name: "Find next", line: "Go to the web page's next match", area: "Files and browser", keys: ["⌘G"], menu: "find-next" },
+  { id: "find-previous", name: "Find previous", line: "Go to the web page's previous match", area: "Files and browser", keys: ["⇧⌘G"], menu: "find-previous" },
   { id: "go-to-line", name: "Go to line", line: "Jump to a line of the file in front", area: "Files and browser", keys: ["⌃G"] },
   { id: "address", name: "Browser address", line: "Type an address in the browser tab", area: "Files and browser", keys: ["⌘L"], menu: "address" },
+  { id: "page-back", name: "Page back", line: "Go back a page in the browser tab", area: "Files and browser", keys: ["⌘←"], menu: "page-back" },
+  { id: "page-forward", name: "Page forward", line: "Go forward a page in the browser tab", area: "Files and browser", keys: ["⌘→"], menu: "page-forward" },
+  { id: "reload", name: "Reload page", line: "Load the browser tab's page again", area: "Files and browser", keys: ["⌘R"], menu: "reload" },
+  {
+    id: "force-reload",
+    name: "Reload without the cache",
+    line: "Load the page and everything on it fresh from the site",
+    area: "Files and browser",
+    keys: ["⇧⌘R"],
+    menu: "force-reload",
+  },
+  { id: "zoom-in", name: "Zoom in", line: "Make the web page larger", area: "Files and browser", keys: ["⌘="], menu: "zoom-in" },
+  { id: "zoom-out", name: "Zoom out", line: "Make the web page smaller", area: "Files and browser", keys: ["⌘-"], menu: "zoom-out" },
+  { id: "zoom-reset", name: "Actual size", line: "Show the web page at 100%", area: "Files and browser", keys: ["⌘0"], menu: "zoom-reset" },
   { id: "commit", name: "Commit", line: "Commit with the message typed", area: "Files and browser", keys: ["⌘⏎"] },
 ];
 
 /** The built-in browser's shortcuts, gone while it is off (Settings › Browser). */
-export const BROWSER_SHORTCUTS: ReadonlySet<string> = new Set(["new-browser", "address"]);
+export const BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
+  "new-browser",
+  "address",
+  "page-back",
+  "page-forward",
+  "reload",
+  "force-reload",
+  "find-next",
+  "find-previous",
+  "zoom-in",
+  "zoom-out",
+  "zoom-reset",
+]);
 
 /** How the composer sends, as Settings › General › Composer sets it. */
 export type ComposerKeys = { sendShortcut: SendShortcut; followUp: FollowUp };

@@ -90,6 +90,18 @@ pub enum BrowserEvent {
     Downloaded { path: String, ok: bool },
 }
 
+/// What finding text in a Browser tab's page came to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserFound {
+    /// The page has the text: its match in turn is selected and scrolled to.
+    pub found: bool,
+    /// Which match that is, from 1; 0 when it can't be told.
+    pub current: u32,
+    /// How many matches the page shows, counted up to 1000; 0 when they can't be counted.
+    pub total: u32,
+}
+
 /// The user's Settings › Browser choices the shell acts on itself, sent at start and on every
 /// change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

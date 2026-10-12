@@ -241,7 +241,6 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         ("terminal", "Toggle bottom terminal", "CmdOrCtrl+J"),
         ("terminal-alternate", "Terminal", "Ctrl+`"),
         ("new", "New tab", "CmdOrCtrl+T"),
-        ("new-browser", "New browser tab", "CmdOrCtrl+Shift+B"),
         ("new-side-chat", "New side chat", "Alt+CmdOrCtrl+S"),
         ("new-file", "New file", "Alt+CmdOrCtrl+N"),
         ("save", "Save file", "CmdOrCtrl+S"),
@@ -255,7 +254,6 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
             "Reopen closed tab, page or terminal",
             "CmdOrCtrl+Shift+T",
         ),
-        ("address", "Focus browser address", "CmdOrCtrl+L"),
         (
             "previous",
             "Previous tab, page or terminal",
@@ -287,6 +285,7 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         )?;
     }
     menu.append(&panes)?;
+    menu.append(&browser_submenu(app)?)?;
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
         if let Some(shortcut) = event.id().as_ref().strip_prefix("pane:") {
@@ -326,58 +325,76 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// The Panes menu's items that belong to the built-in browser, each after the item it follows.
+/// The Browser menu's items, in groups: what opens a page, then what acts on the page in front.
+/// Each reaches the page's tab as its key press, also while the page has the keyboard; with no
+/// web page in front a key does its usual job.
 #[cfg(target_os = "macos")]
-const BROWSER_ITEMS: [(&str, &str, &str, &str); 2] = [
-    (
-        "pane:new-browser",
-        "New browser tab",
-        "CmdOrCtrl+Shift+B",
-        "pane:new",
-    ),
-    (
-        "pane:address",
-        "Focus browser address",
-        "CmdOrCtrl+L",
-        "pane:reopen",
-    ),
+const BROWSER_ITEMS: [&[(&str, &str, &str)]; 4] = [
+    &[
+        ("new-browser", "New browser tab", "CmdOrCtrl+Shift+B"),
+        ("address", "Focus browser address", "CmdOrCtrl+L"),
+    ],
+    &[
+        ("page-back", "Page back", "CmdOrCtrl+Left"),
+        ("page-forward", "Page forward", "CmdOrCtrl+Right"),
+        ("reload", "Reload page", "CmdOrCtrl+R"),
+        (
+            "force-reload",
+            "Reload page without the cache",
+            "CmdOrCtrl+Shift+R",
+        ),
+    ],
+    &[
+        ("find", "Find…", "CmdOrCtrl+F"),
+        ("find-next", "Find next", "CmdOrCtrl+G"),
+        ("find-previous", "Find previous", "CmdOrCtrl+Shift+G"),
+    ],
+    &[
+        ("zoom-in", "Zoom in", "CmdOrCtrl+="),
+        ("zoom-out", "Zoom out", "CmdOrCtrl+-"),
+        ("zoom-reset", "Actual size", "CmdOrCtrl+0"),
+    ],
 ];
 
-/// Takes the browser's items out of the Panes menu (Settings › Browser off), or puts them
-/// back.
+/// The Browser menu's title, which finds it again.
+#[cfg(target_os = "macos")]
+const BROWSER_MENU: &str = "Browser";
+
+#[cfg(target_os = "macos")]
+fn browser_submenu(app: &AppHandle) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+    let browser = tauri::menu::Submenu::new(app, BROWSER_MENU, true)?;
+    for (at, group) in BROWSER_ITEMS.iter().enumerate() {
+        if at > 0 {
+            browser.append(&tauri::menu::PredefinedMenuItem::separator(app)?)?;
+        }
+        for (id, title, accelerator) in group.iter() {
+            browser.append(
+                &MenuItemBuilder::with_id(format!("pane:{id}"), *title)
+                    .accelerator(*accelerator)
+                    .build(app)?,
+            )?;
+        }
+    }
+    Ok(browser)
+}
+
+/// Takes the Browser menu out of the menu bar (Settings › Browser off), or puts it back.
 #[cfg(target_os = "macos")]
 pub fn browser_menu(app: &AppHandle, on: bool) -> tauri::Result<()> {
     let Some(menu) = app.menu() else {
         return Ok(());
     };
-    let Some(panes) = menu.items()?.into_iter().find_map(|item| {
+    let shown = menu.items()?.into_iter().find_map(|item| {
         item.as_submenu()
-            .filter(|submenu| submenu.text().is_ok_and(|text| text == "Panes"))
+            .filter(|submenu| submenu.text().is_ok_and(|text| text == BROWSER_MENU))
             .cloned()
-    }) else {
-        return Ok(());
-    };
-    for (id, title, accelerator, after) in BROWSER_ITEMS {
-        let items = panes.items()?;
-        let at = items.iter().position(|item| item.id() == id);
-        match (on, at) {
-            (false, Some(_)) => {
-                if let Some(item) = panes.get(id) {
-                    panes.remove(&item)?;
-                }
-            }
-            (true, None) => {
-                let position = items
-                    .iter()
-                    .position(|item| item.id() == after)
-                    .map_or(items.len(), |at| at + 1);
-                let item = MenuItemBuilder::with_id(id, title)
-                    .accelerator(accelerator)
-                    .build(app)?;
-                panes.insert(&item, position)?;
-            }
-            _ => {}
+    });
+    match (on, shown) {
+        (false, Some(browser)) => {
+            menu.remove(&browser)?;
         }
+        (true, None) => menu.append(&browser_submenu(app)?)?,
+        _ => {}
     }
     Ok(())
 }

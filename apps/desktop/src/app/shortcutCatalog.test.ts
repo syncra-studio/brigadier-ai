@@ -23,7 +23,17 @@ const press = (code: string, key: string, mods: { ctrl?: boolean; alt?: boolean;
   metaKey: mods.cmd ?? false,
 });
 
-const CODE_OF: Record<string, string> = { "[": "BracketLeft", "]": "BracketRight", "`": "Backquote", Tab: "Tab", ",": "Comma", "←": "ArrowLeft", "→": "ArrowRight" };
+const CODE_OF: Record<string, string> = {
+  "[": "BracketLeft",
+  "]": "BracketRight",
+  "`": "Backquote",
+  Tab: "Tab",
+  ",": "Comma",
+  "←": "ArrowLeft",
+  "→": "ArrowRight",
+  "=": "Equal",
+  "-": "Minus",
+};
 const codeOf = (key: string) => CODE_OF[key] ?? (/^\d$/.test(key) ? `Digit${key}` : `Key${key}`);
 
 const ARROWS: Record<string, string> = { Left: "←", Right: "→" };
@@ -66,8 +76,10 @@ test("a menu-owned shortcut's keys are the keys its menu item sends", () => {
 test("the native menu's accelerators are the catalog's keys", () => {
   const shell = readFileSync(new URL("../../src-tauri/src/shell.rs", import.meta.url), "utf8");
   const menu = new Map<string, string>();
-  for (const [, id, keys] of shell.matchAll(/\("([a-z-]+)",\s*"[^"]+",\s*"([^"]+)",?\s*\)/g)) if (id && keys) menu.set(id, accelerator(keys));
+  for (const [, id, keys] of shell.matchAll(/\(\s*"([a-z-]+)",\s*"[^"]+",\s*"([^"]+)",?\s*\)/g)) if (id && keys) menu.set(id, accelerator(keys));
   assert.ok(menu.size > 15, "the Panes and View items were read");
+  // Items rustfmt spreads over lines are read too.
+  for (const id of ["reopen", "previous", "force-reload", "zoom-in", "zoom-out", "page-back"]) assert.ok(menu.has(id), id);
   for (const shortcut of SHORTCUTS.filter((s) => s.menu && menu.has(s.menu))) {
     assert.equal(menu.get(shortcut.menu ?? ""), shortcut.keys[0], shortcut.id);
   }
@@ -157,8 +169,39 @@ test("search finds shortcuts by words and by a key press", () => {
 
 const shortcutIds = (browser: boolean) => shortcutsFor(true, browser).map((shortcut) => shortcut.id);
 
+const BROWSER_ONLY = [
+  "new-browser",
+  "address",
+  "page-back",
+  "page-forward",
+  "reload",
+  "force-reload",
+  "find-next",
+  "find-previous",
+  "zoom-in",
+  "zoom-out",
+  "zoom-reset",
+];
+
 test("off, the built-in browser's shortcuts are gone", () => {
-  assert.ok(shortcutIds(true).includes("new-browser") && shortcutIds(true).includes("address"));
-  assert.ok(!shortcutIds(false).includes("new-browser") && !shortcutIds(false).includes("address"));
-  assert.equal(shortcutIds(true).length - shortcutIds(false).length, 2);
+  for (const id of BROWSER_ONLY) {
+    assert.ok(shortcutIds(true).includes(id), id);
+    assert.ok(!shortcutIds(false).includes(id), id);
+  }
+  // ⌘F still finds in a file.
+  assert.ok(shortcutIds(false).includes("find"));
+  assert.equal(shortcutIds(true).length - shortcutIds(false).length, BROWSER_ONLY.length);
+});
+
+test("the Browser menu holds the browser's items, which leave with it", () => {
+  const shell = readFileSync(new URL("../../src-tauri/src/shell.rs", import.meta.url), "utf8");
+  const menu = shell.slice(shell.indexOf("const BROWSER_ITEMS"), shell.indexOf("const BROWSER_MENU"));
+  const items = [...menu.matchAll(/\(\s*"([a-z-]+)",/g)].map(([, id]) => id);
+  assert.deepEqual(items.toSorted(), [...BROWSER_ONLY, "find"].toSorted());
+  // Each reaches the page's tab as its key, and the Panes menu no longer has them.
+  const panes = shell.slice(shell.indexOf('Submenu::new(app, "Panes"'), shell.indexOf("menu.append(&panes)"));
+  for (const id of items) {
+    assert.ok(MENU_KEYS[id ?? ""], `${id} has its key`);
+    assert.ok(!new RegExp(`\\(\\s*"${id}",`).test(panes), `${id} is not in Panes`);
+  }
 });

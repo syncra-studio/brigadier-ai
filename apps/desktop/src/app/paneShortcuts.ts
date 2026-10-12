@@ -5,7 +5,7 @@ import { takePaneClose } from "@/state/closedPanes";
 import { useApp } from "@/state/store";
 import { HOME_PLACE, toggleTerminal, undoTabClose } from "@/state/terminalPlaces";
 
-/** The Panes and View menus' items (macOS), as the key presses the views listen for. */
+/** The Panes, Browser and View menus' items (macOS), as the key presses the views listen for. */
 export const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?: boolean; alt?: boolean }> = {
   terminal: { code: "KeyJ" },
   "terminal-alternate": { code: "Backquote", control: true },
@@ -28,6 +28,17 @@ export const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?
   next: { code: "BracketRight", shift: true },
   "previous-tab": { code: "ArrowLeft", alt: true },
   "next-tab": { code: "ArrowRight", alt: true },
+  // The Browser menu's, for the web page in front.
+  "page-back": { code: "ArrowLeft" },
+  "page-forward": { code: "ArrowRight" },
+  reload: { code: "KeyR" },
+  "force-reload": { code: "KeyR", shift: true },
+  find: { code: "KeyF" },
+  "find-next": { code: "KeyG" },
+  "find-previous": { code: "KeyG", shift: true },
+  "zoom-in": { code: "Equal" },
+  "zoom-out": { code: "Minus" },
+  "zoom-reset": { code: "Digit0" },
   // The View menu's.
   back: { code: "BracketLeft" },
   forward: { code: "BracketRight" },

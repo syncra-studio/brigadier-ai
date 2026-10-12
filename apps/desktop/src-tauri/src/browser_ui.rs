@@ -7,8 +7,9 @@
 //! capture from the site's choices (Allow, Block, or Ask: WebKit's own question), sends popups
 //! (`window.open`, `target=_blank`) to the system browser, and leaves the file picker to wry's
 //! delegate as before. It also reaches the browser's saved WebKit data store (clearing it,
-//! counting its sites, adding imported cookies) and asks where to save a download. Talking to
-//! WebKit through objc2 needs `unsafe`; every use says why it holds.
+//! counting its sites, adding imported cookies) and asks where to save a download. A tab's page
+//! also zooms, finds text, prints, copies a screenshot and reloads past the cache here. Talking
+//! to WebKit through objc2 needs `unsafe`; every use says why it holds.
 
 use std::cell::RefCell;
 use std::ptr::NonNull;
@@ -18,22 +19,26 @@ use brigadier_ipc::app::SitePermission;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
-use objc2_app_kit::{NSModalResponseOK, NSSavePanel};
+use objc2_app_kit::{
+    NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSModalResponseOK, NSPasteboard,
+    NSPasteboardTypePNG, NSPrintInfo, NSSavePanel,
+};
 use objc2_foundation::{
-    MainThreadMarker, NSArray, NSDate, NSHTTPCookie, NSHTTPCookieDomain, NSHTTPCookieExpires,
-    NSHTTPCookieName, NSHTTPCookiePath, NSHTTPCookiePropertyKey, NSHTTPCookieSameSiteLax,
-    NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteStrict, NSHTTPCookieSecure, NSHTTPCookieValue,
-    NSMutableDictionary, NSObjectProtocol, NSSet, NSString, NSURL, NSUUID, ns_string,
+    MainThreadMarker, NSArray, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain,
+    NSHTTPCookieExpires, NSHTTPCookieName, NSHTTPCookiePath, NSHTTPCookiePropertyKey,
+    NSHTTPCookieSameSiteLax, NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteStrict,
+    NSHTTPCookieSecure, NSHTTPCookieValue, NSMutableDictionary, NSObjectProtocol, NSSet, NSString,
+    NSURL, NSUUID, ns_string,
 };
 use objc2_web_kit::{
-    WKFrameInfo, WKMediaCaptureType, WKNavigationAction, WKOpenPanelParameters,
-    WKPermissionDecision, WKSecurityOrigin, WKUIDelegate, WKWebView, WKWebViewConfiguration,
-    WKWebsiteDataRecord, WKWebsiteDataStore, WKWebsiteDataTypeCookies, WKWebsiteDataTypeDiskCache,
-    WKWebsiteDataTypeFetchCache, WKWebsiteDataTypeFileSystem, WKWebsiteDataTypeHashSalt,
-    WKWebsiteDataTypeIndexedDBDatabases, WKWebsiteDataTypeLocalStorage, WKWebsiteDataTypeMediaKeys,
-    WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeSearchFieldRecentSearches,
-    WKWebsiteDataTypeServiceWorkerRegistrations, WKWebsiteDataTypeSessionStorage,
-    WKWebsiteDataTypeWebSQLDatabases, WKWindowFeatures,
+    WKFindConfiguration, WKFindResult, WKFrameInfo, WKMediaCaptureType, WKNavigationAction,
+    WKOpenPanelParameters, WKPermissionDecision, WKSecurityOrigin, WKUIDelegate, WKWebView,
+    WKWebViewConfiguration, WKWebsiteDataRecord, WKWebsiteDataStore, WKWebsiteDataTypeCookies,
+    WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeFetchCache, WKWebsiteDataTypeFileSystem,
+    WKWebsiteDataTypeHashSalt, WKWebsiteDataTypeIndexedDBDatabases, WKWebsiteDataTypeLocalStorage,
+    WKWebsiteDataTypeMediaKeys, WKWebsiteDataTypeMemoryCache,
+    WKWebsiteDataTypeSearchFieldRecentSearches, WKWebsiteDataTypeServiceWorkerRegistrations,
+    WKWebsiteDataTypeSessionStorage, WKWebsiteDataTypeWebSQLDatabases, WKWindowFeatures,
 };
 use wry::WebViewExtMacOS;
 
@@ -176,6 +181,126 @@ pub fn install(webview: &wry::WebView, on_popup: impl Fn(String) + 'static) -> B
     BrowserUi {
         _delegate: delegate,
     }
+}
+
+/// The page's zoom, 1.0 being 100%.
+pub fn page_zoom(webview: &wry::WebView) -> f64 {
+    // SAFETY: a property read on a live web view, on the main thread (it is MainThreadOnly).
+    unsafe { webview.webview().pageZoom() }
+}
+
+/// Zooms the page to `zoom` (1.0 being 100%). It stays with the web view across its pages.
+pub fn set_page_zoom(webview: &wry::WebView, zoom: f64) {
+    // SAFETY: a property write on a live web view, on the main thread.
+    unsafe { webview.webview().setPageZoom(zoom) };
+}
+
+/// Finds `query` in the page, after the current match (before it, `backwards`), going round at
+/// the end and ignoring case. WebKit selects the match and scrolls to it; `done` hears whether
+/// there was one.
+pub fn find(
+    webview: &wry::WebView,
+    query: &str,
+    backwards: bool,
+    done: impl FnOnce(bool) + 'static,
+) {
+    let view = webview.webview();
+    // SAFETY: a fresh configuration and plain property writes, on the main thread.
+    let configuration = unsafe {
+        let configuration = WKFindConfiguration::new(view.mtm());
+        configuration.setBackwards(backwards);
+        configuration.setCaseSensitive(false);
+        configuration.setWraps(true);
+        configuration
+    };
+    let done = once(done);
+    let block = RcBlock::new(move |result: NonNull<WKFindResult>| {
+        // SAFETY: WebKit passes a valid result for the call's duration.
+        done(unsafe { result.as_ref().matchFound() });
+    });
+    // SAFETY: a live web view, a valid string and configuration, and a block WebKit copies, on
+    // the main thread.
+    unsafe {
+        view.findString_withConfiguration_completionHandler(
+            &NSString::from_str(query),
+            Some(&configuration),
+            &block,
+        );
+    }
+}
+
+/// Opens the print panel for the page, as a sheet on its window. `false` when the page is in
+/// no window.
+pub fn print(webview: &wry::WebView) -> bool {
+    let view = webview.webview();
+    let Some(window) = view.window() else {
+        return false;
+    };
+    let info = NSPrintInfo::sharedPrintInfo();
+    // SAFETY: a live web view and the shared print info, on the main thread.
+    let operation = unsafe { view.printOperationWithPrintInfo(&info) };
+    // WebKit's printing view starts out with no size, and prints blank pages unless it is given
+    // the page's.
+    if let Some(printing) = operation.view() {
+        printing.setFrame(view.bounds());
+    }
+    operation.setShowsPrintPanel(true);
+    operation.setShowsProgressPanel(true);
+    // SAFETY: the page's own window; no delegate, so no selector or context is called back.
+    unsafe {
+        operation.runOperationModalForWindow_delegate_didRunSelector_contextInfo(
+            &window,
+            None,
+            None,
+            std::ptr::null_mut(),
+        );
+    }
+    true
+}
+
+/// `image` as PNG on the general pasteboard, in place of what was there.
+fn copy_png(image: &NSImage) -> bool {
+    let Some(rep) = image
+        .TIFFRepresentation()
+        .and_then(|tiff| NSBitmapImageRep::imageRepWithData(&tiff))
+    else {
+        return false;
+    };
+    // SAFETY: an empty properties dictionary, which the method accepts for every file type.
+    let png = unsafe {
+        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    };
+    let Some(png) = png else {
+        return false;
+    };
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    // SAFETY: AppKit's exported pasteboard type, read only.
+    pasteboard.setData_forType(Some(&png), unsafe { NSPasteboardTypePNG })
+}
+
+/// Takes a picture of the page as shown and puts it on the clipboard as a PNG; `done` hears
+/// whether it is there.
+pub fn copy_snapshot(webview: &wry::WebView, done: impl FnOnce(bool) + 'static) {
+    let done = once(done);
+    let block = RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
+        // SAFETY: WebKit passes either nil or a valid image for the call's duration.
+        let copied = unsafe { image.as_ref() }.is_some_and(copy_png);
+        done(copied);
+    });
+    // SAFETY: a live web view, no configuration (the whole visible page) and a block WebKit
+    // copies, on the main thread.
+    unsafe {
+        webview
+            .webview()
+            .takeSnapshotWithConfiguration_completionHandler(None, &block);
+    }
+}
+
+/// Reloads the page, fetching it and what it loads again rather than from the cache.
+pub fn reload_from_origin(webview: &wry::WebView) {
+    // SAFETY: a plain method call on a live web view, on the main thread.
+    let _ = unsafe { webview.webview().reloadFromOrigin() };
 }
 
 /// The browser's saved data store, by the identifier its webviews were built with.

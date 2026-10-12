@@ -7,14 +7,17 @@ const PAGE = "https://www.example.com/docs/intro?q=1#top";
 
 type Box = { width: number; height: number };
 
-/** A ⋯ menu row as the fixture reads it: those the page does natively are disabled until D2. */
-const item = (label: string, native: string | null = null) => ({ label, disabled: native !== null, native });
+/** A ⋯ menu row as the fixture reads it. */
+const item = (label: string, disabled = false) => ({ label, disabled });
+/** The Zoom row: what its stepper shows and which of its buttons are disabled. */
+const zoom = (shows: string, disabled: string[]) => ({ label: "Zoom", shows, disabled });
 
 // The Browser tab in Chromium over a faked shell, at 1280 wide, with Show full URL off and on:
 // the toolbar's measurements, the address idle and focused, site information for https, http
-// and a local page, Reload while loading, the ⋯ menu and where each of its Settings rows leads.
+// and a local page, Reload while loading, the ⋯ menu and where each of its Settings rows leads,
+// then the page's native actions: zoom, Print, the screenshot, the find bar and the tab's keys.
 for (const full of [false, true]) {
-  test(`browser tab toolbar: measurements, address, site information, loading, ⋯ menu and its destinations${full ? " (Show full URL)" : ""}`, { timeout: 90000 }, async (t) => {
+  test(`browser tab toolbar: measurements, address, site information, loading, ⋯ menu and its destinations, zoom, find and the page keys${full ? " (Show full URL)" : ""}`, { timeout: 90000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, `browser-tab.html?drive=1${full ? "&full=1" : ""}`, "browser-tab-result", 60000)) as Record<string, unknown>;
     if (process.env.BROWSER_TAB_SEEN) console.log(JSON.stringify(seen, null, 2));
 
@@ -53,13 +56,14 @@ for (const full of [false, true]) {
     // Loading: the spinner stands in for Reload, and stops the load.
     assert.deepEqual(seen.loading, { busy: "true", spinner: true });
 
+    // On a page the native rows act; at 100% there is nothing to reset.
     assert.deepEqual(seen.menu, [
-      item("Find in page", "find"),
-      item("Print", "print"),
+      item("Find in page"),
+      item("Print"),
       "|",
-      item("Zoom", "zoom"),
+      zoom("100%", ["Reset zoom"]),
       "|",
-      item("Take a screenshot", "screenshot"),
+      item("Take a screenshot"),
       "|",
       item("Import Browser Data…"),
       item("Downloads"),
@@ -86,5 +90,73 @@ for (const full of [false, true]) {
     assert.deepEqual(seen.newTabBack, { disabled: true, opacity: "0.4" });
 
     assert.deepEqual(seen.asked, [{ go: "stop" }, { open: PAGE }]);
+
+    // Zoom steps 10% and resets to 100%; the screenshot says where it went; each asks the shell.
+    assert.deepEqual(seen.zoomStepped, { shows: "110%", group: zoom("110%", []) });
+    assert.equal(seen.zoomReset, "100%");
+    assert.deepEqual(seen.screenshotToast, ["Screenshot saved to clipboard"]);
+    const id = "c-browser";
+    assert.deepEqual(seen.menuAsked, [
+      { zoom: 1.1, id },
+      { zoom: 1.2, id },
+      { zoom: 1.1, id },
+      { zoom: 1, id },
+      { snapshot: id },
+      { print: id },
+    ]);
+    // ⌘= (also with Shift, ⌘+), ⌘-, ⌘0, ⌘R, ⇧⌘R, ⌘← and ⌘→ from the app or from the pane a
+    // native page's menu keys reach; ⌘← in the address field stays the field's. With the page
+    // holding the keyboard, ⌘←/⌘→ spare its fields and ⌘L takes the keyboard back first.
+    assert.deepEqual(seen.keysAsked, [
+      { zoom: 1.1, id },
+      { zoom: 1, id },
+      { zoom: 1.1, id },
+      { zoom: 1, id },
+      { go: "reload" },
+      { go: "force-reload" },
+      { go: "back" },
+      { go: "forward" },
+      { go: "back-unless-typing" },
+      { go: "forward-unless-typing" },
+      { focus: null },
+    ]);
+    assert.equal(seen.addressFromPage, true);
+
+    // The find bar: under the toolbar at its end, 340 by 44 with 20 corners, 13px text, the
+    // page right under it; it opens with the keyboard in its field.
+    assert.deepEqual(seen.findOpen, { focused: true, placeholder: "Find in page…", count: "" });
+    assert.deepEqual(seen.findMeasure, { width: 340, height: 44, radius: 20, endGap: 8, underToolbar: 0, pageBelow: 0, font: 13 });
+    assert.equal(seen.typed, "1 of 3");
+    assert.equal(seen.enter, "2 of 3");
+    assert.equal(seen.commandG, "3 of 3");
+    assert.equal(seen.shiftEnter, "2 of 3");
+    assert.equal(seen.commandShiftG, "1 of 3");
+    assert.deepEqual(seen.noResults, { count: "No results", previous: true, next: true });
+    // Per tab: another tab has neither the bar nor the zoom; back, both are as they were.
+    assert.deepEqual(seen.otherTab, { bar: false, zoom: "100%" });
+    assert.deepEqual(seen.backTab, { query: "foo", count: "1 of 3", zoom: "110%" });
+    // Esc closes it, keeping the text for next time, clears the match and refocuses the page.
+    assert.deepEqual(seen.closed, { bar: false, kept: "foo" });
+    assert.deepEqual(seen.findAsked, [
+      { find: "foo", step: "type", id },
+      { find: "foo", step: "next", id },
+      { find: "foo", step: "next", id },
+      { find: "foo", step: "previous", id },
+      { find: "foo", step: "previous", id },
+      { find: "fooz", step: "type", id },
+      { find: "foo", step: "type", id },
+      { zoom: 1.1, id },
+      { find: "", step: "type", id },
+      { focus: id },
+    ]);
+
+    // The New tab page has nothing to find, print, zoom or picture.
+    assert.deepEqual(seen.newTabMenu, [
+      item("Find in page", true),
+      item("Print", true),
+      zoom("100%", ["Zoom out", "Zoom in", "Reset zoom"]),
+      item("Take a screenshot", true),
+    ]);
+    assert.equal(seen.newTabFind, false);
   });
 }

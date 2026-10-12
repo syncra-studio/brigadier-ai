@@ -84,6 +84,7 @@
  *                                             (`.browser-address-field`)
  *               w-browser-site-info           the popover of its site information button
  *               h-browser-zoom, w-browser-zoom-value  the ⋯ menu's zoom stepper and its 100%
+ *               w-browser-find, h-browser-find-row, shadow-browser-find  the page's find bar
  *               w-browser-menu, h-browser-menu-item, rounded-browser-menu  its ⋯ menu
  *               browser-{pane,tab-min,tab-max,composer}  the Browser tab's pane, its tabs' least
  *                                             and most, its composer
@@ -324,6 +325,9 @@
   --spacing-browser-site-info: 20rem;
   --spacing-browser-zoom: 1.625rem;
   --spacing-browser-zoom-value: 2.75rem;
+  /* The page's find bar, as the reference app's measures: 340 wide, a 44 high row. */
+  --spacing-browser-find: 21.25rem;
+  --spacing-browser-find-row: 2.75rem;
   --browser-address-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
   /* Bottom shell sessions keep the native terminal's measurements at either density. */
   --spacing-terminal-header: 2.5rem;
@@ -477,6 +481,8 @@
   --shadow-marker: 0 0 0 1px oklch(1 0 0);
   --shadow-panel-tab: inset 0 0 0 0.5px var(--panel-tab-border), 0 1px 2px oklch(0 0 0 / 8%);
   --shadow-session-tab: inset 0 0 0 0.5px var(--session-tab-separator), 0 1px 2px -1px oklch(0 0 0 / 8%);
+  /* The Browser tab's find bar: a hairline edge (8.2% white) and the menus' soft drop. */
+  --shadow-browser-find: 0 0 0 0.5px oklch(1 0 0 / 8.2%), 0 8px 16px -4px oklch(0 0 0 / 12%);
 
   /* The pinned summary's motion: springs sampled for CSS. The thread's column moving aside
      settles without a bounce in 350ms; the card eases in from the pane's end in 300ms. */

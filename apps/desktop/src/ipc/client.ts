@@ -5,6 +5,7 @@ import type {
   BridgeEvent,
   BrowserBounds,
   BrowserEvent,
+  BrowserFound,
   BrowserOptions,
   ConventionsExport,
   IpcError,
@@ -205,12 +206,45 @@ export function browserPlace(id: string, bounds: BrowserBounds | null): Promise<
   return invoke("browser_place", { id, bounds });
 }
 
-/** Back, forward, reload or stop in the Browser tab's page. */
+/**
+ * Back, forward, reload, reload past the cache (macOS) or stop in the Browser tab's page. The
+ * `-unless-typing` ones are ⌘← and ⌘→ while the page has the keyboard: in a text field they move
+ * the caret to the line's start or end instead.
+ */
 export function browserGo(
   id: string,
-  action: "back" | "forward" | "reload" | "stop",
+  action: "back" | "forward" | "back-unless-typing" | "forward-unless-typing" | "reload" | "force-reload" | "stop",
 ): Promise<void> {
   return invoke("browser_go", { id, action });
+}
+
+/** The Browser tab's page zoom (1 is 100%), set to `zoom` first when given (macOS). */
+export function browserZoom(id: string, zoom: number | null): Promise<number> {
+  return invoke<number>("browser_zoom", { id, zoom });
+}
+
+/**
+ * Finds `query` in the Browser tab's page (macOS): `"type"` from where the match selected
+ * starts (the query changed), `"next"` and `"previous"` from it on. An empty query leaves no
+ * match selected.
+ */
+export function browserFind(id: string, query: string, step: "type" | "next" | "previous"): Promise<BrowserFound> {
+  return invoke<BrowserFound>("browser_find", { id, query, step });
+}
+
+/** Opens the print panel for the Browser tab's page (macOS). */
+export function browserPrint(id: string): Promise<void> {
+  return invoke("browser_print", { id });
+}
+
+/** Puts a picture of the Browser tab's page on the clipboard (macOS). */
+export function browserSnapshot(id: string): Promise<void> {
+  return invoke("browser_snapshot", { id });
+}
+
+/** Gives the keyboard to the Browser tab `id`'s page, or with `null` back to the app's own. */
+export function browserFocus(id: string | null): Promise<void> {
+  return invoke("browser_focus", { id });
 }
 
 /** Tells the shell the user's Settings › Browser choices it acts on itself. */

@@ -19,12 +19,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use brigadier_ipc::app::{
-    BrowserBounds, BrowserClear, BrowserDownload, BrowserEvent, BrowserOptions, BrowserSite,
-    BrowserVisit, HistoryFilter, SitePermission,
+    BrowserBounds, BrowserClear, BrowserDownload, BrowserEvent, BrowserFound, BrowserOptions,
+    BrowserSite, BrowserVisit, HistoryFilter, SitePermission,
 };
 use brigadier_ipc::protocol::{ErrorCode, IpcError};
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 use std::time::{Duration, Instant};
+use tauri::Manager;
 use tauri::ipc::Channel;
 
 use crate::browser_store;
@@ -35,6 +36,146 @@ fn failed(message: impl Into<String>) -> IpcError {
         message: message.into(),
     }
 }
+
+/// A page action only macOS's WebKit has (zoom, find, print, screenshots, reloading past the
+/// cache); the tab shows them disabled elsewhere.
+#[cfg(not(target_os = "macos"))]
+fn unsupported() -> IpcError {
+    IpcError {
+        code: ErrorCode::Invalid,
+        message: "the built-in browser can't do that on this platform".into(),
+    }
+}
+
+/// The least and most a page zooms to: 30% and 300%.
+const ZOOM_RANGE: (f64, f64) = (0.3, 3.0);
+
+/// `zoom` within [`ZOOM_RANGE`]; 100% for anything that isn't a number.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn zoom_within(zoom: f64) -> f64 {
+    if zoom.is_finite() {
+        zoom.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1)
+    } else {
+        1.0
+    }
+}
+
+/// Counts the matches of `query` in the page's text as shown, whatever its case, and which of
+/// them the selection (the match WebKit's find just selected) starts at: `[total, current]`.
+/// Text is read as it renders: runs of spaces as one, and no match across two blocks. It stops
+/// counting at 1000.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn count_script(query: &str) -> String {
+    let query = serde_json::to_string(query).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        r#"(() => {{
+  const query = {query}.replace(/\s+/g, " ").toLowerCase();
+  const body = document.body;
+  if (!body || !query) return [0, 0];
+  const shown = new Map();
+  const visible = (element) => {{
+    let seen = shown.get(element);
+    if (seen === undefined) {{
+      seen = element.checkVisibility
+        ? element.checkVisibility({{ visibilityProperty: true }})
+        : element.getClientRects().length > 0;
+      shown.set(element, seen);
+    }}
+    return seen;
+  }};
+  const blocks = new Map();
+  const blockOf = (element) => {{
+    const path = [];
+    let cursor = element;
+    let block = body;
+    while (cursor && cursor !== body) {{
+      const known = blocks.get(cursor);
+      if (known) {{ block = known; break; }}
+      path.push(cursor);
+      const display = getComputedStyle(cursor).display;
+      if (!display.startsWith("inline") && display !== "contents") {{ block = cursor; break; }}
+      cursor = cursor.parentElement;
+    }}
+    for (const element of path) blocks.set(element, block);
+    return block;
+  }};
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  let text = "";
+  let lastBlock = null;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {{
+    const parent = node.parentElement;
+    if (!parent || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(parent.tagName) || !visible(parent)) continue;
+    const block = blockOf(parent);
+    if (lastBlock && block !== lastBlock) text += "\n";
+    lastBlock = block;
+    let chunk = node.data.replace(/\s+/g, " ").toLowerCase();
+    const lead = chunk.startsWith(" ") && /[ \n]$/.test(text) ? 1 : 0;
+    chunk = chunk.slice(lead);
+    nodes.push({{ node, start: text.length, lead }});
+    text += chunk;
+  }}
+  let at = -1;
+  const selection = getSelection();
+  if (selection && selection.rangeCount > 0) {{
+    const range = selection.getRangeAt(0);
+    const entry = nodes.find((item) => item.node === range.startContainer);
+    if (entry) {{
+      const before = entry.node.data.slice(0, range.startOffset).replace(/\s+/g, " ").length;
+      at = entry.start + Math.max(0, before - entry.lead);
+    }}
+  }}
+  let total = 0;
+  let current = 0;
+  for (let from = text.indexOf(query); from >= 0 && total < 1000; from = text.indexOf(query, from + query.length)) {{
+    total += 1;
+    if (from <= at) current = total;
+  }}
+  return [total, current];
+}})()"#
+    )
+}
+
+/// What the count script answered, as WebKit's JSON: `(total, current)`, nothing known when it
+/// failed.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn counted(json: &str) -> (u32, u32) {
+    serde_json::from_str::<(u32, u32)>(json).unwrap_or((0, 0))
+}
+
+/// ⌘← or ⌘→ from the Browser menu while the page has the keyboard: the menu takes the key
+/// before the page, so in a text field the caret goes to the line's start or end (`side`) as
+/// it would have; anywhere else the page goes back or forward (`go`). A field in a frame of
+/// another site can't be told from outside, so nothing happens there.
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows", test)),
+    allow(dead_code)
+)]
+fn unless_typing(side: &str, go: &str) -> String {
+    format!(
+        r#"(() => {{
+  let view = window;
+  let field = document.activeElement;
+  while (field && field.tagName === "IFRAME") {{
+    try {{ view = field.contentWindow; field = field.contentDocument.activeElement; }} catch {{ return; }}
+    if (!view) return;
+  }}
+  const typing = field && (field.isContentEditable || field.tagName === "TEXTAREA" ||
+    (field.tagName === "INPUT" && !/^(button|checkbox|color|file|hidden|image|radio|range|reset|submit)$/i.test(field.type)));
+  if (typing) view.getSelection()?.modify("move", "{side}", "lineboundary");
+  else {go};
+}})()"#
+    )
+}
+
+/// Leaves no match selected once the find bar closes.
+#[cfg(target_os = "macos")]
+const CLEAR_FIND: &str = "getSelection()?.removeAllRanges()";
+
+/// Puts the caret where the selected match starts, for WebKit's find to look on from there.
+#[cfg(target_os = "macos")]
+const FIND_FROM_START: &str =
+    "(() => { const s = getSelection(); if (s && s.rangeCount > 0) s.collapseToStart(); })()";
 
 /// Whether the tab may show `url`: web pages, and the blank and blob pages they make.
 /// Everything else (files, the app's own schemes, `data:`, `javascript:`) is refused.
@@ -562,9 +703,41 @@ mod embedded {
             "forward" => "history.forward()",
             "reload" => "location.reload()",
             "stop" => "stop()",
+            "back-unless-typing" => &super::unless_typing("left", "history.back()"),
+            "forward-unless-typing" => &super::unless_typing("right", "history.forward()"),
+            "force-reload" => return force_reload(id),
             other => return Err(failed(format!("unknown browser action {other}"))),
         };
         with_webview(id, |webview| webview.evaluate_script(script))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn force_reload(id: &str) -> Result<(), IpcError> {
+        with_webview(id, |webview| {
+            crate::browser_ui::reload_from_origin(webview);
+            Ok(())
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn force_reload(_id: &str) -> Result<(), IpcError> {
+        Err(super::unsupported())
+    }
+
+    /// Runs `action` with the tab's page; an error when it has none.
+    #[cfg(target_os = "macos")]
+    pub fn with_page<T>(id: &str, action: impl FnOnce(&WebView) -> T) -> Result<T, IpcError> {
+        BROWSERS.with_borrow(|browsers| {
+            browsers
+                .get(id)
+                .map(|tab| action(&tab.webview))
+                .ok_or_else(|| failed("the browser's page is gone"))
+        })
+    }
+
+    /// Gives the keyboard to the tab's page.
+    pub fn focus(id: &str) -> Result<(), IpcError> {
+        with_webview(id, WebView::focus)
     }
 
     pub fn close(id: &str) {
@@ -605,6 +778,10 @@ mod embedded {
     }
 
     pub fn go(_id: &str, _action: &str) -> Result<(), IpcError> {
+        Ok(())
+    }
+
+    pub fn focus(_id: &str) -> Result<(), IpcError> {
         Ok(())
     }
 
@@ -718,10 +895,176 @@ pub fn browser_place(id: String, bounds: Option<BrowserBounds>) -> Result<(), Ip
     embedded::place(&id, bounds)
 }
 
-/// Back, forward, reload or stop in the tab's page.
+/// Back, forward, reload, reload past the cache (`force-reload`, macOS) or stop in the tab's
+/// page; `back-unless-typing` and `forward-unless-typing` are ⌘← and ⌘→ (see `unless_typing`).
 #[tauri::command]
 pub fn browser_go(id: String, action: String) -> Result<(), IpcError> {
     embedded::go(&id, &action)
+}
+
+/// Runs `action` with the tab's page on the main thread, and waits for what it sends.
+#[cfg(target_os = "macos")]
+async fn on_page<T: Send + 'static>(
+    app: &tauri::AppHandle,
+    id: String,
+    action: impl FnOnce(&wry::WebView, tokio::sync::oneshot::Sender<T>) + Send + 'static,
+) -> Result<T, IpcError> {
+    let (sent, answer) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        // Without a page, `sent` goes unanswered and the wait below ends in an error.
+        let _ = embedded::with_page(&id, |webview| action(webview, sent));
+    })
+    .map_err(|err| failed(err.to_string()))?;
+    answer
+        .await
+        .map_err(|_| failed("the browser's page is gone"))
+}
+
+/// The tab's page zoom (1.0 being 100%): set to `zoom` (within 30% to 300%) first, when given.
+/// The page keeps it from page to page while the tab is open.
+#[tauri::command]
+pub fn browser_zoom(id: String, zoom: Option<f64>) -> Result<f64, IpcError> {
+    #[cfg(target_os = "macos")]
+    {
+        embedded::with_page(&id, |webview| {
+            if let Some(zoom) = zoom {
+                crate::browser_ui::set_page_zoom(webview, zoom_within(zoom));
+            }
+            crate::browser_ui::page_zoom(webview)
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (id, zoom);
+        Err(unsupported())
+    }
+}
+
+/// Finds `query` in the tab's page, whatever its case, going round at the end, with its
+/// matches counted. `step`: `type` (the query changed) looks from where the match selected
+/// starts, so it stays while it still matches; `next` and `previous` from it on. An empty
+/// `query` leaves no match selected (the find bar closed).
+#[tauri::command]
+pub async fn browser_find(
+    app: tauri::AppHandle,
+    id: String,
+    query: String,
+    step: String,
+) -> Result<BrowserFound, IpcError> {
+    #[cfg(target_os = "macos")]
+    {
+        let backwards = match step.as_str() {
+            "type" | "next" => false,
+            "previous" => true,
+            other => return Err(failed(format!("unknown find step {other}"))),
+        };
+        if query.is_empty() {
+            on_page(&app, id, |webview, sent| {
+                let _ = webview.evaluate_script(CLEAR_FIND);
+                let _ = sent.send(());
+            })
+            .await?;
+            return Ok(BrowserFound::default());
+        }
+        let script = count_script(&query);
+        let again = step == "type";
+        let found = on_page(&app, id.clone(), move |webview, sent| {
+            // WebKit looks after the selection: from its start, the match typed so far stays.
+            if again {
+                let _ = webview.evaluate_script(FIND_FROM_START);
+            }
+            crate::browser_ui::find(webview, &query, backwards, move |found| {
+                let _ = sent.send(found);
+            });
+        })
+        .await?;
+        if !found {
+            return Ok(BrowserFound::default());
+        }
+        // The count is a bonus: a page that won't run it still has its match.
+        let json = on_page(&app, id, move |webview, sent| {
+            let sent = Mutex::new(Some(sent));
+            let _ = webview.evaluate_script_with_callback(&script, move |json| {
+                if let Some(sent) = sent
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    let _ = sent.send(json);
+                }
+            });
+        })
+        .await
+        .unwrap_or_default();
+        let (total, current) = counted(&json);
+        Ok(BrowserFound {
+            found,
+            current: current.min(total),
+            total,
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, id, query, step);
+        Err(unsupported())
+    }
+}
+
+/// Opens the print panel for the tab's page.
+#[tauri::command]
+pub fn browser_print(id: String) -> Result<(), IpcError> {
+    #[cfg(target_os = "macos")]
+    {
+        if embedded::with_page(&id, crate::browser_ui::print)? {
+            Ok(())
+        } else {
+            Err(failed("the page isn't in the window"))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = id;
+        Err(unsupported())
+    }
+}
+
+/// Puts a picture of the tab's page, as shown, on the clipboard.
+#[tauri::command]
+pub async fn browser_snapshot(app: tauri::AppHandle, id: String) -> Result<(), IpcError> {
+    #[cfg(target_os = "macos")]
+    {
+        let copied = on_page(&app, id, |webview, sent| {
+            crate::browser_ui::copy_snapshot(webview, move |copied| {
+                let _ = sent.send(copied);
+            });
+        })
+        .await?;
+        if copied {
+            Ok(())
+        } else {
+            Err(failed("the screenshot couldn't be taken"))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, id);
+        Err(unsupported())
+    }
+}
+
+/// Gives the keyboard to the tab `id`'s page, or with none back to the app's own: a native
+/// page keeps it from the app's fields until one of them asks.
+#[tauri::command]
+pub fn browser_focus(app: tauri::AppHandle, id: Option<String>) -> Result<(), IpcError> {
+    match id {
+        Some(id) => embedded::focus(&id),
+        None => app
+            .get_webview_window(crate::shell::MAIN_WINDOW)
+            .ok_or_else(|| failed("the window is gone"))?
+            .as_ref()
+            .set_focus()
+            .map_err(|err| failed(err.to_string())),
+    }
 }
 
 /// The built-in browser's history, newest first: the last visit shown (`before_ms`,
@@ -948,6 +1291,34 @@ mod tests {
             free_name(dir, std::ffi::OsStr::new("notes"), taken(&["notes"])),
             Path::new("/d/notes (2)")
         );
+    }
+
+    #[test]
+    fn zoom_stays_between_30_and_300_percent() {
+        assert_eq!(zoom_within(1.1), 1.1);
+        assert_eq!(zoom_within(0.1), 0.3);
+        assert_eq!(zoom_within(5.0), 3.0);
+        assert_eq!(zoom_within(f64::NAN), 1.0);
+        assert_eq!(zoom_within(f64::INFINITY), 1.0);
+    }
+
+    #[test]
+    fn the_count_script_takes_the_query_as_a_string_and_its_answer_reads_safely() {
+        let script = count_script("say \"hi\" </script> ${x}");
+        assert!(script.contains(r#"const query = "say \"hi\" </script> ${x}".replace"#));
+        assert!(script.starts_with("(() => {") && script.ends_with("})()"));
+        assert_eq!(counted("[12,3]"), (12, 3));
+        assert_eq!(counted(""), (0, 0));
+        assert_eq!(counted("null"), (0, 0));
+        assert_eq!(counted("[-1,2]"), (0, 0));
+    }
+
+    #[test]
+    fn command_arrows_move_the_caret_in_a_field_and_go_elsewhere() {
+        let back = unless_typing("left", "history.back()");
+        assert!(back.contains(r#"modify("move", "left", "lineboundary")"#));
+        assert!(back.contains("else history.back();"));
+        assert!(unless_typing("right", "history.forward()").contains(r#""right""#));
     }
 
     #[test]

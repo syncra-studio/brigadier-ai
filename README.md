@@ -47,7 +47,9 @@ docs/          plan and design notes
   every camera and microphone request. Ours answers them from the site's choice in Settings ›
   Browser › Site settings (Allow, Block, or Ask: WebKit's own question), sends popups to the
   system browser and leaves file uploads to wry's. The same module clears the browser's saved
-  WebKit data store, counts its sites and shows the save panel for downloads. This module,
+  WebKit data store, counts its sites and shows the save panel for downloads, and does what a
+  tab's page does natively: zoom, find in page, print, copy a screenshot and reload past the
+  cache. This module,
   `apps/desktop/src-tauri/src/browser_ui.rs`, is the app shell's WebKit exception to the
   workspace's `unsafe_code = "deny"` (the sandbox crate's OS calls are the only others): calling
   WebKit through objc2 needs `unsafe`. The `#[allow(unsafe_code)]` sits on that module alone, and
