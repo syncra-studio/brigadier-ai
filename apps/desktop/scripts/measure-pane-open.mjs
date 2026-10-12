@@ -1,6 +1,6 @@
-// Measures how long the toolbar's Files and Source take to show their contents, frame by frame
-// from the click, in a production build of the pane-open fixture (lazy chunks as the app loads
-// them) with IPC answered after a daemon-like delay.
+// Measures how long the right sidebar takes to show Files or Source, frame by frame from the key
+// that opens it on that view, in a production build of the pane-open fixture with IPC answered
+// after a daemon-like delay.
 // PLAYWRIGHT_MODULE=<installed module> CHROME_BIN=<installed browser> node scripts/measure-pane-open.mjs [delay ms] [runs]
 import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,10 +14,14 @@ const delay = Number(process.argv[2] ?? 25);
 const runs = Number(process.argv[3] ?? 5);
 const root = fileURLToPath(new URL('..', import.meta.url));
 const outDir = join(tmpdir(), `brigadier-measure-pane-open-${process.pid}`);
-// The column whose contents are measured, and the views as the toolbar names them, each with a
-// text its contents show once read.
+// The column whose contents are measured, and its views, each with the key that opens the
+// sidebar on it and a text its contents show once read.
 const COLUMN = '[data-slot="workspace-pane"]';
-const VIEWS = [{ label: 'Files', text: 'apps' }, { label: 'Source', text: 'file-0.ts' }];
+const VIEWS = [
+  { label: 'Files', key: { code: 'KeyE', metaKey: true, shiftKey: true }, text: 'apps' },
+  { label: 'Source', key: { code: 'KeyG', ctrlKey: true, shiftKey: true }, text: 'file-0.ts' },
+];
+const TOGGLE = { code: 'KeyB', metaKey: true, altKey: true };
 
 await build({ root, configFile: join(root, 'vite.config.ts'), logLevel: 'warn',
   build: { outDir, emptyOutDir: true, rolldownOptions: { input: { paneOpen: join(root, 'fixtures/pane-open.html') } } } });
@@ -25,13 +29,12 @@ const server = await preview({ root, configFile: join(root, 'vite.config.ts'), l
 const url = server.resolvedUrls.local[0];
 const browser = await chromium.launch({ headless: true, args: process.platform === 'darwin' ? ['--single-process'] : [], executablePath: process.env.CHROME_BIN });
 
-/** In the page: clicks the toolbar button and samples every frame for a second. */
-function sample({ column, label, text }) {
-  const button = document.querySelector(`header[data-slot="test-toolbar"] button[aria-label="${label}"]`);
+/** In the page: presses the view's key and samples every frame for a second. */
+function sample({ column, key, text }) {
   return new Promise((resolve) => {
     const frames = [];
     const start = performance.now();
-    button.click();
+    window.dispatchEvent(new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true }));
     const tick = () => {
       const element = document.querySelector(column);
       const rect = element?.getBoundingClientRect();
@@ -67,14 +70,14 @@ try {
     await page.goto(`${url}fixtures/pane-open.html?delay=${delay}`);
     await page.evaluate(() => localStorage.clear());
     await page.reload();
-    await page.locator('header[data-slot="test-toolbar"] button[aria-label="Files"]').waitFor();
+    await page.locator('header[data-slot="test-toolbar"] button[aria-label="Right sidebar"]').waitFor();
     await page.waitForTimeout(300);
     for (const [phase, views] of [['cold', VIEWS], ['warm', VIEWS]]) {
       for (const view of views) {
         const frames = await page.evaluate(sample, { column: COLUMN, ...view });
         results.push({ run, phase, view: view.label, ...summary(frames) });
         // Closed again, its slide and the contents' removal over.
-        await page.locator(`header[data-slot="test-toolbar"] button[aria-label="${view.label}"]`).click();
+        await page.evaluate((key) => window.dispatchEvent(new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true })), TOGGLE);
         await page.waitForTimeout(600);
       }
     }

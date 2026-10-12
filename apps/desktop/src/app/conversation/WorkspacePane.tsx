@@ -1,5 +1,8 @@
-import { createContext, lazy, Suspense, type CSSProperties, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, type CSSProperties, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { FilesTab } from "@/app/conversation/FilesTab";
+import { ProjectDraftPane } from "@/app/conversation/ProjectDraftPane";
+import { SourcePanel } from "@/app/conversation/SourcePanel";
 import { shortcutKeys } from "@/app/shortcutCatalog";
 import { FilesGlyph, SidebarRightGlyph, SidebarRightOffGlyph, SourceControlGlyph } from "@/components/glyphs/codicons";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
@@ -8,10 +11,8 @@ import { cn } from "@/lib/utils";
 import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, workspacePaneKey, type WorkspacePaneTab } from "@/state/workspacePane";
 import { useApp } from "@/state/store";
+import { prefetchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
 
-const FilesTab = lazy(() => import("@/app/conversation/FilesTab").then((m) => ({ default: m.FilesTab })));
-const SourcePanel = lazy(() => import("@/app/conversation/SourcePanel").then((m) => ({ default: m.SourcePanel })));
-const ProjectDraftPane = lazy(() => import("@/app/conversation/ProjectDraftPane").then((m) => ({ default: m.ProjectDraftPane })));
 
 /** The right sidebar's views, in its icon row's order. */
 const VIEWS = [
@@ -42,6 +43,13 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
     setSearchRequest((value) => value + 1);
     setPlaceholder(replaceTabId ? { id, tabId: replaceTabId } : null);
   }, [enabled, id]);
+  const target = useMemo<WorkspaceTarget | null>(() => conversationId ? { type: "conversation", conversationId }
+    : projectId ? { type: "project", projectId } : null, [conversationId, projectId]);
+  // What the sidebar would show is read as the session or draft opens, so opening it paints at once.
+  const prefetch = useCallback(() => {
+    if (enabled && target) prefetchWorkspace(target);
+  }, [enabled, target]);
+  useEffect(prefetch, [prefetch]);
   const mac = useApp((s) => s.info?.platform === "macos");
   // A view's key opens the sidebar on it; pressed again while it shows, it takes the keyboard there.
   const show = useCallback((tab: WorkspacePaneTab) => {
@@ -71,10 +79,10 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
     return () => window.removeEventListener("keydown", key);
   }, [enabled, mac, openFilesSearch, toggleOpen, show]);
   return useMemo(() => ({
-    ...size, enabled, open: enabled && open, active, toggleOpen, select, openFilesSearch,
+    ...size, enabled, open: enabled && open, active, toggleOpen, select, openFilesSearch, prefetch,
     setOpen: setWorkspacePaneOpen, conversationId, projectId, searchRequest, searchHandled,
     filePlaceholder: placeholder?.id === id ? placeholder.tabId : undefined, fileOpened,
-  }), [size, enabled, open, active, toggleOpen, select, openFilesSearch, conversationId, projectId, searchRequest, searchHandled, placeholder, id, fileOpened]);
+  }), [size, enabled, open, active, toggleOpen, select, openFilesSearch, conversationId, projectId, searchRequest, searchHandled, placeholder, id, fileOpened, prefetch]);
 }
 
 export const WorkspacePaneContext = createContext<ReturnType<typeof useWorkspacePane> | null>(null);
@@ -86,7 +94,7 @@ export function WorkspacePaneToggle() {
   if (!pane?.enabled) return null;
   return (
     <TitlebarButton tooltip="Right sidebar" shortcut={shortcutKeys("right-sidebar", mac)}
-      aria-pressed={pane.open} aria-controls="workspace-pane-content" onClick={pane.toggleOpen}>
+      aria-pressed={pane.open} aria-controls="workspace-pane-content" onPointerEnter={pane.prefetch} onClick={pane.toggleOpen}>
       {pane.open ? <SidebarRightGlyph /> : <SidebarRightOffGlyph />}
     </TitlebarButton>
   );
@@ -158,19 +166,14 @@ export function WorkspacePane() {
             </TitlebarTips>
           </div>
           <div id="workspace-pane-content" role="tabpanel" aria-labelledby={`workspace-pane-${pane.active}`} data-pane={pane.active}
-            className={cn(
-              "bg-background text-sidebar-foreground rounded-e-page flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 motion-reduce:transition-none",
-              open ? "opacity-100" : "opacity-0",
-            )}>
+            className="bg-background text-sidebar-foreground rounded-e-page flex min-h-0 flex-1 flex-col overflow-hidden">
             {/* Keyed by whose files they are: one draft's list or message never shows for another. */}
-            {shown && <Suspense key={pane.conversationId ?? `project:${pane.projectId}`} fallback={null}>
-              {pane.conversationId ? (
-                pane.active === "files" ? <FilesTab conversationId={pane.conversationId} searchRequest={pane.searchRequest}
-                  onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />
-                  : <SourcePanel target={{ type: "conversation", conversationId: pane.conversationId }} />
-              ) : pane.projectId && <ProjectDraftPane projectId={pane.projectId} tab={pane.active}
-                searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />}
-            </Suspense>}
+            {shown && (pane.conversationId ? (
+              pane.active === "files" ? <FilesTab key={pane.conversationId} conversationId={pane.conversationId} searchRequest={pane.searchRequest}
+                onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />
+                : <SourcePanel key={pane.conversationId} target={{ type: "conversation", conversationId: pane.conversationId }} />
+            ) : pane.projectId && <ProjectDraftPane key={`project:${pane.projectId}`} projectId={pane.projectId} tab={pane.active}
+              searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />)}
           </div>
         </div>
       </SidebarReveal>

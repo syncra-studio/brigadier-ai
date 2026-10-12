@@ -7,12 +7,12 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useCheckoutFiles } from "@/app/conversation/Mentions";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { fuzzyMatch } from "@/components/assistant-ui/elements/fuzzy-match";
 import { listFiles, listProjectFiles } from "@/state/actions";
+import { useBoard } from "@/state/board";
 import { openFileTab, replaceNewTabWithFile } from "@/state/sessionTabs";
-import { useApp } from "@/state/store";
+import { type FileList, readFiles, useCachedEntry, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
 
 /**
  * The Files panel (⌘P): the session checkout's files as a tree with a search field. A click
@@ -27,9 +27,6 @@ type OnOpen = (path: string, keep: boolean) => void;
 const RESULTS = 100;
 /** How long typing pauses before the daemon searches a checkout too big to list whole. */
 const SEARCH_DELAY_MS = 150;
-
-/** A checkout's files as listed (at most so many), and whether there were more. */
-type FileList = { files: string[]; truncated: boolean };
 
 /** The files matching a query in the whole checkout. */
 type Search = (query: string) => Promise<FileList>;
@@ -97,8 +94,11 @@ export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled, r
   replaceTabId?: string | undefined;
   onFileOpened?: (() => void) | undefined;
 }) {
-  const conversation = useApp((s) => s.conversations[conversationId]);
-  const list = useCheckoutFiles(conversation ?? null);
+  const target = useMemo(() => ({ type: "conversation", conversationId }) as const, [conversationId]);
+  // Workers landing change the checkout.
+  const landed = useBoard((s) => s.board?.conversationId === conversationId
+    ? Object.values(s.board.tasks).filter((task) => task.landed !== null).length : 0);
+  const list = useWorkspaceFiles(target, landed);
   const search = useCallback((query: string) => listFiles(conversationId, query), [conversationId]);
   return (
     <FileBrowser
@@ -126,7 +126,8 @@ export function ProjectFiles({ projectId, searchRequest, onSearchHandled, onOpen
   onSearchHandled: () => void;
   onOpen: (path: string) => void;
 }) {
-  const list = useProjectFiles(projectId);
+  const target = useMemo(() => ({ type: "project", projectId }) as const, [projectId]);
+  const list = useWorkspaceFiles(target, 0);
   const search = useCallback((query: string) => listProjectFiles(projectId, query), [projectId]);
   return (
     <FileBrowser
@@ -140,27 +141,35 @@ export function ProjectFiles({ projectId, searchRequest, onSearchHandled, onOpen
   );
 }
 
-/** A project folder's files: read when shown, and again when the window comes back. */
-function useProjectFiles(projectId: string): FileList | null {
-  const [read, setRead] = useState<{ projectId: string; list: FileList } | null>(null);
+/**
+ * A checkout's files: what was last read of it at once (a prefetch usually has them before the
+ * sidebar opens), read again when shown, when `changed` changes and when the window comes back.
+ */
+function useWorkspaceFiles(target: WorkspaceTarget, changed: number): FileList | null {
+  const key = useCheckoutKey(target);
+  const kept = useCachedEntry(key)?.files;
+  const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
     const load = () =>
-      listProjectFiles(projectId)
-        .then((list) => live && setRead({ projectId, list }))
-        .catch((error: unknown) => {
-          console.error("listing the project's files failed", error);
-          if (live) setRead((previous) => previous?.projectId === projectId ? previous : { projectId, list: { files: [], truncated: false } });
-        });
+      readFiles(target).catch((error: unknown) => {
+        console.error("listing the checkout's files failed", error);
+        // Keep the last good list when a refresh fails; with none, show an empty one.
+        if (live) setFailed(key);
+      });
     void load();
     window.addEventListener("focus", load);
     return () => {
       live = false;
       window.removeEventListener("focus", load);
     };
-  }, [projectId]);
-  return read?.projectId === projectId ? read.list : null;
+    // `changed` asks for a fresh read even though nothing read here depends on it.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [target, key, changed]);
+  return kept ?? (failed === key ? EMPTY : null);
 }
+
+const EMPTY: FileList = { files: [], truncated: false };
 
 function FileBrowser({
   scope,

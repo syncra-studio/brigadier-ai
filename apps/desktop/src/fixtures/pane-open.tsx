@@ -1,7 +1,7 @@
 /**
- * How long the toolbar's Files and Source take to show their contents: the production toolbar
- * and pane over IPC answered after `?delay=` ms (a daemon round trip), measured frame by frame
- * from the click by `scripts/measure-pane-open.mjs`.
+ * How long the right sidebar takes to show Files or Source: the production toolbar and sidebar
+ * over IPC answered after `?delay=` ms (a daemon round trip), measured frame by frame from the
+ * key that opens it by `scripts/measure-pane-open.mjs`.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
