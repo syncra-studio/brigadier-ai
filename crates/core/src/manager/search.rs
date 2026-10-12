@@ -368,22 +368,24 @@ fn preview(text: &str, start: usize, number: u32, ranges: &[(usize, usize)]) -> 
         .strip_suffix('\r')
         .unwrap_or(&text[start..end]);
     let first = ranges.first().map_or(0, |range| range.0);
+    // The line's indent is left out, unless a match is in it.
+    let indent = (line.len() - line.trim_start().len()).min(first);
     // Character boundaries: up to PREVIEW_BEFORE characters before the first match.
-    let from = if line[..first].chars().count() > PREVIEW_BEFORE {
+    let from = if line[indent..first].chars().count() > PREVIEW_BEFORE {
         line[..first]
             .char_indices()
             .rev()
             .nth(PREVIEW_BEFORE - 1)
             .map_or(0, |(at, _)| at)
     } else {
-        0
+        indent
     };
     let to = line[from..]
         .char_indices()
         .nth(PREVIEW_CHARS)
         .map_or(line.len(), |(at, _)| from + at);
     let mut preview = String::new();
-    if from > 0 {
+    if from > indent {
         preview.push('…');
     }
     let offset = preview.encode_utf16().count() as u32;
@@ -539,6 +541,13 @@ mod tests {
         let units: Vec<u16> = line.preview.encode_utf16().collect();
         let hit = String::from_utf16(&units[range.start as usize..range.end as usize]).unwrap();
         assert_eq!(hit, "needle");
+        let indented = "\t    let needle = 1;\n";
+        let found = search_file(&matcher, "f".into(), String::new(), indented).unwrap();
+        assert_eq!(
+            found.lines[0].preview, "let needle = 1;",
+            "the indent is left out"
+        );
+        assert_eq!(found.lines[0].ranges[0], SearchRange { start: 4, end: 10 });
         let short = "a 😀 needle\n";
         let found = search_file(&matcher, "f".into(), String::new(), short).unwrap();
         assert_eq!(found.lines[0].ranges[0], SearchRange { start: 5, end: 11 });

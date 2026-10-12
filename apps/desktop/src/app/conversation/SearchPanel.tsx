@@ -212,7 +212,8 @@ export function SearchPanel({ target, onOpen, readOnly }: {
 const Field: FC<{ label: string; value: string; onChange: (value: string) => void; onEnter: () => void; children: ReactNode }> = ({
   label, value, onChange, onEnter, children,
 }) => (
-  <label className="border-border rounded-control focus-within:border-ring flex h-control-md items-center gap-0.5 border ps-2 pe-0.5">
+  // Not a label: the buttons inside would take its text as their names.
+  <div className="border-border rounded-control focus-within:border-ring flex h-control-md items-center gap-0.5 border ps-2 pe-0.5">
     <input value={value} placeholder={label} aria-label={label} spellCheck={false}
       onChange={(event) => onChange(event.target.value)}
       onKeyDown={(event) => {
@@ -223,7 +224,7 @@ const Field: FC<{ label: string; value: string; onChange: (value: string) => voi
       }}
       className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none" />
     {children}
-  </label>
+  </div>
 );
 
 const Toggle: FC<{ label: string; pressed: boolean; onChange: (pressed: boolean) => void; children: ReactNode }> = ({
@@ -274,7 +275,8 @@ const FileGroup = memo(function FileGroup({ file, open, onToggle, onOpen, onRepl
           className="flex h-full min-w-0 flex-1 items-center gap-1.5 ps-1 text-start text-sm">
           {open ? <ChevronDown className="size-icon-xs shrink-0" /> : <ChevronRight className="size-icon-xs shrink-0" />}
           <FileIcon name={file.path} />
-          <span className="shrink-0">{baseName(file.path)}</span>
+          {/* A long name shrinks only once its folder has gone. */}
+          <span className="min-w-0 truncate">{baseName(file.path)}</span>
           <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{dirName(file.path)}</span>
         </button>
         {onReplace && (

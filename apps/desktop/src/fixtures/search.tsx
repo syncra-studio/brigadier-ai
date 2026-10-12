@@ -81,7 +81,7 @@ function Fixture() {
       seen.starts = starts().length;
       seen.query = starts()[0]!.method === "startSearch" ? (starts()[0] as Extract<Request, { method: "startSearch" }>).query : null;
       seen.groups = [...inPanel("session").querySelectorAll('[aria-label="Search results"] > li')].map((li) => ({
-        name: li.querySelector("button[aria-expanded] span.shrink-0")?.textContent,
+        name: li.querySelector("button[aria-expanded] span.truncate")?.textContent,
         count: li.querySelector("span.tabular-nums")?.textContent,
         marks: [...li.querySelectorAll("mark")].map((mark) => mark.textContent),
       }));
