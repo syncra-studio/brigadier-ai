@@ -22,6 +22,7 @@ test("Search streams grouped results, opens a line, asks again on its options, r
     files: [{ path: "src/app.ts", hash: "h-app", matches: 2 }, { path: "README.md", hash: "h-readme", matches: 1 }],
   }, "the files go with the search's hashes and counts");
   assert.match(String(seen.outcome), /Replaced 2 matches in 1 file\..*README\.md \(it changed since the search\)/);
+  assert.equal(seen.reconnected, false, "after reconnecting, the search shown is asked again");
   assert.match(String(seen.patternError), /valid regular expression/);
   assert.equal(seen.cleared, true, "a cleared query clears the results");
   assert.equal(seen.waitingReplace, false, "no Replace before the session's own copy exists");

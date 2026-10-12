@@ -2,7 +2,8 @@
  * The right sidebar's Search over a mocked daemon: results streamed in batches (one before the
  * search's id is known), grouped by file with matches marked, a line opening its file, the
  * options asking again, the Replace field not searching, Replace all after its confirm with the
- * search's hashes, a refresh after it, an invalid pattern's error, a cleared query, and no
+ * search's hashes, a refresh after it, a search asked again after the connection came back, an
+ * invalid pattern's error, a cleared query, and no
  * Replace for a session whose own copy doesn't exist yet.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -11,6 +12,7 @@ import { createRoot } from "react-dom/client";
 
 import { SearchPanel } from "@/app/conversation/SearchPanel";
 import type { Request, SearchFile } from "@/ipc/generated";
+import { useApp } from "@/state/store";
 import { emitSearchUpdate } from "@/state/workspaceSearch";
 
 const files: SearchFile[] = [
@@ -21,6 +23,11 @@ const files: SearchFile[] = [
 ];
 const asked: Request[] = [];
 let ids = 0;
+/** While set, a search is started but never says what it found: the connection dropped. */
+let silent = false;
+const connection = (status: "connected" | "disconnected") =>
+  useApp.setState({ connection: { status, daemon: null, reason: null } });
+connection("connected");
 mockIPC((command, args) => {
   if (command !== "ipc_request") return null;
   const req = (args as { request: Request }).request;
@@ -28,6 +35,7 @@ mockIPC((command, args) => {
   if (req.method === "startSearch") {
     const id = ++ids;
     if (req.query.regex && req.query.text === "(") throw { code: "invalid", message: "the search isn't a valid regular expression: unclosed group" };
+    if (silent) return { method: req.method, id };
     // The first batch comes before the answer with the id; the rest after.
     emitSearchUpdate(id, { type: "files", files: [files[0]!] });
     setTimeout(() => {
@@ -112,6 +120,17 @@ function Fixture() {
       seen.outcome = inPanel("session").querySelector('[role="status"]')?.textContent;
       // The replace changed the checkout: the search runs again.
       await until(() => starts().length === 3);
+      await until(() => summary() === "3 results in 2 files");
+      // The connection drops mid-search, which the new one doesn't carry on: it is asked again.
+      silent = true;
+      button("session", "Match case")!.click();
+      await until(() => starts().length === 4);
+      connection("disconnected");
+      await sleep(50);
+      silent = false;
+      connection("connected");
+      await until(() => starts().length === 5 && summary() === "3 results in 2 files");
+      seen.reconnected = (starts()[4] as Extract<Request, { method: "startSearch" }>).query.matchCase;
       button("session", "Regular expression")!.click();
       type(field("session", "Search"), "(");
       await until(() => !!inPanel("session").querySelector('[role="alert"]'));

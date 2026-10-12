@@ -9,6 +9,7 @@ import { FileIcon } from "@/components/glyphs/fileIcons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { ReplaceOutcome, SearchFile, SearchLine, SearchQuery } from "@/ipc/generated";
+import { useApp } from "@/state/store";
 import { onWorkspaceChanged, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import {
   clearSearch, EMPTY_FORM, replaceResults, runSearch, sameQuery, searchId, searchQuery, type SearchForm,
@@ -78,6 +79,15 @@ export function SearchPanel({ target, onOpen, readOnly }: {
   }, [target, asked, checkout]);
   // Closed, the view stops its search; opened again, it asks again.
   useEffect(() => () => stopSearch(target), [target]);
+  // A new connection doesn't carry on the old one's search, nor hear what changed meanwhile:
+  // after reconnecting, the query is found again, the old results kept meanwhile.
+  const connected = useApp((s) => s.connection.status === "connected");
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    const reconnected = connected && !wasConnected.current;
+    wasConnected.current = connected;
+    if (reconnected && latest.current.query) runSearch(target, latest.current.query);
+  }, [target, connected]);
   // Edits to the checkout (an agent's, a replace's) find again, the old results kept meanwhile.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
