@@ -33,6 +33,8 @@ pub const MAX_MATCHES: u32 = 20_000;
 pub const MAX_FILES: u32 = 2_000;
 /// Lines listed for one file; its count still has every match.
 const LINES_PER_FILE: usize = 1_000;
+/// How many matches in one file pass between looks at whether the search was stopped.
+const STOP_CHECK_EVERY: u32 = 4_096;
 /// How much of a long line its preview keeps: some text before the first match, then up to
 /// the whole preview's length.
 const PREVIEW_BEFORE: usize = 40;
@@ -272,7 +274,7 @@ fn search(root: &Path, matcher: &Matcher, stop: &AtomicBool, tx: &mpsc::Sender<S
         let Some((hash, text)) = searchable(entry.path()) else {
             continue;
         };
-        if let Some(found) = search_file(matcher, relative, hash, &text) {
+        if let Some(found) = search_file(matcher, relative, hash, &text, stop) {
             files += 1;
             matches = matches.saturating_add(found.matches);
             batch.push(found);
@@ -321,12 +323,23 @@ fn relative_path(root: &Path, path: &Path) -> Option<String> {
 /// The line being collected: where it starts, and its matches' byte ranges in it.
 type Pending = (usize, Vec<(usize, usize)>);
 
-/// One file's matches, line by line, or none when it has none.
-fn search_file(matcher: &Matcher, path: String, hash: String, text: &str) -> Option<SearchFile> {
+/// One file's matches, line by line, or none when it has none or the search is stopped.
+fn search_file(
+    matcher: &Matcher,
+    path: String,
+    hash: String,
+    text: &str,
+    stop: &AtomicBool,
+) -> Option<SearchFile> {
+    let bytes = text.as_bytes();
+    let line_end_from =
+        |start: usize| memchr::memchr(b'\n', &bytes[start..]).map_or(text.len(), |at| start + at);
     let mut lines: Vec<SearchLine> = Vec::new();
     let mut count = 0u32;
-    // Where the current line starts and its number, moved forward as matches come.
+    // The current line: where it starts and ends and its number, moved forward as matches
+    // come, so each line is scanned once however many matches it holds.
     let (mut line_start, mut line_number) = (0usize, 1u32);
+    let mut line_end = line_end_from(0);
     let mut current: Option<Pending> = None;
     let flush = |current: &mut Option<Pending>, number: u32, lines: &mut Vec<SearchLine>| {
         if let Some((start, ranges)) = current.take()
@@ -337,19 +350,18 @@ fn search_file(matcher: &Matcher, path: String, hash: String, text: &str) -> Opt
     };
     for found in matcher.find(text) {
         count = count.saturating_add(1);
-        // The line the match starts on.
-        let mut moved = false;
-        while let Some(newline) = memchr::memchr(b'\n', &text.as_bytes()[line_start..found.start()])
-        {
-            if !moved {
-                flush(&mut current, line_number, &mut lines);
-                moved = true;
-            }
-            line_start += newline + 1;
-            line_number += 1;
+        if count.is_multiple_of(STOP_CHECK_EVERY) && stop.load(Ordering::Acquire) {
+            return None;
         }
-        let line_end = memchr::memchr(b'\n', &text.as_bytes()[line_start..])
-            .map_or(text.len(), |at| line_start + at);
+        // The line the match starts on; a match at a line's newline stays on that line.
+        if line_end < found.start() {
+            flush(&mut current, line_number, &mut lines);
+            while line_end < found.start() {
+                line_start = line_end + 1;
+                line_number += 1;
+                line_end = line_end_from(line_start);
+            }
+        }
         let range = (
             found.start() - line_start,
             found.end().min(line_end) - line_start,
@@ -375,7 +387,8 @@ fn preview(text: &str, start: usize, number: u32, ranges: &[(usize, usize)]) -> 
     let line = text[start..end]
         .strip_suffix('\r')
         .unwrap_or(&text[start..end]);
-    let first = ranges.first().map_or(0, |range| range.0);
+    // Matches at a line's end can sit past its trimmed carriage return.
+    let first = ranges.first().map_or(0, |range| range.0).min(line.len());
     // The line's indent is left out, unless a match is in it.
     let indent = (line.len() - line.trim_start().len()).min(first);
     // Character boundaries: up to PREVIEW_BEFORE characters before the first match.
@@ -401,8 +414,9 @@ fn preview(text: &str, start: usize, number: u32, ranges: &[(usize, usize)]) -> 
     let units = |bytes: usize| offset + line[from..from + bytes].encode_utf16().count() as u32;
     let ranges = ranges
         .iter()
+        .map(|&(a, b)| (a.min(line.len()), b))
         .filter(|range| range.0 >= from && range.0 < to.max(from + 1))
-        .map(|&(a, b)| SearchRange {
+        .map(|(a, b)| SearchRange {
             start: units(a - from),
             end: units(b.min(line.len()).min(to) - from),
         })
@@ -556,7 +570,14 @@ mod tests {
     fn a_long_line_previews_around_its_match_in_utf16_offsets() {
         let matcher = Matcher::new(&query("needle")).unwrap();
         let text = format!("{}é needle {}\nnone\n", "x".repeat(100), "y".repeat(400));
-        let found = search_file(&matcher, "f".into(), String::new(), &text).unwrap();
+        let found = search_file(
+            &matcher,
+            "f".into(),
+            String::new(),
+            &text,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         let line = &found.lines[0];
         assert!(line.preview.starts_with('…') && line.preview.ends_with('…'));
         let range = line.ranges[0];
@@ -564,15 +585,86 @@ mod tests {
         let hit = String::from_utf16(&units[range.start as usize..range.end as usize]).unwrap();
         assert_eq!(hit, "needle");
         let indented = "\t    let needle = 1;\n";
-        let found = search_file(&matcher, "f".into(), String::new(), indented).unwrap();
+        let found = search_file(
+            &matcher,
+            "f".into(),
+            String::new(),
+            indented,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(
             found.lines[0].preview, "let needle = 1;",
             "the indent is left out"
         );
         assert_eq!(found.lines[0].ranges[0], SearchRange { start: 4, end: 10 });
         let short = "a 😀 needle\n";
-        let found = search_file(&matcher, "f".into(), String::new(), short).unwrap();
+        let found = search_file(
+            &matcher,
+            "f".into(),
+            String::new(),
+            short,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(found.lines[0].ranges[0], SearchRange { start: 5, end: 11 });
+    }
+
+    #[test]
+    fn a_match_at_a_crlf_line_end_previews_without_its_carriage_return() {
+        let mut regex = query(r"\n");
+        regex.regex = true;
+        let matcher = Matcher::new(&regex).unwrap();
+        let text = "one\r\n  two\r\nthree";
+        let found = search_file(
+            &matcher,
+            "f".into(),
+            String::new(),
+            text,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(found.matches, 2);
+        let lines: Vec<(u32, &str)> = found
+            .lines
+            .iter()
+            .map(|line| (line.line, line.preview.as_str()))
+            .collect();
+        assert_eq!(lines, [(1, "one"), (2, "two")]);
+    }
+
+    #[test]
+    fn many_matches_on_one_line_are_counted_once_each_and_lines_stay_numbered() {
+        let matcher = Matcher::new(&query("a")).unwrap();
+        let text = format!("b\n{}\nb\nab\n", "a".repeat(400_000));
+        let started = Instant::now();
+        let found = search_file(
+            &matcher,
+            "f".into(),
+            String::new(),
+            &text,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(found.matches, 400_001);
+        let numbers: Vec<u32> = found.lines.iter().map(|line| line.line).collect();
+        assert_eq!(numbers, [2, 4]);
+        let stopped = search_file(
+            &matcher,
+            "f".into(),
+            String::new(),
+            &text,
+            &AtomicBool::new(true),
+        );
+        assert!(
+            stopped.is_none(),
+            "a stopped search leaves a long file part way"
+        );
     }
 
     #[test]

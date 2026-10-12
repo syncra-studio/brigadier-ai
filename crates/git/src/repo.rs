@@ -588,10 +588,29 @@ impl Repo {
         Ok((ignored, truncated))
     }
 
-    /// The files whose change changes what `git status` says beyond the checkout's own files:
-    /// its index and HEAD, wherever git keeps them (a linked worktree's are outside it).
+    /// The files whose change changes what `git status` says beyond the checkout's own files,
+    /// wherever git keeps them (a linked worktree's are outside it): its index and HEAD, the
+    /// branch HEAD names and the branch that one follows (a reset, a commit from elsewhere or
+    /// a fetch moves them while HEAD stays), and the packed refs either may be kept in.
     pub fn status_files(&self) -> Result<Vec<PathBuf>> {
-        Ok(vec![self.git_path("index")?, self.git_path("HEAD")?])
+        let mut files = vec![
+            self.git_path("index")?,
+            self.git_path("HEAD")?,
+            self.git_path("packed-refs")?,
+        ];
+        if let Some(branch) = self.symbolic_head()? {
+            files.push(self.git_path(&format!("refs/heads/{branch}"))?);
+            let spec = format!("refs/heads/{branch}@{{upstream}}");
+            let args = ["rev-parse", "--symbolic-full-name", spec.as_str()];
+            let out = self.run(&args, true)?;
+            if out.status.success()
+                && let Ok(upstream) = parse::line(&out.stdout)
+                && upstream.starts_with("refs/")
+            {
+                files.push(self.git_path(&upstream)?);
+            }
+        }
+        Ok(files)
     }
 
     /// The files git tracks in this checkout (its index), relative to its root, unsorted.

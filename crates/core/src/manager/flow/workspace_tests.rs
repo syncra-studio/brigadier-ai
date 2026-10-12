@@ -188,8 +188,8 @@ async fn hears(watch: &mut crate::manager::workspace::WorkspaceWatch, wait: Dura
     tokio::time::timeout(wait, watch.changed()).await.is_ok()
 }
 
-/// The watch hears a file written, created and deleted, and a file staged in a session's own
-/// worktree (whose index git keeps outside it), but not a build writing into an ignored
+/// The watch hears a file written, created and deleted, and a file staged or a branch moved
+/// in a session's own worktree (whose index and refs git keeps outside it), but not a build writing into an ignored
 /// folder.
 #[tokio::test]
 async fn the_watch_hears_files_and_staging_but_not_ignored_folders() {
@@ -241,6 +241,24 @@ async fn the_watch_hears_files_and_staging_but_not_ignored_folders() {
     while hears(&mut watch, Duration::from_millis(800)).await {}
     git(&checkout, &["add", "notes.txt"]);
     assert!(hears(&mut watch, Duration::from_secs(3)).await, "staging");
+    // Undoing a commit moves only the branch, kept in the main repository too.
+    git(&checkout, &["commit", "-q", "-m", "Notes"]);
+    while hears(&mut watch, Duration::from_millis(800)).await {}
+    git(&checkout, &["reset", "-q", "--soft", "HEAD~1"]);
+    assert!(
+        hears(&mut watch, Duration::from_secs(3)).await,
+        "a branch moved"
+    );
+    // A branch switched to is watched from then on, also in a folder new to git.
+    git(&checkout, &["checkout", "-q", "-b", "topic/switched"]);
+    assert!(hears(&mut watch, Duration::from_secs(3)).await, "a switch");
+    git(&checkout, &["commit", "-q", "-m", "Notes"]);
+    while hears(&mut watch, Duration::from_millis(800)).await {}
+    git(&checkout, &["reset", "-q", "--soft", "HEAD~1"]);
+    assert!(
+        hears(&mut watch, Duration::from_secs(3)).await,
+        "the switched-to branch moved"
+    );
     drop(watch);
     flow.stop().await;
 }

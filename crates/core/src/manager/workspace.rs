@@ -4,7 +4,7 @@
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc as std_mpsc};
+use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -68,8 +68,8 @@ impl SessionManager {
         .await
     }
 
-    /// Watches a target's checkout: the watch's `changed` resolves after its files, its index
-    /// or its HEAD change, a burst of changes once. What happens only in ignored folders (a
+    /// Watches a target's checkout: the watch's `changed` resolves after its files, its index,
+    /// its HEAD or its branch change, a burst of changes once. What happens only in ignored folders (a
     /// build's output) doesn't count. A checkout that can't be watched is read again every
     /// so often instead.
     pub async fn watch_workspace(&self, target: &WorkspaceTarget) -> Result<WorkspaceWatch> {
@@ -86,10 +86,9 @@ impl SessionManager {
         let git = self.git.clone();
         let reread_root = root.clone();
         let reread = move || {
-            git.open(&reread_root)
-                .and_then(|repo| repo.ignored(IGNORED_KEPT))
-                .map(|(ignored, _)| ignored)
-                .ok()
+            let repo = git.open(&reread_root).ok()?;
+            let ignored = repo.ignored(IGNORED_KEPT).ok()?.0;
+            Some((ignored, repo.status_files().ok()?))
         };
         Ok(WorkspaceWatch::start(root, status_files, ignored, reread))
     }
@@ -145,7 +144,7 @@ fn read_folder(root: &Path, path: &str) -> Result<WorkspaceFolder> {
 pub struct WorkspaceWatch {
     changes: mpsc::Receiver<()>,
     stop: Arc<AtomicBool>,
-    _watcher: Option<notify::RecommendedWatcher>,
+    _watcher: Arc<Mutex<Option<notify::RecommendedWatcher>>>,
 }
 
 impl Drop for WorkspaceWatch {
@@ -166,26 +165,20 @@ impl WorkspaceWatch {
         root: PathBuf,
         status_files: Vec<PathBuf>,
         ignored: Vec<String>,
-        reread_ignored: impl Fn() -> Option<Vec<String>> + Send + 'static,
+        reread: impl Fn() -> Option<(Vec<String>, Vec<PathBuf>)> + Send + 'static,
     ) -> Self {
         // One pending change is enough: the reader reads the whole checkout again.
         let (changes_tx, changes) = mpsc::channel(1);
         let stop = Arc::new(AtomicBool::new(false));
-        // Events name resolved paths (`/private/tmp`, not `/tmp`).
-        let resolve = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let root = resolve(&root);
-        let status_files: Vec<PathBuf> = status_files
-            .iter()
-            .map(|file| match (file.parent(), file.file_name()) {
-                (Some(dir), Some(name)) => resolve(dir).join(name),
-                _ => file.clone(),
-            })
-            .collect();
+        let root = resolved(&root);
+        let status_files: Vec<PathBuf> = status_files.iter().map(|file| resolved(file)).collect();
         let (events_tx, events) = std_mpsc::channel::<notify::Result<notify::Event>>();
         let watcher = watcher(&root, &status_files, events_tx)
             .inspect_err(|err| tracing::warn!(%err, root = %root.display(), "watching a checkout failed; reading it again every so often"))
             .ok();
         let mut watching = watcher.is_some();
+        let watcher = Arc::new(Mutex::new(watcher));
+        let thread_watcher = watcher.clone();
         let thread_stop = stop.clone();
         let spawned = thread::Builder::new()
             .name("workspace-watcher".into())
@@ -235,9 +228,20 @@ impl WorkspaceWatch {
                     if changes_tx.try_send(()).is_err() && changes_tx.is_closed() {
                         return;
                     }
-                    // A new build folder is ignored from now on.
-                    if let Some(ignored) = reread_ignored() {
+                    // A new build folder is ignored from now on, and a switched branch's refs
+                    // are watched.
+                    if let Some((ignored, status_files)) = reread() {
                         filter.set_ignored(&ignored);
+                        let status_files: Vec<PathBuf> =
+                            status_files.iter().map(|file| resolved(file)).collect();
+                        if status_files != filter.status_files {
+                            if let Ok(mut watcher) = thread_watcher.lock()
+                                && let Some(watcher) = watcher.as_mut()
+                            {
+                                watch_status_dirs(watcher, &filter.root, &status_files);
+                            }
+                            filter.status_files = status_files;
+                        }
                     }
                 }
             });
@@ -263,14 +267,52 @@ fn watcher(
         let _ = events.send(event);
     })?;
     watcher.watch(root, notify::RecursiveMode::Recursive)?;
-    // A linked worktree's index and HEAD live outside it. Their folders are watched, not the
-    // files: git replaces the index by renaming a new one over it.
+    watch_status_dirs(&mut watcher, root, status_files);
+    Ok(watcher)
+}
+
+/// A linked worktree's index, HEAD and refs live outside it. Their folders are watched, not
+/// the files: git replaces them by renaming a new one over them. A branch's folder that isn't
+/// there yet (its ref only packed) is heard from the nearest folder above it that is. A folder
+/// that can't be watched leaves its files to the next read.
+fn watch_status_dirs(
+    watcher: &mut notify::RecommendedWatcher,
+    root: &Path,
+    status_files: &[PathBuf],
+) {
+    use notify::Watcher as _;
+
     for dir in status_files.iter().filter_map(|file| file.parent()) {
-        if !dir.starts_with(root) {
-            watcher.watch(dir, notify::RecursiveMode::NonRecursive)?;
+        if dir.starts_with(root) {
+            continue;
+        }
+        let Some(existing) = dir.ancestors().find(|dir| dir.is_dir()) else {
+            continue;
+        };
+        let mode = if existing == dir {
+            notify::RecursiveMode::NonRecursive
+        } else {
+            notify::RecursiveMode::Recursive
+        };
+        if let Err(err) = watcher.watch(existing, mode) {
+            tracing::warn!(%err, dir = %existing.display(), "watching a checkout's git folder failed");
         }
     }
-    Ok(watcher)
+}
+
+/// A path as events name it, with links resolved (`/private/tmp`, not `/tmp`), also when its
+/// last parts aren't there yet.
+fn resolved(path: &Path) -> PathBuf {
+    for existing in path.ancestors() {
+        if let (Ok(base), Ok(rest)) = (existing.canonicalize(), path.strip_prefix(existing)) {
+            return if rest.as_os_str().is_empty() {
+                base
+            } else {
+                base.join(rest)
+            };
+        }
+    }
+    path.to_path_buf()
 }
 
 /// Which reported paths change what the sidebar shows.
@@ -389,7 +431,7 @@ mod tests {
         ));
         let mut watch = WorkspaceWatch::start(path, Vec::new(), Vec::new(), || None);
         let stop = watch.stop.clone();
-        assert!(watch._watcher.is_none());
+        assert!(watch._watcher.lock().unwrap().is_none());
         assert_eq!(
             tokio::time::timeout(POLL + Duration::from_secs(2), watch.changed())
                 .await
