@@ -23,8 +23,8 @@
 }
 
 /* The welcome is pure black (its waves are white light on it), unless the window is staged
-   and shows only the comet over the desktop. */
-html:not([data-intro="staged"]) .welcome[data-step="intro"] {
+   and shows only the comet over the desktop, or it's fading into the name's backdrop. */
+html:not([data-intro="staged"]) .welcome[data-step="intro"]:not([data-leaving]) {
   background: #000;
 }
 
