@@ -47,6 +47,8 @@ test("a page: shortcuts, the Insert list, formatting, dragging, autosave, confli
   // The File menu.
   assert.deepEqual(seen.fileItems, ["Show pages⇧⌘E", "Rename", "Copy as Markdown", "Download", "Delete"]);
   assert.equal(seen.copied, "# Launch plan\n\nTheir version");
+  assert.equal(seen.renameFocus, true);
+  assert.deepEqual(seen.renameSelection, [0, 11, 11]);
   assert.deepEqual(seen.download, { name: "Launch plan.md", choose: true, sameText: true });
   assert.deepEqual(seen.pageList, ["Launch plan", "📌Older notes"]);
   assert.deepEqual(seen.openedFromList, ["1".repeat(32), "2".repeat(32)]);

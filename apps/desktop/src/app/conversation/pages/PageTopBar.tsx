@@ -1,6 +1,6 @@
 import { ChevronDown, Copy, Document, Download, EditPencil, SquarePlus, Trash } from "@openai/apps-sdk-ui/components/Icon";
 import type { LexicalEditor } from "lexical";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -42,6 +42,7 @@ export function PageTopBar({ conversationId, pageId, content, editor, mac, activ
   const [listing, setListing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const renaming = useRef(false);
   useEffect(() => {
     if (!active) return;
     const key = (event: KeyboardEvent) => {
@@ -73,12 +74,18 @@ export function PageTopBar({ conversationId, pageId, content, editor, mac, activ
             <Document aria-hidden className="size-icon-sm" /><ChevronDown aria-hidden className="size-icon-sm" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="page-menu page-file-menu">
+        <DropdownMenuContent align="start" className="page-menu page-file-menu" onCloseAutoFocus={(event) => {
+          if (!renaming.current) return;
+          event.preventDefault();
+          renaming.current = false;
+          // The closing menu releases its focus trap after this callback returns.
+          requestAnimationFrame(onRename);
+        }}>
           <DropdownMenuItem className="page-menu-item" onSelect={() => setListing(true)}>
             <Document aria-hidden /><span className="flex-1">Show pages</span><DropdownMenuShortcut>{shortcutLabel("⇧⌘E", mac)}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem className="page-menu-item" onSelect={onRename}><EditPencil aria-hidden />Rename</DropdownMenuItem>
+          <DropdownMenuItem className="page-menu-item" onSelect={() => { renaming.current = true; }}><EditPencil aria-hidden />Rename</DropdownMenuItem>
           <DropdownMenuItem className="page-menu-item" onSelect={copy}><Copy aria-hidden />Copy as Markdown</DropdownMenuItem>
           <DropdownMenuItem className="page-menu-item" onSelect={download}><Download aria-hidden />Download</DropdownMenuItem>
           <DropdownMenuSeparator />

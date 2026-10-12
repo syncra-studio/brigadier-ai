@@ -190,6 +190,12 @@ async function steps(seen: Record<string, unknown>): Promise<void> {
   menuItems().find((item) => item.textContent === "Copy as Markdown")?.click(); await wait(100);
   seen.copied = copied.at(-1);
   openMenu("File menu"); await until(() => menuItems().length > 0);
+  menuItems().find((item) => item.textContent === "Rename")?.click();
+  await until(() => document.activeElement === one(".page-title"));
+  const renameTitle = one<HTMLTextAreaElement>(".page-title")!;
+  seen.renameFocus = document.activeElement === renameTitle;
+  seen.renameSelection = [renameTitle.selectionStart, renameTitle.selectionEnd, renameTitle.value.length];
+  openMenu("File menu"); await until(() => menuItems().length > 0);
   menuItems().find((item) => item.textContent === "Download")?.click(); await wait(100);
   const download = calls.find((call) => call.command === "save_document")?.payload as { name: string; text: string; choose: boolean } | undefined;
   seen.download = download ? { name: download.name, choose: download.choose, sameText: download.text === copied.at(-1) } : null;
