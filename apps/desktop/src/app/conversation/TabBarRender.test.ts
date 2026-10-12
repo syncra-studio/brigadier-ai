@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
 
 for (const compact of [false, true]) {
   test(`a session's title turns into tabs and back, measured, with widths kept after a close and Delete on a tab${compact ? " (compact)" : ""}`, { timeout: 60000 }, async (t) => {
@@ -42,5 +42,30 @@ for (const compact of [false, true]) {
     assert.equal(seen.focusAfterDelete, true, "the keyboard goes to the tab in front");
     assert.equal(seen.chatKept, seen.deleted, "Chat is never closed");
     assert.equal(seen.back, true, "closing every tab brings the title back");
+  });
+}
+
+for (const reduced of [false, true]) {
+  test(`tabs animate opening and closing and native menu events reach session tabs with browser focus${reduced ? " (reduced motion)" : ""}`, { timeout: 90000 }, async (t) => {
+    const seen = JSON.parse(await renderFixtureLive(t, "tabbar.html?live=1", "tabbar-result", 60000, reduced)) as Record<string, unknown>;
+    if (process.env.TABBAR_SEEN) console.log(JSON.stringify(seen, null, 2));
+    assert.equal(seen.reduced, reduced);
+    assert.equal(seen.openAnimation, !reduced);
+    if (!reduced) {
+      assert.equal(seen.openStart, 0);
+      assert.ok(Number(seen.openMiddle) > 0 && Number(seen.openMiddle) < Number(seen.openEnd));
+      assert.equal(seen.closeDuration, "0.1s");
+      assert.equal(seen.closingInert, true);
+    }
+    assert.equal(seen.closingRetained, !reduced);
+    for (const key of ["previous", "next", "number", "cycle", "cycleBack", "bracket", "bracketBack", "lastReturnsPlain", "reopened"]) assert.equal(seen[key], true, key);
+    assert.deepEqual(seen.kept, [seen.expectedKept]);
+    assert.equal(seen.closed, 0);
+    assert.ok((seen.forwarded as string[]).includes("ArrowLeft"));
+    assert.ok((seen.forwarded as string[]).includes("ArrowRight"));
+    assert.ok((seen.forwarded as string[]).includes("KeyW"));
+    const style = seen.openStyle as { fill: string; shadow: string };
+    assert.match(style.fill, /\/ 0\.08\)$/, "active fill is 8%");
+    assert.match(style.shadow, /\/ 0\.082\)/, "active hairline is 8.2%");
   });
 }

@@ -5,10 +5,12 @@
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { SessionTabBar } from "@/app/conversation/SessionTabBar";
+import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, Request } from "@/ipc/generated";
 import { closeTab, newSessionTab, selectTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
@@ -17,7 +19,7 @@ import { useApp } from "@/state/store";
 const params = new URLSearchParams(location.search);
 if (params.has("compact")) document.documentElement.dataset.density = "compact";
 // Headless virtual time doesn't run CSS transitions: the checks read where they end.
-document.head.append(Object.assign(document.createElement("style"), { textContent: "*, ::after { transition: none !important; }" }));
+if (!params.has("live")) document.head.append(Object.assign(document.createElement("style"), { textContent: "*, ::after { transition: none !important; }" }));
 const id = "tabbar-fixture";
 useSessionTabs.setState({ sessions: {} });
 const conversation: Conversation = {
@@ -31,7 +33,24 @@ useApp.setState({
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
 });
+const eventListeners = new Map<number, string>();
 mockIPC((command, payload) => {
+  const values = payload as Record<string, unknown>;
+  if (command === "plugin:event|listen") {
+    eventListeners.set(values.handler as number, values.event as string);
+    return values.handler;
+  }
+  if (command === "plugin:event|unlisten") {
+    eventListeners.delete(values.eventId as number);
+    return null;
+  }
+  if (command === "plugin:event|emit") {
+    const bridge = (window as unknown as { __TAURI_INTERNALS__: { runCallback: (id: number, event: unknown) => void } })["__TAURI_INTERNALS__"];
+    for (const [handler, event] of eventListeners) {
+      if (event === values.event) bridge.runCallback(handler, { id: handler, event, payload: values.payload });
+    }
+    return null;
+  }
   if (command !== "ipc_request") return null;
   return { method: (payload as { request: Request }).request.method };
 });
@@ -54,12 +73,23 @@ const press = (target: Element, code: string, key: string) =>
   target.dispatchEvent(new KeyboardEvent("keydown", { code, key, bubbles: true, cancelable: true }));
 
 function Fixture() {
+  usePaneShortcuts();
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const [result, setResult] = useState("");
   useEffect(() => {
+    if (params.has("manual")) return;
+    if (params.has("live")) {
+      let disposed = false;
+      void checkMotionAndMenu().then((seen) => { if (!disposed) setResult(JSON.stringify(seen)); });
+      return () => { disposed = true; };
+    }
     const seen: Record<string, unknown> = {};
     const timers: ReturnType<typeof setTimeout>[] = [];
-    const at = (ms: number, action: () => void) => timers.push(setTimeout(action, ms));
+    const at = (ms: number, action: () => void) => timers.push(setTimeout(() => {
+      // Virtual time pauses animation frames: these geometry checks inspect the settled strip.
+      for (const animation of document.getAnimations()) animation.finish();
+      action();
+    }, ms));
     const newTab = () => bar().querySelector<HTMLButtonElement>('button[aria-label="New tab"]')!;
     const context = () => document.querySelector<HTMLButtonElement>('button[aria-label="Context"]')!;
     at(500, () => {
@@ -145,9 +175,75 @@ function Fixture() {
           <button type="button" aria-label="Context">Context</button>
         </SessionTabBar>
         <input id="field" aria-label="Field" defaultValue="text" />
+        <div data-pane="browser" data-active="true" />
         {result && <pre id="tabbar-result">{result}</pre>}
       </main>
     </AssistantRuntimeProvider>
   );
+}
+
+/** Exercise the event bridge with the shell unfocused, and tab motion with real frames. */
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+async function checkMotionAndMenu() {
+  const seen: Record<string, unknown> = {};
+  const ready = async (condition: () => boolean) => {
+    for (let tries = 0; !condition() && tries < 500; tries++) await wait(10);
+    if (!condition()) throw new Error("Tab fixture step did not become ready");
+  };
+  await ready(() => eventListeners.size > 0);
+  const menu = async (name: string) => { await emit("pane-shortcut", name); await wait(20); };
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  seen.reduced = reduced;
+  // A native page owns focus: the shell's browser host receives menu events.
+  Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false });
+  const forwarded: string[] = [];
+  const record = (event: KeyboardEvent) => {
+    if (event.target instanceof Element && event.target.matches('[data-pane="browser"]')) forwarded.push(event.code);
+  };
+  window.addEventListener("keydown", record, true);
+  await emit("pane-shortcut", "new");
+  await ready(() => contentTabs().length === 1);
+  const opening = contentTabs()[0]!;
+  const animation = opening.getAnimations().find((entry) => entry.effect?.getTiming().duration === 200);
+  seen.openAnimation = !!animation;
+  if (animation) {
+    animation.pause();
+    animation.currentTime = 0;
+    seen.openStart = opening.getBoundingClientRect().width;
+    animation.currentTime = 100;
+    seen.openMiddle = opening.getBoundingClientRect().width;
+    animation.finish();
+  }
+  seen.openEnd = opening.getBoundingClientRect().width;
+  seen.openStyle = { color: getComputedStyle(opening).color, fill: getComputedStyle(opening).backgroundColor, shadow: getComputedStyle(opening).boxShadow };
+  await menu("new");
+  await wait(220);
+  const [first, second] = sessionTabs(id).tabs;
+  await menu("previous-tab"); seen.previous = sessionTabs(id).active === first!.id;
+  await menu("next-tab"); seen.next = sessionTabs(id).active === second!.id;
+  await menu("tab-1"); seen.number = sessionTabs(id).active === "chat";
+  await menu("cycle-next"); seen.cycle = sessionTabs(id).active === first!.id;
+  await menu("cycle-previous"); seen.cycleBack = sessionTabs(id).active === "chat";
+  await menu("next"); seen.bracket = sessionTabs(id).active === first!.id;
+  await menu("previous"); seen.bracketBack = sessionTabs(id).active === "chat";
+  await menu("tab-2");
+  await menu("close-others");
+  seen.kept = sessionTabs(id).tabs.map((tab) => tab.id);
+  seen.expectedKept = first!.id;
+  await wait(140);
+  await menu("close");
+  seen.closed = sessionTabs(id).tabs.length;
+  const closing = bar().querySelector<HTMLElement>("[data-closing]");
+  seen.closingRetained = !!closing;
+  seen.closingInert = closing?.inert ?? false;
+  seen.closeDuration = closing ? getComputedStyle(closing).transitionDuration : null;
+  await ready(() => bar().hasAttribute("data-plain"));
+  seen.lastReturnsPlain = true;
+  await menu("reopen");
+  seen.reopened = sessionTabs(id).active === first!.id;
+  seen.forwarded = forwarded;
+  window.removeEventListener("keydown", record, true);
+  // Hover/active visibility of close controls is measured separately by pointer automation.
+  return seen;
 }
 createRoot(document.getElementById("root")!).render(<TooltipProvider><Fixture /></TooltipProvider>);

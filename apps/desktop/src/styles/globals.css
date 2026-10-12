@@ -586,11 +586,19 @@
   /* Its size here: a text size beside the tab's text colour would be merged away. */
   font-size: var(--text-session-tab);
   line-height: var(--text-session-tab--line-height);
+  font-weight: 430;
   flex: 0 0 clamp(var(--spacing-session-tab-min), calc((100cqw - (var(--session-tab-count) - 1) * var(--spacing) / 2) / var(--session-tab-count)), var(--spacing-session-tab-max));
-  transition: flex-basis 200ms var(--ease-session-tab);
+  transition: flex-basis 200ms var(--ease-session-tab), padding 200ms var(--ease-session-tab), opacity 200ms var(--ease-session-tab);
   @media (prefers-reduced-motion: reduce) {
     transition: none;
   }
+}
+.session-tab[data-closing] {
+  flex-basis: 0;
+  padding-inline: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition-duration: 100ms;
 }
 .session-tab::after {
   content: "";
@@ -602,6 +610,9 @@
   opacity: 0;
   transition: opacity 150ms;
   pointer-events: none;
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
 }
 .session-tab[data-separator]::after {
   opacity: 1;

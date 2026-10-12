@@ -165,7 +165,7 @@ function Fixture() {
   }, [seen, runtime]);
   return <AssistantRuntimeProvider runtime={runtime}><ComposerTargetContext.Provider value={target}>
     <WorkspacePaneContext.Provider value={workspace}><RightSidebarContext.Provider value={panel}>
-      <div className="bg-background text-foreground flex h-screen">
+      <div className="bg-background text-foreground flex h-screen min-w-0 flex-1">
         <main className="flex min-w-0 flex-1 flex-col">
           <SummaryFloat>
             <header data-slot="test-toolbar" className="h-titlebar flex shrink-0 items-center justify-end">

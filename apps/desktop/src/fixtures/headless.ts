@@ -160,7 +160,7 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
  * frames, animation callbacks and resize observers run as in the app, which virtual time stops),
  * in a 1280×976 window, and the result is read over the DevTools protocol once it shows.
  */
-export async function renderFixtureLive(t: TestContext, page: string, resultId: string, timeoutMs = 60000): Promise<string> {
+export async function renderFixtureLive(t: TestContext, page: string, resultId: string, timeoutMs = 60000, reducedMotion = false): Promise<string> {
   const binary = chromium();
   const { url, scratch, log } = await serveFixtures(t);
   const profile = join(scratch, "profile");
@@ -215,6 +215,7 @@ export async function renderFixtureLive(t: TestContext, page: string, resultId: 
       replies.set(++id, resolve);
       socket.send(JSON.stringify({ id, method, params }));
     });
+  if (reducedMotion) await call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
   await call("Page.navigate", { url: `${url}fixtures/${page}` });
   while (Date.now() < deadline) {
     const { result } = (await call("Runtime.evaluate", {

@@ -8,6 +8,7 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useLayoutEffect,
   useRef,
 } from "react";
 
@@ -216,10 +217,11 @@ export function SessionTabBar({
     newSessionTab(id, kind, cwd);
   }, [id, archived, cwd, browserOn]);
   useTabKeys(id, archived, create);
-  const plain = tabs.length === 0;
+  const presence = useTabPresence(tabs);
+  const plain = presence.tabs.length === 0;
   const lock = useCloseLock(plain);
   const { listRef, shown, dragging, grip } = useDragReorder<SessionTab, HTMLDivElement>({
-    items: tabs,
+    items: presence.tabs,
     idOf: (tab) => tab.id,
     rowSelector: "[data-session-tab]",
     onMove: (tab, to) => moveTab(id, tab, to),
@@ -351,7 +353,7 @@ export function SessionTabBar({
             className={cn(
               TAB,
               active === CHAT_TAB
-                ? "bg-panel-tab shadow-panel-tab text-foreground"
+                ? "bg-panel-tab shadow-session-tab text-foreground"
                 : "text-toolbar-foreground hover:bg-toolbar-hover",
             )}
           >
@@ -364,7 +366,7 @@ export function SessionTabBar({
               aria-label={archived ? `${chatTitle} (Archived)` : undefined}
               onClick={() => selectTab(id, CHAT_TAB)}
               onDoubleClick={archived ? undefined : onRename}
-              className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
+              className="flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm"
             >
               {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
               <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">{chatTitle}</span>
@@ -390,8 +392,11 @@ export function SessionTabBar({
               const handlers = grip(tab.id, index);
               return (
                 <TabMenu key={tab.id} conversationId={id} tab={tab}>
-                  <div
+                  <AnimatedTab
                     data-session-tab
+                    closing={presence.closing.has(tab.id)}
+                    inert={presence.closing.has(tab.id)}
+                    aria-hidden={presence.closing.has(tab.id) || undefined}
                     data-separator={!selected && index < tabs.length - 1 && tabs[index + 1]?.id !== active || undefined}
                     data-tab-id={tab.id}
                     data-active={selected || undefined}
@@ -399,7 +404,7 @@ export function SessionTabBar({
                     className={cn(
                       TAB,
                       selected
-                        ? "bg-panel-tab shadow-panel-tab text-foreground"
+                        ? "bg-panel-tab shadow-session-tab text-foreground"
                         : "text-toolbar-foreground hover:bg-toolbar-hover",
                       "data-dragging:z-10 data-dragging:opacity-80",
                     )}
@@ -422,7 +427,7 @@ export function SessionTabBar({
                       onKeyDown={(event) => {
                         if (event.altKey) handlers.onKeyDown(event);
                       }}
-                      className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
+                      className="flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm"
                     >
                       {tab.kind === "file" ? (
                         <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
@@ -454,7 +459,7 @@ export function SessionTabBar({
                     >
                       <X aria-hidden className="size-icon-xs" />
                     </button>
-                  </div>
+                  </AnimatedTab>
                 </TabMenu>
               );
             })}
@@ -470,6 +475,54 @@ export function SessionTabBar({
       <CloseAsk />
     </header>
   );
+}
+
+/** Keep removed tabs only for their closing slide; state and resources close immediately. */
+function useTabPresence(tabs: readonly SessionTab[]) {
+  const [state, setState] = useState({ source: tabs, tabs, closing: new Set<string>() });
+  if (state.source !== tabs) {
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const shown = [...tabs];
+    const closing = new Set<string>();
+    if (!reduced) {
+      state.tabs.forEach((tab, index) => {
+        if (!tabs.some((current) => current.id === tab.id)) {
+          shown.splice(Math.min(index, shown.length), 0, tab);
+          closing.add(tab.id);
+        }
+      });
+    }
+    setState({ source: tabs, tabs: shown, closing });
+  }
+  useEffect(() => {
+    if (!state.closing.size) return;
+    const timer = setTimeout(() => setState((current) => ({
+      source: current.source, tabs: current.source, closing: new Set<string>(),
+    })), 100);
+    return () => clearTimeout(timer);
+  }, [state]);
+  return state;
+}
+
+/** A new tab grows into its slot; the final width still comes from the responsive CSS rule. */
+function AnimatedTab({ closing, ref: triggerRef, ...props }: React.ComponentProps<"div"> & { closing: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const attach = useCallback((element: HTMLDivElement | null) => {
+    ref.current = element;
+    if (typeof triggerRef === "function") return triggerRef(element);
+    if (triggerRef) triggerRef.current = element;
+  }, [triggerRef]);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element || closing || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const style = getComputedStyle(element);
+    const animation = element.animate([
+      { flexBasis: "0", paddingInlineStart: "0", paddingInlineEnd: "0", opacity: 0, overflow: "hidden" },
+      { flexBasis: `${element.getBoundingClientRect().width}px`, paddingInlineStart: style.paddingInlineStart, paddingInlineEnd: style.paddingInlineEnd, opacity: 1, overflow: "hidden" },
+    ], { duration: 200, easing: style.getPropertyValue("--ease-session-tab").trim() });
+    return () => animation.cancel();
+  }, [closing]);
+  return <div ref={attach} data-closing={closing || undefined} {...props} />;
 }
 
 /** Asks before closing tabs with unsaved files. */

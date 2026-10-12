@@ -110,7 +110,7 @@
  *               shadow-summary (the pinned summary), shadow-thumb (a switch's thumb),
  *               shadow-page (the page surface),
  *               shadow-side-panel (the side panel over the thread), shadow-panel-tab (its
- *               active tab)
+ *               active tab), shadow-session-tab (a session tab's active hairline and shadow)
  *   Motion      ease-summary-shift, ease-summary-card (the pinned summary), ease-sidebar (the
  *               sidebar opening and closing), ease-panel (the side panel), ease-enter (a section's list opening or closing),
  *               ease-standard (a disclosure chevron turning)
@@ -466,6 +466,7 @@
   --shadow-mockup-toolbar: 0 0 0 1px oklch(1 0 0 / 8%), 0 4px 8px -2px oklch(0 0 0 / 35%);
   --shadow-marker: 0 0 0 1px oklch(1 0 0);
   --shadow-panel-tab: inset 0 0 0 0.5px var(--panel-tab-border), 0 1px 2px oklch(0 0 0 / 8%);
+  --shadow-session-tab: inset 0 0 0 0.5px var(--session-tab-separator), 0 1px 2px -1px oklch(0 0 0 / 8%);
 
   /* The pinned summary's motion: springs sampled for CSS. The thread's column moving aside
      settles without a bounce in 350ms; the card eases in from the pane's end in 300ms. */
