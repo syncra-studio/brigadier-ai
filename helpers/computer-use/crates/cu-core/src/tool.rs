@@ -307,6 +307,8 @@ pub trait Tool: Send + Sync {
 /// rely on that for focus safety: direct CLI/daemon callers can reach the
 /// registry with malformed JSON. Internal daemon metadata keys (`_...`) are
 /// ignored because they are injected after client-side schema validation.
+/// So is `session` on a tool that doesn't take one: agents are told to pass
+/// their session on every call, and a tool that has no use for it ignores it.
 pub fn validate_dispatch_args(def: &ToolDef, args: &Value) -> Result<(), ToolResult> {
     let Some(object) = args.as_object() else {
         return Err(dispatch_validation_error(
@@ -330,10 +332,9 @@ pub fn validate_dispatch_args(def: &ToolDef, args: &Value) -> Result<(), ToolRes
 
     if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
         if let Some(properties) = properties {
-            if let Some(field) = object
-                .keys()
-                .find(|field| !field.starts_with('_') && !properties.contains_key(*field))
-            {
+            if let Some(field) = object.keys().find(|field| {
+                !field.starts_with('_') && *field != "session" && !properties.contains_key(*field)
+            }) {
                 return Err(dispatch_validation_error(
                     &def.name,
                     &format!("unknown field `{field}`"),
@@ -1617,6 +1618,25 @@ mod capability_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_session_is_accepted_by_a_tool_that_takes_none_but_other_strays_are_not() {
+        let def = ToolDef {
+            name: "list_apps".into(),
+            description: String::new(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            read_only: true,
+            destructive: false,
+            idempotent: true,
+            open_world: false,
+        };
+        assert!(validate_dispatch_args(&def, &serde_json::json!({"session": "run-1"})).is_ok());
+        assert!(validate_dispatch_args(&def, &serde_json::json!({"windw": 1})).is_err());
     }
 
     #[test]
