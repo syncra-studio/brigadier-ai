@@ -5,8 +5,9 @@ import type { DictationUpdate } from "./DictationUpdate";
 import type { EventEnvelope } from "./EventEnvelope";
 import type { Outcome } from "./Outcome";
 import type { TerminalOutput } from "./TerminalOutput";
+import type { WorkspaceTarget } from "./WorkspaceTarget";
 
 /**
  * Frames sent by the daemon.
  */
-export type ServerFrame = { "type": "welcome", daemon: DaemonInfo, lastSeq: number, } | { "type": "response", id: number, result: Outcome, } | { "type": "event", event: EventEnvelope, } | { "type": "lagged", resumeAfter: number, } | { "type": "metrics", metrics: DaemonMetrics, } | { "type": "terminal", output: TerminalOutput, } | { "type": "dictation", update: DictationUpdate, } | { "type": "pageChanged", id: string, revision: string | null, } | { "type": "closing" };
+export type ServerFrame = { "type": "welcome", daemon: DaemonInfo, lastSeq: number, } | { "type": "response", id: number, result: Outcome, } | { "type": "event", event: EventEnvelope, } | { "type": "lagged", resumeAfter: number, } | { "type": "metrics", metrics: DaemonMetrics, } | { "type": "terminal", output: TerminalOutput, } | { "type": "dictation", update: DictationUpdate, } | { "type": "pageChanged", id: string, revision: string | null, } | { "type": "workspaceChanged", target: WorkspaceTarget, } | { "type": "closing" };

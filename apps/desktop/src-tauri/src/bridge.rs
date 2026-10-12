@@ -398,6 +398,9 @@ impl Bridge {
             ServerFrame::PageChanged { id, revision } => {
                 self.emit(BridgeEvent::PageChanged { id, revision });
             }
+            ServerFrame::WorkspaceChanged { target } => {
+                self.emit(BridgeEvent::WorkspaceChanged { target });
+            }
             ServerFrame::Closing => return Some("daemon is shutting down".into()),
             ServerFrame::Welcome { .. } => return Some("unexpected second welcome".into()),
         }

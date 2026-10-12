@@ -1602,3 +1602,5 @@ mod trim_tests;
 mod trust_tests;
 #[cfg(test)]
 mod usage_tests;
+#[cfg(test)]
+mod workspace_tests;

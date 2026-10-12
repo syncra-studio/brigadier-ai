@@ -563,6 +563,37 @@ impl Repo {
         Ok((files, truncated))
     }
 
+    /// What the checkout ignores, relative to its root and sorted: an ignored folder once,
+    /// ending in `/`, without what it holds. At most `limit`, and whether there were more.
+    pub fn ignored(&self, limit: usize) -> Result<(Vec<String>, bool)> {
+        let out = self.cmd(
+            &[
+                "ls-files",
+                "-z",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+            ],
+            true,
+        )?;
+        let mut ignored: Vec<String> = out
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .collect();
+        ignored.sort();
+        let truncated = ignored.len() > limit;
+        ignored.truncate(limit);
+        Ok((ignored, truncated))
+    }
+
+    /// The files whose change changes what `git status` says beyond the checkout's own files:
+    /// its index and HEAD, wherever git keeps them (a linked worktree's are outside it).
+    pub fn status_files(&self) -> Result<Vec<PathBuf>> {
+        Ok(vec![self.git_path("index")?, self.git_path("HEAD")?])
+    }
+
     /// The files git tracks in this checkout (its index), relative to its root, unsorted.
     pub fn tracked_files(&self) -> Result<Vec<String>> {
         let out = self.cmd(&["ls-files", "-z", "--cached"], true)?;

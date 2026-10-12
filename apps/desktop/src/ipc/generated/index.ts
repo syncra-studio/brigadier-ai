@@ -411,3 +411,7 @@ export type { WorkerRef } from "./WorkerRef";
 export type { WorkerRole } from "./WorkerRole";
 export type { WorkerStep } from "./WorkerStep";
 export type { WorkerStepKind } from "./WorkerStepKind";
+export type { WorkspaceEntry } from "./WorkspaceEntry";
+export type { WorkspaceFolder } from "./WorkspaceFolder";
+export type { WorkspaceTarget } from "./WorkspaceTarget";
+export type { WorkspaceTree } from "./WorkspaceTree";

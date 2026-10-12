@@ -22,7 +22,8 @@ use brigadier_core::{
     QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, RepoInfo,
     RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, Settings, Setup, SetupRequest,
     SourceChange, SourceScope, SourceState, TaskId, ThreadItem, ThreadMetrics, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -233,6 +234,21 @@ pub enum Request {
         /// As [`Request::ListFiles`]'s.
         #[serde(default)]
         query: Option<String>,
+    },
+    /// A checkout's files and what it ignores, for the right sidebar's tree.
+    GetWorkspaceTree {
+        target: WorkspaceTarget,
+    },
+    /// One folder of a checkout read from disk: an ignored folder opened in the tree.
+    ListWorkspaceFolder {
+        target: WorkspaceTarget,
+        /// Relative to the checkout's root.
+        path: String,
+    },
+    /// Watches a checkout for this connection, in place of the one it watched before (none
+    /// stops watching): `WorkspaceChanged` frames say when to read it again.
+    WatchWorkspace {
+        target: Option<WorkspaceTarget>,
     },
     /// One file of a session's checkout, for the side panel's Files tab.
     ReadFile {
@@ -1238,6 +1254,16 @@ pub enum Response {
         files: Vec<String>,
         truncated: bool,
     },
+    GetWorkspaceTree {
+        tree: WorkspaceTree,
+    },
+    ListWorkspaceFolder {
+        folder: WorkspaceFolder,
+    },
+    WatchWorkspace {
+        /// Whether a watch runs now (false when stopped, or the target has no checkout).
+        watching: bool,
+    },
     GetProjectSourceState {
         state: SourceState,
     },
@@ -1610,6 +1636,10 @@ pub enum ServerFrame {
     PageChanged {
         id: String,
         revision: Option<String>,
+    },
+    /// The checkout this connection watches changed: its files, index or HEAD. Live only.
+    WorkspaceChanged {
+        target: WorkspaceTarget,
     },
     /// The daemon is shutting down; the connection closes next.
     Closing,

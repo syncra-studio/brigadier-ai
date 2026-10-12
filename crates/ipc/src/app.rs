@@ -48,6 +48,10 @@ pub enum BridgeEvent {
         id: String,
         revision: Option<String>,
     },
+    /// The checkout the right sidebar watches changed: read it again.
+    WorkspaceChanged {
+        target: brigadier_core::WorkspaceTarget,
+    },
     /// The window was hidden or shown; pause sampling while hidden.
     WindowVisibility {
         visible: bool,

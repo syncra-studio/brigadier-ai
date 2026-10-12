@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 pub use crate::model::{CardId, Mention, TaskId};
-use crate::model::{ConversationId, ModelChoice};
+use crate::model::{ConversationId, ModelChoice, ProjectId};
 
 /// A file the user attached, kept in the blob store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -2268,6 +2268,51 @@ pub struct CheckoutFile {
     /// Its text; absent for a binary file.
     pub text: Option<String>,
     /// Only the file's start was read.
+    pub truncated: bool,
+}
+
+/// Whose checkout the right sidebar shows: a session's (its worktree, or the repository while
+/// that doesn't exist yet), or a project's folder before its session starts.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WorkspaceTarget {
+    Conversation { conversation_id: ConversationId },
+    Project { project_id: ProjectId },
+}
+
+/// A checkout's files as the right sidebar's tree lists them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTree {
+    /// Tracked and untracked files, relative to the checkout's root, sorted.
+    pub files: Vec<String>,
+    /// Set when the checkout has more files than were listed.
+    pub truncated: bool,
+    /// What it ignores, sorted: an ignored folder once, ending in `/`, its contents read
+    /// only when it is opened.
+    pub ignored: Vec<String>,
+    /// Set when it ignores more than were listed.
+    pub ignored_truncated: bool,
+}
+
+/// One entry of a folder read on its own (an ignored one, opened in the tree).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceEntry {
+    pub name: String,
+    pub folder: bool,
+}
+
+/// A folder of a checkout, read on its own: folders first, then files, each by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFolder {
+    pub entries: Vec<WorkspaceEntry>,
+    /// Set when it holds more than were listed.
     pub truncated: bool,
 }
 

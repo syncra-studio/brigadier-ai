@@ -32,6 +32,7 @@ import type { SourceScope } from "./SourceScope";
 import type { TaskId } from "./TaskId";
 import type { UninstallApp } from "./UninstallApp";
 import type { UpdateTarget } from "./UpdateTarget";
+import type { WorkspaceTarget } from "./WorkspaceTarget";
 
 /**
  * Commands and queries.
@@ -45,7 +46,11 @@ query: string | null, } | { "method": "listProjectFiles", projectId: ProjectId,
 /**
  * As [`Request::ListFiles`]'s.
  */
-query: string | null, } | { "method": "readFile", conversationId: ConversationId, 
+query: string | null, } | { "method": "getWorkspaceTree", target: WorkspaceTarget, } | { "method": "listWorkspaceFolder", target: WorkspaceTarget, 
+/**
+ * Relative to the checkout's root.
+ */
+path: string, } | { "method": "watchWorkspace", target: WorkspaceTarget | null, } | { "method": "readFile", conversationId: ConversationId, 
 /**
  * Relative to the checkout's root.
  */

@@ -9,10 +9,12 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use brigadier_core::heap;
 use brigadier_core::manager::SessionManager;
+use brigadier_core::manager::workspace::WorkspaceWatch;
 use brigadier_core::pages::{PageChange, PageError, Pages};
 use brigadier_core::runtime::{Runtime, StartRaw};
 use brigadier_core::{
     Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId, Setup,
+    WorkspaceTarget,
 };
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
@@ -201,6 +203,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         dictation_feed: None,
         dictations: Started::new(daemon.dictation.clone()),
         page_feed: None,
+        workspace_watch: None,
         late_tx,
         late,
     };
@@ -235,6 +238,8 @@ struct Session {
     dictations: Started,
     /// Page changes, once subscribed to the live feed.
     page_feed: Option<broadcast::Receiver<PageChange>>,
+    /// The checkout this connection's right sidebar shows, watched while it shows.
+    workspace_watch: Option<(WorkspaceTarget, WorkspaceWatch)>,
     /// Answers to slow requests (clones), which run beside the others, by request id.
     late_tx: mpsc::Sender<(u32, Result<Response, IpcError>)>,
     late: mpsc::Receiver<(u32, Result<Response, IpcError>)>,
@@ -340,6 +345,11 @@ impl Session {
                         self.writer.write(&ServerFrame::PageChanged { id, revision }).await?;
                     }
                 }
+                target = next_workspace_change(&mut self.workspace_watch) => {
+                    if let Some(target) = target {
+                        self.writer.write(&ServerFrame::WorkspaceChanged { target }).await?;
+                    }
+                }
                 update = next_dictation_update(&mut self.dictation_feed) => {
                     if let Some(update) = update {
                         let ours = match &update {
@@ -443,6 +453,20 @@ impl Session {
                     let _ = late.send((id, outcome)).await;
                 });
                 return Ok(Flow::Continue);
+            }
+            Request::WatchWorkspace { target } => {
+                // The old watch stops first, and a failed new one leaves none.
+                self.workspace_watch = None;
+                match target {
+                    None => Ok(Response::WatchWorkspace { watching: false }),
+                    Some(target) => match self.daemon.sessions.watch_workspace(&target).await {
+                        Ok(watch) => {
+                            self.workspace_watch = Some((target, watch));
+                            Ok(Response::WatchWorkspace { watching: true })
+                        }
+                        Err(err) => Err(IpcError::from(err)),
+                    },
+                }
             }
             // A window that reconnects mid-download asks this first: it hears the rest.
             Request::GetDictation => Ok(Response::GetDictation {
@@ -912,6 +936,22 @@ async fn next_event(
 ) -> Result<Arc<StoredEvent>, RecvError> {
     match feed {
         Some(feed) => feed.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The watched checkout's next change; pending forever while none is watched.
+async fn next_workspace_change(
+    watch: &mut Option<(WorkspaceTarget, WorkspaceWatch)>,
+) -> Option<WorkspaceTarget> {
+    match watch {
+        Some((target, changes)) => match changes.changed().await {
+            Some(()) => Some(target.clone()),
+            None => {
+                *watch = None;
+                None
+            }
+        },
         None => std::future::pending().await,
     }
 }
@@ -1540,6 +1580,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::DiscardFiles {
             state: heap(|| sessions.discard_files(&conversation_id, scope, paths)).await?,
         },
+        Request::GetWorkspaceTree { target } => Response::GetWorkspaceTree {
+            tree: heap(|| sessions.workspace_tree(&target)).await?,
+        },
+        Request::ListWorkspaceFolder { target, path } => Response::ListWorkspaceFolder {
+            folder: heap(|| sessions.workspace_folder(&target, path)).await?,
+        },
         Request::ListProjectFiles { project_id, query } => {
             let (files, truncated) = sessions.list_project_files(&project_id, query).await?;
             Response::ListProjectFiles { files, truncated }
@@ -2108,6 +2154,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         }
         Request::Subscribe { .. }
         | Request::SetMetricsStreaming { .. }
+        | Request::WatchWorkspace { .. }
         | Request::RefreshRankings
         | Request::Shutdown => {
             return Err(IpcError {

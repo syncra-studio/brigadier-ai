@@ -89,6 +89,7 @@ mod watchdog;
 mod worker_handoff;
 mod worker_resume;
 mod workers;
+pub mod workspace;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
