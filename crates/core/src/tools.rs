@@ -625,6 +625,29 @@ pub struct ReviewPlan {
     pub brief: String,
 }
 
+/// `read_page`: the page the user's latest message was sent from, as it is now.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadPage {
+    /// The page's id, from the `[page …]` note on the user's message.
+    pub page_id: String,
+}
+
+/// `write_page`: replace that page's text, if nobody changed it since `base_revision`.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WritePage {
+    /// The page's id, from the `[page …]` note on the user's message.
+    pub page_id: String,
+    /// The page's whole new text, in Markdown (without its title).
+    pub body: String,
+    /// A new title; leave it out to keep the page's title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// The revision `read_page` returned: the write is refused if the page changed since.
+    pub base_revision: String,
+}
+
 /// `finish_session`: merge the session branch into its base (new-worktree sessions), once the
 /// user asked for it in their own words.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -834,6 +857,8 @@ pub enum OrchestratorCall {
     ProjectMap,
     CleanUp,
     ReviewPlan(ReviewPlan),
+    ReadPage(ReadPage),
+    WritePage(WritePage),
     Run(RunCommand),
     RunUnsandboxed(RunUnsandboxed),
     RunCheck(RunCheck),
@@ -878,6 +903,8 @@ pub const THREAD_TOOLS: &[&str] = &[
     "project_map",
     "clean_up",
     "review_plan",
+    "read_page",
+    "write_page",
     "run",
     "run_unsandboxed",
     "run_check",
@@ -923,6 +950,8 @@ impl OrchestratorCall {
             Self::ProjectMap => "project_map",
             Self::CleanUp => "clean_up",
             Self::ReviewPlan(_) => "review_plan",
+            Self::ReadPage(_) => "read_page",
+            Self::WritePage(_) => "write_page",
             Self::Run(_) => "run",
             Self::RunUnsandboxed(_) => "run_unsandboxed",
             Self::RunCheck(_) => "run_check",

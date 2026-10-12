@@ -2295,6 +2295,9 @@ impl SessionManager {
                     Mention::Chat { id, title } => {
                         append_input_text(&mut inline, &self.mentioned_chat(id, title).await);
                     }
+                    Mention::Page { id, title } => {
+                        append_input_text(&mut inline, &super::page_tools::page_note(id, title));
+                    }
                 }
             }
             if !ordered.is_empty() {

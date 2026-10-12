@@ -7,10 +7,11 @@ use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CiPush, CodeRefs, CodeSearch,
     DelegateTask, EndRun, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser,
     OrchestratorCall, PlanPhases, PreviewLog, ProposeMerge, ProposeOvernight, ProposePlan,
-    QueryBrain, ReadArtifact, RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval,
-    ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
-    SearchTranscript, SettleStep, StartPreview, StopPreview, StopWorker, SubmitOutline,
-    SubmitReport, SuggestFullAccess, TaskRef, ToolCall, WorkerCall,
+    QueryBrain, ReadArtifact, ReadPage, RecordFindings, RecordNodes, Remember, ReportRef,
+    RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools,
+    RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, StartPreview, StopPreview,
+    StopWorker, SubmitOutline, SubmitReport, SuggestFullAccess, TaskRef, ToolCall, WorkerCall,
+    WritePage,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -147,6 +148,14 @@ const REVIEW_PLAN: &str = "Your call, for a plan of your own that is big or risk
 review of it by a model from the other vendor, against the brief you give. Returns at once: \
 carry on (delegate, or wait for nothing), and the findings arrive later as a [plan review …] \
 message. Weigh them against the brief; there are no rounds.";
+
+const READ_PAGE: &str = "Read the page the user's latest message was sent from (its id is in \
+the [page …] note on that message): its title, its text in Markdown and its revision. Only that \
+page, and only until the user writes again.";
+
+const WRITE_PAGE: &str = "Change the page the user's latest message was sent from: its whole new \
+text in Markdown, and a new title only if asked. Pass the revision read_page returned: if the page \
+changed since, nothing is written and you read it again. The user's open tab shows the change.";
 
 const LAND_PHASE: &str = "Land a finished `implement` or `merge` task's commits on the \
 session's branch: the lead's task once its report is in, or a verifier you started for big or \
@@ -443,6 +452,8 @@ fn orchestrator_tools() -> Vec<Tool> {
         tool("project_map", PROJECT_MAP, no_arguments()),
         tool("clean_up", CLEAN_UP, no_arguments()),
         tool("review_plan", REVIEW_PLAN, input_schema::<ReviewPlan>()),
+        tool("read_page", READ_PAGE, input_schema::<ReadPage>()),
+        tool("write_page", WRITE_PAGE, input_schema::<WritePage>()),
         tool(
             "start_preview",
             START_PREVIEW,
@@ -576,6 +587,8 @@ pub fn parse_call(
                 "project_map" => OrchestratorCall::ProjectMap,
                 "clean_up" => OrchestratorCall::CleanUp,
                 "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
+                "read_page" => OrchestratorCall::ReadPage(args(name, arguments)?),
+                "write_page" => OrchestratorCall::WritePage(args(name, arguments)?),
                 "start_preview" => OrchestratorCall::StartPreview(args(name, arguments)?),
                 "stop_preview" => OrchestratorCall::StopPreview(args(name, arguments)?),
                 "preview_log" => OrchestratorCall::PreviewLog(args(name, arguments)?),

@@ -473,6 +473,9 @@ pub enum Mention {
     File { path: String },
     /// Another conversation: its recent messages go along as context.
     Chat { id: ConversationId, title: String },
+    /// The page the message was sent from: while it is the user's latest message, the thread
+    /// may read and change that page (and no other).
+    Page { id: String, title: String },
 }
 
 /// Also reads mentions stored before files and chats could be mentioned: a bare task id.
@@ -484,6 +487,7 @@ impl<'de> Deserialize<'de> for Mention {
             Task { id: TaskId },
             File { path: String },
             Chat { id: ConversationId, title: String },
+            Page { id: String, title: String },
         }
         #[derive(Deserialize)]
         #[serde(untagged)]
@@ -495,6 +499,7 @@ impl<'de> Deserialize<'de> for Mention {
             Stored::Tagged(Tagged::Task { id }) | Stored::Task(id) => Mention::Task { id },
             Stored::Tagged(Tagged::File { path }) => Mention::File { path },
             Stored::Tagged(Tagged::Chat { id, title }) => Mention::Chat { id, title },
+            Stored::Tagged(Tagged::Page { id, title }) => Mention::Page { id, title },
         })
     }
 }

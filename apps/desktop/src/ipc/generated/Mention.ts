@@ -5,4 +5,4 @@ import type { TaskId } from "./TaskId";
 /**
  * Something a user message @-mentions.
  */
-export type Mention = { "type": "task", id: TaskId, } | { "type": "file", path: string, } | { "type": "chat", id: ConversationId, title: string, };
+export type Mention = { "type": "task", id: TaskId, } | { "type": "file", path: string, } | { "type": "chat", id: ConversationId, title: string, } | { "type": "page", id: string, title: string, };

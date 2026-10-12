@@ -358,6 +358,8 @@ async fn run(
     ));
     // "Open in terminal" runs a worker's session in the daemon's terminals.
     daemon.sessions.set_terminal_host(daemon.terminals.clone());
+    // The thread reads and changes the page a message was sent from.
+    daemon.sessions.set_pages(daemon.pages.clone());
     supervisor.spawn_critical(
         "ipc accept loop",
         server::accept_loop(daemon.clone(), listener, token),

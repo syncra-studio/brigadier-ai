@@ -51,6 +51,7 @@ mod merge_consent;
 mod outcomes;
 mod outputs;
 pub mod overnight;
+mod page_tools;
 mod past_projects;
 mod phases;
 mod preview;
@@ -192,6 +193,8 @@ pub struct SessionManager {
     closing: closing::Closing,
     /// Where "Open in terminal" runs a worker's session (the daemon's terminals).
     terminal_host: std::sync::OnceLock<Arc<dyn takeover::TerminalHost>>,
+    /// The user's pages, which a thread may read and change from the page's own composer.
+    pages: std::sync::OnceLock<Arc<crate::pages::Pages>>,
     /// Tests: the home whose CLI settings folder trust is written to. Without it, tests write
     /// none (never the real `~/.claude.json` or `~/.codex/config.toml`).
     #[cfg(test)]
@@ -284,6 +287,7 @@ impl SessionManager {
             machine,
             closing: closing::Closing::default(),
             terminal_host: std::sync::OnceLock::new(),
+            pages: std::sync::OnceLock::new(),
             #[cfg(test)]
             trust_home: std::sync::OnceLock::new(),
             #[cfg(test)]

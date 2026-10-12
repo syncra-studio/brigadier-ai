@@ -36,6 +36,9 @@ function label(mention: Mention, targets: readonly MentionTarget[]): string | nu
       return mention.path;
     case "chat":
       return mention.title;
+    case "page":
+      // Sent from a page's own composer, never written in the text.
+      return null;
   }
 }
 

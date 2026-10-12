@@ -595,6 +595,11 @@ impl SessionManager {
             OrchestratorCall::ReviewPlan(args) => {
                 crate::heap(|| self.review_thread_plan(id, args)).await
             }
+            OrchestratorCall::ReadPage(args) => crate::heap(|| self.read_page(id, args)).await,
+            OrchestratorCall::WritePage(args) => {
+                crate::heap(|| self.check_plan_mode(id)).await?;
+                crate::heap(|| self.write_page(id, args)).await
+            }
             OrchestratorCall::Run(args) => {
                 crate::heap(|| {
                     self.run_tool(

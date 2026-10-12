@@ -324,6 +324,8 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
         "review_code" => ToolCall::Worker(W::ReviewCode),
         "review_plan" => ToolCall::Orchestrator(O::ReviewPlan(arg(name, args))),
+        "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
+        "write_page" => ToolCall::Orchestrator(O::WritePage(arg(name, args))),
         "read_artifact" => ToolCall::Orchestrator(O::ReadArtifact(arg(name, args))),
         "run" => ToolCall::Orchestrator(O::Run(arg(name, args))),
         "run_unsandboxed" => ToolCall::Orchestrator(O::RunUnsandboxed(arg(name, args))),
@@ -1575,6 +1577,8 @@ mod litter_tests;
 mod mockup_tests;
 #[cfg(test)]
 mod overnight_tests;
+#[cfg(test)]
+mod page_tools_tests;
 #[cfg(test)]
 mod plan_tests;
 mod preview_tests;
