@@ -111,14 +111,17 @@ export function runSearch(target: WorkspaceTarget, query: SearchQuery): void {
   });
 }
 
+/** Stops a target's search, if it runs; what it found so far stays. */
+export function stopSearch(target: WorkspaceTarget): void {
+  if (running?.owner !== searchId(target)) return;
+  if (running.id !== null) request({ method: "cancelSearch", id: running.id }).catch(() => undefined);
+  running = null;
+}
+
 /** Stops a target's search and forgets its results: the query was cleared. */
 export function clearSearch(target: WorkspaceTarget): void {
-  const owner = searchId(target);
-  if (running?.owner === owner) {
-    if (running.id !== null) request({ method: "cancelSearch", id: running.id }).catch(() => undefined);
-    running = null;
-  }
-  patch(owner, { results: null });
+  stopSearch(target);
+  patch(searchId(target), { results: null });
 }
 
 function applyUpdate(id: number, update: SearchUpdate): void {

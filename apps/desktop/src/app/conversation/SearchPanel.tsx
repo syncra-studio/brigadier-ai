@@ -12,7 +12,7 @@ import type { ReplaceOutcome, SearchFile, SearchLine, SearchQuery } from "@/ipc/
 import { onWorkspaceChanged, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import {
   clearSearch, EMPTY_FORM, replaceResults, runSearch, sameQuery, searchId, searchQuery, type SearchForm,
-  setSearchForm, useWorkspaceSearch,
+  setSearchForm, stopSearch, useWorkspaceSearch,
 } from "@/state/workspaceSearch";
 
 /**
@@ -76,6 +76,8 @@ export function SearchPanel({ target, onOpen, readOnly }: {
     const timer = setTimeout(() => runSearch(target, next), again ? 0 : TYPING_MS);
     return () => clearTimeout(timer);
   }, [target, asked, checkout]);
+  // Closed, the view stops its search; opened again, it asks again.
+  useEffect(() => () => stopSearch(target), [target]);
   // Edits to the checkout (an agent's, a replace's) find again, the old results kept meanwhile.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
