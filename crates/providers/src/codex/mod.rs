@@ -852,16 +852,20 @@ async fn open_thread(
     // Where a command may ask for more folders or the network (the feature, see
     // [`profile_config`]), Brigadier's reviewer must read what it asks for.
     rpc.initialize(profiled && spec.auto_review).await?;
-    // Brigadier's own skills join the ones Codex finds itself, for this app-server only.
+    // Brigadier's own skills join the ones Codex finds itself, for this app-server only. A Codex
+    // without extra skill roots still runs; the agent's prompt names the tools either way.
     if !spec.skill_plugins.is_empty() {
         let roots: Vec<String> = spec
             .skill_plugins
             .iter()
             .map(|plugin| plugin.join("skills").display().to_string())
             .collect();
-        let _: Value = rpc
-            .call("skills/extraRoots/set", &json!({ "extraRoots": roots }))
-            .await?;
+        if let Err(error) = rpc
+            .call::<_, Value>("skills/extraRoots/set", &json!({ "extraRoots": roots }))
+            .await
+        {
+            tracing::warn!(%error, "Codex didn't take Brigadier's skills");
+        }
     }
     let config = thread_config(rpc, spec, cwd, profile).await?;
     // Only a folder Brigadier created may have its trust entry recorded and undone. Codex keys
