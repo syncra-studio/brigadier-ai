@@ -630,10 +630,18 @@ impl SessionManager {
                     // Commits that only fix review findings get no review of their own, and a
                     // held merge's consent covers them (SESSION-FIXES-PLAN.md Q3.4, Q6.1).
                     match self.thread_fixes(id, repo, &base, &tip).await {
-                        Some(fixed) => {
-                            self.move_held_merge(id, branch, &base, &tip).await;
-                            self.recheck_thread_fix(id, base, tip.clone(), repo.to_owned(), &fixed)
-                                .await;
+                        Some(fix) => {
+                            if fix.since_merge {
+                                self.move_held_merge(id, branch, &base, &tip).await;
+                            }
+                            self.recheck_thread_fix(
+                                id,
+                                base,
+                                tip.clone(),
+                                repo.to_owned(),
+                                &fix.fixed,
+                            )
+                            .await;
                         }
                         None => {
                             self.review_thread_commits(id, base, tip.clone(), repo.to_owned())

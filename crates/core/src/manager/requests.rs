@@ -898,7 +898,10 @@ mod tests {
         for (id, at) in [("r1", 10), ("r2", 20)] {
             let mut stored = request(id, RequestState::Working);
             stored.started_at_ms = at;
-            board.apply(&crate::model::DomainEvent::RequestUpdated { request: stored }, 0);
+            board.apply(
+                &crate::model::DomainEvent::RequestUpdated { request: stored },
+                0,
+            );
         }
         let stepped = |board: &mut Board, request: &str, result: Option<&str>| {
             board.apply(
@@ -912,7 +915,10 @@ mod tests {
         stepped(&mut board, "r1", Some("stopped"));
         stepped(&mut board, "r2", None);
         assert_eq!(board.orchestrator_steps.len(), 1, "one row per push");
-        assert!(owed_a_turn(&board, "r2", false, false), "the restart's watch");
+        assert!(
+            owed_a_turn(&board, "r2", false, false),
+            "the restart's watch"
+        );
         assert!(!owed_a_turn(&board, "r1", false, false), "the old request");
         stepped(&mut board, "r1", None);
         assert_eq!(

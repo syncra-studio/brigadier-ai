@@ -903,3 +903,152 @@ async fn a_threads_commit_that_names_no_finding_gets_a_full_review_and_needs_a_f
     );
     flow.stop().await;
 }
+
+/// The user merges while the landing's review still runs; its one finding comes after the
+/// merge, recorded high, and the thread fixes it with a commit that names it. That review
+/// started before the merge, yet the fix is still known as one: it gets the targeted re-check
+/// of the finding, never a full review of the thread's commit.
+#[tokio::test]
+async fn a_named_fix_of_a_review_that_ran_across_the_merge_gets_only_its_recheck() {
+    let log: Arc<Mutex<Vec<String>>> = Arc::default();
+    let reviews: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (merged, fixed) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let (said, read, gate, merging) =
+        (log.clone(), reviews.clone(), merged.clone(), merged.clone());
+    let flow = Flow::start(
+        "merged-then-own-fix",
+        Options {
+            reviews: Some(script(move |turn| {
+                let (read, gate) = (read.clone(), gate.clone());
+                async move {
+                    let first = {
+                        let mut read = read.lock().unwrap();
+                        read.push(turn.input.clone());
+                        read.len() == 1
+                    };
+                    if !first {
+                        return Reply::text("No findings.");
+                    }
+                    // The landing's review ends only after the merge.
+                    for _ in 0..1000 {
+                        if gate.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Reply::text(ONE_MEDIUM)
+                }
+            })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (said, merging, fixed) = (said.clone(), merging.clone(), fixed.clone());
+            async move {
+                if turn.is_review() {
+                    return Reply::text("No findings.");
+                }
+                if !turn.is_orchestrator() {
+                    turn.write("B.md", "note\n");
+                    turn.git(&["add", "B.md"]);
+                    turn.git(&["commit", "-qm", "Write B.md"]);
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "Wrote B.md.", "changes": ["B.md"]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reported.");
+                }
+                said.lock().unwrap().push(turn.input.clone());
+                if turn.input.starts_with("Add a note") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "medium", "title": "Write note B", "kind": "implement",
+                                   "spec": "Write the note.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[report task-1") {
+                    let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    let reply = turn
+                        .call("finish_session", json!({"user_words": "merge it"}))
+                        .await;
+                    assert!(reply.text.contains("[finished]"), "{}", reply.text);
+                    merging.store(true, Ordering::SeqCst);
+                    return Reply::text("Merged the note.");
+                }
+                if turn.input.contains("[review task-1 · ") {
+                    assert!(turn.input.contains("R1.1: [P2]"), "{}", turn.input);
+                    let reply = turn
+                        .call(
+                            "record_findings",
+                            json!({"items": [{"id": "R1.1", "status": "open", "high": true}]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("The review found the note has no title. Fix it?");
+                }
+                if turn.input.contains("Fix the title.") && !fixed.swap(true, Ordering::SeqCst) {
+                    commit_in_workspace(
+                        &turn,
+                        "B.md",
+                        "# B\nnote\n",
+                        "Title note B\n\nBrigadier-Author: thread\nBrigadier-Fixes: R1.1",
+                    );
+                    let reply = turn
+                        .call(
+                            "record_findings",
+                            json!({"items": [{"id": "R1.1", "status": "fixed", "high": true}]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Fixed the missing title.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add a note, and merge it.").await;
+    let said = log.clone();
+    flow.until("the review heard after the merge", move |board| {
+        board.run == crate::work::RunState::Idle
+            && said
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|input| input.contains("[review task-1 · "))
+    })
+    .await;
+    flow.say("Fix the title.").await;
+    let read = reviews.clone();
+    flow.until("the fix's review", move |board| {
+        read.lock().unwrap().len() >= 2
+            && board
+                .reviews
+                .values()
+                .all(|review| review.state != crate::work::ReviewState::Running)
+    })
+    .await;
+    flow.settled().await;
+    let reviews = reviews.lock().unwrap().clone();
+    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    assert!(reviews[1].contains("Re-check a fix"), "{}", reviews[1]);
+    assert!(reviews[1].contains("R1.1: [P2] The second note has no title"));
+    let said = log.lock().unwrap().clone();
+    assert!(
+        !said
+            .iter()
+            .any(|input| input.contains("[review of your commits")),
+        "{said:#?}"
+    );
+    flow.stop().await;
+}
