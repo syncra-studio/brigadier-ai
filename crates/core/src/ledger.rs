@@ -74,6 +74,24 @@ impl BranchOwnership {
             || made(repo)
             || made(&repo_key(repo))
     }
+
+    /// The branches its records show Brigadier made (or kept) in the repository at `repo`,
+    /// whatever their prefix.
+    pub fn made_in(&self, repo: &std::path::Path) -> Vec<String> {
+        let keys = [
+            repo.to_string_lossy().into_owned(),
+            repo_key(repo).to_string_lossy().into_owned(),
+        ];
+        let mut names: Vec<String> = self
+            .made
+            .iter()
+            .filter(|(made, _)| keys.contains(made))
+            .map(|(_, name)| name.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
 }
 
 /// The path a branch record keeps its repository by: the real one where it resolves, so a
@@ -1145,6 +1163,24 @@ mod tests {
     use brigadier_providers::cli::CliEnv;
     use brigadier_store::{Store, StoreConfig};
     use tokio::sync::Notify;
+
+    /// A session's branch under Settings › Git's prefix is listed as the engine's in its own
+    /// repository only, so other sessions can be kept off it.
+    #[test]
+    fn made_in_lists_the_branches_made_in_that_repository_whatever_their_prefix() {
+        let owned = BranchOwnership {
+            made: HashSet::from([
+                ("/repos/a".to_owned(), "sg/aa/session".to_owned()),
+                ("/repos/a".to_owned(), "brigadier/bb/task-1".to_owned()),
+                ("/repos/b".to_owned(), "sg/cc/session".to_owned()),
+            ]),
+        };
+        assert_eq!(
+            owned.made_in(Path::new("/repos/a")),
+            ["brigadier/bb/task-1", "sg/aa/session"]
+        );
+        assert!(owned.made_in(Path::new("/repos/c")).is_empty());
+    }
 
     /// A store and a platform of their own, to load ledgers from again and again.
     struct Fixture {

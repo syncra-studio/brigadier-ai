@@ -1527,7 +1527,7 @@ impl SessionManager {
             ));
         }
         if let Some(held) = &pending {
-            match held_gate(held, &tasks, &board, &conv) {
+            match held_gate(held, &tasks, &board, &conv, self.reviews_on()) {
                 Gate::Stop(reason) => {
                     self.stop_held_merge(id, &conv, held, &reason).await;
                     return Err(Error::Invalid(stopped_text(&reason)));
@@ -1774,7 +1774,7 @@ impl SessionManager {
                 *told = Some((held.asked_in.clone(), kind));
                 again
             };
-            match held_gate(&held, &tasks, &board, &conv) {
+            match held_gate(&held, &tasks, &board, &conv, self.reviews_on()) {
                 Gate::Stop(reason) => {
                     self.stop_held_merge(id, &conv, &held, &reason).await;
                     stopped_text(&reason)
@@ -2372,12 +2372,14 @@ impl Drop for ReviewDue {
     }
 }
 
-/// [`Gate`] of `held` with every write task final.
+/// [`Gate`] of `held` with every write task final. With reviews off (`reviews_on` false) a
+/// review still running is waited for no more; findings already in still are.
 pub(super) fn held_gate(
     held: &PendingMerge,
     tasks: &[Task],
     board: &crate::board::Board,
     conv: &super::conversation::ConvLive,
+    reviews_on: bool,
 ) -> Gate {
     let ended = tasks.iter().find(|task| {
         task.kind.writes()
@@ -2406,7 +2408,7 @@ pub(super) fn held_gate(
     }
     // A landing whose review isn't stored yet waits like a running review.
     let review_due = conv.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0;
-    if findings.running || review_due || !findings.new.is_empty() {
+    if (reviews_on && (findings.running || review_due)) || !findings.new.is_empty() {
         return Gate::Wait(findings.new);
     }
     Gate::Due
