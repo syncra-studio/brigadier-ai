@@ -1,8 +1,12 @@
-import { Branch, ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, type ReactNode, useMemo, useState } from "react";
+import { Branch, Check, ChevronRight, X } from "@openai/apps-sdk-ui/components/Icon";
+import { type FC, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import {
+  CI_LINGER_MS,
+  ciPill,
+  ciRunWords,
+  type CiState,
   type CiWatchView,
   ciWatches,
   ciWords,
@@ -43,14 +47,32 @@ const Toggle: FC<{ open: boolean; onToggle: () => void; icon: ReactNode; childre
   </button>
 );
 
-/** "Checking CI · 2 of 5 jobs done": every push being watched, each run's jobs and link inside. */
+/** The CI pill's icon: a spinner while it checks, then how it ended. */
+const CiGlyph: FC<{ state: CiState }> = ({ state }) => {
+  switch (state) {
+    case "checking":
+      return <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" />;
+    case "passed":
+      return <Check className="text-success size-icon-xs" />;
+    case "failed":
+      return <X className="text-destructive size-icon-xs" />;
+    case "ended":
+      return <span className="border-foreground/35 size-icon-xs rounded-full border" />;
+  }
+};
+
+/**
+ * "Checking CI · 2 of 5 jobs done", then "CI passed" or "CI failed · test": every push being
+ * watched, each run's jobs or how it ended, and its link, inside.
+ */
 const CiPill: FC<{ watches: readonly CiWatchView[] }> = ({ watches }) => {
   const [open, setOpen] = useState(false);
+  const pill = ciPill(watches);
   return (
-    <div data-slot="ci-pill" className="flex flex-col px-1 py-1">
+    <div data-slot="ci-pill" data-ci={pill.state} className="flex flex-col px-1 py-1">
       <div className="flex min-h-row items-center gap-1">
-        <Toggle open={open} onToggle={() => setOpen(!open)} icon={<Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" />}>
-          {ciWords(watches)}
+        <Toggle open={open} onToggle={() => setOpen(!open)} icon={<CiGlyph state={pill.state} />}>
+          {pill.words}
         </Toggle>
       </div>
       {open && (
@@ -65,7 +87,7 @@ const CiPill: FC<{ watches: readonly CiWatchView[] }> = ({ watches }) => {
                 <span className="text-foreground/50 font-mono text-xs">{shortSha(watch.sha)}</span>
               </span>
               {watch.runs.length === 0 ? (
-                <span className="text-foreground/50 ps-6 text-sm">Waiting for CI to start…</span>
+                <span className="text-foreground/50 ps-6 text-sm">{watch.result === null ? "Waiting for CI to start…" : watch.result === "stopped" ? "Stopped watching CI" : "No CI runs"}</span>
               ) : (
                 watch.runs.map((run) => (
                   <button
@@ -75,9 +97,7 @@ const CiPill: FC<{ watches: readonly CiWatchView[] }> = ({ watches }) => {
                     className="hover:bg-foreground/5 rounded-control min-h-row-sm text-foreground/60 hover:text-foreground flex min-w-0 items-center gap-1.5 ps-6 pe-2 text-start text-sm"
                   >
                     <span className="min-w-0 flex-1 truncate">{run.workflow}</span>
-                    <span className="shrink-0 tabular-nums">
-                      {run.jobsTotal > 0 ? `${run.jobsDone} of ${run.jobsTotal} jobs done` : run.status === "queued" ? "Queued" : "Starting"}
-                    </span>
+                    <span className="shrink-0 tabular-nums">{ciRunWords(run)}</span>
                   </button>
                 ))
               )}
@@ -89,8 +109,11 @@ const CiPill: FC<{ watches: readonly CiWatchView[] }> = ({ watches }) => {
   );
 };
 
-/** "Merging after 2 workers finish", with Cancel: the user's yes, held while workers write. */
-const MergePill: FC<{ conversationId: string; words: string; branch: string; base: string }> = ({ conversationId, words, branch, base }) => {
+/**
+ * "Merging after 2 workers finish", with Cancel: the user's yes, held while workers write. While
+ * a merge card waits for their answer, the card is where they say it: no Cancel.
+ */
+const MergePill: FC<{ conversationId: string; words: string; branch: string; base: string; asking: boolean }> = ({ conversationId, words, branch, base, asking }) => {
   const cancel = useAction();
   return (
     <div data-slot="merge-pill" className="flex flex-col px-1 py-1">
@@ -103,19 +126,21 @@ const MergePill: FC<{ conversationId: string; words: string; branch: string; bas
             </span>
           </TooltipTrigger>
           <TooltipContent side="top">
-            Merges {branch} into {base} once they’re done, as you asked
+            {asking ? `Merges ${branch} into ${base} once you say yes on its card` : `Merges ${branch} into ${base} once they’re done, as you asked`}
           </TooltipContent>
         </Tooltip>
-        <Button
-          size="xs"
-          variant="ghost"
-          data-slot="merge-cancel"
-          disabled={cancel.busy}
-          onClick={() => cancel.run(() => cancelMerge(conversationId))}
-          className="text-foreground/60 hover:text-foreground"
-        >
-          Cancel
-        </Button>
+        {!asking && (
+          <Button
+            size="xs"
+            variant="ghost"
+            data-slot="merge-cancel"
+            disabled={cancel.busy}
+            onClick={() => cancel.run(() => cancelMerge(conversationId))}
+            className="text-foreground/60 hover:text-foreground"
+          >
+            Cancel
+          </Button>
+        )}
       </div>
       {cancel.error && <p role="alert" className="text-destructive px-2 text-xs">{cancel.error}</p>}
     </div>
@@ -129,18 +154,26 @@ const MergePill: FC<{ conversationId: string; words: string; branch: string; bas
  */
 export const ComposerStatusSlot: FC<{ conversationId: string }> = ({ conversationId }) => {
   const strip = useWorkersStrip(conversationId);
+  // A watch's result lingers a few seconds: the clock moves on when the first one is due to go.
+  const [now, setNow] = useState(() => Date.now());
   const ciJson = useBoard((s) => {
     if (s.board?.conversationId !== conversationId) return null;
-    const watches = ciWatches(s.board.orchestratorSteps);
+    const watches = ciWatches(s.board.orchestratorSteps, now);
     return watches.length > 0 ? JSON.stringify(watches) : null;
   });
   const watches = useMemo(() => (ciJson ? (JSON.parse(ciJson) as CiWatchView[]) : null), [ciJson]);
-  const [mergeText, mergeBranch, mergeBase, mergeSince] = useBoard(
+  const lingerEnd = Math.min(...(watches ?? []).map((watch) => (watch.endedAtMs === null ? Infinity : watch.endedAtMs + CI_LINGER_MS)));
+  useEffect(() => {
+    if (!Number.isFinite(lingerEnd)) return;
+    const timer = window.setTimeout(() => setNow(Math.max(Date.now(), lingerEnd)), Math.max(0, lingerEnd - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [lingerEnd]);
+  const [mergeText, mergeBranch, mergeBase, mergeSince, mergeAsking] = useBoard(
     useShallow((s) => {
       const board = s.board;
-      if (board?.conversationId !== conversationId) return [null, "", "", 0];
-      const merge = heldMerge(board.orchestratorSteps, board.tasks, Object.values(board.reviews));
-      return merge ? [mergeWords(merge), merge.branch, merge.base, merge.sinceMs] : [null, "", "", 0];
+      if (board?.conversationId !== conversationId) return [null, "", "", 0, false];
+      const merge = heldMerge(board.orchestratorSteps, board.tasks, Object.values(board.reviews), Object.values(board.questions));
+      return merge ? [mergeWords(merge), merge.branch, merge.base, merge.sinceMs, merge.asking] : [null, "", "", 0, false];
     }),
   );
   const stripSince = useBoard((s) => {
@@ -175,7 +208,7 @@ export const ComposerStatusSlot: FC<{ conversationId: string }> = ({ conversatio
           {rows.map((row) =>
             row === "workers" && strip ? <WorkersStrip key={row} conversationId={conversationId} view={strip} />
             : row === "ci" && watches ? <CiPill key={row} watches={watches} />
-            : row === "merge" && mergeText ? <MergePill key={row} conversationId={conversationId} words={mergeText} branch={mergeBranch} base={mergeBase} />
+            : row === "merge" && mergeText ? <MergePill key={row} conversationId={conversationId} words={mergeText} branch={mergeBranch} base={mergeBase} asking={mergeAsking} />
             : null,
           )}
         </div>
