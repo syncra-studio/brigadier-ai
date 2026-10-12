@@ -48,30 +48,47 @@ function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
     const seen: Record<string, unknown> = {};
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const at = (ms: number, action: () => void) => timers.push(setTimeout(action, ms));
-    at(600, () => {
-      seen.layout = document.querySelector<HTMLElement>("[data-summary]")?.dataset.summary;
-      newSessionTab(id, "newTab", "/fixture");
-    });
-    at(1000, () => {
-      seen.coveredBefore = sessionTabs(id).active !== CHAT_TAB;
-      toggle().click();
-    });
-    at(1500, () => {
-      seen.chatInFront = sessionTabs(id).active === CHAT_TAB;
-      seen.openedOverTab = floating();
-      toggle().click();
-    });
-    at(1900, () => {
-      seen.closed = !floating();
-      toggle().click();
-    });
-    at(2300, () => {
-      seen.openedOverChat = floating();
-      setResult(JSON.stringify(seen));
-    });
-    return () => timers.forEach(clearTimeout);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Each step waits for what it acts on rather than a fixed time, so a busy machine only makes
+    // it slower; a step whose condition never comes goes on after a while and its check fails.
+    const steps: { ready: () => boolean; act: () => void }[] = [
+      { ready: () => !!document.querySelector<HTMLElement>("[data-summary]")?.dataset.summary, act: () => {
+        seen.layout = document.querySelector<HTMLElement>("[data-summary]")?.dataset.summary;
+        newSessionTab(id, "newTab", "/fixture");
+      } },
+      { ready: () => sessionTabs(id).active !== CHAT_TAB && !!document.querySelector('header button[aria-label="Context"]'), act: () => {
+        seen.coveredBefore = sessionTabs(id).active !== CHAT_TAB;
+        toggle().click();
+      } },
+      { ready: () => sessionTabs(id).active === CHAT_TAB && floating(), act: () => {
+        seen.chatInFront = sessionTabs(id).active === CHAT_TAB;
+        seen.openedOverTab = floating();
+        toggle().click();
+      } },
+      { ready: () => !floating(), act: () => {
+        seen.closed = !floating();
+        toggle().click();
+      } },
+      { ready: floating, act: () => {
+        seen.openedOverChat = floating();
+        setResult(JSON.stringify(seen));
+      } },
+    ];
+    const run = (step: number, waited: number) => {
+      const next = steps[step];
+      if (!next) return;
+      if (!next.ready() && waited < 10000) {
+        timer = setTimeout(() => run(step, waited + 50), 50);
+        return;
+      }
+      // A beat after it is ready, as a user's next click would come.
+      timer = setTimeout(() => {
+        next.act();
+        run(step + 1, 0);
+      }, 100);
+    };
+    timer = setTimeout(() => run(0, 0), 300);
+    return () => clearTimeout(timer);
   }, []);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
