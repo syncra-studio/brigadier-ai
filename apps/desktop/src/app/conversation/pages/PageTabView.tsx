@@ -4,11 +4,13 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "re
 import { Button } from "@/components/ui/button";
 import { openLink } from "@/state/links";
 import { pageEditing, usePageEdits } from "@/state/pageEditing";
+import { useApp } from "@/state/store";
 import { ensurePage } from "@/state/pageTabs";
 import { changeSessionTab, closeTab, openPageTab, type PageTabState } from "@/state/sessionTabs";
 
 import { EmojiButton } from "./EmojiButton";
 import { focusPageStart, PageEditor } from "./PageEditor";
+import { PageTopBar } from "./PageTopBar";
 import "./PageTab.css";
 
 /** A page in a session tab: its title, its emoji and its body, saved as they are typed. */
@@ -37,6 +39,7 @@ function MakePage({ tab, onRetry }: { tab: PageTabState; onRetry: () => void }) 
 
 function OpenPage({ conversationId, tab, pageId, active }: { conversationId: string; tab: PageTabState; pageId: string; active: boolean }) {
   const editing = pageEditing();
+  const mac = useApp((s) => s.info?.platform === "macos");
   const page = usePageEdits((s) => s.pages[pageId]);
   const editor = useRef<LexicalEditor | null>(null);
   const title = useRef<HTMLTextAreaElement | null>(null);
@@ -85,6 +88,8 @@ function OpenPage({ conversationId, tab, pageId, active }: { conversationId: str
   };
   return (
     <div className="page-tab" data-slot="page-tab">
+      <PageTopBar conversationId={conversationId} pageId={pageId} content={page.content} editor={() => editor.current} mac={mac} active={active}
+        onRename={() => { const field = title.current; if (!field) return; field.focus(); field.select(); }} />
       {page.conflict && (
         <Banner tone="warning" text="This page changed elsewhere. Which version do you want to keep?">
           <Button size="sm" variant="ghost" onClick={() => void editing.keepMine(pageId)}>Keep mine</Button>

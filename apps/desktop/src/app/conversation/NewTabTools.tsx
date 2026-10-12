@@ -8,11 +8,13 @@ import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
-import type { BrowserVisit } from "@/ipc/generated";
+import { pageList } from "@/ipc/client";
+import type { BrowserVisit, PageSummary } from "@/ipc/generated";
 import { browserHistory } from "@/state/browserData";
 import { useBrowsers } from "@/state/browsers";
 import { useBrowserOn } from "@/state/links";
-import { openReviewTab, replaceNewTab, useSessionTabs } from "@/state/sessionTabs";
+import { onPageChanged } from "@/state/pageChanges";
+import { openPageTab, openReviewTab, replaceNewTab, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { setTerminalOpen } from "@/state/terminalPlaces";
 
@@ -53,6 +55,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
     });
     return () => { disposed = true; unsubscribe(); unsubscribeTabs(); unsubscribeSelection(); window.removeEventListener("focus", refresh); };
   }, [browserOn, conversationId, tabId]);
+  const pages = useRecentPages();
   const sites = browserOn ? suggestedSites(history, dismissed) : [];
   const tools = [
     { label: "Review changes", Icon: DiffGlyph, shortcut: "⌃⇧G", run: () => openReviewTab(conversationId, { type: "all" }, tabId) },
@@ -100,6 +103,22 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
             </div>
           </div>
         </section>
+        {pages.length > 0 && (
+          <section aria-label="Recents" className="new-tab-section">
+            <h2>Recents</h2>
+            <ul aria-label="Recent work" className="new-tab-recents">
+              {pages.map((page) => (
+                <li key={page.id}>
+                  <button type="button" className="new-tab-recent" onClick={() => openPageTab(conversationId, page.id, page.title, tabId)}>
+                    {page.emoji ? <span aria-hidden className="new-tab-recent-emoji">{page.emoji}</span> : <Document aria-hidden />}
+                    <span className="new-tab-tool-label">{page.title || "Untitled page"}</span>
+                    <span className="new-tab-recent-when">{when(page.updatedMs)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
         {sites.length > 0 && (
           <section aria-label="Suggested" className="new-tab-section">
             <h2>Suggested</h2>
@@ -119,6 +138,35 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
       </div>
     </div>
   );
+}
+
+/** The pages changed most recently, kept current while the New tab shows. */
+function useRecentPages(): PageSummary[] {
+  const [pages, setPages] = useState<PageSummary[]>([]);
+  useEffect(() => {
+    let disposed = false;
+    let revision = 0;
+    const refresh = () => {
+      const current = ++revision;
+      pageList().then(
+        (list) => { if (!disposed && current === revision) setPages(list.slice(0, 20)); },
+        () => { if (!disposed && current === revision) setPages([]); },
+      );
+    };
+    refresh();
+    const off = onPageChanged(refresh);
+    return () => { disposed = true; off(); };
+  }, []);
+  return pages;
+}
+
+/** "Just now", "5 min ago", "3 h ago", then the date. */
+export function when(ms: number, now = Date.now()): string {
+  const minutes = Math.floor((now - ms) / 60_000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} h ago`;
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 /** Use an already-known site icon without making extra requests to sites on the launch page. */

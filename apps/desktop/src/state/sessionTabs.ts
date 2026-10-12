@@ -191,6 +191,29 @@ export function dropBrowserTabs(): void {
   }
 }
 
+/** Page `pageId` was deleted: every tab showing it closes, and none can be reopened. */
+export function dropPageTabs(pageId: string): void {
+  const shows = (tab: SessionTab) => tab.kind === "page" && tab.pageId === pageId;
+  for (const [conversationId, list] of closed) {
+    const kept = list.filter((entry) => !shows(entry.tab));
+    if (kept.length) closed.set(conversationId, kept);
+    else closed.delete(conversationId);
+  }
+  for (const [conversationId, current] of Object.entries(useSessionTabs.getState().sessions)) {
+    const gone = current.tabs.filter(shows);
+    if (!gone.length) continue;
+    update(conversationId, () => {
+      let { tabs, active } = current;
+      for (const tab of gone) {
+        const left = tabs.filter((entry) => entry.id !== tab.id);
+        active = afterClose({ tabs, active }, left, tab);
+        tabs = left;
+      }
+      return { tabs, active };
+    });
+  }
+}
+
 /** Choosing a tool or entering an address consumes the placeholder, not a tab-close entry. */
 export function replaceNewTab(conversationId: string, id: string, kind: Exclude<NewTabKind, "newTab">, cwd: string | null = null, url = ""): void {
   update(conversationId, (current) => ({

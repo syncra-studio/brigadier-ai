@@ -49,3 +49,13 @@ test("new tab with no history keeps Tools and omits Suggested", { timeout: 90000
   const seen = JSON.parse(await renderFixtureLive(t, "new-tab.html?drive=1&empty=1", "new-tab-result")) as Record<string, unknown>;
   assert.deepEqual(seen.sections, ["Tools"]); assert.deepEqual(seen.suggested, []);
 });
+test("recent pages show on the New tab and reopen after every page tab was closed", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "new-tab.html?drive=1&empty=1&pages=1", "new-tab-result")) as Record<string, unknown>;
+  assert.deepEqual(seen.sections, ["Tools", "Recents"]);
+  assert.deepEqual(seen.rows, ["🚀Release notes5 min ago", "Untitled page3 h ago"]);
+  const opened = seen.opened as { kind: string; pageId: string; title: string };
+  assert.equal(opened.kind, "page"); assert.equal(opened.pageId, "b".repeat(32)); assert.equal(opened.title, "");
+  const reopened = seen.reopened as { kind: string; pageId: string; title: string };
+  assert.equal(reopened.kind, "page"); assert.equal(reopened.pageId, "a".repeat(32)); assert.equal(reopened.title, "Release notes");
+  assert.equal(seen.tabCount, 1, "the page took the New tab's place");
+});

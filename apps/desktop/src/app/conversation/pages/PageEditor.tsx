@@ -13,9 +13,12 @@ import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { TabIndentationPlugin } from "@lexical/react/LexicalTabIndentationPlugin";
 import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
 import { $getRoot, type EditorThemeClasses, type LexicalEditor } from "lexical";
-import type { ReactNode, RefObject } from "react";
+import { type RefObject, useState } from "react";
+
+import { useApp } from "@/state/store";
 
 import { $exportPage, $importPage, PAGE_NODES, PAGE_TRANSFORMERS } from "./pageMarkdown";
+import { DragHandles, SelectionToolbar, SlashMenu } from "./PageTools";
 
 const THEME: EditorThemeClasses = {
   paragraph: "page-p",
@@ -47,16 +50,16 @@ export function safeLink(url: string): boolean {
  * The page's body: Markdown in, Markdown out on every change. Remount it (a new `key`) to load
  * content that changed outside it.
  */
-export function PageEditor({ body, label, editorRef, onChange, onOpenLink, children }: {
+export function PageEditor({ body, label, editorRef, onChange, onOpenLink }: {
   body: string;
   label: string;
   /** ⌘-click (Ctrl-click) on a link. */
   onOpenLink: (url: string) => void;
   editorRef: RefObject<LexicalEditor | null>;
   onChange: (markdown: string) => void;
-  /** Plugins that need the editor: the Insert menu, the selection toolbar, the drag handles. */
-  children?: ReactNode;
 }) {
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const [anchor, setAnchor] = useState<HTMLDivElement | null>(null);
   return (
     <LexicalComposer initialConfig={{
       namespace: "page",
@@ -66,7 +69,7 @@ export function PageEditor({ body, label, editorRef, onChange, onOpenLink, child
       editorState: () => $importPage(body),
     }}>
       {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- the links inside are reached by keyboard through the editor */}
-      <div data-slot="page-body" className="page-body" onClick={(event) => {
+      <div ref={setAnchor} data-slot="page-body" className="page-body" onClick={(event) => {
         const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
         const href = link?.getAttribute("href");
         if (!href || !(event.metaKey || event.ctrlKey)) return;
@@ -89,7 +92,9 @@ export function PageEditor({ body, label, editorRef, onChange, onOpenLink, child
       <MarkdownShortcutPlugin transformers={PAGE_TRANSFORMERS} />
       <OnChangePlugin ignoreSelectionChange onChange={(state) => onChange(state.read(() => $exportPage()))} />
       <EditorRefPlugin editorRef={editorRef} />
-      {children}
+      <SlashMenu />
+      <SelectionToolbar mac={mac} />
+      <DragHandles anchor={anchor} />
     </LexicalComposer>
   );
 }

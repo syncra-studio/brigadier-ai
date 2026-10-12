@@ -307,6 +307,17 @@ export function forgetDocument(id: string): Promise<void> {
   return invoke("forget_document", { id });
 }
 
+/** Asks where to save a copy of `text` (suggesting `name`) and writes it there; the path, or
+ * null when the dialog was cancelled. Nothing is remembered for the next save. */
+export async function saveCopy(text: string, name: string): Promise<string | null> {
+  const id = `copy:${crypto.randomUUID()}`;
+  try {
+    return await saveDocument(id, text, null, name, true);
+  } finally {
+    forgetDocument(id).catch(console.error);
+  }
+}
+
 /** Makes a new, empty page: a local Markdown document the daemon keeps in the data folder. */
 export async function pageCreate(): Promise<Page> {
   return (await request({ method: "pageCreate" })).page;

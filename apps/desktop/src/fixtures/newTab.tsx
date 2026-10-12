@@ -31,8 +31,14 @@ useApp.setState((s) => ({
 }));
 useSessionTabs.setState({ sessions: {} });
 newSessionTab(ID, "newTab");
+const pages = params.has("pages") ? [
+  { id: "a".repeat(32), title: "Release notes", emoji: "🚀", updatedMs: Date.now() - 5 * 60_000 },
+  { id: "b".repeat(32), title: "", emoji: null, updatedMs: Date.now() - 3 * 3_600_000 },
+] : [];
 mockIPC((command, payload) => {
   if (command === "browser_history") { calls.push(payload); return history; }
+  const request = (payload as { request?: { method?: string } } | undefined)?.request;
+  if (command === "ipc_request" && request?.method === "pageList") return { method: "pageList", pages };
   return null;
 });
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -46,12 +52,31 @@ const pick = (label: string) => menuItems().find((e) => e.textContent?.startsWit
 const box = (e: Element | null) => { const r = e?.getBoundingClientRect(); return r ? { width: r.width, height: r.height } : null; };
 const page = (favicon: string | null, loading: boolean) => useBrowsers.setState({ pages: { [GLYPH]: { url: "https://one.test/", title: "Site", blocked: null, favicon, loading } } });
 const currentTab = () => sessionTabs(ID).tabs[0];
+const rows = () => [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Recent work"] button')];
 function Fixture() {
   const [result, setResult] = useState("");
   const workspace = useWorkspacePane(ID, "fixture-project", true);
   const tabId = useSessionTabs((s) => s.sessions[ID]?.tabs[0]?.id ?? "");
   useEffect(() => {
     if (!params.has("drive")) return;
+    if (params.has("pages")) {
+      void (async () => {
+        await until(() => one('[aria-label="Recents"]') !== null);
+        const seen: Record<string, unknown> = {};
+        seen.sections = [...document.querySelectorAll('[data-slot="new-tab-column"] h2')].map((e) => e.textContent);
+        seen.rows = rows().map((e) => e.textContent);
+        rows()[1]?.click(); await wait(100);
+        seen.opened = currentTab();
+        // Every page tab closed: a New tab still lists the page and opens it again.
+        useSessionTabs.setState({ sessions: {} }); newSessionTab(ID, "newTab"); await wait(100);
+        await until(() => rows().length === 2);
+        rows()[0]?.click(); await wait(100);
+        seen.reopened = currentTab();
+        seen.tabCount = sessionTabs(ID).tabs.length;
+        setResult(JSON.stringify(seen));
+      })();
+      return;
+    }
     void (async () => {
       await until(() => one('[data-slot="new-tab-column"]') !== null && (params.has("empty") || one('[aria-label="Suggested"]') !== null));
       await wait(100);
