@@ -261,6 +261,8 @@ export function Welcome({
           </DialogTitle>
           <div
             className="welcome-continue"
+            // Out of reach until it has faded in, without the disabled look.
+            inert={!ready}
             onAnimationEnd={(event) => {
               if (event.target === event.currentTarget && event.animationName === "intro-continue-in") {
                 setReady(true);
@@ -312,10 +314,10 @@ function ContinueButton({
       size="lg"
       type={form ? "submit" : "button"}
       form={form}
-      disabled={!ready || busy}
+      disabled={arrow ? busy : !ready || busy}
       onClick={onClick}
       aria-label={arrow ? "Continue" : undefined}
-      className={arrow ? "px-5" : "min-w-32 gap-2"}
+      className={arrow ? "px-7" : "min-w-32 gap-2"}
     >
       {busy && <Spinner className="animate-spin" />}
       {arrow ? <ArrowRight /> : "Continue"}
