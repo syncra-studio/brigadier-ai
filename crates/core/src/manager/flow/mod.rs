@@ -1618,6 +1618,8 @@ mod review_hold_tests;
 #[cfg(test)]
 mod review_switch_tests;
 #[cfg(test)]
+mod search_tests;
+#[cfg(test)]
 mod status_tests;
 #[cfg(test)]
 mod takeover_tests;
@@ -1631,3 +1633,5 @@ mod trim_tests;
 mod trust_tests;
 #[cfg(test)]
 mod usage_tests;
+#[cfg(test)]
+mod workspace_tests;

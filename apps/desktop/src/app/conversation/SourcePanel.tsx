@@ -10,7 +10,8 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
-import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
+import { LETTERS } from "@/app/conversation/sourceStatus";
+import { FileIcon } from "@/components/glyphs/fileIcons";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,8 @@ import {
 } from "@/components/ui/dialog";
 import { Kbd } from "@/components/ui/kbd";
 import { request } from "@/ipc/client";
-import type { CommitOutcome, SourceChange, SourceFile, SourceScope, SourceState, SourceStatus } from "@/ipc/generated";
+import { keepSource, onWorkspaceChanged, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
+import type { CommitOutcome, SourceChange, SourceFile, SourceScope, SourceState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
 import { noteSourceState, setReviewScope } from "@/state/review";
@@ -49,7 +51,7 @@ export type SourceTarget =
   | { type: "conversation"; conversationId: string }
   | { type: "project"; projectId: string; readOnly: boolean };
 
-/** The panel's reads and changes, sent for its target. */
+/** The panel's changes, sent for its target. */
 function sourceCalls(target: SourceTarget) {
   return target.type === "conversation"
     ? sessionCalls(target.conversationId)
@@ -58,7 +60,6 @@ function sourceCalls(target: SourceTarget) {
 
 function sessionCalls(conversationId: string) {
   return {
-    read: () => request({ method: "getSourceState", conversationId }),
     change: (change: SourceChange): Promise<{ state: SourceState }> =>
       change.type === "stage"
         ? request({ method: "stageFiles", conversationId, paths: change.paths })
@@ -72,7 +73,6 @@ function sessionCalls(conversationId: string) {
 
 function projectCalls(projectId: string) {
   return {
-    read: () => request({ method: "getProjectSourceState", projectId }),
     change: (change: SourceChange): Promise<{ state: SourceState }> =>
       request({ method: "changeProjectSource", projectId, change }),
     commit: (message: string | null, push: boolean): Promise<{ outcome: CommitOutcome }> =>
@@ -93,9 +93,6 @@ function targetKey(target: SourceTarget): string {
   return target.type === "conversation" ? target.conversationId : `project:${target.projectId}`;
 }
 
-/** How often the panel reads the checkout again while it shows: agents change files meanwhile. */
-const REFRESH_MS = 4000;
-
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -109,59 +106,56 @@ function dirName(path: string): string {
   return slash < 0 ? "" : path.slice(0, slash);
 }
 
-const LETTERS: Record<SourceStatus, { letter: string; label: string; className: string }> = {
-  modified: { letter: "M", label: "Modified", className: "text-warning" },
-  added: { letter: "A", label: "Added", className: "text-success" },
-  deleted: { letter: "D", label: "Deleted", className: "text-destructive" },
-  renamed: { letter: "R", label: "Renamed", className: "text-link" },
-  copied: { letter: "C", label: "Copied", className: "text-link" },
-  typeChanged: { letter: "T", label: "Type changed", className: "text-warning" },
-  untracked: { letter: "U", label: "Untracked", className: "text-success" },
-  conflicted: { letter: "!", label: "Conflicted", className: "text-destructive" },
-};
 
-/** The checkout's state, read now, again while it shows, and as the board changes it. */
+/**
+ * The checkout's state: what was last read of it at once, read again now, when it changes, and as
+ * the board changes it.
+ */
 function useSourceState(target: SourceTarget) {
-  const [read, setRead] = useState<{ state: SourceState | null; error: string | null }>({
-    state: null,
-    error: null,
-  });
   const conversationId = sessionOf(target);
   const projectId = target.type === "project" ? target.projectId : null;
-  const changeKey = useCheckoutChanges(conversationId ?? "");
-  const calls = useMemo(
-    () => (conversationId ? sessionCalls(conversationId) : projectCalls(projectId ?? "")),
+  const cacheTarget = useMemo<WorkspaceTarget>(
+    () => (conversationId ? { type: "conversation", conversationId } : { type: "project", projectId: projectId ?? "" }),
     [conversationId, projectId],
   );
+  const key = useCheckoutKey(cacheTarget);
+  const kept = useCachedEntry(key)?.source;
+  const [read, setRead] = useState<{ key: string; state: SourceState } | null>(null);
+  const state = kept ?? (read?.key === key ? read.state : null);
+  const [failure, setFailure] = useState<{ key: string; error: string } | null>(null);
+  const changeKey = useCheckoutChanges(conversationId ?? "");
   const load = useCallback(() => {
-    calls
-      .read()
-      .then(({ state }) => {
-        setRead({ state, error: null });
-        if (conversationId) noteSourceState(conversationId, state);
+    readSource(cacheTarget)
+      .then((next) => {
+        if (workspaceKey(cacheTarget) !== key) return;
+        setRead({ key, state: next });
+        setFailure(null);
+        if (conversationId) noteSourceState(conversationId, next);
       })
-      .catch((error: unknown) => setRead((current) => ({ state: current.state, error: reason(error) })));
-  }, [calls, conversationId]);
+      .catch((error: unknown) => { if (workspaceKey(cacheTarget) === key) setFailure({ key, error: reason(error) }); });
+  }, [cacheTarget, conversationId, key]);
   // A landing, Undo or Reapply changes the checkout at once.
   useEffect(() => {
     if (changeKey) load();
   }, [changeKey, load]);
   useEffect(() => {
     load();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") load();
-    }, REFRESH_MS);
+    // Agents change files meanwhile: the sidebar's watch says when.
+    const unsubscribe = onWorkspaceChanged(cacheTarget, load);
     window.addEventListener("focus", load);
     return () => {
-      window.clearInterval(timer);
+      unsubscribe();
       window.removeEventListener("focus", load);
     };
-  }, [load]);
-  const set = (state: SourceState) => {
-    setRead({ state, error: null });
-    if (conversationId) noteSourceState(conversationId, state);
+  }, [load, cacheTarget]);
+  const set = (next: SourceState) => {
+    if (workspaceKey(cacheTarget) !== key) return;
+    keepSource(cacheTarget, next, key);
+    setRead({ key, state: next });
+    setFailure(null);
+    if (conversationId) noteSourceState(conversationId, next);
   };
-  return { ...read, set, load };
+  return { state, error: failure?.key === key ? failure.error : null, set, load };
 }
 
 type Discarding = { scope: SourceScope; files: SourceFile[] };
@@ -348,7 +342,7 @@ const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; children: Rea
   const status = LETTERS[file.status];
   const name = (
     <>
-      <FileTypeIcon name={file.path} className="size-icon-sm shrink-0" />
+      <FileIcon name={file.path} />
       <span className={cn("shrink-0", file.status === "deleted" && "line-through")}>
         {baseName(file.path)}
       </span>

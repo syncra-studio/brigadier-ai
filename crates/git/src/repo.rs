@@ -563,6 +563,56 @@ impl Repo {
         Ok((files, truncated))
     }
 
+    /// What the checkout ignores, relative to its root and sorted: an ignored folder once,
+    /// ending in `/`, without what it holds. At most `limit`, and whether there were more.
+    pub fn ignored(&self, limit: usize) -> Result<(Vec<String>, bool)> {
+        let out = self.cmd(
+            &[
+                "ls-files",
+                "-z",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+            ],
+            true,
+        )?;
+        let mut ignored: Vec<String> = out
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .collect();
+        ignored.sort();
+        let truncated = ignored.len() > limit;
+        ignored.truncate(limit);
+        Ok((ignored, truncated))
+    }
+
+    /// The files whose change changes what `git status` says beyond the checkout's own files,
+    /// wherever git keeps them (a linked worktree's are outside it): its index and HEAD, the
+    /// branch HEAD names and the branch that one follows (a reset, a commit from elsewhere or
+    /// a fetch moves them while HEAD stays), and the packed refs either may be kept in.
+    pub fn status_files(&self) -> Result<Vec<PathBuf>> {
+        let mut files = vec![
+            self.git_path("index")?,
+            self.git_path("HEAD")?,
+            self.git_path("packed-refs")?,
+        ];
+        if let Some(branch) = self.symbolic_head()? {
+            files.push(self.git_path(&format!("refs/heads/{branch}"))?);
+            let spec = format!("refs/heads/{branch}@{{upstream}}");
+            let args = ["rev-parse", "--symbolic-full-name", spec.as_str()];
+            let out = self.run(&args, true)?;
+            if out.status.success()
+                && let Ok(upstream) = parse::line(&out.stdout)
+                && upstream.starts_with("refs/")
+            {
+                files.push(self.git_path(&upstream)?);
+            }
+        }
+        Ok(files)
+    }
+
     /// The files git tracks in this checkout (its index), relative to its root, unsorted.
     pub fn tracked_files(&self) -> Result<Vec<String>> {
         let out = self.cmd(&["ls-files", "-z", "--cached"], true)?;

@@ -10,7 +10,6 @@ import {
   SettingsCog,
   SettingsSlider,
   Storage,
-  Terminal,
   Usage,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { lazy, type ComponentType, type SVGProps } from "react";
@@ -26,6 +25,7 @@ import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
+import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { computerUseAvailable } from "@/state/computerAccess";
 import { type SettingsPageId, useApp } from "@/state/store";
 
@@ -188,7 +188,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   {
     id: "inspector",
     label: "Inspector",
-    icon: Terminal,
+    icon: TerminalGlyph,
     group: "System",
     component: InspectorPage,
     rows: INSPECTOR_ROWS,

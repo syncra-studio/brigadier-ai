@@ -21,6 +21,7 @@ import type { Conversation, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { showPlanDoc } from "@/state/planDoc";
 import { useApp } from "@/state/store";
+import { emitWorkspaceChanged } from "@/state/workspaceCache";
 
 const id = "toolbar-fixture";
 const conversation: Conversation = { id, kind: "chat", title: "Toolbar", projectId: null,
@@ -33,14 +34,21 @@ useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: { previe
   workdir: "/fixture", workspace: "/fixture", pid: null, log: null,
   state: { type: "running" }, startedAtMs: 0, endedAtMs: null,
 } } } });
+let keyboardReturns = 0;
+let projectChanged = false;
 mockIPC((command, args) => {
+  if (command === "browser_focus" && (args as { id: string | null }).id === null) keyboardReturns++;
   if (command !== "ipc_request") return null;
   const req = (args as { request: Request }).request;
   if (req.method === "listFiles") return { method: req.method, files: ["README.md"], truncated: false };
+  if (req.method === "getWorkspaceTree") return { method: req.method, tree: {
+    files: req.target.type === "project" ? ["package.json", "src/app.ts"] : ["README.md"], truncated: false, ignored: [], ignoredTruncated: false } };
   if (req.method === "getSourceState") return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes: [] } };
   if (req.method === "listProjectFiles") return { method: req.method, files: ["src/app.ts", "package.json"], truncated: false };
   if (req.method === "getProjectSourceState") return { method: req.method, state: { branch: "trunk", remote: null, upstream: null, ahead: 0, staged: [],
-    changes: [{ path: "src/app.ts", oldPath: null, status: "modified" }] } };
+    changes: [{ path: "src/app.ts", oldPath: null, status: "modified" },
+      ...(projectChanged ? [{ path: "new.ts", oldPath: null, status: "untracked" }] : [])] } };
+  if (req.method === "pageList") return { method: req.method, pages: [] };
   if (req.method === "previewLog") return { method: req.method, tail: "", url: null };
   return { method: req.method };
 });
@@ -57,6 +65,7 @@ function Fixture() {
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const [seen] = useState<Record<string, unknown>>({});
   useEffect(() => {
+    if (new URLSearchParams(location.search).has("manual")) return;
     const timers: ReturnType<typeof setTimeout>[] = [];
     const at = (ms: number, action: () => void) => timers.push(setTimeout(action, ms));
     const click = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)?.click();
@@ -80,20 +89,24 @@ function Fixture() {
     const dockContents = () => !!document.querySelector('[data-slot="workspace-pane"] [data-pane] > *');
     at(1000, () => {
       seen.sessionControls = controls(); seen.initialRight = right();
-      seen.dockClosedSlide = slide("workspace-pane"); click("Files");
+      seen.dockClosedSlide = slide("workspace-pane"); click("Right sidebar");
       setTimeout(() => { seen.dockOpeningSlides = dockSlides()?.length; });
     });
     at(1300, () => {
       seen.files = pane(); seen.dockOpenSlide = slide("workspace-pane");
-      const header = document.querySelector('header[data-slot="test-toolbar"]')!.getBoundingClientRect();
+      // A full-height column at the window's right edge, its views' icons in the titlebar strip.
       const dock = document.querySelector('[data-slot="workspace-pane"]')!.getBoundingClientRect();
-      seen.belowToolbar = dock.top >= header.bottom;
-      click("Files");
+      seen.atEdge = dock.top === 0 && Math.abs(dock.right - window.innerWidth) < 1 && Math.abs(dock.bottom - window.innerHeight) < 1;
+      seen.views = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => tab.getAttribute("aria-label"));
+      click("Right sidebar");
       // Through the closing slide the contents stay; once it is over they go.
       setTimeout(() => { seen.closingContents = dockContents(); });
       setTimeout(() => { seen.closedContents = dockContents(); }, 450);
     });
-    at(1800, () => { seen.closedFiles = pane(); click("Source"); });
+    at(1800, () => {
+      seen.closedFiles = pane();
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyG", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+    });
     at(2100, () => {
       seen.source = pane();
       const before = dockSlides() ?? [];
@@ -102,39 +115,64 @@ function Fixture() {
     });
     at(2200, () => {
       seen.switchedFiles = pane(); seen.filesRight = right();
+      Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false });
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyP", metaKey: true, bubbles: true, cancelable: true }));
     });
     at(2500, () => {
       seen.searchFocused = document.activeElement?.getAttribute("aria-label");
+      seen.keyboardReturns = keyboardReturns; Reflect.deleteProperty(document, "hasFocus");
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB", metaKey: true, altKey: true, bubbles: true, cancelable: true }));
-      seen.removedKeyRight = right(); seen.removedMenu = MENU_KEYS["right-sidebar"] ?? null;
-      const find = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Find file"));
-      find?.click();
+      seen.removedKeyRight = right(); seen.menuKey = MENU_KEYS["right-sidebar"] ?? null;
+    });
+    at(2650, () => {
+      seen.keyClosed = pane();
+      // ⌘P shows the closed sidebar on Files with its search focused.
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyP", metaKey: true, bubbles: true, cancelable: true }));
     });
     // The right panel stays in the page while closed, and the room it takes is its full width
     // from the moment it opens rather than the sliding width, frame by frame.
     const shown = () => document.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]')?.style.getPropertyValue("--right-sidebar-shown");
     at(2800, () => {
+      seen.reopened = pane();
       seen.findFileFocused = document.activeElement?.getAttribute("aria-label"); seen.closedSlide = slide("right-sidebar"); click("Thread worker");
-      // Once the click's update is in, before any frame of the slide.
-      setTimeout(() => { seen.openingShown = shown(); });
     });
     at(3100, () => {
       seen.workerRight = right(); seen.workerTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane");
+      // This 800px window can't hold the thread beside both columns: the Workers panel, opened
+      // last, stays and the right sidebar closes. It still sits between the content and the sidebar.
+      seen.workersNarrow = pane();
+      seen.workersInside = document.querySelector('[data-slot="right-sidebar"]')!.getBoundingClientRect().right <= document.querySelector('[data-slot="workspace-pane"]')!.getBoundingClientRect().left + 1;
       seen.openShown = shown(); seen.openSlide = slide("right-sidebar");
       seen.openWidth = `${document.querySelector('[data-slot="right-sidebar"] > div > div')!.getBoundingClientRect().width}px`;
       click("Close right panel"); setTimeout(() => { seen.closingShown = shown(); });
     });
-    at(3400, () => { seen.closedRight = right(); seen.closedShown = shown(); click("Composer worker"); });
-    at(3700, () => { seen.composerRight = right(); click("Close right panel"); click("Context worker"); });
+    at(3400, () => {
+      seen.closedRight = right(); seen.closedShown = shown(); click("Composer worker");
+      // Once the click's update is in, before any frame of the slide.
+      setTimeout(() => { seen.openingShown = shown(); });
+    });
+    at(3700, () => {
+      seen.composerRight = right();
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB", metaKey: true, altKey: true, bubbles: true, cancelable: true }));
+    });
+    at(3850, () => {
+      // Opened last, the right sidebar stays and the Workers panel closes.
+      seen.sidebarWins = [pane(), right()];
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB", metaKey: true, altKey: true, bubbles: true, cancelable: true }));
+      click("Context worker");
+    });
     at(4000, () => { seen.contextWorkerRight = right(); click("Open plan"); });
     at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click(); });
-    at(4700, () => { seen.previewPopover = !!document.querySelector('[aria-label="Previews"]'); seen.previewRight = right(); click("Files"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } }); });
+    at(4700, () => { seen.previewPopover = !!document.querySelector('[aria-label="Previews"]'); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } }); });
     at(4850, () => { useBoard.setState({ board: { ...useBoard.getState().board!, previews } }); });
     at(5000, () => { seen.previewReopened = !!document.querySelector('[aria-label="Previews"]'); setKind("draft"); });
     const buttons = (scope: string) => [...document.querySelectorAll(`${scope} button`)].map((button) => button.textContent?.trim());
-    at(5200, () => { seen.draftControls = controls(); seen.draftRight = right(); click("Files"); });
+    at(5200, () => { seen.draftControls = controls(); seen.draftRight = right();
+      // ⇧⌘E shows Files, whether the sidebar is open or not.
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyE", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+    });
     at(5600, () => {
+      seen.draftSourceCount = document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent ?? null;
       seen.draftFiles = pane(); seen.draftTree = document.querySelector('[data-slot="workspace-pane"] [role="tree"]')?.textContent;
       document.querySelector<HTMLButtonElement>('[data-slot="workspace-pane"] button[title="package.json"]')?.click();
     });
@@ -145,16 +183,31 @@ function Fixture() {
       const box = document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')!;
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "Unsent message");
       box.dispatchEvent(new Event("input", { bubbles: true }));
-      click("Source");
+      click("Right sidebar");
     });
-    at(6400, () => { seen.closedSource = pane(); click("Source"); });
+    at(6400, () => { seen.closedSource = pane(); click("Right sidebar"); });
     at(6600, () => {
       seen.keptMessage = document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')?.value;
       updateDraft("project", { environment: "newWorktree" });
     });
     at(6900, () => {
       seen.worktreeSource = buttons('[data-slot="source-panel"]'); seen.worktreeCommitBox = !!document.querySelector('[aria-label="Commit message"]');
-      seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent; setKind("chat");
+      seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent;
+      // ⇧⌘F shows Search with its field taking the keyboard; a draft making its own copy has no Replace.
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+      useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
+    });
+    at(6850, () => {
+      projectChanged = true;
+      emitWorkspaceChanged({ type: "project", projectId: "project" });
+    });
+    at(7000, () => {
+      seen.draftSearch = pane();
+      seen.sourceCountInSearch = document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent;
+      seen.selectedTabs = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => [tab.getAttribute("aria-label"), tab.getAttribute("aria-selected"), getComputedStyle(tab).backgroundColor]);
+      seen.searchKeyFocus = document.activeElement?.getAttribute("aria-label");
+      seen.draftSearchReplace = !!document.querySelector('[data-slot="workspace-pane"] input[aria-label="Replace"]');
+      setKind("chat");
     });
     at(7100, () => { click("Context"); });
     at(7300, () => { seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context"); });
@@ -181,11 +234,11 @@ function Fixture() {
                 <button aria-label="Open plan" onClick={() => { showPlanDoc(id, { type: "plan", id: "plan" }); panel.openTab("plan"); }}>Open plan</button>
                 <PreviewChip conversationId={id} />
               </SummaryPane>
-              <WorkspacePane />
             </div>
           </SummaryFloat>
         </main>
         {kind !== "draft" && <RightSidebar conversationId={id} />}
+        <WorkspacePane />
       </div>
       {result && <pre id="toolbar-result">{result}</pre>}
     </RightSidebarContext.Provider></WorkspacePaneContext.Provider>

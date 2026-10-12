@@ -8,7 +8,7 @@
  * Token families (Tailwind utility → token):
  *   Colors      bg-background, text-foreground, bg-card, bg-popover, bg-primary, bg-secondary,
  *               bg-muted, text-muted-foreground, bg-accent, text-destructive, text-warning,
- *               text-success, text-full-access (Full access permission pill), text-brand-claude
+ *               text-success, text-file-* (file-type icons by kind), text-full-access (Full access permission pill), text-brand-claude
  *               (Claude's mark), border-border,
  *               bg-input, ring-ring, bg-code-surface, bg-composer (the composer card),
  *               bg-rail (rail cards), bg-rail-controls (the rail's utility bar),
@@ -23,6 +23,7 @@
  *               px-button-{xs,sm,md,lg}       horizontal padding of text buttons
  *               size-icon-button-{xs,sm,md,lg} square icon-only buttons
  *               size-icon-{xs,sm,md,lg}       icon glyphs (apps-sdk-ui icons are 1em/currentColor)
+ *               size-icon-text                our own glyphs' default: the text's size, as those
  *               h-pill, px-pill               badges and status pills
  *               h-row, h-row-sm               list rows (event rows, menus)
  *               h-nav-row                     sidebar and Settings navigation rows
@@ -170,6 +171,7 @@
   --spacing-icon-sm: 0.875rem;
   --spacing-icon-md: 1rem;
   --spacing-icon-lg: 1.25rem;
+  --spacing-icon-text: 1em;
   --spacing-pill: 1.25rem;
   --spacing-pill-x: 0.5rem;
   --spacing-row: 2rem;
@@ -547,6 +549,16 @@
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-link: var(--link);
+  --color-file-blue: var(--file-blue);
+  --color-file-green: var(--file-green);
+  --color-file-orange: var(--file-orange);
+  --color-file-yellow: var(--file-yellow);
+  --color-file-purple: var(--file-purple);
+  --color-file-red: var(--file-red);
+  --color-file-pink: var(--file-pink);
+  --color-file-grey: var(--file-grey);
+  --color-file-white: var(--file-white);
+  --color-file-ignore: var(--file-ignore);
   --color-full-access: var(--full-access);
   --color-full-access-foreground: var(--full-access-foreground);
   --color-brand-claude: var(--brand-claude);
@@ -633,6 +645,17 @@
   --success-foreground: oklch(0.215 0.003 var(--tint));
   /* Blue: links inside the thread ("Continued from chat"). */
   --link: oklch(0.7 0.15 255);
+  /* File-type icons, by kind (the icon set's own palette). */
+  --file-blue: #519aba;
+  --file-green: #8dc149;
+  --file-orange: #e37933;
+  --file-yellow: #cbcb41;
+  --file-purple: #a074c4;
+  --file-red: #cc3e44;
+  --file-pink: #f55385;
+  --file-grey: #6d8086;
+  --file-white: #d4d7d6;
+  --file-ignore: #41535b;
   --border: oklch(0.985 0.002 var(--tint) / 10%);
   --input: oklch(0.985 0.002 var(--tint) / 15%);
   --ring: oklch(0.556 0.004 var(--tint));

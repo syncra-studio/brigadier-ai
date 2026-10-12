@@ -236,6 +236,8 @@ mockIPC(
     if (req.method === "openSideChat") return { method: req.method, conversation: { ...conversation, id: req.sideChatId, kind: "chat", title: "Side chat", sideOf: req.conversationId } };
     if (req.method === "listFiles")
       return { method: req.method, files: ["README.md", "package.json", "src/app.tsx", "src/styles.css"], truncated: false };
+    if (req.method === "getWorkspaceTree")
+      return { method: req.method, tree: { files: ["README.md", "package.json", "src/app.tsx", "src/styles.css"], truncated: false, ignored: [], ignoredTruncated: false } };
     if (req.method === "getSourceState")
       return { method: req.method, state: {
         branch: "sidebar-redesign", remote: null, upstream: null, ahead: 0, staged: [],
@@ -305,7 +307,7 @@ function Fixture() {
                   className="flex min-w-0 flex-1 flex-col"
                 >
                   {kind === "session" ? <SessionTabBar conversation={{ ...conversation, id: conversationId, title }} onRename={() => setRenaming(true)}>
-                    <WorkspacePaneToggle tab="files" /><WorkspacePaneToggle tab="source" /><TerminalButton />
+                    <TerminalButton /><WorkspacePaneToggle />
                   </SessionTabBar> : <header className="h-titlebar ps-clear-3 flex items-center"><span className="flex-1">{kind === "chat" ? "Plain chat" : "Home"}</span><TerminalButton /></header>}
                   {renaming && <div role="dialog" aria-label="Rename session" className="bg-background absolute inset-8 z-50 p-4"><input aria-label="Session title" value={title} onChange={(event) => setTitle(event.target.value)} /><button onClick={() => setRenaming(false)}>Done</button></div>}
                   <div className="relative flex min-h-0 flex-1"><div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -314,7 +316,7 @@ function Fixture() {
                       Give each tool its own pane.
                     </p>
                     <p>
-                      Files and Source dock beside the workspace. Worker clicks open the right panel.
+                      Files and Source open in the right sidebar. Worker clicks open the right panel.
                       The terminal stays at the bottom.
                     </p>
                     <button
@@ -345,12 +347,13 @@ function Fixture() {
                   </div>
                   {kind === "session" && <SessionTabViews key={conversationId} conversationId={conversationId} />}
                   </div>
-                  <WorkspacePane /></div>
+                  </div>
                   <TerminalPane place={`conv:${conversationId}`} />
                 </div>
               </div>
             </main>
             {kind === "session" && <RightSidebar conversationId={conversationId} />}
+            <WorkspacePane />
           </div>
         </AgentsPanelContext.Provider>
         </RightSidebarContext.Provider>

@@ -1,7 +1,6 @@
 import {
   ChevronDown,
   Plus,
-  Terminal as TerminalIcon,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
@@ -15,6 +14,7 @@ import {
 } from "react";
 
 import { useReveal } from "@/app/conversation/SidePanel";
+import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { request } from "@/ipc/client";
 import type { ProviderKind, TerminalInfo } from "@/ipc/generated";
@@ -301,7 +301,7 @@ export function TerminalPane({ place }: { place: string }) {
                     onClick={() => selectTab(place, tab.id)}
                     className="flex min-w-0 flex-1 items-center gap-1 rounded-sm"
                   >
-                    <TerminalIcon aria-hidden className="size-icon-md shrink-0" />
+                    <TerminalGlyph aria-hidden className="size-icon-md shrink-0" />
                     <TabLabel key={names[index]} name={names[index]!} hidden={compactTabs} />
                   </button>
                   <button

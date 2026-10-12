@@ -94,7 +94,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
     menu: "terminal-alternate",
   },
   { id: "files", name: "Find file", line: "Search the session's files", area: "Tabs and panes", keys: ["⌘P"], menu: "files" },
-  { id: "review", name: "Review changes", line: "Open the session's changes for review", area: "Tabs and panes", keys: ["⌃⇧G"], menu: "review" },
+  { id: "right-sidebar", name: "Toggle right sidebar", line: "Show or hide the session's files and changes", area: "Tabs and panes", keys: ["⌥⌘B"], menu: "right-sidebar" },
+  { id: "show-files", name: "Files", line: "Show the session's files in the right sidebar", area: "Tabs and panes", keys: ["⇧⌘E"], menu: "show-files" },
+  { id: "show-search", name: "Search", line: "Search the session's files in the right sidebar", area: "Tabs and panes", keys: ["⇧⌘F"], menu: "show-search" },
+  { id: "show-source", name: "Source", line: "Show the session's changes in the right sidebar", area: "Tabs and panes", keys: ["⌃⇧G"], menu: "show-source" },
+  { id: "show-pages", name: "Show pages", line: "List the pages, from a page in front", area: "Tabs and panes", keys: ["⌥⌘E"], menu: "show-pages" },
 
   // Composer
   // Send, New line and the follow-up's other way as with the defaults; `shortcutsFor` gives

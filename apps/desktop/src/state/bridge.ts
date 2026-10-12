@@ -17,6 +17,8 @@ import { applyEvents, useApp } from "@/state/store";
 import { startBrowserOptions } from "@/state/links";
 import { startMenuBar } from "@/state/menuBar";
 import { emitPageChanged } from "@/state/pageChanges";
+import { emitWorkspaceChanged } from "@/state/workspaceCache";
+import { emitSearchUpdate } from "@/state/workspaceSearch";
 import { startPagesFlush } from "@/state/pagesFlush";
 import { applyUpdateEvents, loadUpdates } from "@/state/updates";
 import { applyUsageEvents } from "@/state/usage";
@@ -121,6 +123,12 @@ function onBridgeEvent(message: BridgeEvent) {
       break;
     case "pageChanged":
       emitPageChanged({ id: message.id, revision: message.revision });
+      break;
+    case "workspaceChanged":
+      emitWorkspaceChanged(message.target);
+      break;
+    case "search":
+      emitSearchUpdate(message.id, message.update);
       break;
     case "windowVisibility":
       setSamplingPaused(!message.visible);

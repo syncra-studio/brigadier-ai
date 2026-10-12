@@ -38,7 +38,7 @@ test("the Browser menu's items reach the tab as the keys it acts on", () => {
 });
 
 test("the tab's other menu items are none of its keys", () => {
-  for (const item of ["new", "reopen", "close", "close-others", "previous-tab", "next-tab", "previous", "next", "back", "forward", "tab-1", "review", "sidebar"]) {
+  for (const item of ["new", "reopen", "close", "close-others", "previous-tab", "next-tab", "previous", "next", "back", "forward", "tab-1", "sidebar", "right-sidebar", "show-files", "show-search", "show-source", "show-pages"]) {
     const menu = MENU_KEYS[item];
     assert.ok(menu, item);
     const sent = press(menu.code, { cmd: !menu.control, ctrl: menu.control ?? false, shift: menu.shift ?? false, alt: menu.alt ?? false });

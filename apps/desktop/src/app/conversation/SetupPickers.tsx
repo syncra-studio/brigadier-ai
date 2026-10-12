@@ -6,7 +6,6 @@ import {
   HandRaised,
   Settings as SettingsIcon,
   Shuffle,
-  Terminal,
   Warning,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useRef, useState } from "react";
@@ -18,6 +17,7 @@ import {
   type ModelGroup,
 } from "@/components/assistant-ui/elements/model-selector";
 import { composerPill } from "@/components/assistant-ui/elements/surfaces";
+import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { ShieldExclamation, ShieldTerminal } from "@/components/glyphs/permission-glyphs";
 import { Button } from "@/components/ui/button";
 import {
@@ -229,7 +229,7 @@ const FULL_ACCESS_POWERS: { icon: FC<{ className?: string }>; tone: string; titl
     line: "Read, create, modify, or delete files anywhere on this computer",
   },
   {
-    icon: Terminal,
+    icon: TerminalGlyph,
     tone: "text-muted-foreground",
     title: "Terminal commands",
     line: "Run commands, install software, and change system settings",

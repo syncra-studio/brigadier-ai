@@ -839,7 +839,6 @@ export function ConversationView({
                             </div>
                             {tabbed && conversationId && <SessionTabViews conversationId={conversationId} />}
                           </div>
-                          <WorkspacePane />
                           </div>
                         </SummaryFloat>
                         {!embedded && <TerminalPane place={placeOf(selection)} />}
@@ -847,6 +846,7 @@ export function ConversationView({
                       </div>
                     </div>
                     {tabbed && conversationId && <RightSidebar conversationId={conversationId} />}
+                    <WorkspacePane />
                     </div>
                   </OpenFileContext.Provider>
                   {conversation && (

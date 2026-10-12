@@ -71,6 +71,7 @@ mod review_hold;
 mod review_runs;
 mod routing;
 mod run;
+pub mod search;
 mod secrets;
 mod side_chat;
 mod sidecars;
@@ -90,6 +91,7 @@ mod watchdog;
 mod worker_handoff;
 mod worker_resume;
 mod workers;
+pub mod workspace;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

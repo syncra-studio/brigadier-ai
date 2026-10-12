@@ -23,7 +23,9 @@ import type { ProviderKind } from "./ProviderKind";
 import type { Rating } from "./Rating";
 import type { RawApprovals } from "./RawApprovals";
 import type { RawSessionId } from "./RawSessionId";
+import type { ReplaceFile } from "./ReplaceFile";
 import type { ReviewScope } from "./ReviewScope";
+import type { SearchQuery } from "./SearchQuery";
 import type { Settings } from "./Settings";
 import type { Setup } from "./Setup";
 import type { SetupRequest } from "./SetupRequest";
@@ -32,6 +34,7 @@ import type { SourceScope } from "./SourceScope";
 import type { TaskId } from "./TaskId";
 import type { UninstallApp } from "./UninstallApp";
 import type { UpdateTarget } from "./UpdateTarget";
+import type { WorkspaceTarget } from "./WorkspaceTarget";
 
 /**
  * Commands and queries.
@@ -45,7 +48,11 @@ query: string | null, } | { "method": "listProjectFiles", projectId: ProjectId,
 /**
  * As [`Request::ListFiles`]'s.
  */
-query: string | null, } | { "method": "readFile", conversationId: ConversationId, 
+query: string | null, } | { "method": "getWorkspaceTree", target: WorkspaceTarget, } | { "method": "listWorkspaceFolder", target: WorkspaceTarget, 
+/**
+ * Relative to the checkout's root.
+ */
+path: string, } | { "method": "watchWorkspace", target: WorkspaceTarget | null, } | { "method": "startSearch", target: WorkspaceTarget, query: SearchQuery, } | { "method": "cancelSearch", id: number, } | { "method": "replaceInFiles", target: WorkspaceTarget, query: SearchQuery, replacement: string, files: Array<ReplaceFile>, } | { "method": "readFile", conversationId: ConversationId, 
 /**
  * Relative to the checkout's root.
  */

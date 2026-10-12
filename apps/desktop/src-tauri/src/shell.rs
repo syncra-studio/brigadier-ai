@@ -248,7 +248,8 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
             .build(app)?;
         app_menu.append(&quit)?;
     }
-    // View › Toggle Sidebar, Back and Forward at its end; the webview handles them as keys.
+    // View › Toggle Sidebar, the right sidebar and its views, Back and Forward at its end; the
+    // webview handles them as keys.
     for item in menu.items()? {
         if let Some(view) = item.as_submenu()
             && view.text()? == "View"
@@ -256,6 +257,10 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
             view.append(&tauri::menu::PredefinedMenuItem::separator(app)?)?;
             for (id, title, accelerator) in [
                 ("sidebar", "Toggle Sidebar", "CmdOrCtrl+B"),
+                ("right-sidebar", "Toggle Right Sidebar", "Alt+CmdOrCtrl+B"),
+                ("show-files", "Files", "CmdOrCtrl+Shift+E"),
+                ("show-search", "Search", "CmdOrCtrl+Shift+F"),
+                ("show-source", "Source", "Ctrl+Shift+G"),
                 ("back", "Back", "CmdOrCtrl+["),
                 ("forward", "Forward", "CmdOrCtrl+]"),
             ] {
@@ -277,7 +282,7 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
         ("save", "Save file", "CmdOrCtrl+S"),
         ("save-as", "Save file as…", "CmdOrCtrl+Shift+S"),
         ("files", "Find file", "CmdOrCtrl+P"),
-        ("review", "Review", "Ctrl+Shift+G"),
+        ("show-pages", "Show pages", "Alt+CmdOrCtrl+E"),
         ("cycle-next", "Next session tab", "Ctrl+Tab"),
         ("cycle-previous", "Previous session tab", "Ctrl+Shift+Tab"),
         (

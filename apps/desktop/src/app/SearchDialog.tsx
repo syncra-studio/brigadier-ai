@@ -1,7 +1,8 @@
-import { Chat, Folder, Terminal } from "@openai/apps-sdk-ui/components/Icon";
+import { Chat, Folder } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { create } from "zustand";
 
+import { TerminalGlyph } from "@/components/glyphs/codicons";
 import {
   Dialog,
   DialogContent,
@@ -58,7 +59,7 @@ function useResults(query: string): Result[] {
   }, [query, projects, conversations]);
 }
 
-const ICONS = { project: Folder, session: Terminal, chat: Chat } as const;
+const ICONS = { project: Folder, session: TerminalGlyph, chat: Chat } as const;
 
 export function SearchDialog({
   open,

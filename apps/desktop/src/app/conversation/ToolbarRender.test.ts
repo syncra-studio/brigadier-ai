@@ -2,29 +2,41 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
-test("toolbar order, docked pane, Files search, draft project folder and worker/plan-only right panel routes", { timeout: 60000 }, async (t) => {
+test("toolbar order, right sidebar, its keys, Files search, draft project folder and worker/plan-only right panel routes", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "toolbar.html", "toolbar-result", 9500)) as Record<string, unknown>;
-  assert.deepEqual(seen.sessionControls, ["Context", "Files", "Source", "Terminal"]);
-  assert.deepEqual(seen.draftControls, ["Context", "Files", "Source", "Terminal"]);
+  assert.deepEqual(seen.sessionControls, ["Context", "Terminal", "Right sidebar"]);
+  assert.deepEqual(seen.draftControls, ["Context", "Terminal", "Right sidebar"]);
+  assert.deepEqual(seen.views, ["Files", "Search", "Source"]);
   assert.deepEqual(seen.chatControls, ["Context", "Terminal"]);
   assert.equal(seen.files, "files");
   assert.equal(seen.closedFiles, null);
   assert.equal(seen.source, "source");
   assert.equal(seen.switchedFiles, "files");
-  assert.equal(seen.belowToolbar, true);
+  assert.equal(seen.atEdge, true, "the right sidebar runs the window's full height at its right edge");
+  assert.equal(seen.keyClosed, null, "⌥⌘B hides the right sidebar");
+  assert.deepEqual(seen.menuKey, { code: "KeyB", alt: true });
+  assert.equal(seen.reopened, "files", "⌘P shows the closed right sidebar on Files");
+  assert.equal(seen.workersNarrow, null, "where both don't fit, a worker click closes the right sidebar");
+  assert.deepEqual(seen.sidebarWins, ["files", "collapsed"], "where both don't fit, ⌥⌘B closes the Workers panel");
+  assert.equal(seen.workersInside, true, "the Workers panel sits between the content and the right sidebar");
   assert.equal(seen.searchFocused, "Search files");
+  assert.equal(seen.keyboardReturns, 1, "⌘P returns the native browser keyboard to the app before focusing Files");
   assert.equal(seen.findFileFocused, "Search files");
   for (const field of ["initialRight", "filesRight", "removedKeyRight", "closedRight", "previewRight"]) assert.equal(seen[field], "collapsed", field);
-  assert.equal(seen.removedMenu, null);
   for (const field of ["workerRight", "composerRight", "contextWorkerRight"]) assert.equal(seen[field], "expanded", field);
   assert.equal(seen.workerTab, "workers");
+  assert.equal(seen.draftSearch, "search", "⇧⌘F shows Search");
+  assert.equal(seen.draftSourceCount, "1", "Source's icon counts the files it lists");
+  assert.equal(seen.sourceCountInSearch, "2", "Source's count refreshes while Search is selected");
+  assert.equal(seen.searchKeyFocus, "Search", "with its field taking the keyboard");
+  assert.equal(seen.draftSearchReplace, false, "a draft making its own copy has no Replace");
   for (const field of ["dockClosedSlide", "dockOpenSlide"]) {
     assert.deepEqual(seen[field], { transitionProperty: "width", transitionDuration: "0.3s", sidebarEase: true, reducedMotion: true },
-      `${field}: the docked pane stays in the page and its width slides on the left sidebar's spring, and not with reduced motion`);
+      `${field}: the right sidebar stays in the page and its width slides on the left sidebar's spring, and not with reduced motion`);
   }
-  assert.equal(seen.dockOpeningSlides, 1, "opening the docked pane slides its width");
+  assert.equal(seen.dockOpeningSlides, 1, "opening the right sidebar slides its width");
   assert.equal(seen.switchSlides, 0, "switching Source to Files while open doesn't slide again");
-  assert.equal(seen.closingContents, true, "the docked pane keeps its contents through the closing slide");
+  assert.equal(seen.closingContents, true, "the right sidebar keeps its contents through the closing slide");
   assert.equal(seen.closedContents, false, "and drops them once closed, so a closed Source reads nothing");
   for (const field of ["closedSlide", "openSlide"]) {
     assert.deepEqual(seen[field], { transitionProperty: "width", transitionDuration: "0.3s", sidebarEase: true, reducedMotion: true },

@@ -1,14 +1,15 @@
-import { Terminal } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BarItem } from "@/app/BarItem";
 import { useWorkspacePane } from "@/app/conversation/WorkspacePane";
 import { useRightSidebar } from "@/app/conversation/RightSidebar";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
+import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { TitlebarButton } from "@/components/titlebar-button";
+import { tokenPx } from "@/lib/tokens";
 import { takePaneClose } from "@/state/closedPanes";
-import { openReviewTab } from "@/state/sessionTabs";
 import { HOME_PLACE, placeOf, terminalWorksHere, toggleTerminal, undoTabClose, useTerminalPlaces } from "@/state/terminalPlaces";
 import { useApp } from "@/state/store";
+import { columnsFit } from "@/state/workspacePane";
 
 export function shortcutLabel(keys: string, mac: boolean): string {
   return mac
@@ -39,14 +40,21 @@ export function useSidePanel(conversationId: string | null, enabled: boolean, em
         if (closed === "terminal") undoTabClose(conversationId ? `conv:${conversationId}` : HOME_PLACE);
         if (closed) event.preventDefault();
       }
-      if (!enabled || !conversationId) return;
-      if (event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey && event.code === "KeyG") {
-        event.preventDefault(); openReviewTab(conversationId, { type: "all" });
-      }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [conversationId, enabled, embedded, mac]);
+  // Where the window can't hold the thread beside both the Workers panel and the right sidebar,
+  // the one opened last stays and the other closes.
+  const shown = useRef({ pane: workspace.open, workers: open });
+  const closeWorkspace = workspace.setOpen;
+  useLayoutEffect(() => {
+    const opened = { pane: workspace.open && !shown.current.pane, workers: open && !shown.current.workers };
+    shown.current = { pane: workspace.open, workers: open };
+    if (!workspace.open || !open || bothColumnsFit()) return;
+    if (opened.pane) setOpen(false);
+    else if (opened.workers) closeWorkspace(false);
+  }, [workspace.open, open, setOpen, closeWorkspace]);
   const agents = useMemo(() => ({
     panel: open && active === "workers" ? worker : undefined,
     setPanel: (next: AgentsPanelState) => {
@@ -55,6 +63,21 @@ export function useSidePanel(conversationId: string | null, enabled: boolean, em
     },
   }), [open, active, worker, setOpen, openTab]);
   return { panel: rightSidebar, agents, workspace };
+}
+
+/**
+ * A right column's chosen width, not its rendered one: a window too narrow for both squeezes
+ * them. One never resized counts at its default.
+ */
+function columnWidth(slot: string): number {
+  const chosen = document.querySelector<HTMLElement>(`[data-slot="${slot}"]`)?.style.getPropertyValue("--right-sidebar-width") ?? "";
+  return chosen.endsWith("px") ? Number.parseFloat(chosen) : tokenPx("--spacing-sidebar");
+}
+
+/** Whether the Workers panel and the right sidebar fit beside the left column and the thread. */
+function bothColumnsFit(): boolean {
+  const left = document.querySelector('[data-slot="sidebar-panel"]')?.getBoundingClientRect().width ?? 0;
+  return columnsFit(window.innerWidth, left, tokenPx("--spacing-sidebar-thread-min"), columnWidth("right-sidebar"), columnWidth("workspace-pane"));
 }
 
 export function TerminalButton() {
@@ -70,7 +93,7 @@ export function TerminalButton() {
         aria-pressed={open}
         onClick={() => toggleTerminal()}
       >
-        <Terminal />
+        <TerminalGlyph />
       </TitlebarButton>
     </BarItem>
   );

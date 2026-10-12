@@ -1,4 +1,4 @@
-import { ChatCompose, ChevronDown, Document, DotsHorizontal, Globe, Grid, Search, Terminal, X } from "@openai/apps-sdk-ui/components/Icon";
+import { ChatCompose, ChevronDown, Document, DotsHorizontal, Globe, Grid, Search, X } from "@openai/apps-sdk-ui/components/Icon";
 import { useContext, useEffect, useState } from "react";
 
 import { WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
@@ -6,6 +6,7 @@ import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TerminalGlyph } from "@/components/glyphs/codicons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { pageList } from "@/ipc/client";
@@ -58,7 +59,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
   const pages = useRecentPages();
   const sites = browserOn ? suggestedSites(history, dismissed) : [];
   const tools = [
-    { label: "Review changes", Icon: DiffGlyph, shortcut: "⌃⇧G", run: () => openReviewTab(conversationId, { type: "all" }, tabId) },
+    { label: "Review changes", Icon: DiffGlyph, shortcut: null, run: () => openReviewTab(conversationId, { type: "all" }, tabId) },
     { label: "Find file", Icon: Search, shortcut: "⌘P", disabled: !workspace?.enabled, run: () => workspace?.openFilesSearch(tabId) },
   ];
   return (
@@ -69,7 +70,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
           <div data-slot="new-tab-tools" className="new-tab-grid">
             <div className="new-tab-card">
               <button type="button" aria-label="Terminal" disabled={archived} onClick={() => replaceNewTab(conversationId, tabId, "terminal", cwd)} className="new-tab-tool">
-                <Terminal aria-hidden /><span className="new-tab-tool-label">Terminal</span>
+                <TerminalGlyph aria-hidden /><span className="new-tab-tool-label">Terminal</span>
                 <Kbd>{shortcutLabel("⌃`", mac)}</Kbd>
               </button>
               <DropdownMenu>
@@ -100,7 +101,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
                 <DropdownMenuContent align="end" data-slot="new-tab-more-tools">
                   {tools.map(({ label, Icon, shortcut, disabled, run }) => (
                     <DropdownMenuItem key={label} disabled={!!disabled} onSelect={run}>
-                      <Icon aria-hidden /><span className="flex-1">{label}</span><Kbd className="font-sans">{shortcutLabel(shortcut, mac)}</Kbd>
+                      <Icon aria-hidden /><span className="flex-1">{label}</span>{shortcut && <Kbd className="font-sans">{shortcutLabel(shortcut, mac)}</Kbd>}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>

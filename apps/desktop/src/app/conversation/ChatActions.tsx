@@ -7,7 +7,6 @@ import {
   Folder,
   Pencil,
   Pin,
-  Terminal,
   Unpin,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useEffect } from "react";
@@ -16,6 +15,7 @@ import { FORK_PLACES } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
 import { NameDialog } from "@/app/NameDialog";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TerminalGlyph } from "@/components/glyphs/codicons";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -218,7 +218,7 @@ export const ChatActions: FC<{
                     <DropdownMenuItem
                       onSelect={() => void openFolder(directory, "Terminal").catch(fail)}
                     >
-                      <Terminal />
+                      <TerminalGlyph />
                       Terminal
                     </DropdownMenuItem>
                   )}

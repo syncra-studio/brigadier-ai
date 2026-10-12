@@ -50,7 +50,7 @@ test("a page: shortcuts, the Insert list, formatting, dragging, autosave, confli
     text: "tick the first item", mentions: [{ type: "page", id: "1".repeat(32), title: "Launch plan" }], afterWrite: true,
     cleared: true, placeholder: "Work with this page…",
   });
-  assert.deepEqual(seen.fileItems, ["Show pages⇧⌘E", "Rename", "Copy as Markdown", "Download", "Delete"]);
+  assert.deepEqual(seen.fileItems, ["Show pages⌥⌘E", "Rename", "Copy as Markdown", "Download", "Delete"]);
   assert.deepEqual(seen.typedWhileSaving, { sent: "add a date", kept: "add a date and a time" });
   assert.deepEqual(seen.modEnter, { enterSent: false, modEnterSent: "one more" });
   assert.equal(seen.copied, "# Launch plan\n\nTheir version before sending!");

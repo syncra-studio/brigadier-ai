@@ -252,8 +252,8 @@ async function steps(seen: Record<string, unknown>): Promise<void> {
   menuItems().find((item) => item.textContent === "Download")?.click(); await wait(100);
   const download = calls.find((call) => call.command === "save_document")?.payload as { name: string; text: string; choose: boolean } | undefined;
   seen.download = download ? { name: download.name, choose: download.choose, sameText: download.text === copied.at(-1) } : null;
-  // Show pages (⇧⌘E) lists every page and opens one.
-  window.dispatchEvent(new KeyboardEvent("keydown", { key: "E", code: "KeyE", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+  // Show pages (⌥⌘E) lists every page and opens one.
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "´", code: "KeyE", metaKey: true, altKey: true, bubbles: true, cancelable: true }));
   await until(() => document.querySelectorAll(".page-list-row").length === 2);
   seen.pageList = [...document.querySelectorAll(".page-list-row")].map((row) => row.textContent?.replace(/Just now|\d+ min ago/, "").trim());
   document.querySelectorAll<HTMLButtonElement>(".page-list-row")[1]?.click();
