@@ -1,7 +1,9 @@
 import { create } from "zustand";
 
-import { browserClose, browserNavigate, browserOpen } from "@/ipc/client";
+import { browserClose, browserNavigate, browserOpen, revealPath } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
+import { useApp } from "@/state/store";
+import { toast } from "@/state/toasts";
 
 /**
  * The Browser tabs' pages as the app knows them, one per conversation: what each shows, heard
@@ -53,11 +55,12 @@ export function faviconFits(page: Pick<BrowserPage, "url" | "loading"> | undefin
   }
 }
 
-/** Opens `url` in the conversation's Browser tab, over `bounds`. */
+/** Opens `url` in the Browser tab `id`, over `bounds`; `agent`: an agent gave the tab its page. */
 export async function openPage(
   id: string,
   url: string,
   bounds: BrowserBounds,
+  agent = false,
 ): Promise<void> {
   const page = useBrowsers.getState().pages[id];
   useBrowsers.setState(({ pages }) => ({
@@ -71,7 +74,7 @@ export async function openPage(
       await browserNavigate(id, url, bounds);
       return;
     }
-    await browserOpen(id, url, bounds, (event) => {
+    await browserOpen(id, url, bounds, agent, (event) => {
       if (event.type === "load")
         update(id, { url: event.url, loading: event.loading,
           ...(event.url !== useBrowsers.getState().pages[id]?.url ? { favicon: null } : {}) });
@@ -79,6 +82,7 @@ export async function openPage(
       else if (event.type === "favicon") {
         if (faviconFits(useBrowsers.getState().pages[id], event.url)) update(id, { favicon: event.dataUrl });
       }
+      else if (event.type === "downloaded") downloaded(event.path, event.ok);
       else update(id, { blocked: event.url, loading: false });
     });
     if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }
@@ -88,6 +92,19 @@ export async function openPage(
     update(id, { loading: false });
     throw error;
   }
+}
+
+/** A download finished or failed: a toast says so, and finds the file. */
+function downloaded(path: string, ok: boolean): void {
+  const name = path.split(/[\\/]/).pop() || path;
+  if (!ok) {
+    toast(`Couldn't download ${name}`, { tone: "error" });
+    return;
+  }
+  const mac = useApp.getState().info?.platform === "macos";
+  toast(`Downloaded ${name}`, {
+    actions: [{ label: mac ? "Reveal in Finder" : "Show in folder", run: () => void revealPath(path) }],
+  });
 }
 
 export function dismissBlocked(id: string): void {

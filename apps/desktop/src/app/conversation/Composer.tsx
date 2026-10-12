@@ -444,7 +444,8 @@ const SEND_TIPS: Record<SendState, string> = {
 
 /**
  * One send button, which changes with the state: ↑ to send (its tip "Queue" while the model
- * works: a Chat queues the message, a session's orchestrator sorts it), ■ to stop, "Esc" once
+ * works: a Chat queues the message, a session's orchestrator sorts it; "Steer" when steering is
+ * the default follow-up, Settings › General), ■ to stop, "Esc" once
  * armed, ▶ to resume a stopped request, and a grey spinner while the conversation's model
  * starts.
  */
@@ -464,6 +465,7 @@ function SendControls({
   const canCancel = useAuiState((s) => s.composer.canCancel);
   const armed = useEscToStop(canCancel);
   const dictationOwner = conversationId ?? NEW_CHAT_SCOPE;
+  const steers = useApp((s) => s.settings.followUp === "steer");
   const state: SendState =
     armed
       ? "armed"
@@ -478,7 +480,7 @@ function SendControls({
             : "send";
   const button = (
     <TooltipIconButton
-      tooltip={SEND_TIPS[state]}
+      tooltip={state === "queue" && steers ? "Steer" : SEND_TIPS[state]}
       side="bottom"
       type="button"
       variant={state === "starting" ? "secondary" : "default"}

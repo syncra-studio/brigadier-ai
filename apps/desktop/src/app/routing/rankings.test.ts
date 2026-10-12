@@ -85,16 +85,16 @@ test("the last refresh: when, with which model and how it ended", () => {
   assert.equal(lastRefresh(refresh("idle"), null), null);
   assert.equal(lastRefresh(refresh("researching"), "Opus 4.5"), null);
   const finishedAtMs = new Date(2026, 9, 4, 14, 9).getTime();
-  assert.match(lastRefresh(refresh("done", { finishedAtMs }), "Opus 4.5") ?? "", /^.+ with Opus 4\.5: finished\.$/);
-  assert.match(lastRefresh(refresh("failed", { finishedAtMs }), null) ?? "", /: failed\.$/);
-  assert.equal(lastRefresh(refresh("cancelled", { startedAtMs: null }), null), "stopped.");
+  assert.match(lastRefresh(refresh("done", { finishedAtMs }), "Opus 4.5") ?? "", /^.+ with Opus 4\.5: finished$/);
+  assert.match(lastRefresh(refresh("failed", { finishedAtMs }), null) ?? "", /: failed$/);
+  assert.equal(lastRefresh(refresh("cancelled", { startedAtMs: null }), null), "stopped");
 });
 
 test("the ratings in use: researched, no longer applied, or published", () => {
   const at = new Date(2026, 9, 3, 9, 30).getTime();
-  assert.match(overlayStatus(refresh("idle", { overlayApplied: true, overlayAtMs: at })), /^Researched ratings from .+\.$/);
+  assert.match(overlayStatus(refresh("idle", { overlayApplied: true, overlayAtMs: at })), /^Researched ratings from .+[^.]$/);
   assert.match(overlayStatus(refresh("superseded", { overlayAtMs: at })), /isn't used/);
-  assert.equal(overlayStatus(refresh("idle")), "The published ratings.");
+  assert.equal(overlayStatus(refresh("idle")), "The published ratings");
 });
 
 test("changed fields read as words", () => {

@@ -110,6 +110,7 @@ impl Uninstall {
                         | Artifact::CodexGeneratedImages { .. }
                         | Artifact::CodexProjectTrust { .. }
                         | Artifact::CliTrust { .. }
+                        | Artifact::Adopted { .. }
                 )
             })
             .count();

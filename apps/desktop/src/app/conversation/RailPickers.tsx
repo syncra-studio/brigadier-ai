@@ -38,6 +38,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { EnvironmentKind, Project, QuotaWindow, RepoInfo } from "@/ipc/generated";
+import { usageTone } from "@/lib/quota";
+import { branchNameProblem } from "@/lib/refname";
 import { cn } from "@/lib/utils";
 import { loadProviders, select, updateProject } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
@@ -49,9 +51,6 @@ import { useApp } from "@/state/store";
  * a menu upward. A session's repository and environment are fixed once it starts, so the bar
  * goes with the first send.
  */
-
-/** What "Create branch for this session" suggests before a name, unless the project says. */
-const DEFAULT_BRANCH_PREFIX = "brigadier/";
 
 /** The menu surface, shared by the rail's menus. */
 const MENU = "rounded-menu p-1";
@@ -325,7 +324,7 @@ function UsageRemaining({ provider }: { provider: string }) {
           {windows.map((window) => (
             <p key={window.id} className="flex items-center gap-2">
               <span className="flex-1">{usageName(window)}</span>
-              <span className="tabular-nums">
+              <span className={cn("tabular-nums", usageTone(window.usedPercent, { normal: { text: "" } }).text)}>
                 {Math.max(0, Math.round(100 - window.usedPercent))}%
               </span>
               {window.resetsAtMs !== null && (
@@ -389,15 +388,8 @@ export function WorkInMenu({ resolved }: { resolved: ResolvedDraft }) {
 /** Why `name` can't be a new branch, in git's terms, or `null`. */
 function branchProblem(name: string, info: RepoInfo | null): string | null {
   if (!name) return "Enter a branch name.";
-  if (name.endsWith("/")) return 'Branch name cannot end with "/".';
-  if (name.startsWith("/") || name.startsWith("-")) return `Branch name cannot start with "${name[0]}".`;
-  if (name.endsWith(".") || name.endsWith(".lock")) return "Branch name cannot end with \".\" or \".lock\".";
-  if (/\s/.test(name)) return "Branch name cannot contain spaces.";
-  if (name.includes("..") || name.includes("//") || name.includes("@{"))
-    return 'Branch name cannot contain "..", "//" or "@{".';
-  if (/[~^:?*[\\]/.test(name)) return "Branch name contains a character git doesn't allow.";
-  if (name.split("/").some((part) => part.startsWith(".")))
-    return 'A part of the name cannot start with ".".';
+  const problem = branchNameProblem(name);
+  if (problem) return problem;
   if (info?.branches.some((branch) => branch.name === name)) return "A branch with this name already exists.";
   return null;
 }
@@ -433,7 +425,8 @@ function CreateBranchDialog(props: CreateBranchProps) {
 function CreateBranchForm({ open, onOpenChange, resolved, from }: CreateBranchProps) {
   const aui = useAui();
   const project = resolved.project;
-  const prefix = project?.prefs.branchPrefix ?? DEFAULT_BRANCH_PREFIX;
+  const globalPrefix = useApp((s) => s.settings.branchPrefix);
+  const prefix = project?.prefs.branchPrefix ?? globalPrefix;
   const [name, setName] = useState(
     () => resolved.draft.newBranch ?? `${prefix}${slug(aui.composer().getState().text)}`,
   );
@@ -499,7 +492,7 @@ function CreateBranchForm({ open, onOpenChange, resolved, from }: CreateBranchPr
           open={editingPrefix}
           onOpenChange={setEditingPrefix}
           title="Branch prefix"
-          description={`Put before the names suggested for ${project.name}'s new branches.`}
+          description={`Put before the names of ${project.name}'s new branches, instead of the prefix in Settings › Git.`}
           label="Prefix"
           initialValue={prefix}
           confirmLabel="Save"

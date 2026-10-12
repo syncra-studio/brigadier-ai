@@ -33,6 +33,8 @@
  *                                             an on/off switch
  *               min-w-settings-control        the room a Settings row keeps for its control
  *               h-page-toolbar                the strip atop a Settings page
+ *               h-settings-band, pt-settings-top  the band over a Settings page (titlebar and
+ *                                             toolbar strips) it scrolls under; where its title starts
  *               max-h-action-list             a worker's expanded run of actions (9 rows)
  *               max-h-command-list            the composer's / menu (10 rows and a half, then scrolls)
  *               h-kbd, min-w-kbd              keyboard hints
@@ -277,6 +279,10 @@
   --spacing-switch-travel: calc(var(--spacing-switch-width) - var(--spacing-switch-thumb) - 0.125rem);
   /* The strip atop a Settings page, over its title. */
   --spacing-page-toolbar: 2.875rem;
+  /* The band over a Settings page that drags the window: the titlebar's strip and the page's;
+     the page scrolls under it, and its title starts 16px below it. */
+  --spacing-settings-band: calc(var(--spacing-titlebar) + var(--spacing-page-toolbar));
+  --spacing-settings-top: calc(var(--spacing-settings-band) + var(--spacing) * 4);
   /* A Settings row keeps at least this much room for its control. */
   --spacing-settings-control: min(10rem, 40cqw);
   /* Window chrome: top bars, room for the macOS traffic lights. */
@@ -398,7 +404,7 @@
   --radius-nav: 0.78125rem;
   /* An icon on the sidebar's strip or at its foot, and a flyout's trigger: its highlight. */
   --radius-strip-button: 0.625rem;
-  --radius-settings: 1.25rem;
+  --radius-settings: 0.875rem;
 
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
@@ -764,7 +770,7 @@
   --radius-summary: 1rem;
   --radius-tooltip: 0.75rem;
   --radius-nav: 0.625rem;
-  --radius-settings: 1rem;
+  --radius-settings: 0.75rem;
   --radius-toolbar-button: 0.5rem;
   --radius-strip-button: 0.5rem;
 

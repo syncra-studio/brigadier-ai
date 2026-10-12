@@ -8,7 +8,7 @@ import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { clearPreviews, pausePreview, previewLogTail, resumePreview, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
-import { changeSessionTab, newSessionTab } from "@/state/sessionTabs";
+import { openLink } from "@/state/links";
 import { useApp } from "@/state/store";
 
 export function RunningTab({ conversationId }: { conversationId: string }) {
@@ -76,8 +76,7 @@ function PreviewRow({ preview, disabled }: { preview: Preview; disabled: boolean
       <p className={cn("mt-1 break-words text-xs", preview.state.type === "running" ? "text-success" : "text-muted-foreground")}>{previewStateLabel(preview.state)}</p>
       <p className="text-muted-foreground mt-2 break-all font-mono text-xs">{preview.command}</p>
       {url && <Button variant="link" size="xs" className="mt-2 h-auto max-w-full justify-start whitespace-normal break-all p-0 text-start" onClick={() => {
-        const tab = newSessionTab(preview.conversationId, "browser");
-        changeSessionTab(preview.conversationId, tab, (current) => current.kind === "browser" ? { ...current, url } : current);
+        void openLink(url, { agent: true, conversationId: preview.conversationId });
       }}>{url}</Button>}
       <div className="mt-3 flex flex-wrap items-center gap-1">
         {actions.map((action) => <Button key={action} variant="outline" size="xs" disabled={disabled || busy} onClick={() => run(() =>

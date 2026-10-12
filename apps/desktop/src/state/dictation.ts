@@ -3,6 +3,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import workletUrl from "@/app/conversation/dictation-worklet?worker&url";
 import type { DictationStatus, DictationUpdate } from "@/ipc/generated";
 import { request } from "@/ipc/client";
+import { useApp } from "@/state/store";
 
 /**
  * Dictation (the composer's Dictate button), run on this computer: the
@@ -27,12 +28,23 @@ type Snapshot = {
   owner: string | null;
   /** The microphone's recent loudness, 0–1, oldest first (the waveform). */
   levels: number[];
+  /** The speech model's download, however it was started, while it runs. */
+  model: { received: number; total: number } | null;
+  /** Why the last download from Settings › Voice stopped short. */
+  modelError: string | null;
 };
 
 const LEVELS = 40;
 const LEVEL_EVERY_MS = 50;
 
-let snapshot: Snapshot = { status: null, phase: { type: "idle" }, owner: null, levels: [] };
+let snapshot: Snapshot = {
+  status: null,
+  phase: { type: "idle" },
+  owner: null,
+  levels: [],
+  model: null,
+  modelError: null,
+};
 const listeners = new Set<() => void>();
 
 function set(patch: Partial<Snapshot>): void {
@@ -92,8 +104,14 @@ function captureSupported(): boolean {
 }
 
 function refreshStatus(): void {
+  // Progress from before this asked, with the daemon now saying nothing downloads, is left over
+  // from a download whose end never arrived.
+  const before = snapshot.model;
   request({ method: "getDictation" })
-    .then(({ dictation }) => set({ status: dictation }))
+    .then(({ dictation }) => {
+      set({ status: dictation });
+      if (snapshot.status?.downloading === false && before && snapshot.model === before) set({ model: null });
+    })
     .catch((error: unknown) => console.error("dictation status failed", error));
 }
 
@@ -177,10 +195,30 @@ function busy(): boolean {
   return snapshot.phase.type !== "idle" && snapshot.phase.type !== "failed";
 }
 
+const AUDIO: MediaTrackConstraints = {
+  channelCount: 1,
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
+/**
+ * The microphone chosen in Settings › Voice (`deviceId`), or the system's default when none is
+ * chosen or it isn't connected now.
+ */
+export async function openMicrophone(deviceId: string): Promise<MediaStream> {
+  if (!deviceId) return navigator.mediaDevices.getUserMedia({ audio: AUDIO });
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: { ...AUDIO, deviceId: { exact: deviceId } } });
+  } catch (error) {
+    const name = (error as { name?: unknown } | null)?.name;
+    if (name !== "OverconstrainedError" && name !== "NotFoundError") throw error;
+    return navigator.mediaDevices.getUserMedia({ audio: AUDIO });
+  }
+}
+
 async function openCapture(): Promise<void> {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-  });
+  const stream = await openMicrophone(useApp.getState().settings.dictationMicrophone);
   const context = new AudioContext();
   try {
     // A context made after an await may start suspended (no user gesture left to start it).
@@ -325,11 +363,13 @@ export function cancelDictation(): void {
 export function onDictationUpdate(update: DictationUpdate): void {
   switch (update.type) {
     case "download":
+      set({ model: { received: update.received, total: update.total } });
       if (snapshot.phase.type === "downloading") {
         set({ phase: { type: "downloading", received: update.received, total: update.total } });
       }
       break;
     case "downloaded": {
+      set({ model: null, modelError: null });
       if (snapshot.status) set({ status: { ...snapshot.status, installed: true, downloading: false } });
       const owner = startAfterDownload;
       startAfterDownload = null;
@@ -337,6 +377,7 @@ export function onDictationUpdate(update: DictationUpdate): void {
       break;
     }
     case "downloadStopped":
+      set({ model: null, modelError: update.message ?? null });
       refreshStatus();
       if (snapshot.phase.type !== "downloading") break;
       if (update.message) fail(`The speech model couldn't download: ${update.message}`);
@@ -360,5 +401,42 @@ export function onDictationUpdate(update: DictationUpdate): void {
 /** The daemon went away: what it was doing for dictation is gone with it. */
 export function onDictationDisconnected(): void {
   if (busy()) fail("The connection to Brigadier's core dropped.");
+  // A download's progress and end no longer reach this connection; the next status says.
+  set({ model: null });
   statusRequested = false;
+}
+
+/** The speech model as Settings › Voice shows it: its status, its download, why one failed. */
+export function useSpeechModel(): Pick<Snapshot, "status" | "model" | "modelError"> & { dictating: boolean } {
+  const state = useSyncExternalStore(subscribeStore, () => snapshot);
+  useEffect(() => {
+    if (statusRequested) return;
+    statusRequested = true;
+    refreshStatus();
+  }, []);
+  return {
+    status: state.status,
+    model: state.model ?? (state.status?.downloading ? { received: 0, total: state.status.modelBytes } : null),
+    modelError: state.modelError,
+    dictating: busy(),
+  };
+}
+
+/** Downloads the speech model without starting a dictation (Settings › Voice). */
+export async function downloadSpeechModel(): Promise<void> {
+  set({ model: { received: 0, total: snapshot.status?.modelBytes ?? 0 }, modelError: null });
+  try {
+    await request({ method: "downloadDictationModel" });
+  } catch (error) {
+    set({ model: null, modelError: messageOf(error) });
+  }
+}
+
+export function cancelSpeechModelDownload(): void {
+  void request({ method: "cancelDictationDownload" }).catch(() => {});
+}
+
+/** Reads the speech model's status again (after it was removed). */
+export function refreshSpeechModel(): void {
+  refreshStatus();
 }

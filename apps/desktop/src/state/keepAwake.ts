@@ -98,16 +98,16 @@ export function lidClosedHint(status: KeepAwakeStatus | null, settingUp: boolean
   if (settingUp) return "Waiting for the administrator password…";
   switch (status?.lidClosed) {
     case "needsSetup":
-      return "Asks for your administrator password once.";
+      return "Asks for your administrator password once";
     case "lowBattery":
-      return "The battery is low, so closing the lid sleeps the computer. Plug it in.";
+      return "The battery is low, so closing the lid sleeps the computer; plug it in";
     case "active":
       return status.forRun
-        ? "The overnight run keeps going with the lid closed until it ends. Keep it plugged in."
-        : "Sleep is off, even with the lid closed. Keep it plugged in.";
+        ? "The overnight run keeps going with the lid closed until it ends; keep it plugged in"
+        : "Sleep is off, even with the lid closed; keep it plugged in";
     case "ready":
-      return "Applied whenever the computer is kept awake. Best plugged in.";
+      return "Applied whenever the computer is kept awake; best plugged in";
     default:
-      return "Applied whenever the computer is kept awake.";
+      return "Applied whenever the computer is kept awake";
   }
 }

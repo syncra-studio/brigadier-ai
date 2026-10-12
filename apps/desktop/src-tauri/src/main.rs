@@ -8,12 +8,15 @@
 
 mod bridge;
 mod browser;
+mod browser_import;
+mod browser_store;
 mod documents;
 // WebKit's narrow unsafe boundary (the workspace denies it): see its header and the README.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod browser_ui;
 mod launcher;
+mod login_item;
 mod overnight_notifications;
 mod shell;
 mod smoke;
@@ -98,6 +101,13 @@ async fn ipc_request(state: State<'_, AppState>, request: Request) -> Result<Res
 #[tauri::command]
 async fn notification_permission() -> overnight_notifications::Permission {
     overnight_notifications::permission().await
+}
+
+/// Asks the system to let Brigadier show notifications (Settings › General), and answers what
+/// the user chose once they did (still not asked after a minute without an answer).
+#[tauri::command]
+async fn ask_notification_permission() -> overnight_notifications::Permission {
+    overnight_notifications::ask_and_wait().await
 }
 
 /// Opens the system's notification settings at Brigadier.
@@ -338,6 +348,13 @@ fn open_url(app: tauri::AppHandle, url: String) -> Result<(), IpcError> {
         })
 }
 
+/// Settings starts or ends recording a key press (search by keystrokes): meanwhile the menu's
+/// own items reach the page as key presses.
+#[tauri::command]
+fn set_key_capture(on: bool) {
+    shell::set_key_capture(on);
+}
+
 /// The conversations running now, which the menu-bar item lists under "Running".
 #[tauri::command]
 fn set_running_chats(app: tauri::AppHandle, chats: Vec<RunningChat>) {
@@ -372,6 +389,16 @@ fn notifier(app: tauri::AppHandle) -> Notify {
         if let Err(err) = shown {
             tracing::debug!(error = %err, "could not show a desktop notification");
         }
+    })
+}
+
+/// Whether a Brigadier window is shown and focused, for the notifications that show only
+/// while it is in the background.
+fn in_front(app: tauri::AppHandle) -> bridge::InFront {
+    Box::new(move || {
+        app.webview_windows().values().any(|window| {
+            window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false)
+        })
     })
 }
 
@@ -595,11 +622,13 @@ fn main() {
                     );
                 }
             }
+            browser::set_data_dir(&platform.paths().data_dir);
             let launcher = Launcher::new(platform.clone(), daemon_env);
             let bridge = Bridge::start(
                 platform.clone() as Arc<dyn Platform>,
                 launcher,
                 notifier(app.handle().clone()),
+                in_front(app.handle().clone()),
             );
             app.manage(documents::Documents::default());
             app.manage(AppState {
@@ -669,7 +698,11 @@ fn main() {
             ipc_request,
             ipc_subscribe,
             notification_permission,
+            ask_notification_permission,
             open_notification_settings,
+            login_item::login_item,
+            login_item::set_login_item,
+            login_item::open_login_items,
             app_ready,
             startup_finished,
             smoke_finish,
@@ -683,11 +716,24 @@ fn main() {
             open_url,
             reveal_path,
             set_running_chats,
+            set_key_capture,
+            browser::browser_configure,
             browser::browser_open,
             browser::browser_navigate,
             browser::browser_place,
             browser::browser_go,
-            browser::browser_close
+            browser::browser_close,
+            browser::browser_history,
+            browser::browser_history_remove,
+            browser::browser_clear,
+            browser::browser_site_count,
+            browser::browser_downloads,
+            browser::browser_downloads_remove,
+            browser::browser_sites,
+            browser::browser_site_set,
+            browser_import::browser_import_sources,
+            browser_import::browser_import,
+            browser_import::browser_import_open_access
         ])
         .build(context)
         .unwrap_or_else(|err| {

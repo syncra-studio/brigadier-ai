@@ -143,6 +143,7 @@ export function ModelSelector({
   className,
   open: shown,
   onOpenChange,
+  automatic,
 }: {
   groups: readonly ModelGroup[];
   value: ModelChoice;
@@ -154,7 +155,14 @@ export function ModelSelector({
   /** Opens the picker from elsewhere (the composer's `/model`); uncontrolled when absent. */
   open?: boolean | undefined;
   onOpenChange?: ((open: boolean) => void) | undefined;
+  /**
+   * An "Automatic" choice above the models (a setting Brigadier may pick for): `chosen` shows
+   * it on the button, and `value` is then only where the menus open. `label` names it, with
+   * what it picks now ("Automatic (Opus 5.5)").
+   */
+  automatic?: { chosen: boolean; hint: string; onChoose: () => void; label?: string } | undefined;
 }) {
+  const auto = automatic?.chosen === true;
   const [own, setOwn] = useState(false);
   const open = shown ?? own;
   const setOpen = onOpenChange ?? setOwn;
@@ -175,7 +183,7 @@ export function ModelSelector({
       ...(provider === value.provider && value.account ? { account: value.account } : {}),
     });
   const models = (group: ModelGroup) => {
-    const chosen = group.provider === value.provider ? current?.id : undefined;
+    const chosen = !auto && group.provider === value.provider ? current?.id : undefined;
     const legacy = group.models.filter(isLegacy(defaultModel));
     return (
       <DropdownMenuRadioGroup
@@ -215,10 +223,16 @@ export function ModelSelector({
           data-slot="model-selector-trigger"
           className={cn(composerPill, "text-muted-foreground gap-1", className)}
         >
-          <ProviderGlyph provider={value.provider} className="size-icon-sm shrink-0" />
-          {fast && <Bolt aria-label="Fast" className="text-foreground" />}
-          <span className="text-foreground truncate">{name}</span>
-          {effort && <span className="shrink-0">{effortLabel(effort)}</span>}
+          {auto ? (
+            <span className="text-foreground truncate">{automatic?.label ?? "Automatic"}</span>
+          ) : (
+            <>
+              <ProviderGlyph provider={value.provider} className="size-icon-sm shrink-0" />
+              {fast && <Bolt aria-label="Fast" className="text-foreground" />}
+              <span className="text-foreground truncate">{name}</span>
+              {effort && <span className="shrink-0">{effortLabel(effort)}</span>}
+            </>
+          )}
           <ChevronDown className="size-icon-xs!" />
         </button>
       </DropdownMenuTrigger>
@@ -228,7 +242,25 @@ export function ModelSelector({
         data-slot="model-selector"
         className="w-xs p-1"
       >
-        {current && current.efforts.length > 0 && (
+        {automatic && (
+          <>
+            <DropdownMenuCheckboxItem
+              checked={auto}
+              data-slot="model-selector-automatic"
+              className={TALL_ROW}
+              onCheckedChange={() => automatic.onChoose()}
+            >
+              <span className="flex min-w-0 flex-col py-1">
+                <span>{automatic.label ?? "Automatic"}</span>
+                <span className="text-muted-foreground text-xs whitespace-normal">
+                  {automatic.hint}
+                </span>
+              </span>
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        {!auto && current && current.efforts.length > 0 && (
           <>
             <Section>Effort</Section>
             <DropdownMenuRadioGroup
@@ -251,7 +283,7 @@ export function ModelSelector({
             </DropdownMenuRadioGroup>
           </>
         )}
-        {current?.fast && (
+        {!auto && current?.fast && (
           <DropdownMenuCheckboxItem
             checked={fast}
             data-slot="model-selector-fast"
@@ -262,7 +294,9 @@ export function ModelSelector({
             <span className="text-muted-foreground min-w-0 truncate">{current.fast}</span>
           </DropdownMenuCheckboxItem>
         )}
-        {current && (current.efforts.length > 0 || current.fast) && <DropdownMenuSeparator />}
+        {!auto && current && (current.efforts.length > 0 || current.fast) && (
+          <DropdownMenuSeparator />
+        )}
         <Section>Model</Section>
         {single ? (
           models(single)

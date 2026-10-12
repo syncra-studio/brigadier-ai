@@ -2,7 +2,7 @@ import { createContext, useContext } from "react";
 import { createStore, type StoreApi, useStore } from "zustand";
 
 import { liveActivity } from "@/app/conversation/activity/words";
-import { showConversationNotice } from "@/state/notices";
+import { showConversationNotice, shownNotice } from "@/state/notices";
 
 import type {
   Approval,
@@ -378,7 +378,7 @@ export function boardFromView(
     context: view.context,
     streaming: view.streaming,
     thinking: view.thinking ?? [],
-    notices: view.notices.filter(showConversationNotice).slice(-NOTICES),
+    notices: view.notices.filter(showConversationNotice).slice(-NOTICES).map(shownNotice),
     activity: keep?.activity ?? {},
     summaries: keep?.summaries ?? {},
     edits: keep?.edits ?? {},
@@ -527,7 +527,7 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       };
     case "conversationNotice":
       if (!showConversationNotice(event.notice)) return board;
-      return { ...board, notices: [...board.notices, event.notice].slice(-NOTICES) };
+      return { ...board, notices: [...board.notices, shownNotice(event.notice)].slice(-NOTICES) };
     case "taskUpdated":
       return { ...board, tasks: placed(board.tasks, event.task, envelope, board) };
     case "approvalUpdated":

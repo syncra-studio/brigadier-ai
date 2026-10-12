@@ -1,7 +1,7 @@
 //! The pinned card's Git actions: the user's own commit and push in a session's
 //! checkout. They are never automatic (PLAN §4); a commit waits for any landing on the same
-//! repository (the landing lock). A blank commit message is written by the cheapest model of
-//! the session's provider, in a throwaway CLI session that is disposed of right after.
+//! repository (the landing lock). A blank commit message is written in a throwaway CLI session
+//! that is disposed of right after, by the model and style the user's Git settings name.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -11,9 +11,13 @@ use brigadier_providers::{
     Access, Origin, ProviderEvent, ProviderKind, Role, SessionSpec, Started, ToolSet, TurnInput,
 };
 
+use brigadier_router::{Decision, Exclusion, Needs, Pin, Routed, TaskCategory};
+
 use super::landing::diff_stat_of;
+use super::routing::{Ask, Trial};
 use super::{SessionManager, blocking, git_error};
-use crate::model::{ConversationId, Environment, Setup};
+use crate::accounts::AccountRef;
+use crate::model::{ConversationId, Environment, GitStyle, ModelChoice, Settings, Setup};
 use crate::work::{CommitOutcome, GitState, SourceFile, SourceScope, SourceState, SourceStatus};
 use crate::{Error, Result};
 
@@ -21,6 +25,11 @@ use crate::{Error, Result};
 const PATCH_CHARS: usize = 12_000;
 /// How long the message writer may take before the commit gives up.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// How many models the message writer tries: one more for each usage limit it runs into.
+const WRITE_ATTEMPTS: usize = 3;
+/// How many of the latest commit subjects show the writer the repository's style.
+const STYLE_SUBJECTS: usize = 15;
 
 const WRITER_PROMPT: &str = "You write git commit messages. Reply with the message only: a \
 subject line in the imperative mood of at most 72 characters, then, only when the change needs \
@@ -146,12 +155,12 @@ impl SessionManager {
     ) -> Result<CommitOutcome> {
         self.admit()?;
         let _fence = self.enter(id)?;
-        let (path, provider) = self.checkout(id)?;
-        let message = match message.map(|text| text.trim().to_owned()) {
-            Some(text) if !text.is_empty() => text,
+        let (path, _) = self.checkout(id)?;
+        let (message, note) = match message.map(|text| text.trim().to_owned()) {
+            Some(text) if !text.is_empty() => (text, None),
             _ => {
                 let patch = self.pending_patch(&path, include_unstaged).await?;
-                self.write_commit_message(id, provider, &patch).await?
+                self.write_commit_message(id, &path, &patch).await?
             }
         };
         let message = if self.core.settings().omit_ai_coauthors {
@@ -179,6 +188,7 @@ impl SessionManager {
                 message: text,
                 branch,
                 pushed: push,
+                note,
             })
         })
         .await
@@ -224,16 +234,179 @@ impl SessionManager {
         .await
     }
 
-    /// A commit message for `patch`, from the cheapest model of `provider` in a throwaway
-    /// session with no tools.
+    /// A commit message for `patch` in the checkout at `path`, in a throwaway session with no
+    /// tools, by the user's Git settings: their writer model (else Automatic, routing's pick
+    /// for git text) and style. A model at its usage limit hands the message to routing's next
+    /// pick (another account, then the other provider). With it, why the user's model didn't
+    /// write it, when it didn't.
     async fn write_commit_message(
         &self,
         id: &ConversationId,
-        provider: ProviderKind,
+        path: &Path,
         patch: &str,
-    ) -> Result<String> {
+    ) -> Result<(String, Option<String>)> {
         let _turn = self.background_turn();
-        let (model, effort) = self.cheapest(provider)?;
+        let settings = self.core.settings();
+        let project = self.core.conversation(id)?.project_id;
+        let subjects = match settings.commit_style {
+            GitStyle::Repository => self.recent_subjects(path).await,
+            _ => Vec::new(),
+        };
+        let system = writer_prompt(&settings, &subjects);
+        let shown: String = patch.chars().take(PATCH_CHARS).collect();
+        let cut = if shown.len() < patch.len() {
+            "\n[the rest of the diff is cut]"
+        } else {
+            ""
+        };
+        let prompt = format!("Write the commit message for this diff:\n\n{shown}{cut}");
+        let mut exclude: Vec<Exclusion> = Vec::new();
+        let mut limited: Vec<(AccountRef, String)> = Vec::new();
+        let mut runs = 0;
+        // Each pass either runs the writer or rules a model out, and routing runs out of
+        // models; the cap only guards against a pick that ignores its exclusions.
+        for _ in 0..WRITE_ATTEMPTS * 4 {
+            if runs == WRITE_ATTEMPTS {
+                break;
+            }
+            let (routed, mut account, why) = self
+                .writer_route(settings.git_writer.as_ref(), project.as_ref(), &exclude)
+                .await?;
+            // The user's model writes it as they set it, Fast included.
+            let fast = why.is_none()
+                && settings
+                    .git_writer
+                    .as_ref()
+                    .is_some_and(|chosen| chosen.fast == Some(true));
+            if limited.contains(&(account.clone(), routed.model.clone())) {
+                // Another account of the same model that still has room, else that model is
+                // out until its reset.
+                match self
+                    .runtime
+                    .switch_target(&account, Some(&routed.model))
+                    .filter(|next| !limited.contains(&(next.clone(), routed.model.clone())))
+                {
+                    Some(next) => account = next,
+                    None => {
+                        exclude.push(Exclusion {
+                            provider: routed.provider,
+                            model: Some(routed.model.clone()),
+                        });
+                        continue;
+                    }
+                }
+            }
+            runs += 1;
+            match self
+                .run_writer(&routed, fast, &account, &system, &prompt)
+                .await?
+            {
+                Some(message) => {
+                    let message = clean_message(&message);
+                    if message.is_empty() {
+                        tracing::warn!(conversation = %id, "the message writer's reply was empty");
+                        return Err(Error::Provider("the message writer replied nothing".into()));
+                    }
+                    // Why the user's model didn't write it, of the pass that did.
+                    return Ok((message, why));
+                }
+                None => {
+                    tracing::info!(conversation = %id, model = %routed.model, "the message writer hit its usage limit");
+                    limited.push((account, routed.model));
+                }
+            }
+        }
+        Err(Error::Provider(
+            "every model that could write the message is at its usage limit".into(),
+        ))
+    }
+
+    /// The model, effort and account the next message is written with, and why it isn't the
+    /// user's `chosen` one when it isn't. Automatic: routing's pick for git text.
+    async fn writer_route(
+        &self,
+        chosen: Option<&ModelChoice>,
+        project: Option<&crate::model::ProjectId>,
+        exclude: &[Exclusion],
+    ) -> Result<(Routed, AccountRef, Option<String>)> {
+        let ask = |pin: Option<Pin>| Ask {
+            category: TaskCategory::GitText,
+            areas: &[],
+            floor: brigadier_router::default_floor(TaskCategory::GitText),
+            needs: Needs::default(),
+            pin,
+            hold_pin: false,
+            avoid: None,
+            distinct_from: Vec::new(),
+            exclude,
+            project_id: project,
+            trial: Trial::Never,
+        };
+        if let Some(chosen) = chosen {
+            let pin = Pin {
+                provider: Some(chosen.provider),
+                model: chosen.model.clone(),
+                effort: chosen.effort.clone(),
+            };
+            if let Decision::Run(routed) = self.decide(&ask(Some(pin))).await
+                && routed.provider == chosen.provider
+                && chosen
+                    .model
+                    .as_deref()
+                    .is_none_or(|model| model == routed.model)
+            {
+                let account = self.runtime.account_for(chosen);
+                return Ok((routed, account, None));
+            }
+        }
+        let routed = match self.decide(&ask(None)).await {
+            Decision::Run(routed) => routed,
+            Decision::Wait(waiting) => {
+                return Err(Error::Invalid(format!(
+                    "no model can write the message now: {}",
+                    waiting.reason
+                )));
+            }
+        };
+        let why = chosen.map(|chosen| {
+            format!(
+                "{} isn't available now, so Automatic wrote the message with {}.",
+                choice_name(chosen.provider, chosen.model.as_deref()),
+                choice_name(routed.provider, Some(&routed.model)),
+            )
+        });
+        let account = self
+            .runtime
+            .launch_account(routed.provider, Some(&routed.model));
+        Ok((routed, account, why))
+    }
+
+    /// The latest commit subjects of the checkout's branch, for the writer to match; none
+    /// before its first commit.
+    async fn recent_subjects(&self, path: &Path) -> Vec<String> {
+        let git = self.git.clone();
+        let path = path.to_owned();
+        blocking(move || {
+            let repo = git.open(&path).map_err(git_error)?;
+            let head = repo.resolve("HEAD").map_err(git_error)?;
+            let log = repo.log(&head, STYLE_SUBJECTS).map_err(git_error)?;
+            Ok(log.into_iter().map(|commit| commit.subject).collect())
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// One try of the message writer on `routed`'s model (on its fast tier when `fast`) under
+    /// `account`: its reply, or `None` when it hit its usage limit (noted, so routing and the
+    /// account choice move on).
+    async fn run_writer(
+        &self,
+        routed: &Routed,
+        fast: bool,
+        account: &AccountRef,
+        system: &str,
+        prompt: &str,
+    ) -> Result<Option<String>> {
         let run = uuid::Uuid::now_v7().to_string();
         let owner = format!("gen:{run}");
         let dir = self.owned_dir("scratch", &run);
@@ -242,12 +415,13 @@ impl SessionManager {
         })?;
         let spec = SessionSpec {
             cwd: dir.clone(),
-            model: Some(model),
-            effort,
-            fast: false,
+            model: Some(routed.model.clone()),
+            effort: routed.effort.clone(),
+            fast,
             origin: Origin::New,
+            ephemeral: true,
             access: Access::ReadOnly,
-            append_system_prompt: Some(WRITER_PROMPT.to_owned()),
+            append_system_prompt: Some(system.to_owned()),
             mcp_servers: Vec::new(),
             tools: ToolSet::None,
             add_dirs: Vec::new(),
@@ -265,26 +439,20 @@ impl SessionManager {
             output_hook: None,
             protection: Default::default(),
         };
-        let shown: String = patch.chars().take(PATCH_CHARS).collect();
-        let cut = if shown.len() < patch.len() {
-            "\n[the rest of the diff is cut]"
-        } else {
-            ""
-        };
-        let prompt = format!("Write the commit message for this diff:\n\n{shown}{cut}");
         let written = async {
             let Started {
                 session,
                 mut events,
-            } = self
-                .runtime
-                .start_hosted(&owner, &self.runtime.launch_account(provider, None), spec)
-                .await?;
+            } = self.runtime.start_hosted(&owner, account, spec).await?;
             let reply = async {
-                session.send(TurnInput::text(prompt)).await.map_err(|err| {
-                    Error::Provider(format!("the message writer didn't start: {err}"))
-                })?;
+                session
+                    .send(TurnInput::text(prompt.to_owned()))
+                    .await
+                    .map_err(|err| {
+                        Error::Provider(format!("the message writer didn't start: {err}"))
+                    })?;
                 let mut text = None;
+                let mut limit = None;
                 while let Some(event) = events.recv().await {
                     match event {
                         ProviderEvent::Message {
@@ -292,11 +460,22 @@ impl SessionManager {
                             text: reply,
                             ..
                         } => text = Some(reply),
+                        ProviderEvent::RateLimits { quota } => {
+                            self.runtime.note_quota_snapshot(account, quota).await;
+                        }
+                        ProviderEvent::Error { error } if !error.will_retry => {
+                            limit = error.limit.or(limit);
+                        }
                         ProviderEvent::TurnCompleted { .. } | ProviderEvent::Exited { .. } => break,
                         _ => {}
                     }
                 }
-                text.ok_or_else(|| Error::Provider("the message writer replied nothing".into()))
+                if let Some(limit) = limit {
+                    self.runtime.note_limit(account, limit).await;
+                    return Ok(None);
+                }
+                text.map(Some)
+                    .ok_or_else(|| Error::Provider("the message writer replied nothing".into()))
             };
             let reply = tokio::time::timeout(WRITE_TIMEOUT, reply)
                 .await
@@ -309,12 +488,7 @@ impl SessionManager {
         .await;
         let _ = self.runtime.ledger().dispose(&owner).await;
         let _ = tokio::fs::remove_dir_all(&dir).await;
-        let message = clean_message(&written?);
-        if message.is_empty() {
-            tracing::warn!(conversation = %id, "the message writer's reply was empty");
-            return Err(Error::Provider("the message writer replied nothing".into()));
-        }
-        Ok(message)
+        written
     }
 
     /// The provider's cheapest model for a one-off chore, at low effort where it has efforts.
@@ -355,6 +529,33 @@ impl SessionManager {
         })?;
         let effort = (provider == ProviderKind::Codex).then(|| "low".to_owned());
         Ok((model, effort))
+    }
+}
+
+/// The writer's instructions, by the user's commit style: the repository's latest
+/// `subjects` to match, Conventional Commits, or the user's own instructions.
+fn writer_prompt(settings: &Settings, subjects: &[String]) -> String {
+    match super::prompts::commit_rules(settings.commit_style, &settings.commit_instructions) {
+        Some(rules) => format!("{WRITER_PROMPT}\n\nThese win over the rules above. {rules}"),
+        None if subjects.is_empty() => WRITER_PROMPT.to_owned(),
+        None => {
+            let mut text = format!(
+                "{WRITER_PROMPT}\n\nMatch this repository's style: its form, prefixes, tense, capitals and length. Its latest commit subjects:"
+            );
+            for subject in subjects {
+                text.push_str("\n- ");
+                text.push_str(subject);
+            }
+            text
+        }
+    }
+}
+
+/// A model as a note names it: "Claude Code haiku".
+fn choice_name(provider: ProviderKind, model: Option<&str>) -> String {
+    match model {
+        Some(model) => format!("{} {model}", provider.label()),
+        None => provider.label().to_owned(),
     }
 }
 

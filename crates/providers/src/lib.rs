@@ -20,6 +20,7 @@ pub mod codex;
 mod events;
 pub mod fixtures;
 pub mod history;
+pub mod leftovers;
 mod looked;
 pub mod model;
 pub mod policy;

@@ -6,7 +6,7 @@ import { request } from "@/ipc/client";
 import type { RankingsRefresh } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 
-/** The rankings refresh the Routing page shows, with its actions. */
+/** The rankings refresh Settings › Providers shows, with its actions. */
 export type RankingsRefreshView = {
   refresh: RankingsRefresh | null;
   /** Why reading the refresh failed. */
@@ -18,7 +18,7 @@ export type RankingsRefreshView = {
 };
 
 /**
- * The rankings refresh as the Routing page shows it: read on opening the page and on every
+ * The rankings refresh as Settings › Providers shows it: read on opening the page and on every
  * rankings change, then every two seconds while a refresh runs (and the window can be seen).
  * `start` asks for a refresh (or joins the one running); `reset` drops the researched ratings,
  * stopping a running refresh first.

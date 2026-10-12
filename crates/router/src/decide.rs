@@ -166,8 +166,17 @@ pub fn default_floor(category: TaskCategory) -> QualityTier {
         }
         TaskCategory::Orchestrate | TaskCategory::Operate => QualityTier::Strong,
         TaskCategory::Research => QualityTier::Standard,
-        TaskCategory::Scout | TaskCategory::Verify | TaskCategory::Chat => QualityTier::Light,
+        TaskCategory::Scout | TaskCategory::Verify | TaskCategory::Chat | TaskCategory::GitText => {
+            QualityTier::Light
+        }
     }
+}
+
+/// Whether a category's work goes to the smallest, fastest model that can take it: models
+/// are tried tier by tier from the lowest up, by score within a tier. Short git text needs no
+/// more than a light model, and the user waits for it.
+pub fn cheapest_first(category: TaskCategory) -> bool {
+    category == TaskCategory::GitText
 }
 
 /// Whether a category is low-risk work a model on trial may take.
@@ -198,7 +207,7 @@ fn at_least(category: TaskCategory, effort: &'static str) -> &'static str {
 /// The effort a category runs at when the registry names none.
 fn category_effort(category: TaskCategory) -> Option<&'static str> {
     match category {
-        TaskCategory::Scout => Some("low"),
+        TaskCategory::Scout | TaskCategory::GitText => Some("low"),
         TaskCategory::Research
         | TaskCategory::Verify
         | TaskCategory::Operate
@@ -468,7 +477,8 @@ pub fn preview(query: &Query) -> Preview {
         cross_vendor,
     } = assessed(query);
 
-    // Order: score, then the table's vendor order, then each CLI's own order.
+    // Order: score (for cheap-first work the lowest tier first, then score), then the
+    // table's vendor order, then each CLI's own order.
     let order = table::row(query.category).order;
     let rank = |c: &Candidate| {
         order
@@ -476,16 +486,24 @@ pub fn preview(query: &Query) -> Preview {
             .position(|p| *p == c.model.provider)
             .unwrap_or(2)
     };
+    let cheap = cheapest_first(query.category);
     let mut ranked: Vec<usize> = (0..candidates.len())
         .filter(|i| candidates[*i].eligible())
         .collect();
     ranked.sort_by(|a, b| {
         let (a, b) = (&candidates[*a], &candidates[*b]);
-        b.score
-            .partial_cmp(&a.score)
-            .filter(|_| (a.score - b.score).abs() > TIE)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(rank(a).cmp(&rank(b)))
+        let tier = if cheap {
+            a.model.tier.cmp(&b.model.tier)
+        } else {
+            std::cmp::Ordering::Equal
+        };
+        tier.then_with(|| {
+            b.score
+                .partial_cmp(&a.score)
+                .filter(|_| (a.score - b.score).abs() > TIE)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then(rank(a).cmp(&rank(b)))
     });
     let manual = ranking.map(|ranking| manual_pick(query, ranking, &candidates, &ranked));
     let places = manual
@@ -640,10 +658,13 @@ pub fn preview(query: &Query) -> Preview {
             crate::merge::TRIAL_OUTCOMES
         ));
     }
+    // Cheap-first work weighs a pick only against models of its tier.
+    let league = |i: &usize| !cheap || candidates[*i].model.tier == pick.model.tier;
     // Balancing: without quota penalties, another provider would have won.
     let unpenalized = ranked
         .iter()
         .copied()
+        .filter(league)
         .max_by(|a, b| {
             let (a, b) = (&candidates[*a], &candidates[*b]);
             (a.score + a.penalty)
@@ -661,6 +682,7 @@ pub fn preview(query: &Query) -> Preview {
     let unloaded = ranked
         .iter()
         .copied()
+        .filter(league)
         .max_by(|a, b| {
             let (a, b) = (&candidates[*a], &candidates[*b]);
             (a.score + a.load)
@@ -675,12 +697,12 @@ pub fn preview(query: &Query) -> Preview {
     } else if why.is_none() && candidates[unloaded].model.provider != pick.model.provider {
         candidates[unloaded].load_note.clone()
     } else {
-        limited_rival(&candidates, pick, rank)
+        limited_rival(&candidates, pick, cheap, rank)
     };
 
     let tie = ranked
         .iter()
-        .filter(|i| **i != chosen)
+        .filter(|i| **i != chosen && league(i))
         .any(|i| (candidates[*i].score - pick.score).abs() <= TIE);
     let why = why.unwrap_or_else(|| score_why(query, pick, tie, rule_text.as_deref()));
 
@@ -1736,7 +1758,9 @@ fn score_why(query: &Query, pick: &Candidate, tie: bool, only: Option<&str>) -> 
     if tie {
         evidence.push_str(&format!("; ties go to {} here", name(pick.model.provider)));
     }
-    let lead = if only.is_some() {
+    let lead = if cheapest_first(query.category) {
+        "the fastest, cheapest model that can take it".to_owned()
+    } else if only.is_some() {
         format!("the best {purpose} score your rule allows")
     } else {
         format!("the top {purpose} score here")
@@ -1755,10 +1779,12 @@ fn would_beat(rival: &Candidate, pick: &Candidate, rank: &dyn Fn(&Candidate) -> 
 fn limited_rival(
     candidates: &[Candidate],
     pick: &Candidate,
+    cheap: bool,
     rank: impl Fn(&Candidate) -> usize,
 ) -> Option<String> {
     candidates
         .iter()
+        .filter(|c| !cheap || c.model.tier <= pick.model.tier)
         .filter(|c| !c.model.legacy && would_beat(c, pick, &rank))
         .filter(|c| matches!(c.block, Some(Block::Limit { .. } | Block::Unavailable(_))))
         .max_by(|a, b| (a.score + a.penalty).total_cmp(&(b.score + b.penalty)))
@@ -2055,6 +2081,82 @@ mod tests {
             (ProviderKind::Codex, "gpt-6.1-sol")
         );
         assert_eq!(route.effort.as_deref(), Some("medium"));
+    }
+
+    /// Git text goes to the lowest tier that can take it, at low effort, whatever scores more;
+    /// with that vendor used up, to the other's smallest model; a user rule still holds.
+    #[test]
+    fn git_text_runs_on_the_fastest_cheapest_model_and_falls_over() {
+        assert!(cheapest_first(TaskCategory::GitText));
+        assert!(!cheapest_first(TaskCategory::Scout));
+        assert_eq!(default_floor(TaskCategory::GitText), QualityTier::Light);
+        assert!(!allows_trials(TaskCategory::GitText));
+        let registry = Registry::bundled();
+        let models = catalog(&registry);
+        let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        });
+        let mut q = query(&registry, &models, &both);
+        q.category = TaskCategory::GitText;
+        q.floor = default_floor(TaskCategory::GitText);
+        let route = routed(&q);
+        assert_eq!(
+            (
+                route.provider,
+                route.model.as_str(),
+                route.effort.as_deref()
+            ),
+            (ProviderKind::Claude, "haiku", Some("low"))
+        );
+        assert_eq!(route.tier, QualityTier::Light);
+        assert!(
+            route.reason.contains("the fastest, cheapest model"),
+            "{}",
+            route.reason
+        );
+
+        let used_up = ProviderQuota {
+            provider: ProviderKind::Claude,
+            windows: Vec::new(),
+            limit: Some(brigadier_providers::LimitHit {
+                window: None,
+                resets_at_ms: Some(60_000),
+                kind: LimitKind::UsageWindow,
+            }),
+            heat: Heat::Limited,
+            observed_at_ms: Some(0),
+        };
+        let claude_out = [
+            ProviderState {
+                quota: Some(used_up),
+                ..both[0].clone()
+            },
+            both[1].clone(),
+        ];
+        let mut q = query(&registry, &models, &claude_out);
+        q.category = TaskCategory::GitText;
+        q.floor = default_floor(TaskCategory::GitText);
+        let route = routed(&q);
+        assert_eq!(route.provider, ProviderKind::Codex);
+        // The smallest Codex models listed: Luna and Terra (standard), never Sol or Astra.
+        assert_eq!(route.tier, QualityTier::Standard, "{}", route.model);
+
+        let never_haiku = [rule(
+            OverrideEffect::Never,
+            OverrideTarget::Model {
+                provider: ProviderKind::Claude,
+                id: "haiku".into(),
+            },
+        )];
+        let mut q = query(&registry, &models, &both);
+        q.category = TaskCategory::GitText;
+        q.floor = default_floor(TaskCategory::GitText);
+        q.overrides = &never_haiku;
+        let route = routed(&q);
+        assert_ne!(route.model, "haiku");
+        assert_eq!(route.tier, QualityTier::Standard, "{}", route.model);
     }
 
     fn info(id: &str, name: &str, resolved: Option<&str>) -> brigadier_providers::ModelInfo {

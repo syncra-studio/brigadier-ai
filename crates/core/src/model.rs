@@ -327,7 +327,8 @@ impl Setup {
     /// The setup a composer request asks for. A new-worktree session without a branch name
     /// gets `brigadier/<id.short()>/session`, next to its task branches; the runtime creates
     /// the branch and worktree when the session starts.
-    pub fn from_request(request: SetupRequest, id: &ConversationId) -> Self {
+    /// `prefix` goes before the name of a new worktree's branch when none was asked for.
+    pub fn from_request(request: SetupRequest, id: &ConversationId, prefix: &str) -> Self {
         match request {
             SetupRequest::Session {
                 repo,
@@ -345,7 +346,7 @@ impl Setup {
                         base,
                         branch: branch
                             .filter(|branch| !branch.trim().is_empty())
-                            .unwrap_or_else(|| format!("brigadier/{}/session", id.short())),
+                            .unwrap_or_else(|| format!("{prefix}{}/session", id.short())),
                         path: None,
                         start: None,
                     },
@@ -548,6 +549,38 @@ pub enum Density {
     Normal,
 }
 
+/// How commit messages or pull requests are written (Settings › Git).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GitStyle {
+    /// Like the repository's recent history.
+    #[default]
+    Repository,
+    /// By the Conventional Commits rules (`type(scope): subject`).
+    Conventional,
+    /// By the user's own instructions.
+    Custom,
+}
+
+/// Whether `after` has commits or pull requests written otherwise than `before` (what the
+/// agents are told may have changed).
+pub fn git_writing_changed(before: &Settings, after: &Settings) -> bool {
+    (
+        before.commit_style,
+        &before.commit_instructions,
+        before.pr_style,
+        &before.pr_instructions,
+    ) != (
+        after.commit_style,
+        &after.commit_instructions,
+        after.pr_style,
+        &after.pr_instructions,
+    )
+}
+
+/// The branch prefix unless the user sets another.
+pub const DEFAULT_BRANCH_PREFIX: &str = "brigadier/";
+
 /// When Brigadier keeps the computer from sleeping.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -559,6 +592,50 @@ pub enum KeepAwake {
     Agents,
     /// Always, while Brigadier runs.
     Always,
+}
+
+/// The key that sends what the composer holds; Shift+Enter always starts a new line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SendShortcut {
+    /// Enter sends; ⌘/Ctrl+Enter sends the other way while an answer works.
+    #[default]
+    Enter,
+    /// ⌘/Ctrl+Enter sends and Enter starts a new line; ⇧⌘/Ctrl+Shift+Enter sends the other way.
+    ModEnter,
+}
+
+/// What a message sent while an answer works does by default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum FollowUp {
+    /// It waits its turn: a Chat queues it, a session's orchestrator sorts it.
+    #[default]
+    Queue,
+    /// It goes into the running answer now.
+    Steer,
+}
+
+/// When a desktop notification says a request is finished.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum NotifyFinished {
+    /// Only while no Brigadier window is in front.
+    #[default]
+    Background,
+    Always,
+    Never,
+}
+
+/// Where a kind of web link opens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkTarget {
+    /// A Browser tab in the session in front (the system browser when there is none).
+    Brigadier,
+    /// The user's default browser.
+    #[default]
+    System,
 }
 
 /// User settings persisted by the core.
@@ -588,6 +665,25 @@ pub struct Settings {
     /// own commits, what the agents write, and the commits Brigadier lands or keeps.
     #[serde(default = "default_true")]
     pub omit_ai_coauthors: bool,
+    /// The model that writes the git text Brigadier writes itself (a commit message the user
+    /// left blank). Absent: Automatic, routing's pick for git text.
+    pub git_writer: Option<ModelChoice>,
+    /// How commit messages are written: the generated ones and the agents' own.
+    pub commit_style: GitStyle,
+    /// The user's instructions for commit messages, kept while another style is chosen.
+    pub commit_instructions: String,
+    /// How an agent writes a pull request's title and body, when the user asks it to open one.
+    pub pr_style: GitStyle,
+    /// The user's instructions for pull requests, kept while another style is chosen.
+    pub pr_instructions: String,
+    /// What goes before the names of the branches Brigadier makes (sessions, forks, workers)
+    /// and the name Create branch suggests, unless the project has its own. Empty: none.
+    pub branch_prefix: String,
+    /// Another vendor's model reviews the sessions' work in the background: each landing, the
+    /// thread's own commits, a lead's outline, and a worker's own change when it asks. Off, no
+    /// review starts and nothing waits for one (THREAD-PLAN.md §2 Q12).
+    #[serde(default = "default_true")]
+    pub review_work: bool,
     /// The first-run setup (agents, then projects) was finished or skipped.
     pub onboarded: bool,
     /// When the computer is kept from sleeping.
@@ -595,6 +691,17 @@ pub struct Settings {
     /// While kept awake, closing the lid doesn't sleep the computer either (macOS: sleep is
     /// disabled system-wide, then restored).
     pub keep_awake_lid_closed: bool,
+    /// The key that sends a message (Settings › General › Composer).
+    pub send_shortcut: SendShortcut,
+    /// What a message sent while an answer works does; the send shortcut's other key does
+    /// the opposite for one message.
+    pub follow_up: FollowUp,
+    /// When a finished request raises a desktop notification. Overnight runs tell the user
+    /// with their report's notification instead.
+    pub notify_finished: NotifyFinished,
+    /// Approvals and questions waiting for the user raise a desktop notification.
+    #[serde(default = "default_true")]
+    pub notify_needs_you: bool,
     /// The user's routing rules, global and per project. They always win over the router's
     /// scores and quota balancing.
     pub routing_overrides: Vec<OverrideRule>,
@@ -607,7 +714,8 @@ pub struct Settings {
     /// Models the Providers page makes unavailable: hidden from every picker and never used.
     pub hidden_models: Vec<ModelRef>,
     /// Every model Brigadier has seen in its agent's list. One seen after its agent's first
-    /// list starts without worker tasks (a rule the Routing page's switch removes).
+    /// list starts without worker tasks (a "Don't give work" rule, which the user removes in
+    /// Settings → Providers).
     pub known_models: Vec<ModelRef>,
     /// The user's extra CLI accounts (Settings → Accounts), in the order they were added. The
     /// user's own login, the one their terminal uses, is each provider's first account and is
@@ -618,6 +726,28 @@ pub struct Settings {
     /// provider.
     #[serde(default = "default_true")]
     pub switch_accounts: bool,
+    /// The language dictation listens for, as the speech engine names it ("en", "de"…). Empty:
+    /// it is detected from the speech.
+    pub dictation_language: String,
+    /// Words and names dictation should recognise, given to the speech engine as a hint.
+    pub dictation_words: Vec<String>,
+    /// The microphone dictation records from (the webview's device id). Empty: the system's
+    /// default.
+    pub dictation_microphone: String,
+    /// Brigadier's built-in browser exists (Settings › Browser). Off, there is no Browser tab,
+    /// shortcut or menu item, links open in the default browser, and sessions are told.
+    pub browser_enabled: bool,
+    /// Where web links open while the browser is on.
+    pub web_links_in: LinkTarget,
+    /// Where local development URLs (localhost and loopback addresses) open while the browser
+    /// is on.
+    pub local_links_in: LinkTarget,
+    /// The Browser tab's address bar shows the whole URL, not only the site.
+    pub browser_full_url: bool,
+    /// Where the built-in browser saves downloads. Empty: the system's Downloads folder.
+    pub browser_downloads_dir: String,
+    /// The built-in browser asks where to save each download.
+    pub browser_ask_downloads: bool,
     /// The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
     /// before it existed read as 0, so their conversions run.
     #[serde(default)]
@@ -654,6 +784,9 @@ pub struct AccountView {
     pub checking: bool,
     /// What went wrong when last checked.
     pub error: Option<String>,
+    /// The check generation its last finished check began in: a refresh answers a generation,
+    /// and the account is checked afresh for it once this reaches it.
+    pub checked_generation: u32,
 }
 
 /// An extra account of a CLI: a home of its own under the data directory
@@ -718,9 +851,20 @@ impl Default for Settings {
             enrich_brain: true,
             short_replies: true,
             omit_ai_coauthors: true,
+            git_writer: None,
+            commit_style: GitStyle::default(),
+            commit_instructions: String::new(),
+            pr_style: GitStyle::default(),
+            pr_instructions: String::new(),
+            branch_prefix: DEFAULT_BRANCH_PREFIX.to_owned(),
+            review_work: true,
             onboarded: false,
             keep_awake: KeepAwake::default(),
             keep_awake_lid_closed: false,
+            send_shortcut: SendShortcut::default(),
+            follow_up: FollowUp::default(),
+            notify_finished: NotifyFinished::default(),
+            notify_needs_you: true,
             routing_overrides: Vec::new(),
             routing_rankings: Vec::new(),
             disabled_providers: Vec::new(),
@@ -728,6 +872,15 @@ impl Default for Settings {
             known_models: Vec::new(),
             accounts: Vec::new(),
             switch_accounts: true,
+            dictation_language: String::new(),
+            dictation_words: Vec::new(),
+            dictation_microphone: String::new(),
+            browser_enabled: true,
+            web_links_in: LinkTarget::System,
+            local_links_in: LinkTarget::Brigadier,
+            browser_full_url: false,
+            browser_downloads_dir: String::new(),
+            browser_ask_downloads: false,
             settings_version: SETTINGS_VERSION,
         }
     }
@@ -1197,12 +1350,10 @@ pub struct UpdatesView {
     pub checked_at_ms: Option<i64>,
 }
 
-/// Brigadier's own use of a provider in one of its usage windows (since the window began).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+/// Brigadier's own use of an account over the Usage page's Activity range.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct WindowTokens {
-    /// The window (`QuotaWindow::id`).
-    pub window_id: String,
+pub struct AccountTokens {
     /// Tokens by model, most first.
     pub by_model: Vec<TokenCount>,
     /// Tokens by conversation, most first (the top few).
@@ -1327,11 +1478,12 @@ pub struct ConversationTokens {
     pub tokens: i64,
 }
 
-/// A window's samples over its current span, for the Usage page's chart.
+/// A window's samples over a span, for the Usage page's chart.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowHistory {
     pub window_id: String,
+    pub label: String,
     /// Oldest first.
     pub samples: Vec<QuotaSample>,
 }
@@ -1341,13 +1493,43 @@ pub struct WindowHistory {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderUsage {
     pub provider: ProviderKind,
-    /// Absent until the first read.
-    pub quota: Option<ProviderQuota>,
-    pub history: Vec<WindowHistory>,
-    pub tokens: Vec<WindowTokens>,
+    /// Its accounts: the user's own login first, then the extra ones as added.
+    pub accounts: Vec<AccountUsage>,
     /// What balancing does about it now ("New scouting and research go to Codex while
     /// Claude's weekly window runs hot").
     pub balancing: Option<String>,
+}
+
+/// One account on the Usage page: its own windows, read from that account alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsage {
+    pub account: crate::accounts::AccountRef,
+    /// A chat's turn or a worker runs on it now.
+    pub working: bool,
+    /// Its windows with their estimates; absent until its first read.
+    pub quota: Option<ProviderQuota>,
+    /// When its quota was last read or reported; absent before the first.
+    pub read_at_ms: Option<i64>,
+}
+
+/// The Usage page's Activity: each account's windows over the last days, and Brigadier's own
+/// use of it then.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageActivity {
+    /// Where the range starts.
+    pub since_ms: i64,
+    pub accounts: Vec<AccountActivity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountActivity {
+    pub account: crate::accounts::AccountRef,
+    /// Its windows' samples since the range's start, the shortest window first.
+    pub history: Vec<WindowHistory>,
+    pub tokens: AccountTokens,
 }
 
 /// Something routing did that the user may want to know about.
@@ -1399,7 +1581,6 @@ pub struct UsageView {
     pub learned: Vec<Learned>,
     pub project_id: Option<ProjectId>,
     pub registry: RegistryInfo,
-    pub at_ms: i64,
 }
 
 /// What routing would choose for one category right now, for the next task submitted (the
@@ -1558,6 +1739,12 @@ pub enum DomainEvent {
     BranchesKept {
         repo: String,
         branches: Vec<KeptBranch>,
+    },
+    /// Brigadier created `branch` in `repo` (a session's, a fork's or a worker's): what proves
+    /// it Brigadier's to delete later, whatever the branch prefix was or is.
+    BranchMade {
+        repo: String,
+        branch: String,
     },
     /// These artifacts of `owner` are gone.
     CleanupRemoved {
@@ -1839,6 +2026,7 @@ impl DomainEvent {
             Self::CleanupRecorded { .. } => "cleanup.recorded",
             Self::CleanupRemoved { .. } => "cleanup.removed",
             Self::BranchesKept { .. } => "branches.kept",
+            Self::BranchMade { .. } => "branch.made",
             Self::CleanupRequested { .. } => "cleanup.requested",
             Self::CleanupCompleted { .. } => "cleanup.completed",
             Self::CleanupFinished { .. } => "cleanup.finished",
@@ -1990,5 +2178,30 @@ mod tests {
         assert!(settings.short_replies);
         let settings: Settings = serde_json::from_str(r#"{"shortReplies":false}"#).unwrap();
         assert!(!settings.short_replies);
+    }
+
+    #[test]
+    fn work_is_reviewed_by_default_and_for_settings_saved_before_the_switch() {
+        assert!(Settings::default().review_work);
+        let settings: Settings = serde_json::from_str(r#"{"hibernateAfterMinutes":12}"#).unwrap();
+        assert!(settings.review_work);
+        let settings: Settings = serde_json::from_str(r#"{"reviewWork":false}"#).unwrap();
+        assert!(!settings.review_work);
+    }
+
+    #[test]
+    fn saved_settings_that_name_a_read_aloud_voice_still_load() {
+        // Read aloud speaks in the system's default voice now; a voice an earlier version
+        // saved is ignored, and is gone once the settings are saved again.
+        let settings: Settings = serde_json::from_str(
+            r#"{"readAloudVoice":"com.apple.voice.daniel","dictationLanguage":"de"}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.dictation_language, "de");
+        assert!(
+            !serde_json::to_string(&settings)
+                .unwrap()
+                .contains("readAloudVoice")
+        );
     }
 }

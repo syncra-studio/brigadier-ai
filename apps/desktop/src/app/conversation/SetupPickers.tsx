@@ -433,7 +433,7 @@ function WaitingPill({ wait }: { wait: QuotaWait }) {
         <button
           type="button"
           data-slot="quota-wait-pill"
-          aria-label={`${text}. ${reason} Open Routing settings.`}
+          aria-label={`${text}. ${reason} Open Providers settings.`}
           onClick={() => openSettings("routing")}
           className="h-pill px-pill rounded-capsule bg-warning/15 text-warning hover:bg-warning/25 inline-flex max-w-sm min-w-0 shrink items-center gap-1 text-xs transition-colors"
         >

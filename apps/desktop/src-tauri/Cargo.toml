@@ -16,9 +16,12 @@ cc = "=1.4.7"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
+blake3.workspace = true
+brigadier-browser-data.workspace = true
 brigadier-core.workspace = true
 brigadier-ipc.workspace = true
 brigadier-sandbox.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11.6", features = ["tray-icon", "image-png", "macos-private-api"] }
@@ -37,8 +40,9 @@ wry = { version = "0.55.1", default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = "0.6.4"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL", "NSURLRequest"] }
-objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKFrameInfo", "WKNavigationAction", "WKOpenPanelParameters", "WKSecurityOrigin", "WKUIDelegate", "WKWebView", "WKWebViewConfiguration", "WKWindowFeatures"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSHTTPCookie", "NSSet", "NSString", "NSURL", "NSURLRequest", "NSUUID"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSBitmapImageRep", "NSImage", "NSImageRep", "NSPanel", "NSResponder", "NSSavePanel", "NSWindow", "NSWorkspace"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKFrameInfo", "WKNavigationAction", "WKOpenPanelParameters", "WKSecurityOrigin", "WKUIDelegate", "WKWebView", "WKWebViewConfiguration", "WKHTTPCookieStore", "WKWebsiteDataRecord", "WKWebsiteDataStore", "WKWindowFeatures"] }
 # Clears the startup blur, which Tauri's `set_effects(None)` leaves on macOS (the release Tauri
 # applies it with).
 window-vibrancy = "0.6.0"

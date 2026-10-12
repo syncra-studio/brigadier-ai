@@ -196,6 +196,12 @@ impl OvernightPhase {
 /// finds notifications back on.
 pub const NOTIFICATIONS_OFF: &str = "Notifications are off for Brigadier.";
 
+/// Whether a request is an overnight run's (its id is `run-<run>-…`): the run's report
+/// notification tells the user when it is over, not one of its own.
+pub fn is_run_request(request_id: &str) -> bool {
+    request_id.starts_with("run-")
+}
+
 /// A run's notification, queued with its report and shown by the app as Brigadier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

@@ -91,6 +91,12 @@ struct State {
     accounts_recorded_ms: i64,
     /// Providers being checked now.
     refreshing: HashSet<ProviderKind>,
+    /// Providers asked to be checked while their check ran: checked once more after it.
+    again: HashSet<ProviderKind>,
+    /// Counts the refreshes asked for ([`Runtime::refresh_all`]).
+    generation: u32,
+    /// The generation each provider's last finished check began in.
+    checked_generation: HashMap<ProviderKind, u32>,
 }
 
 pub struct Runtime {
@@ -307,10 +313,32 @@ impl Runtime {
                 }
             }
         }
+        Some(self.estimated(&snapshot, &owners, now))
+    }
+
+    /// One account's quota as routing sees it: its own windows, each with its rolling estimate.
+    pub fn account_usage(
+        &self,
+        account: &AccountRef,
+        now: i64,
+    ) -> Option<brigadier_router::ProviderQuota> {
+        let snapshot = self.monitor.current_for(account, now)?;
+        let owners = vec![account.clone(); snapshot.windows.len()];
+        Some(self.estimated(&snapshot, &owners, now))
+    }
+
+    /// `snapshot`'s windows with their rolling estimates, each from the samples of the account
+    /// it is (`owners`, window by window) over the window's span.
+    fn estimated(
+        &self,
+        snapshot: &brigadier_providers::QuotaSnapshot,
+        owners: &[AccountRef],
+        now: i64,
+    ) -> brigadier_router::ProviderQuota {
         let history: Vec<(String, Vec<brigadier_router::QuotaSample>)> = snapshot
             .windows
             .iter()
-            .zip(&owners)
+            .zip(owners)
             .map(|(window, owner)| {
                 let span_ms = window.window_minutes.unwrap_or(7 * 24 * 60) * 60 * 1000;
                 (
@@ -323,7 +351,7 @@ impl Runtime {
             .iter()
             .map(|(id, samples)| (id.as_str(), samples.as_slice()))
             .collect();
-        Some(brigadier_router::provider_quota(&snapshot, &history, now))
+        brigadier_router::provider_quota(snapshot, &history, now)
     }
 
     /// The model registry in use.
@@ -726,21 +754,71 @@ impl Runtime {
 
     /// Checks every provider (or only `only`) in the background: login, live models (cached on
     /// disk) and quota. Results arrive as `providerChecked` events, each provider's as soon as
-    /// it is known; a provider already being checked is not checked twice.
+    /// it is known; a provider already being checked is checked once more after that check.
     pub fn refresh_providers(self: &Arc<Self>, only: Option<ProviderKind>) {
         for kind in ProviderKind::ALL {
-            if only.is_some_and(|only| only != kind) || !self.state().refreshing.insert(kind) {
+            if only.is_some_and(|only| only != kind) {
                 continue;
+            }
+            {
+                let mut state = self.state();
+                // One running began before this was asked: it is checked again after it.
+                if !state.refreshing.insert(kind) {
+                    state.again.insert(kind);
+                    continue;
+                }
             }
             let runtime = self.clone();
             self.spawn(async move {
-                let overview = runtime.check(kind).await;
-                runtime.record_overview(overview).await;
-                runtime.state().refreshing.remove(&kind);
-                // The computer's own login is Settings → Accounts' first row.
-                runtime.publish_accounts().await;
+                loop {
+                    let generation = runtime.state().generation;
+                    let overview = runtime.check(kind).await;
+                    runtime.record_overview(overview).await;
+                    let again = {
+                        let mut state = runtime.state();
+                        state.checked_generation.insert(kind, generation);
+                        let again = state.again.remove(&kind);
+                        if !again {
+                            state.refreshing.remove(&kind);
+                        }
+                        again
+                    };
+                    // The computer's own login is Settings → Accounts' first row.
+                    runtime.publish_accounts().await;
+                    if !again {
+                        break;
+                    }
+                }
             });
         }
+    }
+
+    /// Checks every provider and every extra account again, and answers the generation that
+    /// says when that is done: each account reports the generation its last finished check
+    /// began in, and a check already running when this is asked runs once more after it.
+    pub fn refresh_all(self: &Arc<Self>) -> u32 {
+        let generation = {
+            let mut state = self.state();
+            state.generation += 1;
+            state.generation
+        };
+        self.refresh_providers(None);
+        self.refresh_accounts();
+        generation
+    }
+
+    /// The generation `provider`'s own login's last finished check began in.
+    pub(super) fn checked_generation(&self, provider: ProviderKind) -> u32 {
+        self.state()
+            .checked_generation
+            .get(&provider)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The refresh generation now.
+    pub(super) fn generation(&self) -> u32 {
+        self.state().generation
     }
 
     async fn check(&self, kind: ProviderKind) -> ProviderOverview {
@@ -1456,6 +1534,8 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         effort: session.effort.clone(),
         fast: false,
         origin,
+        // The user's own session: they may resume it.
+        ephemeral: false,
         access: session.access.clone(),
         append_system_prompt: None,
         mcp_servers: Vec::new(),

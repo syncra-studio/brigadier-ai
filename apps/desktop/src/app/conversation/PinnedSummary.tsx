@@ -65,7 +65,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { openFolder, openUrl, request } from "@/ipc/client";
+import { openFolder, request } from "@/ipc/client";
+import { openLink as openWebLink } from "@/state/links";
 import type {
   Conversation,
   DiffStat,
@@ -162,7 +163,7 @@ function useSources(conversationId: string): string[] {
 }
 
 function openLink(url: string): void {
-  openUrl(url).catch((error: unknown) =>
+  openWebLink(url, { agent: true }).catch((error: unknown) =>
     toast(error instanceof Error ? error.message : String(error), {
       tone: "error",
     }),
@@ -443,7 +444,7 @@ function PullRequestRow({ pullRequest }: { pullRequest: PullRequest }) {
       icon={state.icon}
       meta={state.label}
       onClick={() =>
-        openUrl(pullRequest.url).catch((cause: unknown) =>
+        openWebLink(pullRequest.url, { agent: true }).catch((cause: unknown) =>
           toast(cause instanceof Error ? cause.message : String(cause), {
             tone: "error",
           }),

@@ -12,7 +12,7 @@ use brigadier_providers::{Provider, ProviderKind, ProviderStatus, QuotaSnapshot}
 use brigadier_store::Retention;
 
 use super::{Runtime, new_event};
-use crate::accounts::{AccountRef, Candidate};
+use crate::accounts::{AccountRef, Candidate, mask_email};
 use crate::model::{AccountEntry, AccountView, AccountsView, DomainEvent, streams};
 use crate::{Error, Result, now_ms};
 
@@ -23,6 +23,10 @@ pub(super) struct AccountLive {
     pub status: Option<ProviderStatus>,
     pub checked_at_ms: Option<i64>,
     pub checking: bool,
+    /// Asked to be checked while a check ran: checked once more after it.
+    pub again: bool,
+    /// The refresh generation its last finished check began in.
+    pub checked_generation: u32,
     pub error: Option<String>,
 }
 
@@ -44,7 +48,7 @@ impl Runtime {
         match &account.account {
             None => Ok(self.provider(account.provider)),
             Some(id) if self.is_removing(id) => Err(Error::Invalid(
-                "that account is being removed in Settings → Accounts".into(),
+                "that account is being removed in Settings → Providers".into(),
             )),
             Some(id) => self
                 .accounts()
@@ -52,7 +56,7 @@ impl Runtime {
                 .filter(|live| live.entry.provider == account.provider)
                 .map(|live| live.provider.clone())
                 .ok_or_else(|| {
-                    Error::Invalid("that account was removed in Settings → Accounts".into())
+                    Error::Invalid("that account was removed in Settings → Providers".into())
                 }),
         }
     }
@@ -63,6 +67,24 @@ impl Runtime {
             .values()
             .find(|live| self.account_home(&live.entry.id) == std::path::Path::new(home))
             .map(|live| live.provider.clone())
+    }
+
+    /// Where each CLI keeps its files: its main home, which holds the history every account
+    /// shares, and each home with state of its own (the main home and every extra account's).
+    pub fn agent_homes(&self) -> Vec<crate::manager::disk::AgentHome> {
+        ProviderKind::ALL
+            .into_iter()
+            .filter_map(|kind| {
+                let main = brigadier_providers::accounts::main_home(kind, &self.env)?;
+                let mut homes = vec![main.clone()];
+                homes.extend(self.account_homes(kind));
+                Some(crate::manager::disk::AgentHome {
+                    kind,
+                    history: main,
+                    homes,
+                })
+            })
+            .collect()
     }
 
     /// The homes of `provider`'s extra accounts set up now.
@@ -108,6 +130,8 @@ impl Runtime {
                             status: None,
                             checked_at_ms: None,
                             checking: false,
+                            again: false,
+                            checked_generation: 0,
                             error: None,
                         },
                     );
@@ -159,16 +183,24 @@ impl Runtime {
             let Some(live) = accounts.get_mut(&id) else {
                 return;
             };
+            // One running began before this was asked: it is checked again after it.
             if live.checking {
+                live.again = true;
                 return;
             }
             live.checking = true;
         }
         let runtime = self.clone();
         self.spawn(async move {
-            runtime.check_account(&id).await;
-            runtime.update_leads().await;
-            runtime.publish_accounts().await;
+            loop {
+                let generation = runtime.generation();
+                let again = runtime.check_account(&id, generation).await;
+                runtime.update_leads().await;
+                runtime.publish_accounts().await;
+                if !again {
+                    break;
+                }
+            }
         });
     }
 
@@ -180,13 +212,15 @@ impl Runtime {
         }
     }
 
-    async fn check_account(&self, id: &str) {
+    /// Checks an extra account's login, then its quota, as of the refresh `generation`;
+    /// answers whether it was asked to be checked again meanwhile.
+    async fn check_account(&self, id: &str, generation: u32) -> bool {
         let Some((provider, kind)) = self
             .accounts()
             .get(id)
             .map(|live| (live.provider.clone(), live.entry.provider))
         else {
-            return;
+            return false;
         };
         let status = provider.status().await;
         let mut error = None;
@@ -202,12 +236,15 @@ impl Runtime {
                 Err(err) => error = Some(format!("quota: {err}")),
             }
         }
-        if let Some(live) = self.accounts().get_mut(id) {
+        self.accounts().get_mut(id).is_some_and(|live| {
             live.status = Some(status);
             live.checked_at_ms = Some(now_ms());
-            live.checking = false;
+            live.checked_generation = generation;
             live.error = error;
-        }
+            let again = std::mem::take(&mut live.again);
+            live.checking = again;
+            again
+        })
     }
 
     /// Reads the quota of every signed-in extra account (the poller's turn).
@@ -317,8 +354,8 @@ impl Runtime {
         self.signed_in(&self.monitor.lead(provider))
     }
 
-    /// How the app names `account` to the user, as Settings → Accounts does: the user's own
-    /// login is "this computer's login"; an extra account its name, else its email.
+    /// How the app names `account` to the user (in notices): the user's own login is "this
+    /// computer's login"; an extra account its name, else its email, an email masked either way.
     pub fn account_label(&self, account: &AccountRef) -> String {
         let Some(id) = &account.account else {
             return "this computer's login".into();
@@ -329,8 +366,8 @@ impl Runtime {
         };
         let email = status.and_then(|status| status.email);
         match (name.trim(), email) {
-            (name, _) if !name.is_empty() => name.to_owned(),
-            (_, Some(email)) if !email.is_empty() => email,
+            (name, _) if !name.is_empty() => mask_email(name),
+            (_, Some(email)) if !email.is_empty() => mask_email(&email),
             _ => "a new account".into(),
         }
     }
@@ -426,6 +463,7 @@ impl Runtime {
                     .and_then(|overview| overview.checked_at_ms),
                 checking,
                 error: overview.and_then(|overview| overview.error),
+                checked_generation: self.checked_generation(kind),
                 account: own,
             });
             let live = self.accounts();
@@ -445,6 +483,7 @@ impl Runtime {
                     checked_at_ms: live.and_then(|live| live.checked_at_ms),
                     checking: live.is_some_and(|live| live.checking),
                     error: live.and_then(|live| live.error.clone()),
+                    checked_generation: live.map_or(0, |live| live.checked_generation),
                     account,
                 });
             }

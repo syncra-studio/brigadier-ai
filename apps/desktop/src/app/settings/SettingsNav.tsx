@@ -6,44 +6,22 @@ import {
 import { useState } from "react";
 
 import {
+  groupTitle,
   searchSettings,
   SETTINGS_GROUPS,
   shownSettingsPages,
   type SettingsSearchResult,
 } from "@/app/settings/pages";
+import { revealSetting } from "@/app/settings/reveal";
 import { navRow, NavHeader, NavList, NavSection } from "@/app/sidebar/nav";
 import { cn } from "@/lib/utils";
 import { closeSettings, openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
 
-/** How many frames a result waits for its page (which may load lazily) to show the setting. */
-const FIND_FRAMES = 60;
-
-/** A setting's row, else a section named like it (the Usage page's sections). */
-function findSetting(label: string): HTMLElement | undefined {
-  const rows = document.querySelectorAll<HTMLElement>("[data-setting]");
-  const row = [...rows].find((element) => element.dataset.setting === label);
-  if (row) return row;
-  return [...document.querySelectorAll<HTMLElement>("section")].find((section) => {
-    const labelledBy = section.getAttribute("aria-labelledby");
-    const name =
-      section.getAttribute("aria-label") ??
-      (labelledBy ? document.getElementById(labelledBy)?.textContent : null);
-    return name?.trim() === label;
-  });
-}
-
 /** Opens a result's page, then brings the setting it found into view. */
 function openResult({ page, row }: SettingsSearchResult) {
   openSettings(page.id);
-  if (!row) return;
-  let frames = 0;
-  const reveal = () => {
-    const target = findSetting(row.label);
-    if (target) target.scrollIntoView({ block: "center" });
-    else if (++frames < FIND_FRAMES) requestAnimationFrame(reveal);
-  };
-  requestAnimationFrame(reveal);
+  if (row) revealSetting(row.target ?? row.label);
 }
 
 /**
@@ -147,7 +125,7 @@ export function SettingsNav() {
           )
         ) : (
           SETTINGS_GROUPS.map((group) => (
-            <NavSection key={group} title={group}>
+            <NavSection key={group} title={groupTitle(group)}>
               <NavList>
                 {pages.filter((page) => page.group === group).map((page) => {
                   const Icon = page.icon;

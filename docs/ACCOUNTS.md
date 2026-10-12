@@ -1,6 +1,6 @@
 # Several accounts per agent
 
-The user can sign in to more than one Claude Code or Codex account, pick in Settings → Accounts
+The user can sign in to more than one Claude Code or Codex account, pick in Settings → Providers
 the one new chats start on (Use / In use), and let Brigadier move a chat to another account of
 the same agent when one hits its limit. There is no account picker in the composer.
 Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accounts.md`.
@@ -62,7 +62,8 @@ Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accou
 | Add and remove | `crates/core/src/manager/accounts.rs` |
 | Auto-switch | `crates/core/src/manager/conversation.rs` (`switch_account`), `fallback.rs` |
 | IPC | `GetAccounts`, `AddAccount`, `SignInAccount`, `RemoveAccount`, `RefreshAccounts`; event `accountsChecked`; sign-in terminal in `crates/daemon/src/server.rs` (`open_account_terminal`) |
-| Settings → Accounts | `apps/desktop/src/app/settings/AccountsPage.tsx`, `state/accounts.ts` (a sign-in already being opened is shared, so a double mount or click adds one account) |
+| Settings → Providers | `apps/desktop/src/app/providers/AccountRows.tsx` (rows in each agent's card), `state/accounts.ts` (a sign-in already being opened is shared, so a double mount or click adds one account) |
+| Masked emails | `apps/desktop/src/lib/email.ts` (`ste•••••@•••••.com`; an eye per row reveals it until the page is left, never stored), `mask_email` in `crates/core/src/accounts.rs` (switch notices), `state/notices.ts` (notices saved before) |
 | Tests | `crates/core/src/manager/flow/accounts_tests.rs`, `takeover_tests.rs` (account case), unit tests in the files above |
 
 ## How to test
@@ -83,9 +84,10 @@ Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accou
 
 ## Signing in to a real second account
 
-1. Settings → Accounts → **Add account** under Claude Code (or Codex).
+1. Settings → Providers → **Add account** in the Claude Code (or Codex) card.
 2. Finish the sign-in the terminal row starts (`claude auth login` / `codex login` in the new
    account's own folder), in the browser, with the *other* account.
-3. The row fills in with that account's email, plan and usage. Rename it from its menu.
+3. The row fills in with that account's email (masked; its eye shows it), plan and usage.
+   Rename it from its menu.
 4. Check that the terminal still uses the old account: `claude auth status` / `codex login status`
    in a terminal.

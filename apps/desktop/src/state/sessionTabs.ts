@@ -43,6 +43,8 @@ export type ReviewTabState = {
 
 export type BrowserTabState = {
   kind: "browser"; id: string; opener: string | null; url: string; title: string;
+  /** Opened from something an agent gave (a link in its reply, a preview's address). */
+  agent?: boolean;
 };
 export type NewTabState = {
   kind: "newTab"; id: string; opener: string | null;
@@ -140,6 +142,41 @@ function makeTab(id: string, opener: string | null, kind: NewTabKind, cwd: strin
     : kind === "terminal" ? { ...base, kind, cwd, title: "" }
     : kind === "sideChat" ? { ...base, kind, conversationId: crypto.randomUUID(), title: "" }
     : { ...base, kind, name: "Untitled", savedPath: null, relativePath: null };
+}
+
+/** A new Browser tab showing `url`, after the tab in front. */
+export function openBrowserTab(conversationId: string, url: string, agent = false): string {
+  const id = `browser:${crypto.randomUUID()}`;
+  update(conversationId, (current) => {
+    const tab: BrowserTabState = { kind: "browser", id, opener: current.active, url, title: "", ...(agent ? { agent } : {}) };
+    return { tabs: insertAfterActive(current, tab), active: id };
+  });
+  return id;
+}
+
+/**
+ * The built-in browser was turned off: every Browser tab goes, and none can be reopened. A
+ * session whose tab in front was one shows the tab that opened it.
+ */
+export function dropBrowserTabs(): void {
+  for (const [conversationId, list] of closed) {
+    const kept = list.filter((entry) => entry.tab.kind !== "browser");
+    if (kept.length) closed.set(conversationId, kept);
+    else closed.delete(conversationId);
+  }
+  for (const [conversationId, current] of Object.entries(useSessionTabs.getState().sessions)) {
+    const browsers = current.tabs.filter((tab) => tab.kind === "browser");
+    if (!browsers.length) continue;
+    update(conversationId, () => {
+      let { tabs, active } = current;
+      for (const tab of browsers) {
+        const left = tabs.filter((entry) => entry.id !== tab.id);
+        active = afterClose({ tabs, active }, left, tab);
+        tabs = left;
+      }
+      return { tabs, active };
+    });
+  }
 }
 
 /** Choosing a tool or entering an address consumes the placeholder, not a tab-close entry. */

@@ -11,7 +11,7 @@ Today the main session is a pure orchestrator. It is a CLI session with no tools
 The target is one long-lived CLI session that works like a person running `/delegator` in cmux:
 - It reads, runs and previews things itself. It makes tiny edits itself and hands everything else to warm workers that start with a context pack.
 - It decides when an outline, a verifier or a deeper review is worth it.
-- Every landed change gets one non-blocking, one-shot review from the other vendor.
+- Every landed change gets one non-blocking, one-shot review from the other vendor. (Since 2026-10-11 the user can turn the reviews off: Settings → Configuration → "Review the work", on by default. Off, no review starts — landings, the thread's commits, outlines, `review_code`, `review_plan`, verifiers — and nothing waits for one; running sessions hear it as a `[settings]` note.)
 
 **Success test (Q3)** is an A/B against a plain cmux `/delegator` session on two real requests:
 - **T1:** the "Sidebar hide mode" request, from base `59a60afb`.
@@ -233,7 +233,7 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
     - The permission mode is `dontAsk`, plus `--allowedTools "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)"`. Anything not allowed is denied and never prompts.
     - Today `permission_mode()` maps ReadOnly to `"default"` (`P/claude/mod.rs:428`). That value is not among 2.1.292's listed choices (`acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`), although `claude -p --permission-mode default --version` parsed without error and `bogus` was rejected.
     - Phase 1 moves ReadOnly to `dontAsk` for every read-only session and checks a review launch live.
-- **Each `ReviewRun`** records conversation, `base`, `tip`, author vendor and reviewer model. It is triggered after every landing: `landed` (`M/landing.rs:595-666`) and thread commits.
+- **Each `ReviewRun`** records conversation, `base`, `tip`, author vendor and reviewer model. It is triggered after every landing: `landed` (`M/landing.rs:595-666`) and thread commits, while the user's "Review the work" setting is on (the default; see the note under the target above).
   - It runs in a detached worktree at `tip` (`git worktree add --detach`) owned by `review:<id>`. So landing disposal (`:638`), merge and the next session branch don't remove it.
   - The reviewer is always the other vendor from the author.
 - **Findings** reach the thread as a `[review …]` message, even after an early merge. The thread fixes them (a fix worker or a tiny fix on the current session branch) or notes why not.

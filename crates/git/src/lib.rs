@@ -8,6 +8,7 @@
 mod command;
 pub mod litter;
 mod parse;
+mod refname;
 mod repo;
 mod source;
 mod trailers;
@@ -16,6 +17,7 @@ mod worktree;
 use std::{ffi::OsString, path::PathBuf};
 
 pub use command::{FoundRepo, Git};
+pub use refname::{branch_name_problem, branch_prefix_problem};
 pub use repo::Repo;
 pub use trailers::strip_ai_coauthors;
 pub use worktree::Worktree;

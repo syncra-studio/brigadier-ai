@@ -2,7 +2,7 @@ import { Search } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps } from "react";
 
 import { field, mono } from "@/components/assistant-ui/elements/surfaces";
-import { openUrl } from "@/ipc/client";
+import { openLink } from "@/state/links";
 import { cn } from "@/lib/utils";
 
 /**
@@ -68,7 +68,7 @@ export function WebSearch({
                   href={result.url}
                   onClick={(event) => {
                     event.preventDefault();
-                    openUrl(result.url).catch((error: unknown) => console.error("opening a link failed", error));
+                    openLink(result.url, { agent: true }).catch((error: unknown) => console.error("opening a link failed", error));
                   }}
                   className="fade-in animate-in hover:bg-foreground/5 rounded-control -mx-2 flex items-center gap-2.5 px-2 py-1 transition-colors duration-300"
                 >

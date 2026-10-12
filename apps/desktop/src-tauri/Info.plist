@@ -3,7 +3,9 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Brigadier listens only while you dictate into the message box. Your speech is turned into text on this Mac and never leaves it.</string>
+  <string>Brigadier listens only while you dictate into the message box; your speech is turned into text on this Mac and never leaves it. Web pages you allow in Brigadier's browser can use the microphone too, like in any browser.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Only web pages you allow in Brigadier's browser can use the camera, like in any browser.</string>
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>

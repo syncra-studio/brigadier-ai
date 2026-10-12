@@ -5,6 +5,7 @@ import type {
   BridgeEvent,
   BrowserBounds,
   BrowserEvent,
+  BrowserOptions,
   ConventionsExport,
   IpcError,
   RunningChat,
@@ -170,16 +171,17 @@ export async function openFolder(path: string, app?: string): Promise<void> {
 
 /**
  * Makes the Browser tab `id`'s page, showing `url` over `bounds`; `onEvent` hears that page
- * until it is closed.
+ * until it is closed. `agent`: the tab came from something an agent gave (its history says so).
  */
 export async function browserOpen(
   id: string,
   url: string,
   bounds: BrowserBounds,
+  agent: boolean,
   onEvent: (event: BrowserEvent) => void,
 ): Promise<void> {
   try {
-    await invoke("browser_open", { id, url, bounds, events: new Channel<BrowserEvent>(onEvent) });
+    await invoke("browser_open", { id, url, bounds, agent, events: new Channel<BrowserEvent>(onEvent) });
   } catch (error) {
     throw isIpcError(error) ? new RequestError(error) : error;
   }
@@ -211,7 +213,12 @@ export function browserGo(
   return invoke("browser_go", { id, action });
 }
 
-/** Drops the Browser tab's page and all it stored. */
+/** Tells the shell the user's Settings › Browser choices it acts on itself. */
+export function browserConfigure(options: BrowserOptions): Promise<void> {
+  return invoke("browser_configure", { options });
+}
+
+/** Drops the Browser tab's page (what it saved stays in the browser's store). */
 export function browserClose(id: string): Promise<void> {
   return invoke("browser_close", { id });
 }
@@ -223,9 +230,32 @@ export function notificationPermission(): Promise<NotificationPermission> {
   return invoke<NotificationPermission>("notification_permission");
 }
 
+/** Asks the OS to let Brigadier notify, and answers the user's choice once made. */
+export function askNotificationPermission(): Promise<NotificationPermission> {
+  return invoke<NotificationPermission>("ask_notification_permission");
+}
+
 /** Opens the system's notification settings at Brigadier. */
 export function openNotificationSettings(): Promise<void> {
   return invoke<void>("open_notification_settings");
+}
+
+/** Whether Brigadier opens at login, as the system says (not where it has no way, or a
+ * development build on macOS). */
+export type LoginItem = "unsupported" | "off" | "on" | "needsApproval";
+
+export function loginItem(): Promise<LoginItem> {
+  return invoke<LoginItem>("login_item");
+}
+
+/** Turns opening at login on or off, and answers how it stands then. */
+export function setLoginItem(on: boolean): Promise<LoginItem> {
+  return invoke<LoginItem>("set_login_item", { on });
+}
+
+/** Opens the system's login items, where macOS asks the user to allow Brigadier. */
+export function openLoginItems(): Promise<void> {
+  return invoke<void>("open_login_items");
 }
 
 /** Rust chooses and remembers the destination; this call never accepts a write path. `choose`

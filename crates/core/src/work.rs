@@ -2154,6 +2154,9 @@ pub struct CommitOutcome {
     pub message: String,
     pub branch: String,
     pub pushed: bool,
+    /// Why the message wasn't written by the model the user chose, when it wasn't.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /// What the side panel's Review tab compares (the scope picker).
@@ -2370,6 +2373,18 @@ pub struct Told {
     /// The instructions' revision ([`crate::manager::prompts::REVISIONS`]) it last heard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<u32>,
+    /// Whether the user's work is reviewed (Settings' "Review the work"); `None` counts as on,
+    /// as every session's instructions were before the switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_work: Option<bool>,
+    /// The fingerprint of what the user's Git settings say about writing commit messages and
+    /// pull requests; empty, as `None` counts too, while they follow the repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_writing: Option<String>,
+    /// Whether Brigadier's built-in browser is on (Settings › Browser); `None` counts as on,
+    /// as no instructions mentioned it before the switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<bool>,
 }
 
 /// One entry of the orchestrator log shown in the Inspector.

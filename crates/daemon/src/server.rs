@@ -16,8 +16,9 @@ use brigadier_core::{
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
     ArtifactText, ClientFrame, ClientInfo, ComputerAccess, ComputerGrant, DaemonActivity,
-    DaemonInfo, DictationUpdate, ErrorCode, EventEnvelope, IpcError, LifecycleOutcome, Outcome,
-    RawJson, Request, Response, SendOutcome, ServerFrame, TerminalInfo, TerminalOutput,
+    DaemonInfo, DictationStatus, DictationUpdate, ErrorCode, EventEnvelope, IpcError,
+    LifecycleOutcome, Outcome, RawJson, Request, Response, SendOutcome, ServerFrame, TerminalInfo,
+    TerminalOutput,
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token, Writer};
 use brigadier_providers::ProviderKind;
@@ -28,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::awake::Awake;
-use crate::dictation::Dictation;
+use crate::dictation::{Dictation, Started};
 use crate::idle;
 use crate::metrics::Metrics;
 use crate::storage::Storage;
@@ -193,7 +194,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         terminals: HashSet::new(),
         worker_terminals: HashMap::new(),
         dictation_feed: None,
-        dictations: HashSet::new(),
+        dictations: Started::new(daemon.dictation.clone()),
         late_tx,
         late,
     };
@@ -223,8 +224,9 @@ struct Session {
     worker_terminals: HashMap<u32, (u16, u16)>,
     /// Dictation updates, once this connection dictated or downloaded the speech model.
     dictation_feed: Option<broadcast::Receiver<DictationUpdate>>,
-    /// The dictations this connection started: only their text is forwarded.
-    dictations: HashSet<String>,
+    /// The dictations this connection started: only their text is forwarded, and the ones
+    /// still taking audio are dropped when it ends.
+    dictations: Started,
     /// Answers to slow requests (clones), which run beside the others, by request id.
     late_tx: mpsc::Sender<(u32, Result<Response, IpcError>)>,
     late: mpsc::Receiver<(u32, Result<Response, IpcError>)>,
@@ -426,8 +428,9 @@ impl Session {
                 });
                 return Ok(Flow::Continue);
             }
+            // A window that reconnects mid-download asks this first: it hears the rest.
             Request::GetDictation => Ok(Response::GetDictation {
-                dictation: self.daemon.dictation.status(),
+                dictation: follow_status(&self.daemon.dictation, &mut self.dictation_feed),
             }),
             Request::DownloadDictationModel => {
                 self.follow_dictation();
@@ -440,9 +443,10 @@ impl Session {
             }
             Request::StartDictation => {
                 self.follow_dictation();
+                let settings = self.daemon.core.settings();
                 self.daemon
                     .dictation
-                    .start()
+                    .start(&settings.dictation_language, &settings.dictation_words)
                     .map(|dictation_id| {
                         self.dictations.insert(dictation_id.clone());
                         Response::StartDictation { dictation_id }
@@ -491,7 +495,7 @@ impl Session {
                 return Ok(Flow::Continue);
             }
             // Long: answered beside the connection's other requests.
-            request @ (Request::ScanStorage
+            request @ (Request::ScanStorage { .. }
             | Request::PreviewDelete { .. }
             | Request::CleanStorage { .. }
             | Request::PreviewRemoveProject { .. }
@@ -828,9 +832,7 @@ impl Session {
 
     /// Forwards dictation updates to this connection from now on.
     fn follow_dictation(&mut self) {
-        if self.dictation_feed.is_none() {
-            self.dictation_feed = Some(self.daemon.dictation.subscribe());
-        }
+        follow(&self.daemon.dictation, &mut self.dictation_feed);
     }
 
     fn set_metrics(&mut self, enabled: bool) {
@@ -913,6 +915,22 @@ async fn next_terminal_output(
         },
         None => std::future::pending().await,
     }
+}
+
+fn follow(dictation: &Dictation, feed: &mut Option<broadcast::Receiver<DictationUpdate>>) {
+    if feed.is_none() {
+        *feed = Some(dictation.subscribe());
+    }
+}
+
+/// The speech model's status, with its updates forwarded from then on. Subscribed first, so
+/// a download that ends in between is still heard.
+fn follow_status(
+    dictation: &Dictation,
+    feed: &mut Option<broadcast::Receiver<DictationUpdate>>,
+) -> DictationStatus {
+    follow(dictation, feed);
+    dictation.status()
 }
 
 async fn next_dictation_update(
@@ -1749,6 +1767,27 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 heap(|| core.update_settings(brigadier_core::accounts::edited(&before, *settings)))
                     .await?;
             heap(|| daemon.awake.apply()).await;
+            if before.review_work != settings.review_work {
+                // Workers waiting for a review go on, and those at work hear it at once.
+                let (sessions, on) = (daemon.sessions.clone(), settings.review_work);
+                daemon
+                    .supervisor
+                    .spawn(async move { sessions.reviews_switched(on).await });
+            }
+            if brigadier_core::git_writing_changed(&before, &settings) {
+                // Workers at work hear it at once; threads before their next turn.
+                let sessions = daemon.sessions.clone();
+                daemon
+                    .supervisor
+                    .spawn(async move { sessions.git_writing_switched().await });
+            }
+            if before.browser_enabled != settings.browser_enabled {
+                // Workers at work hear it at once; threads before their next turn.
+                let sessions = daemon.sessions.clone();
+                daemon
+                    .supervisor
+                    .spawn(async move { sessions.browser_switched().await });
+            }
             // New rules or rankings, or an agent or model turned back on, may let work waiting
             // for quota run now.
             if before.accounts != settings.accounts
@@ -1813,11 +1852,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::RemoveAccount { id } => Response::RemoveAccount {
             settings: Box::new(heap(|| daemon.sessions.remove_account(&id)).await?),
         },
-        Request::RefreshAccounts => {
-            daemon.runtime.refresh_providers(None);
-            daemon.runtime.refresh_accounts();
-            Response::RefreshAccounts
-        }
+        Request::RefreshAccounts => Response::RefreshAccounts {
+            generation: daemon.runtime.refresh_all(),
+        },
         Request::GetProviders => Response::GetProviders {
             view: heap(|| daemon.runtime.view()).await,
         },
@@ -1827,6 +1864,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         }
         Request::GetUsage { project_id } => Response::GetUsage {
             usage: Box::new(heap(|| daemon.sessions.usage_view(project_id)).await?),
+        },
+        Request::GetUsageActivity { days } => Response::GetUsageActivity {
+            activity: daemon.sessions.usage_activity(days).await,
         },
         Request::PreviewRoutes { project_id, areas } => Response::PreviewRoutes {
             routes: heap(|| daemon.sessions.preview_routes(project_id, areas)).await,
@@ -1951,9 +1991,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 overnight: daemon.sessions.overnight_active(),
             },
         },
-        Request::ScanStorage => Response::ScanStorage {
+        Request::ScanStorage { app } => Response::ScanStorage {
             report: Box::new(
-                heap(|| daemon.storage.scan(daemon))
+                heap(|| daemon.storage.scan(daemon, app))
                     .await
                     .map_err(invalid)?,
             ),
@@ -2058,6 +2098,28 @@ mod tests {
             computer_pane_url(ComputerGrant::ScreenRecording),
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
         );
+    }
+
+    #[tokio::test]
+    async fn a_window_that_asks_for_the_speech_model_hears_its_download_end() {
+        let models =
+            std::env::temp_dir().join(format!("brigadier-models-{}", uuid::Uuid::new_v4()));
+        let dictation = Arc::new(Dictation::new(models.clone()));
+        let mut feed = None;
+        assert!(!follow_status(&dictation, &mut feed).installed);
+        // The download ends (here: the model is already there), after the window asked.
+        let model = models.join("whisper").join("ggml-base-q5_1.bin");
+        std::fs::create_dir_all(model.parent().unwrap()).unwrap();
+        std::fs::File::create(&model)
+            .unwrap()
+            .set_len(dictation.status().model_bytes)
+            .unwrap();
+        dictation.download();
+        let update = tokio::time::timeout(Duration::from_secs(5), next_dictation_update(&mut feed))
+            .await
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&models);
+        assert!(matches!(update, Some(DictationUpdate::Downloaded)));
     }
 
     #[test]

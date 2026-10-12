@@ -7,7 +7,8 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { type ITheme, Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 
-import { openUrl, request } from "@/ipc/client";
+import { request } from "@/ipc/client";
+import { openLink } from "@/state/links";
 import type { TerminalInfo, TerminalOutput } from "@/ipc/generated";
 import { tokenColor } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
@@ -135,7 +136,7 @@ export function TerminalView({
       // OSC 8 links.
       linkHandler: {
         activate: (_event, uri) => {
-          void openUrl(uri).catch(() => {});
+          void openLink(uri).catch(() => {});
         },
       },
     });
@@ -147,7 +148,7 @@ export function TerminalView({
     // Addresses in plain text.
     terminal.loadAddon(
       new WebLinksAddon((_event, uri) => {
-        void openUrl(uri).catch(() => {});
+        void openLink(uri).catch(() => {});
       }),
     );
     terminal.loadAddon(new ClipboardAddon(undefined, WRITE_ONLY_CLIPBOARD));

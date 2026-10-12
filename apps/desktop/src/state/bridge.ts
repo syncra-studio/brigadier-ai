@@ -14,6 +14,7 @@ import { openFolderPicker, takeFolders } from "@/state/addProject";
 import { applyBoardEvents, sideBoardIds, useBoard } from "@/state/board";
 import { applyBrainEvents } from "@/state/brain";
 import { applyEvents, useApp } from "@/state/store";
+import { startBrowserOptions } from "@/state/links";
 import { startMenuBar } from "@/state/menuBar";
 import { applyUpdateEvents, loadUpdates } from "@/state/updates";
 import { applyUsageEvents } from "@/state/usage";
@@ -140,4 +141,5 @@ function onBridgeEvent(message: BridgeEvent) {
 export async function startBridge(): Promise<void> {
   await subscribe(onBridgeEvent);
   startMenuBar();
+  startBrowserOptions();
 }

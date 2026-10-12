@@ -2,9 +2,9 @@
 import type { QuotaSample } from "./QuotaSample";
 
 /**
- * A window's samples over its current span, for the Usage page's chart.
+ * A window's samples over a span, for the Usage page's chart.
  */
-export type WindowHistory = { windowId: string, 
+export type WindowHistory = { windowId: string, label: string, 
 /**
  * Oldest first.
  */

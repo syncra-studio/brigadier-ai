@@ -55,6 +55,7 @@ import {
   useSessionTabsOf,
   useTabCloseAsk,
 } from "@/state/sessionTabs";
+import { useBrowserOn } from "@/state/links";
 import { useApp } from "@/state/store";
 import { useBrowsers } from "@/state/browsers";
 import { NewTabTools } from "./NewTabTools";
@@ -198,10 +199,13 @@ export function SessionTabBar({
   const strip = useRef<HTMLDivElement>(null);
   const mac = useApp((s) => s.info?.platform === "macos");
   const cwd = useCheckoutRoot();
+  const browserOn = useBrowserOn();
   const create = useCallback((kind: NewTabKind) => {
     if (archived && (kind === "terminal" || kind === "sideChat")) return;
+    // Off, the built-in browser doesn't exist: ⇧⌘B and its menu item do nothing.
+    if (kind === "browser" && !browserOn) return;
     newSessionTab(id, kind, cwd);
-  }, [id, archived, cwd]);
+  }, [id, archived, cwd, browserOn]);
   useTabKeys(id, archived, create);
   const { listRef, shown, dragging, grip } = useDragReorder<SessionTab, HTMLDivElement>({
     items: tabs,
@@ -448,6 +452,7 @@ const DocumentTabView = lazy(() => import("./DocumentTabView").then((module) => 
  */
 export function SessionTabViews({ conversationId }: { conversationId: string }) {
   const { tabs, active } = useSessionTabsOf(conversationId);
+  const browserOn = useBrowserOn();
   return (
     <>
       {tabs.map((tab) => {
@@ -465,8 +470,13 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <FileTabView conversationId={conversationId} tab={tab} active={shown} />
               ) : tab.kind === "review" ? (
                 <ReviewTab conversationId={conversationId} target={tab.target} active={shown} />
+              ) : tab.kind === "newTab" && !browserOn ? (
+                // Off, a New tab offers its tools without an address bar.
+                <div className="@container/new-tab flex min-h-0 flex-1 flex-col">
+                  <NewTabTools conversationId={conversationId} tabId={tab.id} />
+                </div>
               ) : tab.kind === "newTab" || tab.kind === "browser" ? (
-                <BrowserTab conversationId={tab.id} initialUrl={tab.kind === "browser" ? tab.url : undefined} active={shown}
+                <BrowserTab conversationId={tab.id} initialUrl={tab.kind === "browser" ? tab.url : undefined} agent={tab.kind === "browser" && tab.agent} active={shown}
                   onNavigate={tab.kind === "newTab" ? (url) => replaceNewTab(conversationId, tab.id, "browser", null, url) : undefined}>
                   {tab.kind === "newTab" ? <NewTabTools conversationId={conversationId} tabId={tab.id} /> : null}
                 </BrowserTab>

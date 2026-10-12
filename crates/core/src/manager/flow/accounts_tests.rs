@@ -139,6 +139,35 @@ async fn a_limit_moves_the_chat_to_another_account_and_its_work_is_done_once() {
 }
 
 #[tokio::test]
+async fn a_switch_notice_masks_an_account_named_by_its_email() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-switch-masked",
+        Options::default(),
+        logging(&log, |turn| match &turn.account {
+            None => Reply::limited(),
+            Some(_) => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let mut settings = flow.core.settings();
+    settings.accounts[0].name = "work.person@corp.example.io".into();
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.runtime.sync_accounts().await;
+    flow.say("Do the thing.").await;
+    flow.settled().await;
+    let notices = notices(&flow).await;
+    assert!(
+        notices.iter().any(|text| text
+            == "Claude Code hit its usage limit on this computer's login; continuing on wor•••••@•••••.io."),
+        "{notices:#?}"
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
 async fn with_every_account_at_its_limit_the_chat_falls_back_to_the_other_provider() {
     let log = Log::default();
     let flow = Flow::start(
@@ -861,10 +890,12 @@ async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
         let removals = flow.behavior.removals.lock().unwrap().clone();
         for artifact in native {
             let (id, home) = match &artifact {
-                brigadier_providers::Artifact::ClaudeSession { session_id, home } => {
-                    (session_id, home)
-                }
-                brigadier_providers::Artifact::CodexThread { thread_id, home } => (thread_id, home),
+                brigadier_providers::Artifact::ClaudeSession {
+                    session_id, home, ..
+                } => (session_id, home),
+                brigadier_providers::Artifact::CodexThread {
+                    thread_id, home, ..
+                } => (thread_id, home),
                 other => panic!("unexpected artifact: {other:?}"),
             };
             let account = home.as_ref().map(|_| "acct-b".to_owned());
@@ -1399,6 +1430,7 @@ async fn a_start_cut_off_by_an_archive_ends_even_after_a_restore() {
         vec![brigadier_providers::Artifact::ClaudeSession {
             session_id: after.native_id.clone(),
             home: None,
+            cwd: None,
         }]
     );
     flow.stop().await;

@@ -4,8 +4,8 @@ import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
 type Rendering = {
-  first: { select: string; defaultRow: string; notice: string[]; picker: string };
-  saved: { select: string; defaultRow: string; newSession: string; pickedForOne: string; session: string; picker: string };
+  first: { select: string; notice: string[]; picker: string };
+  saved: { select: string; newSession: string; pickedForOne: string; session: string; picker: string };
   confirming: boolean;
   switched: { session: string; picker: string; notice: string[]; line: string };
   selection: { type: string; page: string };
@@ -21,13 +21,11 @@ test("Configuration saves the default, and the sandbox notice switches the sessi
   const rendering = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Rendering;
   assert.deepEqual(rendering.first, {
     select: "Ask for approval",
-    defaultRow: "Ask for approval",
     notice: ["Switch this session to Full access", "Open Settings > Configuration"],
     picker: "Ask for approval",
   });
   assert.deepEqual(rendering.saved, {
     select: "Approve for me",
-    defaultRow: "Approve for me",
     newSession: "approveForMe",
     pickedForOne: "fullAccess",
     session: "askForApproval",
@@ -53,4 +51,40 @@ test("a finished reply keeps the sandbox notice outside its collapsed work", { t
     buttons: ["Switch this session to Full access", "Open Settings > Configuration"],
     count: 1,
   });
+});
+
+// The real page in Chromium over a faked daemon: one headless card of the defaults with a line
+// each, the explanations in the menus (Automatic first, each level's allowance and risk), and
+// an old page's link and a search landing on their rows.
+test("Configuration shows its defaults in one card and explains the choices in its menus", { timeout: 60000 }, async (t) => {
+  const dump = await renderFixturePage(t, "configuration.html?drive=1", "configuration-result", 10000);
+  const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&"));
+  assert.deepEqual(seen.firstCard, [
+    { setting: "Model for sessions", helper: "Choose the model that leads new sessions, their orchestrator" },
+    { setting: "Model for chats", helper: "Choose the model new chats start with" },
+    { setting: "Default permission level", helper: "Choose how much new sessions may do without asking" },
+    { setting: "Review the work", helper: "Choose whether another AI model reviews each change" },
+    { setting: "Short replies", helper: "Choose whether sessions answer in a few plain lines" },
+  ]);
+  assert.equal(seen.firstCardHeading, false, "the first card has no heading");
+  assert.deepEqual(seen.sections, ["Memory"]);
+  // Its count shows by its name; search and links still find the row by its name.
+  assert.deepEqual(seen.memories, { setting: "Memories", row: "Memories · 2 saved" });
+  assert.deepEqual(seen.buttons, [], "no Use automatic button");
+  assert.equal(seen.levelRow, false, "no read-only row for the chosen level");
+  assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Ask for approval"]);
+  assert.deepEqual(seen.sessionsMenu, [["Automatic (Opus 5.5)", "The first signed-in agent’s default model."]]);
+  assert.deepEqual(seen.chatsMenu, [["Automatic (Opus 5.5)", "The same model as new sessions."]]);
+  assert.deepEqual(
+    seen.permissionMenu.map((choice: string[]) => choice[0]),
+    ["Ask for approval", "Approve for me", "Full access"],
+  );
+  for (const [level, description] of seen.permissionMenu as string[][]) {
+    assert.ok(description && description.length > 40, `${level} explains what it allows`);
+  }
+  assert.match(seen.permissionMenu[0][1], /safest/i);
+  assert.match(seen.permissionMenu[1][1], /reviewer can be wrong/);
+  assert.match(seen.permissionMenu[2][1], /delete or leak/);
+  assert.deepEqual(seen.oldLink, { page: { type: "settings", page: "configuration" }, inView: true });
+  assert.deepEqual(seen.search, { page: { type: "settings", page: "configuration" }, inView: true });
 });

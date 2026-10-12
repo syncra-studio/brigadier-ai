@@ -184,10 +184,12 @@ pub enum TaskCategory {
     Chat,
     /// A session's orchestrator: plans, delegates and reviews, never does the work itself.
     Orchestrate,
+    /// Short git text Brigadier writes itself (a commit message): a fast, cheap model's job.
+    GitText,
 }
 
 impl TaskCategory {
-    pub const ALL: [TaskCategory; 9] = [
+    pub const ALL: [TaskCategory; 10] = [
         TaskCategory::Scout,
         TaskCategory::Research,
         TaskCategory::Implement,
@@ -197,6 +199,7 @@ impl TaskCategory {
         TaskCategory::Operate,
         TaskCategory::Chat,
         TaskCategory::Orchestrate,
+        TaskCategory::GitText,
     ];
 }
 

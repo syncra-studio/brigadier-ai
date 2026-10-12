@@ -61,6 +61,8 @@ mockIPC((command, payload) => {
     case "updateSetup":
       calls.push(`session ${req.setup.type === "session" ? req.setup.permission : "chat"}`);
       return { method: req.method, conversation: { ...useApp.getState().conversations[id], setup: req.setup } };
+    case "listMemories":
+      return { method: req.method, memories: [] };
     default:
       return { method: req.method };
   }
@@ -71,8 +73,6 @@ const buttonNamed = (label: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === label);
 const notice = () => q('[data-kind="fullAccessSuggested"]');
 const noticeButtons = () => [...(notice()?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim());
-const defaultRow = () =>
-  [...document.querySelectorAll('[data-setting]')].find((row) => row.textContent?.endsWith("Default"))?.getAttribute("data-setting");
 const picker = () => q('[data-slot="permission-picker"]')?.textContent?.trim();
 const selectTrigger = () => q<HTMLButtonElement>('button[aria-label="Default permission level"]');
 const sessionLevel = () => {
@@ -89,7 +89,7 @@ function Fixture() {
     const at = (ms: number, run: () => void) => setTimeout(run, ms);
     const timers = [
       at(300, () => {
-        seen.first = { select: selectTrigger()?.textContent, defaultRow: defaultRow(), notice: noticeButtons(), picker: picker() };
+        seen.first = { select: selectTrigger()?.textContent, notice: noticeButtons(), picker: picker() };
         selectTrigger()?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
       }),
       at(600, () => {
@@ -101,7 +101,6 @@ function Fixture() {
         const settings = useApp.getState().settings;
         seen.saved = {
           select: selectTrigger()?.textContent,
-          defaultRow: defaultRow(),
           newSession: resolvePermission(null, settings),
           pickedForOne: resolvePermission("fullAccess", settings),
           session: sessionLevel(),

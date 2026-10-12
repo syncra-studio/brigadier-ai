@@ -16,4 +16,8 @@ reclaimedBytes: number,
 /**
  * Moved to the Trash: given back once the Trash is emptied.
  */
-trashedBytes: number, failures: Array<CleanFailure>, };
+trashedBytes: number, failures: Array<CleanFailure>, 
+/**
+ * Codex threads deleted: the Codex app keeps its own list and may show them a while.
+ */
+codexThreadsDeleted: number, };

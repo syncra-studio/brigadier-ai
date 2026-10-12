@@ -134,7 +134,15 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
     `--user-data-dir=${join(scratch, "profile")}`,
     "--dump-dom", `--virtual-time-budget=${budgetMs}`,
     `${url}fixtures/${page}`,
-  ], { timeout: 45000, maxBuffer: 4 * 1024 * 1024 });
+  ], { timeout: 45000, maxBuffer: 4 * 1024 * 1024 }).catch((error: { signal?: string | null; stdout?: string; stderr?: string }) => {
+    // One-process Chromium on macOS can trap in its compositor thread while it shuts down, after
+    // it printed the whole DOM (often after a dialog opened and closed): the page's result
+    // stands. Any other end, a timeout included, is a failure.
+    if (oneProcess.length > 0 && error.signal === "SIGTRAP" && error.stdout?.includes(`<pre id="${resultId}">`)) {
+      return { stdout: error.stdout, stderr: error.stderr ?? "" };
+    }
+    throw error;
+  });
   const serialized = stdout.match(new RegExp(`<pre id="${resultId}">([^<]+)</pre>`))?.[1];
   if (!serialized) {
     assert.fail([

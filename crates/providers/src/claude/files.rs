@@ -61,7 +61,9 @@ pub(super) fn remove(config: &Path, artifacts: &[Artifact]) -> Result<()> {
     let mut failures = Vec::new();
     // Sessions first: a project directory can only go once the sessions in it are gone.
     let sessions = artifacts.iter().filter_map(|artifact| match artifact {
-        Artifact::ClaudeSession { session_id, home } => Some(
+        Artifact::ClaudeSession {
+            session_id, home, ..
+        } => Some(
             remove_session(config, session_id).and_then(|()| match home {
                 // An extra account's own per-session state; its transcript is in `config`.
                 Some(home) if Path::new(home) != config && Path::new(home).is_dir() => {
@@ -308,4 +310,234 @@ fn remove_path(path: &Path) -> Result<()> {
             format!("{}: {err}", path.display()),
         ))),
     }
+}
+
+/// Lines of a transcript read for its working folder and how it was started.
+const HEAD_LINES: usize = 64;
+/// A line longer than this is skipped, not read on (a pasted image can be megabytes).
+const LINE_LIMIT: u64 = 16 * 1024 * 1024;
+/// Brigadier's tools, as Claude Code names an MCP server's tools.
+const BRIGADIER_TOOLS: &str = "mcp__brigadier__";
+/// A Brigadier daemon's socket, under its data directory.
+const DAEMON_SOCKET: &str = "/run/brigadierd.sock";
+
+/// Claude sessions whose working folder `wanted` accepts, with their files: the transcript
+/// and its folder in `<history>/projects/<encoded cwd>/`, and in every home the per-session
+/// state Claude keeps there. The project folder comes last, removed only once empty.
+pub(crate) fn leftovers(
+    history: &Path,
+    homes: &[PathBuf],
+    wanted: &dyn Fn(&Path) -> bool,
+) -> Vec<crate::leftovers::FoundSession> {
+    use crate::leftovers::{FoundEntry, FoundSession, is_entry, last_change};
+    let projects = history.join("projects");
+    let Ok(folders) = std::fs::read_dir(&projects) else {
+        return Vec::new();
+    };
+    // The same folder reached twice (a home given twice, or through a link) is read once.
+    let mut seen = std::collections::HashSet::new();
+    let homes: Vec<&PathBuf> = homes
+        .iter()
+        .filter(|home| seen.insert(home.canonicalize().unwrap_or_else(|_| (*home).clone())))
+        .collect();
+    let mut found = Vec::new();
+    let mut folders: Vec<PathBuf> = folders
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect();
+    folders.sort();
+    for folder in folders {
+        let Ok(files) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        let mut transcripts: Vec<PathBuf> = files
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+            .collect();
+        transcripts.sort();
+        for transcript in transcripts {
+            let Some(id) = transcript
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .filter(|id| check_session_id(id).is_ok())
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let Some((cwd, headless)) = head(&transcript) else {
+                continue;
+            };
+            if !wanted(&cwd) {
+                continue;
+            }
+            let fingerprint = if headless {
+                fingerprint(&transcript)
+            } else {
+                None
+            };
+            let mut entries = vec![FoundEntry {
+                root: projects.clone(),
+                path: transcript.clone(),
+                empty_only: false,
+            }];
+            let own = folder.join(&id);
+            if is_entry(&own) {
+                entries.push(FoundEntry {
+                    root: projects.clone(),
+                    path: own,
+                    empty_only: false,
+                });
+            }
+            for home in &homes {
+                let mut state: Vec<PathBuf> = SESSION_DIRS
+                    .iter()
+                    .map(|name| home.join(name).join(&id))
+                    .chain([home.join("debug").join(format!("{id}.txt"))])
+                    .collect();
+                if let Ok(todos) = std::fs::read_dir(home.join("todos")) {
+                    let prefix = format!("{id}-");
+                    let mut named: Vec<PathBuf> = todos
+                        .flatten()
+                        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+                        .map(|entry| entry.path())
+                        .collect();
+                    named.sort();
+                    state.extend(named);
+                }
+                entries.extend(state.into_iter().filter(|path| is_entry(path)).map(|path| {
+                    FoundEntry {
+                        root: (*home).clone(),
+                        path,
+                        empty_only: false,
+                    }
+                }));
+            }
+            entries.push(FoundEntry {
+                root: projects.clone(),
+                path: folder.clone(),
+                empty_only: true,
+            });
+            let last_change = entries
+                .iter()
+                .filter(|entry| !entry.empty_only)
+                .filter_map(|entry| last_change(&entry.path))
+                .max();
+            found.push(FoundSession {
+                kind: crate::model::ProviderKind::Claude,
+                id,
+                cwd: Some(cwd),
+                fingerprint,
+                entries,
+                last_change,
+            });
+        }
+    }
+    found
+}
+
+/// A transcript's working folder, and whether a program started it (`entrypoint` `sdk-cli`,
+/// as stream-json sessions say), from its first lines.
+fn head(transcript: &Path) -> Option<(PathBuf, bool)> {
+    let mut reader = std::io::BufReader::new(std::fs::File::open(transcript).ok()?);
+    for _ in 0..HEAD_LINES {
+        let line = read_line(&mut reader)?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if let Some(cwd) = value.get("cwd").and_then(serde_json::Value::as_str) {
+            let headless =
+                value.get("entrypoint").and_then(serde_json::Value::as_str) == Some("sdk-cli");
+            return Some((PathBuf::from(cwd), headless));
+        }
+    }
+    None
+}
+
+/// One line, at most [`LINE_LIMIT`] long (the rest of a longer one is skipped); `None` at the
+/// end.
+fn read_line(reader: &mut impl std::io::BufRead) -> Option<String> {
+    use std::io::{BufRead as _, Read as _};
+    let mut line = Vec::new();
+    let read = reader
+        .by_ref()
+        .take(LINE_LIMIT)
+        .read_until(b'\n', &mut line)
+        .ok()?;
+    if read == 0 {
+        return None;
+    }
+    if line.last() != Some(&b'\n') && read as u64 == LINE_LIMIT {
+        // Skip the rest of a line too long to read.
+        let mut rest = Vec::new();
+        let _ = reader.read_until(b'\n', &mut rest);
+        return Some(String::new());
+    }
+    Some(String::from_utf8_lossy(&line).into_owned())
+}
+
+/// Brigadier's marks in a transcript: a call of one of its tools, or the sandbox letting the
+/// session reach a Brigadier daemon's socket. Read from the parsed records, never from text a
+/// message merely quotes.
+fn fingerprint(transcript: &Path) -> Option<crate::leftovers::Fingerprint> {
+    use crate::leftovers::Fingerprint;
+    use serde_json::Value;
+    let mut reader = std::io::BufReader::new(std::fs::File::open(transcript).ok()?);
+    let mut socket = None;
+    while let Some(line) = read_line(&mut reader) {
+        // A cheap look first: most lines are neither.
+        let tools = line.contains(BRIGADIER_TOOLS);
+        let sandbox = line.contains(DAEMON_SOCKET) && line.contains("sandbox_instructions");
+        if !tools && !sandbox {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if tools
+            && value.get("type").and_then(Value::as_str) == Some("assistant")
+            && value
+                .pointer("/message/content")
+                .and_then(Value::as_array)
+                .is_some_and(|parts| {
+                    parts.iter().any(|part| {
+                        part.get("type").and_then(Value::as_str) == Some("tool_use")
+                            && part
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|name| name.starts_with(BRIGADIER_TOOLS))
+                    })
+                })
+        {
+            return Some(Fingerprint::BrigadierTools);
+        }
+        if sandbox
+            && socket.is_none()
+            && value.get("type").and_then(Value::as_str) == Some("attachment")
+            && value.pointer("/attachment/type").and_then(Value::as_str)
+                == Some("sandbox_instructions")
+            && let Some(content) = value.pointer("/attachment/content").and_then(Value::as_str)
+        {
+            socket = socket_data_dir(content);
+        }
+    }
+    socket.map(|data_dir| Fingerprint::BrigadierSocket { data_dir })
+}
+
+/// The data directory of the Brigadier daemon socket named in a sandbox description's
+/// `allowUnixSockets` list.
+fn socket_data_dir(content: &str) -> Option<PathBuf> {
+    let at = content.find("allowUnixSockets")?;
+    let rest = &content[at..];
+    let open = rest.find('[')?;
+    let close = rest[open..].find(']')? + open;
+    let list: Vec<String> = serde_json::from_str(&rest[open..=close]).ok()?;
+    list.iter().find_map(|socket| {
+        socket
+            .strip_suffix(DAEMON_SOCKET)
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from)
+    })
 }

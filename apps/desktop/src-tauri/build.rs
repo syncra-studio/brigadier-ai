@@ -8,6 +8,12 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=UserNotifications");
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rerun-if-changed=src/overnight_notifications.m");
+        cc::Build::new()
+            .file("src/login_item.m")
+            .flag("-fobjc-arc")
+            .compile("brigadier_login_item");
+        println!("cargo:rustc-link-lib=framework=ServiceManagement");
+        println!("cargo:rerun-if-changed=src/login_item.m");
     }
     tauri_build::build();
 }

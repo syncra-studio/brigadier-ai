@@ -22,3 +22,17 @@ export function browserAddress(typed: string): string | null {
   const text = typed.trim();
   return text ? webAddress(text) ?? `https://www.google.com/search?q=${encodeURIComponent(text)}` : null;
 }
+
+/**
+ * What the address bar shows while nobody types in it: the whole URL with Show full URL on,
+ * else only the site (the path, query and fragment show once the field is focused).
+ */
+export function shownAddress(url: string, full: boolean): string {
+  if (full || !url) return url;
+  try {
+    const { protocol, host } = new URL(url);
+    return protocol === "http:" || protocol === "https:" ? host : url;
+  } catch {
+    return url;
+  }
+}

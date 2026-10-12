@@ -1,82 +1,219 @@
+import { useEffect, useState } from "react";
+
 import { useAction } from "@/app/conversation/useAction";
+import { errorText } from "@/app/dialogs/fields";
+import { MemoriesDialog } from "@/app/settings/MemoriesDialog";
 import {
+  SettingsAdvanced,
+  SettingsButton,
   SettingsCard,
   SettingsPage,
   SettingsRow,
   SettingsSection,
   SettingsSelect,
+  selectTrigger,
+  SwitchSetting,
 } from "@/app/settings/parts";
-import { Badge } from "@/components/ui/badge";
-import type { PermissionLevel } from "@/ipc/generated";
 import {
-  NEVER_PUSHES_NOTE,
-  PERMISSION_DETAILS,
+  findModel,
+  ModelSelector,
+  type ModelGroup,
+} from "@/components/assistant-ui/elements/model-selector";
+import { Badge } from "@/components/ui/badge";
+import type { ModelChoice, Node, PermissionLevel } from "@/ipc/generated";
+import {
+  builtInDefault,
+  modelName,
   PERMISSION_LABELS,
   PERMISSION_LEVELS,
+  useAvailableModelGroups,
+  useModelGroups,
+  withChoice,
 } from "@/lib/setup";
+import { cn } from "@/lib/utils";
+import { listMemories } from "@/state/brain";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
-/** What each level lets a session's lead and workers do, and what it risks, in plain words. */
-const LEVEL_COPY: Record<PermissionLevel, { allows: string; risk: string }> = {
-  askForApproval: {
-    allows:
-      "The lead and its workers run in a sandbox. They can read files on this computer, except Brigadier’s own private folders, and write only in the session’s checkout or worktree, the repository’s Git folder, their scratch folders and toolchain caches. They have no internet, except workers that research the web. Anything outside that asks you first, on a card, and you give each plan its go-ahead.",
-    risk: "The safest level. You answer more cards, and work waits for you while you’re away.",
-  },
-  approveForMe: {
-    allows:
-      "The same sandbox, with the internet. When a command needs to leave the sandbox, an automatic reviewer decides instead of you, and the lead gives plans their go-ahead for you. You’re asked only what only you can answer.",
-    risk: "The reviewer can be wrong. With the internet on, what the work downloads runs in the sandbox and data in the project can be sent out.",
-  },
-  fullAccess: {
-    allows:
-      "No sandbox: the lead and its workers run commands like your own terminal, without asking, except that the lead can’t change other sessions’ branches and folders or Brigadier’s own data. They can read, change or delete any other file you can, install software and use the internet.",
-    risk: "A wrong command, or instructions planted in a web page or file (prompt injection), can delete or leak data anywhere on this computer. Use it with projects and sources you trust.",
-  },
+/**
+ * What each level lets a session's lead and workers do, then what it risks, in plain words: the
+ * permission menu's line under each level.
+ */
+export const LEVEL_COPY: Record<PermissionLevel, string> = {
+  askForApproval:
+    "Works in a sandbox, without the internet, and asks you before each plan and anything outside it. The safest level: work waits for you while you’re away.",
+  approveForMe:
+    "The same sandbox with the internet; a reviewer approves plans and steps outside it for you. The reviewer can be wrong, and the project’s data can be sent out.",
+  fullAccess:
+    "No sandbox: runs commands like your own terminal, without asking, though the lead can’t change other sessions’ branches and folders or Brigadier’s own data. A wrong command or planted instructions can delete or leak any of your other files.",
 };
 
+const PERMISSION_LABEL = "Default permission level";
+
+/** A level's row for search: what it allows and risks, found at the permission row. */
 const levelRow = (level: PermissionLevel) => ({
   label: PERMISSION_LABELS[level],
-  description: `${LEVEL_COPY[level].allows} ${LEVEL_COPY[level].risk}`,
+  description: LEVEL_COPY[level],
+  target: PERMISSION_LABEL,
 });
 
 /** The Configuration page's rows, for the page and for Settings search. */
 export const CONFIGURATION_ROWS = {
+  sessionModel: {
+    label: "Model for sessions",
+    description: "Choose the model that leads new sessions, their orchestrator",
+  },
+  chatModel: { label: "Model for chats", description: "Choose the model new chats start with" },
   permission: {
-    label: "Default permission level",
-    description:
-      "Where new sessions start. Pick another level for one session in its composer; changing this leaves started sessions as they are.",
+    label: PERMISSION_LABEL,
+    description: "Choose how much new sessions may do without asking",
   },
   askForApproval: levelRow("askForApproval"),
   approveForMe: levelRow("approveForMe"),
   fullAccess: levelRow("fullAccess"),
-};
+  reviewWork: {
+    label: "Review the work",
+    description: "Choose whether another AI model reviews each change",
+  },
+  shortReplies: {
+    label: "Short replies",
+    description: "Choose whether sessions answer in a few plain lines",
+  },
+  memories: {
+    label: "Memories",
+    description: "What Brigadier remembers about you, used by every chat and session",
+  },
+  fullAccessNotice: {
+    label: "Show the Full access notice",
+    description:
+      "A line above the composer while a conversation's workers run without the OS sandbox",
+  },
+  enrichBrain: {
+    label: "Use spare quota to deepen the Brain",
+    description:
+      "Before a usage window resets with quota left, a cheap model studies your projects further",
+  },
+} as const;
 
+const ADVANCED_LABELS = [
+  CONFIGURATION_ROWS.fullAccessNotice.label,
+  CONFIGURATION_ROWS.enrichBrain.label,
+];
+
+/**
+ * How Brigadier works for the user: one card of the defaults new sessions and chats start with
+ * (models, permission level, reviews, reply length), what Brigadier remembers, then display and
+ * Brain extras under Advanced. Each row says in a line what it chooses; its menu explains the
+ * choices.
+ */
 export function ConfigurationPage() {
+  const groups = useAvailableModelGroups();
+  const orchestrator = useApp((s) => s.settings.defaultOrchestrator);
+  const chatModel = useApp((s) => s.settings.defaultChatModel);
   const permission = useApp((s) => s.settings.defaultPermission);
+  const automatic = builtInDefault(groups);
+
   return (
     <SettingsPage
       title="Configuration"
-      description="Choose how much Brigadier’s sessions may do on this computer without asking you."
+      description="Choose how Brigadier works on your tasks. A project’s own model and level win over these."
     >
-      <SettingsSection title="Permissions">
+      <SettingsCard>
+        <DefaultModelRow
+          setting="defaultOrchestrator"
+          row={CONFIGURATION_ROWS.sessionModel}
+          hint="The first signed-in agent’s default model."
+          groups={groups}
+          value={orchestrator}
+          fallback={automatic}
+        />
+        <DefaultModelRow
+          setting="defaultChatModel"
+          row={CONFIGURATION_ROWS.chatModel}
+          hint="The same model as new sessions."
+          groups={groups}
+          value={chatModel}
+          fallback={orchestrator ?? automatic}
+        />
+        <PermissionRow value={permission} />
+        <SwitchSetting setting="reviewWork" row={CONFIGURATION_ROWS.reviewWork} />
+        <SwitchSetting setting="shortReplies" row={CONFIGURATION_ROWS.shortReplies} />
+      </SettingsCard>
+
+      <SettingsSection title="Memory">
         <SettingsCard>
-          <PermissionRow value={permission} />
+          <MemoriesRow />
         </SettingsCard>
       </SettingsSection>
 
-      <SettingsSection
-        title="What each level allows"
-        description={`A session’s level covers its lead and every worker. ${NEVER_PUSHES_NOTE} Plan mode waits for you to approve its plan at every level, and in a folder you don’t trust, sessions always ask first.`}
+      <SettingsAdvanced
+        description="What the composer shows, and spare quota for the Brain."
+        labels={ADVANCED_LABELS}
       >
-        <SettingsCard>
-          {PERMISSION_LEVELS.map((level) => (
-            <LevelRow key={level} level={level} isDefault={level === permission} />
-          ))}
-        </SettingsCard>
-      </SettingsSection>
+        <SettingsSection title="Composer">
+          <SettingsCard>
+            <SwitchSetting
+              setting="showFullAccessNotice"
+              row={CONFIGURATION_ROWS.fullAccessNotice}
+            />
+          </SettingsCard>
+        </SettingsSection>
+        <SettingsSection title="Brain">
+          <SettingsCard>
+            <SwitchSetting setting="enrichBrain" row={CONFIGURATION_ROWS.enrichBrain} />
+          </SettingsCard>
+        </SettingsSection>
+      </SettingsAdvanced>
     </SettingsPage>
+  );
+}
+
+/**
+ * A default model: "Automatic (‹what it picks now›)", the menu's first choice, or a picked
+ * agent, model and effort.
+ */
+function DefaultModelRow({
+  setting,
+  row,
+  hint,
+  groups,
+  value,
+  fallback,
+}: {
+  setting: "defaultOrchestrator" | "defaultChatModel";
+  row: { label: string; description: string };
+  /** What Automatic picks, under it in the menu. */
+  hint: string;
+  groups: readonly ModelGroup[];
+  value: ModelChoice | null;
+  fallback: ModelChoice;
+}) {
+  const save = useAction();
+  const all = useModelGroups();
+  const change = (choice: ModelChoice | null) => save.run(() => setSetting(setting, choice));
+  // A saved model made unavailable on Providers stays saved; new conversations skip it.
+  const gone = value !== null && findModel(all, value) !== null && findModel(groups, value) === null;
+  return (
+    <SettingsRow
+      label={row.label}
+      description={gone ? "Not available now, so new ones use another model" : row.description}
+      error={save.error}
+    >
+      <ModelSelector
+        label={row.label}
+        groups={value ? withChoice(groups, all, value) : groups}
+        value={value ?? fallback}
+        defaultChoice={fallback}
+        onChange={change}
+        automatic={{
+          chosen: value === null,
+          label: `Automatic (${modelName(groups, fallback)})`,
+          hint,
+          onChoose: () => change(null),
+        }}
+        className={cn(selectTrigger, "text-foreground")}
+      />
+    </SettingsRow>
   );
 }
 
@@ -99,7 +236,7 @@ function PermissionRow({ value }: { value: PermissionLevel }) {
             ) : (
               PERMISSION_LABELS[level]
             ),
-          hint: `${PERMISSION_DETAILS[level]}.`,
+          hint: LEVEL_COPY[level],
         }))}
         onChange={(level) => save.run(() => setSetting("defaultPermission", level))}
       />
@@ -107,22 +244,51 @@ function PermissionRow({ value }: { value: PermissionLevel }) {
   );
 }
 
-/** One level: what it allows, then its risk, marked when it is the default. */
-function LevelRow({ level, isDefault }: { level: PermissionLevel; isDefault: boolean }) {
+/** How many memories Brigadier keeps, and the way to see and forget them. */
+function MemoriesRow() {
+  const [memories, setMemories] = useState<Node[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    let current = true;
+    listMemories().then(
+      (list) => current && setMemories(list),
+      (cause: unknown) => current && setError(errorText(cause)),
+    );
+    return () => {
+      current = false;
+    };
+  }, []);
+
+  const count =
+    memories === null ? null : memories.length === 0 ? "nothing saved yet" : `${memories.length} saved`;
   return (
-    <SettingsRow
-      label={CONFIGURATION_ROWS[level].label}
-      description={
-        <span className="flex flex-col gap-1">
-          <span>{LEVEL_COPY[level].allows}</span>
-          <span>
-            <span className="text-foreground/80 font-medium">Risk: </span>
-            {LEVEL_COPY[level].risk}
-          </span>
-        </span>
-      }
-    >
-      {isDefault && <Badge variant="secondary">Default</Badge>}
-    </SettingsRow>
+    <>
+      <SettingsRow
+        label={
+          <>
+            {CONFIGURATION_ROWS.memories.label}
+            {count && <span className="text-foreground/65 font-normal"> · {count}</span>}
+          </>
+        }
+        // Search and links find it by its name, whatever the count says.
+        setting={CONFIGURATION_ROWS.memories.label}
+        description={CONFIGURATION_ROWS.memories.description}
+        error={error}
+      >
+        <SettingsButton disabled={memories === null} onClick={() => setOpen(true)}>
+          Manage
+        </SettingsButton>
+      </SettingsRow>
+      <MemoriesDialog
+        open={open}
+        onOpenChange={setOpen}
+        memories={memories ?? []}
+        onForgotten={(id) =>
+          setMemories((list) => list?.filter((memory) => memory.id !== id) ?? null)
+        }
+      />
+    </>
   );
 }

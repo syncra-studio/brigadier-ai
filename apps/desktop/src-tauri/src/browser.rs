@@ -3,19 +3,31 @@
 //! It is a plain `wry` webview, not a Tauri one: Tauri gives each of its webviews the app's IPC
 //! bridge, init scripts and custom protocols, and a web page must get none of that. This one
 //! has no app IPC bridge or custom protocols. Its metadata-only handler accepts a bounded PNG
-//! favicon for this tab, with no commands or access to the app. `NO_CAPTURE` takes the
-//! microphone, camera and speech APIs away; it keeps its cookies and
-//! storage in memory only, separate from the app's own webview; it opens only web pages, sends
-//! popups to the system browser, and on macOS denies the page the camera and microphone (wry's
-//! own delegate would grant them; see `browser_ui`). It is made when the tab first loads a page and dropped
-//! when the tab closes. Linux has no embedded page (Tauri's window there is a GTK box a child
-//! can't be laid over); its tab opens pages in the system browser.
+//! favicon for this tab, with no commands or access to the app. `NO_CAPTURE` takes screen
+//! capture and speech recognition away (and on Windows the camera and microphone). Every tab keeps its cookies and site data in one
+//! saved store of its own, apart from the app's own webview and kept per Brigadier data folder
+//! (macOS: a WebKit data store named from the folder; Windows: a WebView2 folder in it), so
+//! sign-ins last like in any browser. It opens only web pages, sends popups to the system
+//! browser, and on macOS gives a page the camera or microphone only as the user chose for its
+//! site (Settings › Browser › Site settings; wry's own delegate would grant them; see
+//! `browser_ui`). It is made when the tab first loads a page and dropped when
+//! the tab closes. Linux has no embedded page (Tauri's window there is a GTK box a child can't
+//! be laid over); its tab opens pages in the system browser.
 
-use brigadier_ipc::app::{BrowserBounds, BrowserEvent};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+use brigadier_ipc::app::{
+    BrowserBounds, BrowserClear, BrowserDownload, BrowserEvent, BrowserOptions, BrowserSite,
+    BrowserVisit, HistoryFilter, SitePermission,
+};
 use brigadier_ipc::protocol::{ErrorCode, IpcError};
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
+
+use crate::browser_store;
 
 fn failed(message: impl Into<String>) -> IpcError {
     IpcError {
@@ -34,11 +46,25 @@ fn allowed(url: &str) -> bool {
     matches!(scheme.as_deref(), Some("http" | "https" | "about" | "blob"))
 }
 
-/// Run in every frame of the tab's pages before their own scripts: takes away the
-/// microphone, camera and speech recognition APIs. The app itself may use the microphone
-/// (dictation), and asking for it here would make the system ask the user on a page's behalf;
-/// a page that still asks is refused (macOS: `browser_ui`; Windows: WebView2 asks the user).
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+/// Run in every frame of the tab's pages before their own scripts: takes away screen capture
+/// and speech recognition (which would listen through the app's own microphone use). On macOS
+/// a page may ask for the camera and microphone, answered per site in `browser_ui`.
+#[cfg(target_os = "macos")]
+const NO_CAPTURE: &str = r#"(() => {
+  const gone = (target, name) => {
+    try {
+      Object.defineProperty(target, name, { get: () => undefined, configurable: false });
+    } catch {}
+  };
+  if (window.MediaDevices) gone(MediaDevices.prototype, "getDisplayMedia");
+  for (const name of ["SpeechRecognition", "webkitSpeechRecognition"]) {
+    gone(window, name);
+  }
+})();"#;
+
+/// Windows has no per-site choices: the camera and microphone APIs go too, so the app's
+/// dictation microphone is never asked for on a page's behalf.
+#[cfg(target_os = "windows")]
 const NO_CAPTURE: &str = r#"(() => {
   const gone = (target, name) => {
     try {
@@ -174,6 +200,93 @@ impl FaviconLimit {
     }
 }
 
+/// A tab's latest page in the browser's history: the page that finished loading, and the title
+/// it showed meanwhile, which may come before or after.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[derive(Default)]
+struct Visit {
+    id: Option<i64>,
+    title: String,
+    /// A page is loading: a title now is the new page's, kept for its visit, never the
+    /// last page's.
+    loading: bool,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl Visit {
+    fn load(
+        &mut self,
+        store: &crate::browser_store::Store,
+        url: &str,
+        loading: bool,
+        agent: bool,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.loading = loading;
+        if loading {
+            self.title.clear();
+            return Ok(());
+        }
+        if !web_page(url) {
+            self.id = None;
+            return Ok(());
+        }
+        let visited = store.visit(self.id, url, &self.title, agent, now);
+        self.id = visited.as_ref().ok().copied();
+        visited.map(drop)
+    }
+
+    fn titled(&mut self, store: &crate::browser_store::Store, title: &str) -> rusqlite::Result<()> {
+        self.title = title.to_owned();
+        match self.id {
+            Some(id) if !self.loading => store.titled(id, title),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// `name` in `dir`, or with " (2)", " (3)"… before its extension while `taken` says that one is.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn free_name(dir: &Path, name: &std::ffi::OsStr, taken: impl Fn(&Path) -> bool) -> PathBuf {
+    let first = dir.join(name);
+    if !taken(&first) {
+        return first;
+    }
+    let name = Path::new(name);
+    let stem = name.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = name
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    (2..)
+        .map(|n| dir.join(format!("{stem} ({n}){extension}")))
+        .find(|path| !taken(path))
+        .unwrap_or(first)
+}
+
+/// Where a download goes, given where WebKit or WebView2 would put it (`suggested`, in the
+/// system's Downloads folder): the user's folder when one is set and there, and with "Ask where
+/// to save" (macOS) where they pick, `None` when they cancel.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn download_target(suggested: &Path) -> Option<PathBuf> {
+    let options = DOWNLOADS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let name = suggested.file_name()?;
+    let chosen = options
+        .as_ref()
+        .map(|options| PathBuf::from(&options.downloads_dir))
+        .filter(|dir| dir.is_absolute() && dir.is_dir());
+    let dir = chosen.or_else(|| suggested.parent().map(Path::to_path_buf))?;
+    let target = free_name(&dir, name, Path::exists);
+    #[cfg(target_os = "macos")]
+    if options.is_some_and(|options| options.ask_downloads) {
+        return crate::browser_ui::save_path(&target);
+    }
+    Some(target)
+}
+
 /// Whether `url` is a web page, which the system browser may open.
 fn web_page(url: &str) -> bool {
     let scheme = url
@@ -185,7 +298,9 @@ fn web_page(url: &str) -> bool {
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod embedded {
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
+    use std::path::PathBuf;
+    use std::rc::Rc;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
@@ -200,9 +315,13 @@ mod embedded {
     use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder};
 
     use super::{
-        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, allowed, failed, favicon_data, web_page,
+        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, Visit, allowed, failed, favicon_data,
+        web_page,
     };
     use crate::shell::MAIN_WINDOW;
+
+    /// A tab's downloads under way, by address: their history entries and where they go.
+    type Downloads = HashMap<String, VecDeque<(Option<i64>, PathBuf)>>;
 
     /// A tab's page.
     struct Tab {
@@ -239,6 +358,7 @@ mod embedded {
         id: String,
         url: String,
         bounds: BrowserBounds,
+        agent: bool,
         events: Channel<BrowserEvent>,
     ) -> Result<(), IpcError> {
         if BROWSERS.with_borrow(|browsers| browsers.contains_key(&id)) {
@@ -255,26 +375,34 @@ mod embedded {
             events.clone(),
             events,
         );
+        let downloads: Rc<RefCell<Downloads>> = Rc::default();
+        let finished = downloads.clone();
         let limit = Arc::new(Mutex::new(FaviconLimit::default()));
+        let visit = Arc::new(Mutex::new(Visit::default()));
+        let title_visit = visit.clone();
         let load_limit = limit.clone();
-        // Windows keeps even a private page's browser process data in a folder; give this tab
-        // its own, apart from the app's webview.
+        let saved = super::data_dir();
+        // Windows: the browser's folder in Brigadier's data folder, apart from the app's webview.
         #[cfg(target_os = "windows")]
-        let mut context = wry::WebContext::new(
-            app.path()
-                .app_local_data_dir()
-                .ok()
-                .map(|dir| dir.join("BrowserTab")),
-        );
+        let mut context = wry::WebContext::new(saved.map(|dir| dir.join("webview2")));
         #[cfg(target_os = "windows")]
         let builder = WebViewBuilder::new_with_web_context(&mut context);
         #[cfg(not(target_os = "windows"))]
         let builder = WebViewBuilder::new();
+        #[cfg(target_os = "macos")]
+        let builder = match saved {
+            Some(dir) => {
+                use wry::WebViewBuilderExtDarwin;
+                builder.with_data_store_identifier(super::store_identifier(dir))
+            }
+            None => builder,
+        };
         let builder = builder
             .with_url(&url)
             .with_bounds(rect(bounds))
             .with_visible(false)
-            .with_incognito(true)
+            // Without a data folder (never in the app) nothing is kept.
+            .with_incognito(saved.is_none())
             .with_initialization_script_for_main_only(NO_CAPTURE, false)
             .with_initialization_script_for_main_only(FAVICON, true)
             .with_ipc_handler(move |request| {
@@ -319,9 +447,38 @@ mod embedded {
                 }
                 ok
             })
-            .with_download_started_handler(move |url, _path| {
-                let _ = on_download.send(BrowserEvent::Blocked { url });
-                false
+            .with_download_started_handler(move |url, path| {
+                let Some(target) = super::download_target(path) else {
+                    return false;
+                };
+                let now = crate::browser_store::now_ms();
+                let id = crate::browser_store::with(|store| {
+                    store.download_started(&url, &target.to_string_lossy(), now)
+                });
+                path.clone_from(&target);
+                downloads
+                    .borrow_mut()
+                    .entry(url)
+                    .or_default()
+                    .push_back((id, target));
+                true
+            })
+            .with_download_completed_handler(move |url, _path, ok| {
+                // macOS never says where it saved; it's where the start was told to.
+                let Some((id, path)) = finished
+                    .borrow_mut()
+                    .get_mut(&url)
+                    .and_then(VecDeque::pop_front)
+                else {
+                    return;
+                };
+                if let Some(id) = id {
+                    crate::browser_store::with(|store| store.download_finished(id, ok));
+                }
+                let _ = on_download.send(BrowserEvent::Downloaded {
+                    path: path.to_string_lossy().into_owned(),
+                    ok,
+                });
             })
             .with_on_page_load_handler(move |event, url| {
                 let loading = matches!(event, PageLoadEvent::Started);
@@ -329,9 +486,23 @@ mod embedded {
                 if loading {
                     held.reset();
                 }
+                drop(held);
+                crate::browser_store::with(|store| {
+                    let now = crate::browser_store::now_ms();
+                    visit
+                        .lock()
+                        .expect("visit lock")
+                        .load(store, &url, loading, agent, now)
+                });
                 let _ = on_load.send(BrowserEvent::Load { url, loading });
             })
             .with_document_title_changed_handler(move |title| {
+                crate::browser_store::with(|store| {
+                    title_visit
+                        .lock()
+                        .expect("visit lock")
+                        .titled(store, &title)
+                });
                 let _ = on_title.send(BrowserEvent::Title { title });
             });
         // macOS: `browser_ui`'s delegate takes the popups instead.
@@ -419,6 +590,7 @@ mod embedded {
         _id: String,
         _url: String,
         _bounds: BrowserBounds,
+        _agent: bool,
         _events: Channel<BrowserEvent>,
     ) -> Result<(), IpcError> {
         Err(failed("pages open in the system browser on this platform"))
@@ -441,6 +613,70 @@ mod embedded {
     pub fn close_all() {}
 }
 
+/// The built-in browser's own folder in Brigadier's data folder, set once at start: its saved
+/// store is named from it, and its history kept in it.
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Keeps the browser's saved data with Brigadier's data folder `data_dir`.
+pub fn set_data_dir(data_dir: &Path) {
+    let _ = DATA_DIR.set(data_dir.join("browser"));
+}
+
+/// The browser's folder, once the app has set it.
+pub fn data_dir() -> Option<&'static Path> {
+    DATA_DIR.get().map(PathBuf::as_path)
+}
+
+/// The WebKit data store that holds the pages' cookies and site data for the browser folder
+/// `dir`: the same folder always gets the same store, and another (a test app's) never shares it.
+#[cfg(any(target_os = "macos", test))]
+pub fn store_identifier(dir: &Path) -> [u8; 16] {
+    let mut hasher = blake3::Hasher::new_derive_key("brigadier browser data store");
+    hasher.update(dir.as_os_str().as_encoded_bytes());
+    let mut id = [0; 16];
+    id.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
+    id
+}
+
+/// Whether the built-in browser exists (Settings › Browser): on until the app says otherwise.
+static ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// The user's download choices, as the app last sent them.
+static DOWNLOADS: Mutex<Option<BrowserOptions>> = Mutex::new(None);
+
+/// Refuses a page while the browser is off: whatever asks, nothing opens in it.
+pub fn check_enabled() -> Result<(), IpcError> {
+    if ENABLED.load(Ordering::Acquire) {
+        Ok(())
+    } else {
+        Err(IpcError {
+            code: ErrorCode::Invalid,
+            message: "Brigadier's browser is off (Settings › Browser)".into(),
+        })
+    }
+}
+
+/// The app's Settings › Browser choices: off drops every tab's page and the browser's menu
+/// items; the download choices apply to the next download.
+#[tauri::command]
+pub fn browser_configure(app: tauri::AppHandle, options: BrowserOptions) {
+    let was = ENABLED.swap(options.enabled, Ordering::AcqRel);
+    if !options.enabled {
+        embedded::close_all();
+    }
+    if was != options.enabled {
+        #[cfg(target_os = "macos")]
+        if let Err(err) = crate::shell::browser_menu(&app, options.enabled) {
+            tracing::warn!(error = %err, "could not change the browser's menu items");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = &app;
+    *DOWNLOADS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(options);
+}
+
 fn web_page_only(url: &str) -> Result<(), IpcError> {
     if web_page(url) {
         Ok(())
@@ -453,22 +689,25 @@ fn web_page_only(url: &str) -> Result<(), IpcError> {
 }
 
 /// Makes the tab `id`'s webview showing `url` at `bounds`; its page events arrive on
-/// `events`. For a tab that has one, it goes to `url` (see `browser_navigate`).
+/// `events`. `agent`: the tab was opened from something an agent gave (its history says so). For a tab that has one, it goes to `url` (see `browser_navigate`).
 #[tauri::command]
 pub fn browser_open(
     app: tauri::AppHandle,
     id: String,
     url: String,
     bounds: BrowserBounds,
+    agent: Option<bool>,
     events: Channel<BrowserEvent>,
 ) -> Result<(), IpcError> {
+    check_enabled()?;
     web_page_only(&url)?;
-    embedded::open(&app, id, url, bounds, events)
+    embedded::open(&app, id, url, bounds, agent.unwrap_or(false), events)
 }
 
 /// Shows `url` in the tab `id`'s webview, at `bounds`.
 #[tauri::command]
 pub fn browser_navigate(id: String, url: String, bounds: BrowserBounds) -> Result<(), IpcError> {
+    check_enabled()?;
     web_page_only(&url)?;
     embedded::navigate(&id, &url, bounds)
 }
@@ -485,12 +724,147 @@ pub fn browser_go(id: String, action: String) -> Result<(), IpcError> {
     embedded::go(&id, &action)
 }
 
+/// The built-in browser's history, newest first: the last visit shown (`before_ms`,
+/// `before_id`) pages through it.
+#[tauri::command]
+pub fn browser_history(
+    query: String,
+    filter: HistoryFilter,
+    before_ms: Option<i64>,
+    before_id: Option<i64>,
+    limit: u32,
+) -> Vec<BrowserVisit> {
+    let before = before_ms.map(|at_ms| (at_ms, before_id.unwrap_or(i64::MAX)));
+    browser_store::with(|store| store.history(&query, filter, before, limit)).unwrap_or_default()
+}
+
+/// Removes pages from the browser's history.
+#[tauri::command]
+pub fn browser_history_remove(ids: Vec<i64>) -> Result<(), IpcError> {
+    browser_store::with(|store| store.remove_visits(&ids))
+        .ok_or_else(|| failed("the browser's history can't be changed now"))
+}
+
+/// The browser's downloads, newest first, whose address or file holds `query`.
+#[tauri::command]
+pub fn browser_downloads(query: String) -> Vec<BrowserDownload> {
+    browser_store::with(|store| store.downloads(&query)).unwrap_or_default()
+}
+
+/// Forgets downloads (the files stay): `ids`, or every finished one with none.
+#[tauri::command]
+pub fn browser_downloads_remove(ids: Option<Vec<i64>>) -> Result<(), IpcError> {
+    browser_store::with(|store| store.remove_downloads(ids.as_deref(), None))
+        .ok_or_else(|| failed("the download history can't be changed now"))
+}
+
+/// The sites that asked for the camera or microphone, with the user's choices.
+#[tauri::command]
+pub fn browser_sites() -> Vec<BrowserSite> {
+    browser_store::with(|store| store.sites()).unwrap_or_default()
+}
+
+/// Sets what the site `origin` may use: the camera, the microphone, or both.
+#[tauri::command]
+pub fn browser_site_set(
+    origin: String,
+    camera: Option<SitePermission>,
+    microphone: Option<SitePermission>,
+) -> Result<(), IpcError> {
+    browser_store::with(|store| {
+        if let Some(choice) = camera {
+            store.set_site(&origin, browser_store::Device::Camera, choice)?;
+        }
+        if let Some(choice) = microphone {
+            store.set_site(&origin, browser_store::Device::Microphone, choice)?;
+        }
+        Ok(())
+    })
+    .ok_or_else(|| failed("the site settings can't be changed now"))
+}
+
+/// Runs `action` with the browser's data store on the main thread, and waits for its answer.
+#[cfg(target_os = "macos")]
+pub async fn on_store<T: Send + 'static>(
+    app: &tauri::AppHandle,
+    action: impl FnOnce([u8; 16], Box<dyn FnOnce(T)>) + Send + 'static,
+) -> Result<T, IpcError> {
+    let identifier = data_dir()
+        .map(store_identifier)
+        .ok_or_else(|| failed("the browser has no data folder yet"))?;
+    let (sent, answer) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        action(
+            identifier,
+            Box::new(move |value| {
+                let _ = sent.send(value);
+            }),
+        );
+    })
+    .map_err(|err| failed(err.to_string()))?;
+    answer
+        .await
+        .map_err(|_| failed("the browser's data store didn't answer"))
+}
+
+/// Settings › Browser › Clear browsing data: removes what `clear` picks, changed since its
+/// time. Cookies, site data and the cache are WebKit's (macOS only; elsewhere the page doesn't
+/// offer them); history, download history and site choices are the browser's own.
+#[tauri::command]
+pub async fn browser_clear(app: tauri::AppHandle, clear: BrowserClear) -> Result<(), IpcError> {
+    let since = clear.since_ms;
+    let kept = browser_store::with(|store| {
+        if clear.history {
+            store.clear_history(since)?;
+        }
+        if clear.downloads {
+            store.remove_downloads(None, since)?;
+        }
+        if clear.sites {
+            store.clear_sites(since)?;
+        }
+        Ok(())
+    });
+    if (clear.history || clear.downloads || clear.sites) && kept.is_none() {
+        return Err(failed("the browser's history can't be changed now"));
+    }
+    #[cfg(target_os = "macos")]
+    if clear.cookies || clear.cache {
+        let (site_data, cache) = (clear.cookies, clear.cache);
+        let done = on_store(&app, move |identifier, done| {
+            crate::browser_ui::remove_data(identifier, site_data, cache, since, done);
+        })
+        .await?;
+        if !done {
+            return Err(failed("the browser's data couldn't be cleared"));
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = &app;
+    Ok(())
+}
+
+/// How many sites the browser keeps cookies or other data for (macOS; `None` elsewhere).
+#[tauri::command]
+pub async fn browser_site_count(app: tauri::AppHandle) -> Result<Option<u32>, IpcError> {
+    #[cfg(target_os = "macos")]
+    {
+        let count = on_store(&app, crate::browser_ui::count_sites).await?;
+        Ok(count.map(|count| u32::try_from(count).unwrap_or(u32::MAX)))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = &app;
+        Ok(None)
+    }
+}
+
 /// Drops every tab's page (on the main thread): the app's own page started again.
 pub fn close_all() {
     embedded::close_all();
 }
 
-/// The tab closed: its page and everything it stored go.
+/// The tab closed: its page goes (what it saved stays in the browser's store).
 #[tauri::command]
 pub fn browser_close(id: String) {
     embedded::close(&id);
@@ -499,6 +873,90 @@ pub fn browser_close(id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_data_folder_has_its_own_lasting_store() {
+        let real = store_identifier(Path::new("/Users/u/Library/Application Support/x/browser"));
+        assert_eq!(
+            real,
+            store_identifier(Path::new("/Users/u/Library/Application Support/x/browser"))
+        );
+        assert_ne!(real, store_identifier(Path::new("/tmp/scratch/browser")));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn a_title_while_the_next_page_loads_is_that_pages() {
+        use crate::browser_store::Store;
+        use brigadier_ipc::app::HistoryFilter;
+        let store = Store::in_memory();
+        let mut visit = Visit::default();
+        let title = |store: &Store| {
+            store
+                .history("", HistoryFilter::All, None, 10)
+                .unwrap()
+                .into_iter()
+                .map(|v| (v.url, v.title))
+                .collect::<Vec<_>>()
+        };
+        visit
+            .load(&store, "https://a.test/", true, false, 1)
+            .unwrap();
+        visit
+            .load(&store, "https://a.test/", false, false, 2)
+            .unwrap();
+        visit.titled(&store, "A").unwrap();
+        // B shows its title before it finishes loading: A keeps its own.
+        visit
+            .load(&store, "https://b.test/", true, false, 3)
+            .unwrap();
+        visit.titled(&store, "B").unwrap();
+        assert_eq!(title(&store), [("https://a.test/".into(), "A".into())]);
+        visit
+            .load(&store, "https://b.test/", false, false, 4)
+            .unwrap();
+        // A reload takes the title it showed.
+        visit
+            .load(&store, "https://b.test/", true, false, 5)
+            .unwrap();
+        visit.titled(&store, "B, again").unwrap();
+        visit
+            .load(&store, "https://b.test/", false, false, 6)
+            .unwrap();
+        assert_eq!(
+            title(&store),
+            [
+                ("https://b.test/".into(), "B, again".into()),
+                ("https://a.test/".into(), "A".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_download_takes_a_free_name_in_its_folder() {
+        let dir = Path::new("/d");
+        let taken = |names: &'static [&'static str]| {
+            move |path: &Path| names.iter().any(|name| Path::new("/d").join(name) == path)
+        };
+        let name = std::ffi::OsStr::new("report.pdf");
+        assert_eq!(free_name(dir, name, taken(&[])), Path::new("/d/report.pdf"));
+        assert_eq!(
+            free_name(dir, name, taken(&["report.pdf", "report (2).pdf"])),
+            Path::new("/d/report (3).pdf")
+        );
+        assert_eq!(
+            free_name(dir, std::ffi::OsStr::new("notes"), taken(&["notes"])),
+            Path::new("/d/notes (2)")
+        );
+    }
+
+    #[test]
+    fn nothing_opens_while_the_browser_is_off() {
+        ENABLED.store(false, Ordering::Release);
+        assert!(check_enabled().is_err());
+        ENABLED.store(true, Ordering::Release);
+        assert!(check_enabled().is_ok());
+    }
 
     fn offer(limit: &mut FaviconLimit, data_url: &str, now: Instant) -> FaviconStep {
         limit.offer("https://example.com/".into(), data_url.into(), now)

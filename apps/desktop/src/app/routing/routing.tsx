@@ -33,7 +33,7 @@ import { AREA_LABELS, AREAS, RANKED_CATEGORIES } from "@/lib/routing";
 import { resetToAutomatic, useRoutePreview } from "@/state/routing";
 import { useApp } from "@/state/store";
 
-/** The Routing page's rows, for Settings search; the page renders this copy. */
+/** Routing's rows on the Providers page, for Settings search; the page renders this copy. */
 export const ROUTING_ROWS = {
   simple: {
     label: "Who does what",
