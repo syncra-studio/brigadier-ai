@@ -100,6 +100,7 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
   const chains = new Map<string, Promise<void>>();
   const loads = new Map<string, Promise<void>>();
   const openings = new Map<string, number>();
+  const readers = new Map<string, number>();
   /** A change heard while a save was running, checked once it ends. */
   const pendingChange = new Map<string, string | null>();
 
@@ -111,13 +112,16 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
   }
 
   /** Reads the page; a newer recovery copy wins, or shows as a conflict if the file moved on. */
-  function open(id: string): Promise<void> {
+  function open(id: string, retain = true): Promise<void> {
     openings.set(id, (openings.get(id) ?? 0) + 1);
+    // A load retry doesn't attach another editor; a second tab does, even after a load failed.
+    if (retain) readers.set(id, (readers.get(id) ?? 0) + 1);
     if (get(id) && get(id)!.status !== "failed") return loads.get(id) ?? Promise.resolve();
     usePageEdits.setState(({ pages }) => ({ pages: { ...pages, [id]: {
       status: "loading", content: EMPTY_PAGE, revision: "", dirty: false, conflict: null, error: null, version: 0,
     } } }));
     const load = ipc.read(id).then((page) => {
+      if (!get(id)) return;
       const recovery = readRecovery(id);
       const recovered = recovery && !samePage(recovery.content, page.content) ? recovery : null;
       if (recovery && !recovered) writeRecovery(id, null);
@@ -130,6 +134,7 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
         set(id, { status: "ready", content: page.content, revision: page.revision, version: get(id)!.version + 1 });
       }
     }, (error: unknown) => {
+      if (!get(id)) return;
       const recovery = readRecovery(id);
       // A page whose file is gone still has its unsaved text here; it can be kept as a new page.
       set(id, recovery
@@ -246,9 +251,10 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
   /** The editor closed; what is waiting is saved first. */
   function close(id: string): Promise<void> {
     const opening = openings.get(id);
+    readers.set(id, Math.max(0, (readers.get(id) ?? 1) - 1));
     return flush(id).finally(() => {
       const current = get(id);
-      if (openings.get(id) === opening && current && !current.dirty && !current.conflict) {
+      if (!readers.get(id) && openings.get(id) === opening && current && current.status !== "loading" && !current.dirty && !current.conflict) {
         usePageEdits.setState(({ pages }) => {
           const { [id]: _gone, ...rest } = pages;
           return { pages: rest };
@@ -259,6 +265,7 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
 
   /** The page was deleted on purpose: nothing of it is kept. */
   function forget(id: string): void {
+    readers.delete(id);
     clearTimeout(timers.get(id));
     timers.delete(id);
     writeRecovery(id, null);

@@ -50,6 +50,22 @@ function gate() {
   return { promise, resolve };
 }
 
+test("closing one of two tabs for a page keeps the remaining editor and its saves", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  daemon.put("shared", text("base"));
+  const editing = createPageEditing(daemon.ipc, 10_000);
+  await editing.open("shared");
+  await editing.open("shared");
+  await editing.close("shared");
+  assert.equal(usePageEdits.getState().pages.shared?.content.body, "base");
+  editing.edit("shared", text("remaining tab's edit"));
+  await editing.flush("shared");
+  assert.equal(daemon.pages.get("shared")!.content.body, "remaining tab's edit");
+  await editing.close("shared");
+  assert.equal(usePageEdits.getState().pages.shared, undefined);
+});
+
 test("reopening while the previous tab flushes keeps the reopened editor", async () => {
   data.clear();
   const daemon = fakeDaemon();

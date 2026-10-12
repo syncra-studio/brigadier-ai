@@ -73,7 +73,7 @@ function OpenPage({ conversationId, tab, pageId, active }: { conversationId: str
     return (
       <div className="page-tab">
         <Banner tone="error" text={`Could not open the page: ${page.error ?? "unknown error"}`}>
-          <Button size="sm" variant="ghost" onClick={() => void editing.open(pageId)}>Try again</Button>
+          <Button size="sm" variant="ghost" onClick={() => void editing.open(pageId, false)}>Try again</Button>
         </Banner>
       </div>
     );
