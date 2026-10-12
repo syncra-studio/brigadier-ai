@@ -46,6 +46,8 @@
  *                                             thread-composer-gap, thread-fade-{bottom,top} (globals.css)
  *               size-attachment-thumb, w-attachment-card  an image attachment, a file attachment
  *               mx-rail-inset, -mb-rail-tuck  the composer rail: its side inset, the tuck under the card
+ *               {px,py,gap,size,h}-notice-*   the Full access card (nine tenths of a card), with
+ *                                             text-notice, text-notice-button
  *   Layout      w-sidebar, min-w-sidebar-min, max-w-sidebar-max  the sidebar panel: default
  *                                             width and how far it resizes
  *               w-sidebar-strip               the sidebar panel collapsed to its icons
@@ -206,6 +208,17 @@
   --spacing-thread-fade-top: 1.25rem;
   /* The composer grows with its text up to a quarter of the window, then scrolls. */
   --spacing-composer-max: 25dvh;
+  /* The Full access card above the composer: nine tenths of a card's padding, gaps, icon and
+     buttons, its heights on whole pixels so the thread's floating footer stays on the pixel
+     grid. */
+  --spacing-notice-x: calc(var(--spacing) * 3.6);
+  --spacing-notice-y: round(calc(var(--spacing) * 2.7), 1px);
+  --spacing-notice-gap: round(calc(var(--spacing) * 1.8), 1px);
+  --spacing-notice-gap-wide: calc(var(--spacing) * 2.7);
+  --spacing-notice-icon: calc(var(--spacing-icon-md) * 0.9);
+  --spacing-notice-button: round(calc(var(--spacing-control-xs) * 0.9), 1px);
+  --spacing-notice-close: round(calc(var(--spacing-icon-button-sm) * 0.9), 1px);
+  --spacing-notice-close-icon: calc(var(--spacing-icon-sm) * 0.9);
   /* The pinned summary: its gap to the top bar and the thread pane's edges (also the gap
      between its cards), how short a card may get before the cards scroll together instead (its
      own height when shorter), and how far the thread's column moves aside for it in a pane too
@@ -412,6 +425,10 @@
   --text-xs--line-height: 1rem;
   --text-sm: 0.875rem;
   --text-sm--line-height: 1.25rem;
+  /* The Full access card's text and its buttons' (nine tenths of text-sm and text-xs). */
+  --text-notice: calc(var(--text-sm) * 0.9);
+  --text-notice--line-height: round(calc(var(--text-sm--line-height) * 0.9), 1px);
+  --text-notice-button: calc(var(--text-xs) * 0.9);
   --text-base: 0.9375rem;
   --text-base--line-height: 1.5rem;
   --text-lg: 1.0625rem;

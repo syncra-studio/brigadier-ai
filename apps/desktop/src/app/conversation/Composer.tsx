@@ -58,6 +58,7 @@ import { ModelSelector } from "@/components/assistant-ui/elements/model-selector
 import { ContextRing } from "@/components/assistant-ui/context-ring";
 import { ShieldExclamation } from "@/components/glyphs/permission-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
+import { Button } from "@/components/ui/button";
 import type { Conversation } from "@/ipc/generated";
 import type { ComposerProps } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -132,7 +133,8 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
         {conversation && (
           <Mentions conversation={conversation} targets={targets} />
         )}
-        {conversation && !archived && <FullAccessNotice conversation={conversation} />}
+        {/* Out of the way while a decision waits above the composer (see FullAccessNotice). */}
+        {conversation && !archived && !current && !slot && <FullAccessNotice conversation={conversation} />}
         <SlashCommands
           conversation={conversation}
           groups={resolved.groups}
@@ -292,9 +294,13 @@ function ComposerContextRing() {
 const closedNotices = new Set<string>();
 
 /**
- * The Full access line above the composer, while a session's workers run without the OS
- * sandbox: one calm row like the notices above it. × closes it for this conversation; "Don't
- * show again" turns it off in Settings, where it can be turned back on.
+ * The "Full access is on" card above the composer, while a session's workers run without the
+ * OS sandbox: the full warning at nine tenths of a card's usual size (its padding, type, icon
+ * and buttons; heights rounded to whole pixels, so the thread's footer stays on the pixel grid),
+ * rounded like the composer. It steps aside while a question, proposal or approval
+ * waits above the composer, so it never pushes that card or the thread's last lines out of
+ * view. × closes it for this conversation; "Don't show again" turns it off in Settings, where it
+ * can be turned back on.
  */
 function FullAccessNotice({ conversation }: { conversation: Conversation }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
@@ -309,38 +315,47 @@ function FullAccessNotice({ conversation }: { conversation: Conversation }) {
     <section
       aria-label="Full access is on"
       data-slot="full-access-notice"
-      className="bg-muted text-foreground rounded-control mb-2 flex items-center gap-2 px-3 py-1.5 text-xs"
+      className="@container/notice animate-rail-open bg-rail border-foreground/10 rounded-composer mb-2 border px-notice-x py-notice-y text-notice motion-reduce:animate-none"
     >
-      <ShieldExclamation aria-hidden className="text-muted-foreground size-icon-xs shrink-0" />
-      <p className="min-w-0 flex-1">
-        Full access: workers run without asking.{" "}
-        <button
-          type="button"
-          className="text-muted-foreground hover:text-foreground underline underline-offset-2"
-          onClick={openPermissionsHelp}
-        >
-          Learn more
-        </button>
-      </p>
-      <button
-        type="button"
-        className="text-muted-foreground hover:text-foreground shrink-0"
-        onClick={() =>
-          void setSetting("showFullAccessNotice", false).catch(
-            (error: unknown) => console.error("couldn't save the setting", error),
-          )
-        }
-      >
-        Don’t show again
-      </button>
-      <button
-        type="button"
-        aria-label="Close"
-        className="text-muted-foreground hover:text-foreground shrink-0"
-        onClick={close}
-      >
-        <X className="size-icon-xs" />
-      </button>
+      {/* Narrow, the buttons go under the text, so the text keeps the width to read. */}
+      <div className="flex flex-col gap-notice-gap @lg/notice:flex-row @lg/notice:items-center @lg/notice:gap-notice-gap-wide">
+        <div className="flex min-w-0 flex-1 items-center gap-notice-gap-wide">
+          <ShieldExclamation className="size-notice-icon shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">Full access is on</p>
+            <p className="text-muted-foreground">
+              Brigadier’s workers can edit any file and run commands with internet access without
+              your approval. This increases the risk of data loss, exposed information, and
+              unexpected changes.{" "}
+              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={openPermissionsHelp}>
+                Learn more
+              </button>{" "}
+              about elevated risks.
+            </p>
+          </div>
+        </div>
+        <div className="border-foreground/10 flex shrink-0 items-center justify-end gap-1 @lg/notice:self-stretch @lg/notice:border-s @lg/notice:ps-notice-gap-wide">
+          <Button
+            size="xs"
+            className="rounded-capsule h-notice-button text-notice-button"
+            onClick={() =>
+              void setSetting("showFullAccessNotice", false).catch(
+                (error: unknown) => console.error("couldn't save the setting", error),
+              )
+            }
+          >
+            Don’t show again
+          </Button>
+          <TooltipIconButton
+            tooltip="Close"
+            side="bottom"
+            className="rounded-capsule size-notice-close"
+            onClick={close}
+          >
+            <X className="size-notice-close-icon" />
+          </TooltipIconButton>
+        </div>
+      </div>
     </section>
   );
 }
