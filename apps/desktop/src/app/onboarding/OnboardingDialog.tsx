@@ -13,6 +13,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { introRelease } from "@/ipc/client";
 import { useRevealed } from "@/lib/splash";
 import { cn } from "@/lib/utils";
 import { finishOnboarding, useOnboarding } from "@/state/onboarding";
@@ -52,6 +53,11 @@ export function OnboardingDialog() {
   useEffect(() => {
     if (intro) preloadWelcomeSound().catch((error: unknown) => console.error(error));
   }, [intro]);
+
+  // A window held for the intro (src-tauri/src/intro.rs) shows normally when there's none.
+  useEffect(() => {
+    if (revealed && catalogLoaded && !intro) introRelease().catch((error: unknown) => console.error(error));
+  }, [revealed, catalogLoaded, intro]);
 
   // A first launch's setup fills the window, so the startup screen fades onto its backdrop
   // rather than the app it hasn't been seen over yet; the setup opens over this once revealed.

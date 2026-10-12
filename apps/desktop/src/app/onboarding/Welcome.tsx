@@ -1,7 +1,9 @@
-import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
+import { IntroCanvas, WINDOW_SHAPED } from "@/app/onboarding/IntroCanvas";
 import { useFocusOnMount } from "@/app/onboarding/parts";
+import { StaggerText } from "@/app/onboarding/StaggerText";
 import { playWelcomeSound, preloadWelcomeSound } from "@/app/onboarding/welcomeSound";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -9,15 +11,17 @@ import { Button } from "@/components/ui/button";
 import { DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
+import { introBegin, introFinish, introRelease, introShaped, onIntroEnded } from "@/ipc/client";
 
 /** How long the intro waits for its sound to load before it starts without it. */
 const SOUND_WAIT_MS = 1500;
-/** How long the mark turns, from just after it lands. */
-const TURN_MS = 1000;
-const TURN_AFTER_LAND_MS = 100;
+/** How long the window's page takes to show clear before the window does. */
+const STAGE_PAINT_MS = 50;
+/** The desktop's dim fading out, early (Escape, the window ending it). */
+const QUICK_LIFT_MS = 300;
 
-/** The first launch's heading, a word at a time (styles/onboarding.css staggers them). */
-const HEADING = ["Welcome ", "to ", "Brigadier"];
+const HEADING = "Welcome to Brigadier";
+const LINE = "Your next idea starts here.";
 
 /** A time token from tokens.css ("2.2s", "450ms") in milliseconds. */
 function tokenMs(name: string): number {
@@ -30,12 +34,21 @@ function reducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/** The page shows clear while the window is staged, so only the orb is seen (onboarding.css). */
+function setPageStaged(staged: boolean): void {
+  if (staged) document.documentElement.dataset.intro = "staged";
+  else delete document.documentElement.dataset.intro;
+}
+
 /**
- * The first launch's welcome, then the name. The intro starts with its sound: the mark's
- * strokes gather and its core lands as the sound blooms, the mark turns once, rises above
- * "Welcome to Brigadier", and Continue appears last; only then can it be used (Enter too, as
- * it takes the focus). Escape shows the end at once, as reduced motion does. The name step
- * keeps the mark where it came to rest and asks what to call the user.
+ * The first launch's welcome, then the name. The intro starts with its sound. On macOS's
+ * first launch the desktop dims and the window shows only a comet, which streaks in and
+ * becomes Brigadier's mark, then flares open into the window; the window's chrome comes back
+ * around faint white waves on the shell's dark. As the dim lifts, "Welcome to Brigadier" and
+ * its line come in a letter at a time, and Continue appears last; only then can it be used
+ * (Enter too, as it takes the focus). Elsewhere it plays the same inside the window, without
+ * the dim. Escape shows the end at once, as reduced motion does. The name step shows the mark
+ * above the question.
  */
 export function Welcome({
   step,
@@ -52,106 +65,171 @@ export function Welcome({
   onContinue: () => void;
   onName: (name: string) => Promise<void>;
 }) {
-  const [started, setStarted] = useState(false);
-  const [assembling, setAssembling] = useState(true);
-  const [spinning, setSpinning] = useState(false);
+  const [start, setStart] = useState<number | null>(null);
   const [settled, setSettled] = useState(() => step !== "intro" || reducedMotion());
   const [ready, setReady] = useState(settled);
+  // The gradient stays until it has faded out behind the name.
+  const [canvasShown, setCanvasShown] = useState(step === "intro");
+  // The window is staged for the intro (intro.rs) until its dim starts lifting.
+  const staged = useRef(false);
   const onSoundRef = useRef(onSound);
   useEffect(() => {
     onSoundRef.current = onSound;
   }, [onSound]);
 
-  // The intro starts when its sound does (or without it, if it can't play).
+  // Shows the intro's end at once; the window's own state comes back with it.
+  const settle = useCallback(() => {
+    setSettled(true);
+    setReady(true);
+    setPageStaged(false);
+    if (staged.current) {
+      staged.current = false;
+      void introFinish(QUICK_LIFT_MS).catch((error: unknown) => console.error(error));
+    }
+  }, []);
+
+  // The intro starts with its sound (or without it, if it can't play), once the window shows.
   useEffect(() => {
     if (step !== "intro") return;
     let live = true;
-    const begin = () => {
-      if (live) setStarted(true);
-    };
+    const still = reducedMotion();
     const waited = new Promise<"late">((resolve) => setTimeout(() => resolve("late"), SOUND_WAIT_MS));
-    void Promise.race([preloadWelcomeSound(), waited])
-      .then((loaded) => {
-        if (!live) return;
-        if (loaded === "late") {
-          console.error("the welcome sound took too long to load; the intro starts without it");
-          begin();
+    void (async () => {
+      const loaded = await Promise.race([
+        preloadWelcomeSound().then(
+          () => "loaded" as const,
+          (error: unknown) => {
+            console.error("the welcome sound can't load", error);
+            return "failed" as const;
+          },
+        ),
+        waited,
+      ]);
+      if (!live) return;
+      if (loaded === "late") console.error("the welcome sound took too long to load; the intro starts without it");
+      if (still) {
+        await introRelease().catch((error: unknown) => console.error(error));
+      } else {
+        setPageStaged(true);
+        await new Promise((resolve) => setTimeout(resolve, STAGE_PAINT_MS));
+        const shown = await introBegin().catch((error: unknown) => {
+          console.error("the window can't stage the intro", error);
+          return false;
+        });
+        if (!live) {
+          setPageStaged(false);
+          if (shown) void introFinish(0).catch((error: unknown) => console.error(error));
           return;
         }
-        return playWelcomeSound().then((stop) => {
+        staged.current = shown;
+        if (!shown) setPageStaged(false);
+      }
+      if (loaded === "loaded") {
+        try {
+          const stop = await playWelcomeSound();
           if (!live) {
             stop();
             return;
           }
           onSoundRef.current(stop);
-          begin();
-        });
-      })
-      .catch((error: unknown) => {
-        console.error("the welcome sound can't play", error);
-        begin();
-      });
+        } catch (error) {
+          console.error("the welcome sound can't play", error);
+        }
+      }
+      if (live) setStart(performance.now());
+    })();
     return () => {
       live = false;
     };
     // The intro plays once per mount; a later Escape doesn't restart it.
   }, [step]);
 
-  // Once the core has landed, the strokes stop being animated and the mark turns once.
+  // The window's beats, from the intro's start.
   useEffect(() => {
-    if (!started || settled) return;
-    const land = tokenMs("--intro-land") + TURN_AFTER_LAND_MS;
+    if (start === null || settled) return;
+    const at = (ms: number, beat: () => void) => setTimeout(beat, start + ms - performance.now());
     const timers = [
-      setTimeout(() => {
-        setAssembling(false);
-        setSpinning(true);
-      }, land),
-      setTimeout(() => setSpinning(false), land + TURN_MS),
+      at(WINDOW_SHAPED * 1000, () => {
+        setPageStaged(false);
+        if (staged.current) void introShaped().catch((error: unknown) => console.error(error));
+      }),
+      at(tokenMs("--intro-dim-lift-at"), () => {
+        if (!staged.current) return;
+        staged.current = false;
+        void introFinish(tokenMs("--intro-dim-lift")).catch((error: unknown) => console.error(error));
+      }),
     ];
     return () => timers.forEach(clearTimeout);
-  }, [started, settled]);
+  }, [start, settled]);
 
-  // Escape during the intro shows its end.
+  // Escape during the intro shows its end; so does the window ending the intro itself.
   useEffect(() => {
     if (step !== "intro" || settled) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      setSettled(true);
-      setSpinning(false);
-      setReady(true);
+      settle();
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [step, settled]);
+    const ended = onIntroEnded(settle);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      void ended.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, [step, settled, settle]);
 
+  // Leaving with the window still staged (the setup closed) restores it.
+  useEffect(
+    () => () => {
+      setPageStaged(false);
+      if (staged.current) void introFinish(0).catch((error: unknown) => console.error(error));
+    },
+    [],
+  );
+
+  const playing = start !== null && !settled;
   return (
     <div
       className="welcome"
       data-step={step}
-      data-started={started || undefined}
-      data-assembling={(started && assembling && !settled) || undefined}
+      data-started={start !== null || undefined}
       data-settled={settled || undefined}
       data-tauri-drag-region
     >
-      <div className="welcome-glow" aria-hidden />
-      <div className="welcome-mark" aria-hidden>
-        <BrigadierGlyph spinning={spinning} />
-      </div>
+      {canvasShown && (
+        <IntroCanvas
+          start={start}
+          settled={settled}
+          still={reducedMotion()}
+          onUnavailable={settle}
+          className="welcome-canvas"
+          onTransitionEnd={() => {
+            if (step !== "intro") setCanvasShown(false);
+          }}
+        />
+      )}
       {step === "intro" ? (
         <>
           <div className="welcome-copy">
             <DialogTitle asChild>
-              <h1 className="welcome-heading" aria-label={HEADING.join("")}>
-                {HEADING.map((word) => (
-                  <span key={word} aria-hidden>
-                    {word}
-                  </span>
-                ))}
+              <h1 className="welcome-heading" aria-label={HEADING}>
+                <StaggerText
+                  text={HEADING}
+                  play={playing}
+                  delayMs={tokenMs("--intro-heading")}
+                  staggerMs={tokenMs("--intro-letter-stagger")}
+                />
               </h1>
             </DialogTitle>
-            <p className="welcome-line text-muted-foreground mt-3 text-lg">Your next idea starts here.</p>
+            <p className="welcome-line text-muted-foreground mt-3 text-lg" aria-label={LINE}>
+              <StaggerText
+                text={LINE}
+                play={playing}
+                delayMs={tokenMs("--intro-line-at")}
+                staggerMs={tokenMs("--intro-line-stagger")}
+              />
+            </p>
           </div>
           <div
             className="welcome-continue"
@@ -165,7 +243,12 @@ export function Welcome({
           </div>
         </>
       ) : (
-        <NameForm name={name} onName={onName} />
+        <>
+          <div className="welcome-mark" aria-hidden>
+            <BrigadierGlyph />
+          </div>
+          <NameForm name={name} onName={onName} />
+        </>
       )}
     </div>
   );

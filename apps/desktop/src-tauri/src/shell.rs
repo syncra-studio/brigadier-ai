@@ -406,6 +406,8 @@ pub fn show_main(app: &AppHandle) {
 }
 
 pub fn hide_main(app: &AppHandle) {
+    // The first launch's intro doesn't outlive its window being seen.
+    crate::intro::interrupt(app);
     if let Some(window) = main_window(app) {
         let _ = window.hide();
     }

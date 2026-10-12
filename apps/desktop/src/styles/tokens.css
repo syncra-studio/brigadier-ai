@@ -854,31 +854,27 @@
 }
 
 /* ── First launch ───────────────────────────────────────────────────────────────────────────
-   The welcome intro and the setup after it (styles/onboarding.css, app/onboarding). The
-   intro's beats match the welcome sound's (scripts/render-welcome-sound.mjs: LAND, HEADING,
-   CONTINUE) and the spin's start in Welcome.tsx. */
+   The welcome intro and the setup after it (styles/onboarding.css, app/onboarding), from the
+   moment the intro starts. The comet's beats are drawn by app/onboarding/IntroCanvas.tsx: it
+   streaks in from 0.25 s, reaches the centre at 2.2 s and has become the mark by 2.9 s, which
+   flares out at 3.5 s and has all but filled the window at 3.9 s, when the window's chrome
+   comes back (src-tauri/src/intro.rs dims the desktop from 0 s). The welcome sound's beats
+   match (scripts/render-welcome-sound.mjs: LAND, FLARE, HEADING, CONTINUE). */
 :root {
-  /* The strokes gather from here, staggered from the middle out; the core lands at --intro-land. */
-  --intro-strokes-at: 0.25s;
-  --intro-stroke-in: 1.3s;
-  --intro-stroke-stagger: 90ms;
-  --intro-stroke-rise: 2.75rem;
-  --intro-land: 2.2s;
-  --intro-core-in: 0.45s;
-  /* After its turn, the mark rises and shrinks to sit above the heading. */
-  --intro-rise-at: 3.6s;
-  --intro-rise: 0.9s;
-  --intro-heading: 4.2s;
-  --intro-word-stagger: 80ms;
-  --intro-line-at: 4.9s;
-  --intro-continue: 5.8s;
-  --intro-text-in: 0.7s;
+  /* The desktop's dim lifts from here, over this long. */
+  --intro-dim-lift-at: 4.4s;
+  --intro-dim-lift: 1.85s;
+  /* The heading, then its line, a letter at a time (app/onboarding/StaggerText.tsx). */
+  --intro-heading: 4.6s;
+  --intro-letter-stagger: 35ms;
+  --intro-line-at: 5.2s;
+  --intro-line-stagger: 14ms;
+  --intro-continue: 6.5s;
+  --intro-continue-in: 0.45s;
   --intro-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* The mark above the name field. */
   --intro-mark-size: 8.5rem;
-  /* The mark's resting size above the heading and the name field, as a scale of the above. */
   --intro-mark-rest: 0.7;
-  --intro-glow: color-mix(in oklab, var(--foreground) 9%, transparent);
-  --intro-glow-size: 34rem;
   /* A step of the setup coming in: its lines rise this far, this far apart. */
   --onboarding-step-in: 0.35s;
   --onboarding-rise: 0.5rem;

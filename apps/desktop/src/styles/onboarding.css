@@ -1,35 +1,29 @@
 /* The first launch (app/onboarding): the welcome intro, the name, then the setup steps. Its
    timings and sizes are the "First launch" tokens in tokens.css.
 
-   The intro, from the moment its sound starts (`data-started` on `.welcome`):
-   - the mark's fifteen thin strokes rise into place from alternating sides, the middle ones
-     first, and its core lands at --intro-land with a soft glow (`data-assembling`, which
-     Welcome.tsx takes off once they are in place, so the mark's turn can redraw them freely);
-   - the mark turns once like a globe (Welcome.tsx spins it), then rises and shrinks to its
-     rest above the heading;
-   - the heading's words come in one by one, then its line, then Continue, whose animation
-     ending is what makes it usable.
-   Escape (`data-settled`) and reduced motion show the end of all that at once. */
+   The intro, from the moment it starts (`data-started` on `.welcome`): the comet, the mark it
+   becomes and the waves the mark opens into are drawn on `.welcome-canvas` (IntroCanvas.tsx);
+   the heading and its line come in a letter at a time (StaggerText.tsx); Continue comes in
+   last, and its animation ending is what makes it usable. Escape (`data-settled`) and reduced motion show the end of all that at once. */
 
 .welcome {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  /* Where the mark rests above the heading and the name field. */
-  --welcome-mark-rest: translateY(-5.5rem) scale(var(--intro-mark-rest));
 }
 
-.welcome-glow {
+.welcome-canvas {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  width: var(--intro-glow-size);
-  height: var(--intro-glow-size);
-  translate: -50% -50%;
-  border-radius: 50%;
-  background: radial-gradient(closest-side, var(--intro-glow), transparent);
-  opacity: 0.5;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
+  transition: opacity var(--onboarding-step-in) var(--intro-ease);
+}
+
+/* Behind the name, the waves fade into the setup's backdrop, the same dark (then go). */
+.welcome[data-step="name"] .welcome-canvas {
+  opacity: 0;
 }
 
 .welcome-mark {
@@ -39,8 +33,8 @@
   width: var(--intro-mark-size);
   height: var(--intro-mark-size);
   margin: calc(var(--intro-mark-size) / -2) 0 0 calc(var(--intro-mark-size) / -2);
-  transform: var(--welcome-mark-rest);
   color: var(--foreground);
+  pointer-events: none;
 }
 
 .welcome-mark > svg {
@@ -50,12 +44,13 @@
   overflow: visible;
 }
 
-.welcome-mark > svg > * {
-  transform-box: view-box;
-  transform-origin: 50% 50%;
+/* Above the name, the mark rests over the question. */
+.welcome[data-step="name"] .welcome-mark {
+  transform: translateY(-5.5rem) scale(var(--intro-mark-rest));
+  animation: onboarding-in var(--onboarding-step-in) var(--intro-ease) both;
 }
 
-/* The heading, its line, or the name form: below the mark's rest, centred. */
+/* The heading and its line, centred; or the name form, below the mark's rest. */
 .welcome-copy {
   position: absolute;
   top: calc(50% - 1rem);
@@ -69,6 +64,11 @@
   text-align: center;
 }
 
+.welcome[data-step="intro"] .welcome-copy {
+  top: 50%;
+  translate: 0 -50%;
+}
+
 .welcome-heading {
   font-size: var(--welcome-heading);
   line-height: 1.15;
@@ -76,9 +76,14 @@
   font-weight: 500;
 }
 
-.welcome-heading > span {
+.stagger-word {
   display: inline-block;
-  white-space: pre;
+  white-space: nowrap;
+}
+
+.stagger-char {
+  display: inline-block;
+  transform-origin: 0 100%;
 }
 
 /* Level with the steps' footer buttons (parts.tsx: pb-8, gap-3, then a text-xs note), so
@@ -90,102 +95,49 @@
   translate: -50% 0;
 }
 
-/* ── Before the sound starts: nothing but the backdrop ─────────────────────────────────── */
+/* ── Before it starts: nothing but the backdrop ───────────────────────────────────────── */
 
-.welcome[data-step="intro"]:not([data-started], [data-settled]) :is(.welcome-mark, .welcome-copy, .welcome-continue, .welcome-glow) {
+.welcome[data-step="intro"]:not([data-started], [data-settled]) :is(.welcome-copy, .welcome-continue) {
   opacity: 0;
 }
 
 /* ── Playing ───────────────────────────────────────────────────────────────────────────── */
 
-.welcome[data-started]:not([data-settled]) .welcome-glow {
-  animation: intro-glow calc(var(--intro-land) + 2.4s) ease-out both;
-}
-
-.welcome[data-started]:not([data-settled]) .welcome-mark {
-  animation: intro-rise var(--intro-rise) var(--intro-ease) var(--intro-rise-at) both;
-}
-
-.welcome[data-assembling] .welcome-mark > svg > path:nth-child(-n + 15) {
-  animation: intro-stroke var(--intro-stroke-in) var(--intro-ease) both;
-  animation-delay: calc(var(--intro-strokes-at) + var(--stroke-order) * var(--intro-stroke-stagger));
-}
-
-/* The core (its disc and bars) lands as the last strokes settle. */
-.welcome[data-assembling] .welcome-mark > svg > :nth-child(n + 16) {
-  animation: intro-core var(--intro-core-in) cubic-bezier(0.2, 0.9, 0.3, 1.15) both;
-  animation-delay: calc(var(--intro-land) - var(--intro-core-in));
-}
-
-/* Each stroke's place in the gathering (the middle first) and the side it rises from. */
-.welcome-mark > svg > path:nth-child(odd) { --stroke-from: 1; }
-.welcome-mark > svg > path:nth-child(even) { --stroke-from: -1; }
-.welcome-mark > svg > path:nth-child(8) { --stroke-order: 0; }
-.welcome-mark > svg > path:is(:nth-child(7), :nth-child(9)) { --stroke-order: 1; }
-.welcome-mark > svg > path:is(:nth-child(6), :nth-child(10)) { --stroke-order: 2; }
-.welcome-mark > svg > path:is(:nth-child(5), :nth-child(11)) { --stroke-order: 3; }
-.welcome-mark > svg > path:is(:nth-child(4), :nth-child(12)) { --stroke-order: 4; }
-.welcome-mark > svg > path:is(:nth-child(3), :nth-child(13)) { --stroke-order: 5; }
-.welcome-mark > svg > path:is(:nth-child(2), :nth-child(14)) { --stroke-order: 6; }
-.welcome-mark > svg > path:is(:nth-child(1), :nth-child(15)) { --stroke-order: 7; }
-
-.welcome[data-started]:not([data-settled]) .welcome-heading > span {
-  animation: intro-text-in var(--intro-text-in) var(--intro-ease) both;
-  animation-delay: calc(var(--intro-heading) + var(--word-order) * var(--intro-word-stagger));
-}
-.welcome-heading > span:nth-child(1) { --word-order: 0; }
-.welcome-heading > span:nth-child(2) { --word-order: 1; }
-.welcome-heading > span:nth-child(3) { --word-order: 2; }
-.welcome-heading > span:nth-child(4) { --word-order: 3; }
-
-.welcome[data-started]:not([data-settled]) .welcome-line {
-  animation: intro-text-in var(--intro-text-in) var(--intro-ease) var(--intro-line-at) both;
-}
-
 .welcome[data-step="intro"][data-started]:not([data-settled]) .welcome-continue {
-  animation: intro-continue-in var(--intro-text-in) var(--intro-ease) var(--intro-continue) both;
+  animation: intro-continue-in var(--intro-continue-in) var(--intro-ease) var(--intro-continue) both;
 }
 
-/* ── The name, after the intro: the mark stays, its words change ──────────────────────── */
+/* ── The name, after the intro ─────────────────────────────────────────────────────────── */
 
 .welcome[data-step="name"] .welcome-copy {
   animation: onboarding-in var(--onboarding-step-in) var(--intro-ease) both;
 }
 
-@keyframes intro-glow {
-  0% { opacity: 0; scale: 0.7; }
-  45% { opacity: 0.55; scale: 0.95; }
-  55% { opacity: 1; scale: 1.06; }
-  100% { opacity: 0.5; scale: 1; }
+/* ── While the window is staged (intro.rs), the page is clear but for the orb ───────────── */
+
+html[data-intro="staged"],
+html[data-intro="staged"] body,
+html[data-intro="staged"] [data-slot="dialog-overlay"],
+html[data-intro="staged"] [data-slot="dialog-content"] {
+  background: transparent;
+  backdrop-filter: none;
 }
 
-@keyframes intro-stroke {
-  from {
-    opacity: 0;
-    transform: translateY(calc(var(--stroke-from) * var(--intro-stroke-rise))) scaleY(0.35);
-  }
-  40% { opacity: 1; }
-  to { opacity: 1; transform: none; }
-}
-
-@keyframes intro-core {
-  from { opacity: 0; transform: scale(0.82); }
-  to { opacity: 1; transform: none; }
-}
-
-@keyframes intro-rise {
-  from { transform: none; }
-  to { transform: var(--welcome-mark-rest); }
-}
-
-@keyframes intro-text-in {
-  from { opacity: 0; translate: 0 var(--onboarding-rise); }
-  to { opacity: 1; translate: 0 0; }
+html[data-intro="staged"] #root {
+  visibility: hidden;
 }
 
 @keyframes intro-continue-in {
-  from { opacity: 0; translate: -50% var(--onboarding-rise); }
-  to { opacity: 1; translate: -50% 0; }
+  from {
+    opacity: 0;
+    filter: blur(8px);
+    scale: 0.94;
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    scale: 1;
+  }
 }
 
 /* ── The setup's steps: their lines come in one after another ────────────────────────────── */
