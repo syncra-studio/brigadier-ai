@@ -1,16 +1,23 @@
-import { Branch, Folders } from "@openai/apps-sdk-ui/components/Icon";
 import { createContext, lazy, Suspense, type CSSProperties, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { TitlebarButton } from "@/components/titlebar-button";
+import { shortcutKeys } from "@/app/shortcutCatalog";
+import { FilesGlyph, SidebarRightGlyph, SidebarRightOffGlyph, SourceControlGlyph } from "@/components/glyphs/codicons";
+import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { cn } from "@/lib/utils";
 import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
-import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, toggleWorkspacePane, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, type WorkspacePaneTab } from "@/state/workspacePane";
+import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, workspacePaneKey, type WorkspacePaneTab } from "@/state/workspacePane";
 import { useApp } from "@/state/store";
 
 const FilesTab = lazy(() => import("@/app/conversation/FilesTab").then((m) => ({ default: m.FilesTab })));
 const SourcePanel = lazy(() => import("@/app/conversation/SourcePanel").then((m) => ({ default: m.SourcePanel })));
 const ProjectDraftPane = lazy(() => import("@/app/conversation/ProjectDraftPane").then((m) => ({ default: m.ProjectDraftPane })));
+
+/** The right sidebar's views, in its icon row's order. */
+const VIEWS = [
+  { id: "files", title: "Files", shortcut: "show-files", Icon: FilesGlyph },
+  { id: "source", title: "Source", shortcut: "show-source", Icon: SourceControlGlyph },
+] as const satisfies readonly { id: WorkspacePaneTab; title: string; shortcut: string; Icon: unknown }[];
 
 export function useWorkspacePane(conversationId: string | null, projectId: string | null, enabled: boolean) {
   const id = conversationId ?? `draft:${projectId ?? "none"}`;
@@ -23,8 +30,11 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
   if (placeholder && (!open || active !== "files" || sessionActive !== placeholder.tabId || id !== placeholder.id)) setPlaceholder(null);
   const fileOpened = useCallback(() => setPlaceholder(null), []);
   const searchHandled = useCallback(() => setSearchRequest(0), []);
-  const toggle = useCallback((tab: WorkspacePaneTab) => {
-    if (enabled) toggleWorkspacePane(id, tab);
+  const toggleOpen = useCallback(() => {
+    if (enabled) setWorkspacePaneOpen((value) => !value);
+  }, [enabled]);
+  const select = useCallback((tab: WorkspacePaneTab) => {
+    if (enabled) openWorkspacePane(id, tab);
   }, [enabled, id]);
   const openFilesSearch = useCallback((replaceTabId?: string) => {
     if (!enabled) return;
@@ -33,42 +43,65 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
     setPlaceholder(replaceTabId ? { id, tabId: replaceTabId } : null);
   }, [enabled, id]);
   const mac = useApp((s) => s.info?.platform === "macos");
+  // A view's key opens the sidebar on it; pressed again while it shows, it takes the keyboard there.
+  const show = useCallback((tab: WorkspacePaneTab) => {
+    if (open && active === tab) {
+      document.getElementById("workspace-pane-content")
+        ?.querySelector<HTMLElement>('input, textarea, button, [tabindex="0"]')?.focus({ preventScroll: true });
+    } else {
+      select(tab);
+    }
+  }, [open, active, select]);
   useEffect(() => {
     if (!enabled) return;
     const key = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isFilesSearchKey(event, mac)) return;
+      if (event.defaultPrevented) return;
+      if (isFilesSearchKey(event, mac)) {
+        event.preventDefault();
+        openFilesSearch();
+        return;
+      }
+      const asked = workspacePaneKey(event, mac);
+      if (!asked) return;
       event.preventDefault();
-      openFilesSearch();
+      if (asked === "toggle") toggleOpen();
+      else show(asked);
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [enabled, mac, openFilesSearch]);
+  }, [enabled, mac, openFilesSearch, toggleOpen, show]);
   return useMemo(() => ({
-    ...size, enabled, open: enabled && open, active, toggle, openFilesSearch,
+    ...size, enabled, open: enabled && open, active, toggleOpen, select, openFilesSearch,
     setOpen: setWorkspacePaneOpen, conversationId, projectId, searchRequest, searchHandled,
     filePlaceholder: placeholder?.id === id ? placeholder.tabId : undefined, fileOpened,
-  }), [size, enabled, open, active, toggle, openFilesSearch, conversationId, projectId, searchRequest, searchHandled, placeholder, id, fileOpened]);
+  }), [size, enabled, open, active, toggleOpen, select, openFilesSearch, conversationId, projectId, searchRequest, searchHandled, placeholder, id, fileOpened]);
 }
 
 export const WorkspacePaneContext = createContext<ReturnType<typeof useWorkspacePane> | null>(null);
 
-export function WorkspacePaneToggle({ tab }: { tab: WorkspacePaneTab }) {
+/** The toolbar's right sidebar toggle: its glyph shows the sidebar out or in. */
+export function WorkspacePaneToggle() {
   const pane = useContext(WorkspacePaneContext);
+  const mac = useApp((s) => s.info?.platform === "macos");
   if (!pane?.enabled) return null;
   return (
-    <TitlebarButton tooltip={tab === "files" ? "Files" : "Source"}
-      aria-pressed={pane.open && pane.active === tab} aria-controls="workspace-pane-content"
-      onClick={() => pane.toggle(tab)}>
-      {tab === "files" ? <Folders /> : <Branch />}
+    <TitlebarButton tooltip="Right sidebar" shortcut={shortcutKeys("right-sidebar", mac)}
+      aria-pressed={pane.open} aria-controls="workspace-pane-content" onClick={pane.toggleOpen}>
+      {pane.open ? <SidebarRightGlyph /> : <SidebarRightOffGlyph />}
     </TitlebarButton>
   );
 }
 
-/** Files or Source for the open session, or before it starts for its project's folder. */
+/**
+ * The right sidebar: Files or Source for the open session, or before it starts for its
+ * project's folder. A full-height column at the window's edge, its views' icons in the titlebar
+ * strip; the Workers panel, when open too, sits between it and the content.
+ */
 export function WorkspacePane() {
   const pane = useContext(WorkspacePaneContext);
+  const mac = useApp((s) => s.info?.platform === "macos");
   const open = Boolean(pane?.open);
-  // While it shows, the sidebar and the right panel leave it at least its minimum width.
+  // While it shows, the sidebar and the Workers panel leave it at least its minimum width.
   useLayoutEffect(() => {
     const wrapper = open ? document.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]') : null;
     wrapper?.style.setProperty("--workspace-pane-reserve", "var(--spacing-sidebar-min)");
@@ -76,8 +109,8 @@ export function WorkspacePane() {
       wrapper?.style.removeProperty("--workspace-pane-reserve");
     };
   }, [open]);
-  // It slides open and closed as the sidebar does, pushing the thread aside. Its contents stay
-  // through the closing slide, then go, so a closed pane reads and refreshes nothing.
+  // It slides open and closed as the sidebar does, pushing the content aside. Its contents stay
+  // through the closing slide, then go, so a closed sidebar reads and refreshes nothing.
   const column = useRef<HTMLElement>(null);
   const [shown, setShown] = useState(open);
   if (open && !shown) setShown(true);
@@ -93,27 +126,55 @@ export function WorkspacePane() {
   }, [open, shown]);
   if (!pane?.enabled) return null;
   return (
-    <aside ref={column} aria-label={pane.active === "files" ? "Files" : "Source"} data-slot="workspace-pane"
-      data-state={open ? "expanded" : "collapsed"} className="relative flex h-full min-h-0 shrink-0"
+    <aside ref={column} aria-label="Right sidebar" data-slot="workspace-pane" data-state={open ? "expanded" : "collapsed"}
+      className={cn(
+        "column-divider relative flex h-full min-h-0 shrink-0 before:transition-opacity before:duration-300 before:ease-sidebar after:transition-opacity after:duration-300 after:ease-sidebar motion-reduce:before:transition-none motion-reduce:after:transition-none",
+        !open && "before:opacity-0 after:opacity-0",
+      )}
       style={{ "--right-sidebar-width": pane.width === null ? "var(--spacing-sidebar)" : `${pane.width}px` } as CSSProperties}>
       <SidebarReveal side="right" width="workspace-pane-width" open={open} hidden={!open} resizing={pane.resizing}>
-        <div id="workspace-pane-content" data-pane={pane.active}
-          className={cn(
-            "workspace-pane-width border-border bg-background text-sidebar-foreground flex h-full min-h-0 flex-col overflow-hidden border-s transition-opacity duration-150 motion-reduce:transition-none",
-            open ? "opacity-100" : "opacity-0",
-          )}>
-          {/* Keyed by whose files they are: one draft's list or message never shows for another. */}
-          {shown && <Suspense key={pane.conversationId ?? `project:${pane.projectId}`} fallback={null}>
-            {pane.conversationId ? (
-              pane.active === "files" ? <FilesTab conversationId={pane.conversationId} searchRequest={pane.searchRequest}
-                onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />
-                : <SourcePanel target={{ type: "conversation", conversationId: pane.conversationId }} />
-            ) : pane.projectId && <ProjectDraftPane projectId={pane.projectId} tab={pane.active}
-              searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />}
-          </Suspense>}
+        <div className="workspace-pane-width flex h-full min-h-0 flex-col">
+          <div role="tablist" aria-label="Right sidebar" data-tauri-drag-region className="h-titlebar flex shrink-0 items-center justify-center gap-1 px-2">
+            <TitlebarTips>
+              {VIEWS.map(({ id, title, shortcut, Icon }, index) => (
+                <TitlebarButton key={id} role="tab" id={`workspace-pane-${id}`} aria-controls="workspace-pane-content"
+                  aria-selected={pane.active === id} tabIndex={pane.active === id ? 0 : -1}
+                  className="aria-selected:bg-toolbar-pressed aria-selected:text-foreground"
+                  tooltip={title} shortcut={shortcutKeys(shortcut, mac)}
+                  onClick={() => pane.select(id)}
+                  onKeyDown={(event) => {
+                    const next = event.key === "ArrowRight" ? (index + 1) % VIEWS.length
+                      : event.key === "ArrowLeft" ? (index + VIEWS.length - 1) % VIEWS.length
+                        : event.key === "Home" ? 0 : event.key === "End" ? VIEWS.length - 1 : null;
+                    if (next === null) return;
+                    event.preventDefault();
+                    const view = VIEWS[next]!;
+                    pane.select(view.id);
+                    document.getElementById(`workspace-pane-${view.id}`)?.focus();
+                  }}>
+                  <Icon />
+                </TitlebarButton>
+              ))}
+            </TitlebarTips>
+          </div>
+          <div id="workspace-pane-content" role="tabpanel" aria-labelledby={`workspace-pane-${pane.active}`} data-pane={pane.active}
+            className={cn(
+              "bg-background text-sidebar-foreground rounded-e-page flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-150 motion-reduce:transition-none",
+              open ? "opacity-100" : "opacity-0",
+            )}>
+            {/* Keyed by whose files they are: one draft's list or message never shows for another. */}
+            {shown && <Suspense key={pane.conversationId ?? `project:${pane.projectId}`} fallback={null}>
+              {pane.conversationId ? (
+                pane.active === "files" ? <FilesTab conversationId={pane.conversationId} searchRequest={pane.searchRequest}
+                  onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />
+                  : <SourcePanel target={{ type: "conversation", conversationId: pane.conversationId }} />
+              ) : pane.projectId && <ProjectDraftPane projectId={pane.projectId} tab={pane.active}
+                searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />}
+            </Suspense>}
+          </div>
         </div>
       </SidebarReveal>
-      {open && <SidebarResizeHandle {...pane} side="right" label="Resize workspace pane" belowToolbar />}
+      {open && <SidebarResizeHandle {...pane} side="right" label="Resize right sidebar" />}
     </aside>
   );
 }

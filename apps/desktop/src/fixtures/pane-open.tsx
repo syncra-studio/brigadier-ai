@@ -56,11 +56,9 @@ function Fixture() {
           <header data-slot="test-toolbar" className="h-titlebar flex shrink-0 items-center justify-end">
             <TitlebarTips><ConversationToolbar kind="session" /></TitlebarTips>
           </header>
-          <div className="flex min-h-0 flex-1">
-            <div className="flex-1" />
-            <WorkspacePane />
-          </div>
+          <div className="flex-1" />
         </main>
+        <WorkspacePane />
       </div>
     </RightSidebarContext.Provider></WorkspacePaneContext.Provider>
   </ComposerTargetContext.Provider></AssistantRuntimeProvider>;

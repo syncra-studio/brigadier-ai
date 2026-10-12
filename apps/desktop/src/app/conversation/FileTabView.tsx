@@ -315,7 +315,7 @@ const CodeLines: FC<{
         setGoing(false);
         setFinding(true);
         requestAnimationFrame(() => findInput.current?.select());
-      } else if (control && event.code === "KeyG") {
+      } else if (control && !event.shiftKey && event.code === "KeyG") {
         event.preventDefault();
         setFinding(false);
         setGoing(true);

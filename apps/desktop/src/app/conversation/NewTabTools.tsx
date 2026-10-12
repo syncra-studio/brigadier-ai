@@ -59,7 +59,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
   const pages = useRecentPages();
   const sites = browserOn ? suggestedSites(history, dismissed) : [];
   const tools = [
-    { label: "Review changes", Icon: DiffGlyph, shortcut: "⌃⇧G", run: () => openReviewTab(conversationId, { type: "all" }, tabId) },
+    { label: "Review changes", Icon: DiffGlyph, shortcut: null, run: () => openReviewTab(conversationId, { type: "all" }, tabId) },
     { label: "Find file", Icon: Search, shortcut: "⌘P", disabled: !workspace?.enabled, run: () => workspace?.openFilesSearch(tabId) },
   ];
   return (
@@ -101,7 +101,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
                 <DropdownMenuContent align="end" data-slot="new-tab-more-tools">
                   {tools.map(({ label, Icon, shortcut, disabled, run }) => (
                     <DropdownMenuItem key={label} disabled={!!disabled} onSelect={run}>
-                      <Icon aria-hidden /><span className="flex-1">{label}</span><Kbd className="font-sans">{shortcutLabel(shortcut, mac)}</Kbd>
+                      <Icon aria-hidden /><span className="flex-1">{label}</span>{shortcut && <Kbd className="font-sans">{shortcutLabel(shortcut, mac)}</Kbd>}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>

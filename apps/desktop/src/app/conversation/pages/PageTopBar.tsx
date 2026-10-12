@@ -47,7 +47,7 @@ export function PageTopBar({ conversationId, pageId, content, editor, mac, activ
     if (!active) return;
     const key = (event: KeyboardEvent) => {
       const command = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
-      if (command && event.shiftKey && !event.altKey && event.code === "KeyE") { event.preventDefault(); setListing(true); }
+      if (command && event.altKey && !event.shiftKey && event.code === "KeyE") { event.preventDefault(); setListing(true); }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
@@ -82,7 +82,7 @@ export function PageTopBar({ conversationId, pageId, content, editor, mac, activ
           requestAnimationFrame(onRename);
         }}>
           <DropdownMenuItem className="page-menu-item" onSelect={() => setListing(true)}>
-            <Document aria-hidden /><span className="flex-1">Show pages</span><DropdownMenuShortcut>{shortcutLabel("⇧⌘E", mac)}</DropdownMenuShortcut>
+            <Document aria-hidden /><span className="flex-1">Show pages</span><DropdownMenuShortcut>{shortcutLabel("⌥⌘E", mac)}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem className="page-menu-item" onSelect={() => { renaming.current = true; }}><EditPencil aria-hidden />Rename</DropdownMenuItem>

@@ -45,7 +45,7 @@ test("a page: shortcuts, the Insert list, formatting, dragging, autosave, confli
   assert.equal(kept.theirs, "Their version");
   assert.equal(seen.editorShowsTheirs, "Their version");
   // The File menu.
-  assert.deepEqual(seen.fileItems, ["Show pages⇧⌘E", "Rename", "Copy as Markdown", "Download", "Delete"]);
+  assert.deepEqual(seen.fileItems, ["Show pages⌥⌘E", "Rename", "Copy as Markdown", "Download", "Delete"]);
   assert.equal(seen.copied, "# Launch plan\n\nTheir version");
   assert.equal(seen.renameFocus, true);
   assert.deepEqual(seen.renameSelection, [0, 11, 11]);
