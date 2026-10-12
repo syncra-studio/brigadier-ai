@@ -90,6 +90,12 @@ function Fixture() {
       seen.activeNone = separator(tabEl(fourth!.id));
       seen.before = widths();
       seen.clamped = widths().every((width) => width >= 89 && width <= 241);
+      // The scroller fills the list beside Chat, whatever its tabs' own widths would add up to.
+      const scroller = tabEl(first!.id).parentElement!.parentElement!;
+      seen.scroller = {
+        basis: getComputedStyle(scroller).flexBasis,
+        toListEnd: Math.round(box(bar().querySelector('[role="tablist"]'))!.right - box(scroller)!.right),
+      };
       // The × of the second tab, as a pointer would: the others keep their widths.
       tabEl(sessionTabs(id).tabs[1]!.id).querySelector<HTMLButtonElement>('button[aria-label^="Close"]')!.click();
     });

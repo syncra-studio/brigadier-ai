@@ -26,6 +26,7 @@ for (const compact of [false, true]) {
     assert.equal((seen.besideActive as { opacity: string }).opacity, "0", "no rule beside the tab in front");
     assert.equal((seen.activeNone as { opacity: string }).opacity, "0", "no rule after the last tab");
     assert.equal(seen.clamped, true, JSON.stringify(seen.before));
+    assert.deepEqual(seen.scroller, { basis: "0%", toListEnd: 0 }, "the tabs' scroller takes the rest of the list, not its content's width");
     const before = seen.before as number[];
     const held = seen.held as number[];
     const released = seen.released as number[];

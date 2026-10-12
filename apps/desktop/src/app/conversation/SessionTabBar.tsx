@@ -220,10 +220,12 @@ export function SessionTabBar({
     axis: "x",
   });
 
-  // The tab in front scrolls into view, and stays there as the strip's room changes.
+  // The tab in front scrolls into view, and stays there as the strip's room changes and as the
+  // tabs finish growing or shrinking.
+  const tabCount = tabs.length;
   useEffect(() => {
     const list = strip.current;
-    if (!list) return;
+    if (!list || tabCount === 0) return;
     const reveal = () =>
       list
         .querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(active)}"]`)
@@ -231,8 +233,12 @@ export function SessionTabBar({
     reveal();
     const observer = new ResizeObserver(reveal);
     observer.observe(list);
-    return () => observer.disconnect();
-  }, [active]);
+    list.addEventListener("transitionend", reveal);
+    return () => {
+      observer.disconnect();
+      list.removeEventListener("transitionend", reveal);
+    };
+  }, [active, tabCount]);
 
   // On the button's release: the webview may never send `auxclick`.
   const middleClose = (tab: string) => (event: ReactMouseEvent) => {
@@ -369,7 +375,7 @@ export function SessionTabBar({
         <div
           ref={strip}
           data-tauri-drag-region
-          className="hide-scrollbar flex min-w-0 shrink scroll-px-1 items-center gap-0.5 overflow-x-auto"
+          className="hide-scrollbar flex min-w-0 flex-1 scroll-px-1 items-center gap-0.5 overflow-x-auto"
         >
           <div ref={listRef} className="contents">
             {shown.map((tab) => {
