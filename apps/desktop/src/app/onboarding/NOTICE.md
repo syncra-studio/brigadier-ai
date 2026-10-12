@@ -1,6 +1,6 @@
 # welcome-sound.m4a
 
-The first launch's welcome music is rendered by `scripts/render-welcome-sound.mjs` from an
+The first launch's welcome sound is rendered by `scripts/render-welcome-sound.mjs` from an
 original score, played on the instruments of the **FluidR3 Mono GM** SoundFont (version 2.312),
 as MuseScore 2.1 ships it:
 <https://github.com/musescore/MuseScore/raw/2.1/share/sound/FluidR3Mono_GM.sf3>

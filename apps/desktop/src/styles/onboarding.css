@@ -52,8 +52,8 @@
   overflow: visible;
 }
 
-/* The intro's mark, small at the window's centre: it comes up out of a blur as the music
-   drops, is held, then blurs away (only while the intro plays). */
+/* The intro's mark, small at the window's centre: it comes up out of a blur as Brigadier's
+   signature sounds, is held, then blurs away (only while the intro plays). */
 .welcome-intro-mark {
   position: absolute;
   top: 50%;

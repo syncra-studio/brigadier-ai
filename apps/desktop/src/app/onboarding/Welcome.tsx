@@ -52,11 +52,11 @@ function setPageStaged(staged: boolean): void {
  * focus at the window's centre, idling there, slowly changing shape, while the music builds.
  * It opens out, blurred, into the window, and its light settles onto the shell's dark, with
  * faint waves of light moving over it; the window's chrome comes back. Brigadier's mark comes
- * up out of a blur at the centre as the music drops into its groove, held while the desktop's
- * dim lifts, then blurs away. On the music's next bar the title comes in a letter at a time;
- * the arrow button under it appears last, on that bar's last beat, and only then can it be
- * used (Enter too, as it takes the focus). The music plays on, into the name if need be, and
- * resolves. Elsewhere it plays the same inside the window, without the dim. Escape shows the
+ * up out of a blur at the centre as Brigadier's signature sounds, held while the desktop's
+ * dim lifts, then blurs away. The title comes in a letter at a time while the signature rings
+ * on; the arrow button under it appears last, with a soft bell, and only then can it be used
+ * (Enter too, as it takes the focus). The sound settles and fades out a few seconds later,
+ * into the name if need be. Elsewhere it plays the same inside the window, without the dim. Escape shows the
  * end at once, as reduced motion does. Continuing fades the title and the waves out, and the
  * name step comes in on the same dark, with the mark above the question.
  */

@@ -859,12 +859,12 @@
    app/onboarding/IntroCanvas.tsx: the orb grows into sight from 0.58 s and idles, swells, then
    bursts out into the window at 4.07 s, filling it by 4.34 s; its light evens out into a mist
    and the dark comes into focus under it by 4.89 s. The window's chrome comes back at 4.69 s
-   (src-tauri/src/intro.rs dims the desktop from 0.95 s). The welcome music's beats match
-   (scripts/render-welcome-sound.mjs): a march at 100 beats a minute, it drops in at 4.8 s, as
-   the mark comes up; the title comes on the next bar and its button on that bar's last beat. */
+   (src-tauri/src/intro.rs dims the desktop from 0.95 s). The welcome sound's moments match
+   (scripts/render-welcome-sound.mjs): Brigadier's signature sounds at 4.8 s, as the mark comes
+   up, and rings on under the title from 7.2 s; a soft bell marks its button at 9 s. */
 :root {
-  /* The mark at the window's centre: up out of a blur from here (seen clearly as the music
-     drops), held, gone by the end. */
+  /* The mark at the window's centre: up out of a blur from here (seen clearly as the
+     signature sounds), held, gone by the end. */
   --intro-mark-at: 4.68s;
   --intro-mark-for: 2.07s;
   --intro-held-mark-size: clamp(4rem, 6.5vw, 7rem);
@@ -872,10 +872,10 @@
   --intro-dim-lift-at: 5.45s;
   --intro-dim-lift: 0.8s;
   /* The title, a letter at a time, one line after the other (app/onboarding/StaggerText.tsx):
-     its first letter is seen about 0.12 s after it starts, on the music's bar at 7.2 s. */
+     its first letter is seen about 0.12 s after it starts, at 7.2 s. */
   --intro-heading: 7.08s;
   --intro-letter-stagger: 35ms;
-  /* The button under it, seen from about 0.03 s after it starts (the beat at 9 s). */
+  /* The button under it, seen from about 0.03 s after it starts (its bell at 9 s). */
   --intro-continue: 8.97s;
   --intro-continue-in: 0.45s;
   /* Continuing: the title fades out, then the name comes in, as the welcome's waves fade
