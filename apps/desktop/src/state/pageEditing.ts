@@ -181,10 +181,18 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
   }
 
 
-  /** Saves now whatever is waiting. */
-  function flush(id: string): Promise<void> {
+  /** Saves now whatever is waiting; null once the page on disk holds it, else why not. */
+  function flush(id: string): Promise<string | null> {
     if (timers.has(id)) { clearTimeout(timers.get(id)); timers.delete(id); }
-    return save(id);
+    return save(id).then(() => {
+      const now = get(id);
+      if (!now) return "This page isn't open.";
+      if (now.conflict) return "This page changed elsewhere. Choose which version to keep first.";
+      if (now.status === "missing") return "This page was deleted.";
+      if (now.status !== "ready") return "This page hasn't loaded yet.";
+      if (now.error) return `This page isn't saved: ${now.error}`;
+      return now.dirty ? "This page isn't saved yet." : null;
+    });
   }
 
   function flushAll(): Promise<void> {
@@ -232,7 +240,7 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
     const current = get(id);
     if (!current?.conflict) return Promise.resolve();
     set(id, { revision: current.conflict.revision, conflict: null, dirty: true });
-    return flush(id);
+    return flush(id).then(() => undefined);
   }
 
 
@@ -267,7 +275,7 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
           return { pages: rest };
         });
       }
-    });
+    }).then(() => undefined);
   }
 
   /** The page was deleted on purpose: nothing of it is kept. */

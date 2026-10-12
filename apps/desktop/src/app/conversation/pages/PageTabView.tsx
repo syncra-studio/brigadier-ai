@@ -9,6 +9,7 @@ import { ensurePage } from "@/state/pageTabs";
 import { changeSessionTab, closeTab, openPageTab, type PageTabState } from "@/state/sessionTabs";
 
 import { EmojiButton } from "./EmojiButton";
+import { PageComposer } from "./PageComposer";
 import { focusPageStart, PageEditor } from "./PageEditor";
 import { PageTopBar } from "./PageTopBar";
 import "./PageTab.css";
@@ -144,6 +145,7 @@ function OpenPage({ conversationId, tab, pageId, active }: { conversationId: str
           />
         </div>
       </div>
+      {page.status === "ready" && <PageComposer conversationId={conversationId} pageId={pageId} title={page.content.title} editing={editing} />}
     </div>
   );
 }

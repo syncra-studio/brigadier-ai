@@ -29,6 +29,7 @@ const OTHER = "2".repeat(32);
 put(FIRST, { title: "", emoji: null, body: "" });
 put(OTHER, { title: "Older notes", emoji: "📌", body: "Kept" });
 const calls: { command: string; payload: unknown }[] = [];
+const sent: { text: string; mentions: unknown; afterWrite: boolean }[] = [];
 const copied: string[] = [];
 Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { copied.push(text); } } });
 
@@ -43,7 +44,7 @@ mockIPC((command, payload) => {
   calls.push({ command, payload });
   if (command === "save_document") return `/tmp/${String((payload as { name: string }).name)}`;
   if (command !== "ipc_request") return null;
-  const request = (payload as { request: { method: string; id?: string; content?: PageContent; baseRevision?: string } }).request;
+  const request = (payload as { request: { method: string; id?: string; content?: PageContent; baseRevision?: string; text?: string; mentions?: unknown } }).request;
   const page = request.id ? pages.get(request.id) : undefined;
   switch (request.method) {
     case "pageRead": if (!page) throw new Error("No such page"); return { method: "pageRead", page };
@@ -53,6 +54,12 @@ mockIPC((command, payload) => {
       return { method: "pageWrite", outcome: { type: "saved", revision: put(page.id, request.content!).revision } };
     case "pageList": return { method: "pageList", pages: [...pages.values()].toSorted((a, b) => b.updatedMs - a.updatedMs).map((entry) => ({ id: entry.id, title: entry.content.title, emoji: entry.content.emoji, updatedMs: entry.updatedMs })) };
     case "pageDelete": pages.delete(request.id!); return { method: "pageDelete" };
+    case "sendMessage": {
+      const last = calls.findLast((call) => (call.payload as { request?: { method?: string } } | null)?.request?.method === "pageWrite");
+      sent.push({ text: request.text!, mentions: request.mentions, afterWrite: !!last && pages.get(FIRST)!.content.body.includes("before sending") });
+      const message = { id: `m${sent.length}`, conversationId: ID, seq: sent.length, role: "user", text: request.text!, blob: null, createdAtMs: Date.now(), attachments: [], mentions: request.mentions, model: null, requestId: null, parentId: null };
+      return { method: "sendMessage", outcome: { type: "sent", message } };
+    }
     case "pageCreate": return { method: "pageCreate", page: put(crypto.randomUUID().replaceAll("-", ""), { title: "", emoji: null, body: "" }) };
     default: return null;
   }
@@ -71,6 +78,18 @@ const openMenu = (label: string) => {
   const trigger = [...document.querySelectorAll<HTMLElement>("button")].find((button) => button.getAttribute("aria-label") === label || button.textContent?.trim() === label);
   trigger?.focus();
   trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+};
+const composer = () => one<HTMLTextAreaElement>(".page-composer-input")!;
+/** Sets the composer's text as typing would, so React sees it. */
+const setComposer = (text: string) => {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(composer(), text);
+  composer().dispatchEvent(new Event("input", { bubbles: true }));
+};
+/** Writes in the page's composer and presses Enter. */
+const ask = async (text: string) => {
+  setComposer(text); await wait(30);
+  composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+  await wait(100);
 };
 /** Puts the caret at the end of the page's last block. */
 const caretAtEnd = () => {
@@ -175,6 +194,10 @@ async function steps(seen: Record<string, unknown>): Promise<void> {
   await until(() => one('.page-banner[data-tone="warning"]') !== null);
   const banner = one('.page-banner[data-tone="warning"]');
   seen.conflict = banner ? [banner.querySelector(".page-banner-text")?.textContent, ...[...banner.querySelectorAll("button")].map((button) => button.textContent)] : null;
+  // Not sent while the page can't be saved; the words stay.
+  await ask("tidy this up");
+  await until(() => one('.page-composer-problem') !== null);
+  seen.refusedWhileConflict = { problem: one(".page-composer-problem")?.textContent, kept: composer().value, sent: sent.length };
   [...(banner?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Keep both")?.click();
   await until(() => sessionTabs(ID).tabs.length === 2);
   const copy = sessionTabs(ID).tabs.find((tab) => tab.kind === "page" && tab.pageId !== FIRST);
@@ -184,6 +207,12 @@ async function steps(seen: Record<string, unknown>): Promise<void> {
   useSessionTabs.setState({ sessions: { [ID]: { tabs: sessionTabs(ID).tabs.filter((tab) => tab.id === "page:fixture"), active: "page:fixture" } } });
   await until(() => one(".page-banner") === null);
   seen.editorShowsTheirs = content().textContent;
+  // Sending saves the page first, then asks with the page attached.
+  setComposer("");
+  content().focus(); caretAtEnd(); await wait(50); type(" before sending"); await wait(50);
+  await ask("tick the first item");
+  await until(() => sent.length === 1);
+  seen.sentFromPage = { ...sent[0], cleared: composer().value === "", placeholder: composer().placeholder };
   // The File menu.
   openMenu("File menu"); await until(() => menuItems().length > 0);
   seen.fileItems = menuItems().map((item) => item.textContent);

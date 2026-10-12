@@ -394,7 +394,7 @@ export async function setPinned(id: string, pinned: boolean): Promise<void> {
 export type Outgoing = {
   text: string;
   attachments: AttachmentRef[];
-  /** What the message @-mentions: workers, files, other conversations. */
+  /** What the message @-mentions: workers, files, other conversations, the page it was sent from. */
   mentions: Mention[];
 };
 

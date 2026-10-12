@@ -45,8 +45,13 @@ test("a page: shortcuts, the Insert list, formatting, dragging, autosave, confli
   assert.equal(kept.theirs, "Their version");
   assert.equal(seen.editorShowsTheirs, "Their version");
   // The File menu.
+  assert.deepEqual(seen.refusedWhileConflict, { problem: "Not sent. This page changed elsewhere. Choose which version to keep first.", kept: "tidy this up", sent: 0 });
+  assert.deepEqual(seen.sentFromPage, {
+    text: "tick the first item", mentions: [{ type: "page", id: "1".repeat(32), title: "Launch plan" }], afterWrite: true,
+    cleared: true, placeholder: "Work with this page…",
+  });
   assert.deepEqual(seen.fileItems, ["Show pages⇧⌘E", "Rename", "Copy as Markdown", "Download", "Delete"]);
-  assert.equal(seen.copied, "# Launch plan\n\nTheir version");
+  assert.equal(seen.copied, "# Launch plan\n\nTheir version before sending");
   assert.equal(seen.renameFocus, true);
   assert.deepEqual(seen.renameSelection, [0, 11, 11]);
   assert.deepEqual(seen.download, { name: "Launch plan.md", choose: true, sameText: true });

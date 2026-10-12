@@ -22,7 +22,7 @@ text: string,
  */
 blob: string | null, createdAtMs: number, attachments: Array<AttachmentRef>, 
 /**
- * What the message @-mentions: workers, files, other conversations.
+ * What the message @-mentions: workers, files, other conversations, the page it was sent from.
  */
 mentions: Array<Mention>, 
 /**

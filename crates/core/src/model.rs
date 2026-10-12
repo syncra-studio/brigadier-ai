@@ -528,7 +528,7 @@ pub struct Message {
     pub created_at_ms: i64,
     #[serde(default)]
     pub attachments: Vec<AttachmentRef>,
-    /// What the message @-mentions: workers, files, other conversations.
+    /// What the message @-mentions: workers, files, other conversations, the page it was sent from.
     #[serde(default)]
     pub mentions: Vec<Mention>,
     /// For assistant messages: the model that wrote it (a Chat may fall back to another).

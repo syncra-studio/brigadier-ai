@@ -326,3 +326,25 @@ test("a failed save keeps the text and its recovery copy, and the next edit trie
   assert.equal(daemon.pages.get("f")!.content.body, "precious!");
   assert.equal(usePageEdits.getState().pages.f!.error, null);
 });
+
+test("flush says whether the page on disk holds the editor's text before it is sent", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  daemon.put("send", text("base"));
+  const editing = createPageEditing(daemon.ipc, 10_000);
+  await editing.open("send");
+  editing.edit("send", text("typed just now"));
+  assert.equal(await editing.flush("send"), null);
+  assert.equal(daemon.pages.get("send")?.content.body, "typed just now");
+
+  daemon.put("send", text("changed elsewhere"));
+  editing.edit("send", text("typed again"));
+  assert.match((await editing.flush("send")) ?? "", /changed elsewhere/);
+  assert.equal(daemon.pages.get("send")?.content.body, "changed elsewhere");
+
+  const failing = createPageEditing({ ...daemon.ipc, write: async () => { throw new Error("disk full"); } }, 10_000);
+  daemon.put("full", text("base"));
+  await failing.open("full");
+  failing.edit("full", text("unsaved"));
+  assert.match((await failing.flush("full")) ?? "", /disk full/);
+});
