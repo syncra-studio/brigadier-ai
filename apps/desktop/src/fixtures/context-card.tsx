@@ -71,6 +71,8 @@ function Fixture() {
       } },
       { ready: floating, act: () => {
         seen.openedOverChat = floating();
+        // This session has no setup yet: its card still says something.
+        seen.cardText = document.querySelector('[data-slot="summary-card"]')?.textContent ?? null;
         setResult(JSON.stringify(seen));
       } },
     ];

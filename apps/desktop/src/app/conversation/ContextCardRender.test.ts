@@ -12,4 +12,5 @@ test("a session's context card opens from its toolbar where it floats, also whil
   assert.equal(seen.openedOverTab, true, "and the card opens over it");
   assert.equal(seen.closed, true);
   assert.equal(seen.openedOverChat, true);
+  assert.equal(seen.cardText, "Nothing here yet", "a session with no setup yet still shows its card");
 });

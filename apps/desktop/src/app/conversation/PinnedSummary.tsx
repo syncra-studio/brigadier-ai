@@ -917,7 +917,8 @@ function SessionSummaryContent({
   // During and after a run the card shows the run's branch: that is where the work is.
   const diff = run ? runDiff : sessionDiff;
   const pullRequest = usePullRequest(conversation.id);
-  if (!setup) return null;
+  // Before a session has its folder and branch, its card is a chat's: never an empty space.
+  if (!setup) return <ChatSummaryContent conversation={conversation} active={active} />;
   const checkout =
     setup.environment.type === "newWorktree"
       ? (setup.environment.path ?? setup.repo)
