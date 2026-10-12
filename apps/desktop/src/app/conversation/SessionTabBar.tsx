@@ -1,4 +1,4 @@
-import { Archive, Chat, Globe, Terminal, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, Globe, Terminal, Plus, SquarePlus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -176,10 +176,16 @@ function TabMenu({
   );
 }
 
+/** The rule between the bar's own controls and the toolbar's. */
+function BarDivider() {
+  return <span aria-hidden data-bar-divider className="bg-session-tab-separator mx-0.5 h-4 w-px shrink-0" />;
+}
+
 /**
- * A session's top bar. With nothing open it is a title, as a chat's is, with "+" at its end.
- * Once something is, it turns into tabs: Chat first (its ⋯ chat actions; never closed or moved),
- * then the tabs it opened, which shrink to their least and then scroll, and "+" right after them.
+ * A session's top bar. With nothing open it is a title, as a chat's is, with its ⋯ and the toolbar
+ * at the end and "+" last. Once something is open it turns into tabs: the chat first, under its
+ * title with its ⋯ (never closed or moved), then the tabs it opened, which shrink to their least
+ * and then scroll, and "+" right after them.
  * Click to show, drag to reorder, middle-click or Delete to close; a preview tab is in italic
  * until double-clicked. After a close the tabs keep their widths, so the next × lands under the
  * pointer, until it leaves them. While the thread keeps something running for the user, its chip
@@ -249,7 +255,7 @@ export function SessionTabBar({
   };
   const newTab = (
     <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className={plain ? undefined : "ms-0.5"}
-      onClick={() => { lock.release(); create("newTab"); }}><Plus /></TitlebarButton>
+      onClick={() => { lock.release(); create("newTab"); }}>{plain ? <SquarePlus /> : <Plus />}</TitlebarButton>
   );
   const connecting = connection !== "connected" && (
     <Badge variant="warning" role="status" className="shrink-0">
@@ -257,6 +263,7 @@ export function SessionTabBar({
     </Badge>
   );
   const project = useApp((s) => conversation.projectId ? s.projects[conversation.projectId]?.name ?? null : null);
+  const chatTitle = UNTITLED.has(conversation.title) ? "Chat" : conversation.title;
 
   if (plain) {
     return (
@@ -271,8 +278,9 @@ export function SessionTabBar({
         {connecting}
         <PreviewChip conversationId={id} />
         <ChatActions conversation={conversation} onRename={onRename} />
-        {newTab}
         {children}
+        <BarDivider />
+        {newTab}
         <CloseAsk />
       </header>
     );
@@ -352,23 +360,20 @@ export function SessionTabBar({
               role="tab"
               aria-selected={active === CHAT_TAB}
               tabIndex={active === CHAT_TAB ? 0 : -1}
-              title={archived ? `${conversation.title} (Archived)` : conversation.title}
-              aria-label={archived ? "Chat (Archived)" : undefined}
+              title={archived ? `${chatTitle} (Archived)` : chatTitle}
+              aria-label={archived ? `${chatTitle} (Archived)` : undefined}
               onClick={() => selectTab(id, CHAT_TAB)}
               onDoubleClick={archived ? undefined : onRename}
               className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm"
             >
               {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
-              <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">Chat</span>
+              <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">{chatTitle}</span>
             </button>
             <ChatActions
               conversation={conversation}
               onRename={onRename}
               compact
-              className={cn(
-                "shrink-0 transition-opacity",
-                active !== CHAT_TAB && "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100",
-              )}
+              className="shrink-0"
             />
           </div>
         </TabMenu>
@@ -460,6 +465,7 @@ export function SessionTabBar({
       {connecting}
       <PreviewChip conversationId={id} />
       <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
+      <BarDivider />
       {children}
       <CloseAsk />
     </header>

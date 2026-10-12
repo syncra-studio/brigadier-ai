@@ -1,5 +1,5 @@
 /**
- * Headless exercise of a session's top bar: a title with "+" at its end while nothing is open,
+ * Headless exercise of a session's top bar: a title with ⋯, the toolbar and "+" last while nothing is open,
  * tabs with "+" after them once something is, their measures at both densities, the widths kept
  * after a close, and Delete on a tab. `compact=1` runs it at compact density.
  */
@@ -38,6 +38,10 @@ mockIPC((command, payload) => {
 
 const bar = () => document.querySelector<HTMLElement>('[data-slot="session-tabs"]')!;
 const box = (element: Element | null | undefined) => element?.getBoundingClientRect() ?? null;
+// The bar's controls in order, "|" for its divider.
+const controls = () => [...bar().querySelectorAll<HTMLElement>("button, [data-bar-divider]")]
+  .filter((element) => !element.closest('[role="tablist"]'))
+  .map((element) => element.dataset.barDivider !== undefined ? "|" : element.getAttribute("aria-label") ?? element.textContent?.trim());
 const labels = () => [...bar().querySelectorAll('[role="tab"]')].map((tab) => tab.textContent?.trim());
 const tabEl = (tabId: string) => bar().querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(tabId)}"]`)!;
 const contentTabs = () => [...bar().querySelectorAll<HTMLElement>("[data-session-tab]")];
@@ -62,8 +66,7 @@ function Fixture() {
       seen.plain = bar().hasAttribute("data-plain");
       seen.plainTabs = bar().querySelectorAll('[role="tab"]').length;
       seen.plainTitle = bar().textContent;
-      seen.plainPlusNext = newTab().nextElementSibling?.getAttribute("aria-label");
-      seen.plainPlusGap = Math.round(box(context())!.left - box(newTab())!.right);
+      seen.plainControls = controls();
       newTab().click();
     });
     at(900, () => {
@@ -72,6 +75,7 @@ function Fixture() {
       const last = contentTabs().at(-1)!;
       seen.plusAfterLast = Math.round(box(newTab())!.left - box(last)!.right);
       seen.plusFarFromContext = Math.round(box(context())!.left - box(newTab())!.right);
+      seen.openedControls = controls();
       const tab = getComputedStyle(last);
       seen.measure = { height: parseFloat(tab.height), radius: parseFloat(tab.borderTopLeftRadius), font: parseFloat(tab.fontSize) };
       seen.activeShadow = tab.boxShadow !== "none";
@@ -89,6 +93,8 @@ function Fixture() {
       seen.besideActive = separator(tabEl(third!.id));
       seen.activeNone = separator(tabEl(fourth!.id));
       seen.before = widths();
+      // Chat is in back here: its ⋯ still shows.
+      seen.chatActions = getComputedStyle([...bar().querySelectorAll('[role="tablist"] button')].find((button) => button.textContent === "Chat actions")!).opacity;
       seen.clamped = widths().every((width) => width >= 89 && width <= 241);
       // The scroller fills the list beside Chat, whatever its tabs' own widths would add up to.
       const scroller = tabEl(first!.id).parentElement!.parentElement!;

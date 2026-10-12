@@ -9,10 +9,13 @@ for (const compact of [false, true]) {
     assert.equal(seen.plain, true);
     assert.equal(seen.plainTabs, 0);
     assert.match(String(seen.plainTitle), /Tidy the release notes/);
-    assert.equal(seen.plainPlusNext, "Context", "+ sits just before the toolbar");
-    assert.ok(Number(seen.plainPlusGap) <= 8, `+ is flush with the toolbar: ${seen.plainPlusGap}`);
+    const plain = seen.plainControls as string[];
+    assert.deepEqual(plain.slice(-2), ["|", "New tab"], `+ is last, past a divider: ${plain}`);
+    assert.ok(plain.indexOf("Chat actions") < plain.indexOf("Context"), `⋯ comes before the toolbar: ${plain}`);
     assert.equal(seen.opened, false);
-    assert.deepEqual(seen.openedLabels, ["Chat", "New tab"]);
+    assert.deepEqual(seen.openedLabels, ["Tidy the release notes", "New tab"], "the chat's tab carries its title");
+    const opened = seen.openedControls as string[];
+    assert.deepEqual(opened.slice(opened.indexOf("New tab"), opened.indexOf("Context") + 1).filter((label) => label === "|" || label === "New tab" || label === "Context"), ["New tab", "|", "Context"], `+ follows the tabs, a divider leads the toolbar: ${opened}`);
     // 6 px, scaled with the density.
     assert.equal(seen.plusAfterLast, compact ? 5 : 6, "+ comes right after the last tab");
     assert.ok(Number(seen.plusFarFromContext) > 100, "+ is no longer at the end");
@@ -26,6 +29,7 @@ for (const compact of [false, true]) {
     assert.equal((seen.besideActive as { opacity: string }).opacity, "0", "no rule beside the tab in front");
     assert.equal((seen.activeNone as { opacity: string }).opacity, "0", "no rule after the last tab");
     assert.equal(seen.clamped, true, JSON.stringify(seen.before));
+    assert.equal(seen.chatActions, "1", "the chat's ⋯ shows while another tab is in front");
     assert.deepEqual(seen.scroller, { basis: "0%", toListEnd: 0 }, "the tabs' scroller takes the rest of the list, not its content's width");
     const before = seen.before as number[];
     const held = seen.held as number[];
