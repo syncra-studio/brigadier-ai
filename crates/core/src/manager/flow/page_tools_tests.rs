@@ -145,6 +145,71 @@ async fn the_thread_reads_and_changes_the_page_a_message_was_sent_from() {
 }
 
 #[tokio::test]
+async fn editing_a_delivered_page_message_keeps_only_its_pages_grant() {
+    let flow = Flow::start("page-tools-edited-grant", Options::default(), quiet()).await;
+    let (pages, first) = pages_with(&flow, "first");
+    let second = page_holding(&pages, "second");
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "edit it".into(),
+            Vec::new(),
+            from_page(&first),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    flow.settled().await;
+    let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
+    let at = messages
+        .iter()
+        .rposition(|message| message.role == crate::model::MessageRole::User)
+        .unwrap();
+    let original = &messages[at];
+    let parent = crate::sessions::parent_of(&messages, at);
+
+    // The edit contains no page token: its context comes from the delivered message.
+    flow.manager
+        .edit_message(
+            flow.conversation.clone(),
+            original.id.clone(),
+            "change the first item".into(),
+            None,
+        )
+        .await
+        .unwrap();
+    flow.settled().await;
+    let board = flow.board().await;
+    let branch = flow
+        .core
+        .branch(&flow.conversation, &board.head.as_ref().unwrap().0)
+        .await
+        .unwrap();
+    let edited = branch
+        .iter()
+        .rev()
+        .find(|message| message.role == crate::model::MessageRole::User)
+        .unwrap();
+    assert_ne!(edited.id, original.id);
+    assert_eq!(edited.parent_id.as_deref(), Some(parent.as_str()));
+    assert_eq!(edited.mentions, from_page(&first));
+    assert!(!read(&flow, &first).await.is_error);
+    assert!(read(&flow, &second).await.is_error);
+    let revision = pages.read(&first).unwrap().revision;
+    assert!(!write(&flow, &first, "edited", &revision).await.is_error);
+    let revision = pages.read(&second).unwrap().revision;
+    assert!(
+        write(&flow, &second, "not allowed", &revision)
+            .await
+            .is_error
+    );
+    assert_eq!(pages.read(&first).unwrap().content.body, "edited");
+    assert_eq!(pages.read(&second).unwrap().content.body, "second");
+    flow.stop().await;
+}
+
+#[tokio::test]
 async fn only_the_latest_messages_page_is_granted_and_a_message_without_one_revokes_it() {
     let flow = Flow::start("page-tools-grant", Options::default(), quiet()).await;
     let (pages, first) = pages_with(&flow, "first");
