@@ -1,7 +1,7 @@
 //! The right sidebar's Search: the text or pattern the user looks for across a checkout,
-//! found file by file and sent as it goes, and Replace all, which rewrites only files still
-//! as the search found them. It reads what git would (ignored files and `.git` stay out) and
-//! never writes outside the checkout.
+//! found file by file and sent as it goes, and Replace all, which rewrites the files listed only
+//! if every one is still as the search found it, all of them or none. It reads what git would
+//! (ignored files and `.git` stay out) and never writes outside the checkout.
 
 use std::collections::HashSet;
 use std::fs;
@@ -87,8 +87,9 @@ impl SessionManager {
         Ok(SearchRun { updates, stop })
     }
 
-    /// Replaces every match of `query` with `replacement` in the files listed, each only if it
-    /// still holds what the search found: the same bytes and as many matches. With a regular
+    /// Replaces every match of `query` with `replacement` in the files listed, only if each of
+    /// them still holds what the search found (the same bytes and as many matches): all of them
+    /// or none (see [`replace`]). With a regular
     /// expression, `$1` or `${name}` in the replacement stand for what a group matched. A
     /// session's checkout is written only once it has one of its own or works in the
     /// repository, never while its landing moves it.
@@ -112,7 +113,14 @@ impl SessionManager {
                     .0
                     .into_iter()
                     .collect();
-                Ok(replace(&root, &matcher, &replacement, files, &eligible))
+                Ok(replace(
+                    &root,
+                    &matcher,
+                    &replacement,
+                    files,
+                    &eligible,
+                    |_| {},
+                ))
             })
         };
         match target {
@@ -431,45 +439,112 @@ fn preview(text: &str, start: usize, number: u32, ranges: &[(usize, usize)]) -> 
     }
 }
 
-/// Rewrites each listed file that still holds what the search found.
+/// One listed file's rewrite, ready to go: its new text written beside it, not yet in place.
+struct Staged {
+    path: String,
+    full: PathBuf,
+    /// What the search found in it, and what the rewrite holds.
+    hash: String,
+    new_hash: String,
+    matches: u32,
+    temp: PathBuf,
+    /// Where the file is moved aside while the rewrite takes its place, until all are in.
+    aside: PathBuf,
+}
+
+/// Rewrites the listed files, all of them or none. Each is checked against what the search
+/// found and its rewrite is written beside it; any that changed, can't be searched or written
+/// stops it all before a byte moves. Then each in turn is moved aside, checked once more (it may
+/// have changed since), and its rewrite linked into its place, which fails if anything took the
+/// place meanwhile. A failure puts back every file already rewritten; one that something else
+/// changed meanwhile stays as it is, its text from before kept beside it, and is listed in
+/// `unrestored`. `interfere` runs before each file goes in place (tests change files there).
 fn replace(
     root: &Path,
     matcher: &Matcher,
     replacement: &str,
     files: Vec<ReplaceFile>,
     eligible: &HashSet<String>,
+    mut interfere: impl FnMut(usize),
 ) -> ReplaceOutcome {
     let mut outcome = ReplaceOutcome {
         files: 0,
         matches: 0,
         skipped: Vec::new(),
+        unrestored: Vec::new(),
     };
+    let mut staged: Vec<Staged> = Vec::new();
     for file in files {
         let result = if !eligible.contains(&file.path) || !matcher.wants(&file.path) {
             Err("it is not included in the checkout's searchable files".into())
         } else {
-            replace_file(root, matcher, replacement, &file)
+            stage_file(root, matcher, replacement, &file)
         };
         match result {
-            Ok(count) => {
-                outcome.files += 1;
-                outcome.matches = outcome.matches.saturating_add(count);
-            }
+            Ok(file) => staged.push(file),
             Err(reason) => outcome.skipped.push(ReplaceSkip {
                 path: file.path,
                 reason,
             }),
         }
     }
+    let discard = |staged: &[Staged]| {
+        for file in staged {
+            let _ = fs::remove_file(&file.temp);
+        }
+    };
+    if !outcome.skipped.is_empty() {
+        discard(&staged);
+        return outcome;
+    }
+    let mut placed = 0;
+    let mut failed = None;
+    for (index, file) in staged.iter().enumerate() {
+        interfere(index);
+        match place(file) {
+            Ok(()) => placed += 1,
+            Err((reason, moved)) => {
+                // Moved aside but not replaced: it goes back with the rest.
+                if moved {
+                    placed += 1;
+                }
+                failed = Some(ReplaceSkip {
+                    path: file.path.clone(),
+                    reason,
+                });
+                break;
+            }
+        }
+    }
+    if let Some(failed) = failed {
+        for file in staged[..placed].iter().rev() {
+            if let Err(reason) = put_back(file) {
+                outcome.unrestored.push(ReplaceSkip {
+                    path: file.path.clone(),
+                    reason,
+                });
+            }
+        }
+        outcome.skipped.push(failed);
+        discard(&staged);
+        return outcome;
+    }
+    for file in &staged {
+        let _ = fs::remove_file(&file.aside);
+        let _ = fs::remove_file(&file.temp);
+        outcome.files += 1;
+        outcome.matches = outcome.matches.saturating_add(file.matches);
+    }
     outcome
 }
 
-fn replace_file(
+/// Checks a listed file against its search and writes its rewrite beside it.
+fn stage_file(
     root: &Path,
     matcher: &Matcher,
     replacement: &str,
     file: &ReplaceFile,
-) -> std::result::Result<u32, String> {
+) -> std::result::Result<Staged, String> {
     let full = checkout_file(root, &file.path)?;
     let (hash, text) = searchable(&full).ok_or("it can't be searched any more")?;
     if hash != file.hash {
@@ -496,8 +571,68 @@ fn replace_file(
     if count != file.matches {
         return Err("its matches changed since the search".into());
     }
-    write_atomically(&full, out.as_bytes()).map_err(|err| format!("couldn't write it: {err}"))?;
-    Ok(count)
+    let temp =
+        write_beside(&full, out.as_bytes()).map_err(|err| format!("couldn't write it: {err}"))?;
+    Ok(Staged {
+        path: file.path.clone(),
+        aside: sibling(&full, "replaced"),
+        full,
+        hash,
+        new_hash: self::hash(out.as_bytes()),
+        matches: count,
+        temp,
+    })
+}
+
+/// Puts a staged rewrite in its file's place: the file moved aside, checked unchanged, and the
+/// rewrite linked in where nothing may have appeared meanwhile. On failure, whether the file
+/// was moved aside (and so needs putting back).
+fn place(file: &Staged) -> std::result::Result<(), (String, bool)> {
+    fs::rename(&file.full, &file.aside)
+        .map_err(|err| (format!("couldn't move it: {err}"), false))?;
+    let unchanged = fs::read(&file.aside).is_ok_and(|bytes| hash(&bytes) == file.hash);
+    if !unchanged {
+        return Err((
+            "it changed while the files were being replaced".into(),
+            true,
+        ));
+    }
+    // A link, unlike a rename, refuses a file that took the place meanwhile.
+    fs::hard_link(&file.temp, &file.full).map_err(|err| {
+        let reason = if err.kind() == std::io::ErrorKind::AlreadyExists {
+            "it was written again while the files were being replaced".into()
+        } else {
+            format!("couldn't write it: {err}")
+        };
+        (reason, true)
+    })
+}
+
+/// Puts back a file `place` moved aside: its rewrite (if still as written) goes, and the file
+/// from before comes back. When something else is in its place, both stay: why, and where the
+/// text from before is.
+fn put_back(file: &Staged) -> std::result::Result<(), String> {
+    match fs::read(&file.full) {
+        Ok(bytes) if hash(&bytes) == file.new_hash => {
+            fs::remove_file(&file.full).map_err(|err| format!("couldn't undo it: {err}"))?;
+        }
+        Ok(_) => {
+            return Err(format!(
+                "it changed while the files were being replaced; its text from before is in {}",
+                file.aside.display()
+            ));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(format!("couldn't undo it: {err}")),
+    }
+    fs::hard_link(&file.aside, &file.full)
+        .and_then(|()| fs::remove_file(&file.aside))
+        .map_err(|err| {
+            format!(
+                "couldn't undo it ({err}); its text from before is in {}",
+                file.aside.display()
+            )
+        })
 }
 
 /// The file at `path` in the checkout: relative, without `.`, `..` or `.git`, and once
@@ -525,15 +660,15 @@ fn checkout_file(root: &Path, path: &str) -> std::result::Result<PathBuf, String
     Ok(full)
 }
 
-/// Writes `bytes` beside `path`, then moves it into place, keeping the file's permissions.
-fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let dir = path.parent().ok_or(std::io::ErrorKind::NotFound)?;
-    let name = path.file_name().ok_or(std::io::ErrorKind::NotFound)?;
-    let temp = dir.join(format!(
-        ".{}.replace-{}",
-        name.to_string_lossy(),
-        uuid::Uuid::new_v4()
-    ));
+/// A new name beside `path`, hidden, that no one else will guess.
+fn sibling(path: &Path, what: &str) -> PathBuf {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!(".{name}.{what}-{}", uuid::Uuid::new_v4()))
+}
+
+/// Writes `bytes` to a new file beside `path`, with its permissions: where it is.
+fn write_beside(path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    let temp = sibling(path, "replace");
     // Exclusive creation refuses existing files and symlinks, even if a name is guessed.
     let mut out = fs::OpenOptions::new()
         .write(true)
@@ -542,13 +677,15 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let result = (|| {
         out.write_all(bytes)?;
         out.sync_all()?;
-        fs::set_permissions(&temp, fs::metadata(path)?.permissions())?;
-        fs::rename(&temp, path)
+        fs::set_permissions(&temp, fs::metadata(path)?.permissions())
     })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
+    match result {
+        Ok(()) => Ok(temp),
+        Err(err) => {
+            let _ = fs::remove_file(&temp);
+            Err(err)
+        }
     }
-    result
 }
 
 #[cfg(test)]
@@ -701,5 +838,109 @@ mod tests {
         }
         assert!(globs(" , ", "x").unwrap().is_none());
         assert!(globs("src/[", "files to include").is_err());
+    }
+
+    /// Three files holding `hit`, listed as a search found them, in a new folder.
+    fn three_files(name: &str) -> (PathBuf, Vec<ReplaceFile>, HashSet<String>) {
+        let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut listed = Vec::new();
+        for path in ["a.txt", "b.txt", "c.txt"] {
+            let text = format!("{path} hit\n");
+            fs::write(dir.join(path), &text).unwrap();
+            listed.push(ReplaceFile {
+                path: path.into(),
+                hash: hash(text.as_bytes()),
+                matches: 1,
+            });
+        }
+        let eligible = listed.iter().map(|file| file.path.clone()).collect();
+        (dir, listed, eligible)
+    }
+
+    fn read(dir: &Path, path: &str) -> String {
+        fs::read_to_string(dir.join(path)).unwrap()
+    }
+
+    /// The names in `dir` other than the files listed.
+    fn others(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| !["a.txt", "b.txt", "c.txt"].contains(&name.as_str()))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_file_changed_while_others_are_replaced_puts_them_all_back() {
+        let (dir, listed, eligible) = three_files("replace-rollback");
+        let matcher = Matcher::new(&query("hit")).unwrap();
+        let outcome = replace(&dir, &matcher, "miss", listed, &eligible, |index| {
+            if index == 1 {
+                fs::write(dir.join("b.txt"), "b.txt hit, edited\n").unwrap();
+            }
+        });
+        assert_eq!((outcome.files, outcome.matches), (0, 0));
+        assert_eq!(outcome.skipped.len(), 1);
+        assert_eq!(outcome.skipped[0].path, "b.txt");
+        assert!(outcome.skipped[0].reason.contains("changed while"));
+        assert!(outcome.unrestored.is_empty(), "{:?}", outcome.unrestored);
+        assert_eq!(read(&dir, "a.txt"), "a.txt hit\n", "put back");
+        assert_eq!(read(&dir, "b.txt"), "b.txt hit, edited\n", "the edit kept");
+        assert_eq!(read(&dir, "c.txt"), "c.txt hit\n");
+        assert_eq!(
+            others(&dir),
+            Vec::<String>::new(),
+            "nothing left beside them"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+
+        // The last file gone before its turn: the two rewritten already go back.
+        let (dir, listed, eligible) = three_files("replace-rollback-last");
+        let outcome = replace(&dir, &matcher, "miss", listed, &eligible, |index| {
+            if index == 2 {
+                fs::remove_file(dir.join("c.txt")).unwrap();
+            }
+        });
+        assert_eq!(outcome.files, 0);
+        assert_eq!(outcome.skipped[0].path, "c.txt");
+        assert!(outcome.unrestored.is_empty());
+        assert_eq!(read(&dir, "a.txt"), "a.txt hit\n");
+        assert_eq!(read(&dir, "b.txt"), "b.txt hit\n");
+        assert_eq!(others(&dir), Vec::<String>::new());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_rewritten_file_edited_before_the_rollback_stays_and_says_where_its_text_was_kept() {
+        let (dir, listed, eligible) = three_files("replace-unrestored");
+        let matcher = Matcher::new(&query("hit")).unwrap();
+        let outcome = replace(&dir, &matcher, "miss", listed, &eligible, |index| {
+            if index == 1 {
+                // a.txt is already rewritten; then both it and b.txt are edited.
+                fs::write(dir.join("a.txt"), "a.txt edited\n").unwrap();
+                fs::write(dir.join("b.txt"), "b.txt edited\n").unwrap();
+            }
+        });
+        assert_eq!(outcome.files, 0);
+        assert_eq!(outcome.skipped[0].path, "b.txt");
+        assert_eq!(outcome.unrestored.len(), 1);
+        assert_eq!(outcome.unrestored[0].path, "a.txt");
+        assert_eq!(
+            read(&dir, "a.txt"),
+            "a.txt edited\n",
+            "the edit isn't undone"
+        );
+        assert_eq!(read(&dir, "b.txt"), "b.txt edited\n");
+        assert_eq!(read(&dir, "c.txt"), "c.txt hit\n");
+        let kept = others(&dir);
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert!(kept[0].starts_with(".a.txt.replaced-"));
+        assert!(outcome.unrestored[0].reason.contains(&kept[0]));
+        assert_eq!(read(&dir, &kept[0]), "a.txt hit\n");
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

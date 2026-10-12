@@ -52,6 +52,15 @@ async fn collect(mut run: SearchRun) -> (Vec<SearchFile>, (u32, u32, bool)) {
     panic!("the search ended without Done");
 }
 
+/// The hidden files a replace writes beside the ones it rewrites, left in `dir`.
+fn hidden_siblings(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".replace-") || name.contains(".replaced-"))
+        .collect()
+}
+
 async fn found(flow: &Flow, target: &WorkspaceTarget, query: SearchQuery) -> Vec<(String, u32)> {
     let run = flow.manager.start_search(target, query).await.unwrap();
     let (files, _) = collect(run).await;
@@ -227,9 +236,9 @@ async fn search_stops_at_its_limits_and_when_dropped() {
 
 /// Replace all rewrites the matches of files still as searched, with `$1` groups in a
 /// pattern (whole word keeps their numbers) and `$` as itself in literal text; a file changed
-/// since is skipped and said so.
+/// since, or listed with other counts, keeps every file from being rewritten and is said.
 #[tokio::test]
-async fn replace_rewrites_only_files_unchanged_since_the_search() {
+async fn replace_rewrites_all_the_files_only_if_each_is_unchanged_since_the_search() {
     let (flow, target) = flow("search-replace").await;
     let repo = flow.repo.clone();
     write(&repo, "a.txt", "let foo_1 = foo_2;\nfoo_3x\n");
@@ -268,10 +277,11 @@ async fn replace_rewrites_only_files_unchanged_since_the_search() {
     listed[2].matches = 5;
     let outcome = flow
         .manager
-        .replace_in_files(&target, pattern, "bar_$1".into(), listed)
+        .replace_in_files(&target, pattern.clone(), "bar_$1".into(), listed)
         .await
         .unwrap();
-    assert_eq!((outcome.files, outcome.matches), (1, 2));
+    assert_eq!((outcome.files, outcome.matches), (0, 0));
+    assert!(outcome.unrestored.is_empty());
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep\n");
     assert!(
         std::fs::symlink_metadata(&old_temp)
@@ -292,12 +302,50 @@ async fn replace_rewrites_only_files_unchanged_since_the_search() {
     assert!(outcome.skipped[0].reason.contains("changed"));
     assert_eq!(
         std::fs::read_to_string(repo.join("a.txt")).unwrap(),
-        "let bar_1 = bar_2;\nfoo_3x\n"
+        "let foo_1 = foo_2;\nfoo_3x\n",
+        "a file still as searched isn't rewritten while another one changed"
     );
     assert_eq!(
         std::fs::read_to_string(repo.join("b.txt")).unwrap(),
         "foo_9 foo_8\n"
     );
+    assert_eq!(hidden_siblings(&repo), Vec::<String>::new());
+
+    // Searched again, every file is rewritten.
+    let run = flow
+        .manager
+        .start_search(&target, pattern.clone())
+        .await
+        .unwrap();
+    let (files, _) = collect(run).await;
+    let listed = files
+        .iter()
+        .map(|file| ReplaceFile {
+            path: file.path.clone(),
+            hash: file.hash.clone(),
+            matches: file.matches,
+        })
+        .collect();
+    let outcome = flow
+        .manager
+        .replace_in_files(&target, pattern, "bar_$1".into(), listed)
+        .await
+        .unwrap();
+    assert_eq!((outcome.files, outcome.matches), (3, 5));
+    assert!(outcome.skipped.is_empty() && outcome.unrestored.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "let bar_1 = bar_2;\nfoo_3x\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("b.txt")).unwrap(),
+        "bar_9 bar_8\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("c.txt")).unwrap(),
+        "cost bar_1\n"
+    );
+    assert_eq!(hidden_siblings(&repo), Vec::<String>::new());
 
     let run = flow
         .manager

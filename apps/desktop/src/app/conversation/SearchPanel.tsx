@@ -11,7 +11,7 @@ import {
 import { FileIcon } from "@/components/glyphs/fileIcons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { ReplaceOutcome, SearchFile, SearchLine, SearchQuery } from "@/ipc/generated";
+import type { ReplaceOutcome, ReplaceSkip, SearchFile, SearchLine, SearchQuery } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { useApp } from "@/state/store";
 import { onWorkspaceChanged, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
@@ -206,8 +206,8 @@ export function SearchPanel({ target, onOpen, readOnly }: {
                   Replace {plural(confirmedMatches, "match", "matches")} in {plural(confirmedFiles.length, "file")}?
                 </DialogTitle>
                 <DialogDescription>
-                  {form.replace ? <>Each becomes “{form.replace}”.</> : "Each is deleted."} Files changed since the
-                  search are left as they are.
+                  {form.replace ? <>Each becomes “{form.replace}”.</> : "Each is deleted."} If a file changed since
+                  the search, none is replaced.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
@@ -260,15 +260,19 @@ const Glob: FC<{ label: string; placeholder: string; value: string; onChange: (v
   </label>
 );
 
+const skipList = (skips: ReplaceSkip[]) => skips.map((skip) => `${baseName(skip.path)} (${skip.reason})`).join(", ");
+
 const ReplaceNote: FC<{ outcome: ReplaceOutcome | { error: string } }> = ({ outcome }) => {
   if ("error" in outcome) return <p role="alert" className="text-destructive px-1 pb-1 text-xs">{outcome.error}</p>;
   return (
     <div role="status" className="text-muted-foreground px-1 pb-1 text-xs">
-      <p>Replaced {plural(outcome.matches, "match", "matches")} in {plural(outcome.files, "file")}.</p>
-      {outcome.skipped.length > 0 && (
-        <p className="text-warning">
-          Left as {outcome.skipped.length === 1 ? "it was" : "they were"}: {outcome.skipped.map((skip) => `${baseName(skip.path)} (${skip.reason})`).join(", ")}
-        </p>
+      {outcome.skipped.length > 0 ? (
+        <p className="text-warning">Nothing was replaced: {skipList(outcome.skipped)}. Search again, then replace.</p>
+      ) : (
+        <p>Replaced {plural(outcome.matches, "match", "matches")} in {plural(outcome.files, "file")}.</p>
+      )}
+      {outcome.unrestored.length > 0 && (
+        <p className="text-destructive">Couldn’t put back: {skipList(outcome.unrestored)}</p>
       )}
     </div>
   );

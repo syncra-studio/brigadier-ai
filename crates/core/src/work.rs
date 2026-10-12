@@ -2397,7 +2397,7 @@ pub struct ReplaceFile {
     pub matches: u32,
 }
 
-/// A file a replace left alone, and why.
+/// A file that kept a replace from happening, or that it couldn't put back, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplaceSkip {
@@ -2405,13 +2405,20 @@ pub struct ReplaceSkip {
     pub reason: String,
 }
 
-/// What a replace did.
+/// What a replace did. It is all or nothing: every file listed is rewritten, or none is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplaceOutcome {
+    /// Files rewritten: all of those listed, or none.
     pub files: u32,
     pub matches: u32,
+    /// Why nothing was rewritten: each file that changed since the search, can't be written,
+    /// or changed while the others were written (those were put back).
     pub skipped: Vec<ReplaceSkip>,
+    /// Files the replace rewrote and couldn't put back after another one failed (something
+    /// else changed them meanwhile): they stay replaced, and the reason says where their text
+    /// from before is kept.
+    pub unrestored: Vec<ReplaceSkip>,
 }
 
 /// Why something entered the orchestrator's context.

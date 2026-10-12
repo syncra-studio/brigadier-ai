@@ -21,7 +21,7 @@ test("Search streams grouped results, opens a line, asks again on its options, r
     replacement: "bar", matchCase: true,
     files: [{ path: "src/app.ts", hash: "h-app", matches: 2 }, { path: "README.md", hash: "h-readme", matches: 1 }],
   }, "the files go with the search's hashes and counts");
-  assert.match(String(seen.outcome), /Replaced 2 matches in 1 file\..*README\.md \(it changed since the search\)/);
+  assert.equal(seen.outcome, "Replaced 3 matches in 2 files.");
   assert.equal(seen.reconnected, false, "after reconnecting, the search shown is asked again");
   assert.match(String(seen.patternError), /valid regular expression/);
   assert.equal(seen.cleared, true, "a cleared query clears the results");
@@ -38,6 +38,8 @@ test("Search streams grouped results, opens a line, asks again on its options, r
   assert.equal(seen.expand, "true", "right on a closed file opens it");
   assert.equal(seen.intoLines, "src/many-0.ts:1", "right on an open file goes to its first line");
   assert.equal(seen.collapsedRows, true, "Collapse all leaves the files");
+  assert.match(String(seen.manyOutcome), /^Nothing was replaced: many-7\.ts \(it changed while the files were being replaced\)\. Search again, then replace\./);
+  assert.match(String(seen.manyOutcome), /Couldn’t put back: many-3\.ts \(.*its text from before is in src\/\.many-3\.ts\.replaced-1\)/);
   assert.equal(seen.collapsedSummary, "1,500 results in 300 files");
   assert.equal(seen.manyConfirm, "Replace 1,500 matches in 300 files?");
   assert.equal(seen.manyReplaced, 300, "Replace all takes every file, drawn or not");

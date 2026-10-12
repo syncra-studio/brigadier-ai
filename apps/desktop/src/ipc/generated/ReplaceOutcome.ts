@@ -2,6 +2,21 @@
 import type { ReplaceSkip } from "./ReplaceSkip";
 
 /**
- * What a replace did.
+ * What a replace did. It is all or nothing: every file listed is rewritten, or none is.
  */
-export type ReplaceOutcome = { files: number, matches: number, skipped: Array<ReplaceSkip>, };
+export type ReplaceOutcome = { 
+/**
+ * Files rewritten: all of those listed, or none.
+ */
+files: number, matches: number, 
+/**
+ * Why nothing was rewritten: each file that changed since the search, can't be written,
+ * or changed while the others were written (those were put back).
+ */
+skipped: Array<ReplaceSkip>, 
+/**
+ * Files the replace rewrote and couldn't put back after another one failed (something
+ * else changed them meanwhile): they stay replaced, and the reason says where their text
+ * from before is kept.
+ */
+unrestored: Array<ReplaceSkip>, };

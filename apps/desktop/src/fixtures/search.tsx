@@ -57,8 +57,19 @@ mockIPC((command, args) => {
     }, 30);
     return { method: req.method, id };
   }
-  if (req.method === "replaceInFiles")
-    return { method: req.method, outcome: { files: 1, matches: 2, skipped: [{ path: "README.md", reason: "it changed since the search" }] } };
+  if (req.method === "replaceInFiles") {
+    // The first replace goes through; the second meets a file changed meanwhile, and one it
+    // couldn't put back.
+    if (req.files.length < 10) return { method: req.method, outcome: { files: req.files.length, matches: 3, skipped: [], unrestored: [] } };
+    return {
+      method: req.method,
+      outcome: {
+        files: 0, matches: 0,
+        skipped: [{ path: "src/many-7.ts", reason: "it changed while the files were being replaced" }],
+        unrestored: [{ path: "src/many-3.ts", reason: "it changed while the files were being replaced; its text from before is in src/.many-3.ts.replaced-1" }],
+      },
+    };
+  }
   return { method: req.method };
 });
 
@@ -193,6 +204,8 @@ function Fixture() {
       [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Replace")!.click();
       await until(() => asked.filter((req) => req.method === "replaceInFiles").length === 2);
       seen.manyReplaced = (asked.filter((req) => req.method === "replaceInFiles")[1] as Extract<Request, { method: "replaceInFiles" }>).files.length;
+      await until(() => !!inPanel("many").querySelector('[role="status"]'));
+      seen.manyOutcome = inPanel("many").querySelector('[role="status"]')?.textContent;
       setResult(JSON.stringify(seen));
     })().catch((error: unknown) => setResult(JSON.stringify({ error: String(error), seen })));
   }, []);
