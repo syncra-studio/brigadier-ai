@@ -646,8 +646,7 @@ fn choice_name(provider: ProviderKind, model: Option<&str>) -> String {
 
 /// A checkout's Source panel state.
 fn source_state_of(repo: &Repo) -> Result<SourceState> {
-    let changes = repo.source_changes().map_err(git_error)?;
-    let branch = repo.state().map_err(git_error)?.current_branch;
+    let (changes, branch) = repo.source_status().map_err(git_error)?;
     let remote = match &branch {
         Some(branch) => Some(repo.remote_state(branch).map_err(git_error)?),
         None => None,

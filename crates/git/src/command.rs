@@ -4,7 +4,10 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -24,16 +27,31 @@ pub struct FoundRepo {
 pub struct Git {
     program: PathBuf,
     env: Environment,
+    /// Its version, once found new enough: every [`Git::open`] checks it, without asking git
+    /// again each time.
+    checked_version: Arc<OnceLock<String>>,
 }
 
 impl Git {
     /// Use the resolved git binary and login environment supplied by the application.
     pub fn new(program: PathBuf, env: Vec<(OsString, OsString)>) -> Self {
-        Self { program, env }
+        Self {
+            program,
+            env,
+            checked_version: Arc::default(),
+        }
     }
 
     /// Report git's version and reject versions older than 2.38.
     pub fn version(&self) -> Result<String> {
+        if let Some(version) = self.checked_version.get() {
+            return Ok(version.clone());
+        }
+        let version = self.ask_version()?;
+        Ok(self.checked_version.get_or_init(|| version).clone())
+    }
+
+    fn ask_version(&self) -> Result<String> {
         let output = self.checked(None, &["--version"], true, &[], None)?;
         let version = parse::line(&output)?;
         let number = version

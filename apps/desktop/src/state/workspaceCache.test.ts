@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { Conversation, Environment, Project } from "@/ipc/generated";
-import { cachedWorkspace, checkoutKey, keepSource, readFiles, remembered, workspaceKey } from "./workspaceCache";
+import { cachedWorkspace, checkoutKey, emitWorkspaceChanged, keepSource, readFiles, remembered, workspaceKey } from "./workspaceCache";
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { useApp } from "@/state/store";
@@ -90,6 +90,25 @@ test("a late read from a removed checkout cannot be reused, even after the same 
   replies[0]!({ method: "getWorkspaceTree", tree: { files: ["old.ts"], truncated: false, ignored: [], ignoredTruncated: false } });
   await Promise.all([first, shared]);
   assert.deepEqual(cachedWorkspace(target)?.files?.files, ["current.ts"]);
+});
+
+test("a read begun before a change isn't shared after it: one more follows it, never alongside", async () => {
+  const replies: ((value: unknown) => void)[] = [];
+  mockIPC(() => new Promise((resolve) => { replies.push(resolve); }));
+  const tree = (files: string[]) => ({ method: "getWorkspaceTree", tree: { files, truncated: false, ignored: [], ignoredTruncated: false } });
+  const before = readFiles(target);
+  emitWorkspaceChanged(target);
+  const after = readFiles(target);
+  const alsoAfter = readFiles(target);
+  assert.equal(replies.length, 1, "the next read waits for the one under way");
+  replies[0]!(tree(["before.ts"]));
+  assert.deepEqual((await before).files, ["before.ts"]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(replies.length, 2, "then reads again, once for both");
+  replies[1]!(tree(["after.ts"]));
+  assert.deepEqual((await after).files, ["after.ts"]);
+  assert.deepEqual((await alsoAfter).files, ["after.ts"]);
+  assert.deepEqual(cachedWorkspace(target)?.files?.files, ["after.ts"]);
 });
 
 test("deleting and recreating a project or changing a session repo gives a new generation", () => {

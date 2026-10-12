@@ -18,8 +18,12 @@ use crate::{Error, Result};
 const IGNORED_KEPT: usize = 5_000;
 /// Entries listed when a folder is read on its own.
 const FOLDER_ENTRIES: usize = 2_000;
-/// How long the watch waits for a burst of changes (a save, a checkout) to end.
-const SETTLE: Duration = Duration::from_millis(200);
+/// How long the watch gathers a change's own events (a save writes, then renames) before it
+/// says the checkout changed.
+const GATHER: Duration = Duration::from_millis(25);
+/// The least time between two changes said while a burst goes on (a checkout, a build): what
+/// comes meanwhile is said once, at its end.
+const SETTLE: Duration = Duration::from_millis(250);
 /// How often a checkout that can't be watched is read again anyway.
 const POLL: Duration = Duration::from_secs(10);
 
@@ -210,37 +214,47 @@ impl WorkspaceWatch {
                         }
                         Err(std_mpsc::RecvTimeoutError::Disconnected) => return,
                     };
+                    // A change is said at once, after its own few events; what follows within
+                    // SETTLE of it is said once at the end of that, and so on while it goes on.
                     let mut batch = vec![first];
-                    let settled = Instant::now() + SETTLE;
-                    while let Some(left) = settled.checked_duration_since(Instant::now()) {
-                        match events.recv_timeout(left) {
-                            Ok(event) => batch.push(event),
-                            Err(_) => break,
-                        }
-                    }
-                    if batch.iter().any(|event| event.is_err()) {
-                        // A backend that fails after starting must also get the poll fallback.
-                        watching = false;
-                    }
-                    if !batch.iter().any(|event| filter.counts(event)) {
-                        continue;
-                    }
-                    if changes_tx.try_send(()).is_err() && changes_tx.is_closed() {
-                        return;
-                    }
-                    // A new build folder is ignored from now on, and a switched branch's refs
-                    // are watched.
-                    if let Some((ignored, status_files)) = reread() {
-                        filter.set_ignored(&ignored);
-                        let status_files: Vec<PathBuf> =
-                            status_files.iter().map(|file| resolved(file)).collect();
-                        if status_files != filter.status_files {
-                            if let Ok(mut watcher) = thread_watcher.lock()
-                                && let Some(watcher) = watcher.as_mut()
-                            {
-                                watch_status_dirs(watcher, &filter.root, &status_files);
+                    let mut until = Instant::now() + GATHER;
+                    loop {
+                        while let Some(left) = until.checked_duration_since(Instant::now()) {
+                            match events.recv_timeout(left) {
+                                Ok(event) => batch.push(event),
+                                Err(_) => break,
                             }
-                            filter.status_files = status_files;
+                        }
+                        if batch.iter().any(|event| event.is_err()) {
+                            // A backend that fails after starting must also get the poll fallback.
+                            watching = false;
+                        }
+                        let counted = batch.iter().any(|event| filter.counts(event));
+                        batch.clear();
+                        if !counted {
+                            break;
+                        }
+                        if changes_tx.try_send(()).is_err() && changes_tx.is_closed() {
+                            return;
+                        }
+                        until = Instant::now() + SETTLE;
+                        // A new build folder is ignored from now on, and a switched branch's
+                        // refs are watched.
+                        if let Some((ignored, status_files)) = reread() {
+                            filter.set_ignored(&ignored);
+                            let status_files: Vec<PathBuf> =
+                                status_files.iter().map(|file| resolved(file)).collect();
+                            if status_files != filter.status_files {
+                                if let Ok(mut watcher) = thread_watcher.lock()
+                                    && let Some(watcher) = watcher.as_mut()
+                                {
+                                    watch_status_dirs(watcher, &filter.root, &status_files);
+                                }
+                                filter.status_files = status_files;
+                            }
+                        }
+                        if thread_stop.load(Ordering::SeqCst) {
+                            return;
                         }
                     }
                 }
