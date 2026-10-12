@@ -1,11 +1,13 @@
 import { $isCodeNode } from "@lexical/code";
 import { $isLinkNode, TOGGLE_LINK_COMMAND } from "@lexical/link";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { DraggableBlockPlugin_EXPERIMENTAL } from "@lexical/react/LexicalDraggableBlockPlugin";
 import { LexicalTypeaheadMenuPlugin, MenuOption, type MenuRenderFn, useBasicTypeaheadTriggerMatch } from "@lexical/react/LexicalTypeaheadMenuPlugin";
 import { $findMatchingParent, mergeRegister } from "@lexical/utils";
 import { ChevronDown, Code, Link } from "@openai/apps-sdk-ui/components/Icon";
 import {
+  $getNearestNodeFromDOMNode,
+  $getNodeByKey,
+  $getRoot,
   $getSelection,
   $isRangeSelection,
   BLUR_COMMAND,
@@ -13,9 +15,10 @@ import {
   FORMAT_TEXT_COMMAND,
   KEY_DOWN_COMMAND,
   SELECTION_CHANGE_COMMAND,
+  type LexicalEditor,
   type TextFormatType,
 } from "lexical";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -114,7 +117,7 @@ export function SelectionToolbar({ mac }: { mac: boolean }) {
   const refresh = useCallback(() => {
     const native = window.getSelection();
     const root = editor.getRootElement();
-    const found = editor.getEditorState().read(() => {
+    const found = editor.read(() => {
       const selection = $getSelection();
       if (!$isRangeSelection(selection) || selection.isCollapsed() || !selection.getTextContent().trim()) return null;
       const anchor = selection.anchor.getNode();
@@ -226,25 +229,111 @@ export function SelectionToolbar({ mac }: { mac: boolean }) {
   );
 }
 
-/** Six dots beside the block under the pointer: drag them to move the block. */
+/** The top-level block a pointer at `y` is over: the first or last when it is above or below them all. */
+function blockAt(editor: LexicalEditor, y: number): HTMLElement | null {
+  const keys = editor.read(() => $getRoot().getChildrenKeys());
+  let found: HTMLElement | null = null;
+  for (const key of keys) {
+    const element = editor.getElementByKey(key);
+    if (!element) continue;
+    found = element;
+    if (y < element.getBoundingClientRect().bottom) break;
+  }
+  return found;
+}
+
+/**
+ * Six dots beside the block under the pointer: drag them to move the block. The drag follows
+ * the pointer itself rather than the system's drag and drop, which the window keeps for files
+ * dropped from outside.
+ */
 export function DragHandles({ anchor }: { anchor: HTMLElement | null }) {
-  const menu = useRef<HTMLDivElement | null>(null);
+  const [editor] = useLexicalComposerContext();
+  const handle = useRef<HTMLDivElement | null>(null);
   const line = useRef<HTMLDivElement | null>(null);
+  const [block, setBlock] = useState<HTMLElement | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    if (!anchor || dragging) return;
+    const move = (event: MouseEvent) => {
+      if (handle.current?.contains(event.target as Node)) return;
+      const box = anchor.getBoundingClientRect();
+      const inside = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+      setBlock(inside ? blockAt(editor, event.clientY) : null);
+    };
+    const leave = () => setBlock(null);
+    anchor.addEventListener("mousemove", move);
+    anchor.addEventListener("mouseleave", leave);
+    return () => { anchor.removeEventListener("mousemove", move); anchor.removeEventListener("mouseleave", leave); };
+  }, [anchor, dragging, editor]);
+
+  useEffect(() => {
+    const dots = handle.current;
+    if (!anchor || !dots) return;
+    if (!block) { delete dots.dataset.shown; return; }
+    const lineHeight = Number.parseFloat(getComputedStyle(block).lineHeight);
+    const rect = block.getBoundingClientRect();
+    const height = Number.isNaN(lineHeight) ? rect.height : lineHeight;
+    const top = rect.top - anchor.getBoundingClientRect().top + (height - dots.offsetHeight) / 2;
+    dots.style.transform = `translateY(${top}px)`;
+    dots.dataset.shown = "";
+  }, [anchor, block]);
+
+  const start = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !anchor || !block) return;
+    event.preventDefault();
+    const source = block;
+    const key = editor.read(() => $getNearestNodeFromDOMNode(source)?.getKey());
+    if (!key) return;
+    setDragging(true);
+    source.classList.add("page-block-dragging");
+    let drop: { target: HTMLElement; before: boolean } | null = null;
+    const move = (pointer: PointerEvent) => {
+      const target = blockAt(editor, pointer.clientY);
+      const marker = line.current;
+      if (!target || !marker) return;
+      const rect = target.getBoundingClientRect();
+      const before = pointer.clientY < rect.top + rect.height / 2;
+      drop = { target, before };
+      const gap = Number.parseFloat(getComputedStyle(target)[before ? "marginTop" : "marginBottom"]) || 0;
+      const edge = (before ? rect.top : rect.bottom) - anchor.getBoundingClientRect().top;
+      marker.style.transform = `translateY(${edge + (before ? -gap : gap) / 2 - marker.offsetHeight / 2}px)`;
+      marker.dataset.shown = "";
+    };
+    const end = (pointer: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      source.classList.remove("page-block-dragging");
+      if (line.current) delete line.current.dataset.shown;
+      setDragging(false);
+      setBlock(null);
+      if (pointer.type !== "pointerup" || !drop) return;
+      const { target, before } = drop;
+      editor.update(() => {
+        const dragged = $getNodeByKey(key);
+        const over = $getNearestNodeFromDOMNode(target);
+        if (!dragged || !over || over.is(dragged)) return;
+        if (before) over.insertBefore(dragged);
+        else over.insertAfter(dragged);
+      });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+
   if (!anchor) return null;
-  return (
-    <DraggableBlockPlugin_EXPERIMENTAL
-      anchorElem={anchor}
-      menuRef={menu}
-      targetLineRef={line}
-      menuComponent={
-        <div ref={menu} data-slot="page-drag-handle" aria-hidden className="page-drag-handle">
-          <svg viewBox="0 0 10 16" fill="currentColor" className="page-drag-dots">
-            {[3, 8, 13].flatMap((y) => [2.5, 7.5].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.25" />))}
-          </svg>
-        </div>
-      }
-      targetLineComponent={<div ref={line} className="page-drop-line" />}
-      isOnMenu={(element) => element.closest(".page-drag-handle") !== null}
-    />
+  return createPortal(
+    <>
+      <div ref={handle} data-slot="page-drag-handle" aria-hidden className="page-drag-handle" onPointerDown={start}>
+        <svg viewBox="0 0 10 16" fill="currentColor" className="page-drag-dots">
+          {[3, 8, 13].flatMap((y) => [2.5, 7.5].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.25" />))}
+        </svg>
+      </div>
+      <div ref={line} className="page-drop-line" />
+    </>,
+    anchor,
   );
 }

@@ -128,7 +128,7 @@
 .page-drag-handle {
   position: absolute;
   top: 0;
-  left: 0;
+  left: .25rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -138,8 +138,11 @@
   color: var(--page-quiet);
   opacity: 0;
   cursor: grab;
+  touch-action: none;
   will-change: transform;
 }
+.page-drag-handle[data-shown] { opacity: 1; }
+.page-drag-handle:not([data-shown]) { pointer-events: none; }
 .page-drag-handle:hover { background: var(--toolbar-hover); color: var(--foreground); }
 .page-drag-handle:active { cursor: grabbing; }
 .page-drag-dots { width: .625rem; height: 1rem; }
@@ -149,13 +152,15 @@
   left: 0;
   width: calc(100% - var(--page-gutter)) !important;
   height: 2px;
-  margin-inline-start: calc(var(--page-gutter) - 1.5rem);
+  margin-inline-start: var(--page-gutter);
   border-radius: 1px;
   background: var(--ring);
   opacity: 0;
   pointer-events: none;
   will-change: transform;
 }
+.page-drop-line[data-shown] { opacity: 1; }
+.page-content > .page-block-dragging { opacity: .4; }
 .page-content { min-height: 12rem; outline: none; font-size: var(--page-font); line-height: var(--page-line); caret-color: var(--foreground); }
 .page-content > * + * { margin-top: .5rem; }
 .page-p { margin: 0; }

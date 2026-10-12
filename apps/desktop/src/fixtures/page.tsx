@@ -155,13 +155,14 @@ async function steps(seen: Record<string, unknown>): Promise<void> {
   const handle = one<HTMLElement>(".page-drag-handle")!;
   seen.handleShows = getComputedStyle(handle).opacity === "1";
   seen.handleBesideBlock = handle.getBoundingClientRect().right <= at.left;
-  const transfer = new DataTransfer();
-  handle.dispatchEvent(new DragEvent("dragstart", { dataTransfer: transfer, bubbles: true }));
+  const from = handle.getBoundingClientRect();
+  handle.dispatchEvent(new PointerEvent("pointerdown", { button: 0, clientX: from.left + 4, clientY: from.top + 4, bubbles: true, cancelable: true }));
   const target = content().children[4] as HTMLElement;
   const to = target.getBoundingClientRect();
-  content().dispatchEvent(new DragEvent("dragover", { dataTransfer: transfer, clientX: to.left + 10, clientY: to.bottom - 2, bubbles: true, cancelable: true }));
-  content().dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, clientX: to.left + 10, clientY: to.bottom - 2, bubbles: true, cancelable: true }));
-  handle.dispatchEvent(new DragEvent("dragend", { dataTransfer: transfer, bubbles: true }));
+  window.dispatchEvent(new PointerEvent("pointermove", { clientX: to.left + 10, clientY: to.top + 2 }));
+  seen.dropLineShows = getComputedStyle(one(".page-drop-line")!).opacity === "1";
+  window.dispatchEvent(new PointerEvent("pointermove", { clientX: to.left + 10, clientY: to.bottom - 2 }));
+  window.dispatchEvent(new PointerEvent("pointerup", { clientX: to.left + 10, clientY: to.bottom - 2 }));
   await wait(100);
   seen.afterDrag = blocks();
   // Saved as Markdown about 600 ms after the last change.

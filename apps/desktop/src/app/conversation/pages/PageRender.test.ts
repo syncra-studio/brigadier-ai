@@ -30,6 +30,7 @@ test("a page: shortcuts, the Insert list, formatting, dragging, autosave, confli
   // The handle shows in the gutter beside the block under the pointer and moves it.
   assert.equal(seen.handleShows, true);
   assert.equal(seen.handleBesideBlock, true);
+  assert.equal(seen.dropLineShows, true);
   assert.deepEqual(seen.afterDrag, ["h1", "h3", "ul", "ol", "h2", "ul.check", "blockquote", "p", "hr", "code", "table", "p"]);
   // Saved as Markdown once typing stops.
   assert.deepEqual(seen.saved, {
