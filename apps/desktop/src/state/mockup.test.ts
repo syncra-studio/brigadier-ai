@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { ArtifactRef, Task } from "@/ipc/generated";
 
-import { mockupOf, revisedSince, shotNumber, shotsOf, takesNotes } from "./mockup";
+import { earlierShots, mockupOf, revisedSince, sentShots, shotNumber, shotsOf, takesNotes } from "./mockup";
 
 const ref = (name: string, mime = "image/png"): ArtifactRef => ({
   id: `hash-${name}`, title: name, kind: "screenshot", mime, bytes: 1, fileName: name,
@@ -66,6 +66,14 @@ test("notes' revision is there once the worker is done with new screenshots, or 
   assert.equal(revisedSince(at({ state: "running", reworkRounds: 1 }), sent), false, "still working");
   assert.equal(revisedSince(at({ reworkRounds: 1 }), sent), true, "done with the same screenshots");
   assert.equal(revisedSince(at({ outputs: [ref("mockup-1b.png")] }), sent), true, "new screenshots");
+});
+
+test("the screenshots notes went on keep their screens when the revision drops one", () => {
+  const before = mockupOf({ t1: task(1, { mockup: { type: "builds" }, outputs: [ref("mockup-1.png"), ref("mockup-2.png")] }) })!;
+  const sent = sentShots(before);
+  assert.deepEqual(sent.screens, [1, 2]);
+  const after = mockupOf({ t1: task(1, { mockup: { type: "builds" }, outputs: [{ ...ref("mockup-2.png"), id: "hash-mockup-2-v2" }], reworkRounds: 1 }) })!;
+  assert.deepEqual(earlierShots(after, sent).map((shot) => [shot.screen, shot.ref.id]), [[1, "hash-mockup-1.png"], [2, "hash-mockup-2.png"]]);
 });
 
 const notesTakenAt = (state: Task["state"]) =>

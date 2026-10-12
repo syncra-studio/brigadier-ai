@@ -68,14 +68,14 @@ export function notePlacement(point: { x: number; y: number }, box: Box, surface
 
 /**
  * A session's notes on its mockup (the task `task` built) while they are made, kept while the
- * tab closes and opens. `sent` holds the screenshots shown when notes went, until the user
- * moves to the revised ones (`dismissed`: not now, the next time the mockup opens). `sending`
- * and `failed` are the send in flight and the last one's failure, kept with the notes so a tab
- * opened again mid-send still has them frozen.
+ * tab closes and opens. `sent` holds the screenshots shown when notes went, each with its
+ * screen, until the user moves to the revised ones (`dismissed`: not now, the next time the
+ * mockup opens). `sending` and `failed` are the send in flight and the last one's failure,
+ * kept with the notes so a tab opened again mid-send still has them frozen.
  */
 type SessionNotes = {
   task: string | null; notes: MockupNote[]; commenting: boolean;
-  sent: { version: number; shots: string[]; dismissed: boolean } | null;
+  sent: { version: number; shots: string[]; screens: (number | null)[]; dismissed: boolean } | null;
   sending: boolean; failed: boolean;
 };
 

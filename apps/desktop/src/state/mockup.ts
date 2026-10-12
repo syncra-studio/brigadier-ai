@@ -92,6 +92,33 @@ export function revisedSince(mockup: Mockup, sent: { version: number; shots: rea
   return mockup.shots.map((ref) => ref.id).join() !== sent.shots.join() || mockup.version > sent.version;
 }
 
+/** A mockup screenshot with the screen it is. */
+export type Shot = { screen: number; ref: ArtifactRef };
+
+/** The mockup's screenshots, each with its screen. */
+export const shotsOfMockup = (mockup: Mockup): Shot[] =>
+  mockup.pairs.flatMap((pair) => (pair.mockup ? [{ screen: pair.number, ref: pair.mockup }] : []));
+
+/** The screenshots notes go on, by id, and each one's screen: kept to show after a revision. */
+export function sentShots(mockup: Mockup): { shots: string[]; screens: (number | null)[] } {
+  return {
+    shots: mockup.shots.map((ref) => ref.id),
+    screens: mockup.shots.map((ref) => mockup.pairs.find((pair) => pair.mockup === ref)?.number ?? null),
+  };
+}
+
+/**
+ * The screenshots notes went on (`sent`), each on the screen it was then, whichever screens
+ * the revision has. One no longer among the mockup's outputs is shown by its id.
+ */
+export function earlierShots(mockup: Mockup, sent: { shots: readonly string[]; screens: readonly (number | null)[] }): Shot[] {
+  return sent.shots.flatMap((id, index) => {
+    const screen = sent.screens[index];
+    if (screen === null || screen === undefined) return [];
+    return [{ screen, ref: mockup.shots.find((ref) => ref.id === id) ?? { ...mockup.shots[0]!, id, fileName: null, title: "Earlier version" } }];
+  });
+}
+
 /**
  * Whether the user can mark notes on the mockup: it is built or building, and its worker
  * hasn't ended, since the notes go back to that worker. An ended one's screenshots stay to
