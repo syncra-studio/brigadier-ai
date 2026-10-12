@@ -87,7 +87,7 @@ export function introBegin(): Promise<boolean> {
   return invoke<boolean>("intro_begin");
 }
 
-/** The orb has opened into the window: its own chrome comes back. */
+/** The burst has opened the window: its own chrome comes back. */
 export function introShaped(): Promise<void> {
   return invoke("intro_shaped");
 }

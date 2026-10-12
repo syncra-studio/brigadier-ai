@@ -2,9 +2,9 @@
 //!
 //! On macOS the first launch holds the main window clear until the page is ready (shown, so
 //! its page runs and paints, but unseen and passing the mouse through), then stages it: the
-//! window appears with no title-bar buttons, shadow or background (so only the page's orb
+//! window appears with no title-bar buttons, shadow or background (so only the page's comet
 //! is seen), above a borderless black window over the screen below the menu bar that ignores
-//! the mouse and fades in to dim the desktop. When the orb has opened into the window, its
+//! the mouse and fades in to dim the desktop. When the mark's burst has opened the window, its
 //! chrome comes back (`intro_shaped`); then the dim fades out and closes for good
 //! (`intro_finish`).
 //!
@@ -72,7 +72,7 @@ fn unhold(app: &AppHandle) {
     let _ = app.run_on_main_thread(move || mac::unhold(&handle));
 }
 
-/// Whether the window is staged: its startup colour must not cover the page's orb.
+/// Whether the window is staged: its startup colour must not cover the page's comet.
 pub fn staged() -> bool {
     STAGED.load(Ordering::Acquire)
 }
@@ -109,7 +109,7 @@ pub async fn intro_begin(app: AppHandle) -> bool {
     true
 }
 
-/// The orb has opened into the window: its title-bar buttons, shadow and colour come back.
+/// The burst has opened the window: its title-bar buttons, shadow and colour come back.
 #[tauri::command]
 pub fn intro_shaped(app: AppHandle) {
     if !staged() {

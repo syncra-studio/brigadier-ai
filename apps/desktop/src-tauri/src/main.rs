@@ -448,7 +448,7 @@ fn clear_backdrop(window: &tauri::Window) {
 /// The startup screen has gone and the app covers the window: its backdrop goes too.
 #[tauri::command]
 fn startup_finished(app: tauri::AppHandle, window: tauri::Window) {
-    // A staged intro keeps the window clear until its orb has opened (intro.rs).
+    // A staged intro keeps the window clear until its burst has opened it (intro.rs).
     if startup_backdrop(&app).is_some() && !intro::staged() {
         clear_backdrop(&window);
         if let Err(err) = window.set_background_color(Some(WINDOW_BACKGROUND)) {

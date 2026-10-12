@@ -38,7 +38,7 @@ function reducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-/** The page shows clear while the window is staged, so only the orb is seen (onboarding.css). */
+/** The page shows clear while the window is staged, so only the comet is seen (onboarding.css). */
 function setPageStaged(staged: boolean): void {
   if (staged) document.documentElement.dataset.intro = "staged";
   else delete document.documentElement.dataset.intro;
