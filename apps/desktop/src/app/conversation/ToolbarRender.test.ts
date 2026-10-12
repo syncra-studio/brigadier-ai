@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { renderFixturePage } from "@/fixtures/headless";
+
+test("toolbar order, docked pane, Files search and worker/plan-only right panel routes", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "toolbar.html", "toolbar-result", 8500)) as Record<string, unknown>;
+  assert.deepEqual(seen.sessionControls, ["Context", "Files", "Source", "Terminal"]);
+  assert.deepEqual(seen.draftControls, ["Context", "Files", "Source", "Terminal"]);
+  assert.deepEqual(seen.chatControls, ["Context", "Terminal"]);
+  assert.equal(seen.files, "files");
+  assert.equal(seen.closedFiles, null);
+  assert.equal(seen.source, "source");
+  assert.equal(seen.switchedFiles, "files");
+  assert.equal(seen.belowToolbar, true);
+  assert.equal(seen.searchFocused, "Search files");
+  assert.equal(seen.findFileFocused, "Search files");
+  for (const field of ["initialRight", "filesRight", "removedKeyRight", "closedRight", "previewRight"]) assert.equal(seen[field], "collapsed", field);
+  assert.equal(seen.removedMenu, null);
+  for (const field of ["workerRight", "composerRight", "contextWorkerRight"]) assert.equal(seen[field], "expanded", field);
+  assert.equal(seen.workerTab, "workers");
+  assert.equal(seen.planTab, "plan");
+  assert.equal(seen.previewPopover, true);
+  assert.equal(seen.draftFiles, "files");
+  assert.match(String(seen.draftUnavailable), /No files/);
+  assert.equal(seen.chatPane, null);
+  assert.match(String(seen.chatText), /Nothing here yet/);
+  assert.doesNotMatch(String(seen.chatText), /Plan|Workers/);
+  assert.equal(seen.contextClosed, "false");
+  assert.equal(seen.contextOpened, "true");
+  assert.match(String(seen.chatUsage), /1,200 tokens used/);
+  assert.doesNotMatch(String(seen.chatUsage), /Plan|Workers/);
+  assert.equal((seen.savedPane as { state: { open: boolean } }).state.open, true);
+});

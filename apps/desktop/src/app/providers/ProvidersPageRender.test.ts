@@ -3,13 +3,13 @@ import { test } from "node:test";
 import { createServer } from "vite";
 
 import type { AccountView } from "@/ipc/generated";
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive } from "@/fixtures/headless";
 
 // The real page in Chromium over a faked daemon: emails masked, one row's revealed until the
 // page is left, usage coloured only near the limit, the Don't give work rules (the old switch's
 // and a new model's), and rows whose place moved brought into view, Advanced opening for them.
 test("Providers masks emails, reveals one row until the page is left, and brings moved rows into view", { timeout: 60000 }, async (t) => {
-  const dump = await renderFixturePage(t, "providers.html?drive=1", "providers-result", 12000);
+  const dump = await renderFixtureLive(t, "providers.html?drive=1", "providers-result", 30000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
   assert.deepEqual(seen.sections, ["Claude Code", "Codex", "Who does what"]);
   assert.equal(seen.switchRow, true);

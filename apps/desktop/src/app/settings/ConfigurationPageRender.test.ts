@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
 
 type Rendering = {
   first: { select: string; notice: string[]; picker: string };
@@ -57,7 +57,7 @@ test("a finished reply keeps the sandbox notice outside its collapsed work", { t
 // each, the explanations in the menus (Automatic first, each level's allowance and risk), and
 // an old page's link and a search landing on their rows.
 test("Configuration shows its defaults in one card and explains the choices in its menus", { timeout: 60000 }, async (t) => {
-  const dump = await renderFixturePage(t, "configuration.html?drive=1", "configuration-result", 10000);
+  const dump = await renderFixtureLive(t, "configuration.html?drive=1", "configuration-result", 30000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&"));
   assert.deepEqual(seen.firstCard, [
     { setting: "Model for sessions", helper: "Choose the model that leads new sessions, their orchestrator" },

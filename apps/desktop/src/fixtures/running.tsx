@@ -84,7 +84,8 @@ function Fixture() {
         const tabs = sessionTabs(id);
         const browser = tabs.tabs.find((tab) => tab.id === tabs.active);
         seen.browser = browser?.kind === "browser" ? browser.url : undefined;
-        document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click();
+        const chip = document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]');
+        if (chip?.getAttribute("aria-expanded") !== "true") chip?.click();
       });
       at(3000, () => { press("Clear finished"); });
       at(3300, () => { seen.cleared = Object.keys(useBoard.getState().board!.previews); press("Stop", row("Web app")!); });

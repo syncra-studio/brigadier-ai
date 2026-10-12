@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive } from "@/fixtures/headless";
 
 test("Running renders all states and controls pause, resume, stop, clear and the session browser", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "running.html?drive=1", "running-result", 10000)) as {
+  const seen = JSON.parse(await renderFixtureLive(t, "running.html?drive=1", "running-result", 30000)) as {
     initial: { name: string; text: string; actions: string[] }[];
     paused: string[]; resumed: string[]; windows: string[]; error: string; browser: string;
     cleared: string[]; stopped: string[]; allStopped: boolean; empty: string; calls: string[];
