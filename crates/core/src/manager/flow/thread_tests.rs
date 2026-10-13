@@ -2725,6 +2725,10 @@ async fn an_unsettled_codex_escalation_is_a_card_unless_nobody_is_there() {
             .all(|(_, decision)| decision == &Some(ApprovalDecision::Allow))
     );
 
+    // The request ends first: a message sent while it works is a follow-up to it, which the
+    // thread hears once as that and again as a request of its own.
+    flow.settled().await;
+
     // An overnight run: nobody to ask, so both are declined with the reason.
     flow.manager.overnight.active.insert(
         flow.conversation.clone(),
