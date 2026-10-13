@@ -1058,6 +1058,9 @@ impl SessionManager {
                 crate::logging::private_trace!(private_logs, warn, "could not collect blobs"; conversation = %id, error = %err)
             }
         }
+        if conversation.tab_chat.is_some() {
+            self.scrub_databases().await;
+        }
         Ok(true)
     }
 }
@@ -1090,6 +1093,21 @@ impl SessionManager {
             Err(err) => {
                 crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not forget a deleted conversation's routing records"; conversation = %id, error = %err)
             }
+        }
+    }
+}
+
+impl SessionManager {
+    /// A tab's chat leaves nothing, not even in the database files: their WAL is emptied, and
+    /// with `secure_delete` on, the deleted rows' pages hold no copy either.
+    pub(crate) async fn scrub_databases(&self) {
+        if self.core.store().scrub().await.is_err() {
+            tracing::warn!("could not empty the store's write-ahead log after a tab chat");
+        }
+        if let Some(routing) = self.runtime.routing_store()
+            && routing.scrub().await.is_err()
+        {
+            tracing::warn!("could not empty the routing write-ahead log after a tab chat");
         }
     }
 }

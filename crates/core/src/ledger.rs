@@ -485,6 +485,10 @@ impl CleanupLedger {
             crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not forget a tab chat's records"; owner, error = %err);
             return;
         }
+        // Nor a copy in the store's write-ahead log.
+        if self.core.store().scrub().await.is_err() {
+            tracing::warn!("could not empty the store's write-ahead log after a tab chat");
+        }
         let mut state = self.state();
         state.disposing.remove(owner);
         state.artifacts.remove(owner);

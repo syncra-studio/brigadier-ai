@@ -173,9 +173,32 @@ async fn left_nothing_of(flow: &Flow, chat: &ConversationId, natives: &[String])
     }
     let scratch = flow.dir.join("data/tabchat").join(&chat.0);
     assert!(!scratch.exists(), "{} survived", scratch.display());
+    // Nothing of what it said or which CLI sessions it had stays in the databases' freed
+    // pages or write-ahead logs, and the logs don't hold its id. (Its bare id can stay in the
+    // index's inner pages until the database is next compacted.)
+    for file in [
+        "brigadier.db",
+        "brigadier.db-wal",
+        "routing.sqlite",
+        "routing.sqlite-wal",
+    ] {
+        let bytes = database_text(flow, file);
+        if file.ends_with("-wal") {
+            assert!(!bytes.contains(&chat.0), "{file} still holds its id");
+        }
+        for id in natives {
+            assert!(!bytes.contains(id.as_str()), "{file} still holds {id}");
+        }
+    }
     // A store reloaded from disk has nothing of it either.
     let reloaded = crate::Core::load(flow.core.store().clone()).await.unwrap();
     assert!(reloaded.conversation(chat).is_err());
+}
+
+/// A database file of the flow's data folder, as text (empty when it isn't there).
+fn database_text(flow: &Flow, file: &str) -> String {
+    let bytes = std::fs::read(flow.dir.join("data").join(file)).unwrap_or_default();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn natives(log: &Log) -> Vec<String> {
@@ -814,6 +837,21 @@ async fn a_tab_chat_leaves_no_canaries_in_logs_even_when_deletion_is_retried() {
     flow.behavior.fail_cleanup.store(false, Ordering::SeqCst);
     flow.restart().await;
     left_nothing_of(&flow, &chat, &ids).await;
+    // What it was called and said is overwritten in the databases, not left in freed pages.
+    for file in [
+        "brigadier.db",
+        "brigadier.db-wal",
+        "routing.sqlite",
+        "routing.sqlite-wal",
+    ] {
+        let bytes = database_text(&flow, file);
+        for canary in [&title, &text] {
+            assert!(
+                !bytes.contains(canary.as_str()),
+                "{file} still holds {canary}"
+            );
+        }
+    }
     // A normal conversation still logs its identifying fields.
     let normal = flow.conversation.0.clone();
     flow.manager

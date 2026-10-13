@@ -599,8 +599,22 @@ impl Store {
     pub fn request_checkpoint(&self) {
         let (reply, _) = oneshot::channel();
         let _ = self.writes.try_send(WriteCommand {
-            op: WriteOp::Checkpoint { reply },
+            op: WriteOp::Checkpoint {
+                truncate: false,
+                reply,
+            },
         });
+    }
+
+    /// Empties the WAL after rows that must leave nothing behind were deleted (a tab's chat):
+    /// with `secure_delete` on, neither file then keeps a copy of them. It waits only briefly
+    /// for readers; what one held back goes at the next full checkpoint.
+    pub async fn scrub(&self) -> Result<()> {
+        self.command(|reply| WriteOp::Checkpoint {
+            truncate: true,
+            reply,
+        })
+        .await?
     }
 
     /// Stops admitting writes, commits everything already queued, truncates the WAL and stops

@@ -46,7 +46,10 @@ pub(crate) enum WriteOp {
         hashes: Vec<(BlobHash, SystemTime)>,
         reply: oneshot::Sender<Result<Collected>>,
     },
+    /// A PASSIVE checkpoint, or with `truncate` one that empties the WAL (waiting only briefly
+    /// for readers), so rows just deleted leave no copy behind in it.
     Checkpoint {
+        truncate: bool,
         reply: oneshot::Sender<Result<()>>,
     },
     /// Rebuilds the database file without its free pages (`VACUUM`), then truncates the WAL.
@@ -104,7 +107,7 @@ pub(crate) struct Collected {
 struct Sorted {
     mutations: Vec<Mutation>,
     collections: Vec<Collection>,
-    checkpoints: Vec<oneshot::Sender<Result<()>>>,
+    checkpoints: Vec<(bool, oneshot::Sender<Result<()>>)>,
     compactions: Vec<(bool, oneshot::Sender<Result<Compacted>>)>,
     shutdown: Option<oneshot::Sender<Result<()>>>,
 }
@@ -144,7 +147,7 @@ impl Sorted {
             WriteOp::CollectBlobs { hashes, reply } => {
                 self.collections.push(Collection { hashes, reply })
             }
-            WriteOp::Checkpoint { reply } => self.checkpoints.push(reply),
+            WriteOp::Checkpoint { truncate, reply } => self.checkpoints.push((truncate, reply)),
             WriteOp::Compact { automatic, reply } => self.compactions.push((automatic, reply)),
             WriteOp::Shutdown { reply } => match self.shutdown {
                 // A second shutdown racing the first just succeeds.
@@ -308,8 +311,12 @@ impl Writer {
             for collection in collections {
                 let _ = collection.reply.send(self.collect(collection.hashes));
             }
-            for reply in checkpoints {
-                let _ = reply.send(self.checkpoint("PASSIVE"));
+            for (truncate, reply) in checkpoints {
+                let _ = reply.send(if truncate {
+                    self.scrub()
+                } else {
+                    self.checkpoint("PASSIVE")
+                });
             }
             for (automatic, reply) in compactions {
                 // A shutdown in this batch has stopped maintenance already.
@@ -461,6 +468,16 @@ impl Writer {
         self.counters.checkpoints.fetch_add(1, Ordering::Relaxed);
         self.record_wal_size();
         Ok(())
+    }
+
+    /// Empties the WAL, waiting for readers only briefly (a reader holds every write behind
+    /// it): with `secure_delete` on, rows deleted before it then leave no copy in either file.
+    /// What a reader kept from being copied goes at the next full checkpoint.
+    fn scrub(&self) -> Result<()> {
+        self.conn.busy_timeout(AUTOMATIC_CHECKPOINT_WAIT)?;
+        let scrubbed = self.checkpoint("TRUNCATE");
+        self.conn.busy_timeout(schema::WRITER_BUSY_TIMEOUT)?;
+        scrubbed
     }
 
     /// `VACUUM` (outside any transaction: the batch's has committed), then a TRUNCATE
