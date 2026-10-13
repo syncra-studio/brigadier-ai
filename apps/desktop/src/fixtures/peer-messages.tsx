@@ -333,8 +333,8 @@ if (!long) {
   filler(docs, 3);
   // Long ago: API schema tells Docs, which takes it in a turn of its own.
   ask(api, "j1", "Tell Docs the schema changed.");
-  read(api, "j1", "schema.sql");
-  read(api, "j1", "openapi.yaml");
+  // Enough reads first that the group's rows scroll, the message's row past their fold.
+  for (const name of ["schema.sql", "openapi.yaml", "orders.ts", "payments.ts", "events.ts", "routes.ts", "models.ts", "README.md", "CHANGELOG.md", "migrations.md"]) read(api, "j1", name);
   sent(api, "j1", "ml", DOCS, SCHEMA_CHANGED, { type: "seen" });
   answer(api, "j1", "Told Docs.");
   received(docs, "ml", API, SCHEMA_CHANGED);
@@ -364,7 +364,9 @@ if (!long) {
 function pageStarts(s: Side): number[] {
   if (!long) return [1];
   const starts = new Set([1, ...s.cuts]);
-  for (let at = s.seq - 9; at > 1; at -= 10) {
+  // Ten messages a page, as the daemon counts them (steps and records hold no place in a page).
+  for (let index = s.messages.length - 10; index > 0; index -= 10) {
+    const at = s.messages[index]!.seq;
     if (!s.together.some(([from, to]) => at > from && at <= to)) starts.add(at);
   }
   return [...starts].toSorted((a, b) => a - b);
@@ -507,6 +509,16 @@ async function unfoldAll(): Promise<void> {
   await wait(300);
 }
 
+/** Whether every list that scrolls around `element` inside the thread shows all of it. */
+function within(element: HTMLElement, rect: DOMRect): boolean {
+  for (let holder = element.parentElement; holder && holder !== viewport(); holder = holder.parentElement) {
+    if (holder.scrollHeight <= holder.clientHeight) continue;
+    const box = holder.getBoundingClientRect();
+    if (rect.top < box.top || rect.bottom > box.bottom) return false;
+  }
+  return true;
+}
+
 /** Where a jump landed: the message's element, how far its centre is from the view's, and what holds it. */
 function landing(messageId: string) {
   const element = one(`[data-peer-message="${messageId}"]`);
@@ -517,7 +529,7 @@ function landing(messageId: string) {
     found: !!element,
     revealed: element?.dataset["revealed"] === "true",
     offCentre: box && rect ? Math.round(rect.top + rect.height / 2 - (box.top + box.height / 2)) : null,
-    inView: !!(box && rect && rect.top >= box.top && rect.bottom <= box.bottom),
+    inView: !!(box && rect && rect.top >= box.top && rect.bottom <= box.bottom && !!element && within(element, rect)),
     clamped: !!scroller && (scroller.scrollTop <= 0 || scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight - 1),
     group: element?.closest("[data-slot=work-group]")?.getAttribute("data-state") ?? null,
     workOpen: !!element?.closest("[data-slot=request-work]"),

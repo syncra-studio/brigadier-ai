@@ -85,13 +85,21 @@ export function landReveal(messageId: string, done: number): () => void {
 
 function land(element: HTMLElement): void {
   const viewport = element.closest<HTMLElement>("[data-slot=aui_thread-viewport]");
-  if (viewport) {
-    const box = viewport.getBoundingClientRect();
-    const rect = element.getBoundingClientRect();
-    const centre = rect.top + rect.height / 2 - (box.top + box.height / 2);
-    viewport.scrollTop = Math.max(0, Math.min(viewport.scrollHeight - viewport.clientHeight, viewport.scrollTop + centre));
+  // A list that scrolls within the thread (a long group's rows) first brings the row into its own
+  // view, then the thread centres it.
+  for (let holder = element.parentElement; holder && holder !== viewport; holder = holder.parentElement) {
+    if (holder.scrollHeight > holder.clientHeight && /auto|scroll/.test(getComputedStyle(holder).overflowY)) centre(holder, element);
   }
+  if (viewport) centre(viewport, element);
   flash(element);
+}
+
+/** Scrolls `scroller` so `element` sits at its centre, as far as it can. */
+function centre(scroller: HTMLElement, element: HTMLElement): void {
+  const box = scroller.getBoundingClientRect();
+  const rect = element.getBoundingClientRect();
+  const off = rect.top + rect.height / 2 - (box.top + box.height / 2);
+  scroller.scrollTop = Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + off));
 }
 
 /** The flash's tint: the link colour, faint (what a picked sidebar row shows). */
