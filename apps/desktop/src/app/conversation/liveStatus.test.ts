@@ -188,3 +188,14 @@ test("a worker open in the user's terminal waits on the user", () => {
   assert.deepEqual(head(input({ ...leading, tasks: byId([task({ state: "takenOver" })]) })),
     { text: "Working in your terminal", tone: "needsYou" });
 });
+
+test("a lead that waits on its own background command says so until the command's turn runs", () => {
+  const request = (backgroundJobs?: number) => ({ r1: { id: "r1", conversationId: "c", preview: "Start the app", state: "working",
+    startedAtMs: 0, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false,
+    ...(backgroundJobs === undefined ? {} : { backgroundJobs }) } as const });
+  assert.deepEqual(head(input({ requests: request(1) })), { text: "Waiting for a command", tone: "still" });
+  assert.deepEqual(head(input({ requests: request(2) })), { text: "Waiting for 2 commands", tone: "still" });
+  // The command's end starts the lead's turn for it: that turn's own line shows.
+  assert.deepEqual(head(input({ ...leading, requests: request(1) })), { text: "Thinking", tone: "busy" });
+  assert.deepEqual(head(input({ requests: request() })), { text: "Thinking", tone: "busy" });
+});

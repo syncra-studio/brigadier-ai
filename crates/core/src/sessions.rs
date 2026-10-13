@@ -704,6 +704,7 @@ impl Core {
                             to_ms: None,
                         }],
                         quota_wait: false,
+                        background_jobs: None,
                     },
                 },
             ),
@@ -1492,6 +1493,7 @@ impl Core {
         state: RequestState,
         quota_wait: bool,
         card_wait: bool,
+        background_jobs: Option<u32>,
     ) -> Result<bool> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
@@ -1507,6 +1509,7 @@ impl Core {
         };
         let before = request.clone();
         request.moved_to(state, quota_wait, card_wait, now_ms());
+        request.background_jobs = background_jobs;
         if request == before {
             return Ok(false);
         }

@@ -141,6 +141,7 @@ impl SessionManager {
                             undo: None,
                             worked: Vec::new(),
                             quota_wait: false,
+                            background_jobs: None,
                         },
                     }],
                 )

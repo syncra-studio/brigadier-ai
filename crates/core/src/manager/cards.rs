@@ -412,7 +412,7 @@ impl SessionManager {
             return Err(Error::Invalid("this question was already answered".into()));
         }
         let round = question.round();
-        let answers: Vec<String> = answers.iter().map(|a| a.trim().to_owned()).collect();
+        let mut answers: Vec<String> = answers.iter().map(|a| a.trim().to_owned()).collect();
         if answers.len() != round.len() {
             return Err(Error::Invalid(format!(
                 "this card asks {} questions, and {} answers came",
@@ -423,6 +423,24 @@ impl SessionManager {
         if answers.iter().any(String::is_empty) {
             return Err(Error::Invalid("an answer is empty".into()));
         }
+        // A merge card answered in the user's own words is never their consent: the card
+        // records "Not yet", and their words are a new request, which carries that decision.
+        let typed = match &question.kind {
+            QuestionKind::Merge { base, .. }
+                if !round[0]
+                    .options
+                    .iter()
+                    .any(|option| option.label == answers[0]) =>
+            {
+                let not_yet = round[0]
+                    .options
+                    .iter()
+                    .find(|option| !merge_chosen(&option.label, base))
+                    .map_or_else(|| "Not yet".to_owned(), |option| option.label.clone());
+                Some(std::mem::replace(&mut answers[0], not_yet))
+            }
+            _ => None,
+        };
         // A single question's answer is the answer itself; a round's lists each question.
         let answer = match answers.as_slice() {
             [only] => only.clone(),
@@ -439,7 +457,7 @@ impl SessionManager {
         let delivers = matches!(
             question.kind,
             QuestionKind::Orchestrator | QuestionKind::Merge { .. }
-        );
+        ) && typed.is_none();
         if delivers {
             self.answering(&conversation_id, &card_id, question.request_id.clone())
                 .await;
@@ -489,6 +507,18 @@ impl SessionManager {
                     question.request_id.clone(),
                 )
                 .await;
+            }
+            QuestionKind::Merge { branch, base, .. } if let Some(typed) = typed => {
+                self.conv(&conversation_id)?
+                    .note(format!(
+                        "[answer] The user doesn't want `{branch}` merged into `{base}` yet: they answered the merge card with the message below instead. Don't merge, and don't ask again until they bring it up."
+                    ))
+                    .await;
+                self.waiters.answer(&card_id, CardAnswer::Answered);
+                self.settle_requests(&conversation_id).await;
+                self.send_message(conversation_id, typed, Vec::new(), Vec::new(), false, None)
+                    .await?;
+                return Ok(());
             }
             QuestionKind::Merge {
                 branch,

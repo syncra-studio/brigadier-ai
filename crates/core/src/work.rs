@@ -2013,6 +2013,11 @@ pub struct UserRequest {
     /// user.
     #[serde(default)]
     pub quota_wait: bool,
+    /// While it works: how many of the orchestrator's own background jobs (a command it runs
+    /// in the background) still run for it. Their end starts the turn that answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub background_jobs: Option<u32>,
 }
 
 /// A stretch of time a request worked.
