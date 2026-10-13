@@ -270,7 +270,7 @@ Rules:
 
 ### 6.3 Jumping to the exact row
 - `openConversation(id, { at?: { message: message_id } })` (`D/state/actions.ts:287`):
-  1. selects the session;
+  1. selects the session and shows its chat (it may have been left on another tab);
   2. loads the history page that holds the message, if it isn't loaded;
   3. unfolds the work block around the row;
   4. scrolls it to the centre;
