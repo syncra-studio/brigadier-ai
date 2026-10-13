@@ -127,3 +127,72 @@ async fn page_on_a_refused_app_is_refused_without_running() {
         );
     }
 }
+
+/// The script actions are decided by Brigadier's rules, not by the driver's
+/// unrestricted mode, which stays off.
+#[tokio::test]
+async fn page_scripts_are_decided_by_brigadiers_rules() {
+    let registry = registry();
+    for action in [
+        "execute_javascript",
+        "click_element",
+        "insert_text",
+        "type_keystrokes",
+    ] {
+        let args = json!({"action": action, "pid": 100, "window_id": 9000,
+            "javascript": "1", "selector": "#a", "text": "x"});
+        let result = registry.invoke("page", args).await;
+        assert_eq!(
+            code(&result).as_deref(),
+            Some("target_not_allowed"),
+            "{action}: {}",
+            text(&result)
+        );
+    }
+    let result = registry
+        .invoke(
+            "page",
+            json!({"action": "execute_javascript", "window_id": 9000, "javascript": "1"}),
+        )
+        .await;
+    assert_eq!(
+        code(&result).as_deref(),
+        Some("host_policy_refused"),
+        "{}",
+        text(&result)
+    );
+    let result = registry
+        .invoke(
+            "page",
+            json!({"action": "enable_javascript_apple_events", "bundle_id": "ai.brigadier.app",
+                "user_has_confirmed_enabling": true}),
+        )
+        .await;
+    assert_eq!(
+        code(&result).as_deref(),
+        Some("target_not_allowed"),
+        "{}",
+        text(&result)
+    );
+}
+
+/// Without Brigadier's page tool the driver still refuses its own script
+/// actions: the hook covers only a tool the host replaced.
+#[tokio::test]
+async fn the_drivers_own_page_scripts_stay_refused() {
+    let registry = Arc::new(platform_macos::register_tools());
+    registry.init_self_weak();
+    let result = registry
+        .invoke(
+            "page",
+            json!({"action": "execute_javascript", "pid": 100, "window_id": 9000,
+                "javascript": "1"}),
+        )
+        .await;
+    assert_eq!(
+        code(&result).as_deref(),
+        Some("unbounded_operation_requires_unrestricted"),
+        "{}",
+        text(&result)
+    );
+}

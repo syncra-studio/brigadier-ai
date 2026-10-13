@@ -1118,7 +1118,14 @@ pub struct ToolRegistry {
     approval_broker: Arc<crate::consent::ApprovalBroker>,
     protected_resource_grants: Arc<crate::consent::ProtectedResourceGrants>,
     protected_resource_ownership: Arc<crate::consent::ProtectedResourceOwnershipStore>,
+    /// Tools an embedding host replaced with its own implementation through
+    /// [`ToolRegistry::wrap_host_authorized`], and the host's check for them.
+    host_authorized: HashMap<String, HostAuthorization>,
 }
+
+/// An embedding host's own check for a tool it implements itself: `Ok` lets
+/// the call through, `Err` refuses it with that text.
+pub type HostAuthorization = Arc<dyn Fn(&str, &Value) -> Result<(), String> + Send + Sync>;
 
 impl ToolRegistry {
     pub fn new() -> Self {
@@ -1188,6 +1195,7 @@ impl ToolRegistry {
             approval_broker,
             protected_resource_grants,
             protected_resource_ownership,
+            host_authorized: HashMap::new(),
         }
     }
 
@@ -1293,6 +1301,26 @@ impl ToolRegistry {
         let wrapper = wrap(previous);
         debug_assert_eq!(wrapper.def().name, name, "a wrapper keeps the tool's name");
         self.tools.insert(name.to_owned(), wrapper);
+        true
+    }
+
+    /// [`wrap`](Self::wrap) for a host that replaces the tool with its own
+    /// implementation, not just checks around the driver's. Calls the driver
+    /// admits only in unrestricted mode, because its own implementation of
+    /// them is unbounded (today `page`'s script actions), ask `authorize`
+    /// instead of the mode; every other check still applies. The driver's
+    /// implementation is dropped, so it can never run such a call.
+    pub fn wrap_host_authorized(
+        &mut self,
+        name: &str,
+        authorize: impl Fn(&str, &Value) -> Result<(), String> + Send + Sync + 'static,
+        wrap: impl FnOnce(Box<dyn Tool>) -> Box<dyn Tool>,
+    ) -> bool {
+        if !self.wrap(name, wrap) {
+            return false;
+        }
+        self.host_authorized
+            .insert(name.to_owned(), Arc::new(authorize));
         true
     }
 
@@ -1889,10 +1917,19 @@ impl ToolRegistry {
         if has_adapter("browser_unbounded_script")
             && context.mode() != crate::authorization::PermissionMode::Unrestricted
         {
-            return protected_refusal(
-                "unbounded_operation_requires_unrestricted",
-                "legacy page mutation is unbounded and requires unrestricted mode with trusted launch-time risk acceptance",
-            );
+            match self.host_authorized.get(resolved_name) {
+                Some(authorize) => {
+                    if let Err(reason) = authorize(resolved_name, &public_args) {
+                        return protected_refusal("host_policy_refused", &reason);
+                    }
+                }
+                None => {
+                    return protected_refusal(
+                        "unbounded_operation_requires_unrestricted",
+                        "legacy page mutation is unbounded and requires unrestricted mode with trusted launch-time risk acceptance",
+                    );
+                }
+            }
         }
 
         // Cua may report OS permission state, but an agent tool call never

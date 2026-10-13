@@ -16,6 +16,7 @@
 
 use async_trait::async_trait;
 use cua_driver_core::tool::{Tool, ToolRegistry};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -25,11 +26,37 @@ use crate::browser::{
 };
 
 /// Replace the driver's `page` tool with Brigadier's. Call it before
-/// [`crate::guard::install`], so the guard wraps this one.
+/// [`crate::guard::install`], so the guard wraps this one. The script
+/// actions are admitted by [`authorize`] and then by the guard's target
+/// rules, never by the driver's unrestricted mode, which stays off.
 pub fn install(registry: &mut ToolRegistry) {
-    registry.wrap("page", |_driver_page| {
+    registry.wrap_host_authorized("page", authorize, |_driver_page| {
         Box::new(PageTool::new(Arc::new(MacOsPageBackend::new()))) as Box<dyn Tool>
     });
+}
+
+/// A script action runs only in an app the call names, so the guard can
+/// hold it to the same target rules as any other action: a `pid` for the
+/// page actions, a `bundle_id` to switch on a browser's JavaScript.
+pub fn authorize(_tool: &str, args: &Value) -> Result<(), String> {
+    let action = args.get("action").and_then(Value::as_str).unwrap_or("");
+    let (key, named) = if action == "enable_javascript_apple_events" {
+        (
+            "bundle_id",
+            args.get("bundle_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.trim().is_empty()),
+        )
+    } else {
+        ("pid", args.get("pid").and_then(Value::as_i64).is_some())
+    };
+    if named {
+        Ok(())
+    } else {
+        Err(format!(
+            "page {action} needs `{key}` naming the app to act in."
+        ))
+    }
 }
 
 pub struct MacOsPageBackend {
