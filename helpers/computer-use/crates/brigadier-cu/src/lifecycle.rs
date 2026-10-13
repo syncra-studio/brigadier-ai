@@ -198,7 +198,7 @@ pub fn note_setup_needed(home: &Path) {
 
 /// This helper's home directory.
 pub fn home() -> PathBuf {
-    pip_preview::home::home()
+    crate::home::home()
 }
 
 #[cfg(test)]

@@ -14,7 +14,7 @@ unsafe extern "C" {
 
 #[cfg(target_os = "macos")]
 pub fn already_disclaimed() -> bool {
-    std::env::var_os(cu_core::RESPONSIBILITY_DISCLAIMED_ENV).is_some()
+    std::env::var_os(crate::env::RESPONSIBILITY_DISCLAIMED_ENV).is_some()
 }
 
 /// Split out from [`reexec_disclaimed_if_needed`] so the decision is
@@ -29,7 +29,7 @@ fn should_skip_disclaim(embedded: bool, already_disclaimed: bool, inside_bundle:
 #[cfg(target_os = "macos")]
 pub fn reexec_disclaimed_if_needed() {
     if should_skip_disclaim(
-        cu_core::embedded_mode(),
+        crate::env::embedded_mode(),
         already_disclaimed(),
         crate::bundle::is_executable_inside_brigadier_cu_app(),
     ) {
@@ -77,7 +77,7 @@ pub fn reexec_disclaimed_if_needed() {
         })
         .chain(std::iter::once(CString::new(format!(
             "{}=1",
-            cu_core::RESPONSIBILITY_DISCLAIMED_ENV
+            crate::env::RESPONSIBILITY_DISCLAIMED_ENV
         ))))
         .collect::<Result<_, _>>()
     {
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn already_disclaimed_reflects_env_var() {
-        let name = cu_core::RESPONSIBILITY_DISCLAIMED_ENV;
+        let name = crate::env::RESPONSIBILITY_DISCLAIMED_ENV;
         let original = std::env::var_os(name);
 
         std::env::remove_var(name);

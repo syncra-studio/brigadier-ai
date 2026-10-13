@@ -6,14 +6,14 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use cu_core::activity::host::{
+use crate::activity::host::{
     outcome_from_result, ActivityHost, ActivityUpdate, CallStart, CapturedFrames, Gate, UserOp,
 };
-use cu_core::activity::model::{
+use crate::activity::model::{
     AgentClass, AgentIdentity, Attribution, CallKind, Caller, ClickPoint, Origin, Profile,
     RecordingMode, SessionId, Target,
 };
-use cu_core::activity::redact::RedactPolicy;
+use crate::activity::redact::RedactPolicy;
 use cu_core::recording::now_ms;
 use serde_json::{json, Value};
 
@@ -55,7 +55,7 @@ fn store_root(profile: Profile, socket_path: &str) -> std::path::PathBuf {
     if let Some(dir) = std::env::var_os(ACTIVITY_DIR_ENV).filter(|v| !v.is_empty()) {
         return std::path::PathBuf::from(dir);
     }
-    let base = pip_preview::home::home().join("activity");
+    let base = crate::home::home().join("activity");
     // Tag scopes run separate daemons on separate sockets: one store each.
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -99,7 +99,7 @@ pub fn caller(peer_pid: Option<u32>, user: bool) -> Caller {
     // keying on it keeps one actor across short-lived proxy generations.
     let agent = agent_pid.filter(|p| *p > 1);
     let kind = agent
-        .and_then(|p| cu_core::session_state::resolve_process_name(i64::from(p)))
+        .and_then(|p| resolve_process_name(i64::from(p)))
         .map(|name| agent_kind(&name))
         .unwrap_or_else(|| "unknown".to_owned());
     let actor = match agent {
@@ -132,6 +132,31 @@ fn identity(
         harness_session_id: None,
         proxy_pid: pid,
         proxy_pid_start: start,
+    }
+}
+
+/// The executable name of `pid` (`ps -o comm=`), without its directory.
+fn resolve_process_name(pid: i64) -> Option<String> {
+    if pid <= 0 {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        let output = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+            .ok()?;
+        let raw = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if raw.is_empty() {
+            return None;
+        }
+        Some(
+            std::path::Path::new(&raw)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&raw)
+                .to_owned(),
+        )
     }
 }
 

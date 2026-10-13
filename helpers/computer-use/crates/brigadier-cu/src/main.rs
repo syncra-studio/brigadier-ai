@@ -25,17 +25,23 @@
 //!
 //! On all other platforms `#[tokio::main]` is used directly.
 
+// Moved whole from the old core; a few of its items have no caller here yet.
+#[allow(dead_code)]
+mod activity;
 mod activity_daemon;
 mod agent_apps;
 mod bundle;
 mod cli;
 mod doctor;
+mod env;
+mod home;
 mod host;
 mod journal;
 mod lifecycle;
 mod owner_watch;
 mod proxy;
 mod responsibility;
+mod scope_args;
 mod serve;
 mod supervisor;
 
@@ -182,7 +188,7 @@ fn apply_home_flag() {
     if let Some(i) = args.iter().position(|a| a == "--home") {
         if let Some(dir) = args.get(i + 1).filter(|d| !d.is_empty()) {
             // Called first thing in main, before any thread starts.
-            std::env::set_var(pip_preview::home::HOME_ENV, dir);
+            std::env::set_var(crate::home::HOME_ENV, dir);
         }
     }
     // Brigadier's setup window, likewise.

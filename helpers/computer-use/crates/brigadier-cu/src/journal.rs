@@ -27,7 +27,7 @@ pub fn marker_path() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("BRIGADIER_CU_JOURNAL_DIR") {
         return Some(PathBuf::from(dir).join("enabled"));
     }
-    Some(pip_preview::home::home().join("journal-enabled"))
+    Some(crate::home::home().join("journal-enabled"))
 }
 
 /// The append-only JSONL journal.
@@ -35,7 +35,7 @@ pub fn journal_path() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("BRIGADIER_CU_JOURNAL_DIR") {
         return Some(PathBuf::from(dir).join("journal.jsonl"));
     }
-    Some(pip_preview::home::home().join("journal.jsonl"))
+    Some(crate::home::home().join("journal.jsonl"))
 }
 
 /// Whether this process should write journal entries.

@@ -289,12 +289,12 @@ pub fn parse_command() -> Command {
 
     // `--embedded` / `--host-bundle-id` export to the environment rather
     // than threading through `Command`: all consumers read
-    // `cu_core::embedded_mode()` and children inherit the mode.
+    // `crate::env::embedded_mode()` and children inherit the mode.
     if args.iter().any(|a| a == "--embedded") {
-        std::env::set_var(cu_core::EMBEDDED_ENV, "1");
+        std::env::set_var(crate::env::EMBEDDED_ENV, "1");
     }
     if let Some(id) = flag_value(&args, "--host-bundle-id") {
-        std::env::set_var(cu_core::HOST_BUNDLE_ID_ENV, id);
+        std::env::set_var(crate::env::HOST_BUNDLE_ID_ENV, id);
     }
 
     // Strip cursor-overlay flags (and their values) to expose the subcommand.
@@ -642,7 +642,7 @@ pub fn should_use_daemon_proxy(no_daemon_relaunch: bool) -> bool {
     // Embedded mode stays in-process: relaunching via `open -a BrigadierCu`
     // would leave the host's TCC responsibility chain and could prompt
     // for ai.brigadier.computer-use.
-    if cu_core::embedded_mode() {
+    if crate::env::embedded_mode() {
         return false;
     }
     if no_daemon_relaunch {
@@ -705,7 +705,7 @@ pub fn launch_daemon(socket_path: &str, claude_code_compat: bool) -> anyhow::Res
     // Brigadier sets BRIGADIER_CU_DAEMON_APP to the placed helper app.
     let daemon_app = std::env::var("BRIGADIER_CU_DAEMON_APP")
         .unwrap_or_else(|_| "Brigadier Computer Use".to_string());
-    let home = pip_preview::home::home();
+    let home = crate::home::home();
     let home = home.to_string_lossy();
     let mut open_args: Vec<&str> = vec![
         // `-n` forces a new instance so a running copy cannot swallow
@@ -848,7 +848,7 @@ pub fn run_call(
         let mut args_for_daemon = json_args
             .clone()
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-        cu_core::target_policy::scope_target_args(
+        crate::scope_args::scope_target_args(
             &mut args_for_daemon,
             &cu_core::target_policy::allowed_from_env(),
         );
@@ -980,10 +980,7 @@ pub fn run_call(
         .expect("tokio runtime");
 
     let mut args = json_args.unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-    cu_core::target_policy::scope_target_args(
-        &mut args,
-        &cu_core::target_policy::allowed_from_env(),
-    );
+    crate::scope_args::scope_target_args(&mut args, &cu_core::target_policy::allowed_from_env());
     let tool_name = tool.to_string();
     let out_path = screenshot_out_file;
     let is_error = rt.block_on(async move {
@@ -2016,7 +2013,7 @@ fn diagnose_tcc_db_section() -> String {
 }
 
 fn diagnose_config_paths_section() -> String {
-    let home = pip_preview::home::home();
+    let home = crate::home::home();
     let paths: &[(&str, String)] = &[
         ("helper home", home.to_string_lossy().into_owned()),
         (
@@ -2038,7 +2035,7 @@ fn diagnose_config_paths_section() -> String {
 
 /// Path to the persistent JSON config file (`~/.brigadier-cu/config.json`).
 fn config_file_path() -> std::path::PathBuf {
-    pip_preview::home::home().join("config.json")
+    crate::home::home().join("config.json")
 }
 
 /// Read persisted config from disk.  Returns an empty object if absent/unreadable.

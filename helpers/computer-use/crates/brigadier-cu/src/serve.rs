@@ -872,7 +872,7 @@ fn register_state_file_session_end_hook(registry: &std::sync::Arc<cu_core::tool:
 
 /// Returns the platform default socket/pipe path.
 pub fn default_socket_path() -> String {
-    pip_preview::home::home()
+    crate::home::home()
         .join("cu.sock")
         .to_string_lossy()
         .into_owned()
@@ -880,7 +880,7 @@ pub fn default_socket_path() -> String {
 
 /// Returns the platform default PID file path.
 pub fn default_pid_file_path() -> String {
-    pip_preview::home::home()
+    crate::home::home()
         .join("cu.pid")
         .to_string_lossy()
         .into_owned()
@@ -950,7 +950,7 @@ fn configured_socket_auth_token() -> Option<String> {
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| {
-            std::fs::read_to_string(pip_preview::home::home().join("auth"))
+            std::fs::read_to_string(crate::home::home().join("auth"))
                 .ok()
                 .map(|token| token.trim().to_owned())
                 .filter(|token| !token.is_empty())
@@ -1397,7 +1397,7 @@ fn daemon_permission_attribution() -> &'static str {
         })
         .unwrap_or(false);
     let launched_by_launchd = unsafe { libc::getppid() } == 1;
-    let disclaimed = std::env::var_os(cu_core::RESPONSIBILITY_DISCLAIMED_ENV).is_some();
+    let disclaimed = std::env::var_os(crate::env::RESPONSIBILITY_DISCLAIMED_ENV).is_some();
     if inside_bundle && (launched_by_launchd || disclaimed) {
         "driver-daemon"
     } else {
@@ -2492,7 +2492,7 @@ pub async fn run_serve_with_owner(
                                         .map(|ids| ids.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
                                         .unwrap_or_default();
                                     let mut updates = activity.subscribe();
-                                    let snapshot = cu_core::activity::host::ActivityUpdate::Sessions {
+                                    let snapshot = crate::activity::host::ActivityUpdate::Sessions {
                                         sessions: activity.sessions(None, None, 500),
                                     };
                                     if let Some(line) = crate::activity_daemon::stream_line(&snapshot, true, &events_for) {
@@ -2507,7 +2507,7 @@ pub async fn run_serve_with_owner(
                                                     Ok(update) => update,
                                                     // A slow reader missed updates: resend the full list.
                                                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                                        cu_core::activity::host::ActivityUpdate::Sessions {
+                                                        crate::activity::host::ActivityUpdate::Sessions {
                                                             sessions: activity.sessions(None, None, 500),
                                                         }
                                                     }
@@ -2622,7 +2622,7 @@ pub async fn run_serve_with_owner(
                                 // one the user stopped it from using.
                                 #[cfg(target_os = "macos")]
                                 if let Some(host_session) = args
-                                    .get(cu_core::HOST_SESSION_ARG)
+                                    .get(crate::env::HOST_SESSION_ARG)
                                     .and_then(serde_json::Value::as_str)
                                     .map(str::to_owned)
                                 {
@@ -2659,16 +2659,16 @@ pub async fn run_serve_with_owner(
                                     Some(host) => {
                                         let caller = crate::activity_daemon::caller(activity_peer_pid, false);
                                         match crate::activity_daemon::begin(host, &caller, &activity_label, &tool_name, &args) {
-                                            cu_core::activity::host::Gate::Run(start) => Some(start),
-                                            cu_core::activity::host::Gate::Refuse { code, message } => {
+                                            crate::activity::host::Gate::Run(start) => Some(start),
+                                            crate::activity::host::Gate::Refuse { code, message } => {
                                                 let resp = crate::activity_daemon::refusal(&code, &message);
                                                 let _ = writer.write_all(
                                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                                 ).await;
                                                 continue;
                                             }
-                                            cu_core::activity::host::Gate::Replay(_)
-                                            | cu_core::activity::host::Gate::RunUntracked => None,
+                                            crate::activity::host::Gate::Replay(_)
+                                            | crate::activity::host::Gate::RunUntracked => None,
                                         }
                                     }
                                     None => None,
@@ -2719,7 +2719,7 @@ pub async fn run_serve_with_owner(
                                     cu_core::session::revive_session(sid);
                                     #[cfg(target_os = "macos")]
                                     if let Some(host_session) =
-                                        cu_core::host_session_id_from_proxy(sid)
+                                        crate::env::host_session_id_from_proxy(sid)
                                     {
                                         platform_macos::cursor::overlay::begin_reusable_cursor_generation(
                                             host_session.to_owned(),

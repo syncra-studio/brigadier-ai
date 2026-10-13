@@ -812,7 +812,7 @@ fn proxy_target_guard(
     #[cfg(target_os = "macos")]
     {
         let mut args = args.clone();
-        cu_core::target_policy::take_allowed(&mut args);
+        crate::scope_args::take_allowed(&mut args);
         platform_macos::target_guard::enforce_native(name, &args, allowed)
     }
 }
@@ -839,7 +839,7 @@ async fn call_daemon_tool(
     if let Err(refusal) = proxy_target_guard(name, &args, &allowed_targets) {
         return Ok(refusal_daemon_response(refusal));
     }
-    cu_core::target_policy::scope_target_args(&mut args, &allowed_targets);
+    crate::scope_args::scope_target_args(&mut args, &allowed_targets);
     send_daemon_request_async(
         socket_path,
         DaemonRequest {
@@ -1455,7 +1455,7 @@ fn prepare_action_group(
                 .unwrap_or_else(|| "target_not_allowed".to_owned());
             return Err(format!("perform_actions step {index}: {text}"));
         }
-        cu_core::target_policy::scope_target_args(&mut arguments, &allowed_targets);
+        crate::scope_args::scope_target_args(&mut arguments, &allowed_targets);
         prepared.push(PreparedProxyAction {
             tool: tool.to_owned(),
             request: DaemonRequest {
@@ -1746,7 +1746,7 @@ fn daemon_response_to_mcp(
 }
 
 fn configured_default_session() -> Option<String> {
-    std::env::var(cu_core::DEFAULT_SESSION_ENV)
+    std::env::var(crate::env::DEFAULT_SESSION_ENV)
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
@@ -1796,7 +1796,7 @@ fn enforce_proxy_session_identity(
             object.insert("_session_id".to_owned(), lifecycle_session);
             if let Some(host_session) = managed_host_session(session_id) {
                 object.insert(
-                    cu_core::HOST_SESSION_ARG.to_owned(),
+                    crate::env::HOST_SESSION_ARG.to_owned(),
                     serde_json::Value::String(host_session.to_owned()),
                 );
             }
