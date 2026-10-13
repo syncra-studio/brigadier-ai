@@ -1,0 +1,245 @@
+Why: a host restore policy (focus_steal::set_restore_policy) asked before every restore the driver makes, so an embedding app can leave the user's own switches and system prompts in front.
+
+The driver puts the user's app back in front from three places: the
+activation observer (focus_steal, used by actions and by launch_app's
+watchdog), the self-activation revert and the window-order restore
+(key_focus_guard, also used by the browser launch watch). Each now builds a
+RestoreRequest (kind, the app that came forward, the app to restore, the
+named target or None for a wildcard entry, when the guard began, origin) and
+skips the restore when the installed policy returns false. Without a policy
+nothing changes. FocusStealPreventer::restores_for_activation,
+key_focus_guard::would_revert_self_activation and order_restore_allowed
+expose the decisions without restoring, for tests. Upstreamable as is.
+
+diff --git a/crates/platform-macos/src/focus_steal.rs b/crates/platform-macos/src/focus_steal.rs
+index 682a6ff8..b65848e7 100644
+--- a/crates/platform-macos/src/focus_steal.rs
++++ b/crates/platform-macos/src/focus_steal.rs
+@@ -100,6 +100,8 @@ struct Entry {
+     /// Monotonic deadline. After this, the entry is pruned without
+     /// firing.
+     deadline: Instant,
++    /// When the entry began, for the host restore policy.
++    started: Instant,
+     /// Provenance for tracing — e.g. `"LaunchAppTool.pre"`.
+     #[allow(dead_code)]
+     origin: &'static str,
+@@ -292,11 +294,13 @@ impl Dispatcher {
+         origin: &'static str,
+     ) -> SuppressionHandle {
+         let id = Uuid::new_v4();
++        let started = Instant::now();
+         let entry = Entry {
+             target_pid,
+             allowed_pid,
+             restore_to,
+-            deadline: Instant::now() + ENTRY_DEADLINE,
++            deadline: started + ENTRY_DEADLINE,
++            started,
+             origin,
+         };
+         {
+@@ -327,7 +331,17 @@ impl Dispatcher {
+     /// Snapshot the entries (cloned to a small Vec) — used by tests
+     /// and the activation handler to evaluate matches without holding
+     /// the lock across the restore call.
++    #[cfg(test)]
+     fn snapshot_matches(&self, activated_pid: i32) -> Vec<i32> {
++        self.snapshot_match_requests(activated_pid)
++            .into_iter()
++            .map(|request| request.restore_to)
++            .collect()
++    }
++
++    /// The restores an activation of `activated_pid` would make, one per
++    /// matching entry, before the host restore policy is asked.
++    fn snapshot_match_requests(&self, activated_pid: i32) -> Vec<RestoreRequest> {
+         let mut guard = self.entries.lock().unwrap();
+         // Reap expired entries first — keeps the dispatcher honest even
+         // if the janitor hasn't ticked yet.
+@@ -347,7 +361,14 @@ impl Dispatcher {
+                     None => activated_pid != e.restore_to,
+                 }
+             })
+-            .map(|e| e.restore_to)
++            .map(|e| RestoreRequest {
++                kind: RestoreKind::Activation,
++                activated_pid,
++                restore_to: e.restore_to,
++                target_pid: e.target_pid,
++                since: e.started,
++                origin: e.origin,
++            })
+             .collect()
+     }
+ 
+@@ -515,12 +536,82 @@ fn handle_activation(dispatcher: &Arc<Dispatcher>, note: &objc2_foundation::NSNo
+         pid as i32
+     };
+ 
+-    let restore_pids = dispatcher.snapshot_matches(activated_pid);
+-    for pid in restore_pids {
++    for pid in allowed_restores(dispatcher, activated_pid) {
+         restore_focus(pid);
+     }
+ }
+ 
++/// The pids an activation of `activated_pid` puts back in front: each
++/// matching entry's `restore_to`, unless the host restore policy declines it.
++fn allowed_restores(dispatcher: &Dispatcher, activated_pid: i32) -> Vec<i32> {
++    dispatcher
++        .snapshot_match_requests(activated_pid)
++        .into_iter()
++        .filter(restore_allowed)
++        .map(|request| request.restore_to)
++        .collect()
++}
++
++impl FocusStealPreventer {
++    /// The pids the observer would put back in front if `activated_pid`
++    /// activated now, after the host restore policy. Does not restore.
++    pub fn restores_for_activation(activated_pid: i32) -> Vec<i32> {
++        allowed_restores(&Self::shared().dispatcher, activated_pid)
++    }
++}
++
++// ── Host restore policy ─────────────────────────────────────────────────────
++
++/// Which kind of restore the driver is about to make.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum RestoreKind {
++    /// An app activated while a suppression entry was active; the driver
++    /// would re-activate `restore_to`.
++    Activation,
++    /// The action's target activated itself; the driver would make
++    /// `restore_to` front and key again (`key_focus_guard`).
++    SelfActivation,
++    /// A target window rose above `restore_to`'s front window; the driver
++    /// would re-activate `restore_to` with all its windows (`key_focus_guard`).
++    WindowOrder,
++}
++
++/// One restore the driver is about to make, as the host policy sees it.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct RestoreRequest {
++    pub kind: RestoreKind,
++    /// The app that came forward or rose.
++    pub activated_pid: i32,
++    /// The app the driver would put back in front.
++    pub restore_to: i32,
++    /// The pid the action named, or `None` for a wildcard suppression entry
++    /// (a launch whose pid was not known yet).
++    pub target_pid: Option<i32>,
++    /// When the suppression or guarded action began.
++    pub since: Instant,
++    /// Provenance, e.g. `"LaunchAppTool.pre"`.
++    pub origin: &'static str,
++}
++
++type RestorePolicy = Box<dyn Fn(&RestoreRequest) -> bool + Send + Sync>;
++
++static RESTORE_POLICY: OnceLock<RestorePolicy> = OnceLock::new();
++
++/// Install the embedding host's restore policy. The driver asks it before
++/// every restore in this module and in `key_focus_guard`; `false` leaves the
++/// app that came forward where it is. Without a policy every restore runs.
++/// Returns `false` if a policy was already installed.
++pub fn set_restore_policy(
++    policy: impl Fn(&RestoreRequest) -> bool + Send + Sync + 'static,
++) -> bool {
++    RESTORE_POLICY.set(Box::new(policy)).is_ok()
++}
++
++/// Whether the host restore policy lets this restore run.
++pub fn restore_allowed(request: &RestoreRequest) -> bool {
++    RESTORE_POLICY.get().is_none_or(|policy| policy(request))
++}
++
+ /// Re-activate `pid` if it's still running. Safe to call from any
+ /// thread — Apple documents `activateWithOptions:` as thread-safe.
+ fn restore_focus(pid: i32) {
+@@ -638,6 +729,7 @@ mod tests {
+                     allowed_pid: None,
+                     restore_to: 7,
+                     deadline: Instant::now() - Duration::from_secs(1),
++                    started: Instant::now() - ENTRY_DEADLINE - Duration::from_secs(1),
+                     origin: "test.leak",
+                 },
+             );
+diff --git a/crates/platform-macos/src/key_focus_guard.rs b/crates/platform-macos/src/key_focus_guard.rs
+index b21548c3..af24b8e2 100644
+--- a/crates/platform-macos/src/key_focus_guard.rs
++++ b/crates/platform-macos/src/key_focus_guard.rs
+@@ -83,7 +83,7 @@ fn target_above_front_in(windows: &[crate::windows::WindowInfo], target: i32, fr
+ pub fn restore_order_now(target: i32, front: i32) -> bool {
+     // NSWorkspace's frontmost reading can lag inside the daemon; the caller
+     // has already checked WindowServer's front process.
+-    if !target_above_front(target, front) {
++    if !target_above_front(target, front) || !order_restore_allowed(target, front) {
+         return false;
+     }
+     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+@@ -101,7 +101,10 @@ pub fn target_window_above_front(target: i32, front: i32) -> bool {
+ }
+ 
+ fn restore_front_if_raised(target: i32, front: i32) -> bool {
+-    if crate::apps::frontmost_pid() != Some(front) || !target_above_front(target, front) {
++    if crate::apps::frontmost_pid() != Some(front)
++        || !target_above_front(target, front)
++        || !order_restore_allowed(target, front)
++    {
+         return false;
+     }
+     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+@@ -139,12 +142,7 @@ pub fn revert_now(target: i32, front: i32) -> bool {
+ }
+ 
+ fn revert_self_activation(target: i32, front: i32) -> bool {
+-    if !target_self_activated(skylight::front_process_pid(), target, front) {
+-        return false;
+-    }
+-    // The user may have switched to the target themselves (a click on its
+-    // window, or Cmd-Tab). Leave that alone.
+-    if user_switched_recently() {
++    if !would_revert_self_activation(skylight::front_process_pid(), target, front) {
+         return false;
+     }
+     let started = Instant::now();
+@@ -176,6 +174,37 @@ fn revert_self_activation(target: i32, front: i32) -> bool {
+     true
+ }
+ 
++/// Whether the driver reverts `target`'s activation when WindowServer's front
++/// process is `front_process`: the target activated itself, the user did not
++/// just switch to it, and the host restore policy agrees.
++pub fn would_revert_self_activation(front_process: Option<i32>, target: i32, front: i32) -> bool {
++    target_self_activated(front_process, target, front)
++        // The user may have switched to the target themselves (a click on its
++        // window, or Cmd-Tab). Leave that alone.
++        && !user_switched_recently()
++        && crate::focus_steal::restore_allowed(&crate::focus_steal::RestoreRequest {
++            kind: crate::focus_steal::RestoreKind::SelfActivation,
++            activated_pid: target,
++            restore_to: front,
++            target_pid: Some(target),
++            since: Instant::now(),
++            origin: "key_focus_guard.revert",
++        })
++}
++
++/// Whether the host restore policy lets the driver re-raise `front`'s
++/// windows above a target window that rose over them.
++pub fn order_restore_allowed(target: i32, front: i32) -> bool {
++    crate::focus_steal::restore_allowed(&crate::focus_steal::RestoreRequest {
++        kind: crate::focus_steal::RestoreKind::WindowOrder,
++        activated_pid: target,
++        restore_to: front,
++        target_pid: Some(target),
++        since: Instant::now(),
++        origin: "key_focus_guard.order",
++    })
++}
++
+ /// A hardware mouse-down or modifier change within this long before an
+ /// activation means the user may have caused it.
+ const USER_SWITCH_WINDOW_S: f64 = 1.0;

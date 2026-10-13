@@ -47,6 +47,7 @@ Patches applied, in order:
 
 - `patches/0001-state-dir.diff`: one state folder for the driver's own config (CUA_DRIVER_STATE_DIR), so an embedding app keeps it beside its other state instead of ~/.cua-driver.
 - `patches/0002-registry-wrap.diff`: ToolRegistry::wrap lets an embedding app put its own checks around a tool in place, so direct calls, run_steps steps and the registry's own re-routes all pass them.
+- `patches/0003-restore-policy.diff`: a host restore policy (focus_steal::set_restore_policy) asked before every restore the driver makes, so an embedding app can leave the user's own switches and system prompts in front.
 <!-- sync:end -->
 
 ## Where the driver keeps state

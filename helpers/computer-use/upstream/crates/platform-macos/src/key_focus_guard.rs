@@ -83,7 +83,7 @@ fn target_above_front_in(windows: &[crate::windows::WindowInfo], target: i32, fr
 pub fn restore_order_now(target: i32, front: i32) -> bool {
     // NSWorkspace's frontmost reading can lag inside the daemon; the caller
     // has already checked WindowServer's front process.
-    if !target_above_front(target, front) {
+    if !target_above_front(target, front) || !order_restore_allowed(target, front) {
         return false;
     }
     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
@@ -101,7 +101,10 @@ pub fn target_window_above_front(target: i32, front: i32) -> bool {
 }
 
 fn restore_front_if_raised(target: i32, front: i32) -> bool {
-    if crate::apps::frontmost_pid() != Some(front) || !target_above_front(target, front) {
+    if crate::apps::frontmost_pid() != Some(front)
+        || !target_above_front(target, front)
+        || !order_restore_allowed(target, front)
+    {
         return false;
     }
     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
@@ -139,12 +142,7 @@ pub fn revert_now(target: i32, front: i32) -> bool {
 }
 
 fn revert_self_activation(target: i32, front: i32) -> bool {
-    if !target_self_activated(skylight::front_process_pid(), target, front) {
-        return false;
-    }
-    // The user may have switched to the target themselves (a click on its
-    // window, or Cmd-Tab). Leave that alone.
-    if user_switched_recently() {
+    if !would_revert_self_activation(skylight::front_process_pid(), target, front) {
         return false;
     }
     let started = Instant::now();
@@ -174,6 +172,37 @@ fn revert_self_activation(target: i32, front: i32) -> bool {
         "reverted a background target's self-activation"
     );
     true
+}
+
+/// Whether the driver reverts `target`'s activation when WindowServer's front
+/// process is `front_process`: the target activated itself, the user did not
+/// just switch to it, and the host restore policy agrees.
+pub fn would_revert_self_activation(front_process: Option<i32>, target: i32, front: i32) -> bool {
+    target_self_activated(front_process, target, front)
+        // The user may have switched to the target themselves (a click on its
+        // window, or Cmd-Tab). Leave that alone.
+        && !user_switched_recently()
+        && crate::focus_steal::restore_allowed(&crate::focus_steal::RestoreRequest {
+            kind: crate::focus_steal::RestoreKind::SelfActivation,
+            activated_pid: target,
+            restore_to: front,
+            target_pid: Some(target),
+            since: Instant::now(),
+            origin: "key_focus_guard.revert",
+        })
+}
+
+/// Whether the host restore policy lets the driver re-raise `front`'s
+/// windows above a target window that rose over them.
+pub fn order_restore_allowed(target: i32, front: i32) -> bool {
+    crate::focus_steal::restore_allowed(&crate::focus_steal::RestoreRequest {
+        kind: crate::focus_steal::RestoreKind::WindowOrder,
+        activated_pid: target,
+        restore_to: front,
+        target_pid: Some(target),
+        since: Instant::now(),
+        origin: "key_focus_guard.order",
+    })
 }
 
 /// A hardware mouse-down or modifier change within this long before an

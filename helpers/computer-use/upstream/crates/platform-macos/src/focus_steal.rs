@@ -100,6 +100,8 @@ struct Entry {
     /// Monotonic deadline. After this, the entry is pruned without
     /// firing.
     deadline: Instant,
+    /// When the entry began, for the host restore policy.
+    started: Instant,
     /// Provenance for tracing — e.g. `"LaunchAppTool.pre"`.
     #[allow(dead_code)]
     origin: &'static str,
@@ -292,11 +294,13 @@ impl Dispatcher {
         origin: &'static str,
     ) -> SuppressionHandle {
         let id = Uuid::new_v4();
+        let started = Instant::now();
         let entry = Entry {
             target_pid,
             allowed_pid,
             restore_to,
-            deadline: Instant::now() + ENTRY_DEADLINE,
+            deadline: started + ENTRY_DEADLINE,
+            started,
             origin,
         };
         {
@@ -327,7 +331,17 @@ impl Dispatcher {
     /// Snapshot the entries (cloned to a small Vec) — used by tests
     /// and the activation handler to evaluate matches without holding
     /// the lock across the restore call.
+    #[cfg(test)]
     fn snapshot_matches(&self, activated_pid: i32) -> Vec<i32> {
+        self.snapshot_match_requests(activated_pid)
+            .into_iter()
+            .map(|request| request.restore_to)
+            .collect()
+    }
+
+    /// The restores an activation of `activated_pid` would make, one per
+    /// matching entry, before the host restore policy is asked.
+    fn snapshot_match_requests(&self, activated_pid: i32) -> Vec<RestoreRequest> {
         let mut guard = self.entries.lock().unwrap();
         // Reap expired entries first — keeps the dispatcher honest even
         // if the janitor hasn't ticked yet.
@@ -347,7 +361,14 @@ impl Dispatcher {
                     None => activated_pid != e.restore_to,
                 }
             })
-            .map(|e| e.restore_to)
+            .map(|e| RestoreRequest {
+                kind: RestoreKind::Activation,
+                activated_pid,
+                restore_to: e.restore_to,
+                target_pid: e.target_pid,
+                since: e.started,
+                origin: e.origin,
+            })
             .collect()
     }
 
@@ -515,10 +536,80 @@ fn handle_activation(dispatcher: &Arc<Dispatcher>, note: &objc2_foundation::NSNo
         pid as i32
     };
 
-    let restore_pids = dispatcher.snapshot_matches(activated_pid);
-    for pid in restore_pids {
+    for pid in allowed_restores(dispatcher, activated_pid) {
         restore_focus(pid);
     }
+}
+
+/// The pids an activation of `activated_pid` puts back in front: each
+/// matching entry's `restore_to`, unless the host restore policy declines it.
+fn allowed_restores(dispatcher: &Dispatcher, activated_pid: i32) -> Vec<i32> {
+    dispatcher
+        .snapshot_match_requests(activated_pid)
+        .into_iter()
+        .filter(restore_allowed)
+        .map(|request| request.restore_to)
+        .collect()
+}
+
+impl FocusStealPreventer {
+    /// The pids the observer would put back in front if `activated_pid`
+    /// activated now, after the host restore policy. Does not restore.
+    pub fn restores_for_activation(activated_pid: i32) -> Vec<i32> {
+        allowed_restores(&Self::shared().dispatcher, activated_pid)
+    }
+}
+
+// ── Host restore policy ─────────────────────────────────────────────────────
+
+/// Which kind of restore the driver is about to make.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreKind {
+    /// An app activated while a suppression entry was active; the driver
+    /// would re-activate `restore_to`.
+    Activation,
+    /// The action's target activated itself; the driver would make
+    /// `restore_to` front and key again (`key_focus_guard`).
+    SelfActivation,
+    /// A target window rose above `restore_to`'s front window; the driver
+    /// would re-activate `restore_to` with all its windows (`key_focus_guard`).
+    WindowOrder,
+}
+
+/// One restore the driver is about to make, as the host policy sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RestoreRequest {
+    pub kind: RestoreKind,
+    /// The app that came forward or rose.
+    pub activated_pid: i32,
+    /// The app the driver would put back in front.
+    pub restore_to: i32,
+    /// The pid the action named, or `None` for a wildcard suppression entry
+    /// (a launch whose pid was not known yet).
+    pub target_pid: Option<i32>,
+    /// When the suppression or guarded action began.
+    pub since: Instant,
+    /// Provenance, e.g. `"LaunchAppTool.pre"`.
+    pub origin: &'static str,
+}
+
+type RestorePolicy = Box<dyn Fn(&RestoreRequest) -> bool + Send + Sync>;
+
+static RESTORE_POLICY: OnceLock<RestorePolicy> = OnceLock::new();
+
+/// Install the embedding host's restore policy. The driver asks it before
+/// every restore in this module and in `key_focus_guard`; `false` leaves the
+/// app that came forward where it is. Without a policy every restore runs.
+/// Returns `false` if a policy was already installed.
+pub fn set_restore_policy(
+    policy: impl Fn(&RestoreRequest) -> bool + Send + Sync + 'static,
+) -> bool {
+    RESTORE_POLICY.set(Box::new(policy)).is_ok()
+}
+
+/// Whether the host restore policy lets this restore run.
+pub fn restore_allowed(request: &RestoreRequest) -> bool {
+    RESTORE_POLICY.get().is_none_or(|policy| policy(request))
 }
 
 /// Re-activate `pid` if it's still running. Safe to call from any
@@ -638,6 +729,7 @@ mod tests {
                     allowed_pid: None,
                     restore_to: 7,
                     deadline: Instant::now() - Duration::from_secs(1),
+                    started: Instant::now() - ENTRY_DEADLINE - Duration::from_secs(1),
                     origin: "test.leak",
                 },
             );
