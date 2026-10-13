@@ -77,10 +77,28 @@ impl Tool for ZoomTool {
             return ToolResult::error("x2 must be > x1 and y2 must be > y1");
         }
 
+        // The region is in the pixels of get_window_state's screenshot, which is
+        // shrunk to the session's largest image size; the crop is cut from the
+        // full-size capture, so the region is scaled up to match.
+        let max_dim = {
+            let cfg = self.state.config.read().unwrap();
+            self.state
+                .session_config
+                .effective_max_image_dimension(args.opt_str("_session_id").as_deref(), &cfg)
+        };
         let state = self.state.clone();
         let result = tokio::task::spawn_blocking(move || {
             let png_bytes = crate::capture::screenshot_window_bytes(window_id)?;
-            cursor_overlay::capture_utils::crop_png_to_jpeg(&png_bytes, x1, y1, x2, y2, 500)
+            let (w, h) = crate::capture::png_dimensions(&png_bytes)?;
+            let k = screenshot_scale(w, h, max_dim);
+            cursor_overlay::capture_utils::crop_png_to_jpeg(
+                &png_bytes,
+                x1 * k,
+                y1 * k,
+                x2 * k,
+                y2 * k,
+                500,
+            )
         })
         .await;
 
@@ -122,5 +140,29 @@ impl Tool for ZoomTool {
                 .unwrap_or_else(|| ToolResult::error(format!("Zoom failed: {e}"))),
             Err(e) => ToolResult::error(format!("Task error: {e}")),
         }
+    }
+}
+
+/// How many full-size capture pixels one screenshot pixel spans, when the
+/// screenshot is shrunk so its longer side fits `max_dim` (0 = never shrunk).
+fn screenshot_scale(w: u32, h: u32, max_dim: u32) -> f64 {
+    let long = w.max(h);
+    if max_dim == 0 || long <= max_dim {
+        1.0
+    } else {
+        long as f64 / max_dim as f64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::screenshot_scale;
+
+    #[test]
+    fn a_region_scales_only_when_the_screenshot_was_shrunk() {
+        assert_eq!(screenshot_scale(1200, 800, 0), 1.0);
+        assert_eq!(screenshot_scale(1200, 800, 1568), 1.0);
+        assert_eq!(screenshot_scale(3136, 2000, 1568), 2.0);
+        assert_eq!(screenshot_scale(1000, 3000, 1500), 2.0);
     }
 }
