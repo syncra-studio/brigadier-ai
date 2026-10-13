@@ -135,8 +135,30 @@ impl FocusStealPreventer {
         restore_to: i32,
         origin: &'static str,
     ) -> SuppressionLease {
+        Self::begin_suppression_for(target_pid, restore_to, origin, ENTRY_DEADLINE, None)
+    }
+
+    /// [`Self::begin_suppression`] for a longer watch than the default
+    /// deadline, e.g. a launch the app may answer only seconds later.
+    /// `action_started`, when the action itself launched the target, is
+    /// when the action began: the app's activations are then always sent
+    /// back, also right after the user's own input, since they can't be the
+    /// user's own switch.
+    pub fn begin_suppression_for(
+        target_pid: Option<i32>,
+        restore_to: i32,
+        origin: &'static str,
+        lasting: Duration,
+        action_started: Option<SystemTime>,
+    ) -> SuppressionLease {
         let shared = Self::shared();
-        let handle = shared.dispatcher.add(target_pid, restore_to, origin);
+        let handle = shared.dispatcher.add_since(
+            target_pid,
+            restore_to,
+            origin,
+            lasting,
+            action_started.unwrap_or_else(SystemTime::now),
+        );
         SuppressionLease {
             handle,
             dispatcher: Arc::clone(&shared.dispatcher),
@@ -230,18 +252,33 @@ impl Dispatcher {
     /// subsequent adds would skip the kick and the janitor never
     /// started, leaving deadline-reaping entirely up to the
     /// `snapshot_matches` reap fallback (only fires on an activation).
+    #[cfg(test)]
     fn add(
         self: &Arc<Self>,
         target_pid: Option<i32>,
         restore_to: i32,
         origin: &'static str,
+        lasting: Duration,
+    ) -> SuppressionHandle {
+        self.add_since(target_pid, restore_to, origin, lasting, SystemTime::now())
+    }
+
+    /// [`Self::add`] for an action that began at `created`: an app launched
+    /// since then counts as launched by the action.
+    fn add_since(
+        self: &Arc<Self>,
+        target_pid: Option<i32>,
+        restore_to: i32,
+        origin: &'static str,
+        lasting: Duration,
+        created: SystemTime,
     ) -> SuppressionHandle {
         let id = Uuid::new_v4();
         let entry = Entry {
             target_pid,
             restore_to,
-            created: SystemTime::now(),
-            deadline: Instant::now() + ENTRY_DEADLINE,
+            created,
+            deadline: Instant::now() + lasting,
             origin,
         };
         {
@@ -554,9 +591,14 @@ fn seconds_since_user_input() -> f64 {
     unsafe { CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, ANY_INPUT_EVENT) }
 }
 
-/// Re-activate `pid` if it's still running. Safe to call from any
-/// thread — Apple documents `activateWithOptions:` as thread-safe.
+/// Put `pid` back in front if it's still running: through the WindowServer
+/// call the foreground assist restores with (back within ~50 ms when
+/// measured, where an app sent back by an AppKit activation stayed in front
+/// about a second), else by asking AppKit, which is documented thread-safe.
 fn restore_focus(pid: i32) {
+    if crate::input::skylight::set_front_pid(pid) {
+        return;
+    }
     unsafe {
         if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
             let _ = app.activateWithOptions(NSApplicationActivationOptions(0));
@@ -580,7 +622,7 @@ mod tests {
     #[test]
     fn dispatcher_add_match_remove() {
         let d = Arc::new(Dispatcher::new());
-        let h = d.add(Some(42), 7, "test.add");
+        let h = d.add(Some(42), 7, "test.add", ENTRY_DEADLINE);
         assert_eq!(d.len(), 1);
         let matches = d.snapshot_matches(42, None);
         assert_eq!(matches, vec![(7, false)]);
@@ -597,12 +639,36 @@ mod tests {
     fn wildcard_matches_only_an_app_launched_during_the_action() {
         let d = Arc::new(Dispatcher::new());
         let before = SystemTime::now() - Duration::from_secs(60);
-        let _h = d.add(None, 7, "test.wild");
+        let _h = d.add(None, 7, "test.wild", ENTRY_DEADLINE);
         let after = SystemTime::now() + Duration::from_millis(1);
         assert_eq!(d.snapshot_matches(99, Some(after)), vec![(7, true)]);
         assert!(d.snapshot_matches(99, Some(before)).is_empty());
         assert!(d.snapshot_matches(99, None).is_empty());
         assert!(d.snapshot_matches(7, Some(after)).is_empty());
+    }
+
+    /// A targeted watch dated from before the launch counts the app as
+    /// launched by the action; one begun after it does not.
+    #[test]
+    fn a_watch_dated_from_the_action_marks_its_launch_as_the_actions() {
+        let d = Arc::new(Dispatcher::new());
+        let action_started = SystemTime::now() - Duration::from_secs(2);
+        let launched = SystemTime::now() - Duration::from_secs(1);
+        let h = d.add_since(Some(5), 1, "test.since", ENTRY_DEADLINE, action_started);
+        assert_eq!(d.snapshot_matches(5, Some(launched)), vec![(1, true)]);
+        d.remove(h);
+        let _h = d.add(Some(5), 1, "test.now", ENTRY_DEADLINE);
+        assert_eq!(d.snapshot_matches(5, Some(launched)), vec![(1, false)]);
+    }
+
+    /// A longer watch outlives the default deadline; the default expires.
+    #[test]
+    fn a_longer_watch_outlives_the_default_deadline() {
+        let d = Arc::new(Dispatcher::new());
+        let _short = d.add(Some(5), 1, "test.short", Duration::from_millis(0));
+        let _long = d.add(Some(5), 2, "test.long", Duration::from_secs(30));
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(d.snapshot_matches(5, None), vec![(2, false)]);
     }
 
     /// The user's own input, system prompts and non-regular apps are
@@ -637,7 +703,7 @@ mod tests {
     fn lease_drop_removes_entry() {
         // Use a private dispatcher to avoid singleton coupling.
         let d = Arc::new(Dispatcher::new());
-        let h = d.add(Some(1), 2, "test.lease");
+        let h = d.add(Some(1), 2, "test.lease", ENTRY_DEADLINE);
         let lease = SuppressionLease {
             handle: h,
             dispatcher: Arc::clone(&d),
@@ -652,7 +718,7 @@ mod tests {
     #[test]
     fn lease_release_removes_entry() {
         let d = Arc::new(Dispatcher::new());
-        let h = d.add(Some(1), 2, "test.lease");
+        let h = d.add(Some(1), 2, "test.lease", ENTRY_DEADLINE);
         let lease = SuppressionLease {
             handle: h,
             dispatcher: Arc::clone(&d),
@@ -695,7 +761,7 @@ mod tests {
     async fn janitor_starts_stops_restarts() {
         let d = Arc::new(Dispatcher::new());
         // First add → janitor starts.
-        let h1 = d.add(Some(1), 2, "test.j1");
+        let h1 = d.add(Some(1), 2, "test.j1", ENTRY_DEADLINE);
         d.kick_janitor();
         // Give the janitor task time to spin up.
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -707,7 +773,7 @@ mod tests {
         assert_eq!(d.len(), 0);
         // Add again — same kick, same lifecycle. (start_janitor is
         // idempotent — already-started task picks up new adds via watch.)
-        let _h2 = d.add(Some(3), 4, "test.j2");
+        let _h2 = d.add(Some(3), 4, "test.j2", ENTRY_DEADLINE);
         d.kick_janitor();
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(d.len(), 1);
@@ -727,7 +793,7 @@ mod tests {
         let d = Arc::new(Dispatcher::new());
         // Outside any tokio runtime — kick_janitor's `try_current` guard
         // returns Err, the function returns without setting started.
-        let h1 = d.add(Some(1), 2, "test.no_runtime");
+        let h1 = d.add(Some(1), 2, "test.no_runtime", ENTRY_DEADLINE);
         assert_eq!(d.len(), 1);
         assert!(
             !*d.janitor_started.lock().unwrap(),
@@ -745,7 +811,7 @@ mod tests {
             .expect("build current-thread runtime");
         let d_in = Arc::clone(&d);
         rt.block_on(async move {
-            let _h2 = d_in.add(Some(3), 4, "test.with_runtime");
+            let _h2 = d_in.add(Some(3), 4, "test.with_runtime", ENTRY_DEADLINE);
             assert_eq!(d_in.len(), 2);
             assert!(
                 *d_in.janitor_started.lock().unwrap(),
@@ -767,8 +833,8 @@ mod tests {
     #[test]
     fn multiple_entries_match_independently() {
         let d = Arc::new(Dispatcher::new());
-        let _a = d.add(Some(42), 1, "test.m1");
-        let _b = d.add(Some(42), 2, "test.m2");
+        let _a = d.add(Some(42), 1, "test.m1", ENTRY_DEADLINE);
+        let _b = d.add(Some(42), 2, "test.m2", ENTRY_DEADLINE);
         let matches = d.snapshot_matches(42, None);
         assert_eq!(matches.len(), 2);
         // Set equality — order is HashMap-dependent.

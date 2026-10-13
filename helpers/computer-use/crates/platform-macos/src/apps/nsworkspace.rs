@@ -66,6 +66,9 @@ pub struct OpenConfig {
     /// Set this whenever the bundle id is known — see Swift `AppLauncher`
     /// comment for the reasoning (cold-launch window-creation reliability).
     pub apple_event_bundle_id: Option<String>,
+    /// Start the app hidden, so a fresh launch can't bring a window up in
+    /// front of the user; the caller shows it again without activating it.
+    pub hides: bool,
 }
 
 /// One-shot timeout for the LaunchServices completion handler. A wedged
@@ -189,6 +192,7 @@ fn build_configuration(cfg: &OpenConfig) -> Retained<NSWorkspaceOpenConfiguratio
         config.setActivates(false);
         config.setAddsToRecentItems(false);
         config.setCreatesNewApplicationInstance(cfg.creates_new_instance);
+        config.setHides(cfg.hides);
 
         if !cfg.arguments.is_empty() {
             let strs: Vec<Retained<NSString>> = cfg

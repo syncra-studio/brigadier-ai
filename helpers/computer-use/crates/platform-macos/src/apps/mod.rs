@@ -158,6 +158,7 @@ pub fn launch_with_urls_by_bundle(
         } else {
             None
         },
+        hides: starts_fresh(Some(bundle_id), creates_new_instance),
     };
     let running = if urls.is_empty() {
         nsworkspace::open_application(bundle_id, &cfg)
@@ -165,6 +166,9 @@ pub fn launch_with_urls_by_bundle(
         nsworkspace::open_urls_with_application(urls, bundle_id, &cfg)
     }
     .map_err(|e| anyhow::anyhow!("Failed to launch {bundle_id}: {e}"))?;
+    if cfg.hides {
+        show_without_activating(&running);
+    }
     let pid: i32 = unsafe { running.processIdentifier() };
     Ok(pid)
 }
@@ -188,6 +192,7 @@ pub fn launch_with_urls_by_name(
         arguments: additional_args.to_vec(),
         environment: env.clone(),
         creates_new_instance,
+        hides: starts_fresh(bid.as_deref(), creates_new_instance),
         apple_event_bundle_id: if urls.is_empty() { bid } else { None },
     };
     let running = if urls.is_empty() {
@@ -196,8 +201,37 @@ pub fn launch_with_urls_by_name(
         nsworkspace::open_urls_with_application(urls, &app_ref, &cfg)
     }
     .map_err(|e| anyhow::anyhow!("Failed to launch '{name}': {e}"))?;
+    if cfg.hides {
+        show_without_activating(&running);
+    }
     let pid: i32 = unsafe { running.processIdentifier() };
     Ok(pid)
+}
+
+/// Whether a launch starts a new process: the app isn't running yet, or a
+/// new instance was asked for. Such a launch starts hidden, because apps
+/// bring themselves to the front as they finish launching.
+fn starts_fresh(bundle_id: Option<&str>, creates_new_instance: bool) -> bool {
+    creates_new_instance
+        || bundle_id.is_some_and(|bid| {
+            !list_running_apps()
+                .iter()
+                .any(|app| app.bundle_id.as_deref() == Some(bid))
+        })
+}
+
+/// Show an app started hidden once it has finished launching, without
+/// activating it: its windows come back where they opened (behind the
+/// user's work), and an activation it asks for later is sent back by the
+/// focus-steal guard.
+fn show_without_activating(app: &objc2_app_kit::NSRunningApplication) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !unsafe { app.isFinishedLaunching() } && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Let the app's own launch-time activation pass while it is still hidden.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    unsafe { app.unhide() };
 }
 
 // ── Bundle resolution ────────────────────────────────────────────────────────

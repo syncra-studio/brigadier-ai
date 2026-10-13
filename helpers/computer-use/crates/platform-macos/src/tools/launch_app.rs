@@ -229,6 +229,7 @@ impl Tool for LaunchAppTool {
             None
         };
 
+        let action_started = std::time::SystemTime::now();
         let wildcard_lease = prior_frontmost.map(|prior| {
             crate::focus_steal::FocusStealPreventer::begin_suppression(
                 None,
@@ -358,11 +359,21 @@ impl Tool for LaunchAppTool {
         if let Ok(Ok((pid, _, _))) = &launch_result {
             if let Some(prior) = prior_frontmost {
                 if *pid != prior {
-                    let targeted_lease = crate::focus_steal::FocusStealPreventer::begin_suppression(
-                        Some(*pid),
-                        prior,
-                        "LaunchAppTool.post",
-                    );
+                    // One lease covers both the call and the detached
+                    // watchdog below, so there is no gap between them.
+                    // An app this call started is always sent back, also
+                    // when it comes forward while the user is typing.
+                    let cold_start = !preexisting_pids.contains(pid);
+                    let ticks = watchdog_ticks(slow_launch_path, cold_start);
+                    let lasting = std::time::Duration::from_millis(250 * u64::from(ticks));
+                    let targeted_lease =
+                        crate::focus_steal::FocusStealPreventer::begin_suppression_for(
+                            Some(*pid),
+                            prior,
+                            "LaunchAppTool.post",
+                            lasting,
+                            cold_start.then_some(action_started),
+                        );
                     // Now safe to drop the wildcard — targeted is armed.
                     drop(wildcard_lease);
                     // Hold the targeted lease long enough to cover the
@@ -395,41 +406,25 @@ impl Tool for LaunchAppTool {
                     // gets its answer.
                     let window_ms: u64 = 60;
                     tokio::time::sleep(std::time::Duration::from_millis(window_ms)).await;
-                    drop(targeted_lease);
 
-                    // Belt-and-braces LOOP: if the target ever pops back
-                    // to the foreground after the lease drops (rare —
-                    // observer already covered the suppression window —
-                    // but happens when the activation fires literally on
-                    // the same tokio tick the lease dropped), demote it.
-                    // Loop 5x200ms = 1s of post-window coverage. Each
-                    // iteration is cheap (one frontmost_pid + maybe one
-                    // activate_pid call) so this stays well under the
-                    // RPC budget even when the demote keeps working.
+                    // Belt-and-braces: if the target is in front anyway (an
+                    // activation the notification missed), send it straight back
+                    // through the WindowServer (back within ~50 ms, where an
+                    // AppKit activation took about a second).
                     let mut demotion_succeeded = true;
-                    for _ in 0..5 {
-                        let frontmost_now = crate::apps::frontmost_pid();
-                        if frontmost_now != Some(*pid) {
-                            // Not frontmost — nothing to do this tick.
-                            continue;
-                        }
-                        let activated = crate::apps::activate_pid(prior);
-                        let still_frontmost = crate::apps::frontmost_pid() == Some(*pid);
-                        if still_frontmost {
+                    if crate::apps::frontmost_pid() == Some(*pid) {
+                        let sent_back = crate::input::skylight::set_front_pid(prior)
+                            || crate::apps::activate_pid(prior);
+                        demotion_succeeded = crate::apps::frontmost_pid() != Some(*pid);
+                        if !demotion_succeeded {
                             tracing::warn!(
                                 target: "platform_macos::tools::launch_app",
                                 launched_pid = *pid,
                                 prior_pid = prior,
-                                activate_pid_returned = activated,
-                                "belt-and-braces demotion iteration failed: \
-                                 launched app remained frontmost after \
-                                 re-activating prior — will retry"
+                                sent_back,
+                                "launched app remained frontmost after sending it back"
                             );
-                            demotion_succeeded = false;
-                        } else {
-                            demotion_succeeded = true;
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     }
                     // Final in-call state determines the structured response.
                     let final_frontmost = crate::apps::frontmost_pid();
@@ -467,50 +462,20 @@ impl Tool for LaunchAppTool {
                     //
                     // Tradeoffs:
                     // - Caller latency: ~0.1 s.
-                    // - Total observer coverage: ~10.5 s post-launch (slow path).
-                    // - CPU: the observer fires per activation event,
-                    //   not per poll; the 250ms tick is just for the
-                    //   manual belt-and-braces demote. Cheap.
-                    // - If a legitimate user click activates Code while
-                    //   the watchdog is alive, we'll demote them. Worst
-                    //   case ~10s of "I clicked Code and it didn't come
-                    //   forward" — acceptable trade for an automation
-                    //   scenario where the agent just launched it.
-                    //
-                    // It now also covers what used to be the in-call window
-                    // (2.5 s slow path, 0.5 s fast path).
-                    {
-                        let ticks =
-                            watchdog_ticks(slow_launch_path, !preexisting_pids.contains(pid));
-                        let launched_pid = *pid;
-                        let prior_pid = prior;
-                        tokio::spawn(async move {
-                            let _lease = crate::focus_steal::FocusStealPreventer::begin_suppression(
-                                Some(launched_pid),
-                                prior_pid,
-                                "LaunchAppTool.watchdog",
-                            );
-                            let mut late_activations = 0u32;
-                            for _ in 0..ticks {
-                                // 42 × 250ms = 10.5s (slow path)
-                                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                                if crate::apps::frontmost_pid() == Some(launched_pid) {
-                                    late_activations += 1;
-                                    let _ = crate::apps::activate_pid(prior_pid);
-                                }
-                            }
-                            if late_activations > 0 {
-                                tracing::warn!(
-                                    target: "platform_macos::tools::launch_app",
-                                    launched_pid,
-                                    prior_pid,
-                                    late_activations,
-                                    "watchdog demoted post-RPC late activations \
-                                     — slow-path window may need tuning"
-                                );
-                            }
-                        });
-                    }
+                    // - Total coverage: ~10.5 s post-launch (slow path or a
+                    //   cold start), 0.5 s otherwise.
+                    // - CPU: none while waiting. The lease is answered from
+                    //   the activation notification itself, which sends the
+                    //   app back at once and leaves alone a switch the user
+                    //   made with their own keyboard or pointer, so there is
+                    //   no polling and no second, slower demote.
+                    tokio::spawn(async move {
+                        tokio::time::sleep(
+                            lasting.saturating_sub(std::time::Duration::from_millis(window_ms)),
+                        )
+                        .await;
+                        drop(targeted_lease);
+                    });
                 } else {
                     // pid == prior frontmost (re-launch of an already-
                     // frontmost app). Just drop the wildcard.
@@ -658,7 +623,7 @@ impl Tool for LaunchAppTool {
     }
 }
 
-/// How many 250 ms ticks the detached watchdog keeps a launched app from
+/// How many 250 ms ticks the detached watchdog lease keeps a launched app from
 /// coming to the front. An app that starts from scratch activates itself
 /// once its first window is ready, seconds after the launch returns
 /// (Electron apps especially), as does one that is handed documents, so

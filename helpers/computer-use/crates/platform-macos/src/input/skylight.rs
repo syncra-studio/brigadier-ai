@@ -437,6 +437,22 @@ pub fn get_process_psn_for_window(window_id: u32, pid: libc::pid_t, out_psn: &mu
     false
 }
 
+/// Make `pid` the frontmost process again at once, the same WindowServer call
+/// the foreground assist restores the prior app with. `false` when the
+/// process or the private calls aren't available.
+pub fn set_front_pid(pid: libc::pid_t) -> bool {
+    let (Some(set_front), Some(get_pid_psn)) = (set_front_process_fn(), get_process_for_pid_fn())
+    else {
+        return false;
+    };
+    let mut psn = [0u8; 8];
+    if unsafe { get_pid_psn(pid, psn.as_mut_ptr() as *mut c_void) } != 0 {
+        return false;
+    }
+    // windowID 0, kCPSNoWindows (0x400): front the process, don't reorder windows.
+    unsafe { set_front(psn.as_ptr() as *const c_void, 0, 0x400) == 0 }
+}
+
 /// Tool-agnostic foreground-assist: briefly front `window_id`, run `body` (which
 /// posts the synthetic input), then restore the prior frontmost process.
 ///
