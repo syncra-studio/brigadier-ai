@@ -41,7 +41,7 @@ sideOf: ConversationId | null,
 /**
  * Set for a tab's own chat (with `side_of`, its session): the tab it belongs to.
  */
-tabChat: TabChat | null, 
+tabChat?: TabChat, 
 /**
  * Set while the conversation's model (a session's orchestrator, a Chat's model) is
  * replaced because it hit a limit. Temporary: the saved choice in `setup`, the project's

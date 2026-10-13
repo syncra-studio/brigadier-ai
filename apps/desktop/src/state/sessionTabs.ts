@@ -20,6 +20,19 @@ export type ReviewTarget =
   | { type: "all" }
   | { type: "file"; path: string; staged: boolean };
 
+/**
+ * A page, file or browser tab's own chat, beside it in a split: `share` is the chat's part of
+ * the tab's width. Shown, folded to a strip at the tab's edge, or hidden behind its button; it
+ * goes with its tab. `seenAt` is the chat's last activity when it was last in view, so its
+ * button can show what came since.
+ */
+export type TabChatState = {
+  id: string;
+  view: "split" | "minimized" | "hidden";
+  share: number;
+  seenAt?: number;
+};
+
 export type FileTab = {
   kind: "file";
   id: string;
@@ -32,6 +45,7 @@ export type FileTab = {
   preview: boolean;
   /** The tab it was opened from, where closing it returns. */
   opener: string | null;
+  chat?: TabChatState;
 };
 
 export type ReviewTabState = {
@@ -45,6 +59,7 @@ export type BrowserTabState = {
   kind: "browser"; id: string; opener: string | null; url: string; title: string;
   /** Opened from something an agent gave (a link in its reply, a preview's address). */
   agent?: boolean;
+  chat?: TabChatState;
 };
 export type NewTabState = {
   kind: "newTab"; id: string; opener: string | null;
@@ -65,6 +80,7 @@ export type PageTabState = {
   title: string;
   /** An old "New file" draft (its key in local storage) whose text becomes this page. */
   draft?: string;
+  chat?: TabChatState;
 };
 /** A tab of the old plain-text "New file", only ever read back from storage to be migrated. */
 export type LegacyDocumentTab = {
@@ -421,11 +437,18 @@ export function afterClose(current: SessionTabs, tabs: SessionTab[], tab: Sessio
   return tabs[at]?.id ?? tabs[at - 1]?.id ?? CHAT_TAB;
 }
 
+/** A tab without its chat: a tab opened again starts with none, as its chat went when it closed. */
+export function withoutChat(tab: SessionTab): SessionTab {
+  if (!("chat" in tab)) return tab;
+  const { chat: _gone, ...rest } = tab;
+  return rest as SessionTab;
+}
+
 function remember(conversationId: string, gone: SessionTab[]): void {
   if (!gone.length) return;
   const list = closed.get(conversationId) ?? [];
   for (const tab of gone) {
-    list.push({ tab, index: sessionTabs(conversationId).tabs.findIndex((entry) => entry.id === tab.id) });
+    list.push({ tab: withoutChat(tab), index: sessionTabs(conversationId).tabs.findIndex((entry) => entry.id === tab.id) });
     if (list.length > 20) { const expired = list.shift()!; for (const listener of discarded) listener(expired.tab); }
     notePaneClose(conversationId, "tab");
   }

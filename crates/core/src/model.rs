@@ -456,7 +456,8 @@ pub struct Conversation {
     #[serde(default)]
     pub side_of: Option<ConversationId>,
     /// Set for a tab's own chat (with `side_of`, its session): the tab it belongs to.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub tab_chat: Option<TabChat>,
     /// Set while the conversation's model (a session's orchestrator, a Chat's model) is
     /// replaced because it hit a limit. Temporary: the saved choice in `setup`, the project's
