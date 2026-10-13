@@ -352,6 +352,42 @@ mod tests {
         assert!(!claude_took(&home.0, "s-1", "id m-1"));
     }
 
+    /// A message steered into a running Claude turn, as Claude Code 2.1.296 wrote it (a live
+    /// run's record, its ids and paths replaced): a user line of the same prompt, its text
+    /// the envelope, which counts as taken.
+    #[test]
+    fn a_claude_steer_as_the_cli_records_it_counts() {
+        let home = scratch("claude-steer");
+        let path = home.0.join("projects/-tmp-orch-c-1/s-1.jsonl");
+        write_lines(
+            &path,
+            &[json!({
+                "parentUuid": "u-0",
+                "isSidechain": false,
+                "promptId": "p-1",
+                "type": "user",
+                "message": {"role": "user", "content": [{
+                    "text": "[message from session \"Math helper\" in Alpha · session c-2 · id m-1]\nPlease end your current answer with the line: steered OK.",
+                    "type": "text"
+                }]},
+                "uuid": "u-1",
+                "timestamp": "2026-10-13T22:41:54.687Z",
+                "permissionMode": "bypassPermissions",
+                "promptSource": "sdk",
+                "turnOrigin": "sdk",
+                "turnPosition": {"promptIndex": 0, "turnIndex": 3},
+                "userType": "external",
+                "entrypoint": "sdk-cli",
+                "cwd": "/tmp/orch/c-1",
+                "sessionId": "s-1",
+                "version": "2.1.296",
+                "gitBranch": "HEAD"
+            })],
+        );
+        assert!(claude_took(&home.0, "s-1", "id m-1"));
+        assert!(!claude_took(&home.0, "s-1", "id m-2"));
+    }
+
     /// The same for a Codex thread: its user messages count, a tool's output (also
     /// `input_text`) doesn't.
     #[test]
