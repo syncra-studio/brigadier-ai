@@ -2326,17 +2326,22 @@ pub async fn run_serve_with_owner(
                                     .unwrap_or_else(|_| serde_json::json!({"content": []}));
                                 result_obj["isError"] =
                                     serde_json::json!(result.is_error.unwrap_or(false));
-                                if let (Some(host), Some(start), Some(call_args)) =
-                                    (activity.clone(), activity_start, activity_args)
-                                {
-                                    crate::activity_daemon::finish(host, start, &call_args, &result_obj).await;
-                                }
                                 // Preserve tool-level `isError` and structured
                                 // content inside a successful daemon transport.
-                                let resp = DaemonResponse::ok(result_obj);
+                                let resp = DaemonResponse::ok(result_obj.clone());
                                 let _ = writer.write_all(
                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                 ).await;
+                                // The activity entry and its after-frame are
+                                // written once the agent has its answer: a
+                                // window capture can take longer than the action.
+                                if let (Some(host), Some(start), Some(call_args)) =
+                                    (activity.clone(), activity_start, activity_args)
+                                {
+                                    tokio::spawn(async move {
+                                        crate::activity_daemon::finish(host, start, &call_args, &result_obj).await;
+                                    });
+                                }
                             }
                             "session_begin" => {
                                 // The proxy's persistent control connection.
