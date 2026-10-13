@@ -74,7 +74,8 @@ All four join `tools_for(Role::Orchestrator)` (`catalog.rs`) and are handled in 
   - It is the same reader the chat mention uses.
   - It's for a look before writing, not for watching.
 - **`settle_wait { message_id, why }`** tells the engine the thread no longer needs a reply to that message. The
-  request can then end (§5.2). It doesn't change the message's own record.
+  request can then end (§5.2). It doesn't change the message's own record: it is a record of its own,
+  `PeerWaitSettled { message_id }`, on the sender's stream.
 
 The tool descriptions say:
 - when to message: another session owns the code or the decision, or the user asked;
@@ -88,13 +89,18 @@ New `DomainEvent`s, each carrying `message_id` (uuid v7) and exported to TypeScr
 
 - **`PeerMessageSent`** (on the sender's stream): `{ message_id, to, text, reply_to?, chain_id, hop, request_id,
   turn_input_id, state }`.
-- **`PeerMessageReceived`** (on the receiver's stream): `{ message_id, from, text, reply_to?, chain_id, hop }`.
-- **`PeerMessageState`** (on the stream the change belongs to): `{ message_id, state }`, where `state` ∈
-  `waiting_for_ok | declined | pending | delivered | seen | replied | refused { reason } | dropped { reason }`.
+- **`PeerMessageReceived`** (on the receiver's stream): `{ message_id, from, reply_to?, chain_id, hop }`. The text
+  is not repeated here: the same transaction appends the receiver's transcript message (role `Peer`, id
+  `message_id`, §5.1), which holds it.
+- **`PeerMessageState`** (on both streams, in one write, so each side knows): `{ message_id, state }`, where `state`
+  ∈ `waiting_for_ok | declined | pending | delivered | seen | replied | refused { reason } | dropped { reason }`.
+- **`PeerWaitSettled`** (on the sender's stream): `{ message_id }`, written by `settle_wait`.
 
 Rules:
-- **Full text is stored once**, in the records, with no cut. A message over 64 KB goes to the blob store and the record
-  holds its ref.
+- **Full text is stored once per side**, with no cut: in the sender's `Sent` and in the receiver's transcript
+  message. A message over 64 KB goes to the blob store and the record holds its ref.
+- **Each send's authorized time is stored** on its `Sent` record (`sent_at_ms`): the moment it was allowed to go,
+  which for an Ask send is the user's Send, not the card's creation. The pair rate (§5.5) counts these.
 - **Writing a send is one store transaction.** `Sent`, plus `Received` with the state `pending`, are committed to both
   streams together *before* anything enters the inbox. Nothing is ever shown without also being durably due.
 - **`delivered`** is written when the envelope is in the receiver's inbox. **`seen`** is written when the receiver's CLI
@@ -105,7 +111,9 @@ Rules:
     the session is kicked.
   - Before redelivering a message whose CLI may already have taken it, the daemon looks for the message id in the
     receiver's native transcript. The id is in the envelope header, so this is a cheap text search of the Claude
-    transcript or the Codex rollout. If it is found, the daemon records `seen` and does not send it again.
+    transcript or the Codex rollout, over its **input records only** (user input and steers). Tool results and
+    assistant output never count: a receiver can read its own queued message with `read_session` before it is
+    delivered. If it is found, the daemon records `seen` and does not send it again.
   - The inbox drops a second envelope with a message id it already holds.
 - **Archive and delete.** Archiving a session with pending messages for it marks them `dropped { archived }`. Deleting a
   session removes its streams as today. The other side keeps its own record and shows "Couldn't deliver: the session
@@ -114,7 +122,9 @@ Rules:
 ## 5. The engine rules
 
 ### 5.1 Peer provenance (an engine contract, not styling)
-- A received message is a new `MessageRole::Peer { from, message_id }`. It is never `User`. That holds everywhere:
+- A received message has the new role `MessageRole::Peer`, with `Message.peer` (`{ message_id, from, reply_to? }`)
+  saying who sent it. The role stays a plain value, so the app's role checks keep working. It is never `User`.
+  That holds everywhere:
   - the transcript;
   - request creation (`M/requests.rs`);
   - steering (`join_working`);
@@ -172,7 +182,7 @@ Rules:
 |---|---|
 | Idle | A new turn starts with it (`delivered`, then `seen`) |
 | Sleeping (hibernated) | Made Active, resumed with `ensure_cli`, then a turn |
-| Busy | Steered into the running turn (`seen` on the steer's ack). If steering is refused, it is queued for the next turn (`queued`). |
+| Busy | Steered into the running turn (`seen` on the steer's ack). If steering is refused, it is queued for the next turn (`queued`). Its transcript message is written at send time, so a queued one sits before the running turn's reply, as a steered user message does. |
 | Archived | Refused: "‹title› is archived. Nothing was sent." It is not woken and not unarchived. |
 | Deleted or unknown id | Refused: "No session with that id." |
 | Itself | Refused: "That's this session." |
@@ -192,15 +202,17 @@ Rules:
 
   A send inherits the chain of the turn's **newest input before the call**: a steered peer message counts, and queued
   turns keep theirs. It is stored on the `Sent` record, so it survives a restart.
-- **Hop limit.** A send at hop ≥ 8 is refused:
+- **Hop limit.** A turn at hop `h` may send only while `h < 8`, and its message carries hop `h + 1`. So eight
+  messages go through and the ninth is refused:
   - "Eight messages have gone back and forth with no one's input. Ask your user before sending more."
   - Only a user message starts a new chain. A peer message never does.
-- **Pair rate.** At most 20 sends a minute from one session to another. More are refused: "Too many messages to
-  ‹title› this minute."
+- **Pair rate.** At most 20 sends a minute from one session to another, counted from the stored authorized times
+  (§4), so it holds across a restart and for Ask sends approved in a burst. More are refused: "Too many messages
+  to ‹title› this minute."
 - These are cheap checks in the engine. Judging whether a message is worth sending stays with the thread.
 
 ### 5.6 Ask for approval
-- Under Ask, `message_session` writes `Sent` with `waiting_for_ok` and opens an approval card with a new
+- Under Ask (the Ask for approval level), `message_session` writes `Sent` with `waiting_for_ok` and opens an approval card with a new
   `ApprovalSubject::PeerMessage { message_id }`.
   - Card title: "Send a message to ‹title› in ‹project›?"
   - Body: the exact text.
@@ -355,7 +367,8 @@ Screenshots of each go in the report. Every throwaway session, project and data 
 
 ## 8. Decisions
 
-- **Sessions only.** Plain chats are out for now (the user, 2026-10-13).
+- **Sessions only.** Plain chats are out for now. The Delegator decided this on the user's behalf on 2026-10-13;
+  the user didn't decide it.
 - **Replies are pushed, not polled.** There is no wait tool. A thread that needs an answer ends its turn and rests
   "Waiting for ‹title›".
 - **No new user control.** The user asks a thread in words. There is no Reply button on a received block, because the
