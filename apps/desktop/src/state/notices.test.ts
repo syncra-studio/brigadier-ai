@@ -47,6 +47,7 @@ test("stored version drift disappears when a conversation is reopened; actual wa
     requests: [],
     waiting: [],
     compactions: [],
+    peerMessages: [],
     notices: [drift, decode, environment],
   } as unknown as ConversationView;
   assert.deepEqual(boardFromView(view, null, []).notices, [
@@ -82,6 +83,7 @@ test("a saved account-switch notice shows its accounts' emails masked", () => {
     requests: [],
     waiting: [],
     compactions: [],
+    peerMessages: [],
     notices: [saved, environment],
   } as unknown as ConversationView;
   assert.deepEqual(
