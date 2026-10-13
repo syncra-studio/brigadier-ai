@@ -40,7 +40,9 @@ answer: string | null,
  */
 answers: Array<string>, createdAtMs: number, answeredAtMs: number | null, 
 /**
- * A merge card the user answered in their own words: those words, which went as a new
- * request. Its answer is "Not yet", and they are never consent to merge.
+ * A merge card the user answered in their own words: the user message they went as (a
+ * new request), its queued message while it waits, or the card's own id while they are on
+ * their way. Its answer is "Not yet", and that message is never consent to merge nor the user
+ * writing since.
  */
-words?: string, };
+wordsId?: string, };

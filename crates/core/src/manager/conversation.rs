@@ -886,9 +886,7 @@ impl SessionManager {
         let message = conv
             .user_write(async {
                 let item = self.core.take_queued(&id, &item_id).await?;
-                self.core
-                    .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
-                    .await
+                self.core.append_queued(id.clone(), item).await
             })
             .await?;
         self.join_working(&conv, message, working).await;
@@ -1106,9 +1104,7 @@ impl SessionManager {
         let message = conv
             .user_write(async {
                 let item = self.core.take_queued(id, item_id).await?;
-                self.core
-                    .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
-                    .await
+                self.core.append_queued(id.clone(), item).await
             })
             .await?;
         self.join_working(&conv, message, working).await;
@@ -1143,16 +1139,7 @@ impl SessionManager {
                 let Some(item) = self.core.pop_queued(&conv.id).await? else {
                     return Ok(None);
                 };
-                Ok(Some(
-                    self.core
-                        .append_user_message(
-                            conv.id.clone(),
-                            item.text,
-                            item.attachments,
-                            item.mentions,
-                        )
-                        .await,
-                ))
+                Ok(Some(self.core.append_queued(conv.id.clone(), item).await))
             })
             .await;
         match popped {
@@ -1672,16 +1659,7 @@ impl SessionManager {
             }
             if users.is_empty() && envelopes.is_empty() && !session {
                 match self.core.pop_queued(&conv.id).await {
-                    Ok(Some(item)) => match self
-                        .core
-                        .append_user_message(
-                            conv.id.clone(),
-                            item.text,
-                            item.attachments,
-                            item.mentions,
-                        )
-                        .await
-                    {
+                    Ok(Some(item)) => match self.core.append_queued(conv.id.clone(), item).await {
                         Ok(message) => users.push(message),
                         Err(err) => {
                             crate::logging::private_trace!(conv.private_logs, warn, "could not send a queued message"; conversation = %conv.id, error = %err);

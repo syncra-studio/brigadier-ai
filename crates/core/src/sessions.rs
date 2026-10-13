@@ -636,6 +636,30 @@ impl Core {
             .await
     }
 
+    /// Sends queued message `item` as the user's message. A merge card answered in the words
+    /// it carries points at the message from now on.
+    pub async fn append_queued(&self, id: ConversationId, item: QueuedMessage) -> Result<Message> {
+        let message = self
+            .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
+            .await?;
+        let board = self.board(&id).await?;
+        let events: Vec<_> = board
+            .questions
+            .values()
+            .filter(|question| question.words_id.as_deref() == Some(item.id.as_str()))
+            .map(|question| DomainEvent::QuestionUpdated {
+                question: crate::work::Question {
+                    words_id: Some(message.id.clone()),
+                    ..question.clone()
+                },
+            })
+            .collect();
+        if !events.is_empty() {
+            self.record_conversation(&id, events).await?;
+        }
+        Ok(message)
+    }
+
     /// Appends a user message after `parent` (a message id, or [`ROOT`] for a new first
     /// message) instead of after the branch shown: an edit starts a branch beside the
     /// message it edits.

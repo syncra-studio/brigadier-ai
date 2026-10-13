@@ -13,7 +13,7 @@ use brigadier_providers::{ApprovalDecision, ApprovalRequest, Decider, ProviderEv
 use tokio::sync::oneshot;
 
 use super::SessionManager;
-use super::conversation::Envelope;
+use super::conversation::{Envelope, SendOutcome};
 use crate::model::{ConversationId, DomainEvent, Setup};
 use crate::work::{
     Approval, ApprovalSubject, CardId, CardState, InjectionKind, Plan, PlanApprover, PlanState,
@@ -381,7 +381,7 @@ impl SessionManager {
             answers: Vec::new(),
             created_at_ms: now_ms(),
             answered_at_ms: None,
-            words: None,
+            words_id: None,
         };
         let rx = self.waiters.register(question.id.clone());
         self.core
@@ -452,7 +452,8 @@ impl SessionManager {
             question.answers = answers.clone();
         }
         question.answered_at_ms = Some(now_ms());
-        question.words.clone_from(&typed);
+        // Until its words are sent, the card's own id marks them on their way.
+        question.words_id = typed.as_ref().map(|_| card_id.to_string());
         // Recorded before it is delivered: until the answer is in the inbox, the request
         // counts as carried, or a settle in between would end it (its card answered, nothing
         // queued) and open its time again with the answer's turn.
@@ -521,7 +522,27 @@ impl SessionManager {
                     .await;
                 self.waiters.answer(&card_id, CardAnswer::Answered);
                 self.settle_requests(&conversation_id).await;
-                self.send_message(conversation_id, typed, Vec::new(), Vec::new(), false, None)
+                let sent = self
+                    .send_message(
+                        conversation_id.clone(),
+                        typed,
+                        Vec::new(),
+                        Vec::new(),
+                        false,
+                        None,
+                    )
+                    .await?;
+                // The card points at the message its words went as: that message is neither
+                // consent nor the user writing since they declined.
+                question.words_id = Some(match sent {
+                    SendOutcome::Sent(message) => message.id,
+                    SendOutcome::Queued(item) => item.id,
+                });
+                self.core
+                    .record_conversation(
+                        &conversation_id,
+                        vec![DomainEvent::QuestionUpdated { question }],
+                    )
                     .await?;
                 return Ok(());
             }

@@ -1698,7 +1698,7 @@ mod tests {
             answers: Vec::new(),
             created_at_ms: 0,
             answered_at_ms: None,
-            words: None,
+            words_id: None,
         };
         board.questions.insert(card.clone(), question.clone());
         assert!(card_open(&board, &card));

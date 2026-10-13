@@ -603,7 +603,7 @@ async fn a_merge_asked_in_words_closes_the_merge_card_left_open() {
 /// A merge card answered in the user's own words is a new request, never consent: the card
 /// records "Not yet", the request that asked stays done, and the words reach the orchestrator
 /// as the new request's one message, with the decision on it. Even words that read as consent
-/// don't merge.
+/// don't merge, nor reopen the card at once; the same words written later in the composer do.
 #[tokio::test]
 async fn a_merge_card_answered_in_words_is_a_new_request() {
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -628,13 +628,22 @@ async fn a_merge_card_answered_in_words_is_a_new_request() {
                     return Reply::text("Added NOTES.md.");
                 }
                 if input.contains("start the dev app") {
-                    // The words read as consent, but they answered the card instead of Merge.
                     let words = "please merge it into main and start the dev app";
                     let reply = turn
                         .call("finish_session", json!({ "user_words": words }))
                         .await;
-                    assert!(reply.is_error, "{}", reply.text);
-                    return Reply::text("The dev app runs.");
+                    if input.contains("doesn't want") {
+                        // The words read as consent, but they answered the card instead of
+                        // Merge; nor are they the user writing since its "Not yet".
+                        assert!(reply.is_error, "{}", reply.text);
+                        let again = turn.call("propose_merge", json!({})).await;
+                        assert!(again.is_error, "{}", again.text);
+                        assert!(again.text.contains("Not yet"), "{}", again.text);
+                        return Reply::text("The dev app runs.");
+                    }
+                    // The same words, written later in the composer, are fresh consent.
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Merged.");
                 }
                 Reply::text("Done.")
             }
@@ -688,6 +697,9 @@ async fn a_merge_card_answered_in_words_is_a_new_request() {
     assert!(inputs[1].contains("doesn't want"), "{}", inputs[1]);
     assert!(!inputs[1].contains("earlier request"), "{}", inputs[1]);
     assert!(!on_main(&flow, "NOTES.md"), "nothing merged");
+    flow.say(words).await;
+    flow.until("the merge", |_| on_main(&flow, "NOTES.md"))
+        .await;
     flow.stop().await;
 }
 
@@ -743,10 +755,7 @@ async fn a_not_yet_click_leaves_the_finished_request_closed() {
         .await
         .unwrap();
     let board = flow.settled().await;
-    assert_eq!(
-        board.questions[&card.id].answer.as_deref(),
-        Some("Not yet")
-    );
+    assert_eq!(board.questions[&card.id].answer.as_deref(), Some("Not yet"));
     let reopened = flow.events().await[seen..].iter().any(|event| {
         matches!(event, crate::model::DomainEvent::RequestUpdated { request }
             if request.id == asked.id)
@@ -756,7 +765,8 @@ async fn a_not_yet_click_leaves_the_finished_request_closed() {
     assert_eq!(inputs.lock().unwrap().len(), 1, "no turn on Not yet");
     assert!(!on_main(&flow, "NOTES.md"), "nothing merged on Not yet");
     flow.say("OK, merge it now.").await;
-    flow.until("the merge", |_| on_main(&flow, "NOTES.md")).await;
+    flow.until("the merge", |_| on_main(&flow, "NOTES.md"))
+        .await;
     let board = flow.settled().await;
     assert_eq!(board.requests[&asked.id].state, RequestState::Done);
     let inputs = inputs.lock().unwrap().clone();
