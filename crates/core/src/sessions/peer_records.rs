@@ -107,7 +107,6 @@ impl Core {
 
     /// The user's Send of a send that waited for it: the receiver's side, and the message
     /// pending on both, allowed to go now. Returns the receiver's request.
-    #[allow(dead_code)]
     pub(crate) async fn release_peer_send(&self, send: &PeerSend) -> Result<String> {
         let (mut events, request) = self.receipt(send).await?;
         events.push((

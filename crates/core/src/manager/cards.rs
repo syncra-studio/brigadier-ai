@@ -295,11 +295,15 @@ impl SessionManager {
                 )
                 .await;
             }
+            // The message waiting for the user's OK goes now, or never.
+            ApprovalSubject::PeerMessage { .. } => {
+                let send = !matches!(decision, ApprovalDecision::Deny { .. });
+                self.answer_peer_card(&approval, send).await;
+            }
             ApprovalSubject::OutwardCommand { .. }
             | ApprovalSubject::Landing { .. }
             | ApprovalSubject::FinishSession { .. }
-            | ApprovalSubject::Outline { .. }
-            | ApprovalSubject::PeerMessage { .. } => {}
+            | ApprovalSubject::Outline { .. } => {}
         }
         self.waiters
             .answer(&card_id, CardAnswer::Decision(decision.clone()));

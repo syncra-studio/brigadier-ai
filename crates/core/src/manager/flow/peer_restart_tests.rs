@@ -145,7 +145,11 @@ async fn a_message_the_cli_took_before_a_crash_is_found_and_not_sent_again() {
     *flow.manager.peer_fault.lock().unwrap() = Some(PeerFault::AfterTaken);
     let sent = peers.sends(&flow.conversation, &api, "Please add a `name` column.");
     flow.say("Ask the API session for a name column.").await;
-    while peers.inputs_of(&api).is_empty() || flow.manager.peer_fault.lock().unwrap().is_some() {
+    // The receiver can take it before the sender's call returns.
+    while peers.inputs_of(&api).is_empty()
+        || flow.manager.peer_fault.lock().unwrap().is_some()
+        || sent.lock().unwrap().is_empty()
+    {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let id = message_id(&only(&sent).0);

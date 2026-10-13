@@ -199,9 +199,10 @@ struct ConvState {
     pending: Vec<Message>,
     /// The chain of the running turn's newest input ([`TurnChain`]).
     chain: Option<TurnChain>,
-    /// Replies from other sessions that came after their request was over (stopped, or its
-    /// overnight run ended), by message id: the next turn carries each as a note.
-    late: Vec<(String, String)>,
+    /// Notes about messages between sessions, by message id, which the next turn carries,
+    /// starting none of its own: a reply that came after its request was over (stopped, or
+    /// its overnight run ended), and the user's answer to a send that waited for their OK.
+    peer_notes: Vec<(String, String)>,
     /// A turn cut short by a limit, from its end until its messages are back in `pending` (on
     /// another account, a stand-in, or waiting for quota) or it has failed. No turn starts
     /// meanwhile: one would run on the CLI at its limit, as it closes.
@@ -643,12 +644,12 @@ impl ConvLive {
         Some((state.request.clone(), state.chain.clone()?))
     }
 
-    /// Keeps a reply from another session that came after its request was over for the next
-    /// turn, once.
-    pub(super) async fn hold_late(&self, message_id: &str, note: String) {
+    /// Keeps a note about message `message_id` for the next turn, once ([`ConvState`]'s
+    /// `peer_notes`).
+    pub(super) async fn hold_peer_note(&self, message_id: &str, note: String) {
         let mut state = self.state.lock().await;
-        if !state.late.iter().any(|(id, _)| id == message_id) {
-            state.late.push((message_id.to_owned(), note));
+        if !state.peer_notes.iter().any(|(id, _)| id == message_id) {
+            state.peer_notes.push((message_id.to_owned(), note));
         }
     }
 
@@ -1889,8 +1890,8 @@ impl SessionManager {
         if unsent.len() < users.len() {
             input.prepend_text(prompts::CONTINUE_ON_ACCOUNT);
         }
-        // Replies from other sessions that came after their request was over.
-        let late = std::mem::take(&mut conv.state.lock().await.late);
+        // Notes about messages between sessions (a late reply, the user's answer to a send).
+        let late = std::mem::take(&mut conv.state.lock().await.peer_notes);
         if !late.is_empty() {
             let notes: Vec<&str> = late.iter().map(|(_, note)| note.as_str()).collect();
             input.prepend_text(&notes.join("\n\n"));
@@ -1963,8 +1964,8 @@ impl SessionManager {
                 state.awaiting_start = false;
                 // They go with the next try.
                 let mut kept = late;
-                kept.append(&mut state.late);
-                state.late = kept;
+                kept.append(&mut state.peer_notes);
+                state.peer_notes = kept;
             }
             // The briefing goes with the next try.
             if let Some((plan, _)) = reborn {

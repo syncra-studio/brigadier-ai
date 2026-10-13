@@ -10,7 +10,7 @@ use crate::model::{
 };
 use crate::sessions::PeerSend;
 use crate::tools::MessageSession;
-use crate::work::{InjectionKind, RequestState};
+use crate::work::{Approval, ApprovalSubject, InjectionKind, RequestState};
 use crate::{Error, Result, now_ms};
 
 /// Messages between sessions with no one's word in between after which a turn may send no
@@ -268,11 +268,7 @@ impl SessionManager {
                 )));
             }
         }
-        if self.permission(caller) == PermissionLevel::AskForApproval {
-            return Err(Error::Invalid(
-                "Messaging other sessions under Ask for approval isn't available yet.".into(),
-            ));
-        }
+        let ask = self.permission(caller) == PermissionLevel::AskForApproval;
         let send = PeerSend {
             message_id: uuid::Uuid::now_v7().to_string(),
             from: caller.clone(),
@@ -286,8 +282,31 @@ impl SessionManager {
         };
         {
             let _checked = self.peer_sends.lock().await;
-            self.may_send(caller, &target, &chain).await?;
-            self.core.record_peer_send(&send, false).await?;
+            self.may_send(caller, &target, chain.hop).await?;
+            self.core.record_peer_send(&send, ask).await?;
+        }
+        if ask {
+            // Under Ask for approval it goes once the user presses Send
+            // (SESSION-MESSAGING-PLAN.md §5.6).
+            self.open_approval(
+                caller,
+                None,
+                ApprovalSubject::PeerMessage {
+                    message_id: send.message_id.clone(),
+                    to: target.id.clone(),
+                    title: target.title.clone(),
+                    project: self.project_name(&target),
+                    text: send.text.clone(),
+                },
+            )
+            .await?;
+            self.settle_requests(caller).await;
+            return Ok(serde_json::json!({
+                "message_id": send.message_id,
+                "state": "waiting_for_ok",
+                "note": "Waiting for the user's OK: it goes, exactly as written, when they press Send.",
+            })
+            .to_string());
         }
         #[cfg(test)]
         if self.peer_fault_at(PeerFault::BeforeEnqueue).await {
@@ -299,6 +318,109 @@ impl SessionManager {
             "state": delivery.word(),
         })
         .to_string())
+    }
+
+    /// The user answered the card of a send that waited for their OK: on Send it goes as
+    /// written, unless its target is gone or archived or the hop or rate rule no longer
+    /// holds; on Don't send it is declined. The sender's next turn hears which.
+    pub(super) async fn answer_peer_card(&self, approval: &Approval, send: bool) {
+        let ApprovalSubject::PeerMessage {
+            message_id, title, ..
+        } = &approval.subject
+        else {
+            return;
+        };
+        let from = &approval.conversation_id;
+        let note = match self.release_peer_card(from, message_id, send).await {
+            Ok(None) => "The user didn't send it.".to_owned(),
+            Ok(Some(())) => format!("Sent to {title}: the user pressed Send."),
+            Err(reason) => format!("It wasn't sent: {reason}"),
+        };
+        if let Ok(conv) = self.conv(from) {
+            conv.hold_peer_note(
+                message_id,
+                format!("[your message to \"{title}\" · id {message_id}] {note}"),
+            )
+            .await;
+        }
+        self.settle_requests(from).await;
+    }
+
+    /// [`Self::answer_peer_card`]'s records: `Some` once sent, `None` when declined, else
+    /// why it was refused.
+    async fn release_peer_card(
+        &self,
+        from: &ConversationId,
+        message_id: &str,
+        send: bool,
+    ) -> std::result::Result<Option<()>, String> {
+        let board = self.core.board(from).await.map_err(|err| err.to_string())?;
+        let Some(record) = board
+            .peer_messages
+            .get(message_id)
+            .filter(|record| record.outgoing && record.state == PeerState::WaitingForOk)
+            .cloned()
+        else {
+            return Err("it was already answered.".into());
+        };
+        if !send {
+            self.core
+                .record_peer_state(message_id, &[from], PeerState::Declined)
+                .await
+                .map_err(|err| err.to_string())?;
+            return Ok(None);
+        }
+        let refuse = |reason: String| async move {
+            let refused = PeerState::Refused {
+                reason: reason.clone(),
+            };
+            if let Err(err) = self
+                .core
+                .record_peer_state(message_id, &[from], refused)
+                .await
+            {
+                tracing::warn!(conversation = %from, error = %err, "could not record a refused message");
+            }
+            Err(reason)
+        };
+        let target = match self.peer_session(&record.peer.0) {
+            Ok(target) => target,
+            Err(_) => return refuse("The session was deleted. Nothing was sent.".into()).await,
+        };
+        if target.lifecycle == Lifecycle::Archived {
+            return refuse(format!("{} is archived. Nothing was sent.", target.title)).await;
+        }
+        let text = self
+            .core
+            .peer_text(from, message_id)
+            .await
+            .unwrap_or_else(|| record.text.clone());
+        let send = PeerSend {
+            message_id: message_id.to_owned(),
+            from: from.clone(),
+            to: target.id.clone(),
+            text,
+            reply_to: record.reply_to.clone(),
+            chain_id: record.chain_id.clone(),
+            hop: record.hop,
+            request_id: record.request_id.clone(),
+            turn_input_id: None,
+        };
+        {
+            let _checked = self.peer_sends.lock().await;
+            if let Err(err) = self
+                .may_send(from, &target, record.hop.saturating_sub(1))
+                .await
+            {
+                return refuse(err.to_string()).await;
+            }
+            self.core
+                .release_peer_send(&send)
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+        self.deliver_peer(&target.id, message_id).await;
+        Ok(Some(()))
     }
 
     /// `settle_wait`: `caller`'s thread no longer needs a reply to `message_id`, so its
@@ -334,15 +456,15 @@ impl SessionManager {
         ))
     }
 
-    /// The engine's hard rules for one more send from `caller` to `target` in a turn on
-    /// `chain`: the hop limit and the pair rate (SESSION-MESSAGING-PLAN.md §5.5).
+    /// The engine's hard rules for one more send from `caller` to `target` from a turn at
+    /// hop `turn_hop`: the hop limit and the pair rate (SESSION-MESSAGING-PLAN.md §5.5).
     async fn may_send(
         &self,
         caller: &ConversationId,
         target: &Conversation,
-        chain: &TurnChain,
+        turn_hop: u32,
     ) -> Result<()> {
-        if chain.hop >= MAX_HOPS {
+        if turn_hop >= MAX_HOPS {
             return Err(Error::Invalid(
                 "Eight messages have gone back and forth with no one's input. Ask your user \
                  before sending more."
@@ -439,7 +561,7 @@ impl SessionManager {
             self.core
                 .record_peer_state(message_id, &sides, PeerState::Delivered)
                 .await?;
-            conv.hold_late(
+            conv.hold_peer_note(
                 message_id,
                 format!(
                     "A reply from \"{title}\" arrived {when} (id {message_id} · reply to {}):\n{text}",
