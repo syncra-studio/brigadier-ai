@@ -1156,9 +1156,9 @@ async fn wait_for_daemon_permission_readiness(
     } else {
         Duration::from_secs(6)
     };
-    if external_permission_flow {
-        crate::lifecycle::note_setup_needed(&crate::lifecycle::home());
-    }
+    // Brigadier opens its setup window when asked; only once the helper says setup is
+    // unfinished, so an agent arriving after setup never opens it.
+    let mut setup_asked = !external_permission_flow;
     let mut last: Option<(bool, bool, Option<bool>)> = None;
     loop {
         let elapsed = started.elapsed();
@@ -1189,6 +1189,10 @@ async fn wait_for_daemon_permission_readiness(
                         "daemon permission authority is ready"
                     );
                     return Ok(());
+                }
+                if !setup_asked {
+                    crate::lifecycle::note_setup_needed(&crate::lifecycle::home());
+                    setup_asked = true;
                 }
             }
         }
