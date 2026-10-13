@@ -295,11 +295,8 @@ impl Tool for LaunchAppTool {
         let launch_result = tokio::task::spawn_blocking(move || {
             if let Some(opened) = opened_in_background {
                 let pid = opened.pid;
-                let (mut windows, new) = open_link::wait_for_new_windows(
-                    pid,
-                    &windows_seen,
-                    urls.len() - opened.unopened,
-                );
+                let (mut windows, new) =
+                    open_link::wait_for_new_pages(pid, &windows_seen, urls.len() - opened.unopened);
                 if new == 0 {
                     put_window_first(&mut windows, apps::main_window_id(pid));
                 }

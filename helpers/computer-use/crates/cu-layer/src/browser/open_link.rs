@@ -8,7 +8,7 @@
 //! allowed them (this never shows macOS's Automation prompt). When neither
 //! works the caller keeps using LaunchServices.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use super::browser_js::{escape_for_applescript_string, BrowserJs};
@@ -20,6 +20,11 @@ const NEW_WINDOW_WAIT: Duration = Duration::from_millis(1500);
 
 /// How often the window list is looked at while waiting.
 const NEW_WINDOW_POLL: Duration = Duration::from_millis(20);
+
+/// How long to wait for a new page window to show its page's title instead
+/// of the placeholder a new browser window starts with. The page's own
+/// title usually follows within a few tens of milliseconds.
+const PAGE_TITLE_WAIT: Duration = Duration::from_millis(250);
 
 /// The smallest side of a window that shows a page, unlike the browser's
 /// thin toolbar, address-bar popup and placeholder windows.
@@ -142,14 +147,66 @@ pub fn wait_for_new_windows(
     expected: usize,
 ) -> (Vec<WindowInfo>, usize) {
     let deadline = Instant::now() + NEW_WINDOW_WAIT;
-    while count_new_page_windows(&crate::window_list::windows(Some(pid)), before) < expected
-        && Instant::now() < deadline
-    {
+    wait_for_page_windows(pid, before, expected, deadline);
+    let mut windows = current_windows_for_pid(pid);
+    let new = new_windows_first(&mut windows, before);
+    (windows, new)
+}
+
+/// [`wait_for_new_windows`] for links a browser opened: also waits a little
+/// for each new page window to change from the title it first showed (a
+/// placeholder such as "Untitled") to its page's own, so the answer names
+/// the window the way the agent will look for it.
+pub fn wait_for_new_pages(
+    pid: i32,
+    before: &HashSet<u32>,
+    expected: usize,
+) -> (Vec<WindowInfo>, usize) {
+    let deadline = Instant::now() + NEW_WINDOW_WAIT;
+    wait_for_page_windows(pid, before, expected, deadline);
+    let first = new_page_titles(&crate::window_list::windows(Some(pid)), before);
+    let titles_deadline = (Instant::now() + PAGE_TITLE_WAIT).min(deadline);
+    while !first.is_empty() && Instant::now() < titles_deadline {
+        let now = new_page_titles(&crate::window_list::windows(Some(pid)), before);
+        if page_titles_settled(&first, &now) {
+            break;
+        }
         std::thread::sleep(NEW_WINDOW_POLL);
     }
     let mut windows = current_windows_for_pid(pid);
     let new = new_windows_first(&mut windows, before);
     (windows, new)
+}
+
+fn wait_for_page_windows(pid: i32, before: &HashSet<u32>, expected: usize, deadline: Instant) {
+    while count_new_page_windows(&crate::window_list::windows(Some(pid)), before) < expected
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(NEW_WINDOW_POLL);
+    }
+}
+
+/// The titles of the new windows big enough to show a page, by id.
+fn new_page_titles(
+    windows: &[crate::window_list::Window],
+    before: &HashSet<u32>,
+) -> HashMap<u32, String> {
+    windows
+        .iter()
+        .filter(|w| {
+            !before.contains(&w.id) && w.width >= MIN_PAGE_SIDE && w.height >= MIN_PAGE_SIDE
+        })
+        .map(|w| (w.id, w.title.clone()))
+        .collect()
+}
+
+/// Whether every window in `first` now shows a title other than the one it
+/// first showed.
+fn page_titles_settled(first: &HashMap<u32, String>, now: &HashMap<u32, String>) -> bool {
+    first.iter().all(|(id, was)| {
+        now.get(id)
+            .is_some_and(|title| !title.is_empty() && title != was)
+    })
 }
 
 /// How many of `windows` are not in `before` and big enough to show a page.
@@ -409,6 +466,7 @@ mod tests {
             pid: 7,
             width,
             height,
+            title: String::new(),
         };
         let before: HashSet<u32> = [1].into();
         let windows = [
@@ -418,5 +476,47 @@ mod tests {
             window(4, 200.0, 200.0),
         ];
         assert_eq!(count_new_page_windows(&windows, &before), 2);
+    }
+    #[test]
+    fn a_new_page_window_is_awaited_until_it_shows_its_pages_title() {
+        let titles = |rows: &[(u32, &str)]| -> HashMap<u32, String> {
+            rows.iter().map(|(id, t)| (*id, t.to_string())).collect()
+        };
+        let first = titles(&[(2, "Untitled"), (3, "")]);
+        assert!(!page_titles_settled(
+            &first,
+            &titles(&[(2, "cu fixture"), (3, "")])
+        ));
+        assert!(!page_titles_settled(
+            &first,
+            &titles(&[(2, "Untitled"), (3, "Docs")])
+        ));
+        assert!(page_titles_settled(
+            &first,
+            &titles(&[(2, "cu fixture"), (3, "Docs")])
+        ));
+        // A window that closed meanwhile is not settled; the wait is bounded.
+        assert!(!page_titles_settled(&first, &titles(&[(2, "cu fixture")])));
+
+        use crate::window_list::Window;
+        let window = |id, height: f64, title: &str| Window {
+            id,
+            pid: 7,
+            width: 900.0,
+            height,
+            title: title.to_owned(),
+        };
+        let before: HashSet<u32> = [1].into();
+        assert_eq!(
+            new_page_titles(
+                &[
+                    window(1, 700.0, "Old"),
+                    window(2, 700.0, "Untitled"),
+                    window(4, 40.0, "")
+                ],
+                &before
+            ),
+            titles(&[(2, "Untitled")])
+        );
     }
 }

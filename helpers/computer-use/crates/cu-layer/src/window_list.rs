@@ -1,4 +1,5 @@
-//! A quick look at which normal windows exist, for waiting on a new one.
+//! A quick look at which normal windows exist, for waiting on a new one
+//! and its title.
 //!
 //! The driver's window list also asks the window server which Space each
 //! window is on, one window at a time, which takes about 20 ms with a few
@@ -11,13 +12,15 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 
-/// A normal (layer 0) window: its id, owner and size in points.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A normal (layer 0) window: its id, owner, size in points and title
+/// (empty when it has none).
+#[derive(Clone, Debug, PartialEq)]
 pub struct Window {
     pub id: u32,
     pub pid: i32,
     pub width: f64,
     pub height: f64,
+    pub title: String,
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -66,11 +69,17 @@ pub fn windows(pid: Option<i32>) -> Vec<Window> {
                     .and_then(|value| value.downcast::<CFNumber>())
                     .and_then(|number| number.to_f64())
             };
+            let title = row
+                .find(CFString::from_static_string("kCGWindowName"))
+                .and_then(|value| value.downcast::<CFString>())
+                .map(|title| title.to_string())
+                .unwrap_or_default();
             Some(Window {
                 id,
                 pid: owner,
                 width: side("Width")?,
                 height: side("Height")?,
+                title,
             })
         })
         .collect()
