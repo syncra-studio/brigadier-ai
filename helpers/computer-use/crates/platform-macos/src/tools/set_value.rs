@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use crate::apps;
 use crate::ax::bindings::{
-    copy_children, copy_number_attr, copy_string_attr, kAXErrorSuccess, perform_action,
-    set_number_attr, set_string_attr, AXUIElementRef,
+    copy_children, copy_number_attr, copy_string_attr, copy_stringified_attr, kAXErrorSuccess,
+    perform_action, set_number_attr, set_string_attr, AXUIElementRef,
 };
 use crate::browser::BrowserJs;
 use crate::focus_guard;
@@ -291,6 +291,7 @@ fn set_value_blocking(
         // write with -25200 yet exposes a readable AXValue + increment/decrement
         // actions).
         let numeric_target = value.trim().parse::<f64>().ok();
+        let before = unsafe { copy_stringified_attr(element, "AXValue") };
         let err = match numeric_target {
             Some(n) => {
                 gate.check()?;
@@ -308,6 +309,16 @@ fn set_value_blocking(
             }
         };
         if err == kAXErrorSuccess {
+            if write_ignored(before.as_deref(), value, || unsafe {
+                copy_stringified_attr(element, "AXValue")
+            }) {
+                anyhow::bail!(
+                    "[{element_index}] {role} accepted the value but still reads {:?}: it doesn't \
+                     take a value written directly. Use the app's own way to change it (click or \
+                     double-click it, then type_text), or a menu command.",
+                    before.unwrap_or_default()
+                );
+            }
             Ok(SetValueDispatch::Complete(format!(
                 "✅ Set AXValue on [{element_index}] {role}."
             )))
@@ -325,6 +336,23 @@ fn set_value_blocking(
             anyhow::bail!("AXUIElementSetAttributeValue(AXValue) failed with error {err}")
         }
     }
+}
+
+/// Whether a write the app accepted left the value as it was: it read
+/// something else than `value` before, and still reads that afterwards (looked
+/// at twice, as some apps apply a write a moment later).
+fn write_ignored(before: Option<&str>, value: &str, read: impl Fn() -> Option<String>) -> bool {
+    let Some(before) = before else {
+        return false;
+    };
+    if before == value {
+        return false;
+    }
+    if read().as_deref() != Some(before) {
+        return false;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    read().as_deref() == Some(before)
 }
 
 // ── AXIncrement / AXDecrement stepping fallback ──────────────────────────────
@@ -577,6 +605,20 @@ fn hex_digit(n: u8) -> char {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_write_counts_as_ignored_only_when_the_old_value_stays() {
+        use super::write_ignored;
+        assert!(write_ignored(Some("old.txt"), "new.txt", || Some(
+            "old.txt".into()
+        )));
+        assert!(!write_ignored(Some("old.txt"), "new.txt", || Some(
+            "new.txt".into()
+        )));
+        assert!(!write_ignored(Some("5"), "5.0", || Some("5.0".into())));
+        assert!(!write_ignored(Some("same"), "same", || Some("same".into())));
+        assert!(!write_ignored(None, "x", || None));
+    }
+
     use super::*;
 
     #[test]
