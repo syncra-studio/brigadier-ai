@@ -1,10 +1,11 @@
 import { request } from "@/ipc/client";
 import type { Conversation, TerminalInfo } from "@/ipc/generated";
 import { closePage, useBrowsers } from "@/state/browsers";
+import { forgetDraft } from "@/state/drafts";
 import { changeSessionTab, discardTab, dropBrowserTabs, onDiscardTab, sessionTabs, useSessionTabs, withoutChat } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { abandonedSideChats } from "@/state/sideChats";
-import { canChat, followTabChats } from "@/state/tabChats";
+import { canChat, followTabChats, goneTabChats } from "@/state/tabChats";
 
 // Lives across ConversationView remounts, but not a real app reload. The stable tab ID is
 // the daemon session ID; its first attachment in this app lifetime replaces the old shell.
@@ -58,6 +59,8 @@ function closeShell(id: string): void {
 }
 
 useSessionTabs.subscribe(followTabChats);
+// A gone tab chat's unsent text goes with it.
+useSessionTabs.subscribe((state, before) => { for (const id of goneTabChats(state, before)) forgetDraft(id); });
 useSessionTabs.subscribe((state, before) => {
   for (const [id, previous] of Object.entries(before.sessions)) {
     const kept = state.sessions[id]?.tabs ?? [];

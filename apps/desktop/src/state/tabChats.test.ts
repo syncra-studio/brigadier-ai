@@ -16,6 +16,7 @@ const { closeTab, newSessionTab, openBrowserTab, openFileTab, openPageTab, reope
 await import("./sessionTabResources");
 const { canChat, chatTarget, keepTabChats, prepareBeforeSend, prepareTabChatSend, newTabChat, setTabChatShare, setTabChatView, showTabChat, MAX_SHARE, MIN_SHARE } = await import("./tabChats");
 const { abandonedSideChats } = await import("./sideChats");
+const drafts = await import("./drafts");
 
 type Sent = RequestOf<"delete"> | RequestOf<"keepTabChats">;
 let sent: Sent[];
@@ -114,6 +115,26 @@ test("closing a tab deletes its chat at once, and the tab reopened starts with n
   const reopened = sessionTabs(session).tabs.find((tab) => tab.kind === "page" && tab.pageId === "p5")!;
   assert.equal(canChat(reopened) && reopened.chat, undefined);
   assert.deepEqual(deleted(), [id]);
+});
+
+test("a gone tab chat's unsent text goes too, and its composer closing after can't keep it again", async () => {
+  const session = "draft";
+  const page = openPageTab(session, "p8", "Draft");
+  showTabChat(session, page);
+  const id = chatOf(session, page)!.id;
+  drafts.saveDraft(id, "half a thought", [], []);
+  assert.equal(drafts.loadDraft(id)?.text, "half a thought");
+  newTabChat(session, page);
+  const next = chatOf(session, page)!.id;
+  drafts.saveDraft(next, "another thought", [], []);
+  closeTab(session, page);
+  // The composers unmount after the tab has gone, and keep what they hold.
+  drafts.saveDraft(id, "half a thought", [], []);
+  drafts.saveDraft(next, "another thought", [], []);
+  await settle();
+  assert.equal(drafts.loadDraft(id), null);
+  assert.equal(drafts.loadDraft(next), null);
+  assert.ok(![...data.values()].some((stored) => stored.includes("thought")), "the drafts are still stored");
 });
 
 test("a preview file tab replaced by another takes its chat with it", async () => {

@@ -79,11 +79,18 @@ function wipe(id: string): void {
   void request({ method: "delete", ids: [id] }).catch(() => console.error("Could not delete a tab chat"));
 }
 
-/** Tab chats that left the tabs (a tab closed, a page deleted, New chat) go at once. */
-export function followTabChats(state: { sessions: Record<string, SessionTabs> }, before: { sessions: Record<string, SessionTabs> }): void {
-  if (state.sessions === before.sessions) return;
+type Tabs = { sessions: Record<string, SessionTabs> };
+
+/** The tab chats a change of the tabs let go (a tab closed, a page deleted, New chat). */
+export function goneTabChats(state: Tabs, before: Tabs): string[] {
+  if (state.sessions === before.sessions) return [];
   const kept = tabChatIds(state.sessions);
-  for (const id of tabChatIds(before.sessions)) if (!kept.has(id)) wipe(id);
+  return [...tabChatIds(before.sessions)].filter((id) => !kept.has(id));
+}
+
+/** Tab chats that left the tabs go at once. */
+export function followTabChats(state: Tabs, before: Tabs): void {
+  for (const id of goneTabChats(state, before)) wipe(id);
 }
 
 /**

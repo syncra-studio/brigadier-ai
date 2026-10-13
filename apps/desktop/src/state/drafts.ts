@@ -51,6 +51,9 @@ function pin(scope: string, attachments: AttachmentRef[]): void {
   });
 }
 
+/** Scopes whose conversation went: a composer closing after that doesn't keep its draft. */
+const gone = new Set<string>();
+
 const sameAttachments = (a: readonly AttachmentRef[], b: readonly AttachmentRef[]) =>
   a.length === b.length && a.every((ref, index) => ref.id === b[index]?.id);
 
@@ -65,6 +68,7 @@ export function saveDraft(
   attachments: AttachmentRef[],
   mentions: DraftMention[],
 ): void {
+  if (gone.has(scope)) return;
   // Retained undo/history refs must not keep a sent or cleared draft (and its pins) alive.
   if (text.trim() === "") attachments = attachments.filter((ref) => ref.inline == null);
   const drafts = readAll();
@@ -86,8 +90,12 @@ export function saveDraft(
   if (!sameAttachments(before?.attachments ?? [], attachments)) pin(scope, attachments);
 }
 
-/** Drops a deleted conversation's draft (the daemon drops its pin with the conversation). */
+/**
+ * Drops a deleted conversation's draft (the daemon drops its pin with the conversation), for
+ * good: its composer closing later keeps nothing.
+ */
 export function forgetDraft(scope: string): void {
+  gone.add(scope);
   const drafts = readAll();
   if (!(scope in drafts)) return;
   delete drafts[scope];
