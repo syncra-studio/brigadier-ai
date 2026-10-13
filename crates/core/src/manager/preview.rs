@@ -2298,7 +2298,10 @@ while True:
         let mut board = crate::board::Board::default();
         board.apply(&event, 1);
         assert_eq!(board.previews["preview-3"].url, None);
-        assert_eq!(board.previews["preview-3"].kind, crate::work::PreviewKind::Web);
+        assert_eq!(
+            board.previews["preview-3"].kind,
+            crate::work::PreviewKind::Web
+        );
         assert_eq!(board.preview_number, 3);
         let clear = DomainEvent::PreviewsCleared {
             conversation_id: ConversationId("c".into()),
