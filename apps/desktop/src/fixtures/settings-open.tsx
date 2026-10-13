@@ -233,6 +233,8 @@ const PAGES: SettingsPageId[] = [
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+let warm: (loads: Promise<unknown>) => void = () => {};
+const warmed = new Promise<unknown>((resolve) => { warm = resolve; });
 const mainText = () => document.querySelector("main")?.textContent ?? "";
 const title = () => document.querySelector("main h1")?.textContent ?? null;
 const navButton = (label: string) =>
@@ -253,8 +255,10 @@ async function open(label: string, read: () => Record<string, unknown> = () => (
  * then.
  */
 async function drive(): Promise<string> {
-  // The app's idle warm-up after startup.
+  // The app's idle warm-up after startup, until its code is in: a busy machine takes longer.
   await sleep(3000);
+  await warmed;
+  await sleep(200);
   document.querySelector<HTMLButtonElement>('button[aria-label="Settings"]')?.click();
   await frame();
   const settings = {
@@ -346,8 +350,11 @@ function Fixture() {
   );
 }
 
-// As the app does once it is up.
-whenIdle(warmSettings);
+// As the app does once it is up; `warmed` settles once the code it loads is in.
+whenIdle(() => {
+  warmSettings();
+  warm(Promise.all([import("@/app/settings/SettingsNav"), import("@/app/settings/SettingsView"), import("@/app/settings/pages")]));
+});
 
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
