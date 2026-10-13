@@ -76,9 +76,15 @@ fn stop_recording_when_session_ends(registry: &mut ToolRegistry) {
 }
 
 /// The screenshot, click-marker, accessibility-snapshot, element-bounds and
-/// video hooks recordings use. Later calls change nothing.
+/// video hooks recordings use. Later calls change nothing. A test process
+/// ([`crate::no_tcc`]) installs none of them, so the activity journal's
+/// frame after an action, which captures through the screenshot hook, never
+/// makes macOS ask it for screen capture.
 pub fn install_recording_hooks() {
     use cua_driver_core::recording;
+    if crate::no_tcc::off() {
+        return;
+    }
     recording::set_screenshot_fn(|window_id, pid| {
         if let Some(window_id) = window_id {
             platform_macos::capture::screenshot_window_bytes(window_id as u32).ok()
