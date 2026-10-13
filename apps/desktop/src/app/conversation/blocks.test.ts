@@ -5,6 +5,7 @@ import { test } from "node:test";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import { settledSession } from "@/fixtures/settledSession";
 import {
+  anchorMessage,
   answerIndex,
   type Block,
   blockFinished,
@@ -16,13 +17,14 @@ import {
   foldTurns,
   isUpdate,
   judgementCall,
+  peerOf,
   shownBranch,
   type ThreadNode,
   updateIndices,
 } from "@/app/conversation/blocks";
 import { splitReport } from "@/app/conversation/phaseView";
 import { checkersOf, checkResult, checksCount, machineWords, taskRowDetail, taskState } from "@/app/conversation/rowWords";
-import type { Decision, EventEnvelope, MachineStep, Message, OrchestratorStep, OvernightRun, Plan, Task, UserRequest } from "@/ipc/generated";
+import type { Decision, EventEnvelope, MachineStep, Message, OrchestratorStep, OvernightRun, PeerMessage, Plan, Task, UserRequest } from "@/ipc/generated";
 import { applyToBoard, emptyBoard } from "@/state/board";
 
 // The board of the first real overnight run (2026-10-03), from its stored events
@@ -583,4 +585,122 @@ test("the branch shown runs back from its head by parent, so another branch's ne
   // Messages from before branches follow the one before them.
   const old = [branchMessage("a", null, "user"), branchMessage("b", null, "assistant")];
   assert.deepEqual(shownBranch(old, null, false).map((entry) => entry.id), ["a", "b"]);
+});
+
+// ---- Messages between sessions (SESSION-MESSAGING-PLAN.md §6) ------------------------------------
+
+/** A message at `seq` of a session's stream, `seq` seconds in. */
+const said = (id: string, seq: number, role: Message["role"], requestId: string, more: Partial<Message> = {}): Message =>
+  ({ ...branchMessage(id, null, role), seq, createdAtMs: seq * 1000, requestId, ...more });
+/** Another session's message as this one received it. */
+const fromPeer = (id: string, seq: number, requestId: string, replyTo?: string): Message =>
+  said(id, seq, "peer", requestId, { peer: { messageId: id, from: "api", ...(replyTo && { replyTo }) } });
+const peerRequest = (id: string, seq: number, more: Partial<UserRequest> = {}): UserRequest => ({
+  id, conversationId: "c", preview: id, state: { type: "done" }, startedAtMs: seq * 1000, endedAtMs: null,
+  steeredInto: null, steeredAfter: null, undo: null, worked: [{ fromMs: seq * 1000, toMs: null }], quotaWait: false, ...more,
+} as UserRequest);
+const record = (messageId: string, position: number, requestId: string, state: PeerMessage["state"], outgoing = true): PeerMessage => ({
+  messageId, outgoing, peer: "docs", requestId, state, text: messageId, blob: null,
+  sentAtMs: position * 1000, settled: false, position,
+});
+const peerDigest = (requests: UserRequest[], peerMessages: PeerMessage[] = [], orchestratorSteps: OrchestratorStep[] = []): BoardDigest => ({
+  tasks: {}, approvals: {}, questions: {}, plans: {}, decisions: [], machineSteps: [], compactions: {},
+  runRequest: null, streaming: null, orchestratorSteps,
+  requests: Object.fromEntries(requests.map((request) => [request.id, request])),
+  peerMessages: Object.fromEntries(peerMessages.map((peer) => [peer.messageId, peer])),
+});
+const keyed = (blocks: Block[], key: string): Block => {
+  const block = blocks.find((candidate) => candidate.key === key);
+  assert.ok(block, key);
+  return block;
+};
+
+test("a session's sent messages are rows of the turn that sent them, in every state, with a refused send's step", () => {
+  const states: PeerMessage["state"][] = [
+    { type: "waitingForOk" }, { type: "pending" }, { type: "delivered" }, { type: "seen" }, { type: "replied" },
+    { type: "declined" }, { type: "dropped", reason: "deleted" },
+  ];
+  const sent = states.map((state, index) => record(`m${index}`, 2 + index * 2, "a1", state));
+  // Another session's received record is no row: its message shows in the thread.
+  const incoming = record("in", 30, "a1", { type: "seen" }, false);
+  const refusal: OrchestratorStep = { requestId: "a1", atMs: 20_000, position: 20, kind: { type: "messageRefused", title: "Billing", reason: "Billing is archived." } };
+  const blocks = buildBlocks([said("a1", 1, "user", "a1")], {}, false, peerDigest([peerRequest("a1", 1)], [...sent, incoming], [refusal]), []);
+  const steps = keyed(blocks, "a1").orchestratorSteps.map((step) => step.kind.type === "peerSent" ? step.kind.messageId : step.kind.type);
+  assert.deepEqual(steps, ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "messageRefused"]);
+});
+
+test("another session's message opens its request's turn where the user's message would stand", () => {
+  const blocks = buildBlocks([fromPeer("m1", 1, "m1"), said("m1-answer", 3, "assistant", "m1")], {}, false, peerDigest([peerRequest("m1", 1, { fromPeer: "api" })]), []);
+  const block = keyed(blocks, "m1");
+  assert.equal(block.user?.kind, "peer");
+  assert.equal(block.user?.kind === "peer" && block.user.earlier, false);
+  assert.equal(anchorMessage(block)?.id, "m1");
+  assert.deepEqual(peerOf(anchorMessage(block)!), { messageId: "m1", from: "api", reply: false, earlier: false });
+  assert.deepEqual(block.texts.map((text) => text.messageId), ["m1-answer"]);
+  // The user's own message is no peer's.
+  assert.equal(peerOf(said("u", 1, "user", "u")), undefined);
+});
+
+test("a reply to the turn still in view sits inside it; one after a newer request carries its request on in a turn of its own", () => {
+  const asked = said("a1", 1, "user", "a1");
+  const reply = fromPeer("r1", 5, "a1", "q1");
+  // Inside the turn that asked.
+  const inTurn = buildBlocks([asked, reply, said("a1-answer", 6, "assistant", "a1")], {}, false, peerDigest([peerRequest("a1", 1)]), []);
+  assert.equal(inTurn.length, 1);
+  assert.deepEqual(inTurn[0]!.steers.map((steer) => steer.message.id), ["r1"]);
+  assert.deepEqual(peerOf(reply), { messageId: "r1", from: "api", reply: true, earlier: false });
+  assert.deepEqual(inTurn[0]!.texts.map((text) => text.messageId), ["a1-answer"]);
+
+  // After a newer request: the earlier turn rests done when the reply came, and the request goes
+  // on in the reply's own turn, "to your earlier message".
+  const later = [asked, said("a1-said", 2, "assistant", "a1"), said("a2", 3, "user", "a2"), said("a2-answer", 4, "assistant", "a2"), reply, said("a1-answer", 6, "assistant", "a1")];
+  const requests = [peerRequest("a1", 1, { endedAtMs: 6000, waitingFor: [] }), peerRequest("a2", 3, { endedAtMs: 4000, worked: [{ fromMs: 3000, toMs: 4000 }] })];
+  const blocks = buildBlocks(later, {}, false, peerDigest(requests), []);
+  assert.deepEqual(blocks.map((block) => block.key), ["a1", "a2", "a1~r1"]);
+  const [earlier, , carried] = blocks;
+  assert.equal(earlier!.state, "done");
+  assert.equal(earlier!.endedAtMs, 5000);
+  assert.deepEqual(earlier!.worked, [{ fromMs: 1000, toMs: 5000 }]);
+  assert.deepEqual(earlier!.texts.map((text) => text.messageId), ["a1-said"]);
+  assert.equal(carried!.user?.kind === "peer" && carried!.user.earlier, true);
+  assert.deepEqual(peerOf(anchorMessage(carried!)!, true), { messageId: "r1", from: "api", reply: true, earlier: true });
+  assert.deepEqual(carried!.texts.map((text) => text.messageId), ["a1-answer"]);
+  assert.deepEqual(carried!.worked, [{ fromMs: 5000, toMs: 6000 }]);
+});
+
+test("a reply to a request the user stopped shows, and no turn follows it: the request keeps its state", () => {
+  const thread = [said("a1", 1, "user", "a1"), said("a2", 3, "user", "a2"), fromPeer("r1", 5, "a1", "q1"), said("a2-answer", 6, "assistant", "a2")];
+  const requests = [
+    peerRequest("a1", 1, { state: { type: "stopped" }, endedAtMs: 2000, worked: [{ fromMs: 1000, toMs: 2000 }] }),
+    peerRequest("a2", 3, { state: { type: "working" } }),
+  ];
+  const blocks = buildBlocks(thread, {}, false, peerDigest(requests), []);
+  assert.deepEqual(blocks.map((block) => block.key), ["a1", "a2", "a1~r1"]);
+  assert.equal(blocks[0]!.state, "stopped");
+  assert.equal(blocks[0]!.endedAtMs, 2000);
+  assert.equal(blocks[2]!.state, "done");
+  assert.deepEqual(blocks[2]!.worked, []);
+  // The newer request's answer stays its own: nothing was carried on.
+  assert.deepEqual(blocks[1]!.texts.map((text) => text.messageId), ["a2-answer"]);
+});
+
+test("another session's message steered into a running turn joins it, as the user's would", () => {
+  const thread = [said("d2", 1, "user", "d2"), said("d2-said", 2, "assistant", "d2"), fromPeer("m3", 3, "m3"), said("m3-answer", 4, "assistant", "m3")];
+  const requests = [peerRequest("d2", 1, { state: { type: "working" } }), peerRequest("m3", 3, { steeredInto: "d2", steeredAfter: "d2-said", fromPeer: "api" })];
+  const blocks = buildBlocks(thread, {}, false, peerDigest(requests), []);
+  assert.equal(blocks.length, 1);
+  const [turn] = blocks;
+  assert.deepEqual(turn!.requestIds, ["d2", "m3"]);
+  assert.deepEqual(turn!.steers.map((steer) => [steer.message.id, steer.message.role]), [["m3", "peer"]]);
+  assert.equal(turn!.state, "working");
+});
+
+test("a turn waiting for other sessions' replies names them, a steered one's too", () => {
+  const thread = [said("d1", 1, "user", "d1"), said("d1-said", 2, "assistant", "d1"), said("d3", 3, "user", "d3")];
+  const requests = [
+    peerRequest("d1", 1, { state: { type: "waiting" }, waitingFor: ["api"], worked: [{ fromMs: 1000, toMs: 2000 }] }),
+    peerRequest("d3", 3, { steeredInto: "d1", waitingFor: ["notes", "api"] }),
+  ];
+  const [turn] = buildBlocks(thread, {}, false, peerDigest(requests), []);
+  assert.deepEqual(turn!.waitingFor, ["api", "notes"]);
 });
