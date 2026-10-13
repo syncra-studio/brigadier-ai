@@ -87,15 +87,17 @@ impl CdpClient {
     }
 
     /// Sends `method` once for each of `params`, in order, on the browser's
-    /// own websocket (the `webSocketDebuggerUrl` `/json/version` gives), and
-    /// returns each `result`. Stops at the first error. The whole exchange
-    /// is bounded to a few seconds.
+    /// own websocket (the `webSocketDebuggerUrl` `/json/version` gives).
+    /// Returns the `result` of each call that succeeded, in order, and the
+    /// error that stopped the rest, if any: a later failure keeps the
+    /// results before it. The whole exchange is bounded to a few seconds.
     pub async fn call_on_browser(
         port: u16,
         method: &str,
         params: Vec<serde_json::Value>,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
-        tokio::time::timeout(Duration::from_secs(5), async {
+    ) -> (Vec<serde_json::Value>, anyhow::Result<()>) {
+        let mut results = Vec::with_capacity(params.len());
+        let outcome = tokio::time::timeout(Duration::from_secs(5), async {
             let ws_url = Self::browser_websocket_url(port).await?;
             let (ws, _) = tokio_tungstenite::connect_async(ws_url.as_str())
                 .await
@@ -107,7 +109,6 @@ impl CdpClient {
                 current_target_url: None,
                 next_id: 1,
             };
-            let mut results = Vec::with_capacity(params.len());
             for params in params {
                 let response = session.call(method, params).await?;
                 if let Some(error) = response.get("error") {
@@ -115,10 +116,12 @@ impl CdpClient {
                 }
                 results.push(response["result"].clone());
             }
-            Ok(results)
+            Ok(())
         })
         .await
-        .map_err(|_| anyhow::anyhow!("CDP {method} on port {port} timed out after 5s"))?
+        .map_err(|_| anyhow::anyhow!("CDP {method} on port {port} timed out after 5s"))
+        .and_then(|outcome| outcome);
+        (results, outcome)
     }
 }
 
@@ -1196,6 +1199,65 @@ mod tests {
             .is_err());
         server.await.unwrap();
         assert_eq!(accepted.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn calls_on_the_browser_keep_the_results_before_a_failed_one() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let read = socket.read(&mut request).await.unwrap();
+            assert!(String::from_utf8_lossy(&request[..read]).starts_with("GET /json/version "));
+            let body = serde_json::json!({
+                "webSocketDebuggerUrl": format!("ws://127.0.0.1:{port}/devtools/browser/b")
+            })
+            .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(socket).await.unwrap();
+            let mut calls = 0;
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                calls += 1;
+                let request: serde_json::Value = serde_json::from_str(&text).unwrap();
+                let id = request["id"].clone();
+                // The second link fails; nothing after it is asked for.
+                let response = if calls == 2 {
+                    serde_json::json!({ "id": id, "error": { "message": "no window" } })
+                } else {
+                    serde_json::json!({ "id": id, "result": { "targetId": format!("t{calls}") } })
+                };
+                ws.send(Message::Text(response.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+            calls
+        });
+
+        let params = [
+            "https://a.example",
+            "https://b.example",
+            "https://c.example",
+        ]
+        .map(|url| serde_json::json!({ "url": url }))
+        .to_vec();
+        let (results, outcome) =
+            super::CdpClient::call_on_browser(port, "Target.createTarget", params).await;
+        assert_eq!(results, [serde_json::json!({ "targetId": "t1" })]);
+        assert!(outcome.is_err());
+        assert_eq!(server.await.unwrap(), 2);
     }
 }
 

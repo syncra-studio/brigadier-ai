@@ -271,6 +271,9 @@ impl Tool for LaunchAppTool {
             .await
         };
         let link_count = urls.len();
+        let unopened_links: Vec<String> = opened_in_background
+            .map(|opened| urls[link_count - opened.unopened..].to_vec())
+            .unwrap_or_default();
 
         // A launch that hands the app documents, arguments or a new instance
         // gets a second activation when the documents arrive, later than a
@@ -292,8 +295,11 @@ impl Tool for LaunchAppTool {
         let launch_result = tokio::task::spawn_blocking(move || {
             if let Some(opened) = opened_in_background {
                 let pid = opened.pid;
-                let (mut windows, new) =
-                    open_link::wait_for_new_windows(pid, &windows_seen, urls.len());
+                let (mut windows, new) = open_link::wait_for_new_windows(
+                    pid,
+                    &windows_seen,
+                    urls.len() - opened.unopened,
+                );
                 if new == 0 {
                     put_window_first(&mut windows, apps::main_window_id(pid));
                 }
@@ -422,6 +428,8 @@ impl Tool for LaunchAppTool {
                     Some(opened) => {
                         let links = if link_count == 1 {
                             "the link".to_owned()
+                        } else if opened.unopened > 0 {
+                            format!("{} of {link_count} links", link_count - opened.unopened)
                         } else {
                             format!("{link_count} links")
                         };
@@ -440,6 +448,12 @@ impl Tool for LaunchAppTool {
                             .is_some_and(|w| !windows_before.contains(&w.window_id))
                         {
                             s.push_str(" The new window is listed first.");
+                        }
+                        if !unopened_links.is_empty() {
+                            s.push_str(&format!(
+                                " These links did not open: {}; open them with launch_app again.",
+                                unopened_links.join(", ")
+                            ));
                         }
                         s
                     }
@@ -492,6 +506,9 @@ impl Tool for LaunchAppTool {
                         OpenedBy::DevTools(port) => json!({ "by": "debugging_port", "port": port }),
                         OpenedBy::AppleEvents => json!({ "by": "apple_events" }),
                     };
+                    if !unopened_links.is_empty() {
+                        structured["opened_in_background"]["not_opened"] = json!(unopened_links);
+                    }
                 }
                 if !moved_targets.is_empty() {
                     summary.push_str(&format!(

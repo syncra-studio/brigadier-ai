@@ -44,6 +44,8 @@ pub enum OpenedBy {
 pub struct OpenedLinks {
     pub pid: i32,
     pub by: OpenedBy,
+    /// How many links at the end of the list could not be opened.
+    pub unopened: usize,
 }
 
 /// The browser family of `bundle_id`, or `None` when it isn't a web browser
@@ -189,30 +191,42 @@ pub async fn open_in_running_browser(
     // Catch the new window as it opens, also when it lands on another Space.
     crate::offspace::watch(pid);
 
+    // Links the debugging port already opened are never opened again.
+    let mut unopened = urls;
+    let mut opened_over_port = None;
     if let Some(port) = debugging_port(pid, requested_port).await {
         let params = urls.iter().map(|u| background_window_params(u)).collect();
-        match CdpClient::call_on_browser(port, "Target.createTarget", params).await {
-            Ok(_) => {
+        let (opened, outcome) =
+            CdpClient::call_on_browser(port, "Target.createTarget", params).await;
+        match outcome {
+            Ok(()) => {
                 return Some(OpenedLinks {
                     pid,
                     by: OpenedBy::DevTools(port),
+                    unopened: 0,
                 })
             }
             Err(error) => tracing::info!(
                 target: "cu_layer::browser::open_link",
                 pid,
                 port,
+                opened = opened.len(),
                 %error,
                 "opening links over the debugging port failed; trying Apple Events"
             ),
         }
+        if !opened.is_empty() {
+            unopened = &urls[opened.len()..];
+            opened_over_port = Some(port);
+        }
     }
 
-    let script = new_window_script(kind, &app_bundle, urls);
+    let script = new_window_script(kind, &app_bundle, unopened);
     match BrowserJs::run_script_if_allowed(&app_bundle, script).await {
         Ok(_) => Some(OpenedLinks {
             pid,
             by: OpenedBy::AppleEvents,
+            unopened: 0,
         }),
         Err(error) => {
             tracing::info!(
@@ -221,7 +235,13 @@ pub async fn open_in_running_browser(
                 %error,
                 "opening links by Apple Events failed; using LaunchServices"
             );
-            None
+            // Some links are already open: report the rest as not opened
+            // instead of opening every link again.
+            opened_over_port.map(|port| OpenedLinks {
+                pid,
+                by: OpenedBy::DevTools(port),
+                unopened: unopened.len(),
+            })
         }
     }
 }
