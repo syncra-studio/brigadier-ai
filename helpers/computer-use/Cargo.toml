@@ -8,6 +8,8 @@ members = [
     "crates/cursor-overlay",
     "crates/pip-preview",
 ]
+# The vendored upstream crates are their own workspace (upstream/UPSTREAM.md).
+exclude = ["upstream"]
 
 [workspace.package]
 version = "0.8.12"

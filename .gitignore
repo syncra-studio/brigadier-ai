@@ -16,3 +16,6 @@ dist/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# A direct cargo run inside the vendored workspace writes a lock nobody uses
+/helpers/computer-use/upstream/Cargo.lock
