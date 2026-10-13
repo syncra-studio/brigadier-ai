@@ -76,6 +76,8 @@ pub enum BridgeEvent {
     OpenFolderMenu,
     /// Brigadier › Uninstall Brigadier… was chosen.
     UninstallMenu,
+    /// The computer-use menu-bar item's "Computer use settings…" was chosen.
+    OpenComputerUseSettings,
     /// Brigadier › Settings… (⌘,) was chosen: open Settings, or leave it when it is open.
     SettingsMenu,
 }

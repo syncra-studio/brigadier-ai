@@ -424,6 +424,7 @@ impl Bridge {
                 self.emit(BridgeEvent::Search { id, update });
             }
             ServerFrame::ComputerUse { status } => {
+                crate::computer_menu::status_changed(&status);
                 self.emit(BridgeEvent::ComputerUse { status });
             }
             ServerFrame::ComputerUseSetupNeeded => {

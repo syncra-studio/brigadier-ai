@@ -7,6 +7,7 @@ import {
   loadConversation,
   openConversation,
   openOrchestratorLog,
+  openSettings,
   toggleSettings,
 } from "@/state/actions";
 import { applyActivityEvents, loadActivity } from "@/state/activity";
@@ -149,6 +150,9 @@ function onBridgeEvent(message: BridgeEvent) {
       break;
     case "uninstallMenu":
       openUninstall();
+      break;
+    case "openComputerUseSettings":
+      openSettings("computerUse");
       break;
     case "settingsMenu":
       toggleSettings();

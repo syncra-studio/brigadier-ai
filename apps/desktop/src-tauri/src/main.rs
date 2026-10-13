@@ -10,6 +10,7 @@ mod bridge;
 mod browser;
 mod browser_import;
 mod browser_store;
+mod computer_menu;
 mod computer_setup;
 mod documents;
 mod intro;
@@ -651,6 +652,7 @@ fn main() {
                 in_front(app.handle().clone()),
                 open_setup(app.handle().clone()),
             );
+            computer_menu::install(app.handle());
             app.manage(documents::Documents::default());
             app.manage(AppState {
                 bridge,
@@ -749,6 +751,7 @@ fn main() {
             set_running_chats,
             set_key_capture,
             computer_setup::open_privacy_settings,
+            computer_menu::set_computer_menu,
             computer_setup::open_computer_setup,
             computer_setup::computer_setup_subscribe,
             computer_setup::computer_setup_drag,
