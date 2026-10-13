@@ -77,6 +77,7 @@ import { useRowActivity } from "@/state/activity";
 import { openAddProject } from "@/state/addProject";
 import { exportProjectConventions } from "@/state/brain";
 import { useCanStep } from "@/state/history";
+import { unread, useLastOpened } from "@/state/lastOpened";
 import { askDelete, clearPicked, pickClick, pickedIn, prunePicked, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
 
@@ -825,12 +826,26 @@ const ProjectRow = memo(function ProjectRow({
 
 /**
  * At the end of a row, showing a chat's state: a green "Awaiting approval" or "Needs input"
- * pill while it waits for the user, else a spinner while it runs. The row's actions take its
- * place on hover.
+ * pill while it waits for the user, else a spinner while it runs, else a small dot while a
+ * message from another session waits unread. The row's actions take its place on hover.
  */
 function RowStatus({ conversationId }: { conversationId: string }) {
   const { running, awaiting } = useRowActivity(conversationId);
-  if (!running && !awaiting) return null;
+  const seen = useLastOpened((s) => s.at[conversationId]);
+  const peerAtMs = useApp((s) => s.conversations[conversationId]?.peerAtMs);
+  const open = useApp((s) => s.selection.type === "conversation" && s.selection.id === conversationId);
+  if (!running && !awaiting) {
+    if (!unread(peerAtMs, seen, open)) return null;
+    return (
+      <span
+        data-slot="row-status"
+        data-status="unread"
+        role="img"
+        aria-label="New message"
+        className={cn("bg-link size-1.5 shrink-0 rounded-full me-1", hideOnRowHover)}
+      />
+    );
+  }
   if (awaiting) {
     return (
       <span

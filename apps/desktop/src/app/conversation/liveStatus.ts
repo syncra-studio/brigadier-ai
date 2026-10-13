@@ -1,3 +1,4 @@
+import { waitingWords } from "@/app/conversation/activity/peerWords";
 import { isPlumbing } from "@/app/conversation/activity/words";
 import { type BlockState, isFinal } from "@/app/conversation/blocks";
 import { activelyWorking } from "@/app/conversation/taskActivity";
@@ -29,6 +30,8 @@ export type StatusInput = {
   compacting: boolean;
   /** The conversation's messages wait for quota. */
   quotaWait: QuotaWait | null;
+  /** The sessions whose replies the turn rests waiting for, by title. */
+  waitingFor?: readonly string[];
 };
 
 function quotaWords(resetsAtMs: number | null): string {
@@ -104,6 +107,8 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
     const text = busy.length === 1 ? "Waiting for a worker" : `Waiting for ${busy.length} workers`;
     return { head: { text, tone: working ? "busy" : "still" } };
   }
+  // It rests until other sessions reply: "Waiting for API work".
+  if (state === "waiting" && input.waitingFor?.length) return { head: { text: waitingWords(input.waitingFor), tone: "still" } };
   // Waiting with nothing above to show (an overnight run's list): no line. A question in the
   // lead's text waits for nothing; the user is asked on cards.
   if (state === "waiting") return none;

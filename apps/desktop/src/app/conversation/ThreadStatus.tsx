@@ -7,6 +7,8 @@ import type { QuotaWait } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 
+const NONE: readonly string[] = [];
+
 /**
  * The last line of a live turn, one line: what happens right now ("Thinking", "Delegating to a
  * worker"), what waits on the user ("Waiting for your approval"), or how many workers the turn
@@ -19,12 +21,14 @@ export const ThreadStatus: FC<{
   thinkingLive: boolean;
   compacting: boolean;
   quotaWait: QuotaWait | null;
-}> = ({ requestIds, state, thinkingLive, compacting, quotaWait }) => {
+  /** The sessions whose replies it waits for, by title. */
+  waitingFor?: readonly string[];
+}> = ({ requestIds, state, thinkingLive, compacting, quotaWait, waitingFor = NONE }) => {
   // A string, so unrelated board changes and token ticks do not repaint the line.
   const json = useBoard((s) => {
     const board = s.board;
     if (!board) return null;
-    const input: StatusInput = { board, requestIds, state, thinkingLive, compacting, quotaWait };
+    const input: StatusInput = { board, requestIds, state, thinkingLive, compacting, quotaWait, waitingFor };
     return JSON.stringify(threadStatus(input));
   });
   const view = useMemo(() => (json ? (JSON.parse(json) as ThreadStatusView) : null), [json]);

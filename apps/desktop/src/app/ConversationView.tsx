@@ -45,9 +45,12 @@ import {
   type BoardDigest,
   buildThread,
   foldTurns,
+  type PeerOf,
+  peerOf,
   SHOWN_TURNS,
   type ThreadNode,
 } from "@/app/conversation/blocks";
+import { PeerUserMessage } from "@/app/conversation/PeerMessageBlock";
 import {
   type ComposerTarget,
   ComposerTargetContext,
@@ -107,6 +110,8 @@ import {
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
 import { useBoard } from "@/state/board";
+import { markOpened } from "@/state/lastOpened";
+import { landReveal, useReveal } from "@/state/reveal";
 import { CHAT_TAB, openFileTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { placeOf } from "@/state/terminalPlaces";
 import {
@@ -130,6 +135,8 @@ type Custom = {
   rework?: boolean;
   /** What a user message @-mentions, so ↑ recalls its chips. */
   mentions?: Mention[];
+  /** Another session sent it: its block shows in the user message's place. */
+  peer?: PeerOf;
 };
 
 /** An attachment-only message has no text part, so no empty bubble shows above its files. */
@@ -166,6 +173,7 @@ function convertMessage(item: Item): ThreadMessageLike {
       };
     }
     const message = user?.message;
+    const peer = message && user?.kind === "peer" ? peerOf(message, user.earlier) : undefined;
     return {
       id: item.id,
       role: "user",
@@ -176,6 +184,7 @@ function convertMessage(item: Item): ThreadMessageLike {
           attachments: message?.attachments ?? [],
           rework: item.rework,
           mentions: message?.mentions ?? [],
+          ...(peer && { peer }),
         } satisfies Custom,
       },
     };
@@ -228,6 +237,7 @@ function signature(
     block.compactions,
     block.steers.map((steer) => [steer.message.id, steer.text]),
     block.requestIds,
+    block.waitingFor,
     picked,
     session,
   ]);
@@ -294,12 +304,16 @@ function useItems(
           orchestratorSteps: block.orchestratorSteps,
           thinking: block.thinking,
           compactions: block.compactions,
-          steers: block.steers.map((steer) => ({
-            position: steer.position,
-            text: steer.text,
-            atMs: steer.message.createdAtMs,
-            attachments: steer.message.attachments,
-          })),
+          steers: block.steers.map((steer) => {
+            const peer = peerOf(steer.message);
+            return {
+              position: steer.position,
+              text: steer.text,
+              atMs: steer.message.createdAtMs,
+              attachments: steer.message.attachments,
+              ...(peer && { peer }),
+            };
+          }),
           state: block.state,
           startedAtMs: block.startedAtMs,
           endedAtMs: block.endedAtMs,
@@ -311,6 +325,7 @@ function useItems(
           rework,
           requestId: block.key,
           requestIds: block.requestIds,
+          waitingFor: block.waitingFor,
           answerId,
           forkId,
         };
@@ -438,6 +453,7 @@ export function ConversationView({
             compactions: s.board.compactions,
             runRequest: s.board.runRequest,
             streaming: s.board.streaming,
+            peerMessages: s.board.peerMessages,
             head: s.board.head,
           }
         : null,
@@ -498,6 +514,19 @@ export function ConversationView({
     }),
     [folded.hidden, conversationId],
   );
+  // Open, its messages from other sessions are read: the sidebar's dot clears, and stays clear.
+  const peerAtMs = conversation?.peerAtMs ?? 0;
+  useEffect(() => {
+    if (!embedded && conversationId) markOpened(conversationId, Math.max(Date.now(), peerAtMs));
+  }, [embedded, conversationId, peerAtMs]);
+  // A jump to a message between sessions here: the earlier turns unfold, and it lands once shown.
+  const reveal = useReveal((s) => (!embedded && s.reveal?.conversationId === conversationId ? s.reveal : null));
+  const showEarlier = earlier.show;
+  useEffect(() => {
+    if (!reveal) return;
+    showEarlier();
+    return landReveal(reveal.messageId, reveal.nonce);
+  }, [reveal, showEarlier]);
   const setup = conversation?.setup;
   const picked =
     setup?.type === "chat" ? setup.model : setup?.type === "session" ? setup.orchestrator : null;
@@ -1071,4 +1100,5 @@ const THREAD_COMPONENTS: ThreadComponents = {
   Capsule: ComposerCapsule,
   Composer: ConversationComposer,
   UserText: UserMessageText,
+  PeerMessage: PeerUserMessage,
 };

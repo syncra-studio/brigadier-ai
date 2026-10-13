@@ -160,6 +160,10 @@ function leadWork(step: BlockOrchestratorStep): "work" | "hidden" | "apart" {
       return kind.name.startsWith("Diff of") ? "hidden" : "work";
     case "readReport":
       return "hidden";
+    // A message to another session is a row of the work, its refusal too.
+    case "peerSent":
+    case "messageRefused":
+      return "work";
     default:
       return "apart";
   }

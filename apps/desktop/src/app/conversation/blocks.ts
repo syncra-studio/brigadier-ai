@@ -131,6 +131,19 @@ export type BlockSteer = {
  */
 export type PeerAnchor = { kind: "peer"; message: Message; text: string; earlier: boolean };
 
+/**
+ * Where a message from another session came from, as its block shows it: who sent it, and
+ * whether it answers one of this session's ("Reply from ‹title›"), an earlier request's
+ * included ("· to your earlier message").
+ */
+export type PeerOf = { messageId: string; from: string; reply: boolean; earlier: boolean };
+
+/** A transcript message's sender, when another session sent it. */
+export function peerOf(message: Message, earlier = false): PeerOf | undefined {
+  if (message.role !== "peer" || !message.peer) return undefined;
+  return { messageId: message.id, from: message.peer.from, reply: message.peer.replyTo !== undefined, earlier };
+}
+
 /** The message a block's request started with: the user's, or another session's. */
 export function anchorMessage(block: Pick<Block, "user">): Message | null {
   return block.user?.kind === "message" || block.user?.kind === "peer" ? block.user.message : null;
@@ -869,7 +882,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
 export type SequenceSource = {
   texts: readonly { position: number }[];
   cards: readonly BlockCard[];
-  steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[] }[];
+  steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; peer?: PeerOf }[];
   compactions: readonly BlockCompaction[];
   orchestratorSteps: readonly BlockOrchestratorStep[];
   thinking?: readonly ThinkingSegment[];
@@ -882,7 +895,7 @@ export type SequenceEntry =
   | { kind: "thinking"; segment: ThinkingSegment; live: boolean; position: number }
   | { kind: "text"; index: number; position: number }
   | { kind: "card"; card: BlockCard; position: number }
-  | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number }
+  | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number; peer?: PeerOf }
   | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
   | { kind: "compaction"; compaction: BlockCompaction; position: number }
   | { kind: "row"; row: BlockRow; position: number };

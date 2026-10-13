@@ -95,6 +95,7 @@
  *                                             and most, its composer
  *               max-w-new-tab-tools           the New tab page's tool grid (--container-new-tab-tools)
  *               max-h-user-message            a long user message, clipped (about 15 lines)
+ *               max-h-peer-message            a message between sessions, folded (six lines)
  *               max-w-thread, max-w-{2xs,xs,sm,md,lg} readable column / surface widths
  *               max-w-settings                the Settings page's column
  *               max-w-settings-wide           data pages (Routing, Usage, Storage, Providers,
@@ -400,6 +401,7 @@
   --spacing-setup-card: 13rem;
   --spacing-agent-mark: 4.5rem;
   --spacing-user-message: 22.5rem;
+  --spacing-peer-message: 6lh;
   /* Placeholder height for off-screen messages skipped by content-visibility. */
 
   --container-2xs: 14rem;

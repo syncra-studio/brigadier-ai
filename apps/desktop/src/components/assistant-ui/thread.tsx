@@ -58,6 +58,8 @@ export type ThreadComponents = {
   MessageFooter?: ComponentType | undefined;
   UserAttachments?: ComponentType | undefined;
   AboveComposer?: ComponentType | undefined;
+  /** A message another session sent, in the user message's place (its `custom.peer` is set). */
+  PeerMessage?: ComponentType | undefined;
   /** A user message's text, where the app shows what it mentions. */
   UserText?: ComponentType<TextMessagePartProps> | undefined;
   /** Floats centred just above the composer, over the thread (the capsule). */
@@ -638,6 +640,21 @@ const AssistantActionBar: FC = () => {
 
 const UserMessage: FC = () => {
   const id = useAuiState((s) => s.message.id);
+  const { PeerMessage } = useContext(ThreadComponentsContext);
+  const peer = useAuiState((s) => s.message.metadata.custom["peer"] !== undefined);
+  if (peer && PeerMessage) {
+    return (
+      <MessagePrimitive.Root
+        data-slot="aui_user-message-root"
+        data-message-id={id}
+        className="scroll-mt-thread-turn flex flex-col items-end gap-y-1 px-2"
+        data-role="user"
+      >
+        <DaySeparator />
+        <PeerMessage />
+      </MessagePrimitive.Root>
+    );
+  }
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"

@@ -1,5 +1,5 @@
 import { ChevronRight, Globe } from "@openai/apps-sdk-ui/components/Icon";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 
 import type { GroupItem, Thought as ThoughtItem } from "@/app/conversation/activity/group";
 import { labelParts, stepLabel, type StepWords, summarize } from "@/app/conversation/activity/words";
@@ -70,14 +70,24 @@ export function StepRow({ words, status, exit = null, detail, suffix, slot }: De
  * ("Reading blocks.ts"). Opened, it lists each step and the thinking between them. A group of one
  * step with no thinking is that step's own row.
  */
-export function ActivityGroup<S>({ items, live, describe, renderStep }: {
+export function ActivityGroup<S>({ items, live, describe, renderStep, reveal }: {
   items: readonly GroupItem<S>[];
   /** It is the live turn's last group: it says what happens now. */
   live: boolean;
   describe: (step: S) => Described;
   renderStep: (step: S, key: string) => ReactNode;
+  /** The step a jump asks to show, if it is one of these: the group opens to it. */
+  reveal?: ((step: S) => boolean) | undefined;
 }) {
   const steps = items.flatMap((item) => (item.type === "step" ? [item] : []));
+  const [open, setOpen] = useState(false);
+  // A jump to one of its steps opens it, once per jump.
+  const holds = !!reveal && steps.some((item) => reveal(item.step));
+  const [revealed, setRevealed] = useState(false);
+  if (holds !== revealed) {
+    setRevealed(holds);
+    if (holds) setOpen(true);
+  }
   const [only] = steps;
   if (only && steps.length === 1 && items.length === 1) return <>{renderStep(only.step, only.key)}</>;
   // A turn with thinking and no work at all: its thoughts are its rows.
@@ -91,7 +101,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep }: {
   // It says the step running now: like that step's own row, no chevron until it is open.
   const running = live && current?.status === "inProgress";
   return (
-    <Collapsible data-slot="work-group">
+    <Collapsible data-slot="work-group" open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
         {head && <StepIcon words={head.words} />}
         {/* A live group's step changes in place: its words cross-fade, with no jump. */}

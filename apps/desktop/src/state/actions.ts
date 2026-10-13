@@ -32,10 +32,12 @@ import type {
   UnlandedBranch,
 } from "@/ipc/generated";
 import { savePinnedSummary } from "@/lib/pinnedSummary";
+import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
 import { setSetting } from "@/state/settings";
 import {
   boardFromView,
+  type Board,
   boardOf,
   collectBoardEvents,
   emptyBoard,
@@ -284,10 +286,89 @@ export function stepHistory(delta: -1 | 1): void {
   select(target, "none");
 }
 
-export function openConversation(id: string): void {
+/** Where `openConversation` lands: a message between sessions, by its id (its row or its block). */
+export type OpenAt = { message: string };
+
+/**
+ * Shows a conversation; `at` a message between sessions, the thread loads the page that holds
+ * it, unfolds what folds it, scrolls it to the centre and flashes it once
+ * (SESSION-MESSAGING-PLAN.md §6.3).
+ */
+export function openConversation(id: string, options: { at?: OpenAt } = {}): void {
   const conversation = useApp.getState().conversations[id];
   if (conversation?.projectId) setProjectExpanded(conversation.projectId, true);
-  select({ type: "conversation", id });
+  const shown = useApp.getState().selection;
+  // A jump within the open conversation stays where it is: only the thread moves.
+  if (!options.at || shown.type !== "conversation" || shown.id !== id) select({ type: "conversation", id });
+  if (options.at) {
+    void revealMessage(id, options.at.message).catch((error: unknown) => console.error("showing the message failed", error));
+  }
+}
+
+/** How many older pages a jump reads at most before it shows what it has. */
+const REVEAL_PAGES = 50;
+
+/** Resolves once `ready` holds, checked as the app's stores change; false after `withinMs`. */
+function storesReach(ready: () => boolean, withinMs: number): Promise<boolean> {
+  if (ready()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const stop = () => {
+      unsubscribeApp();
+      unsubscribeBoard();
+      clearTimeout(timer);
+    };
+    const check = () => {
+      if (!ready()) return;
+      stop();
+      resolve(true);
+    };
+    const unsubscribeApp = useApp.subscribe(check);
+    const unsubscribeBoard = useBoard.subscribe(check);
+    const timer = setTimeout(() => {
+      stop();
+      resolve(ready());
+    }, withinMs);
+  });
+}
+
+/**
+ * The messages a thread must hold for `messageId` to show: a received one itself, and the
+ * message of each request its block stands for, up the turns it was steered into; and its
+ * place in the stream, which a loaded page must reach.
+ */
+function revealNeeds(board: Board, messageId: string): { ids: string[]; position: number | null } {
+  const record = board.peerMessages[messageId];
+  const ids = record?.outgoing ? [] : [messageId];
+  let asked = record?.requestId ?? null;
+  for (let hops = 0; asked && hops < 100 && !ids.includes(asked); hops += 1) {
+    // A run's turns are no message of the thread.
+    if (!asked.startsWith("run-")) ids.push(asked);
+    asked = board.requests[asked]?.steeredInto ?? null;
+  }
+  return { ids, position: record?.position ?? null };
+}
+
+/** Loads what `messageId` needs into `id`'s thread, then asks the thread to show it. */
+async function revealMessage(id: string, messageId: string): Promise<void> {
+  const loaded = () => {
+    const board = useBoard.getState().board;
+    const thread = useApp.getState().threads[id];
+    return board?.conversationId === id && board.loaded && !!thread && !thread.loading;
+  };
+  if (!(await storesReach(loaded, 10_000))) return;
+  for (let page = 0; page < REVEAL_PAGES; page += 1) {
+    const board = useBoard.getState().board;
+    const thread = useApp.getState().threads[id];
+    if (!board || board.conversationId !== id || !thread) return;
+    const { ids, position } = revealNeeds(board, messageId);
+    const held = new Set(thread.items.map((message) => message.id));
+    const oldest = thread.items[0]?.seq ?? Number.POSITIVE_INFINITY;
+    const missing = ids.some((need) => !held.has(need)) || (position !== null && oldest > position);
+    if (!missing || !thread.hasMore) break;
+    await loadEarlier(id);
+    if (!(await storesReach(() => !useApp.getState().threads[id]?.loading, 10_000))) return;
+  }
+  startReveal(id, messageId);
 }
 
 export function setProjectExpanded(id: string, expanded: boolean): void {

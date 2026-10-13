@@ -1,6 +1,6 @@
 import type { Described } from "@/app/conversation/activity/ActivityGroup";
 import type { StepWords } from "@/app/conversation/activity/words";
-import type { PeerMessage, PeerState } from "@/ipc/generated";
+import type { Conversation, PeerMessage, PeerState, Project } from "@/ipc/generated";
 
 /**
  * How messages between sessions read in the thread (SESSION-MESSAGING-PLAN.md §6): the sender's
@@ -112,4 +112,20 @@ export function waitingWords(names: readonly string[]): string {
 /** The reply that answers `message`, if one came: an incoming record naming it. */
 export function replyOf(message: PeerMessage, records: Readonly<Record<string, PeerMessage>>): PeerMessage | null {
   return Object.values(records).find((record) => !record.outgoing && record.replyTo === message.messageId) ?? null;
+}
+
+/**
+ * Another session as this one names it: its title, and its project when that isn't `here`'s;
+ * null once the app no longer has it (deleted).
+ */
+export function peerNameOf(
+  conversations: Readonly<Record<string, Conversation>>,
+  projects: Readonly<Record<string, Project>>,
+  id: string | undefined,
+  here: string | null,
+): PeerName | null {
+  const conversation = id === undefined ? undefined : conversations[id];
+  if (!conversation) return null;
+  const project = conversation.projectId && conversation.projectId !== here ? projects[conversation.projectId] : undefined;
+  return { title: conversation.title, project: project?.name ?? null };
 }

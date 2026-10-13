@@ -15,7 +15,7 @@ import {
   Stop,
   TextShorterConcise,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { type ComponentProps, type ComponentType, type FC, lazy, Suspense, useEffect, useState } from "react";
+import { type ComponentProps, type ComponentType, type FC, Fragment, lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { ThinkingRow } from "@/app/conversation/ThinkingRow";
@@ -27,7 +27,10 @@ import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { type Activity, type LeadStep, turnActivity } from "@/app/conversation/activity/group";
 import { deniedCall } from "@/app/conversation/activity/words";
+import { waitingWords } from "@/app/conversation/activity/peerWords";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
+import { describePeerStep, peerStepRow, usePeerLookup } from "@/app/conversation/activity/PeerRow";
+import { PeerMessageBlock } from "@/app/conversation/PeerMessageBlock";
 import { CHEVRON, ROW, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
 import {
   type BlockCard,
@@ -35,6 +38,7 @@ import {
   type BlockOrchestratorStep,
   type BlockRow,
   type BlockState,
+  type PeerOf,
   answerIndex,
   blockFinished,
   endsWithPlan,
@@ -75,6 +79,7 @@ import { cn } from "@/lib/utils";
 import { openConversation, send } from "@/state/actions";
 import { readAloud, stopReading, useReading } from "@/state/readAloud";
 import { useBoard } from "@/state/board";
+import { useRevealing } from "@/state/reveal";
 import { useApp } from "@/state/store";
 
 /**
@@ -100,7 +105,7 @@ export type BlockMeta = {
   orchestratorSteps: BlockOrchestratorStep[];
   thinking?: ThinkingSegment[];
   /** Messages the user steered into the turn, shown as bubbles in the work. */
-  steers: { position: number; text: string; atMs: number; attachments: AttachmentRef[] }[];
+  steers: { position: number; text: string; atMs: number; attachments: AttachmentRef[]; peer?: PeerOf }[];
   /** Compactions of a Chat's context in the turn, or after it. */
   compactions: BlockCompaction[];
   state: BlockState;
@@ -120,6 +125,8 @@ export type BlockMeta = {
   rework: boolean;
   /** The request this block answers (the id of its user message). */
   requestId: string;
+  /** The sessions whose replies it rests waiting for. */
+  waitingFor: string[];
   /** It and the requests steered into it. */
   requestIds: string[];
   /** The message the user rates: the block's answer, not an update line under it. */
@@ -145,14 +152,15 @@ function useElapsed(from: number, to: number | null, live: boolean): number {
   return Math.max(0, (live || to === null ? now : to) - from);
 }
 
-function headerLabel(state: BlockState, elapsed: number, quota = false): string {
+function headerLabel(state: BlockState, elapsed: number, quota = false, waitingFor: readonly string[] = []): string {
   const time = formatDuration(elapsed);
   switch (state) {
     case "working":
       if (quota) return `Waiting for quota · ${time}`;
       return elapsed < 1000 ? "Working" : `Working for ${time}`;
     case "waiting":
-      return quota ? `Waiting for quota · ${time}` : `Waiting for you · ${time}`;
+      if (quota) return `Waiting for quota · ${time}`;
+      return waitingFor.length > 0 ? `${waitingWords(waitingFor)} · ${time}` : `Waiting for you · ${time}`;
     case "done":
       return `Worked for ${time}`;
     case "stopped":
@@ -188,14 +196,16 @@ const WorkHeader: FC<{
   foldable: boolean;
   /** Its messages wait for quota, and no worker of it runs meanwhile. */
   quota: boolean;
+  /** The sessions whose replies it waits for, by title. */
+  waitingFor: readonly string[];
   onToggle: () => void;
-}> = ({ meta, phase, open, foldable, quota, onToggle }) => {
+}> = ({ meta, phase, open, foldable, quota, waitingFor, onToggle }) => {
   const phaseElapsed = useElapsed(phase?.startedAtMs ?? 0, phase?.endedAtMs ?? null, !!phase && !phase.settled);
   const now = useTicking(!phase && isLive(meta.state));
   const elapsed = phase ? phaseElapsed : turnTime(meta, now);
   // Waiting on its own question card, the turn still works: the card says it waits.
   const state = waitsOnCard(meta) ? "working" : meta.state;
-  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota || meta.quotaWait);
+  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota || meta.quotaWait, waitingFor);
   const text = (
     <span
       data-slot="request-work-label"
@@ -317,6 +327,8 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, stream
     case "card":
       return <CardEntry card={entry.card} />;
     case "steer":
+      // Another session's message steered in, or a reply into its request's turn.
+      if (entry.peer) return <PeerMessageBlock peer={entry.peer} text={entry.text} atMs={entry.atMs} />;
       return <SteerBubble text={entry.text} atMs={entry.atMs} attachments={entry.attachments} />;
     case "orchestrator":
       return <>{entry.steps.map((step) => <ThreadStep key={step.position} step={step} />)}</>;
@@ -409,6 +421,10 @@ const ActivityItems: FC<{
 }> = ({ activity, live, streaming, requestIds }) => {
   const tasks = useBoard((s) => s.board?.tasks);
   const approvals = useBoard((s) => s.board?.approvals);
+  const revealing = useRevealing(useViewConversation()?.id ?? null);
+  const peers = usePeerLookup(
+    activity.flatMap((item) => (item.type === "group" ? item.items.flatMap((step) => (step.type === "step" ? [step.step] : [])) : [])),
+  );
   // A call the user's Deny stopped reads as declined, not failed.
   const shown = (step: LeadStep): LeadStep =>
     approvals && step.kind.type === "tool" && deniedCall(step.kind, step.atMs, requestIds, Object.values(approvals))
@@ -422,8 +438,9 @@ const ActivityItems: FC<{
             key={`group:${item.key}`}
             items={item.items}
             live={live && index === activity.length - 1}
-            describe={(step) => describeLeadStep(shown(step), tasks)}
-            renderStep={(step, key) => <LeadStepRow key={key} step={shown(step)} />}
+            describe={(step) => describePeerStep(step, peers) ?? describeLeadStep(shown(step), tasks)}
+            renderStep={(step, key) => <Fragment key={key}>{peerStepRow(step) ?? <LeadStepRow step={shown(step)} />}</Fragment>}
+            reveal={revealing ? (step) => step.kind.type === "peerSent" && step.kind.messageId === revealing : undefined}
           />
         ) : (
           <SequenceEntry key={entryKey(item.entry)} entry={item.entry} streaming={streaming(item.entry)} />
@@ -484,6 +501,13 @@ const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
 export const RequestBlock: FC = () => {
   const meta = useAuiState((s) => s.message.metadata.custom["block"]) as BlockMeta | undefined;
   const fold = useFold();
+  // A jump to a message this turn sent opens its work.
+  const revealing = useRevealing(useViewConversation()?.id ?? null);
+  const holds = !!revealing && !!meta?.orchestratorSteps.some((step) => step.kind.type === "peerSent" && step.kind.messageId === revealing);
+  const { show } = fold;
+  useEffect(() => {
+    if (holds) show();
+  }, [holds, show]);
   const quotaWait = useViewConversation()?.quotaWait ?? null;
   const requestIds = meta?.requestIds;
   const phase = useBoard(
@@ -499,6 +523,8 @@ export const RequestBlock: FC = () => {
     const id = meta?.answerId;
     return !!id && Object.values(s.board?.overnight ?? {}).some((run) => run.reportMessageId === id);
   });
+  // The sessions it waits for, by title (one deleted meanwhile is no longer waited for).
+  const waitingFor = useApp(useShallow((s) => (meta?.waitingFor ?? []).flatMap((id) => s.conversations[id]?.title ?? [])));
   // Its cards load before its work can open, so they are there the moment it does.
   const hasCards = (meta?.cards.length ?? 0) > 0;
   useEffect(() => {
@@ -548,6 +574,7 @@ export const RequestBlock: FC = () => {
             open={fold.open}
             foldable={foldable}
             quota={quotaWait !== null && meta.state === "working" && !workersActive}
+            waitingFor={waitingFor}
             onToggle={fold.toggle}
           />
         )}
@@ -581,6 +608,7 @@ export const RequestBlock: FC = () => {
                       thinkingLive={sequence.some((entry) => entry.kind === "thinking" && entry.live)}
                       compacting={meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running")}
                       quotaWait={quotaWait}
+                      waitingFor={waitingFor}
                     />
                   </>
                 )}
@@ -650,7 +678,8 @@ export const RequestBlock: FC = () => {
  */
 function useFold() {
   const [open, setOpen] = useState(false);
-  return { open, toggle: () => setOpen(!open) };
+  const show = useCallback(() => setOpen(true), []);
+  return { open, toggle: () => setOpen(!open), show };
 }
 
 /** A turn's work cut at the user's follow-ups: runs of work, and the steered bubbles between them. */
