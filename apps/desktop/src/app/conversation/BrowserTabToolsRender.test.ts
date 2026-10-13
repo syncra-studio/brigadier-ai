@@ -3,6 +3,9 @@ import { test } from "node:test";
 
 import { renderFixtureLive } from "@/fixtures/headless";
 
+/** A suggestion row as the fixture reads it. */
+const row = (kind: string, text: string, selected = false) => ({ kind, text, selected });
+
 // The Browser tab in Chromium over a faked shell: the address field's suggestions (search the
 // web, switch to tab, history with remove, the arrow keys, Esc), the page's question for the
 // camera and microphone (above the live page, each answer once), and the Downloads popover.
@@ -13,7 +16,6 @@ test("browser tab tools: address suggestions, the page's question for the camera
   // Typing "docs": search the web first, the session's other tab whose page matches, then the
   // history's matching pages but the one that tab shows; as wide as the address, which keeps the
   // keyboard.
-  const row = (kind: string, text: string, selected = false) => ({ kind, text, selected });
   assert.deepEqual(seen.typed, {
     rows: [
       row("go", "Search the web for “docs”"),
