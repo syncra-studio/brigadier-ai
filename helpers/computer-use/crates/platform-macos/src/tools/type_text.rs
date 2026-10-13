@@ -78,8 +78,7 @@ fn def() -> &'static ToolDef {
              element_index) to pixel-click the field then type, in one call. NOTE: \
              a px focus-click won't reliably open+focus a CLOSED control; AX-press \
              to open/activate it first (works in the background), then px-type. \
-             Always confirm via the screenshot; if px-background still drops, \
-             escalate to delivery_mode:\"foreground\"."
+             Always confirm via the screenshot."
             .into(),
         input_schema: serde_json::json!({
             "type": "object",
@@ -111,7 +110,7 @@ fn def() -> &'static ToolDef {
                 "delivery_mode": {
                     "type": "string",
                     "enum": ["background", "foreground"],
-                    "description": "Best-effort-background ladder rung (default \"background\"). \"background\": AX insert, then CGEvent keystrokes if needed — no focus steal; the driver verifies via an AXValue read-back and reports `verified`. \"foreground\": briefly front the window, type, restore the prior frontmost — the explicit last resort for focus-sensitive surfaces (e.g. WhatsApp/Catalyst) where background keystrokes don't land. Re-call with \"foreground\" when a background attempt returns `verified:false` and a screenshot shows the text didn't appear."
+                    "description": "Best-effort-background ladder rung (default \"background\"). \"background\": AX insert, then CGEvent keystrokes if needed — no focus steal; the driver verifies via an AXValue read-back and reports `verified`. \"foreground\" is refused: bringing the app to the front would interrupt the user."
                 }
             },
             "additionalProperties": false
@@ -351,8 +350,8 @@ impl Tool for TypeTextTool {
                 } else {
                     (
                         "📨 Sent (unverified)",
-                        " — driver could not confirm the text landed; verify via screenshot, \
-                      and re-call with delivery_mode:\"foreground\" if it didn't."
+                        " — driver could not confirm the text landed; check with get_window_state \
+                      or a screenshot before typing again."
                             .to_string(),
                     )
                 };
@@ -407,10 +406,10 @@ impl Tool for TypeTextTool {
                         });
                     } else if !verified && path != PATH_KEY_EVENTS_FG {
                         s["escalation"] = serde_json::json!({
-                            "recommended": "foreground",
+                            "recommended": "verify",
                             "reason": "background insert could not be confirmed — \
-                                       re-call with delivery_mode:\"foreground\" if a \
-                                       screenshot shows the text didn't land."
+                                       check with get_window_state or a screenshot \
+                                       before typing again."
                         });
                     }
                     s

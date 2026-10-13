@@ -67,7 +67,7 @@ fn def() -> &'static ToolDef {
                 "y": { "type": "number", "description": "Screenshot-pixel Y (see x)." },
                 "window_id": {
                     "type": "integer",
-                    "description": "Target window. Required for delivery_mode:\"foreground\" (the NSMenu activation needs a window). Does NOT itself raise the window — raising is gated on delivery_mode."
+                    "description": "Target window. Keys go to this window without raising it."
                 },
                 "delivery_mode": cu_core::tool_schema::delivery_mode_schema()
             },
@@ -309,11 +309,11 @@ impl Tool for HotkeyTool {
                 });
                 if !fg && window_id.is_some() {
                     structured["escalation"] = serde_json::json!({
-                        "recommended": "foreground",
-                        "reason": "a background combo didn't land? menu key-equivalents \
-                                   often need the window fronted — re-call with \
-                                   delivery_mode:\"foreground\". (To type into a field, \
-                                   pixel-click to focus then type_text instead.)"
+                        "recommended": "menu_item",
+                        "reason": "a background combo didn't land? click the app's menu bar \
+                                   item for it instead (get_window_state lists them). \
+                                   (To type into a field, pixel-click to focus then \
+                                   type_text instead.)"
                     });
                 }
                 ToolResult::text(format!(

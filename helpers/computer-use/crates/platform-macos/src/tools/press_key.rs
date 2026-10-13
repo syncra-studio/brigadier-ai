@@ -54,7 +54,7 @@ fn def() -> &'static ToolDef {
                     "items": { "type": "string" },
                     "description": "Modifier keys: cmd, shift, option/alt, ctrl, fn."
                 },
-                "window_id": { "type": "integer", "description": "Target window. Required for delivery_mode:\"foreground\". Does NOT itself raise the window — raising is gated on delivery_mode." },
+                "window_id": { "type": "integer", "description": "Target window. Keys go to this window without raising it." },
                 "element_index": { "type": "integer" },
                 "element_token": { "type": "string", "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. Takes precedence over element_index when both supplied. Returns an explicit \"stale\" error if the snapshot has been superseded." },
                 "x": { "type": "number", "description": "Screenshot-pixel X — the element px action form: pixel-click there to focus, then send the key. Use when the key must go to a Chromium/Electron surface the AX path can't focus. Pass with y, no element_index." },
@@ -275,10 +275,11 @@ impl Tool for PressKeyTool {
                 });
                 if !fg && window_id.is_some() && element_index.is_none() {
                     structured["escalation"] = serde_json::json!({
-                        "recommended": "foreground",
-                        "reason": "a background menu key didn't land? re-call with \
-                                   delivery_mode:\"foreground\". (To type into a field, \
-                                   pixel-click to focus then type_text.)"
+                        "recommended": "menu_item",
+                        "reason": "a background menu key didn't land? click the app's \
+                                   menu bar item for it instead (get_window_state lists \
+                                   them). (To type into a field, pixel-click to focus then \
+                                   type_text.)"
                     });
                 }
                 ToolResult::text(format!(

@@ -651,6 +651,11 @@ impl ToolRegistry {
             return ToolResult::error(format!("Unknown tool: {name}"));
         };
 
+        // Bringing an app to the front would interrupt the person at the Mac.
+        if let Some(refusal) = refuse_foreground(&args) {
+            return refusal;
+        }
+
         // Target guard: a refused target is side-effect free (no recording
         // turn, no fronting, no dispatch).
         if let Some(hook) = self.target_policy_hook {
@@ -818,6 +823,21 @@ impl ToolRegistry {
 
         result
     }
+}
+
+/// What an agent is told when it asks for `delivery_mode: "foreground"`.
+pub const FOREGROUND_REFUSED: &str = "Not done: this needs the app in front, which would \
+    interrupt the user. Find a way that works with the app in the background (another element, \
+    set_value, the app's menu bar items, or the page tool in a browser), or tell the user what \
+    they need to do themselves.";
+
+/// A call asking to bring the target app to the front is refused, side-effect
+/// free, before it reaches the tool.
+fn refuse_foreground(args: &Value) -> Option<ToolResult> {
+    args.get("delivery_mode")
+        .and_then(Value::as_str)
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("foreground"))
+        .then(|| ToolResult::error(FOREGROUND_REFUSED))
 }
 
 /// Shared watchable-action boundary: validate first, then front exactly once.
@@ -1252,6 +1272,35 @@ mod capability_tests {
         async fn invoke(&self, _args: Value) -> ToolResult {
             ToolResult::text("ok")
         }
+    }
+
+    #[tokio::test]
+    async fn asking_for_the_app_in_front_is_refused_before_the_tool_runs() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(SuccessfulTargetTool {
+            def: dummy_def("click"),
+        }));
+        for mode in ["foreground", "Foreground"] {
+            let result = registry
+                .invoke(
+                    "click",
+                    serde_json::json!({"pid": 42, "x": 1, "y": 2, "delivery_mode": mode}),
+                )
+                .await;
+            assert!(result.is_error.unwrap_or(false), "{mode} must be refused");
+            let text = match &result.content[0] {
+                crate::protocol::Content::Text { text, .. } => text.clone(),
+                _ => String::new(),
+            };
+            assert!(text.contains("interrupt the user"), "{text}");
+        }
+        let result = registry
+            .invoke(
+                "click",
+                serde_json::json!({"pid": 42, "x": 1, "y": 2, "delivery_mode": "background"}),
+            )
+            .await;
+        assert!(!result.is_error.unwrap_or(false));
     }
 
     #[tokio::test]

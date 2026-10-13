@@ -283,7 +283,7 @@ pub(crate) fn pixel_obstruction_error(
             "occluding_window_title": occluder.title,
             "screen_point": { "x": screen_x, "y": screen_y },
             "point": point_name,
-            "hint": "retry with delivery_mode:\"foreground\" or clear the obstruction"
+            "hint": "click it by element_index instead (works under other windows), or wait until the window on top moves"
         })),
     )
 }

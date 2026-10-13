@@ -117,7 +117,7 @@ fn def() -> &'static ToolDef {
                 "delivery_mode": {
                     "type": "string",
                     "enum": ["background", "foreground"],
-                    "description": "Best-effort-background ladder rung (default \"background\"). \"background\": perform the AX action or post the CGEvent without fronting; pixel dispatch with pid+window_id fails with structured error=\"obstructed\", code=\"background_occluded\" when a different visible window owns the screen point. \"foreground\": briefly front the window, act, let transient UI settle, then restore the prior frontmost app; foreground skips the obstruction check because fronting resolves Z order. Requires window_id. A click that is dispatched remains verified:false — confirm its effect via get_window_state."
+                    "description": "Best-effort-background ladder rung (default \"background\"). \"background\": perform the AX action or post the CGEvent without fronting; pixel dispatch with pid+window_id fails with structured error=\"obstructed\", code=\"background_occluded\" when a different visible window owns the screen point. \"foreground\" is refused: bringing the app to the front would interrupt the user. A click that is dispatched remains verified:false — confirm its effect via get_window_state."
                 },
                 "scope": {
                     "type": "string",
@@ -1046,8 +1046,8 @@ fn dimmed_menu_item(
             "[{idx}] AXMenuItem \"{title}\" is dimmed in the app's menu right now, so pressing \
              it would do nothing and it was not pressed. Apps dim a command that doesn't apply \
              at the moment, often while the app is in the background or nothing it acts on is \
-             selected. Select what it should act on first, or press it with delivery_mode \
-             \"foreground\"."
+             selected. Select what it should act on first, or use another way that works with the app in \
+             the background; if there is none, tell the user what they need to do."
         ),
     })
 }

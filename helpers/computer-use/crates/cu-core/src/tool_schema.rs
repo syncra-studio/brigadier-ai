@@ -45,11 +45,9 @@ pub fn delivery_mode_schema_with(description: &str) -> Value {
 /// `delivery_mode` with the generic, tool-agnostic blurb.
 pub fn delivery_mode_schema() -> Value {
     delivery_mode_schema_with(
-        "Best-effort-background ladder rung (default \"background\"). \
-         \"background\": inject without fronting or raising the target — no focus \
-         steal. \"foreground\": briefly front the target, act, then restore the \
-         prior frontmost — the explicit last resort when a background attempt \
-         didn't land. Re-call with \"foreground\" only for the action that needs it.",
+        "Leave out or \"background\": the action is delivered without fronting or \
+         raising the target. \"foreground\" is refused: bringing the app to the front \
+         would interrupt the user.",
     )
 }
 

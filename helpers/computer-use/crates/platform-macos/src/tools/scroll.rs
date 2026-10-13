@@ -308,7 +308,7 @@ fn def() -> &'static ToolDef {
                 "x": { "type": "number", "description": "Window-local screenshot X (top-left origin of the PNG from get_window_state). With `y`, routes through the pixel-wheel path at this point — use for a scrollable surface that isn't in the AX tree. Requires window_id to anchor the window→screen conversion." },
                 "y": { "type": "number", "description": "Window-local screenshot Y. See `x`." },
                 "delivery_mode": cu_core::tool_schema::delivery_mode_schema_with(
-                    "Default background. Background targeted-wheel dispatch with pid+window_id checks WindowServer Z order and returns structured error=\"obstructed\", code=\"background_occluded\" without posting when another window owns the target point. Foreground fronts the target, skips that check, scrolls, then restores the prior app. Successful scrolls report verified plus observed_delta when AX exposes a readable scroll metric."
+                    "Default background. Background targeted-wheel dispatch with pid+window_id checks WindowServer Z order and returns structured error=\"obstructed\", code=\"background_occluded\" without posting when another window owns the target point. \"foreground\" is refused: bringing the app to the front would interrupt the user. Successful scrolls report verified plus observed_delta when AX exposes a readable scroll metric."
                 )
             },
             "additionalProperties": false

@@ -37,7 +37,7 @@ Rules that come with the loop:
 
 - Never steal focus or move the user's pointer. Don't use shell `open`, `osascript ... activate`, `cliclick` or `screencapture` to get around the tools. Use `launch_app` and the action tools instead.
 - Don't call `bring_to_front` unless the user asked for the app to come to the front. It takes over the foreground and leaves it there.
-- `delivery_mode` is `"background"` by default. Switch to `"foreground"` (which briefly fronts the window, acts, then restores) only after a background attempt failed, or when the response recommends it. Never use it up front because you guess an app needs it. `drag` is the exception: background drags don't work on macOS, so `drag` needs `delivery_mode: "foreground"` and the `window_id` whose screenshot gave the coordinates. Use it only when the task really needs a drag.
+- Every action works with the app in the background, so the user can keep working. Asking for `delivery_mode: "foreground"` is refused, because bringing an app to the front interrupts the user; `drag` is refused for the same reason. When something only works with the app in front, find another way (another element, `set_value`, the keyboard) or tell the user what they need to do.
 - Avoid shortcuts that put the keyboard inside an app, such as ⌘L in a browser or ⌘⇧G in Finder. Also avoid browser tab-switching shortcuts. They pull focus or visibly flip the user's tabs. Shortcuts that just do something (copy, save, undo) are fine.
 - To quit an app, ask first, then send `hotkey` with `keys: ["cmd", "q"]`. Use `kill_app` only if that fails, because unsaved work is lost.
 
@@ -59,7 +59,7 @@ Rules that come with the loop:
 
 ## Menus
 
-- Menu-bar items work reliably only when the app is frontmost. On a background app, many menu items show as disabled and quietly do nothing. For a background app, use in-window buttons and toolbar items, or the keyboard shortcut via `hotkey`. If a background shortcut is ignored, retry it with `delivery_mode: "foreground"` and `window_id`.
+- Menu-bar items work reliably only when the app is frontmost. On a background app, many menu items are dimmed; pressing one is refused with a message saying so. For a background app, use in-window buttons and toolbar items, or the keyboard shortcut via `hotkey`.
 - When the app is frontmost, the flow takes two snapshots. Find the `AXMenuBarItem`, then `click` it with `action: "pick"` (the default press does nothing on menu-bar items). Take a new snapshot, then click the `AXMenuItem` that appeared. Snapshot again to check.
 - If you open a menu and don't pick anything, close it with `press_key` and `key: "escape"`. A menu left open breaks later snapshots.
 

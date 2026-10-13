@@ -219,7 +219,7 @@ pub(crate) fn ensure_in(pid: i32, window_id: u32, element: Option<usize>) -> any
         "the app's keyboard focus is in another of its windows{elsewhere}, not window \
          {window_id}, and it would not move, so the keys would land there. Nothing was \
          sent. Call get_window_state for window {window_id} and pass the field's \
-         element_index, or use delivery_mode:\"foreground\"."
+         element_index."
     )
 }
 

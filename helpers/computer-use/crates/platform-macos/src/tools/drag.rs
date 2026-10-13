@@ -47,9 +47,9 @@ fn def() -> &'static ToolDef {
              mouseDragged events linearly interpolated along the path. Increase both for \
              slower, more human drags; decrease for snap gestures.\n\n\
              `modifier` keys (cmd/shift/option/ctrl) are held across the entire gesture.\n\n\
-             Background drag is unavailable on macOS because pid-posted drag streams \
-             drop background CGEvents. Pass delivery_mode=`foreground` and the \
-             `window_id` whose screenshot supplied the coordinates.\n\n\
+             Dragging is unavailable: pid-posted drag streams drop background CGEvents, \
+             and bringing the app to the front would interrupt the user, so every call is \
+             refused without posting. Use set_value, the keyboard or menu bar items.\n\n\
              When `from_zoom` is true, coordinates are in the last zoom image for this \
              pid; the driver maps them back to window coordinates before dispatching."
             .into(),
@@ -94,7 +94,7 @@ fn def() -> &'static ToolDef {
                     "description": "When true, coordinates are in the last zoom image for this pid; driver maps back to window coordinates."
                 },
                 "delivery_mode": cu_core::tool_schema::delivery_mode_schema_with(
-                    "Background drag is unavailable on macOS and returns code=\"background_unavailable\" without posting. Pass \"foreground\" to front the window, perform the gesture, then restore the prior app."
+                    "Dragging is unavailable: on macOS it needs the window in front, and bringing the app to the front would interrupt the user. Calls return code=\"background_unavailable\" without posting."
                 )
             },
             "additionalProperties": false
@@ -130,7 +130,7 @@ impl Tool for DragTool {
         let delivery_mode = super::DeliveryMode::parse(args.opt_str("delivery_mode").as_deref());
         if !delivery_mode.is_foreground() {
             return ToolResult::error(
-                "Background drag is unavailable on macOS; use delivery_mode:\"foreground\"."
+                "Not done: dragging needs the app in front, which would interrupt the user. Use another way that works in the background (set_value for a slider, the keyboard, or the app's menu bar items), or tell the user what they need to do."
                     .to_owned(),
             )
             .with_structured(serde_json::json!({ "code": "background_unavailable" }));
@@ -432,7 +432,7 @@ fn drag_dispatch_preflight(args: &Value) -> Result<(), ToolResult> {
     let delivery_mode = super::DeliveryMode::parse(args.opt_str("delivery_mode").as_deref());
     if !delivery_mode.is_foreground() {
         return Err(ToolResult::error(
-            "Background drag is unavailable on macOS; use delivery_mode:\"foreground\".".to_owned(),
+            "Not done: dragging needs the app in front, which would interrupt the user. Use another way that works in the background (set_value for a slider, the keyboard, or the app's menu bar items), or tell the user what they need to do.".to_owned(),
         )
         .with_structured(serde_json::json!({ "code": "background_unavailable" })));
     }
