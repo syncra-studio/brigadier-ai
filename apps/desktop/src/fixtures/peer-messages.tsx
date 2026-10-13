@@ -216,6 +216,10 @@ const SCHEMA_CHANGED = [
   "Tell me when it's done, and whether anything in the guide still names `is_paid` as the way to check payment.",
 ].join("\n");
 
+/** The blob holding the whole of a long sent message, and what it reads back. */
+const M2_BLOB = "blob-m2";
+const M2_FULL = "The `orders` table has a new `status` column; worth a line in the next release notes.\n\nThe rest of the long note: the migration runs before the deploy.";
+
 const conversations: Record<string, Conversation> = {};
 function session(id: string, projectId: string, title: string): void {
   conversations[id] = {
@@ -267,6 +271,8 @@ if (!long) {
 
   ask(api, "a2", "Let Release notes know the schema changed.");
   sent(api, "a2", "m2", NOTES, "The `orders` table has a new `status` column; worth a line in the next release notes.", { type: "seen" });
+  // Too long for the record: its text there is the head, the whole of it in the blob store.
+  api.peers.at(-1)!.blob = M2_BLOB;
   answer(api, "a2", "Release notes has it.");
 
   ask(docs, "d2", "Draft the changelog for 2.4.");
@@ -427,6 +433,8 @@ mockIPC((command, payload) => {
       return { method: asked.method, view: view(asked.id) };
     case "listMessages":
       return { method: asked.method, page: page(side(asked.conversationId), asked.before ?? Number.POSITIVE_INFINITY) };
+    case "readBlobText":
+      return { method: asked.method, text: asked.hash === M2_BLOB ? M2_FULL : "" };
     case "listFiles":
       return { method: asked.method, files: [], truncated: false };
     default:
@@ -545,6 +553,8 @@ async function driveGallery(): Promise<object> {
     link: !!one("[data-slot=peer-link]", row),
     line: text(one("[data-slot=peer-state]", row)),
   }));
+  // A message whose whole text is in the blob store shows all of it.
+  const whole = text(one("[data-peer-message=m2] [data-slot=peer-sent-detail]"));
   const groups = all("[data-slot=work-group] > button").map((group) => text(group));
   const replyInSender = all("[data-slot=peer-message]").map((block) => ({ caption: text(one("[data-slot=peer-caption]", block)), inTurn: !!block.closest("[data-role=assistant]") }));
   // "Open reply" jumps to the reply within the same session.
@@ -584,7 +594,7 @@ async function driveGallery(): Promise<object> {
     state: row.getAttribute("data-state"),
     label: text(one("[role=button] > span, :scope > span", row)),
   }));
-  return { rows, groups, replyInSender, openReply, blocks, showMore: { clipped, opened }, waiting, docsRows };
+  return { rows, whole, groups, replyInSender, openReply, blocks, showMore: { clipped, opened }, waiting, docsRows };
 }
 
 async function driveJump(): Promise<object> {
