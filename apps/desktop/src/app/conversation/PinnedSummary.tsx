@@ -36,7 +36,7 @@ import {
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
 import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
-import { PreviewsSection } from "@/app/conversation/PreviewsSection";
+import { PreviewChip } from "@/app/conversation/PreviewChip";
 import { ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
@@ -717,6 +717,10 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
         // Focus the summary itself, not its first button (whose tip would open with it).
         onOpenAutoFocus={(event) => {
           event.preventDefault();
+          if (useSummary.getState().automatic) {
+            useSummary.setState({ automatic: false });
+            return;
+          }
           if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
         }}
         onCloseAutoFocus={(event) => {
@@ -742,7 +746,7 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
 export function SummaryFloat({ children }: { children: ReactNode }) {
   const floating = useSummary((s) => s.floating);
   return (
-    <Popover open={floating} onOpenChange={(open) => useSummary.setState({ floating: open })}>
+    <Popover open={floating} onOpenChange={(open) => useSummary.setState({ floating: open, automatic: false })}>
       {children}
     </Popover>
   );
@@ -867,6 +871,7 @@ function SessionSummaryContent({
     <>
       <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
         <div className="flex flex-col py-2.5">
+          <PreviewChip conversationId={conversation.id} />
           <SummarySection
             foldKey="project"
             title={<span title={checkout}>{project ?? setup.repo}</span>}
@@ -899,7 +904,6 @@ function SessionSummaryContent({
               }
             />
           )}
-          <PreviewsSection conversationId={conversation.id} />
           <WorkersSummary conversationId={conversation.id} />
           <Sources conversationId={conversation.id} />
         </div>

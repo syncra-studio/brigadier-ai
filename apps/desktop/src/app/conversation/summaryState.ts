@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import type { EventEnvelope } from "@/ipc/generated";
+import { useApp } from "@/state/store";
 import { useBoard } from "@/state/board";
 
 import { setPinnedSummary } from "@/state/actions";
@@ -7,9 +9,11 @@ import { setPinnedSummary } from "@/state/actions";
 export const useSummary = create<{
   layout: "beside" | "shift" | "float";
   floating: boolean;
+  /** The next floating open keeps focus in the composer. */
+  automatic: boolean;
   /** A plan the thread asked to see; the Plan section shows it until another plan takes over. */
   plan: string | null;
-}>(() => ({ layout: "beside", floating: false, plan: null }));
+}>(() => ({ layout: "beside", floating: false, automatic: false, plan: null }));
 
 /** Where each summary card, and their column, was scrolled to: `<session>/<card>` → offset. */
 export const keptScroll = new Map<string, number>();
@@ -55,4 +59,17 @@ function reveal(elementId: () => string): void {
       target.focus({ preventScroll: true });
     }),
   );
+}
+
+/** Only live arrivals in the loaded, visible conversation reveal its context. */
+export function revealNewPreviews(events: readonly EventEnvelope[]): void {
+  const { board } = useBoard.getState();
+  const { selection } = useApp.getState();
+  if (!board?.loaded || selection.type !== "conversation" || selection.id !== board.conversationId) return;
+  if (!events.some(({ stream, event }) => stream === `conversation:${board.conversationId}`
+    && event.type === "previewUpdated" && event.preview.conversationId === board.conversationId
+    && !board.previews[event.preview.id])) return;
+  if (useSummary.getState().layout === "float") {
+    if (!useSummary.getState().floating) useSummary.setState({ floating: true, automatic: true });
+  } else setPinnedSummary(true);
 }

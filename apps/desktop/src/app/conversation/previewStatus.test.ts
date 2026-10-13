@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { latestLine, previewActions, previewActive, previewStateLabel } from "@/app/conversation/previewStatus";
+import { latestLine, previewChip, previewActions, previewActive, previewStateLabel } from "@/app/conversation/previewStatus";
 import type { EventEnvelope, Preview, PreviewState } from "@/ipc/generated";
 import { applyToBoard, emptyBoard } from "@/state/board";
 
@@ -32,4 +32,19 @@ test("Clear finished keeps starting, running and paused previews", () => {
   states.forEach((state, at) => { board = applyToBoard(board, event(at + 1, { type: "previewUpdated", preview: preview(`preview-${at + 1}`, state) })); });
   board = applyToBoard(board, event(9, { type: "previewsCleared", conversationId: "c", ids: Object.keys(board.previews) }));
   assert.deepEqual(Object.keys(board.previews).toSorted(), ["preview-1", "preview-2", "preview-3"]);
+});
+
+test("the pill names the newest active preview, then the newest finished one", () => {
+  const starting = { ...preview("build", { type: "starting" }), startedAtMs: 2 };
+  const running = preview("server", { type: "running" });
+  const finished = { ...preview("old", { type: "exited", code: 0, status: "exit 0" }), startedAtMs: 3 };
+  const chip = previewChip({ starting, running, finished });
+  assert.equal(chip?.label, "build");
+  assert.equal(chip?.status, "Starting");
+  assert.equal(chip?.active, true);
+  assert.equal(previewChip({ running })?.status, "Running");
+  assert.equal(previewChip({ paused: preview("paused", { type: "paused" }) })?.status, "Paused");
+  assert.equal(previewChip({ finished })?.status, "Finished");
+  assert.equal(previewChip({ finished })?.active, false);
+  assert.equal(previewChip({}), null);
 });

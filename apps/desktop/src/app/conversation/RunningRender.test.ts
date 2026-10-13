@@ -4,10 +4,12 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 test("Running renders all states and controls pause, resume, stop, clear and the session browser", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "running.html?drive=1", "running-result", 30000)) as {
+    chip: string; linkClosed: boolean;
     initial: { name: string; text: string; actions: string[] }[];
     paused: string[]; resumed: string[]; windows: string[]; error: string; browser: string;
     cleared: string[]; stopped: string[]; allStopped: boolean; empty: string; calls: string[];
   };
+  assert.equal(seen.chip, "Brigadier dev app· Starting");
   assert.equal(seen.initial.length, 5);
   assert.match(seen.initial[0]!.text, /Starting/);
   assert.match(seen.initial[0]!.text, /Building \[======> \] 521\/731: brigadier-core/);
@@ -23,6 +25,7 @@ test("Running renders all states and controls pause, resume, stop, clear and the
   assert.ok(seen.resumed.includes("Pause"));
   assert.ok(!seen.windows.includes("Pause") && !seen.windows.includes("Resume") && seen.windows.includes("Stop"));
   assert.match(seen.error, /preview has ended/);
+  assert.equal(seen.linkClosed, true);
   assert.equal(seen.browser, "http://localhost:5173/");
   assert.deepEqual(seen.cleared, ["preview-5", "preview-4", "preview-3"]);
   assert.ok(!seen.stopped.includes("Stop") && !seen.stopped.includes("Pause"));

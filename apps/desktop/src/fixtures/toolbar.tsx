@@ -10,15 +10,15 @@ import { updateDraft } from "@/app/conversation/draftSetup";
 import { MentionMemory } from "@/app/conversation/Mentions";
 import { NewTabTools } from "@/app/conversation/NewTabTools";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
-import { PreviewsSection } from "@/app/conversation/PreviewsSection";
+import { revealNewPreviews, useSummary } from "@/app/conversation/summaryState";
 import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { useSidePanel } from "@/app/conversation/SidePanel";
 import { WorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
 import { MENU_KEYS } from "@/app/paneShortcuts";
 import { TitlebarTips } from "@/components/titlebar-button";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import type { Conversation, Request } from "@/ipc/generated";
-import { emptyBoard, useBoard } from "@/state/board";
+import type { Conversation, EventEnvelope, Request } from "@/ipc/generated";
+import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { showPlanDoc } from "@/state/planDoc";
 import { useApp } from "@/state/store";
 import { emitWorkspaceChanged } from "@/state/workspaceCache";
@@ -56,6 +56,7 @@ mockIPC((command, args) => {
 const mentions = new MentionMemory();
 // Only the mention memory is read by the panes.
 const target = { mentions } as unknown as ComposerTarget;
+const session: Conversation = { ...conversation, kind: "session", setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "fixture" }, permission: "askForApproval", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } };
 const previews = useBoard.getState().board!.previews;
 
 function Fixture() {
@@ -165,9 +166,45 @@ function Fixture() {
     });
     at(4000, () => { seen.contextWorkerRight = right(); click("Open plan"); });
     at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); });
-    at(4700, () => { seen.previewSection = !!document.querySelector('[data-slot="summary-card"] [aria-label="Session previews"]'); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } }); });
-    at(4850, () => { seen.previewCleared = !document.querySelector('[aria-label="Session previews"]'); useBoard.setState({ board: { ...useBoard.getState().board!, previews } }); });
-    at(5000, () => { seen.previewReturned = !!document.querySelector('[data-slot="summary-card"] [aria-label="Session previews"]'); setKind("draft"); });
+    const chip = () => document.querySelector<HTMLButtonElement>('[data-slot="summary-card"] [data-slot="preview-chip"]');
+    const arrival = (previewId: string, conversationId = id) => {
+      const events = [{ stream: `conversation:${conversationId}`, event: { type: "previewUpdated", preview: { ...previews.preview!, id: previewId, conversationId } } }] as EventEnvelope[];
+      revealNewPreviews(events);
+      applyBoardEvents(events);
+    };
+    at(4350, () => {
+      useSummary.setState({ floating: false });
+      useApp.setState({ pinnedSummary: false });
+      document.querySelector<HTMLTextAreaElement>('[aria-label="Fixture composer"]')?.focus();
+      const board = useBoard.getState().board!;
+      useBoard.setState({ board: { ...board, loaded: false, previews: {} } });
+      arrival("loading");
+      seen.loadingClosed = !useSummary.getState().floating && !useApp.getState().pinnedSummary;
+      useBoard.setState({ board });
+      seen.loadedClosed = !useSummary.getState().floating;
+      arrival("preview");
+      seen.updateClosed = !useSummary.getState().floating && !useApp.getState().pinnedSummary;
+      arrival("background", "other");
+      seen.backgroundClosed = !useSummary.getState().floating && !useApp.getState().pinnedSummary;
+      const layout = useSummary.getState().layout;
+      useSummary.setState({ layout: "beside" });
+      arrival("beside-preview");
+      seen.besideOpened = useApp.getState().pinnedSummary;
+      useApp.setState({ pinnedSummary: false, selection: { type: "conversation", id: "other" } });
+      arrival("offscreen-preview");
+      useApp.setState({ selection: { type: "conversation", id } });
+      seen.returnClosed = !useApp.getState().pinnedSummary && !useSummary.getState().floating;
+      useSummary.setState({ layout });
+      arrival("new-preview");
+    });
+    at(4500, () => { seen.autoOpened = useSummary.getState().floating && !!chip(); seen.composerKeptFocus = document.activeElement?.getAttribute("aria-label") === "Fixture composer"; chip()?.click(); });
+    at(4600, () => {
+      seen.nestedOpened = !!document.querySelector('[role="dialog"][aria-label="Previews"][data-state="open"]') && !!chip();
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    at(4700, () => { seen.previewSection = !!chip(); seen.nestedDismissed = !document.querySelector('[role="dialog"][aria-label="Previews"][data-state="open"]') && !!chip(); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } }); });
+    at(4850, () => { seen.previewCleared = !chip(); useBoard.setState({ board: { ...useBoard.getState().board!, previews } }); });
+    at(5000, () => { seen.previewReturned = !!chip(); setKind("draft"); });
     const buttons = (scope: string) => [...document.querySelectorAll(`${scope} button`)].map((button) => button.textContent?.trim());
     at(5200, () => { seen.draftControls = controls(); seen.draftRight = right();
       // ⇧⌘E shows Files, whether the sidebar is open or not.
@@ -211,7 +248,7 @@ function Fixture() {
       seen.draftSearchReplace = !!document.querySelector('[data-slot="workspace-pane"] input[aria-label="Replace"]');
       setKind("chat");
     });
-    at(7100, () => { click("Context"); });
+    at(7100, () => { if (document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") !== "true") click("Context"); });
     at(7300, () => { seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context"); });
     at(7700, () => { seen.contextClosed = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed"); click("Context"); });
     at(8100, () => { seen.contextOpened = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") ?? "false"; const board = useBoard.getState().board!; useBoard.setState({ board: { ...board, context: { usedTokens: 1200, windowTokens: 10000 } } }); });
@@ -230,13 +267,13 @@ function Fixture() {
         <main className="flex min-w-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1">
               <SummaryPane summary>
-                {kind === "chat" && <PinnedSummary conversation={conversation} />}
+                {kind !== "draft" && <PinnedSummary conversation={kind === "session" ? session : conversation} />}
+                <textarea aria-label="Fixture composer" />
                 <NewTabTools conversationId={id} tabId="new" />
                 <button aria-label="Thread worker" onClick={() => agents.setPanel("worker")}>Thread worker</button>
                 <button aria-label="Composer worker" onClick={() => agents.setPanel("worker")}>Composer worker</button>
                 <button aria-label="Context worker" onClick={() => agents.setPanel(null)}>Context worker</button>
                 <button aria-label="Open plan" onClick={() => { showPlanDoc(id, { type: "plan", id: "plan" }); panel.openTab("plan"); }}>Open plan</button>
-                {kind === "session" && <aside data-slot="summary-card"><PreviewsSection conversationId={id} /></aside>}
               </SummaryPane>
             </div>
         </main>

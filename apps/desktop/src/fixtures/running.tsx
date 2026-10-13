@@ -1,18 +1,22 @@
 /** Production Running panel with five preview states and synthetic IPC; no daemon. */
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { PreviewsSection } from "@/app/conversation/PreviewsSection";
+import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { previewActive } from "@/app/conversation/previewStatus";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { Preview, Request } from "@/ipc/generated";
+import type { Conversation, Preview, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const id = "running-fixture";
+const conversation: Conversation = { id, kind: "session", title: "Build the web app", projectId: null,
+  pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "fixture" }, permission: "askForApproval", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } }, lifecycle: "active",
+  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
 const params = new URLSearchParams(location.search);
 const now = Date.now();
 const rows: Preview[] = [
@@ -24,6 +28,7 @@ const rows: Preview[] = [
 ].map((row) => ({ conversationId: id, pid: 42, workdir: "/work/session", workspace: "/work/session", log: null, kind: "web", ...row }) as Preview);
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: Object.fromEntries(rows.map((row) => [row.id, row])) } });
 useApp.setState({
+  pinnedSummary: true, selection: { type: "conversation", id }, conversations: { [id]: conversation },
   info: { platform: params.get("platform") === "windows" ? "windows" : "macos", version: "fixture", processStartMs: now, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
 });
@@ -33,6 +38,7 @@ mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   calls.push(req);
+  if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "previewLog") return {
     method: req.method,
     tail: req.previewId === "preview-5" ? "  VITE ready in 286 ms\n  Local: http://localhost:1420/\n   \u001b[1m\u001b[32mCompiling\u001b[0m brigadier-core v0.1.0\n    Building [=====>  ] 520/731: brigadier-core\r    Building [======> ] 521/731: brigadier-core\r\u001b[K" : req.previewId === "preview-4" ? "VITE ready in 286 ms\nLocal: http://localhost:5173/\nWaiting for file changes…" : req.previewId === "preview-2" ? "Build output not found. Run pnpm build first." : "Preview output is ready.",
@@ -57,11 +63,16 @@ const press = (label: string, within: ParentNode = document) => [...within.query
 const labels = (name: string) => [...(row(name)?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim());
 
 function Fixture() {
+  const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const [result, setResult] = useState("");
   useEffect(() => {
     const seen: Record<string, unknown> = {};
     const timers: ReturnType<typeof setTimeout>[] = [];
     const at = (ms: number, action: () => void) => timers.push(setTimeout(action, ms));
+    at(500, () => {
+      seen.chip = document.querySelector('[data-slot="summary-card"] [data-slot="preview-chip"]')?.textContent;
+      document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click();
+    });
     at(1000, () => {
       press("Show log", row("Web app")!);
       if (!params.has("drive")) return;
@@ -85,21 +96,25 @@ function Fixture() {
         const browser = tabs.tabs.find((tab) => tab.id === tabs.active);
         seen.browser = browser?.kind === "browser" ? browser.url : undefined;
       });
+      at(2800, () => {
+        seen.linkClosed = !document.querySelector('[aria-label="Session previews"]');
+        document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click();
+      });
       at(3000, () => { press("Clear finished"); });
       at(3300, () => { seen.cleared = Object.keys(useBoard.getState().board!.previews); press("Stop", row("Web app")!); });
       at(3600, () => { seen.stopped = labels("Web app"); press("Stop all"); });
       at(3900, () => { seen.allStopped = Object.values(useBoard.getState().board!.previews).every((p) => p.state.type === "stopped"); press("Clear finished"); });
       at(4200, () => {
         seen.empty = document.querySelector('[aria-label="Session previews"]')?.textContent ?? "No previews";
-        seen.calls = calls.filter((call) => call.method !== "previewLog").map((call) => call.method);
+        seen.calls = calls.filter((call) => ["pausePreview", "resumePreview", "stopPreview", "clearPreviews"].includes(call.method)).map((call) => call.method);
         setResult(JSON.stringify(seen));
       });
     }
     return () => timers.forEach(clearTimeout);
   }, []);
   return (
-    <>
-      <main className="bg-background text-foreground flex h-screen w-full min-w-0">
+    <AssistantRuntimeProvider runtime={runtime}>
+      <main className="bg-background text-foreground relative flex h-screen w-full min-w-0">
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="h-titlebar flex items-center justify-between gap-3 px-5">
             <span className="text-sm font-medium">Build the web app</span>
@@ -108,11 +123,11 @@ function Fixture() {
             <p>The web app is ready to preview.</p>
             <p className="text-muted-foreground">Open its local address from Previews. Pause a preview to hold it, or stop it when you are finished.</p>
           </div>
-          <aside data-slot="summary-card" className="bg-popover rounded-card mx-auto w-summary-stack py-2.5"><PreviewsSection conversationId={id} /></aside>
+          <PinnedSummary conversation={conversation} />
         </div>
       </main>
       {result && <pre id="running-result">{result}</pre>}
-    </>
+    </AssistantRuntimeProvider>
   );
 }
 createRoot(document.getElementById("root")!).render(<TooltipProvider><SidebarProvider defaultOpen={false}><Fixture /></SidebarProvider></TooltipProvider>);

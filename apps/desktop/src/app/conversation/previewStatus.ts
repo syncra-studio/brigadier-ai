@@ -1,4 +1,4 @@
-import type { PreviewState } from "@/ipc/generated";
+import type { Preview, PreviewState } from "@/ipc/generated";
 
 export function previewActive(state: PreviewState): boolean {
   return state.type === "starting" || state.type === "running" || state.type === "paused";
@@ -32,4 +32,18 @@ export function latestLine(tail: string): string {
     return drawn.at(-1) ?? "";
   });
   return lines.findLast(Boolean) ?? "";
+}
+
+/** Prefer the newest active preview; finished previews stay reachable until cleared. */
+export function previewChip(previews: Readonly<Record<string, Preview>>) {
+  const all = Object.values(previews).toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
+  const newest = all.find((preview) => previewActive(preview.state)) ?? all[0];
+  if (!newest) return null;
+  const active = previewActive(newest.state);
+  return {
+    label: newest.name,
+    status: active ? previewStateLabel(newest.state) : "Finished",
+    active,
+    title: all.map((preview) => `${preview.name}: ${preview.command} (in ${preview.workdir})`).join("\n"),
+  };
 }

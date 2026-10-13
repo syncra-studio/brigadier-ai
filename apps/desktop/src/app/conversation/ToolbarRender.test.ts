@@ -48,9 +48,10 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.closingShown, "", "closing gives the room back at once");
   assert.equal(seen.closedShown, "");
   assert.equal(seen.planTab, "plan");
+  for (const field of ["besideOpened", "returnClosed", "loadingClosed", "composerKeptFocus", "loadedClosed", "updateClosed", "backgroundClosed", "autoOpened", "nestedOpened", "nestedDismissed"]) assert.equal(seen[field], true, field);
   assert.equal(seen.previewSection, true);
-  assert.equal(seen.previewCleared, true, "the section disappears when previews are cleared");
-  assert.equal(seen.previewReturned, true, "the context section returns when previews arrive");
+  assert.equal(seen.previewCleared, true, "the pill disappears when previews are cleared");
+  assert.equal(seen.previewReturned, true, "the context pill returns when previews arrive");
   assert.equal(seen.draftFiles, "files");
   assert.match(String(seen.draftTree), /src.*package\.json/);
   assert.equal(seen.draftComposer, "@package.json ");
