@@ -1789,6 +1789,8 @@ mod peer_delivery_tests;
 #[cfg(test)]
 mod peer_kit;
 #[cfg(test)]
+mod peer_provenance_tests;
+#[cfg(test)]
 mod peer_reply_tests;
 #[cfg(test)]
 mod peer_restart_tests;
