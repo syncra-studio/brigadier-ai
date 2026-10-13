@@ -53,6 +53,9 @@ pub type Notify = Box<dyn Fn(&str, &str) + Send + Sync>;
 /// Whether a Brigadier window is in front (shown and focused).
 pub type InFront = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// Opens computer use's setup window for an agent waiting on it.
+pub type OpenSetup = Box<dyn Fn() + Send + Sync>;
+
 /// Where the connection task is. Quitting waits out an attempt in flight, since that attempt
 /// may just have launched a daemon.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -77,6 +80,8 @@ struct Inner {
     launcher: Launcher,
     requests: mpsc::Sender<Outgoing>,
     ui: Mutex<Option<Channel<BridgeEvent>>>,
+    /// The computer-use setup window's feed: computer use's status only.
+    setup_ui: Mutex<Option<Channel<BridgeEvent>>>,
     navigation: Mutex<Option<String>>,
     /// Latest connection state, replayed to a webview that subscribes late or reloads.
     status: Mutex<Option<BridgeEvent>>,
@@ -87,6 +92,7 @@ struct Inner {
     stopping: AtomicBool,
     notify: Notify,
     in_front: InFront,
+    open_setup: OpenSetup,
     /// What was already notified (a "Waiting on you" item, an approval, a question, a request's
     /// finish), so an update doesn't notify again.
     notified: Mutex<HashSet<String>>,
@@ -99,6 +105,7 @@ impl Bridge {
         launcher: Launcher,
         notify: Notify,
         in_front: InFront,
+        open_setup: OpenSetup,
     ) -> Self {
         let (requests, queue) = mpsc::channel(QUEUED_REQUESTS);
         let bridge = Self {
@@ -107,6 +114,7 @@ impl Bridge {
                 launcher,
                 requests,
                 ui: Mutex::new(None),
+                setup_ui: Mutex::new(None),
                 navigation: Mutex::new(None),
                 status: Mutex::new(None),
                 link: watch::channel(Link::Down).0,
@@ -115,6 +123,7 @@ impl Bridge {
                 stopping: AtomicBool::new(false),
                 notify,
                 in_front,
+                open_setup,
                 notified: Mutex::new(HashSet::new()),
             }),
         };
@@ -178,6 +187,11 @@ impl Bridge {
         }
     }
 
+    /// Routes computer use's status to the setup window (replacing a closed one's feed).
+    pub fn attach_setup_ui(&self, channel: Channel<BridgeEvent>) {
+        *self.inner.setup_ui.lock().expect("setup ui lock") = Some(channel);
+    }
+
     /// Retains native activation until the webview is ready to receive it.
     #[cfg(target_os = "macos")]
     pub fn open_conversation(&self, conversation_id: String) {
@@ -195,6 +209,11 @@ impl Bridge {
             BridgeEvent::Connected { .. } | BridgeEvent::Disconnected { .. }
         ) {
             *self.inner.status.lock().expect("status lock") = Some(event.clone());
+        }
+        if matches!(event, BridgeEvent::ComputerUse { .. })
+            && let Some(channel) = self.inner.setup_ui.lock().expect("setup ui lock").as_ref()
+        {
+            let _ = channel.send(event.clone());
         }
         if let Some(channel) = self.inner.ui.lock().expect("ui lock").as_ref() {
             let _ = channel.send(event);
@@ -407,8 +426,13 @@ impl Bridge {
             ServerFrame::ComputerUse { status } => {
                 self.emit(BridgeEvent::ComputerUse { status });
             }
-            // The setup window opens from the shell (a later step); nothing to show yet.
-            ServerFrame::ComputerUseSetupNeeded => {}
+            ServerFrame::ComputerUseSetupNeeded => {
+                (self.inner.open_setup)();
+                (self.inner.notify)(
+                    "Computer use needs setting up",
+                    "An agent wants to use apps on this Mac. Finish setup in the window Brigadier opened.",
+                );
+            }
             ServerFrame::Closing => return Some("daemon is shutting down".into()),
             ServerFrame::Welcome { .. } => return Some("unexpected second welcome".into()),
         }

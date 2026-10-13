@@ -200,3 +200,23 @@ async fn checks_at_the_same_time_refresh_the_helper_once() {
         1
     );
 }
+
+#[tokio::test]
+async fn an_agent_waiting_for_setup_opens_the_setup_window_once() {
+    let flow = flow("cu-host-setup").await;
+    let home = fake_helper(&flow, HEALTHY);
+    let mut news = flow.manager.subscribe_computer_use();
+    // Asked before Brigadier started: old news.
+    flow.manager.watch_computer_helper(false).await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    std::fs::write(home.join("setup-needed"), "1").unwrap();
+    flow.manager.watch_computer_helper(false).await;
+    flow.manager.watch_computer_helper(false).await;
+    let mut asked = 0;
+    while let Ok(item) = news.try_recv() {
+        if matches!(item, crate::manager::ComputerNews::SetupNeeded) {
+            asked += 1;
+        }
+    }
+    assert_eq!(asked, 1);
+}

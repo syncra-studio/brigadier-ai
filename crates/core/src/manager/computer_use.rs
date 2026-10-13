@@ -30,6 +30,9 @@ pub(super) const HELPER_APP: &str = "Brigadier Computer Use.app";
 pub(super) const HELPER_BIN: &str = "brigadier-cu";
 /// The permissions the helper last read, which it keeps in its home.
 pub(super) const PERMISSIONS_FILE: &str = "permissions.json";
+/// Tells the helper that setup runs in Brigadier's window: it shows no panel, and agents'
+/// calls wait until that window confirmed screen capture.
+pub(super) const EXTERNAL_SETUP_ENV: &str = "BRIGADIER_CU_EXTERNAL_PERMISSION_FLOW";
 /// Overrides where the helper app is found (a development checkout's staged bundle).
 const HELPER_APP_ENV: &str = "BRIGADIER_CU_APP";
 /// The skill every agent gets, Brigadier's own workflow for the tools.
@@ -108,6 +111,8 @@ impl SessionManager {
                         "BRIGADIER_CU_SOCKET_AUTH_TOKEN".into(),
                         placed.token.clone(),
                     ),
+                    // Setup runs in Brigadier's own window, not a panel of the helper's.
+                    (EXTERNAL_SETUP_ENV.into(), "1".into()),
                     // The session the helper keeps for this agent: it overrides the session
                     // names the agent passes, so the cursor, recordings and state end with it.
                     (

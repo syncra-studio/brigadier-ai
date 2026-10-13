@@ -174,6 +174,28 @@ pub fn record_permissions(accessibility: bool, screen_recording: bool) {
     }
 }
 
+/// Written by Brigadier once its setup window confirmed screen capture works:
+/// a daemon started later (after a restart or an update) is ready at once.
+pub const CAPTURE_CONFIRMED: &str = "capture-confirmed";
+/// Touched when an agent's call starts waiting for setup, so Brigadier opens
+/// its setup window.
+pub const SETUP_NEEDED: &str = "setup-needed";
+/// Brigadier runs setup in its own window: the helper shows no panel of its
+/// own, and calls wait until Brigadier says setup is finished. Set from this
+/// flag at startup, since `open` drops the caller's environment.
+pub const EXTERNAL_SETUP_FLAG: &str = "--external-permission-flow";
+pub const EXTERNAL_SETUP_ENV: &str = "BRIGADIER_CU_EXTERNAL_PERMISSION_FLOW";
+
+/// Whether Brigadier confirmed screen capture in `home`.
+pub fn capture_confirmed(home: &Path) -> bool {
+    home.join(CAPTURE_CONFIRMED).exists()
+}
+
+/// Tells Brigadier an agent is waiting for setup.
+pub fn note_setup_needed(home: &Path) {
+    let _ = std::fs::write(home.join(SETUP_NEEDED), now_ms().to_string());
+}
+
 /// This helper's home directory.
 pub fn home() -> PathBuf {
     pip_preview::home::home()

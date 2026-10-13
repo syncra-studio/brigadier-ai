@@ -726,6 +726,11 @@ pub fn launch_daemon(socket_path: &str, claude_code_compat: bool) -> anyhow::Res
     if claude_code_compat {
         open_args.push("--claude-code-computer-use-compat");
     }
+    // Brigadier runs setup in its own window: no panel of the helper's own.
+    if crate::bundle::is_env_truthy(crate::lifecycle::EXTERNAL_SETUP_ENV) {
+        open_args.push("--no-permissions-gate");
+        open_args.push(crate::lifecycle::EXTERNAL_SETUP_FLAG);
+    }
     let status = Cmd::new("/usr/bin/open")
         .args(&open_args)
         .stdout(Stdio::null())

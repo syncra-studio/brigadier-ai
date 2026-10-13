@@ -402,6 +402,14 @@ fn notifier(app: tauri::AppHandle) -> Notify {
 
 /// Whether a Brigadier window is shown and focused, for the notifications that show only
 /// while it is in the background.
+/// Opens computer use's setup window for an agent, on the main thread.
+fn open_setup(app: tauri::AppHandle) -> bridge::OpenSetup {
+    Box::new(move || {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || computer_setup::open(&handle, false));
+    })
+}
+
 fn in_front(app: tauri::AppHandle) -> bridge::InFront {
     Box::new(move || {
         app.webview_windows().values().any(|window| {
@@ -641,6 +649,7 @@ fn main() {
                 launcher,
                 notifier(app.handle().clone()),
                 in_front(app.handle().clone()),
+                open_setup(app.handle().clone()),
             );
             app.manage(documents::Documents::default());
             app.manage(AppState {
@@ -740,6 +749,10 @@ fn main() {
             set_running_chats,
             set_key_capture,
             computer_setup::open_privacy_settings,
+            computer_setup::open_computer_setup,
+            computer_setup::computer_setup_subscribe,
+            computer_setup::computer_setup_drag,
+            computer_setup::reveal_computer_helper,
             browser::browser_configure,
             browser::browser_open,
             browser::browser_navigate,

@@ -94,10 +94,15 @@ fn a_running_shim_is_refused_once_computer_use_is_turned_off_and_starts_nothing(
 /// A daemon started from a copy of the binary (the branded name refuses
 /// `serve` outside the helper app), on the default socket in `home`.
 fn spawn_daemon(home: &std::path::Path) -> std::process::Child {
+    spawn_daemon_with(home, &[])
+}
+
+fn spawn_daemon_with(home: &std::path::Path, extra: &[&str]) -> std::process::Child {
     let copy = home.join("cu-serve-under-test");
     std::fs::copy(env!("CARGO_BIN_EXE_brigadier-cu"), &copy).unwrap();
     Command::new(copy)
         .args(["serve", "--no-permissions-gate", "--no-overlay"])
+        .args(extra)
         .env("BRIGADIER_CU_HOME", home)
         .env_remove("BRIGADIER_CU_SOCKET_AUTH_TOKEN")
         .env_remove("BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_PID")
@@ -343,4 +348,28 @@ fn stop_using_an_app_holds_after_the_helper_is_replaced_and_only_for_that_agent(
         "{other}"
     );
     drop(cleanup);
+}
+
+#[test]
+fn a_daemon_started_after_brigadier_finished_setup_is_ready_at_once() {
+    let home = std::env::temp_dir().join(format!("cu-lifecycle-setup-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    // Brigadier's setup window confirmed screen capture earlier; the daemon
+    // starts again (a restart or an update), told setup runs in Brigadier.
+    std::fs::write(home.join("capture-confirmed"), b"").unwrap();
+    let mut cleanup = Cleanup(
+        spawn_daemon_with(&home, &["--external-permission-flow"]),
+        home.clone(),
+    );
+    wait_healthy(&home);
+    let status = host(&home, &["request", "permissions_status"]);
+    assert_eq!(status["external_permission_ready"], true, "{status}");
+    cleanup.kill_daemon();
+
+    // Without the confirmation, setup isn't finished.
+    std::fs::remove_file(home.join("capture-confirmed")).unwrap();
+    cleanup.0 = spawn_daemon_with(&home, &["--external-permission-flow"]);
+    wait_healthy(&home);
+    let status = host(&home, &["request", "permissions_status"]);
+    assert_eq!(status["external_permission_ready"], false, "{status}");
 }

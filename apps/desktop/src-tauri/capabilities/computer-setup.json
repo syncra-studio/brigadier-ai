@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "computer-setup",
+  "description": "Computer use's setup window: core events only. All other access goes through Brigadier's own commands.",
+  "windows": [
+    "computer-setup"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close"
+  ]
+}

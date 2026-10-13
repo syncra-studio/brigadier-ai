@@ -38,6 +38,8 @@ const HOST_TIMEOUT: Duration = Duration::from_secs(45);
 const REFRESH_SPACING: Duration = Duration::from_secs(5);
 /// Written once screen capture is confirmed: setup is finished.
 pub(crate) const CAPTURE_CONFIRMED: &str = "capture-confirmed";
+/// Touched by an agent's call that starts waiting for setup: the setup window opens.
+const SETUP_NEEDED: &str = "setup-needed";
 /// The helper's mark that computer use is off: its shims refuse calls and start nothing.
 const OFF_MARKER: &str = "off";
 
@@ -67,11 +69,24 @@ impl Default for ComputerHost {
     }
 }
 
-#[derive(Default)]
 struct HostState {
     strikes: u32,
     trouble: Option<Trouble>,
     last: Option<ComputerUseStatus>,
+    /// The newest setup request answered (its file's change time); older ones, also from
+    /// before Brigadier started, open nothing.
+    setup_asked: SystemTime,
+}
+
+impl Default for HostState {
+    fn default() -> Self {
+        Self {
+            strikes: 0,
+            trouble: None,
+            last: None,
+            setup_asked: SystemTime::now(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,6 +219,7 @@ impl SessionManager {
             .arg("host")
             .args(args)
             .env("BRIGADIER_CU_HOME", &home)
+            .env(super::computer_use::EXTERNAL_SETUP_ENV, "1")
             .env_remove("BRIGADIER_CU_SOCKET_AUTH_TOKEN")
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -519,6 +535,7 @@ impl SessionManager {
         if !self.core.settings().computer_use {
             return;
         }
+        self.notice_setup_request();
         if woke {
             tracing::info!("the Mac woke; checking the computer-use helper");
         }
@@ -552,6 +569,23 @@ impl SessionManager {
         } else {
             let status = self.computer_status_from(Some(raw)).await;
             self.publish_computer_status(&status);
+        }
+    }
+
+    /// An agent started waiting for setup since the last look: the windows hear it, and the
+    /// app opens the setup window.
+    fn notice_setup_request(&self) {
+        let Some(asked) = std::fs::metadata(self.computer_home().join(SETUP_NEEDED))
+            .and_then(|meta| meta.modified())
+            .ok()
+        else {
+            return;
+        };
+        let mut state = self.computer_host_state();
+        if asked > state.setup_asked {
+            state.setup_asked = asked;
+            drop(state);
+            let _ = self.computer_host.news.send(ComputerNews::SetupNeeded);
         }
     }
 

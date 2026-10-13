@@ -1588,7 +1588,12 @@ pub async fn run_serve_with_owner(
     let activity = crate::activity_daemon::open(profile, socket_path);
     let mut authorized_root_health = tokio::time::interval(std::time::Duration::from_secs(1));
 
-    let external_permission_ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Setup Brigadier already finished holds for this daemon too (one started
+    // after a restart or an update).
+    let external_permission_ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+        crate::bundle::is_env_truthy(crate::lifecycle::EXTERNAL_SETUP_ENV)
+            && crate::lifecycle::capture_confirmed(&crate::lifecycle::home()),
+    ));
 
     loop {
         tokio::select! {

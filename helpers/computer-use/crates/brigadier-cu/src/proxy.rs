@@ -1149,7 +1149,16 @@ async fn wait_for_daemon_permission_readiness(
     // readiness milestone is missing, waiting does not help: the host must
     // republish it, which needs a user action. Fail fast in that case.
     let grants_deadline = Duration::from_secs(55);
-    let host_only_deadline = Duration::from_secs(6);
+    // With Brigadier's setup window the user finishes setup there, which the
+    // agent's call can wait for like a grant.
+    let host_only_deadline = if external_permission_flow {
+        grants_deadline
+    } else {
+        Duration::from_secs(6)
+    };
+    if external_permission_flow {
+        crate::lifecycle::note_setup_needed(&crate::lifecycle::home());
+    }
     let mut last: Option<(bool, bool, Option<bool>)> = None;
     loop {
         let elapsed = started.elapsed();

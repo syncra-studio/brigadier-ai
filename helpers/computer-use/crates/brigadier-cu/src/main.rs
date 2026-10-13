@@ -180,6 +180,13 @@ fn apply_home_flag() {
             std::env::set_var(pip_preview::home::HOME_ENV, dir);
         }
     }
+    // Brigadier's setup window, likewise.
+    if args
+        .iter()
+        .any(|a| a == crate::lifecycle::EXTERNAL_SETUP_FLAG)
+    {
+        std::env::set_var(crate::lifecycle::EXTERNAL_SETUP_ENV, "1");
+    }
 }
 
 #[cfg(target_os = "macos")]
