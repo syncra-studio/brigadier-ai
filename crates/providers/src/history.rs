@@ -100,7 +100,8 @@ pub(crate) fn codex(home: &Path) -> Vec<PastFolder> {
 }
 
 /// Whether Claude session `id`'s transcript (`<config>/projects/*/<id>.jsonl`) holds
-/// `needle` in an input the CLI took: a user line's text, never a tool result or the model's
+/// `needle` in an input the CLI took: a user line's text, or a message queued while a turn ran
+/// that the turn took in (a `queued_command` attachment), never a tool result or the model's
 /// own words.
 pub(crate) fn claude_took(config: &Path, id: &str, needle: &str) -> bool {
     let Ok(entries) = fs::read_dir(config.join("projects")) else {
@@ -113,10 +114,17 @@ pub(crate) fn claude_took(config: &Path, id: &str, needle: &str) -> bool {
         .filter(|path| path.is_file())
         .any(|path| {
             any_line(&path, needle, |line| {
-                if line.get("type").and_then(Value::as_str) != Some("user") {
-                    return false;
-                }
-                match line.pointer("/message/content") {
+                let content = match line.get("type").and_then(Value::as_str) {
+                    Some("user") => line.pointer("/message/content"),
+                    Some("attachment")
+                        if line.pointer("/attachment/type").and_then(Value::as_str)
+                            == Some("queued_command") =>
+                    {
+                        line.pointer("/attachment/prompt")
+                    }
+                    _ => return false,
+                };
+                match content {
                     Some(Value::String(text)) => text.contains(needle),
                     Some(Value::Array(parts)) => parts.iter().any(|part| {
                         part.get("type").and_then(Value::as_str) == Some("text")
@@ -316,6 +324,32 @@ mod tests {
             ],
         );
         assert!(claude_took(&home.0, "s-1", "id m-1"));
+        // Steered in while a turn ran: queued, then taken in by the turn.
+        write_lines(
+            &path,
+            &[
+                json!({"type": "attachment", "attachment": {"type": "queued_command",
+                    "prompt": format!("{HEADER}\nHello.")}}),
+            ],
+        );
+        assert!(claude_took(&home.0, "s-1", "id m-1"));
+        write_lines(
+            &path,
+            &[
+                json!({"type": "attachment", "attachment": {"type": "queued_command",
+                    "prompt": [{"type": "text", "text": HEADER}]}}),
+            ],
+        );
+        assert!(claude_took(&home.0, "s-1", "id m-1"));
+        // Any other attachment is not an input.
+        write_lines(
+            &path,
+            &[
+                json!({"type": "attachment", "attachment": {"type": "edited_text_file",
+                    "prompt": HEADER}}),
+            ],
+        );
+        assert!(!claude_took(&home.0, "s-1", "id m-1"));
     }
 
     /// The same for a Codex thread: its user messages count, a tool's output (also
