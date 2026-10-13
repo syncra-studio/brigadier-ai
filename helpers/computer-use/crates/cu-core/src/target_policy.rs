@@ -216,9 +216,24 @@ fn check_pid(
 /// Check one resolved identity.
 pub fn check(tool: &str, identity: &TargetIdentity, allowed: &[String]) -> Result<(), ToolResult> {
     match classify(identity, allowed) {
+        Some(RefusalReason::SecuritySurface) if reads_settings(tool, identity) => Ok(()),
         Some(reason) => Err(refusal(tool, identity, reason)),
         None => Ok(()),
     }
+}
+
+/// System Settings may be opened and read (a version, whether a setting is
+/// on), never changed: an agent must not grant itself permissions there.
+fn reads_settings(tool: &str, identity: &TargetIdentity) -> bool {
+    let bundle = identity.bundle_id.as_deref().unwrap_or_default();
+    let name = identity.name.trim().to_ascii_lowercase();
+    let settings = bundle.eq_ignore_ascii_case("com.apple.systempreferences")
+        || (bundle.is_empty() && matches!(name.as_str(), "system settings" | "system preferences"));
+    settings
+        && matches!(
+            tool,
+            "launch_app" | "get_window_state" | "get_accessibility_tree" | "zoom"
+        )
 }
 
 /// The refusal reason for `identity`, or `None` when it may be targeted.
@@ -356,8 +371,8 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
             "Brigadier Computer Use does not act on itself or on the app that hosts it."
         }
         RefusalReason::SecuritySurface => {
-            "Brigadier Computer Use does not act on macOS authentication or security surfaces. \
-             Ask the user to do this step."
+            "Brigadier Computer Use does not act on macOS authentication or security surfaces \
+             (System Settings can be opened and read, not changed). Ask the user to do this step."
         }
     };
     let message = format!(
@@ -398,6 +413,7 @@ mod tests {
             103 => Some(app("Terminal", "com.apple.Terminal", 103)),
             104 => Some(app("Brigadier NIGHTLY", "ai.brigadier.app.nightly", 104)),
             105 => Some(app("Keychain Access", "com.apple.keychainaccess", 105)),
+            106 => Some(app("System Settings", "com.apple.systempreferences", 106)),
             _ => None,
         };
         let pid_for_window = |window: u64| match window {
@@ -532,6 +548,51 @@ mod tests {
                 ))
                 .as_deref(),
                 Some("driver")
+            );
+        });
+    }
+
+    #[test]
+    fn system_settings_can_be_opened_and_read_but_not_changed() {
+        with_fake_apps(|resolver| {
+            for (tool, args) in [
+                (
+                    "launch_app",
+                    json!({"bundle_id": "com.apple.systempreferences"}),
+                ),
+                ("launch_app", json!({"name": "System Settings"})),
+                ("get_window_state", json!({"pid": 106, "window_id": 1})),
+                ("zoom", json!({"pid": 106})),
+            ] {
+                assert_eq!(
+                    reason_of(enforce(tool, &args, &[], resolver)),
+                    None,
+                    "{tool}"
+                );
+            }
+            for tool in [
+                "click",
+                "type_text",
+                "set_value",
+                "press_key",
+                "hotkey",
+                "scroll",
+            ] {
+                assert_eq!(
+                    reason_of(enforce(tool, &json!({"pid": 106}), &[], resolver)).as_deref(),
+                    Some("security_surface"),
+                    "{tool}"
+                );
+            }
+            assert_eq!(
+                reason_of(enforce(
+                    "get_window_state",
+                    &json!({"pid": 105}),
+                    &[],
+                    resolver
+                ))
+                .as_deref(),
+                Some("security_surface")
             );
         });
     }

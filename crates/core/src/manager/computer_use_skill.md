@@ -91,7 +91,7 @@ Record only when the user asks. `start_recording` takes `output_dir` (and `recor
 
 ## Blocked targets and permissions
 
-- **`target_not_allowed`** means the target is off limits: the user's Brigadier, terminal apps, or macOS security surfaces such as password and authentication prompts. Don't retry, and don't work around it with shell commands. Tell the user what you couldn't do and why.
+- **`target_not_allowed`** means the target is off limits: the user's Brigadier, terminal apps, or macOS security surfaces such as password and authentication prompts. System Settings can be opened and read, but not changed. Don't retry, and don't work around it with shell commands. Tell the user what you couldn't do and why.
 - **Missing permissions:** if a call reports that Accessibility or Screen Recording permission is missing, stop. Tell the user that Brigadier will open its computer-use setup so they can grant access, and end your computer-use work for now. Don't loop on retries or `check_permissions`, and don't try to open System Settings yourself.
 
 ## When something fails
