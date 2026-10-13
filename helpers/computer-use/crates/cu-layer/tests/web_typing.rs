@@ -16,6 +16,10 @@ struct Page {
     refusal: Option<(&'static str, &'static str)>,
     /// What typing into the field gives (`None`: its window can't be made key).
     typed: Option<Typed>,
+    /// The driver typed but none of the text went in.
+    incomplete: bool,
+    /// The target window is on another Space than the user's.
+    other_space: bool,
     /// Whether the element can be found again.
     found: bool,
     finds: usize,
@@ -35,7 +39,19 @@ impl Tool for FakeTypeText {
         &self.def
     }
     async fn invoke(&self, _args: Value) -> ToolResult {
-        match self.page.lock().unwrap().refusal {
+        let page = self.page.lock().unwrap();
+        if page.incomplete {
+            return ToolResult::error(
+                "type_text incomplete: delivered 0 of 7 character(s); retry only the remaining suffix",
+            )
+            .with_structured(json!({
+                "code": "type_text_incomplete",
+                "effect": "partial",
+                "delivered_chars": 0,
+                "retryable": true,
+            }));
+        }
+        match page.refusal {
             None => ToolResult::text("✅ Inserted by the driver"),
             Some((code, advice)) => ToolResult::error(format!("Background input refused ({code})"))
                 .with_structured(json!({
@@ -58,6 +74,10 @@ impl PageFields for FakeFields {
         page.finds += 1;
         page.found
             .then(|| Box::new(FakeField(self.0.clone())) as Box<dyn PageField>)
+    }
+
+    fn on_other_space(&self, _args: &Value) -> bool {
+        self.0.lock().unwrap().other_space
     }
 }
 
@@ -198,4 +218,66 @@ async fn other_answers_pass_through_untouched() {
         assert_eq!(result.is_error, refusal.map(|_| true));
         assert_eq!(page.lock().unwrap().finds, 0);
     }
+}
+
+fn code_of(result: &ToolResult) -> Option<String> {
+    result
+        .structured_content
+        .as_ref()?
+        .get("code")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+#[tokio::test]
+async fn typing_that_reaches_nothing_on_another_space_says_why_instead_of_asking_for_a_retry() {
+    let (registry, page) = build(Page {
+        incomplete: true,
+        other_space: true,
+        ..Page::default()
+    });
+    let result = registry.invoke("type_text", args(6)).await;
+    let text = text_of(&result);
+    assert_eq!(result.is_error, Some(true));
+    assert_eq!(code_of(&result).as_deref(), Some("window_on_other_space"));
+    assert!(text.starts_with("Nothing was typed"), "{text}");
+    assert!(text.contains("another Space"), "{text}");
+    assert!(!text.contains("retry"), "{text}");
+    assert!(!text.to_lowercase().contains("front"), "{text}");
+    let structured = result.structured_content.unwrap();
+    assert_eq!(structured["effect"], "none");
+    assert_eq!(structured["retryable"], false);
+    assert_eq!(structured["pid"], 6);
+    assert!(page.lock().unwrap().keys.is_empty());
+}
+
+#[tokio::test]
+async fn keys_a_window_on_another_space_doesnt_show_are_explained() {
+    let (registry, page) = build(Page {
+        refusal: WEB_REFUSAL,
+        typed: Some(Typed::Unconfirmed),
+        found: true,
+        other_space: true,
+        ..Page::default()
+    });
+    let result = registry.invoke("type_text", args(7)).await;
+    let text = text_of(&result);
+    assert_eq!(result.is_error, Some(true));
+    assert_eq!(code_of(&result).as_deref(), Some("window_on_other_space"));
+    assert!(
+        text.starts_with("7 char(s) went out as key events"),
+        "{text}"
+    );
+    assert_eq!(result.structured_content.unwrap()["effect"], "unconfirmed");
+    assert_eq!(page.lock().unwrap().keys, ["zzquery"]);
+}
+
+#[tokio::test]
+async fn typing_that_reaches_nothing_on_the_users_space_keeps_the_drivers_answer() {
+    let (registry, _) = build(Page {
+        incomplete: true,
+        ..Page::default()
+    });
+    let result = registry.invoke("type_text", args(8)).await;
+    assert_eq!(code_of(&result).as_deref(), Some("type_text_incomplete"));
 }

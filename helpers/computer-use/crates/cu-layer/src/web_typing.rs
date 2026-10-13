@@ -10,6 +10,10 @@
 //! events to the app, and reads the field back. The refusal stands when the
 //! app is the one the user is working in (its key window is the user's), or
 //! when the element can't be found again.
+//!
+//! Such an app takes no typed keys at all in a window on another Space than
+//! the user's. When typing there leaves the field unchanged, the answer says
+//! so instead of asking for a retry that would fail the same way.
 
 use std::time::{Duration, Instant};
 
@@ -42,6 +46,12 @@ pub trait PageFields: Send + Sync {
     /// `None` when the route doesn't apply (the app is in front, the element
     /// or its window can't be found): the driver's refusal then stands.
     fn find(&self, args: &Value) -> Option<Box<dyn PageField>>;
+
+    /// Whether the target is a desktop web app's window on another Space
+    /// than the user's.
+    fn on_other_space(&self, _args: &Value) -> bool {
+        false
+    }
 }
 
 /// One page element found by [`PageFields::find`].
@@ -138,6 +148,44 @@ pub fn typed_result(typed: &Typed, text: &str, refused: &ToolResult) -> ToolResu
 }
 
 /// The driver's `type_text` with page typing around its refusal.
+/// The driver's answer when none of the text went in.
+fn delivered_nothing(result: &ToolResult) -> bool {
+    result.is_error == Some(true)
+        && result.structured_content.as_ref().is_some_and(|s| {
+            s.get("code").and_then(Value::as_str) == Some("type_text_incomplete")
+                && s.get("delivered_chars").and_then(Value::as_u64) == Some(0)
+        })
+}
+
+/// The answer for typing into a desktop web app's window on another Space.
+/// `sent`: key events went out, but the field doesn't show them.
+pub fn other_space_result(args: &Value, text: &str, sent: bool) -> ToolResult {
+    let count = text.chars().count();
+    let mut structured = json!({
+        "code": "window_on_other_space",
+        "effect": if sent { "unconfirmed" } else { "none" },
+        "characters": count,
+        "retryable": false,
+    });
+    for key in ["pid", "window_id"] {
+        if let Some(value) = args.get(key) {
+            structured[key] = value.clone();
+        }
+    }
+    let what = if sent {
+        format!("{count} char(s) went out as key events, but the field doesn't show them")
+    } else {
+        "Nothing was typed".to_owned()
+    };
+    ToolResult::error(format!(
+        "{what}: this window is on another Space than the user's, and the app takes no typed \
+         keys in a window there. In a browser, the `page` tool's insert_text may still put \
+         the text in. Otherwise type again once the window is on the user's current Space, \
+         or tell the user."
+    ))
+    .with_structured(structured)
+}
+
 pub struct TypeIntoPages {
     inner: Box<dyn Tool>,
     fields: Box<dyn PageFields>,
@@ -203,18 +251,24 @@ impl Tool for TypeIntoPages {
 
     async fn invoke(&self, args: Value) -> ToolResult {
         let result = self.inner.invoke(args.clone()).await;
-        if !is_web_content_refusal(&result) {
-            return result;
-        }
         let Some(text) = args.get("text").and_then(Value::as_str).map(str::to_owned) else {
             return result;
         };
+        if delivered_nothing(&result) && self.fields.on_other_space(&args) {
+            return other_space_result(&args, &text, false);
+        }
+        if !is_web_content_refusal(&result) {
+            return result;
+        }
         let Some(field) = self.fields.find(&args) else {
             return result;
         };
         let typing = text.clone();
         let typed = tokio::task::spawn_blocking(move || field.type_text(&typing)).await;
         match typed {
+            Ok(Some(Typed::Unconfirmed)) if self.fields.on_other_space(&args) => {
+                other_space_result(&args, &text, true)
+            }
             Ok(Some(typed)) => typed_result(&typed, &text, &result),
             _ => result,
         }
@@ -230,20 +284,7 @@ impl PageFields for System {
         use cua_driver_core::element_token::ResolvedElement;
         use platform_macos::ax::snapshot::AxSnapshot;
 
-        let owner = args
-            .get("element_token")
-            .and_then(Value::as_str)
-            .and_then(crate::tokens::owner);
-        let pid = args
-            .get("pid")
-            .and_then(Value::as_i64)
-            .or(owner.map(|(pid, _)| pid))?;
-        let pid = i32::try_from(pid).ok()?;
-        let window_id = args
-            .get("window_id")
-            .and_then(Value::as_u64)
-            .or(owner.and_then(|(_, window)| window))?;
-        let window_id = u32::try_from(window_id).ok()?;
+        let (pid, window_id) = target(args)?;
         // The app the user works in keeps its own key window.
         if platform_macos::input::skylight::front_process_pid() == Some(pid) {
             return None;
@@ -258,6 +299,31 @@ impl PageFields for System {
             element,
         }))
     }
+
+    fn on_other_space(&self, args: &Value) -> bool {
+        target(args).is_some_and(|(pid, window_id)| {
+            crate::hotkey::chromium_family(pid)
+                && platform_macos::windows::window_on_current_space_by_id(window_id) == Some(false)
+        })
+    }
+}
+
+/// The target's app and window, from the arguments or the element token.
+#[cfg(target_os = "macos")]
+fn target(args: &Value) -> Option<(i32, u32)> {
+    let owner = args
+        .get("element_token")
+        .and_then(Value::as_str)
+        .and_then(crate::tokens::owner);
+    let pid = args
+        .get("pid")
+        .and_then(Value::as_i64)
+        .or(owner.map(|(pid, _)| pid))?;
+    let window_id = args
+        .get("window_id")
+        .and_then(Value::as_u64)
+        .or(owner.and_then(|(_, window)| window))?;
+    Some((i32::try_from(pid).ok()?, u32::try_from(window_id).ok()?))
 }
 
 #[cfg(not(target_os = "macos"))]
