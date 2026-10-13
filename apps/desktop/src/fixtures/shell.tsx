@@ -381,13 +381,13 @@ async function panels() {
 function tabsStart() {
   const sidebar = rect(one('[data-slot="sidebar-panel"]'))!;
   const nav = [...document.querySelectorAll<HTMLElement>('[data-slot="titlebar-nav"] button')].map((button) => button.getAttribute("aria-label"));
-  const toggle = rect(one('[data-slot="sidebar-toggle"]'))!;
+  const sidebarToggle = rect(one('[data-slot="sidebar-toggle"]'))!;
   const strip = [...document.querySelectorAll<HTMLElement>('[data-slot="sidebar-panel"] button[aria-label]')]
     .filter((button) => !button.closest("[inert]"));
   const firstTab = rect(one('[data-slot="session-tabs"] [data-tab-id="chat"]'))!;
   const rule = getComputedStyle(one('[data-slot="session-tabs"]')!, "::before");
   return {
-    nav, divider: divider(), sidebarEnd: sidebar.x + sidebar.w, toggleEnd: toggle.x + toggle.w,
+    nav, divider: divider(), sidebarEnd: sidebar.x + sidebar.w, toggleEnd: sidebarToggle.x + sidebarToggle.w,
     strip: strip.map((button) => button.getAttribute("aria-label")), firstTab: firstTab.x,
     rule: { width: Number.parseFloat(rule.width), height: Math.round(Number.parseFloat(rule.height)), shown: rule.content !== "none" && rule.display !== "none" },
   };
