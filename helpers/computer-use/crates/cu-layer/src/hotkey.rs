@@ -223,10 +223,10 @@ mod system {
     use core_foundation::base::{CFRange, CFRelease, CFTypeRef, TCFType};
     use core_foundation::string::CFString;
     use platform_macos::ax::bindings::{
-        ax_get_window_id, copy_ax_windows, copy_bool_attr, copy_children, copy_element_attr,
-        copy_number_attr, copy_string_attr, kAXErrorSuccess, kAXValueCFRangeType, perform_action,
-        set_bool_attr_true, AXUIElementCreateApplication, AXUIElementRef,
-        AXUIElementSetAttributeValue, AXValueCreate,
+        ax_get_window_id, copy_ax_windows, copy_ax_windows_including, copy_bool_attr,
+        copy_children, copy_element_attr, copy_number_attr, copy_string_attr, kAXErrorSuccess,
+        kAXValueCFRangeType, perform_action, set_bool_attr_true, AXUIElementCreateApplication,
+        AXUIElementRef, AXUIElementSetAttributeValue, AXValueCreate,
     };
 
     use super::shortcut_matches;
@@ -292,9 +292,11 @@ mod system {
             }
             keep
         });
+        // A window on another Space than the user's is missing from the
+        // app's window list; the lookup that includes it finds it anyway.
         if target.is_none() {
             if let Some(id) = window_id {
-                for window in copy_ax_windows(app) {
+                for window in copy_ax_windows_including(app, pid, id) {
                     if target.is_none() && ax_get_window_id(window) == Some(id) {
                         target = first_text(window);
                     }
