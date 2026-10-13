@@ -292,6 +292,9 @@ pub(crate) fn locate_by_name(name: &str) -> Option<AppLocator> {
         "/Applications/Utilities".to_owned(),
         format!("{home}/Applications"),
         format!("{home}/Applications/Chrome Apps.localized"),
+        // Finder and the other apps macOS keeps with its own services.
+        "/System/Library/CoreServices".to_owned(),
+        "/System/Library/CoreServices/Applications".to_owned(),
     ];
     for root in &roots {
         let path = format!("{root}/{app_name}");
@@ -647,7 +650,17 @@ pub fn format_app_list(apps: &[AppInfo]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{app_path_for_info_plist, read_app_plist, unix_secs_to_rfc3339};
+    use super::{
+        app_path_for_info_plist, locate_by_name, read_app_plist, unix_secs_to_rfc3339, AppLocator,
+    };
+
+    #[test]
+    fn finder_is_found_by_its_name() {
+        assert!(matches!(
+            locate_by_name("Finder"),
+            Some(AppLocator::Path(path)) if path == "/System/Library/CoreServices/Finder.app"
+        ));
+    }
 
     #[test]
     fn rfc3339_epoch() {
