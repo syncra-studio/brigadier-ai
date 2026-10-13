@@ -105,14 +105,23 @@ pub(crate) fn new_window_script(kind: BrowserKind, bundle_id: &str, urls: &[Stri
     script
 }
 
-/// Puts windows that are not in `before` first, keeping the order within
-/// each group. Returns how many are new.
+/// Puts windows that are not in `before` first, and among them the ones big
+/// enough to show a page before the browser's own small helper windows (a
+/// toolbar or address-bar popup opened along with a new window), keeping the
+/// order within each group. Returns how many new windows can show a page.
 pub(crate) fn new_windows_first(windows: &mut [WindowInfo], before: &HashSet<u32>) -> usize {
-    windows.sort_by_key(|w| before.contains(&w.window_id));
+    windows.sort_by_key(|w| (before.contains(&w.window_id), !shows_a_page(w)));
     windows
         .iter()
-        .take_while(|w| !before.contains(&w.window_id))
+        .take_while(|w| !before.contains(&w.window_id) && shows_a_page(w))
         .count()
+}
+
+/// A window big enough to show a page, unlike the browser's thin toolbar,
+/// address-bar popup and placeholder windows.
+fn shows_a_page(window: &WindowInfo) -> bool {
+    const MIN_SIDE: f64 = 200.0;
+    window.bounds.width >= MIN_SIDE && window.bounds.height >= MIN_SIDE
 }
 
 /// The pid's windows with the ones opened since `before` first, waiting a
@@ -299,12 +308,16 @@ mod tests {
     }
 
     fn window(window_id: u32) -> WindowInfo {
+        sized_window(window_id, 800.0, 600.0)
+    }
+
+    fn sized_window(window_id: u32, width: f64, height: f64) -> WindowInfo {
         serde_json::from_value(serde_json::json!({
             "window_id": window_id,
             "pid": 1,
             "app_name": "Browser",
             "title": "",
-            "bounds": { "x": 0.0, "y": 0.0, "width": 800.0, "height": 600.0 },
+            "bounds": { "x": 0.0, "y": 0.0, "width": width, "height": height },
             "layer": 0,
             "z_index": 0,
             "is_on_screen": true,
@@ -321,6 +334,20 @@ mod tests {
         assert_eq!(new_windows_first(&mut windows, &before), 2);
         let ids: Vec<u32> = windows.iter().map(|w| w.window_id).collect();
         assert_eq!(ids, [31, 32, 10, 20]);
+    }
+
+    #[test]
+    fn a_new_page_window_comes_before_the_browsers_new_helper_windows() {
+        let before: HashSet<u32> = [10].into();
+        let mut windows = vec![
+            window(10),
+            sized_window(41, 1038.0, 88.0),
+            sized_window(42, 1.0, 1.0),
+            window(40),
+        ];
+        assert_eq!(new_windows_first(&mut windows, &before), 1);
+        let ids: Vec<u32> = windows.iter().map(|w| w.window_id).collect();
+        assert_eq!(ids, [40, 41, 42, 10]);
     }
 
     #[test]
