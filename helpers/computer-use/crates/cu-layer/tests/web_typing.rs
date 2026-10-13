@@ -20,9 +20,13 @@ struct Page {
     incomplete: bool,
     /// The target window is on another Space than the user's.
     other_space: bool,
+    /// What the browser's debugging port gives when the keys didn't show.
+    debug_port: Option<Typed>,
     /// Whether the element can be found again.
     found: bool,
     finds: usize,
+    /// How often the driver's tool ran.
+    driver_calls: usize,
     keys: Vec<String>,
 }
 
@@ -39,7 +43,8 @@ impl Tool for FakeTypeText {
         &self.def
     }
     async fn invoke(&self, _args: Value) -> ToolResult {
-        let page = self.page.lock().unwrap();
+        let mut page = self.page.lock().unwrap();
+        page.driver_calls += 1;
         if page.incomplete {
             return ToolResult::error(
                 "type_text incomplete: delivered 0 of 7 character(s); retry only the remaining suffix",
@@ -68,6 +73,7 @@ impl Tool for FakeTypeText {
 struct FakeFields(Shared);
 struct FakeField(Shared);
 
+#[async_trait]
 impl PageFields for FakeFields {
     fn find(&self, _args: &Value) -> Option<Box<dyn PageField>> {
         let mut page = self.0.lock().unwrap();
@@ -78,6 +84,10 @@ impl PageFields for FakeFields {
 
     fn on_other_space(&self, _args: &Value) -> bool {
         self.0.lock().unwrap().other_space
+    }
+
+    async fn insert_over_debug_port(&self, _args: &Value, _text: &str) -> Option<Typed> {
+        self.0.lock().unwrap().debug_port.clone()
     }
 }
 
@@ -230,54 +240,96 @@ fn code_of(result: &ToolResult) -> Option<String> {
 }
 
 #[tokio::test]
-async fn typing_that_reaches_nothing_on_another_space_says_why_instead_of_asking_for_a_retry() {
+async fn a_page_on_another_space_is_typed_into_through_its_key_window_without_the_drivers_keys() {
     let (registry, page) = build(Page {
         incomplete: true,
         other_space: true,
+        typed: Some(Typed::Landed {
+            value: "zzquery".into(),
+        }),
+        found: true,
         ..Page::default()
     });
     let result = registry.invoke("type_text", args(6)).await;
     let text = text_of(&result);
-    assert_eq!(result.is_error, Some(true));
-    assert_eq!(code_of(&result).as_deref(), Some("window_on_other_space"));
-    assert!(text.starts_with("Nothing was typed"), "{text}");
-    assert!(text.contains("another Space"), "{text}");
-    assert!(!text.contains("retry"), "{text}");
-    assert!(!text.to_lowercase().contains("front"), "{text}");
-    let structured = result.structured_content.unwrap();
-    assert_eq!(structured["effect"], "none");
-    assert_eq!(structured["retryable"], false);
-    assert_eq!(structured["pid"], 6);
-    assert!(page.lock().unwrap().keys.is_empty());
+    assert_ne!(result.is_error, Some(true), "{text}");
+    assert!(text.starts_with("✅ Typed 7 char(s)"), "{text}");
+    let page = page.lock().unwrap();
+    assert_eq!(page.keys, ["zzquery"]);
+    assert_eq!(page.driver_calls, 0);
 }
 
 #[tokio::test]
-async fn keys_a_window_on_another_space_doesnt_show_are_explained() {
+async fn a_page_on_another_space_whose_field_cant_be_used_gets_the_drivers_answer() {
     let (registry, page) = build(Page {
-        refusal: WEB_REFUSAL,
-        typed: Some(Typed::Unconfirmed),
-        found: true,
+        incomplete: true,
         other_space: true,
         ..Page::default()
     });
-    let result = registry.invoke("type_text", args(7)).await;
-    let text = text_of(&result);
-    assert_eq!(result.is_error, Some(true));
-    assert_eq!(code_of(&result).as_deref(), Some("window_on_other_space"));
-    assert!(
-        text.starts_with("7 char(s) went out as key events"),
-        "{text}"
-    );
-    assert_eq!(result.structured_content.unwrap()["effect"], "unconfirmed");
-    assert_eq!(page.lock().unwrap().keys, ["zzquery"]);
+    let result = registry.invoke("type_text", args(11)).await;
+    assert_eq!(code_of(&result).as_deref(), Some("type_text_incomplete"));
+    assert_eq!(page.lock().unwrap().driver_calls, 1);
 }
 
 #[tokio::test]
-async fn typing_that_reaches_nothing_on_the_users_space_keeps_the_drivers_answer() {
-    let (registry, _) = build(Page {
+async fn the_drivers_answer_stands_when_its_keys_reached_nothing_on_the_users_space() {
+    let (registry, page) = build(Page {
         incomplete: true,
+        found: true,
+        typed: Some(Typed::Landed {
+            value: "zzquery".into(),
+        }),
         ..Page::default()
     });
     let result = registry.invoke("type_text", args(8)).await;
     assert_eq!(code_of(&result).as_deref(), Some("type_text_incomplete"));
+    assert_eq!(page.lock().unwrap().finds, 0);
+}
+
+#[tokio::test]
+async fn keys_a_browser_page_didnt_take_go_in_through_its_debugging_port() {
+    let (registry, page) = build(Page {
+        refusal: WEB_REFUSAL,
+        typed: Some(Typed::Unconfirmed),
+        debug_port: Some(Typed::Inserted {
+            value: "zzquery".into(),
+        }),
+        found: true,
+        ..Page::default()
+    });
+    let result = registry.invoke("type_text", args(9)).await;
+    let text = text_of(&result);
+    assert_ne!(result.is_error, Some(true), "{text}");
+    assert!(
+        text.contains("through the browser's debugging port"),
+        "{text}"
+    );
+    assert_eq!(page.lock().unwrap().keys, ["zzquery"]);
+}
+
+#[tokio::test]
+async fn keys_that_landed_late_are_not_inserted_again() {
+    let (registry, _) = build(Page {
+        refusal: WEB_REFUSAL,
+        typed: Some(Typed::Unconfirmed),
+        debug_port: Some(Typed::Landed {
+            value: "zzquery".into(),
+        }),
+        found: true,
+        ..Page::default()
+    });
+    let result = registry.invoke("type_text", args(10)).await;
+    let text = text_of(&result);
+    assert!(
+        text.starts_with("✅ Typed 7 char(s) into the page's field as key events"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_page_probe_names_the_field_and_the_text() {
+    let probe = cu_layer::web_typing::field_probe("q", "it's");
+    assert!(probe.contains(r#"const id = "q";"#), "{probe}");
+    assert!(probe.contains(r#"v.includes("it's")"#), "{probe}");
+    assert!(probe.contains("'there:' + v"), "{probe}");
 }

@@ -63,10 +63,20 @@ pub struct MacOsPageBackend {
     cdp_sessions: Arc<CdpSessionCache>,
 }
 
+/// The debugging-port connections every caller shares: a browser asks the
+/// user before each new connection to a profile they opened it on, so one
+/// approved connection serves the `page` tool and typing alike.
+pub fn shared_cdp_sessions() -> Arc<CdpSessionCache> {
+    static SESSIONS: OnceLock<Arc<CdpSessionCache>> = OnceLock::new();
+    SESSIONS
+        .get_or_init(|| Arc::new(CdpSessionCache::new()))
+        .clone()
+}
+
 impl MacOsPageBackend {
     pub fn new() -> Self {
         Self {
-            cdp_sessions: Arc::new(CdpSessionCache::new()),
+            cdp_sessions: shared_cdp_sessions(),
         }
     }
 

@@ -11,9 +11,16 @@
 //! app is the one the user is working in (its key window is the user's), or
 //! when the element can't be found again.
 //!
-//! Such an app takes no typed keys at all in a window on another Space than
-//! the user's. When typing there leaves the field unchanged, the answer says
-//! so instead of asking for a retry that would fail the same way.
+//! In a window on another Space than the user's, the driver's own keys
+//! don't reach the page, so such a call goes straight to this route.
+//!
+//! A page whose window isn't being drawn (covered, or on another Space) gets
+//! the keys but tells accessibility about its new text only when it next
+//! handles an event, so the read-back asks the field to scroll itself into
+//! view (nothing moves for a field already in view) until the text shows.
+//! A browser window opened behind the user's work may take no keys at all;
+//! when the field still doesn't show the text and the browser has a
+//! debugging port, the page's focused field gets the text through it.
 
 use std::time::{Duration, Instant};
 
@@ -33,6 +40,9 @@ const READ_BACK_POLL: Duration = Duration::from_millis(20);
 /// What typing into a page field did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Typed {
+    /// The key events didn't show; the text went in through the browser's
+    /// debugging port and the page's field holds it.
+    Inserted { value: String },
     /// The field shows the text.
     Landed { value: String },
     /// The keys were sent but the field doesn't show the text.
@@ -42,15 +52,24 @@ pub enum Typed {
 }
 
 /// Finds the page element a refused call addressed. Tests supply a fake.
+#[async_trait]
 pub trait PageFields: Send + Sync {
     /// `None` when the route doesn't apply (the app is in front, the element
     /// or its window can't be found): the driver's refusal then stands.
     fn find(&self, args: &Value) -> Option<Box<dyn PageField>>;
 
     /// Whether the target is a desktop web app's window on another Space
-    /// than the user's.
+    /// than the user's, where the driver's own keys don't reach the page.
     fn on_other_space(&self, _args: &Value) -> bool {
         false
+    }
+
+    /// When the key events didn't show: the page's focused field through
+    /// the browser's debugging port. [`Typed::Landed`] when it already holds
+    /// `text`, [`Typed::Inserted`] when it does after inserting it, `None`
+    /// when there's no port or the page's focus is on something else.
+    async fn insert_over_debug_port(&self, _args: &Value, _text: &str) -> Option<Typed> {
+        None
     }
 }
 
@@ -72,14 +91,14 @@ pub fn is_web_content_refusal(result: &ToolResult) -> bool {
 }
 
 /// The answer for a typing done here.
-pub fn typed_result(typed: &Typed, text: &str, refused: &ToolResult) -> ToolResult {
+pub fn typed_result(typed: &Typed, text: &str, args: &Value) -> ToolResult {
     let count = text.chars().count();
     let mut structured = json!({
         "route": "key_events_background_key_window",
         "characters": count,
     });
     for key in ["pid", "window_id"] {
-        if let Some(value) = refused.structured_content.as_ref().and_then(|s| s.get(key)) {
+        if let Some(value) = args.get(key) {
             structured[key] = value.clone();
         }
     }
@@ -110,6 +129,33 @@ pub fn typed_result(typed: &Typed, text: &str, refused: &ToolResult) -> ToolResu
                     detail: "the field's value shows the typed text".into(),
                 })
                 .build()
+            {
+                Ok(record) => result.with_action_record(record),
+                Err(_) => result,
+            }
+        }
+        Typed::Inserted { value } => {
+            structured["route"] = json!("debugging_port_insert_text");
+            structured["verified"] = json!(true);
+            structured["value"] = json!(value);
+            let result = ToolResult::text(format!(
+                "✅ Typed {count} char(s) into the page's field through the browser's \
+                 debugging port (its key events didn't reach the page); it now shows \
+                 {value:?}. The app stayed in the background."
+            ))
+            .with_structured(structured);
+            match ActionExecutionRecord::builder(
+                ActionEffect::Confirmed,
+                ActionTransport::BrowserCdpInputKey,
+                RequestedDelivery::Background,
+            )
+            .actual_delivery(ActualDelivery::Background)
+            .delivered_count(count as u32)
+            .evidence(ActionEvidence {
+                kind: EvidenceKind::BrowserReadback,
+                detail: "the page's focused field holds the typed text".into(),
+            })
+            .build()
             {
                 Ok(record) => result.with_action_record(record),
                 Err(_) => result,
@@ -148,44 +194,6 @@ pub fn typed_result(typed: &Typed, text: &str, refused: &ToolResult) -> ToolResu
 }
 
 /// The driver's `type_text` with page typing around its refusal.
-/// The driver's answer when none of the text went in.
-fn delivered_nothing(result: &ToolResult) -> bool {
-    result.is_error == Some(true)
-        && result.structured_content.as_ref().is_some_and(|s| {
-            s.get("code").and_then(Value::as_str) == Some("type_text_incomplete")
-                && s.get("delivered_chars").and_then(Value::as_u64) == Some(0)
-        })
-}
-
-/// The answer for typing into a desktop web app's window on another Space.
-/// `sent`: key events went out, but the field doesn't show them.
-pub fn other_space_result(args: &Value, text: &str, sent: bool) -> ToolResult {
-    let count = text.chars().count();
-    let mut structured = json!({
-        "code": "window_on_other_space",
-        "effect": if sent { "unconfirmed" } else { "none" },
-        "characters": count,
-        "retryable": false,
-    });
-    for key in ["pid", "window_id"] {
-        if let Some(value) = args.get(key) {
-            structured[key] = value.clone();
-        }
-    }
-    let what = if sent {
-        format!("{count} char(s) went out as key events, but the field doesn't show them")
-    } else {
-        "Nothing was typed".to_owned()
-    };
-    ToolResult::error(format!(
-        "{what}: this window is on another Space than the user's, and the app takes no typed \
-         keys in a window there. In a browser, the `page` tool's insert_text may still put \
-         the text in. Otherwise type again once the window is on the user's current Space, \
-         or tell the user."
-    ))
-    .with_structured(structured)
-}
-
 pub struct TypeIntoPages {
     inner: Box<dyn Tool>,
     fields: Box<dyn PageFields>,
@@ -250,28 +258,44 @@ impl Tool for TypeIntoPages {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
-        let result = self.inner.invoke(args.clone()).await;
         let Some(text) = args.get("text").and_then(Value::as_str).map(str::to_owned) else {
-            return result;
+            return self.inner.invoke(args).await;
         };
-        if delivered_nothing(&result) && self.fields.on_other_space(&args) {
-            return other_space_result(&args, &text, false);
+        // The driver's keys don't reach a page on another Space: go straight
+        // to the key window.
+        if self.fields.on_other_space(&args) {
+            if let Some(typed) = self.type_into_page(&args, &text).await {
+                return typed;
+            }
+            return self.inner.invoke(args).await;
         }
+        let result = self.inner.invoke(args.clone()).await;
         if !is_web_content_refusal(&result) {
             return result;
         }
-        let Some(field) = self.fields.find(&args) else {
-            return result;
+        self.type_into_page(&args, &text).await.unwrap_or(result)
+    }
+}
+
+impl TypeIntoPages {
+    /// Types into the page's field as key events, then through the
+    /// browser's debugging port if the keys don't show. `None` when the
+    /// field can't be used.
+    async fn type_into_page(&self, args: &Value, text: &str) -> Option<ToolResult> {
+        let field = self.fields.find(args)?;
+        let typing = text.to_owned();
+        let typed = tokio::task::spawn_blocking(move || field.type_text(&typing))
+            .await
+            .ok()??;
+        let typed = match typed {
+            Typed::Unconfirmed => self
+                .fields
+                .insert_over_debug_port(args, text)
+                .await
+                .unwrap_or(Typed::Unconfirmed),
+            typed => typed,
         };
-        let typing = text.clone();
-        let typed = tokio::task::spawn_blocking(move || field.type_text(&typing)).await;
-        match typed {
-            Ok(Some(Typed::Unconfirmed)) if self.fields.on_other_space(&args) => {
-                other_space_result(&args, &text, true)
-            }
-            Ok(Some(typed)) => typed_result(&typed, &text, &result),
-            _ => result,
-        }
+        Some(typed_result(&typed, text, args))
     }
 }
 
@@ -279,6 +303,7 @@ impl Tool for TypeIntoPages {
 pub struct System;
 
 #[cfg(target_os = "macos")]
+#[async_trait]
 impl PageFields for System {
     fn find(&self, args: &Value) -> Option<Box<dyn PageField>> {
         use cua_driver_core::element_token::ResolvedElement;
@@ -306,6 +331,78 @@ impl PageFields for System {
                 && platform_macos::windows::window_on_current_space_by_id(window_id) == Some(false)
         })
     }
+
+    async fn insert_over_debug_port(&self, args: &Value, text: &str) -> Option<Typed> {
+        use cua_driver_core::element_token::ResolvedElement;
+        use platform_macos::ax::bindings::{copy_string_attr, AXUIElementRef};
+        use platform_macos::ax::snapshot::AxSnapshot;
+
+        if text.is_empty() {
+            return None;
+        }
+        let (pid, window_id) = target(args)?;
+        let port = crate::page::cdp_port_for_pid(pid).await?;
+        // The page names the field by its DOM id, when it has one.
+        let dom_id = {
+            let store = cua_driver_core::snapshot_store::current_runtime_store::<AxSnapshot>()?;
+            let ResolvedElement::Element { element, .. } = store.resolve(pid, args).ok()? else {
+                return None;
+            };
+            unsafe { copy_string_attr(element.as_ptr() as AXUIElementRef, "AXDOMIdentifier") }
+                .unwrap_or_default()
+        };
+        let title = tokio::task::spawn_blocking(move || {
+            crate::window_list::windows(Some(pid))
+                .into_iter()
+                .find(|window| window.id == window_id)
+                .map(|window| window.title)
+        })
+        .await
+        .ok()
+        .flatten();
+        let sessions = crate::page::shared_cdp_sessions();
+        let probe = field_probe(&dom_id, text);
+        let read = || async {
+            sessions
+                .evaluate_in_window(&probe, port, title.as_deref())
+                .await
+                .ok()
+        };
+        let state = read().await?;
+        if let Some(value) = state.strip_prefix("there:") {
+            return Some(Typed::Landed {
+                value: value.to_owned(),
+            });
+        }
+        if state != "missing" {
+            return None;
+        }
+        sessions
+            .insert_text_in_window(text, port, title.as_deref())
+            .await
+            .ok()?;
+        read()
+            .await?
+            .strip_prefix("there:")
+            .map(|value| Typed::Inserted {
+                value: value.to_owned(),
+            })
+    }
+}
+
+/// JavaScript answering `there:<value>` when the page's focused editable
+/// field (with `dom_id`, when given) holds `text`, `missing` when it
+/// doesn't, and `none` when the page's focus is on something else.
+pub fn field_probe(dom_id: &str, text: &str) -> String {
+    let id = serde_json::to_string(dom_id).unwrap_or_else(|_| "\"\"".into());
+    let text = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        "(() => {{ const e = document.activeElement; \
+         if (!e || !(e.isContentEditable || e.tagName === 'INPUT' || e.tagName === 'TEXTAREA')) return 'none'; \
+         const id = {id}; if (id && e.id !== id) return 'none'; \
+         const v = (e.value !== undefined ? e.value : e.textContent) || ''; \
+         return v.includes({text}) ? 'there:' + v : 'missing'; }})()"
+    )
 }
 
 /// The target's app and window, from the arguments or the element token.
@@ -343,7 +440,9 @@ struct AxPageField {
 #[cfg(target_os = "macos")]
 impl PageField for AxPageField {
     fn type_text(&self, text: &str) -> Option<Typed> {
-        use platform_macos::ax::bindings::{copy_bool_attr, copy_string_attr, AXUIElementRef};
+        use platform_macos::ax::bindings::{
+            copy_bool_attr, copy_string_attr, perform_action, AXUIElementRef,
+        };
         use platform_macos::input::{ax_actions, keyboard};
 
         let pointer = self.element.as_ptr() as AXUIElementRef;
@@ -371,6 +470,9 @@ impl PageField for AxPageField {
             if Instant::now() >= deadline {
                 return Some(Typed::Unconfirmed);
             }
+            // A page that isn't being drawn sends its pending text changes
+            // when it handles this.
+            let _ = unsafe { perform_action(pointer, "AXScrollToVisible") };
             std::thread::sleep(READ_BACK_POLL);
         }
     }
