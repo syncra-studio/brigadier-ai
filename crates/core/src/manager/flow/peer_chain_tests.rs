@@ -198,3 +198,103 @@ async fn the_twenty_first_message_in_a_minute_is_refused() {
     flow.settled_in(&api).await;
     flow.stop().await;
 }
+
+/// A worker's report wakes a request a reply came back to: what that turn sends carries the
+/// reply's chain on, one hop more, never counting from zero again.
+#[tokio::test]
+async fn a_turn_a_workers_report_wakes_keeps_the_chain_of_its_requests_newest_message() {
+    use super::peer_kit::header_id;
+    use serde_json::json;
+    let peers = Peers::new();
+    let inner = peers.script();
+    let script: super::Script = Arc::new(move |turn: super::Turn| {
+        if turn.is_orchestrator() {
+            return inner(turn);
+        }
+        Box::pin(async move {
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "`name` is in the users table."}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        })
+    });
+    // Each message waits for a turn of its own, so the reply wakes the thread anew.
+    let options = Options {
+        behavior: Arc::new(FakeBehavior {
+            refuse_steers: true,
+            ..Default::default()
+        }),
+        ..Options::default()
+    };
+    let flow = Flow::start("peer-report-chain", options, script).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Codex)
+        .await;
+    let back = flow.conversation.clone();
+    peers.on(&api, move |turn| {
+        let back = back.clone();
+        async move {
+            if turn.input.contains("Which column holds names?")
+                && let Some(original) = header_id(&turn.input)
+            {
+                send(&turn, &back, "Ask a worker: I don't know.", Some(&original)).await;
+            }
+            Reply::text("Done.")
+        }
+    });
+    let all = Sent::default();
+    let (kept, to) = (all.clone(), api.clone());
+    peers.on(&flow.conversation, move |turn| {
+        let (kept, to) = (kept.clone(), to.clone());
+        async move {
+            if header_id(&turn.input).is_some() {
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "medium", "title": "Find names", "kind": "research",
+                               "spec": "Find where names live.", "provider": "claude"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            let text = if turn.input.contains("Ask the API session") {
+                "Which column holds names?"
+            } else if kept.lock().unwrap().len() == 1 {
+                "A worker found it: the users table."
+            } else {
+                return Reply::text("Done.");
+            };
+            let reply = send(&turn, &to, text, None).await;
+            kept.lock().unwrap().push(reply);
+            Reply::text("Told them.")
+        }
+    });
+    flow.say("Ask the API session where names live.").await;
+    flow.until("the report's turn's message", |_| {
+        all.lock().unwrap().len() == 2
+    })
+    .await;
+    let (reply, failed) = all.lock().unwrap()[1].clone();
+    assert!(!failed, "{reply}");
+    let board = flow.board().await;
+    let record = &board.peer_messages[&message_id(&reply)];
+    let user = flow
+        .core
+        .all_messages(&flow.conversation)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|message| message.role == crate::model::MessageRole::User)
+        .unwrap();
+    assert_eq!(record.chain_id, user.id);
+    // The question went at hop 1 and its reply came at 2.
+    assert_eq!(record.hop, 3);
+    flow.settled().await;
+    flow.settled_in(&api).await;
+    flow.stop().await;
+}

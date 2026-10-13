@@ -1276,7 +1276,8 @@ impl SessionManager {
 
     /// The chain a turn's newest input belongs to (SESSION-MESSAGING-PLAN.md §5.5): a user
     /// message starts one; another session's message carries its sender's; anything else (a
-    /// worker's report, a timer) belongs to its request's.
+    /// worker's report, a timer) belongs to its request's newest, so it never counts the hops
+    /// from zero again.
     async fn turn_chain(
         &self,
         id: &ConversationId,
@@ -1306,12 +1307,23 @@ impl SessionManager {
         {
             return Some(chain);
         }
+        // The newest message of another session's its request took (a reply filed under it
+        // too), else the user's message that opened it.
         let request = request?;
-        Some(received(request).unwrap_or_else(|| TurnChain {
-            chain_id: request.to_owned(),
-            hop: 0,
-            input_id: None,
-        }))
+        let newest = board
+            .peer_messages
+            .values()
+            .filter(|record| !record.outgoing && record.request_id.as_deref() == Some(request))
+            .max_by_key(|record| record.position);
+        Some(
+            newest
+                .and_then(|record| received(&record.message_id))
+                .unwrap_or_else(|| TurnChain {
+                    chain_id: request.to_owned(),
+                    hop: 0,
+                    input_id: None,
+                }),
+        )
     }
 
     /// Unpauses the queue and sends its next message if nothing runs.
