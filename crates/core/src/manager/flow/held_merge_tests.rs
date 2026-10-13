@@ -23,6 +23,15 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
+/// Waits for `gate` to be set, as a held worker or a slow reviewer does. It has no deadline of
+/// its own: on a loaded machine one would let the turn go on before the test set it, out of
+/// the order the test is about. If it is never set, the test's wait for what follows fails.
+async fn until_set(gate: &AtomicBool) {
+    while !gate.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 const ONE_MEDIUM: &str =
     "Full review comments:\n\n- [P2] The second note has no title — B.md:1\n  Add one.";
 
@@ -109,12 +118,7 @@ async fn held(name: &str, plan: Plan) -> Held {
                     if plan.slow_review
                         && changed.as_ref().is_some_and(|files| files.contains("B.md"))
                     {
-                        for _ in 0..3000 {
-                            if review_gate.load(Ordering::SeqCst) {
-                                break;
-                            }
-                            tokio::time::sleep(Duration::from_millis(20)).await;
-                        }
+                        until_set(&review_gate).await;
                     }
                     if plan.finds && changed.is_some_and(|files| files.contains("B.md")) {
                         Reply::text(ONE_MEDIUM)
@@ -133,12 +137,7 @@ async fn held(name: &str, plan: Plan) -> Held {
                 }
                 if !turn.is_orchestrator() {
                     // A writer: holds until released, then writes its own file.
-                    for _ in 0..1000 {
-                        if gate.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
+                    until_set(&gate).await;
                     let file = if turn.task_number() == Some(1) {
                         "A.md"
                     } else {
@@ -248,7 +247,8 @@ async fn writing(held: &Held) {
 }
 
 /// Waits for the stopped merge and for the thread's turn on its `[merge stopped]`: the step is
-/// stored before the thread hears it, and no request works in between.
+/// stored before the thread hears it, and no request works in between. The `[merge held]`
+/// answer names `[merge stopped]` too, so it doesn't count as hearing it.
 async fn stopped(held: &Held) {
     held.flow
         .until("the merge to stop and the thread to hear it", |board| {
@@ -256,7 +256,12 @@ async fn stopped(held: &Held) {
                 .orchestrator_steps
                 .iter()
                 .any(|step| matches!(step.kind, OrchestratorStepKind::MergeStopped { .. }))
-                && held.logged("[merge stopped]") > 0
+                && held
+                    .log
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|line| line.contains("[merge stopped]") && !line.contains("[merge held]"))
         })
         .await;
     held.flow.settled().await;
@@ -331,7 +336,9 @@ async fn a_wait_written_while_held_stops_the_merge() {
         held.logged(
             "[merge stopped] The user wrote since they consented, and their message says \"wait\"."
         ),
-        1
+        1,
+        "{:#?}",
+        held.log.lock().unwrap()
     );
     assert_eq!(held.logged("[merge due] The workers"), 0);
     let refused = held
@@ -457,7 +464,16 @@ async fn a_cancel_spends_the_consent_across_a_restart() {
         .await
         .unwrap();
     assert_eq!(reply, "Merge cancelled.");
-    held.flow.settled().await;
+    // Not settled(): the user's request works until the held writers end.
+    let log = held.log.clone();
+    held.flow
+        .until("the thread to hear the cancel", move |_| {
+            log.lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.contains("[merge cancelled by the user]"))
+        })
+        .await;
     assert_eq!(held.logged("[merge cancelled by the user]"), 1);
     assert!(pending_merge(&held.flow.board().await).is_none());
     held.flow.restart().await;
@@ -740,12 +756,7 @@ async fn fixed_by_the_thread(
                 }
                 if !turn.is_orchestrator() {
                     // Writes once the merge is held.
-                    for _ in 0..1000 {
-                        if gate.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
+                    until_set(&gate).await;
                     turn.write("B.md", "note\n");
                     turn.git(&["add", "B.md"]);
                     turn.git(&["commit", "-qm", "Write B.md"]);
@@ -933,12 +944,7 @@ async fn a_named_fix_of_a_review_that_ran_across_the_merge_gets_only_its_recheck
                         return Reply::text("No findings.");
                     }
                     // The landing's review ends only after the merge.
-                    for _ in 0..1000 {
-                        if gate.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
+                    until_set(&gate).await;
                     Reply::text(ONE_MEDIUM)
                 }
             })),
