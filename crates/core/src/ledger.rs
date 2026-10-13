@@ -66,6 +66,8 @@ struct State {
     /// The branches Brigadier made (or kept for the user), by repository: what proves a branch
     /// Brigadier's to delete.
     made: HashSet<(String, String)>,
+    /// Tab chats whose records went this run: one recorded again must still be removed.
+    forgotten: HashSet<String>,
 }
 
 /// The branches Brigadier's records prove its own: those it made or kept for the user, and,
@@ -179,6 +181,8 @@ pub struct CleanupLedger {
     claude: Arc<Claude>,
     codex: Arc<Codex>,
     state: Mutex<State>,
+    /// A tab chat's records go, or one is added, one at a time: none slips in between.
+    tab_chats: tokio::sync::Mutex<()>,
     worktrees: Mutex<Option<WorktreeRemover>>,
     accounts: Mutex<Option<AccountResolver>>,
     #[cfg(test)]
@@ -187,6 +191,9 @@ pub struct CleanupLedger {
     /// reached, then waits for the second.
     #[cfg(test)]
     append_pause: Mutex<Option<AppendPause>>,
+    /// Holds the next forgetting of an owner, as `append_pause` holds an append.
+    #[cfg(test)]
+    forget_pause: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 #[cfg(test)]
@@ -256,12 +263,15 @@ impl CleanupLedger {
             claude,
             codex,
             state: Mutex::new(state),
+            tab_chats: tokio::sync::Mutex::new(()),
             worktrees: Mutex::new(None),
             accounts: Mutex::new(None),
             #[cfg(test)]
             test_providers: Mutex::new(None),
             #[cfg(test)]
             append_pause: Mutex::new(None),
+            #[cfg(test)]
+            forget_pause: Mutex::new(None),
         })
     }
 
@@ -314,6 +324,23 @@ impl CleanupLedger {
 
     /// Records `artifact` for `owner`, durably, before it is created or relied on.
     pub async fn record(&self, owner: &str, artifact: Artifact) -> Result<()> {
+        let tab_chat = owner.starts_with(TAB_CHAT_OWNER);
+        let _one = if tab_chat {
+            Some(self.tab_chats.lock().await)
+        } else {
+            None
+        };
+        if tab_chat && self.state().forgotten.contains(owner) {
+            // Its chat's records went already: this one is to go too, at the latest when the
+            // next launch sweeps.
+            self.append(DomainEvent::CleanupRequested {
+                owner: owner.to_owned(),
+            })
+            .await?;
+            let mut state = self.state();
+            state.forgotten.remove(owner);
+            state.disposing.insert(owner.to_owned());
+        }
         if self
             .state()
             .artifacts
@@ -462,6 +489,29 @@ impl CleanupLedger {
     /// with the CLI sessions they named. If they can't go now, its finished cleanup stays
     /// recorded and the next launch's sweep tries again.
     async fn forget_owner(&self, owner: &str) {
+        #[cfg(test)]
+        {
+            let pause = self.forget_pause.lock().unwrap().take();
+            if let Some((reached, release)) = pause {
+                reached.notify_one();
+                release.notified().await;
+            }
+        }
+        let _one = self.tab_chats.lock().await;
+        if !self.artifacts(owner).is_empty() {
+            // Recorded meanwhile: it is to go too, at the latest when the next launch sweeps.
+            if self
+                .append(DomainEvent::CleanupRequested {
+                    owner: owner.to_owned(),
+                })
+                .await
+                .is_err()
+            {
+                tracing::warn!("could not keep a tab chat's cleanup request");
+            }
+            self.state().disposing.insert(owner.to_owned());
+            return;
+        }
         let stream = owner_stream(owner);
         let natives: Vec<String> = match read_stream(&self.core, stream.clone()).await {
             Ok(events) => events
@@ -492,6 +542,7 @@ impl CleanupLedger {
         let mut state = self.state();
         state.disposing.remove(owner);
         state.artifacts.remove(owner);
+        state.forgotten.insert(owner.to_owned());
         for id in natives {
             state.native.remove(&id);
         }
@@ -1509,6 +1560,69 @@ mod tests {
             ]
         );
         assert!(fixture.load().await.disposing().is_empty());
+    }
+
+    /// Disposes of tab chat `owner` (it holds nothing, so its records are to go) and holds the
+    /// forgetting until the returned `Notify` is notified.
+    async fn pause_forgetting(
+        ledger: &Arc<CleanupLedger>,
+        owner: &'static str,
+    ) -> (tokio::task::JoinHandle<Leftovers>, Arc<Notify>) {
+        let (reached, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        *ledger.forget_pause.lock().unwrap() = Some((reached.clone(), release.clone()));
+        let disposing = {
+            let ledger = ledger.clone();
+            tokio::spawn(async move { ledger.dispose(owner).await })
+        };
+        reached.notified().await;
+        (disposing, release)
+    }
+
+    #[tokio::test]
+    async fn a_record_made_while_a_tab_chat_is_forgotten_stays_for_the_next_sweep() {
+        let fixture = Fixture::new().await;
+        let owner = "tabchat:forget-race";
+        let ledger = fixture.load().await;
+        let (old, held) = fixture.folder("tab-old");
+        ledger.record(owner, held).await.unwrap();
+        let (disposing, release) = pause_forgetting(&ledger, owner).await;
+        assert!(!old.exists());
+        // Say a process tree of the chat is recorded just as its records go.
+        let (path, artifact) = fixture.folder("tab-new");
+        let recording = {
+            let (ledger, artifact) = (ledger.clone(), artifact.clone());
+            tokio::spawn(async move { ledger.record(owner, artifact).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        release.notify_one();
+        assert!(disposing.await.unwrap().is_clean());
+        recording.await.unwrap().unwrap();
+        assert_eq!(ledger.artifacts(owner), vec![artifact.clone()]);
+        let reloaded = fixture.load().await;
+        assert_eq!(reloaded.artifacts(owner), vec![artifact]);
+        assert!(reloaded.disposing().contains(&owner.to_owned()));
+        reloaded.sweep().await;
+        assert!(!path.exists(), "the launch sweep removes it");
+        assert!(reloaded.artifacts(owner).is_empty());
+        assert!(fixture.load().await.artifacts(owner).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_record_made_after_a_tab_chat_was_forgotten_goes_at_the_next_sweep() {
+        let fixture = Fixture::new().await;
+        let owner = "tabchat:late-record";
+        let ledger = fixture.load().await;
+        let (_, held) = fixture.folder("late-old");
+        ledger.record(owner, held).await.unwrap();
+        assert!(ledger.dispose(owner).await.is_clean());
+        assert!(fixture.load().await.artifacts(owner).is_empty());
+        let (path, artifact) = fixture.folder("late-new");
+        ledger.record(owner, artifact).await.unwrap();
+        let reloaded = fixture.load().await;
+        assert!(reloaded.disposing().contains(&owner.to_owned()));
+        reloaded.sweep().await;
+        assert!(!path.exists(), "the launch sweep removes it");
+        assert!(fixture.load().await.artifacts(owner).is_empty());
     }
 
     fn worktree(path: &str) -> Artifact {
