@@ -24,6 +24,7 @@ fn role_name(role: &Role) -> &'static str {
         Role::Worker { .. } => "worker",
         Role::BrainJob { .. } => "brain job",
         Role::Chat { .. } => "chat",
+        Role::TabChat { .. } => "tab chat",
         Role::OutputHook { .. } => "output hook",
         Role::Computer { .. } => "computer",
     }
@@ -40,6 +41,7 @@ pub async fn serve_mcp(daemon: Arc<Daemon>, grant: String, stream: RawStream) {
             | Role::Worker { .. }
             | Role::BrainJob { .. }
             | Role::Chat { .. }
+            | Role::TabChat { .. }
             | Role::Computer { .. }),
         ) => role,
         other => {

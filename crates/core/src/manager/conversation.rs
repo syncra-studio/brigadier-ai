@@ -1885,10 +1885,11 @@ impl SessionManager {
         }
         let fence = self.enter(&conv.id)?;
         let conversation = self.core.conversation(&conv.id)?;
-        let (owner, area) = match conv.kind {
-            ConversationKind::Session => (format!("orch:{}", conv.id), "orch"),
-            ConversationKind::Chat => (format!("chat:{}", conv.id), "chat"),
-        };
+        self.tab_chat_may_run(&conversation)?;
+        let (owner, area) = super::lifecycle::conversation_owner(&conversation);
+        // A tab chat reads its session's checkout, which is never its own: it runs in a
+        // scratch folder of its own, and only that goes with it.
+        let mut tab_checkout = None;
         let dir = self.owned_dir(area, &conv.id.0);
         self.prepare_owned_dir(&owner, &dir).await?;
 
@@ -1971,6 +1972,39 @@ impl SessionManager {
                 }
                 (choice, prompt, vec![server], current)
             }
+            (Some(Setup::Chat { model }), ConversationKind::Chat)
+                if let (Some(tab), Some(session)) =
+                    (&conversation.tab_chat, &conversation.side_of) =>
+            {
+                let checkout = self.checkout_dir(session)?;
+                let prompt = prompts::tab_chat(&tab.target, &checkout);
+                tab_checkout = Some(std::path::PathBuf::from(checkout));
+                let tools = match tab.target {
+                    crate::model::TabTarget::Page { .. } => Some(crate::tools::TabTools::Page),
+                    crate::model::TabTarget::File { .. } => Some(crate::tools::TabTools::File),
+                    crate::model::TabTarget::Browser => None,
+                };
+                let servers = match tools {
+                    Some(tools) => {
+                        let grant = self.grants.issue(
+                            &owner,
+                            Role::TabChat {
+                                conversation_id: conv.id.clone(),
+                                tools,
+                            },
+                        );
+                        grant_values.push(grant.clone());
+                        vec![self.brigadier_server(grant, CHAT_TOOL_TIMEOUT_SECS, false)]
+                    }
+                    None => Vec::new(),
+                };
+                (
+                    fallback.unwrap_or_else(|| model.clone()),
+                    prompt,
+                    servers,
+                    prompts::Current::chat(Vec::new()),
+                )
+            }
             (Some(Setup::Chat { .. }) | None, ConversationKind::Chat) => {
                 let model = match &conversation.setup {
                     Some(Setup::Chat { model }) => model.clone(),
@@ -2041,14 +2075,17 @@ impl SessionManager {
             mcp_servers: mcp,
             tools: match conv.kind {
                 ConversationKind::Session => ToolSet::Thread,
+                // A tab chat reads its session's files.
+                ConversationKind::Chat if tab_checkout.is_some() => ToolSet::Review,
                 ConversationKind::Chat => ToolSet::Web,
             },
             // The workspace is the thread's to work in, never its own to clean up: it is not
-            // recorded under the thread's owner.
+            // recorded under the thread's owner. A tab chat's checkout is read the same way.
             add_dirs: launch
                 .as_ref()
                 .and_then(|launch| launch.workspace.as_ref())
                 .map(|workspace| vec![workspace.path.clone()])
+                .or_else(|| tab_checkout.clone().map(|checkout| vec![checkout]))
                 .unwrap_or_default(),
             env: match conv.kind {
                 ConversationKind::Session => SessionManager::thread_env(&dir, choice.provider),
@@ -2356,12 +2393,16 @@ impl SessionManager {
                 parts.push(format!("[overnight proposal {} revision {}] This is preparation only. Read the user's brief and referenced plan with read-only scouts if necessary. Use propose_overnight to put its actual phases/criteria/Rules on this same proposal, keeping original phase numbers. Include every phase the user's words select (\"phases 1-3\"), also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. Do not invent scope or start implementation. For a bare goal keep phases empty (Phase 0 plans after Start). Only the user's Start begins the run. Reply with exactly [quiet] once the proposal is ready. The user's full agreement and latest corrections, verbatim:\n{}", run.id, run.revision, run.words));
             }
         }
-        // A side chat answers about the conversation beside it, as it stands now.
-        if let Ok(record) = self.core.conversation(&conv.id)
-            && let Some(parent) = &record.side_of
-            && let Ok(beside) = self.core.conversation(parent)
-        {
-            parts.push(self.side_chat_context(parent, &beside.title).await);
+        // A tab's chat answers about its tab; a side chat about the conversation beside it,
+        // as it stands now.
+        if let Ok(record) = self.core.conversation(&conv.id) {
+            if let Some(tab) = &record.tab_chat {
+                parts.push(self.tab_chat_context(&conv.id, tab));
+            } else if let Some(parent) = &record.side_of
+                && let Ok(beside) = self.core.conversation(parent)
+            {
+                parts.push(self.side_chat_context(parent, &beside.title).await);
+            }
         }
         if conv.kind == ConversationKind::Session && self.plan_mode(&conv.id) {
             parts.push(PLAN_MODE_NOTE.into());
@@ -2499,9 +2540,10 @@ impl SessionManager {
         conv: &Arc<ConvLive>,
         attachment: &AttachmentRef,
     ) -> Option<InputFile> {
-        let area = match conv.kind {
-            ConversationKind::Session => "orch",
-            ConversationKind::Chat => "chat",
+        let area = match self.core.conversation(&conv.id) {
+            Ok(record) => super::lifecycle::conversation_owner(&record).1,
+            Err(_) if conv.kind == ConversationKind::Session => "orch",
+            Err(_) => "chat",
         };
         let dir = self.owned_dir(area, &conv.id.0).join("attachments");
         let path = dir.join(format!(

@@ -86,6 +86,8 @@ impl SessionManager {
     pub(super) async fn recover(&self) {
         self.runtime.ledger().sweep().await;
         self.reconcile_trust().await;
+        // Tab chats whose session went go now; those whose tab closed, once the app says.
+        self.sweep_tab_chats().await;
         for conversation in self.core.catalog().conversations {
             // One still being deleted (a delete that failed at launch) gets nothing new.
             if conversation.deleting {
@@ -1100,7 +1102,13 @@ fn being_deleted() -> Error {
 }
 
 /// The cleanup-ledger owner and data-dir area of a conversation's CLI session.
-fn conversation_owner(conversation: &Conversation) -> (String, &'static str) {
+pub(super) fn conversation_owner(conversation: &Conversation) -> (String, &'static str) {
+    if conversation.tab_chat.is_some() {
+        return (
+            format!("{}{}", crate::ledger::TAB_CHAT_OWNER, conversation.id),
+            "tabchat",
+        );
+    }
     match conversation.kind {
         ConversationKind::Session => (format!("orch:{}", conversation.id), "orch"),
         ConversationKind::Chat => (format!("chat:{}", conversation.id), "chat"),

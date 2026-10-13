@@ -7,6 +7,7 @@ import type { ModelFallback } from "./ModelFallback";
 import type { ProjectId } from "./ProjectId";
 import type { QuotaWait } from "./QuotaWait";
 import type { Setup } from "./Setup";
+import type { TabChat } from "./TabChat";
 
 /**
  * A session (inside a project) or a chat (outside any project), as listed in the sidebar.
@@ -37,6 +38,10 @@ forkedFrom: ForkOrigin | null,
  * with each of its turns. Side chats are temporary and left out of the sidebar.
  */
 sideOf: ConversationId | null, 
+/**
+ * Set for a tab's own chat (with `side_of`, its session): the tab it belongs to.
+ */
+tabChat: TabChat | null, 
 /**
  * Set while the conversation's model (a session's orchestrator, a Chat's model) is
  * replaced because it hit a limit. Temporary: the saved choice in `setup`, the project's

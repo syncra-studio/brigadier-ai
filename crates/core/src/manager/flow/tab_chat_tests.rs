@@ -1,0 +1,667 @@
+//! A tab's own chat: it lives as long as its tab (across restarts too), reads and changes
+//! only what its tab shows, and once its tab closes nothing of it is left: no messages, no
+//! records, no CLI files.
+
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use super::{Flow, Options, Reply, Script, Turn};
+use crate::model::{ConversationId, TabTarget, streams};
+use crate::pages::{PageContent, Pages};
+use crate::tools::{ReadPage, TabChatCall, ToolReply, WritePage, WriteTabFile};
+use crate::work::RequestState;
+
+/// What a tab chat's turn saw.
+#[derive(Debug, Clone)]
+struct Seen {
+    prompt: String,
+    input: String,
+    cwd: PathBuf,
+    add_dirs: Vec<PathBuf>,
+    native_id: String,
+}
+
+type Log = Arc<Mutex<Vec<Seen>>>;
+
+/// Answers every tab chat turn with `answer` (after logging it); other sessions say "ok".
+fn tab_script<F, Fut>(log: &Log, answer: F) -> Script
+where
+    F: Fn(Turn) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Reply> + Send + 'static,
+{
+    let log = log.clone();
+    let answer = Arc::new(answer);
+    Arc::new(move |turn: Turn| {
+        let log = log.clone();
+        let answer = answer.clone();
+        Box::pin(async move {
+            if !turn.prompt.contains("You are a chat beside") {
+                return Reply::text("ok");
+            }
+            log.lock().unwrap().push(Seen {
+                prompt: turn.prompt.clone(),
+                input: turn.input.clone(),
+                cwd: turn.cwd.clone(),
+                add_dirs: turn.add_dirs.clone(),
+                native_id: turn.native_id.clone(),
+            });
+            answer(turn).await
+        })
+    })
+}
+
+fn quiet(log: &Log) -> Script {
+    tab_script(log, |_| async { Reply::text("Sure.") })
+}
+
+fn cleaning() -> Options {
+    Options {
+        behavior: Arc::new(super::FakeBehavior {
+            cleanup: true,
+            ..Default::default()
+        }),
+        ..Options::default()
+    }
+}
+
+/// The app has said which tabs it has (none to drop): tab chats may run.
+async fn app_ready(flow: &Flow) {
+    flow.manager.keep_tab_chats(Vec::new()).await.unwrap();
+}
+
+async fn open(flow: &Flow, tab: &str, target: TabTarget) -> ConversationId {
+    flow.manager
+        .open_tab_chat(
+            &flow.conversation,
+            tab.into(),
+            target,
+            ConversationId(uuid::Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap()
+        .id
+}
+
+async fn send(flow: &Flow, chat: &ConversationId, text: &str) {
+    flow.manager
+        .send_message(chat.clone(), text.into(), vec![], vec![], false, None)
+        .await
+        .unwrap();
+}
+
+/// Sends `text` and waits until the chat has answered every message.
+async fn say(flow: &Flow, chat: &ConversationId, text: &str) {
+    send(flow, chat, text).await;
+    super::eventually_async("the tab chat to answer", || async {
+        let board = flow.core.board(chat).await.unwrap();
+        !board.requests.is_empty()
+            && board
+                .requests
+                .values()
+                .all(|request| request.state == RequestState::Done)
+    })
+    .await;
+}
+
+/// Every stored event, of every stream.
+async fn every_event(flow: &Flow) -> Vec<brigadier_store::StoredEvent> {
+    let mut events = Vec::new();
+    let mut after = 0;
+    loop {
+        let page = flow.core.store().read_since(after, 1_000).await.unwrap();
+        let full = page.len() == 1_000;
+        if let Some(last) = page.last() {
+            after = last.seq;
+        }
+        events.extend(page);
+        if !full {
+            return events;
+        }
+    }
+}
+
+/// Where the flow's own Claude CLI keeps a session's files.
+fn cli_files(flow: &Flow, native_id: &str) -> [PathBuf; 2] {
+    super::fake_files(&flow.dir.join("data/own/claude"), native_id)
+}
+
+/// Nothing of `chat` is left: not in the catalog, the store, the cleanup ledger, the data
+/// folder or the CLI's own files.
+async fn left_nothing_of(flow: &Flow, chat: &ConversationId, natives: &[String]) {
+    super::eventually("the tab chat to go", || {
+        flow.core.conversation(chat).is_err()
+    })
+    .await;
+    flow.manager.cleanup_finished(chat).await;
+    assert!(
+        !flow
+            .core
+            .catalog()
+            .conversations
+            .iter()
+            .any(|conversation| &conversation.id == chat)
+    );
+    let mentions: Vec<String> = every_event(flow)
+        .await
+        .into_iter()
+        .filter(|event| {
+            event.stream.contains(&chat.0)
+                || event.payload.get().contains(&chat.0)
+                || natives.iter().any(|id| event.payload.get().contains(id))
+        })
+        .map(|event| format!("{} {}", event.stream, event.kind))
+        .collect();
+    assert!(
+        mentions.is_empty(),
+        "stored events still name it: {mentions:?}"
+    );
+    let ledger = flow.manager.runtime.ledger();
+    assert!(
+        ledger
+            .owners()
+            .iter()
+            .all(|(owner, _, _)| !owner.contains(&chat.0)),
+        "{:?}",
+        ledger.owners()
+    );
+    let known = ledger.native_sessions();
+    for id in natives {
+        assert!(!known.contains_key(id), "the ledger still knows {id}");
+        for path in cli_files(flow, id) {
+            assert!(!path.exists(), "{} survived", path.display());
+        }
+    }
+    let scratch = flow.dir.join("data/tabchat").join(&chat.0);
+    assert!(!scratch.exists(), "{} survived", scratch.display());
+    // A store reloaded from disk has nothing of it either.
+    let reloaded = crate::Core::load(flow.core.store().clone()).await.unwrap();
+    assert!(reloaded.conversation(chat).is_err());
+}
+
+fn natives(log: &Log) -> Vec<String> {
+    let mut ids: Vec<String> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|seen| seen.native_id.clone())
+        .collect();
+    ids.dedup();
+    ids
+}
+
+#[tokio::test]
+async fn a_tab_chat_outlives_a_restart_and_its_closed_tab_leaves_nothing() {
+    let log = Log::default();
+    let mut flow = Flow::start("tab-chat-lifetime", cleaning(), quiet(&log)).await;
+    app_ready(&flow).await;
+    let chat = open(
+        &flow,
+        "file:README.md",
+        TabTarget::File {
+            path: "README.md".into(),
+        },
+    )
+    .await;
+    say(&flow, &chat, "What is this file?").await;
+    {
+        let seen = log.lock().unwrap()[0].clone();
+        assert!(
+            seen.prompt.contains("a file of the session's checkout"),
+            "{}",
+            seen.prompt
+        );
+        assert!(
+            seen.input
+                .contains("This chat is beside the file README.md"),
+            "{}",
+            seen.input
+        );
+        // Not the session's thread: none of its messages or side-chat wording.
+        assert!(!seen.input.contains("side chat beside the conversation"));
+        // Its own scratch folder; the checkout is only read.
+        assert!(
+            seen.cwd.ends_with(format!("tabchat/{chat}")),
+            "{:?}",
+            seen.cwd
+        );
+        assert_eq!(seen.add_dirs, vec![flow.repo.clone()]);
+    }
+    // The shared catalog and cleanup records never name it.
+    for stream in [streams::CATALOG, streams::CLEANUP] {
+        let events = flow
+            .core
+            .store()
+            .read_stream_since(stream.into(), 0, 10_000)
+            .await
+            .unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|event| !event.payload.get().contains(&chat.0)),
+            "{stream} names the tab chat"
+        );
+    }
+
+    flow.restart().await;
+    let back = flow
+        .core
+        .conversation(&chat)
+        .expect("the chat is still there");
+    assert!(back.tab_chat.is_some());
+    assert_eq!(flow.core.all_messages(&chat).await.unwrap().len(), 2);
+    flow.manager
+        .keep_tab_chats(vec![chat.clone()])
+        .await
+        .unwrap();
+    say(&flow, &chat, "And now?").await;
+    let ids = natives(&log);
+    assert_eq!(
+        ids.len(),
+        1,
+        "the restarted chat resumed its CLI session: {ids:?}"
+    );
+    for path in cli_files(&flow, &ids[0]) {
+        assert!(
+            path.exists(),
+            "{} is there while the tab is",
+            path.display()
+        );
+    }
+
+    // Something else works in the checkout while the tab closes.
+    let mut other = std::process::Command::new("sleep")
+        .arg("30")
+        .current_dir(&flow.repo)
+        .spawn()
+        .unwrap();
+    flow.manager.delete(chat.clone()).await.unwrap();
+    left_nothing_of(&flow, &chat, &ids).await;
+    assert!(
+        other.try_wait().unwrap().is_none(),
+        "a process in the checkout was stopped"
+    );
+    let _ = other.kill();
+    let _ = other.wait();
+    assert!(
+        flow.repo.join("README.md").exists(),
+        "the checkout is untouched"
+    );
+    assert!(flow.core.conversation(&flow.conversation).is_ok());
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn closing_a_tab_stops_its_working_chat_and_wipes_it() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "tab-chat-close-working",
+        cleaning(),
+        tab_script(&log, |turn| async move {
+            turn.stopped().await;
+            Reply::text("Stopped.")
+        }),
+    )
+    .await;
+    app_ready(&flow).await;
+    let chat = open(&flow, "browser:1", TabTarget::Browser).await;
+    send(&flow, &chat, "Summarise this page.").await;
+    super::eventually("the chat to work", || !log.lock().unwrap().is_empty()).await;
+    flow.manager.delete(chat.clone()).await.unwrap();
+    left_nothing_of(&flow, &chat, &natives(&log)).await;
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn archiving_or_deleting_the_session_wipes_its_working_tab_chat() {
+    for archive in [true, false] {
+        let log = Log::default();
+        let flow = Flow::start(
+            if archive {
+                "tab-chat-session-archived"
+            } else {
+                "tab-chat-session-deleted"
+            },
+            cleaning(),
+            tab_script(&log, |turn| async move {
+                turn.stopped().await;
+                Reply::text("Stopped.")
+            }),
+        )
+        .await;
+        app_ready(&flow).await;
+        let chat = open(&flow, "browser:1", TabTarget::Browser).await;
+        send(&flow, &chat, "Summarise this page.").await;
+        super::eventually("the chat to work", || !log.lock().unwrap().is_empty()).await;
+        if archive {
+            flow.manager
+                .archive(flow.conversation.clone())
+                .await
+                .unwrap();
+        } else {
+            flow.manager
+                .delete(flow.conversation.clone())
+                .await
+                .unwrap();
+        }
+        flow.manager.cleanup_finished(&flow.conversation).await;
+        left_nothing_of(&flow, &chat, &natives(&log)).await;
+        flow.stop().await;
+    }
+}
+
+/// A crash after the app saved a tab's close but before it asked for the delete: after the
+/// restart the chat doesn't run, and it goes once the app says which tabs it has.
+#[tokio::test]
+async fn after_a_crash_an_orphaned_tab_chat_never_runs_and_goes_at_the_next_start() {
+    let log = Log::default();
+    let mut flow = Flow::start("tab-chat-orphan", cleaning(), quiet(&log)).await;
+    app_ready(&flow).await;
+    let kept = open(&flow, "browser:kept", TabTarget::Browser).await;
+    let orphan = open(&flow, "browser:closed", TabTarget::Browser).await;
+    say(&flow, &kept, "Hello.").await;
+    say(&flow, &orphan, "Hello.").await;
+    let ids = natives(&log);
+    assert_eq!(ids.len(), 2);
+
+    flow.restart().await;
+    // Until the app has said, neither runs.
+    let before = log.lock().unwrap().len();
+    let _ = flow
+        .manager
+        .send_message(orphan.clone(), "Again.".into(), vec![], vec![], false, None)
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        log.lock().unwrap().len(),
+        before,
+        "an unchecked tab chat ran"
+    );
+
+    flow.manager
+        .keep_tab_chats(vec![kept.clone()])
+        .await
+        .unwrap();
+    left_nothing_of(&flow, &orphan, &ids[1..]).await;
+    assert!(flow.core.conversation(&kept).is_ok());
+    say(&flow, &kept, "Still here?").await;
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_tab_chat_whose_session_went_while_brigadier_was_down_goes_at_launch() {
+    let log = Log::default();
+    let mut flow = Flow::start("tab-chat-session-gone", cleaning(), quiet(&log)).await;
+    app_ready(&flow).await;
+    let chat = open(&flow, "browser:1", TabTarget::Browser).await;
+    say(&flow, &chat, "Hello.").await;
+    // The session is marked archived, and Brigadier stops before any cleanup ran.
+    flow.core
+        .mark_archived(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.restart().await;
+    left_nothing_of(&flow, &chat, &natives(&log)).await;
+    flow.stop().await;
+}
+
+fn page_holding(pages: &Pages, body: &str) -> String {
+    let page = pages.create().unwrap();
+    let content = PageContent {
+        title: "Notes".into(),
+        emoji: None,
+        body: body.into(),
+    };
+    pages.write(&page.id, &content, &page.revision).unwrap();
+    page.id
+}
+
+async fn tab_call(flow: &Flow, chat: &ConversationId, call: TabChatCall) -> ToolReply {
+    flow.manager.tab_chat_call(chat.clone(), call).await
+}
+
+#[tokio::test]
+async fn a_page_tab_chat_reads_and_changes_its_page_and_no_other() {
+    let log = Log::default();
+    let flow = Flow::start("tab-chat-page", cleaning(), quiet(&log)).await;
+    let pages = Arc::new(Pages::open(flow.repo.with_file_name("pages")));
+    flow.manager.set_pages(pages.clone());
+    let mine = page_holding(&pages, "- [ ] milk");
+    let other = page_holding(&pages, "secret");
+    let chat = open(
+        &flow,
+        "page:1",
+        TabTarget::Page {
+            page_id: mine.clone(),
+        },
+    )
+    .await;
+    let read = tab_call(
+        &flow,
+        &chat,
+        TabChatCall::ReadPage(ReadPage {
+            page_id: mine.clone(),
+        }),
+    )
+    .await;
+    assert!(!read.is_error, "{}", read.text);
+    assert!(read.text.contains("- [ ] milk"), "{}", read.text);
+    let revision = pages.read(&mine).unwrap().revision;
+    let wrote = tab_call(
+        &flow,
+        &chat,
+        TabChatCall::WritePage(WritePage {
+            page_id: mine.clone(),
+            body: "- [x] milk".into(),
+            title: None,
+            base_revision: revision.clone(),
+        }),
+    )
+    .await;
+    assert!(wrote.text.starts_with("Saved"), "{}", wrote.text);
+    assert_eq!(pages.read(&mine).unwrap().content.body, "- [x] milk");
+    // An old revision is refused, never overwritten.
+    let stale = tab_call(
+        &flow,
+        &chat,
+        TabChatCall::WritePage(WritePage {
+            page_id: mine.clone(),
+            body: "lost".into(),
+            title: None,
+            base_revision: revision,
+        }),
+    )
+    .await;
+    assert!(stale.is_error, "{}", stale.text);
+    // Another page is out of reach.
+    for call in [
+        TabChatCall::ReadPage(ReadPage {
+            page_id: other.clone(),
+        }),
+        TabChatCall::WritePage(WritePage {
+            page_id: other.clone(),
+            body: "changed".into(),
+            title: None,
+            base_revision: pages.read(&other).unwrap().revision,
+        }),
+    ] {
+        let reply = tab_call(&flow, &chat, call).await;
+        assert!(reply.is_error, "{}", reply.text);
+    }
+    assert_eq!(pages.read(&other).unwrap().content.body, "secret");
+    // Nor can it reach a file.
+    assert!(tab_call(&flow, &chat, TabChatCall::ReadFile).await.is_error);
+
+    // Deleting the page takes the chats of the tabs that showed it.
+    pages.delete(&mine).unwrap();
+    flow.manager.page_deleted(&mine).await;
+    left_nothing_of(&flow, &chat, &[]).await;
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_file_tab_chat_changes_its_file_and_only_reads_the_rest() {
+    let log = Log::default();
+    let flow = Flow::start("tab-chat-file", cleaning(), quiet(&log)).await;
+    std::fs::write(flow.repo.join("notes.txt"), "one\n").unwrap();
+    let chat = open(
+        &flow,
+        "file:notes.txt",
+        TabTarget::File {
+            path: "notes.txt".into(),
+        },
+    )
+    .await;
+    let read = tab_call(&flow, &chat, TabChatCall::ReadFile).await;
+    assert!(read.text.contains("one"), "{}", read.text);
+    let revision = read
+        .text
+        .split("revision ")
+        .nth(1)
+        .and_then(|rest| rest.split(':').next())
+        .unwrap()
+        .to_owned();
+    let wrote = tab_call(
+        &flow,
+        &chat,
+        TabChatCall::WriteFile(WriteTabFile {
+            text: "two\n".into(),
+            base_revision: revision.clone(),
+        }),
+    )
+    .await;
+    assert!(wrote.text.starts_with("Saved"), "{}", wrote.text);
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("notes.txt")).unwrap(),
+        "two\n"
+    );
+    let stale = tab_call(
+        &flow,
+        &chat,
+        TabChatCall::WriteFile(WriteTabFile {
+            text: "lost\n".into(),
+            base_revision: revision,
+        }),
+    )
+    .await;
+    assert!(stale.is_error, "{}", stale.text);
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("notes.txt")).unwrap(),
+        "two\n"
+    );
+    // Its tools are its file's; a page is out of reach.
+    let page = tab_call(
+        &flow,
+        &chat,
+        TabChatCall::ReadPage(ReadPage {
+            page_id: "any".into(),
+        }),
+    )
+    .await;
+    assert!(page.is_error);
+    // A tab can't name a file outside the checkout.
+    for path in ["../outside.txt", "/etc/hosts", ""] {
+        let refused = flow
+            .manager
+            .open_tab_chat(
+                &flow.conversation,
+                "file:x".into(),
+                TabTarget::File { path: path.into() },
+                ConversationId(uuid::Uuid::new_v4().to_string()),
+            )
+            .await;
+        assert!(refused.is_err(), "{path} was accepted");
+    }
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_browser_tab_chat_reads_what_its_tab_sent_and_has_no_tools() {
+    let log = Log::default();
+    let flow = Flow::start("tab-chat-browser", cleaning(), quiet(&log)).await;
+    app_ready(&flow).await;
+    let chat = open(&flow, "browser:1", TabTarget::Browser).await;
+    flow.manager
+        .set_tab_page(
+            &chat,
+            crate::manager::BrowserPage {
+                url: "https://example.com/".into(),
+                title: "Example Domain".into(),
+                text: "This domain is for use in examples.".into(),
+                selection: "examples".into(),
+            },
+        )
+        .unwrap();
+    say(&flow, &chat, "What does it say?").await;
+    let seen = log.lock().unwrap()[0].clone();
+    assert!(
+        seen.input.contains("Address: https://example.com/"),
+        "{}",
+        seen.input
+    );
+    assert!(seen.input.contains("This domain is for use in examples."));
+    assert!(seen.input.contains("The user selected: \"examples\""));
+    let spec = flow
+        .specs
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(_, spec)| spec.cwd.ends_with(format!("tabchat/{chat}")))
+        .map(|(_, spec)| spec.clone())
+        .unwrap();
+    assert!(
+        spec.mcp_servers.is_empty(),
+        "a browser tab's chat has no tools"
+    );
+    assert_eq!(spec.access, brigadier_providers::Access::ReadOnly);
+    // Only a browser tab's chat takes a page.
+    let file_chat = open(
+        &flow,
+        "file:README.md",
+        TabTarget::File {
+            path: "README.md".into(),
+        },
+    )
+    .await;
+    assert!(
+        flow.manager
+            .set_tab_page(&file_chat, crate::manager::BrowserPage::default())
+            .is_err()
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn the_side_chat_shortcut_never_opens_a_tab_chat() {
+    let log = Log::default();
+    let flow = Flow::start("tab-chat-not-side-chat", Options::default(), quiet(&log)).await;
+    let chat = open(&flow, "browser:1", TabTarget::Browser).await;
+    // The session needs a model for a side chat; it has one from its setup.
+    let side = flow
+        .manager
+        .open_side_chat(&flow.conversation, None)
+        .await
+        .unwrap();
+    assert_ne!(side.id, chat);
+    assert!(side.tab_chat.is_none());
+    assert!(
+        flow.manager
+            .open_side_chat(&flow.conversation, Some(chat.clone()))
+            .await
+            .is_err(),
+        "a tab chat can't be opened as a side chat"
+    );
+    // And a tab's chat belongs to that tab only.
+    assert!(
+        flow.manager
+            .open_tab_chat(
+                &flow.conversation,
+                "browser:2".into(),
+                TabTarget::Browser,
+                chat.clone()
+            )
+            .await
+            .is_err()
+    );
+    flow.stop().await;
+}

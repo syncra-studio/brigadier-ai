@@ -370,6 +370,8 @@ export type { StorageReport } from "./StorageReport";
 export type { StoreMetrics } from "./StoreMetrics";
 export type { StoredOutput } from "./StoredOutput";
 export type { StreamingMessage } from "./StreamingMessage";
+export type { TabChat } from "./TabChat";
+export type { TabTarget } from "./TabTarget";
 export type { Takeover } from "./Takeover";
 export type { Task } from "./Task";
 export type { TaskCategory } from "./TaskCategory";

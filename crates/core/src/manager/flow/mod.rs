@@ -1622,6 +1622,8 @@ mod search_tests;
 #[cfg(test)]
 mod status_tests;
 #[cfg(test)]
+mod tab_chat_tests;
+#[cfg(test)]
 mod takeover_tests;
 #[cfg(test)]
 mod tests;

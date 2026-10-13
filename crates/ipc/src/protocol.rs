@@ -306,6 +306,27 @@ pub enum Request {
         #[ts(optional)]
         side_chat_id: Option<ConversationId>,
     },
+    /// Opens the chat of a session's tab (a page, file or browser tab), made under `chatId`
+    /// if it has none yet.
+    OpenTabChat {
+        conversation_id: ConversationId,
+        tab_id: String,
+        target: brigadier_core::TabTarget,
+        chat_id: ConversationId,
+    },
+    /// The tab chats the app's tabs still have: every other one goes, with all of it. Until
+    /// this is sent after a launch, no tab chat runs.
+    KeepTabChats {
+        chat_ids: Vec<ConversationId>,
+    },
+    /// What a browser tab shows, for its chat's next turn (kept only in memory).
+    SetTabPage {
+        chat_id: ConversationId,
+        url: String,
+        title: String,
+        text: String,
+        selection: String,
+    },
     /// A terminal in the home folder that sets up a CLI (the first run's Install and Sign
     /// in), started if none runs for it: it runs the CLI's installer when `install`, else its
     /// sign-in, and ends with it. Its output streams like [`Request::OpenTerminal`]'s.
@@ -1157,6 +1178,11 @@ pub enum Response {
     OpenSideChat {
         conversation: Box<Conversation>,
     },
+    OpenTabChat {
+        conversation: Box<Conversation>,
+    },
+    KeepTabChats,
+    SetTabPage,
     WriteTerminal,
     ResizeTerminal,
     ClearTerminal,

@@ -27,6 +27,20 @@ use crate::model::{DomainEvent, streams};
 use crate::{Core, Error, Result, now_ms};
 
 const PAGE: u32 = 1_000;
+/// The owner of a tab's chat ([`crate::model::TabChat`]) starts so. Its records are kept in a
+/// stream of their own, which goes once everything it recorded is gone: nothing of it stays.
+pub const TAB_CHAT_OWNER: &str = "tabchat:";
+/// Where tab chats' owners keep their records: this, then the owner.
+const TAB_CHAT_STREAMS: &str = "cleanup:tabchat:";
+
+/// The stream `owner`'s records go to.
+fn owner_stream(owner: &str) -> String {
+    if owner.starts_with(TAB_CHAT_OWNER) {
+        format!("cleanup:{owner}")
+    } else {
+        streams::CLEANUP.to_owned()
+    }
+}
 /// Rounds of "find the processes in a folder, kill their trees" before giving up: a process
 /// may start another while it is being killed.
 const KILL_ROUNDS: usize = 3;
@@ -190,14 +204,13 @@ impl CleanupLedger {
         codex: Arc<Codex>,
     ) -> Result<Self> {
         let mut state = State::default();
-        let mut after = 0;
-        loop {
-            let page = core
-                .store()
-                .read_stream_since(streams::CLEANUP.into(), after, PAGE)
-                .await?;
-            for event in &page {
-                after = event.stream_seq;
+        let mut events = read_stream(&core, streams::CLEANUP.into()).await?;
+        for head in core.store().stream_heads(TAB_CHAT_STREAMS.into()).await? {
+            events.extend(read_stream(&core, head.stream).await?);
+        }
+        events.sort_by_key(|event| event.seq);
+        {
+            for event in &events {
                 match crate::sessions::decode(event)? {
                     DomainEvent::CleanupRecorded { owner, artifact } => {
                         state.note_native(&artifact);
@@ -234,9 +247,6 @@ impl CleanupLedger {
                     }
                     _ => {}
                 }
-            }
-            if page.len() < PAGE as usize {
-                break;
             }
         }
         state.artifacts.retain(|_, artifacts| !artifacts.is_empty());
@@ -425,7 +435,13 @@ impl CleanupLedger {
         let removed = self.remove(owner, files).await;
         leftovers.failures.extend(removed.failures);
         leftovers.kept.extend(removed.kept);
-        if leftovers.is_clean() {
+        if leftovers.is_clean()
+            && owner.starts_with(TAB_CHAT_OWNER)
+            && self.artifacts(owner).is_empty()
+        {
+            // A tab's chat leaves no record: with all of it gone, its records go too.
+            self.forget_owner(owner).await;
+        } else if leftovers.is_clean() {
             // Everything in the snapshot is gone. Artifacts recorded meanwhile stay, both here
             // and on replay. Always end the request durably: a record's event can be stored
             // before it shows in memory, so memory can't tell whether one raced this disposal.
@@ -440,6 +456,41 @@ impl CleanupLedger {
             self.state().disposing.remove(owner);
         }
         leftovers
+    }
+
+    /// Forgets `owner` (a tab chat's) altogether once nothing of it is left: its records go,
+    /// with the CLI sessions they named. If they can't go now, its finished cleanup stays
+    /// recorded and the next launch's sweep tries again.
+    async fn forget_owner(&self, owner: &str) {
+        let stream = owner_stream(owner);
+        let natives: Vec<String> = match read_stream(&self.core, stream.clone()).await {
+            Ok(events) => events
+                .iter()
+                .filter_map(|event| match crate::sessions::decode(event) {
+                    Ok(DomainEvent::CleanupRecorded {
+                        artifact:
+                            Artifact::ClaudeSession { session_id: id, .. }
+                            | Artifact::CodexThread { thread_id: id, .. },
+                        ..
+                    }) => Some(id),
+                    _ => None,
+                })
+                .collect(),
+            Err(err) => {
+                tracing::warn!(owner, error = %err, "could not read a tab chat's records");
+                return;
+            }
+        };
+        if let Err(err) = self.core.store().delete_streams(vec![stream]).await {
+            tracing::warn!(owner, error = %err, "could not forget a tab chat's records");
+            return;
+        }
+        let mut state = self.state();
+        state.disposing.remove(owner);
+        state.artifacts.remove(owner);
+        for id in natives {
+            state.native.remove(&id);
+        }
     }
 
     /// After a restart, when nothing of Brigadier's runs: archives the Codex threads it still
@@ -851,9 +902,37 @@ impl CleanupLedger {
                 release.notified().await;
             }
         }
-        let new = NewEvent::new(streams::CLEANUP, event.kind(), now_ms(), &event)?;
+        let stream = match &event {
+            DomainEvent::CleanupRecorded { owner, .. }
+            | DomainEvent::CleanupRemoved { owner, .. }
+            | DomainEvent::CleanupRequested { owner }
+            | DomainEvent::CleanupFinished { owner }
+            | DomainEvent::CleanupCompleted { owner, .. } => owner_stream(owner),
+            _ => streams::CLEANUP.to_owned(),
+        };
+        let new = NewEvent::new(stream, event.kind(), now_ms(), &event)?;
         self.core.store().append(vec![new]).await?;
         Ok(())
+    }
+}
+
+/// Every event of `stream`, oldest first.
+async fn read_stream(core: &Core, stream: String) -> Result<Vec<brigadier_store::StoredEvent>> {
+    let mut events = Vec::new();
+    let mut after = 0;
+    loop {
+        let page = core
+            .store()
+            .read_stream_since(stream.clone(), after, PAGE)
+            .await?;
+        let full = page.len() == PAGE as usize;
+        if let Some(last) = page.last() {
+            after = last.stream_seq;
+        }
+        events.extend(page);
+        if !full {
+            return Ok(events);
+        }
     }
 }
 

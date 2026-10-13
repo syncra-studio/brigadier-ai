@@ -40,6 +40,8 @@ const NEW_CHAT_TITLE: &str = "New chat";
 pub struct Origin {
     pub forked_from: Option<ForkOrigin>,
     pub side_of: Option<ConversationId>,
+    /// A tab's own chat: the tab it belongs to (`side_of` is its session).
+    pub tab_chat: Option<crate::model::TabChat>,
 }
 /// Diagnostic probes kept on disk; older ones are trimmed as new ones arrive.
 const PROBES_KEPT: u32 = 10_000;
@@ -83,18 +85,15 @@ impl Core {
     pub async fn load(store: Store) -> Result<Arc<Self>> {
         let mut projection = Projection::default();
 
-        let mut after = 0;
-        loop {
-            let page = store
-                .read_stream_since(streams::CATALOG.into(), after, CATALOG_PAGE)
-                .await?;
-            for event in &page {
-                projection.apply(&decode(event)?, event.seq, event.at_ms);
-                after = event.stream_seq;
-            }
-            if page.len() < CATALOG_PAGE as usize {
-                break;
-            }
+        // The catalog, and each tab chat's catalog events kept apart from it, in the order
+        // they were written.
+        let mut events = read_whole_stream(&store, streams::CATALOG.into()).await?;
+        for head in store.stream_heads(streams::TAB_CHATS.into()).await? {
+            events.extend(read_whole_stream(&store, head.stream).await?);
+        }
+        events.sort_by_key(|event| event.seq);
+        for event in &events {
+            projection.apply(&decode(event)?, event.seq, event.at_ms);
         }
 
         let latest_settings = store
@@ -345,6 +344,7 @@ impl Core {
             lifecycle: Lifecycle::Active,
             forked_from: origin.forked_from,
             side_of: origin.side_of,
+            tab_chat: origin.tab_chat,
             fallback: None,
             quota_wait: None,
             cleanup_pending: false,
@@ -490,9 +490,21 @@ impl Core {
         Ok(())
     }
 
-    /// Removes a conversation from the catalog. Its streams are purged by the caller.
+    /// Removes a conversation from the catalog. Its streams are purged by the caller. A tab's
+    /// chat leaves no record behind: its catalog stream goes, and with it all it ever was.
     pub async fn forget_conversation(&self, id: ConversationId) -> Result<()> {
-        self.conversation(&id)?;
+        if self.conversation(&id)?.tab_chat.is_some() {
+            self.store
+                .delete_streams(vec![streams::tab_chat(&id)])
+                .await?;
+            {
+                let mut projection = self.projection();
+                projection.conversations.remove(&id);
+                projection.deleted.insert(id.clone());
+            }
+            self.boards.lock().await.remove(&id);
+            return Ok(());
+        }
         self.record(vec![(
             streams::CATALOG.into(),
             DomainEvent::ConversationDeleted { id: id.clone() },
@@ -2009,6 +2021,7 @@ impl Core {
     }
 
     pub(crate) async fn record(&self, events: Vec<(String, DomainEvent)>) -> Result<Vec<i64>> {
+        let events = self.route_tab_chats(events);
         {
             let projection = self.projection();
             if let Some(id) = events
@@ -2032,6 +2045,78 @@ impl Core {
     }
 }
 
+impl Core {
+    /// Catalog events about a tab's chat go to its own catalog stream instead.
+    fn route_tab_chats(&self, events: Vec<(String, DomainEvent)>) -> Vec<(String, DomainEvent)> {
+        let projection = self.projection();
+        events
+            .into_iter()
+            .map(|(stream, event)| {
+                if stream != streams::CATALOG {
+                    return (stream, event);
+                }
+                let tab_chat = match &event {
+                    DomainEvent::ConversationCreated { conversation } => conversation
+                        .tab_chat
+                        .is_some()
+                        .then(|| conversation.id.clone()),
+                    other => catalog_conversation(other)
+                        .filter(|id| {
+                            projection
+                                .conversations
+                                .get(*id)
+                                .is_some_and(|conversation| conversation.tab_chat.is_some())
+                        })
+                        .cloned(),
+                };
+                match tab_chat {
+                    Some(id) => (streams::tab_chat(&id), event),
+                    None => (stream, event),
+                }
+            })
+            .collect()
+    }
+}
+
+/// The conversation a catalog event is about, when it is about one.
+fn catalog_conversation(event: &DomainEvent) -> Option<&ConversationId> {
+    match event {
+        DomainEvent::ConversationCreated { conversation } => Some(&conversation.id),
+        DomainEvent::ConversationSetUp { id, .. }
+        | DomainEvent::ConversationLifecycleChanged { id, .. }
+        | DomainEvent::ConversationCleanup { id, .. }
+        | DomainEvent::ConversationDeleting { id }
+        | DomainEvent::ConversationDeleted { id }
+        | DomainEvent::ConversationRenamed { id, .. }
+        | DomainEvent::ConversationFallback { id, .. }
+        | DomainEvent::ConversationWaiting { id, .. }
+        | DomainEvent::ConversationPinned { id, .. } => Some(id),
+        _ => None,
+    }
+}
+
+/// Every event of `stream`, oldest first.
+async fn read_whole_stream(
+    store: &Store,
+    stream: String,
+) -> Result<Vec<brigadier_store::StoredEvent>> {
+    let mut events = Vec::new();
+    let mut after = 0;
+    loop {
+        let page = store
+            .read_stream_since(stream.clone(), after, CATALOG_PAGE)
+            .await?;
+        let full = page.len() == CATALOG_PAGE as usize;
+        if let Some(last) = page.last() {
+            after = last.stream_seq;
+        }
+        events.extend(page);
+        if !full {
+            return Ok(events);
+        }
+    }
+}
+
 /// The name the user asked to be called, as kept: without surrounding spaces, at most
 /// [`MAX_USER_NAME_CHARS`] long.
 fn user_name(name: &str) -> String {
@@ -2050,7 +2135,8 @@ fn deleted_owner(deleted: &HashSet<ConversationId>, stream: &str) -> Option<Conv
     }
     let (kind, id) = stream.split_once(':')?;
     let id = ConversationId(id.to_owned());
-    (matches!(kind, "conversation" | "orch" | "draft") && deleted.contains(&id)).then_some(id)
+    (matches!(kind, "conversation" | "orch" | "draft" | "tabchat") && deleted.contains(&id))
+        .then_some(id)
 }
 
 fn to_new_event(stream: String, event: &DomainEvent) -> Result<NewEvent> {

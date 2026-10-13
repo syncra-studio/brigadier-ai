@@ -1424,6 +1424,38 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 heap(|| sessions.open_side_chat(&conversation_id, side_chat_id)).await?,
             ),
         },
+        Request::OpenTabChat {
+            conversation_id,
+            tab_id,
+            target,
+            chat_id,
+        } => Response::OpenTabChat {
+            conversation: Box::new(
+                heap(|| sessions.open_tab_chat(&conversation_id, tab_id, target, chat_id)).await?,
+            ),
+        },
+        Request::KeepTabChats { chat_ids } => {
+            heap(|| sessions.keep_tab_chats(chat_ids)).await?;
+            Response::KeepTabChats
+        }
+        Request::SetTabPage {
+            chat_id,
+            url,
+            title,
+            text,
+            selection,
+        } => {
+            sessions.set_tab_page(
+                &chat_id,
+                brigadier_core::manager::BrowserPage {
+                    url,
+                    title,
+                    text,
+                    selection,
+                },
+            )?;
+            Response::SetTabPage
+        }
         Request::WriteTerminal { terminal_id, data } => {
             daemon.terminals.write(&terminal_id, &data)?;
             Response::WriteTerminal
@@ -2210,7 +2242,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             pages: heap(|| on_pages(daemon, |pages| pages.list())).await?,
         },
         Request::PageDelete { id } => {
+            let page = id.clone();
             heap(|| on_pages(daemon, move |pages| pages.delete(&id))).await?;
+            // The chats of the tabs that showed it go with it.
+            heap(|| daemon.sessions.page_deleted(&page)).await;
             Response::PageDelete
         }
         Request::Subscribe { .. }

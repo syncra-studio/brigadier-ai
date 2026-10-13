@@ -115,6 +115,7 @@ use crate::{Core, Error, Result};
 pub use brains::{BrainCounters, IndexRunStats};
 pub use closing::Turn;
 pub use conversation::SendOutcome;
+pub use side_chat::BrowserPage;
 pub use takeover::{HostedTerminal, TerminalHost, WorkerTerminal};
 pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES};
 pub use uninstall::TearDown;
@@ -197,6 +198,8 @@ pub struct SessionManager {
     terminal_host: std::sync::OnceLock<Arc<dyn takeover::TerminalHost>>,
     /// The user's pages, which a thread may read and change from the page's own composer.
     pages: std::sync::OnceLock<Arc<crate::pages::Pages>>,
+    /// Tabs' own chats: whether they may run yet, and what browser tabs sent them.
+    tab_chats: side_chat::TabChats,
     /// Tests: the home whose CLI settings folder trust is written to. Without it, tests write
     /// none (never the real `~/.claude.json` or `~/.codex/config.toml`).
     #[cfg(test)]
@@ -290,6 +293,7 @@ impl SessionManager {
             closing: closing::Closing::default(),
             terminal_host: std::sync::OnceLock::new(),
             pages: std::sync::OnceLock::new(),
+            tab_chats: side_chat::TabChats::default(),
             #[cfg(test)]
             trust_home: std::sync::OnceLock::new(),
             #[cfg(test)]
@@ -738,6 +742,12 @@ impl ToolHost for SessionManager {
                 (Role::Chat { conversation_id }, ToolCall::Chat(call)) => {
                     manager.chat_call(conversation_id, call).await
                 }
+                (
+                    Role::TabChat {
+                        conversation_id, ..
+                    },
+                    ToolCall::TabChat(call),
+                ) => manager.tab_chat_call(conversation_id, call).await,
                 (
                     Role::Computer {
                         conversation_id,
