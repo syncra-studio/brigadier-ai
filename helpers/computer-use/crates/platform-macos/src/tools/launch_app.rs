@@ -656,6 +656,8 @@ fn local_file_target(raw: &str) -> Option<PathBuf> {
     }
     if let Some(rest) = raw.strip_prefix("file://") {
         let path = rest.strip_prefix("localhost").unwrap_or(rest);
+        // A page anchor or query isn't part of the file's path.
+        let path = path.split(['#', '?']).next().unwrap_or(path);
         let decoded = percent_decode_path(path);
         return Some(expand_tilde(&decoded));
     }
@@ -764,6 +766,18 @@ mod tests {
             "/tmp/brigadier-cu-definitely-missing-file-for-test.md"
         );
         assert!(structured.get("details").is_none());
+    }
+
+    #[test]
+    fn local_file_target_drops_anchor_and_query_from_file_urls() {
+        assert_eq!(
+            local_file_target("file:///tmp/page.html#bottom"),
+            Some(PathBuf::from("/tmp/page.html"))
+        );
+        assert_eq!(
+            local_file_target("file:///tmp/page.html?q=1#x"),
+            Some(PathBuf::from("/tmp/page.html"))
+        );
     }
 
     #[test]
