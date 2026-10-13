@@ -23,6 +23,8 @@ echo "$*" >> "$BRIGADIER_CU_HOME/calls.log"
 case "$1" in
   status) cat "$BRIGADIER_CU_HOME/fake-status" ;;
   restart|ensure|probe) echo '{"state":"healthy","pid":1}' ;;
+  off) touch "$BRIGADIER_CU_HOME/off"; echo '{}' ;;
+  on) rm -f "$BRIGADIER_CU_HOME/off"; echo '{}' ;;
   *) echo '{}' ;;
 esac
 "#,
@@ -114,6 +116,10 @@ async fn a_running_helper_shows_its_permissions_and_the_agents_using_apps() {
     assert_eq!(status.sessions[0].app, "TextEdit");
     assert_eq!(status.sessions[0].bundle_id, "com.apple.TextEdit");
     assert_eq!(status.sessions[0].label, "An agent");
+    // The watchdog tells the windows, and a window that subscribes later hears it too.
+    assert!(flow.manager.last_computer_status().is_none());
+    flow.manager.watch_computer_helper(false).await;
+    assert_eq!(flow.manager.last_computer_status(), Some(status));
 }
 
 #[tokio::test]
@@ -160,10 +166,45 @@ async fn nothing_is_tended_while_computer_use_is_off() {
     flow.core.update_settings(settings).await.unwrap();
     flow.manager.watch_computer_helper(true).await;
     flow.manager.watch_computer_helper(false).await;
-    assert!(calls(&home).is_empty());
+    // The helper's off mark is set, once; nothing is started or restarted.
+    let calls = calls(&home);
+    assert_eq!(
+        calls.iter().filter(|call| *call == "off").count(),
+        1,
+        "{calls:?}"
+    );
+    assert!(
+        calls.iter().all(|call| call == "off" || call == "status"),
+        "{calls:?}"
+    );
     assert_eq!(
         flow.manager.computer_use_status().await.setup,
         ComputerSetup::Off
+    );
+}
+
+#[tokio::test]
+async fn quick_flips_of_computer_use_end_as_the_last_one() {
+    let flow = flow("cu-host-flips").await;
+    let home = fake_helper(&flow, HEALTHY);
+    let mut settings = flow.core.settings();
+    settings.computer_use = false;
+    flow.core.update_settings(settings).await.unwrap();
+    // Off, then on, then off, each turn started before the last one ran.
+    let turns: Vec<_> = (0..3)
+        .map(|_| {
+            let manager = flow.manager.clone();
+            tokio::spawn(async move { manager.computer_use_turned().await })
+        })
+        .collect();
+    for turn in turns {
+        turn.await.unwrap();
+    }
+    assert!(home.join("off").exists(), "{:?}", calls(&home));
+    assert!(
+        calls(&home).iter().all(|call| call == "off"),
+        "{:?}",
+        calls(&home)
     );
 }
 

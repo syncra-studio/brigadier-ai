@@ -57,6 +57,8 @@ pub(crate) struct ComputerHost {
     news: broadcast::Sender<ComputerNews>,
     /// Held while the helper is refreshed; concurrent Check agains wait and share it.
     refresh: tokio::sync::Mutex<Option<Instant>>,
+    /// Held while the helper is turned on or off, so turns follow one another.
+    turning: tokio::sync::Mutex<()>,
 }
 
 impl Default for ComputerHost {
@@ -65,6 +67,7 @@ impl Default for ComputerHost {
             state: std::sync::Mutex::new(HostState::default()),
             news: broadcast::channel(16).0,
             refresh: tokio::sync::Mutex::new(None),
+            turning: tokio::sync::Mutex::new(()),
         }
     }
 }
@@ -354,6 +357,11 @@ impl SessionManager {
         self.computer_host.news.subscribe()
     }
 
+    /// The status the windows were last told, for a window that subscribes after it.
+    pub fn last_computer_status(&self) -> Option<ComputerUseStatus> {
+        self.computer_host_state().last.clone()
+    }
+
     /// Tells the windows about `status` when it changed.
     fn publish_computer_status(&self, status: &ComputerUseStatus) {
         let mut state = self.computer_host_state();
@@ -492,8 +500,11 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Computer use was turned on or off: the helper follows, and running agents too.
-    pub async fn computer_use_turned(&self, on: bool) {
+    /// Computer use was turned on or off: the helper follows, and running agents too. It
+    /// follows the setting as it is now, one turn at a time, so quick flips end as the last one.
+    pub async fn computer_use_turned(&self) {
+        let _turning = self.computer_host.turning.lock().await;
+        let on = self.core.settings().computer_use;
         if let Err(error) = self.computer_host(&[if on { "on" } else { "off" }]).await {
             tracing::warn!(%error, on, "couldn't tell the computer-use helper");
         }
@@ -513,7 +524,7 @@ impl SessionManager {
             if let Some(manager) = weak.upgrade() {
                 let on = manager.core.settings().computer_use;
                 if manager.computer_home().join(OFF_MARKER).exists() == on {
-                    manager.computer_use_turned(on).await;
+                    manager.computer_use_turned().await;
                 }
             }
             let mut wall = SystemTime::now();
@@ -533,6 +544,10 @@ impl SessionManager {
 
     pub(super) async fn watch_computer_helper(&self, woke: bool) {
         if !self.core.settings().computer_use {
+            // Off holds: a helper without its off mark (a turn that failed) gets it again.
+            if !self.computer_home().join(OFF_MARKER).exists() {
+                self.computer_use_turned().await;
+            }
             return;
         }
         self.notice_setup_request();

@@ -402,6 +402,13 @@ impl Session {
                 }
                 if self.computer_feed.is_none() {
                     self.computer_feed = Some(self.daemon.sessions.subscribe_computer_use());
+                    // A window that subscribes late (the app reopened) hears where things
+                    // stand now, not only what changes next.
+                    if let Some(status) = self.daemon.sessions.last_computer_status() {
+                        self.writer
+                            .write(&ServerFrame::ComputerUse { status })
+                            .await?;
+                    }
                 }
                 self.subscribe(after_seq).await.map_err(internal)
             }
@@ -1967,10 +1974,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             }
             if before.computer_use != settings.computer_use {
                 // The helper stops, and running agents' calls are refused, until it is on again.
-                let (sessions, on) = (daemon.sessions.clone(), settings.computer_use);
+                let sessions = daemon.sessions.clone();
                 daemon
                     .supervisor
-                    .spawn(async move { sessions.computer_use_turned(on).await });
+                    .spawn(async move { sessions.computer_use_turned().await });
             }
             if before.browser_enabled != settings.browser_enabled {
                 // Workers at work hear it at once; threads before their next turn.
