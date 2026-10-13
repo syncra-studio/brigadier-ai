@@ -712,6 +712,14 @@ fn main() {
                 // Closing the window keeps Brigadier running in the menu bar.
                 api.prevent_close();
                 shell::close_main(window.app_handle());
+            } else if let WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == computer_setup::SETUP_WINDOW
+                && !shell::is_quitting()
+            {
+                // Closed, the setup window is only hidden, and opens again from there: a closed
+                // one would stay behind as a hidden window each time.
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![

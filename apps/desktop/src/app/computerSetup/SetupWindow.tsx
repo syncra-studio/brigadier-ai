@@ -45,12 +45,27 @@ export function SetupWindow({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     // The helper starts here if it isn't running: the user is setting it up.
     check.run(() => checkComputerUse());
-    const looking = window.setInterval(() => void refreshComputerUse().catch(() => {}), LOOK_EVERY_MS);
+    let looking: number | undefined;
+    const look = () => {
+      window.clearInterval(looking);
+      looking = undefined;
+      if (document.visibilityState === "visible") {
+        looking = window.setInterval(() => void refreshComputerUse().catch(() => {}), LOOK_EVERY_MS);
+      }
+    };
+    look();
+    // Closing the window only hides it; shown again, it checks afresh.
+    const shown = () => {
+      if (document.visibilityState === "visible") check.run(() => checkComputerUse());
+      look();
+    };
     // Back from System Settings: a new Screen Recording grant needs the helper refreshed.
     const back = () => check.run(() => checkComputerUse());
+    document.addEventListener("visibilitychange", shown);
     window.addEventListener("focus", back);
     return () => {
       window.clearInterval(looking);
+      document.removeEventListener("visibilitychange", shown);
       window.removeEventListener("focus", back);
     };
     // Once, when the window opens.
