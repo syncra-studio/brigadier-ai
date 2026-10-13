@@ -342,14 +342,22 @@ impl PageFields for System {
         }
         let (pid, window_id) = target(args)?;
         let port = crate::page::cdp_port_for_pid(pid).await?;
-        // The page names the field by its DOM id, when it has one.
-        let dom_id = {
+        // What ties the page's focused element to this field: its DOM id,
+        // or else its accessible names.
+        let (dom_id, names) = {
             let store = cua_driver_core::snapshot_store::current_runtime_store::<AxSnapshot>()?;
             let ResolvedElement::Element { element, .. } = store.resolve(pid, args).ok()? else {
                 return None;
             };
-            unsafe { copy_string_attr(element.as_ptr() as AXUIElementRef, "AXDOMIdentifier") }
-                .unwrap_or_default()
+            let pointer = element.as_ptr() as AXUIElementRef;
+            let read = |attr| unsafe { copy_string_attr(pointer, attr) };
+            let names: Vec<String> = ["AXTitle", "AXDescription", "AXPlaceholderValue"]
+                .into_iter()
+                .filter_map(read)
+                .map(|name| name.trim().to_owned())
+                .filter(|name| !name.is_empty())
+                .collect();
+            (read("AXDOMIdentifier").unwrap_or_default(), names)
         };
         let title = tokio::task::spawn_blocking(move || {
             crate::window_list::windows(Some(pid))
@@ -361,7 +369,7 @@ impl PageFields for System {
         .ok()
         .flatten();
         let sessions = crate::page::shared_cdp_sessions();
-        let probe = field_probe(&dom_id, text);
+        let probe = field_probe(&dom_id, &names, text);
         let read = || async {
             sessions
                 .evaluate_in_window(&probe, port, title.as_deref())
@@ -391,15 +399,30 @@ impl PageFields for System {
 }
 
 /// JavaScript answering `there:<value>` when the page's focused editable
-/// field (with `dom_id`, when given) holds `text`, `missing` when it
-/// doesn't, and `none` when the page's focus is on something else.
-pub fn field_probe(dom_id: &str, text: &str) -> String {
+/// element is the field and holds `text`, `missing` when it is the field
+/// without the text, and `none` when the field can't be told apart for sure:
+/// the focus is elsewhere, or the page doesn't tie the focused element to
+/// the field. It is the field when it has `dom_id` and no other element has
+/// that id, or, without a DOM id, when its accessible name (label, ARIA
+/// label, placeholder or title) is one of `names` and no other editable
+/// element of the page has that name. Text goes in only for `missing`.
+pub fn field_probe(dom_id: &str, names: &[String], text: &str) -> String {
     let id = serde_json::to_string(dom_id).unwrap_or_else(|_| "\"\"".into());
+    let names = serde_json::to_string(names).unwrap_or_else(|_| "[]".into());
     let text = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
     format!(
-        "(() => {{ const e = document.activeElement; \
-         if (!e || !(e.isContentEditable || e.tagName === 'INPUT' || e.tagName === 'TEXTAREA')) return 'none'; \
-         const id = {id}; if (id && e.id !== id) return 'none'; \
+        "(() => {{ \
+         const editable = x => !!x && (x.isContentEditable || x.tagName === 'INPUT' || x.tagName === 'TEXTAREA'); \
+         const e = document.activeElement; if (!editable(e)) return 'none'; \
+         const id = {id}; const names = {names}; \
+         const nameOf = x => String(x.getAttribute('aria-label') || (x.labels && x.labels[0] && x.labels[0].textContent) \
+           || x.getAttribute('placeholder') || x.getAttribute('title') || '').trim(); \
+         let same = false; \
+         if (id) {{ same = e.id === id && Array.from(document.querySelectorAll('[id]')).filter(x => x.id === id).length === 1; }} \
+         else if (names.length) {{ const n = nameOf(e); \
+           same = n !== '' && names.includes(n) && Array.from(document.querySelectorAll('input, textarea, [contenteditable]')) \
+             .filter(x => editable(x) && nameOf(x) === n).length === 1; }} \
+         if (!same) return 'none'; \
          const v = (e.value !== undefined ? e.value : e.textContent) || ''; \
          return v.includes({text}) ? 'there:' + v : 'missing'; }})()"
     )

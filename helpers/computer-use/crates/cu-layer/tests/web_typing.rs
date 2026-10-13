@@ -326,10 +326,100 @@ async fn keys_that_landed_late_are_not_inserted_again() {
     );
 }
 
+/// A stand-in page: `el(tag, {id, value, text, label, attrs, ce})` makes an
+/// element, `add(...)` puts it in the page, `focus(e)` focuses it.
+const FAKE_PAGE: &str = r#"
+function el(tag, o) {
+  o = o || {}; const attrs = o.attrs || {};
+  return { tagName: tag, id: o.id || '', value: o.value, textContent: o.text || '',
+           isContentEditable: !!o.ce, labels: o.label ? [{ textContent: o.label }] : [],
+           getAttribute: k => (k in attrs ? attrs[k] : null) };
+}
+var all = [];
+var document = {
+  activeElement: null,
+  querySelectorAll(sel) {
+    if (sel === '[id]') return all.filter(x => x.id);
+    return all.filter(x => x.tagName === 'INPUT' || x.tagName === 'TEXTAREA' || x.isContentEditable);
+  },
+};
+function add(e) { all.push(e); return e; }
+function focus(e) { document.activeElement = e; }
+"#;
+
+/// What the probe answers on a page set up by `page` (JavaScript).
+fn probe(page: &str, dom_id: &str, names: &[&str], text: &str) -> String {
+    let names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+    let script = cu_layer::web_typing::field_probe(dom_id, &names, text);
+    let runtime = rquickjs::Runtime::new().unwrap();
+    let context = rquickjs::Context::full(&runtime).unwrap();
+    context.with(|ctx| {
+        ctx.eval::<(), _>(format!("{FAKE_PAGE}\n{page}")).unwrap();
+        ctx.eval::<String, _>(script).unwrap()
+    })
+}
+
 #[test]
-fn the_page_probe_names_the_field_and_the_text() {
-    let probe = cu_layer::web_typing::field_probe("q", "it's");
-    assert!(probe.contains(r#"const id = "q";"#), "{probe}");
-    assert!(probe.contains(r#"v.includes("it's")"#), "{probe}");
-    assert!(probe.contains("'there:' + v"), "{probe}");
+fn the_field_with_the_targets_dom_id_is_used() {
+    let page = "add(el('INPUT', {id: 'q'})); focus(add(el('INPUT', {id: 'name', value: ''})));";
+    assert_eq!(probe(page, "name", &[], "zz"), "missing");
+    let typed = "focus(add(el('INPUT', {id: 'name', value: 'a zz b'})));";
+    assert_eq!(probe(typed, "name", &[], "zz"), "there:a zz b");
+}
+
+#[test]
+fn a_focused_field_with_another_dom_id_gets_nothing() {
+    let page = "add(el('INPUT', {id: 'name'})); focus(add(el('INPUT', {id: 'q', value: ''})));";
+    assert_eq!(probe(page, "name", &["Name"], "zz"), "none");
+}
+
+#[test]
+fn a_dom_id_used_twice_in_the_page_ties_nothing() {
+    let page = "add(el('INPUT', {id: 'name'})); focus(add(el('INPUT', {id: 'name', value: ''})));";
+    assert_eq!(probe(page, "name", &[], "zz"), "none");
+}
+
+#[test]
+fn without_a_dom_id_the_one_field_with_the_targets_name_is_used() {
+    let page = "add(el('INPUT', {attrs: {'aria-label': 'Search'}})); \
+                focus(add(el('INPUT', {value: '', label: 'Name '})));";
+    assert_eq!(probe(page, "", &["Name"], "zz"), "missing");
+    let placeholder = "focus(add(el('TEXTAREA', {value: '', attrs: {placeholder: 'Message'}})));";
+    assert_eq!(
+        probe(placeholder, "", &["Note", "Message"], "zz"),
+        "missing"
+    );
+}
+
+#[test]
+fn without_a_dom_id_any_other_focused_field_gets_nothing() {
+    // The page's focus is on a field the agent didn't target.
+    let unnamed =
+        "add(el('INPUT', {attrs: {'aria-label': 'Name'}})); focus(add(el('INPUT', {value: ''})));";
+    assert_eq!(probe(unnamed, "", &["Name"], "zz"), "none");
+    let other = "add(el('INPUT', {attrs: {'aria-label': 'Name'}})); \
+                 focus(add(el('INPUT', {value: '', attrs: {'aria-label': 'Email'}})));";
+    assert_eq!(probe(other, "", &["Name"], "zz"), "none");
+    // Nothing on the target to match by.
+    let any = "focus(add(el('INPUT', {value: '', attrs: {'aria-label': 'Name'}})));";
+    assert_eq!(probe(any, "", &[], "zz"), "none");
+}
+
+#[test]
+fn without_a_dom_id_a_name_two_fields_share_ties_nothing() {
+    let page = "add(el('INPUT', {attrs: {'aria-label': 'Search'}})); \
+                focus(add(el('INPUT', {value: '', attrs: {'aria-label': 'Search'}})));";
+    assert_eq!(probe(page, "", &["Search"], "zz"), "none");
+}
+
+#[test]
+fn focus_on_something_that_isnt_a_field_gets_nothing() {
+    let page = "add(el('INPUT', {id: 'name'})); focus(add(el('BUTTON', {id: 'name'})));";
+    assert_eq!(probe(page, "name", &[], "zz"), "none");
+}
+
+#[test]
+fn keys_that_landed_in_an_editable_element_are_read_from_its_text() {
+    let page = "focus(add(el('DIV', {id: 'doc', ce: true, text: 'zz here'})));";
+    assert_eq!(probe(page, "doc", &[], "zz"), "there:zz here");
 }
