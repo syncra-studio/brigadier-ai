@@ -604,7 +604,8 @@ async fn a_merge_asked_in_words_closes_the_merge_card_left_open() {
 
 /// A merge card answered in the user's own words is a new request, never consent: the card
 /// records "Not yet", the request that asked stays done, and the words reach the orchestrator
-/// as the new request's one message, with the decision on it.
+/// as the new request's one message, with the decision on it. Even words that read as consent
+/// don't merge.
 #[tokio::test]
 async fn a_merge_card_answered_in_words_is_a_new_request() {
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -629,7 +630,11 @@ async fn a_merge_card_answered_in_words_is_a_new_request() {
                     return Reply::text("Added NOTES.md.");
                 }
                 if input.contains("start the dev app") {
-                    let reply = turn.call("finish_session", json!({})).await;
+                    // The words read as consent, but they answered the card instead of Merge.
+                    let words = "please merge it into main and start the dev app";
+                    let reply = turn
+                        .call("finish_session", json!({ "user_words": words }))
+                        .await;
                     assert!(reply.is_error, "{}", reply.text);
                     return Reply::text("The dev app runs.");
                 }
@@ -645,7 +650,7 @@ async fn a_merge_card_answered_in_words_is_a_new_request() {
     let card = open_card(&board, true).unwrap();
     let asked = board.latest_request().unwrap().clone();
     let seen = flow.events().await.len();
-    let words = "start the dev app so I can see it first";
+    let words = "please merge it into main and start the dev app";
     flow.manager
         .answer_question(
             flow.conversation.clone(),

@@ -122,16 +122,20 @@ async fn a_hung_background_job_still_gets_the_worker_nudged() {
     flow.stop().await;
 }
 
-/// The orchestrator's side of a run where it ends its turn while a command it started in the
-/// background still runs. Once `release` is notified the job ends: with `exits`, the CLI dies
+/// The orchestrator's side of a run where it ends its turn while `jobs` commands it started in
+/// the background still run. Once `release` is notified one ends: with `exits`, the CLI dies
 /// with it; otherwise its end starts a turn of the CLI's own, which answers.
-fn orchestrator_waits_for_its_command(exits: bool, release: Arc<tokio::sync::Notify>) -> Script {
+fn orchestrator_waits_for_its_command(
+    jobs: u32,
+    exits: bool,
+    release: Arc<tokio::sync::Notify>,
+) -> Script {
     script(move |turn| {
         let release = release.clone();
         async move {
             let events = turn.events.clone();
             let _ = events
-                .send(ProviderEvent::BackgroundJobs { running: 1 })
+                .send(ProviderEvent::BackgroundJobs { running: jobs })
                 .await;
             tokio::spawn(async move {
                 release.notified().await;
@@ -146,7 +150,7 @@ fn orchestrator_waits_for_its_command(exits: bool, release: Arc<tokio::sync::Not
                     return;
                 }
                 let _ = events
-                    .send(ProviderEvent::BackgroundJobs { running: 0 })
+                    .send(ProviderEvent::BackgroundJobs { running: jobs - 1 })
                     .await;
                 let _ = events
                     .send(ProviderEvent::TurnStarted { turn_id: None })
@@ -172,13 +176,13 @@ fn orchestrator_waits_for_its_command(exits: bool, release: Arc<tokio::sync::Not
     })
 }
 
-/// Waits until the request works on with its turn over, for its command alone.
-async fn waiting_for_the_command(flow: &Flow) -> String {
+/// Waits until the request works on with its turn over, for its `jobs` commands alone.
+async fn waiting_for_the_command(flow: &Flow, jobs: u32) -> String {
     let board = flow
         .until("the request to wait for its command", |board| {
             board.run == crate::work::RunState::Idle
                 && board.requests.values().any(|request| {
-                    request.state == RequestState::Working && request.background_jobs == Some(1)
+                    request.state == RequestState::Working && request.background_jobs == Some(jobs)
                 })
         })
         .await;
@@ -194,11 +198,11 @@ async fn a_request_works_until_its_background_commands_turn_is_over() {
     let flow = Flow::start(
         "orchestrator-background",
         Options::default(),
-        orchestrator_waits_for_its_command(false, release.clone()),
+        orchestrator_waits_for_its_command(1, false, release.clone()),
     )
     .await;
     flow.say("Start the app.").await;
-    let request = waiting_for_the_command(&flow).await;
+    let request = waiting_for_the_command(&flow, 1).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(
         flow.board().await.requests[&request].state,
@@ -226,16 +230,52 @@ async fn a_cli_that_exits_ends_its_requests_wait_for_its_command() {
     let flow = Flow::start(
         "orchestrator-background-exit",
         Options::default(),
-        orchestrator_waits_for_its_command(true, release.clone()),
+        orchestrator_waits_for_its_command(1, true, release.clone()),
     )
     .await;
     flow.say("Start the app.").await;
-    let request = waiting_for_the_command(&flow).await;
+    let request = waiting_for_the_command(&flow, 1).await;
     release.notify_one();
     let board = flow.settled().await;
     let ended = &board.requests[&request];
     assert_ne!(ended.state, RequestState::Working);
     assert_eq!(ended.background_jobs, None);
+    flow.stop().await;
+}
+
+/// The user's Stop ends a request that waits for its commands, and one of them ending later
+/// doesn't make it work again: the turn its end starts is the CLI's own.
+#[tokio::test]
+async fn a_stopped_request_stays_stopped_when_its_command_ends() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let flow = Flow::start(
+        "orchestrator-background-stop",
+        Options::default(),
+        orchestrator_waits_for_its_command(2, false, release.clone()),
+    )
+    .await;
+    flow.say("Start the app.").await;
+    let request = waiting_for_the_command(&flow, 2).await;
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.until("the request to stop", |board| {
+        board.requests[&request].state == RequestState::Stopped
+    })
+    .await;
+    release.notify_one();
+    super::eventually_async("the command's turn to answer", || async {
+        let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
+        messages
+            .iter()
+            .any(|message| message.text == "The app runs.")
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let board = flow.board().await;
+    assert_eq!(board.requests[&request].state, RequestState::Stopped);
+    assert_eq!(board.requests[&request].background_jobs, None);
     flow.stop().await;
 }
 

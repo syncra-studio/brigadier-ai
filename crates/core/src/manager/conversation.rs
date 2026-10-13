@@ -264,8 +264,10 @@ struct ConvState {
 
 /// The background jobs of a conversation's CLI (see `ConvState::background`).
 struct Background {
-    /// The request whose turn started them; the turn their end starts serves it too.
-    request: String,
+    /// The request whose turn started them; the turn their end starts serves it too. None once
+    /// the user stopped it, or for jobs no turn of ours was seen starting: still counted, so
+    /// their end revives no request.
+    request: Option<String>,
     /// How many still run, as the CLI last said.
     running: u32,
     /// The CLI that runs them: they end with it.
@@ -689,7 +691,7 @@ impl ConvLive {
             background: state
                 .background
                 .as_ref()
-                .map(|jobs| (jobs.request.clone(), jobs.running)),
+                .and_then(|jobs| Some((jobs.request.clone()?, jobs.running))),
             reviews_due: self.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0,
         }
     }
@@ -965,14 +967,24 @@ impl SessionManager {
         working: Option<String>,
     ) {
         let mut state = conv.state.lock().await;
-        let steered = match (&state.cli, state.busy && !state.compacting) {
-            (Some(cli), true) => {
+        let cli = state
+            .cli
+            .clone()
+            .filter(|_| state.busy && !state.compacting);
+        let steered = match cli {
+            Some(cli) => {
+                // What waits for the next user message (a card's decision) goes with it.
+                let notes = std::mem::take(&mut state.notes);
                 let input = self
-                    .turn_input(conv, std::slice::from_ref(&message), &[])
+                    .turn_input(conv, std::slice::from_ref(&message), &notes)
                     .await;
-                cli.session.steer(input).await.is_ok()
+                let steered = cli.session.steer(input).await.is_ok();
+                if !steered {
+                    state.notes.splice(0..0, notes);
+                }
+                steered
             }
-            _ => false,
+            None => false,
         };
         let into = if steered {
             self.log_user_injection(conv, &message).await;
@@ -1211,12 +1223,17 @@ impl SessionManager {
             }
             // A request that waits only for the CLI's background jobs ends Stopped; the turn
             // their end starts is the CLI's own again.
-            let waits_on_jobs = state
-                .background
-                .as_ref()
-                .is_some_and(|jobs| !state.busy || state.request.as_deref() != Some(&jobs.request));
-            if waits_on_jobs && let Some(jobs) = state.background.take() {
-                state.outcomes.insert(jobs.request, RequestState::Stopped);
+            let running = state.busy.then(|| state.request.clone()).flatten();
+            let waits_on_jobs = match &mut state.background {
+                Some(jobs) if jobs.request.is_some() && jobs.request != running => {
+                    jobs.request.take()
+                }
+                _ => None,
+            };
+            if let Some(request) = &waits_on_jobs {
+                state
+                    .outcomes
+                    .insert(request.clone(), RequestState::Stopped);
             }
             // A limited turn being handed over: it ends Stopped, and its messages don't go again.
             let mut handed_over = false;
@@ -1244,7 +1261,7 @@ impl SessionManager {
             } else {
                 false
             };
-            (stopped, handed_over, waits_on_jobs)
+            (stopped, handed_over, waits_on_jobs.is_some())
         };
         if stopped {
             self.stop_waiting(&conv).await;
@@ -2620,7 +2637,6 @@ impl SessionManager {
     /// The conversation CLI's background jobs changed: the request whose turn started them
     /// works on until the turn their end starts is over.
     async fn background_jobs(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, running: u32) {
-        let latest = self.request_for(&conv.id, None).await;
         let armed = {
             let mut state = conv.state.lock().await;
             let known = state.background.as_ref().filter(|jobs| jobs.of(cli));
@@ -2630,20 +2646,18 @@ impl SessionManager {
             }
             // A job started now is the running turn's; one ending is still theirs.
             let request = match known {
-                Some(jobs) if !(state.busy && running > before) => Some(jobs.request.clone()),
+                Some(jobs) if !(state.busy && running > before) => jobs.request.clone(),
                 _ if state.busy => state.request.clone(),
-                _ => latest,
+                _ => None,
             };
-            let Some(request) = request else {
-                return;
-            };
+            let waits = request.is_some();
             state.background = Some(Background {
                 request,
                 running,
                 cli: Arc::downgrade(cli),
             });
             state.background_timer += 1;
-            (running == 0 && !state.busy).then_some(state.background_timer)
+            (running == 0 && !state.busy && waits).then_some(state.background_timer)
         };
         self.settle_requests(&conv.id).await;
         if let Some(timer) = armed {
@@ -3277,7 +3291,7 @@ impl SessionManager {
                     let mut state = conv.state.lock().await;
                     state.landed = true;
                     let adopted = match &state.background {
-                        Some(jobs) if !state.busy && jobs.of(cli) => Some(jobs.request.clone()),
+                        Some(jobs) if !state.busy && jobs.of(cli) => jobs.request.clone(),
                         _ => None,
                     };
                     if let Some(request) = adopted {
@@ -3532,12 +3546,13 @@ impl SessionManager {
             let served = state.request.take();
             // The turn the background jobs' end started is over, or a stop or failure ended
             // their request: it no longer waits for them.
-            if state.background.as_ref().is_some_and(|jobs| {
-                jobs.of(cli)
-                    && (jobs.running == 0
-                        || (ended.is_some() && served.as_deref() == Some(&jobs.request)))
-            }) {
-                state.background = None;
+            if let Some(jobs) = state.background.as_mut().filter(|jobs| jobs.of(cli)) {
+                if ended.is_some() && served.is_some() && jobs.request == served {
+                    jobs.request = None;
+                }
+                if jobs.running == 0 {
+                    state.background = None;
+                }
             }
             // An error the request won't show after all (its turn didn't fail) is a notice.
             let unshown = state.unshown_error.take().filter(|_| {

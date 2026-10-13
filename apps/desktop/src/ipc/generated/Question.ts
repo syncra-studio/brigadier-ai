@@ -38,4 +38,9 @@ answer: string | null,
 /**
  * A round's answers, one per item, once answered.
  */
-answers: Array<string>, createdAtMs: number, answeredAtMs: number | null, };
+answers: Array<string>, createdAtMs: number, answeredAtMs: number | null, 
+/**
+ * A merge card the user answered in their own words: those words, which went as a new
+ * request. Its answer is "Not yet", and they are never consent to merge.
+ */
+words?: string, };

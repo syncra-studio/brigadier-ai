@@ -1118,6 +1118,11 @@ pub struct Question {
     pub answers: Vec<String>,
     pub created_at_ms: i64,
     pub answered_at_ms: Option<i64>,
+    /// A merge card the user answered in their own words: those words, which went as a new
+    /// request. Its answer is "Not yet", and they are never consent to merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub words: Option<String>,
 }
 
 impl Question {

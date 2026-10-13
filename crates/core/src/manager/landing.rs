@@ -2060,6 +2060,14 @@ impl SessionManager {
                     && question.answer.is_some()
             })
             .max_by_key(|question| question.answered_at_ms);
+        // Words the user answered that card with instead of its Merge are no consent either.
+        if let (Some(card), Some(latest)) = (card, latest)
+            && card.words.as_deref() == Some(latest.text.trim())
+        {
+            return Err(refuse(
+                "the user's latest message is what they answered the merge card with instead of Merge, which isn't consent; don't ask again until they bring it up".into(),
+            ));
+        }
         if let Some(card) = card
             && let Some(answered) = card.answered_at_ms
             && latest.is_none_or(|latest| answered >= latest.created_at_ms)

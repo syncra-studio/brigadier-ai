@@ -381,6 +381,7 @@ impl SessionManager {
             answers: Vec::new(),
             created_at_ms: now_ms(),
             answered_at_ms: None,
+            words: None,
         };
         let rx = self.waiters.register(question.id.clone());
         self.core
@@ -451,6 +452,7 @@ impl SessionManager {
             question.answers = answers.clone();
         }
         question.answered_at_ms = Some(now_ms());
+        question.words.clone_from(&typed);
         // Recorded before it is delivered: until the answer is in the inbox, the request
         // counts as carried, or a settle in between would end it (its card answered, nothing
         // queued) and open its time again with the answer's turn.

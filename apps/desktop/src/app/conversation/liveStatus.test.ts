@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
 import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import type { OrchestratorStep, ProviderEvent, Question, Task, WaitingItem } from "@/ipc/generated";
+import type { OrchestratorStep, ProviderEvent, Question, Task, UserRequest, WaitingItem } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { applyToBoard, type Board, doingOf, emptyBoard, type ShownApproval } from "@/state/board";
 
@@ -189,13 +189,15 @@ test("a worker open in the user's terminal waits on the user", () => {
     { text: "Working in your terminal", tone: "needsYou" });
 });
 
+/** Request `r1`, working, with `backgroundJobs` of the lead's commands still running. */
+const working = (backgroundJobs?: number): Record<string, UserRequest> => ({ r1: { id: "r1", conversationId: "c",
+  preview: "Start the app", state: { type: "working" }, startedAtMs: 0, endedAtMs: null, steeredInto: null, steeredAfter: null,
+  undo: null, worked: [], quotaWait: false, ...(backgroundJobs === undefined ? {} : { backgroundJobs }) } });
+
 test("a lead that waits on its own background command says so until the command's turn runs", () => {
-  const request = (backgroundJobs?: number) => ({ r1: { id: "r1", conversationId: "c", preview: "Start the app", state: "working",
-    startedAtMs: 0, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false,
-    ...(backgroundJobs === undefined ? {} : { backgroundJobs }) } as const });
-  assert.deepEqual(head(input({ requests: request(1) })), { text: "Waiting for a command", tone: "still" });
-  assert.deepEqual(head(input({ requests: request(2) })), { text: "Waiting for 2 commands", tone: "still" });
+  assert.deepEqual(head(input({ requests: working(1) })), { text: "Waiting for a command", tone: "still" });
+  assert.deepEqual(head(input({ requests: working(2) })), { text: "Waiting for 2 commands", tone: "still" });
   // The command's end starts the lead's turn for it: that turn's own line shows.
-  assert.deepEqual(head(input({ ...leading, requests: request(1) })), { text: "Thinking", tone: "busy" });
-  assert.deepEqual(head(input({ requests: request() })), { text: "Thinking", tone: "busy" });
+  assert.deepEqual(head(input({ ...leading, requests: working(1) })), { text: "Thinking", tone: "busy" });
+  assert.deepEqual(head(input({ requests: working() })), { text: "Thinking", tone: "busy" });
 });
