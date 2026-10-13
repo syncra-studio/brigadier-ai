@@ -352,6 +352,7 @@ impl Core {
             quota_wait: None,
             cleanup_pending: false,
             deleting: false,
+            peer_at_ms: None,
         };
         events.insert(
             0,
@@ -1408,6 +1409,7 @@ impl Core {
             overnight: board.sorted_runs(),
             reviews: board.sorted_reviews(),
             previews: board.sorted_previews(),
+            peer_messages: board.sorted_peer_messages(),
         })
     }
 

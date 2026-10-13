@@ -438,15 +438,20 @@ impl Bridge {
                 return;
             }
             // A finished request is told under its conversation's name.
-            let title = match &notice.title {
-                Title::Fixed(title) => title.clone(),
-                Title::Conversation(id) => catalog
+            let name = |id: &ConversationId| {
+                catalog
                     .conversations
                     .iter()
                     .find(|conversation| &conversation.id == id)
                     .map(|conversation| conversation.title.clone())
                     .filter(|title| !title.trim().is_empty())
-                    .unwrap_or_else(|| "Finished".to_owned()),
+            };
+            let title = match &notice.title {
+                Title::Fixed(title) => title.clone(),
+                Title::Conversation(id) => name(id).unwrap_or_else(|| "Finished".to_owned()),
+                Title::AfterPeer { id, from } => {
+                    after_peer(name(id).as_deref(), name(from).as_deref())
+                }
             };
             (bridge.inner.notify)(&title, &notice.body);
         });
@@ -467,6 +472,22 @@ enum Title {
     Fixed(String),
     /// The conversation's name, read when the notification shows.
     Conversation(ConversationId),
+    /// "‹title› finished · after a message from ‹sender›": a request another session's message
+    /// started (SESSION-MESSAGING-PLAN.md §6.4), the names read when it shows.
+    AfterPeer {
+        id: ConversationId,
+        from: ConversationId,
+    },
+}
+
+/// The title of a finished request another session's message started, by the two sessions'
+/// names (either may be gone).
+fn after_peer(title: Option<&str>, from: Option<&str>) -> String {
+    let title = title.unwrap_or("A session");
+    match from {
+        Some(from) => format!("{title} finished · after a message from {from}"),
+        None => format!("{title} finished · after a message from another session"),
+    }
 }
 
 /// A desktop notification an event asks for.
@@ -535,7 +556,13 @@ fn notice_for(event: &EventEnvelope) -> Option<Notice> {
             request.ended_at_ms.unwrap_or_default()
         ),
         kind: Kind::Finished,
-        title: Title::Conversation(request.conversation_id),
+        title: match request.from_peer {
+            Some(from) => Title::AfterPeer {
+                id: request.conversation_id,
+                from,
+            },
+            None => Title::Conversation(request.conversation_id),
+        },
         body,
     })
 }
@@ -783,6 +810,30 @@ mod tests {
         steered.steered_into = Some("m1".into());
         let steered = DomainEvent::RequestUpdated { request: steered };
         assert!(notice_for(&envelope(&steered)).is_none());
+    }
+
+    #[test]
+    fn a_request_another_session_started_says_so_when_it_finishes() {
+        let DomainEvent::RequestUpdated { mut request } = request("m3", RequestState::Done) else {
+            unreachable!()
+        };
+        request.from_peer = Some(ConversationId("c2".into()));
+        let done = notice_for(&envelope(&DomainEvent::RequestUpdated { request })).unwrap();
+        assert_eq!(
+            done.title,
+            Title::AfterPeer {
+                id: ConversationId("c1".into()),
+                from: ConversationId("c2".into()),
+            }
+        );
+        assert_eq!(
+            after_peer(Some("Docs"), Some("API work")),
+            "Docs finished · after a message from API work"
+        );
+        assert_eq!(
+            after_peer(Some("Docs"), None),
+            "Docs finished · after a message from another session"
+        );
     }
 
     #[test]

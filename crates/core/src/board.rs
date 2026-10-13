@@ -637,6 +637,28 @@ impl Board {
         previews
     }
 
+    /// Its messages to and from other sessions, in stream order.
+    pub(crate) fn sorted_peer_messages(&self) -> Vec<crate::model::PeerMessage> {
+        let mut records: Vec<&PeerRecord> = self.peer_messages.values().collect();
+        records.sort_by_key(|record| record.position);
+        records
+            .into_iter()
+            .map(|record| crate::model::PeerMessage {
+                message_id: record.message_id.clone(),
+                outgoing: record.outgoing,
+                peer: record.peer.clone(),
+                reply_to: record.reply_to.clone(),
+                request_id: record.request_id.clone(),
+                state: record.state.clone(),
+                text: record.text.clone(),
+                blob: record.blob.clone(),
+                sent_at_ms: record.sent_at_ms,
+                settled: record.settled,
+                position: record.position,
+            })
+            .collect()
+    }
+
     /// Its overnight runs, oldest first.
     pub(crate) fn sorted_runs(&self) -> Vec<OvernightRun> {
         let mut runs: Vec<OvernightRun> = self.runs.values().cloned().collect();

@@ -478,6 +478,11 @@ pub struct Conversation {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(skip)]
     pub deleting: bool,
+    /// When it last received a message from another session (its sidebar row's unread dot,
+    /// SESSION-MESSAGING-PLAN.md §6.4); folded from its messages, never stored as such.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub peer_at_ms: Option<i64>,
 }
 
 /// A conversation's model standing in for the chosen one while that one is at a limit.
@@ -583,6 +588,34 @@ pub enum PeerState {
     Refused { reason: String },
     /// It was sent and will never be delivered.
     Dropped { reason: String },
+}
+
+/// A message between this session and another, as this side recorded it, for the thread's
+/// rows and blocks (SESSION-MESSAGING-PLAN.md §6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerMessage {
+    pub message_id: String,
+    /// This session sent it (else it received it).
+    pub outgoing: bool,
+    /// The other session: where it went, or where it came from.
+    pub peer: ConversationId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reply_to: Option<String>,
+    /// Sent: the request whose turn sent it. Received: the request it is filed under.
+    pub request_id: Option<String>,
+    pub state: PeerState,
+    /// Sent: its text (the start of it, when `blob` holds the rest). Received: empty, as the
+    /// transcript message holds it.
+    pub text: String,
+    pub blob: Option<String>,
+    /// Sent: when it was allowed to go.
+    pub sent_at_ms: Option<i64>,
+    /// Sent: the thread no longer waits for its reply.
+    pub settled: bool,
+    /// Where it was first recorded in the conversation's stream.
+    pub position: i64,
 }
 
 impl PeerState {
@@ -1165,6 +1198,9 @@ pub struct ConversationView {
     /// Its previews, oldest first.
     #[serde(default)]
     pub previews: Vec<crate::work::Preview>,
+    /// Its messages to and from other sessions, in the order they were recorded.
+    #[serde(default)]
+    pub peer_messages: Vec<PeerMessage>,
 }
 
 /// A branch, for the composer's branch picker.

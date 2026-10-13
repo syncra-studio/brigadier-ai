@@ -52,4 +52,9 @@ fallback: ModelFallback | null,
  * Set while its model is at a limit and no model it may use can stand in: its messages
  * wait, and go on their own when one can take them.
  */
-quotaWait: QuotaWait | null, };
+quotaWait: QuotaWait | null, 
+/**
+ * When it last received a message from another session (its sidebar row's unread dot,
+ * SESSION-MESSAGING-PLAN.md §6.4); folded from its messages, never stored as such.
+ */
+peerAtMs?: number, };

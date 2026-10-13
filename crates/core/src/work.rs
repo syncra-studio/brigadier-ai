@@ -1722,6 +1722,22 @@ pub enum OrchestratorStepKind {
         #[ts(optional)]
         consent: Option<CiConsent>,
     },
+    /// "Couldn't message ‹title›": a `message_session` the engine refused before anything was
+    /// recorded (an archived, unknown or own target, the hop or rate rule, a bad `reply_to`,
+    /// an empty text). A send that was recorded shows from its record instead
+    /// (SESSION-MESSAGING-PLAN.md §6.1).
+    MessageRefused {
+        /// The session it was for, when the id named one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        to: Option<ConversationId>,
+        /// Its title then, when the id named one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        title: Option<String>,
+        /// Why, in the words the thread heard.
+        reason: String,
+    },
 }
 
 /// The user's answer on the card where the thread asked to watch a push's CI. While its loop

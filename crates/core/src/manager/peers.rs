@@ -10,7 +10,9 @@ use crate::model::{
 };
 use crate::sessions::PeerSend;
 use crate::tools::MessageSession;
-use crate::work::{Approval, ApprovalSubject, CardState, InjectionKind, RequestState};
+use crate::work::{
+    Approval, ApprovalSubject, CardState, InjectionKind, OrchestratorStepKind, RequestState,
+};
 use crate::{Error, Result, now_ms};
 
 /// Messages between sessions with no one's word in between after which a turn may send no
@@ -225,32 +227,67 @@ fn header(title: &str, project: &str, message_id: &str, reply_to: Option<&str>) 
 
 impl SessionManager {
     /// `message_session`: sends `args.text` from `caller`'s running turn to another session
-    /// (SESSION-MESSAGING-PLAN.md §§3, 5).
+    /// (SESSION-MESSAGING-PLAN.md §§3, 5). A send refused before it was recorded leaves the
+    /// thread a "Couldn't message ‹title›" row with the reason (§6.1).
     pub(super) async fn message_session(
         &self,
         caller: &ConversationId,
         args: MessageSession,
     ) -> Result<String> {
+        let to = args.to.clone();
+        match self.send_peer_message(caller, args).await {
+            Ok(reply) => Ok(reply),
+            Err((err, recorded)) => {
+                if !recorded {
+                    let target = self.peer_session(&to).ok();
+                    let reason = match &err {
+                        Error::Invalid(reason) => reason.clone(),
+                        other => other.to_string(),
+                    };
+                    self.orchestrator_step(
+                        caller,
+                        OrchestratorStepKind::MessageRefused {
+                            to: target.as_ref().map(|target| target.id.clone()),
+                            title: target.map(|target| target.title),
+                            reason,
+                        },
+                    )
+                    .await;
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// [`Self::message_session`]'s send: its error says whether the send was recorded first.
+    async fn send_peer_message(
+        &self,
+        caller: &ConversationId,
+        args: MessageSession,
+    ) -> std::result::Result<String, (Error, bool)> {
+        let refused = |err: Error| (err, false);
+        let recorded = |err: Error| (err, true);
         let text = args.text.trim();
         if text.is_empty() {
-            return Err(Error::Invalid(
+            return Err(refused(Error::Invalid(
                 "Write the message: its text is empty.".into(),
-            ));
-        }
-        let target = self.peer_session(&args.to)?;
-        if target.id == *caller {
-            return Err(Error::Invalid("That's this session.".into()));
-        }
-        if target.lifecycle == Lifecycle::Archived {
-            return Err(Error::Invalid(format!(
-                "{} is archived. Nothing was sent.",
-                target.title
             )));
         }
-        let Some((request, chain)) = self.conv(caller)?.sending_turn().await else {
-            return Err(Error::Invalid(
+        let target = self.peer_session(&args.to).map_err(refused)?;
+        if target.id == *caller {
+            return Err(refused(Error::Invalid("That's this session.".into())));
+        }
+        if target.lifecycle == Lifecycle::Archived {
+            return Err(refused(Error::Invalid(format!(
+                "{} is archived. Nothing was sent.",
+                target.title
+            ))));
+        }
+        let Some((request, chain)) = self.conv(caller).map_err(refused)?.sending_turn().await
+        else {
+            return Err(refused(Error::Invalid(
                 "A message goes from a running turn; none runs now.".into(),
-            ));
+            )));
         };
         let reply_to = args
             .reply_to
@@ -259,16 +296,16 @@ impl SessionManager {
             .filter(|id| !id.is_empty())
             .map(str::to_owned);
         if let Some(original) = &reply_to {
-            let board = self.core.board(caller).await?;
+            let board = self.core.board(caller).await.map_err(refused)?;
             let from_target = board
                 .peer_messages
                 .get(original)
                 .is_some_and(|record| !record.outgoing && record.peer == target.id);
             if !from_target {
-                return Err(Error::Invalid(format!(
+                return Err(refused(Error::Invalid(format!(
                     "That message wasn't from {}.",
                     target.title
-                )));
+                ))));
             }
         }
         let ask = self.permission(caller) == PermissionLevel::AskForApproval;
@@ -285,8 +322,13 @@ impl SessionManager {
         };
         {
             let _checked = self.peer_sends.lock().await;
-            self.may_send(caller, &target, chain.hop).await?;
-            self.core.record_peer_send(&send, ask).await?;
+            self.may_send(caller, &target, chain.hop)
+                .await
+                .map_err(refused)?;
+            self.core
+                .record_peer_send(&send, ask)
+                .await
+                .map_err(refused)?;
         }
         if ask {
             // Under Ask for approval it goes once the user presses Send
@@ -302,7 +344,8 @@ impl SessionManager {
                     text: send.text.clone(),
                 },
             )
-            .await?;
+            .await
+            .map_err(recorded)?;
             self.settle_requests(caller).await;
             return Ok(serde_json::json!({
                 "message_id": send.message_id,
@@ -313,7 +356,7 @@ impl SessionManager {
         }
         #[cfg(test)]
         if self.peer_fault_at(PeerFault::BeforeEnqueue).await {
-            return Err(Error::Invalid("the daemon died".into()));
+            return Err(recorded(Error::Invalid("the daemon died".into())));
         }
         let delivery = self.deliver_peer(&target.id, &send.message_id).await;
         Ok(serde_json::json!({

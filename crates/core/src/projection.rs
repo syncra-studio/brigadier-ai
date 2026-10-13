@@ -111,6 +111,12 @@ impl Projection {
             }
             DomainEvent::MessageAppended { message } => {
                 self.touch(&message.conversation_id, message.created_at_ms);
+                if message.role == crate::model::MessageRole::Peer
+                    && let Some(conversation) = self.conversations.get_mut(&message.conversation_id)
+                {
+                    conversation.peer_at_ms =
+                        conversation.peer_at_ms.max(Some(message.created_at_ms));
+                }
             }
             DomainEvent::SettingsChanged { settings } => {
                 if seq >= self.settings_seq {

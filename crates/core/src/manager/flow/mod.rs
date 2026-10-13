@@ -1799,6 +1799,8 @@ mod peer_revision_tests;
 #[cfg(test)]
 mod peer_session_tests;
 #[cfg(test)]
+mod peer_view_tests;
+#[cfg(test)]
 mod plan_tests;
 mod preview_tests;
 #[cfg(test)]

@@ -11,6 +11,7 @@ import type { MessageQueue } from "./MessageQueue";
 import type { Notice } from "./Notice";
 import type { OrchestratorStep } from "./OrchestratorStep";
 import type { OvernightRun } from "./OvernightRun";
+import type { PeerMessage } from "./PeerMessage";
 import type { Plan } from "./Plan";
 import type { Preview } from "./Preview";
 import type { Question } from "./Question";
@@ -99,4 +100,8 @@ reviews: Array<ReviewRun>,
 /**
  * Its previews, oldest first.
  */
-previews: Array<Preview>, };
+previews: Array<Preview>, 
+/**
+ * Its messages to and from other sessions, in the order they were recorded.
+ */
+peerMessages: Array<PeerMessage>, };
