@@ -329,7 +329,13 @@ impl Tool for LaunchAppTool {
                     //   WHILE held, so widening the window converts the
                     //   late activation from a contract violation into
                     //   another auto-demote.
-                    let window_ms: u64 = if slow_launch_path { 2500 } else { 500 };
+                    //
+                    // Only the first moments are spent inside the call now:
+                    // the detached watchdog below holds the same observer-
+                    // backed lease for the rest of that window, so a late
+                    // activation is still demoted while the agent already
+                    // gets its answer.
+                    let window_ms: u64 = if slow_launch_path { 300 } else { 250 };
                     tokio::time::sleep(std::time::Duration::from_millis(window_ms)).await;
                     drop(targeted_lease);
 
@@ -402,8 +408,8 @@ impl Tool for LaunchAppTool {
                     // have a session that outlives the call.
                     //
                     // Tradeoffs:
-                    // - Caller latency unchanged (~2.5s for slow path).
-                    // - Total observer coverage: ~10.5s post-launch.
+                    // - Caller latency: ~0.3 s (slow path), ~0.25 s (fast path).
+                    // - Total observer coverage: ~10.8 s post-launch (slow path).
                     // - CPU: the observer fires per activation event,
                     //   not per poll; the 250ms tick is just for the
                     //   manual belt-and-braces demote. Cheap.
@@ -412,7 +418,11 @@ impl Tool for LaunchAppTool {
                     //   case ~10s of "I clicked Code and it didn't come
                     //   forward" — acceptable trade for an automation
                     //   scenario where the agent just launched it.
-                    if slow_launch_path {
+                    //
+                    // It now also covers what used to be the in-call window
+                    // (2.5 s slow path, 0.5 s fast path).
+                    {
+                        let ticks = if slow_launch_path { 42 } else { 2 };
                         let launched_pid = *pid;
                         let prior_pid = prior;
                         tokio::spawn(async move {
@@ -422,8 +432,8 @@ impl Tool for LaunchAppTool {
                                 "LaunchAppTool.watchdog",
                             );
                             let mut late_activations = 0u32;
-                            for _ in 0..32 {
-                                // 32 × 250ms = 8s
+                            for _ in 0..ticks {
+                                // 42 × 250ms = 10.5s (slow path)
                                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                                 if crate::apps::frontmost_pid() == Some(launched_pid) {
                                     late_activations += 1;
