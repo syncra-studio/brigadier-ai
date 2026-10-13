@@ -25,6 +25,8 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { PreviewsSection } from "@/app/conversation/RunningTab";
+import { TitlebarButton } from "@/components/titlebar-button";
 import { showCard } from "@/app/conversation/ActionCards";
 import { isRunRequest } from "@/app/conversation/blocks";
 import { PlanSection } from "@/app/conversation/cards/PlanSection";
@@ -897,6 +899,7 @@ function SessionSummaryContent({
               }
             />
           )}
+          <PreviewsSection conversationId={conversation.id} />
           <WorkersSummary conversationId={conversation.id} />
           <Sources conversationId={conversation.id} />
         </div>
@@ -921,29 +924,27 @@ export function PinnedSummaryToggle() {
   const floating = useSummary((s) => s.floating);
   if (!float) {
     return (
-      <TooltipIconButton
+      <TitlebarButton
         tooltip="Context"
         aria-label="Context"
         size="icon-md"
         aria-pressed={pinned}
-        className={cn(pinned && "bg-muted")}
         onClick={() => setPinnedSummary(!pinned)}
       >
         <Tasks />
-      </TooltipIconButton>
+      </TitlebarButton>
     );
   }
   return (
     <PopoverTrigger asChild>
-      <TooltipIconButton
+      <TitlebarButton
         tooltip="Context"
         aria-label="Context"
         size="icon-md"
         aria-pressed={floating}
-        className={cn(floating && "bg-muted")}
       >
         <Tasks />
-      </TooltipIconButton>
+      </TitlebarButton>
     </PopoverTrigger>
   );
 }

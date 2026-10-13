@@ -10,7 +10,7 @@ import { updateDraft } from "@/app/conversation/draftSetup";
 import { MentionMemory } from "@/app/conversation/Mentions";
 import { NewTabTools } from "@/app/conversation/NewTabTools";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
-import { PreviewChip } from "@/app/conversation/PreviewChip";
+import { PreviewsSection } from "@/app/conversation/RunningTab";
 import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { useSidePanel } from "@/app/conversation/SidePanel";
 import { WorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
@@ -164,10 +164,10 @@ function Fixture() {
       click("Context worker");
     });
     at(4000, () => { seen.contextWorkerRight = right(); click("Open plan"); });
-    at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click(); });
-    at(4700, () => { seen.previewPopover = !!document.querySelector('[aria-label="Previews"]'); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } }); });
-    at(4850, () => { useBoard.setState({ board: { ...useBoard.getState().board!, previews } }); });
-    at(5000, () => { seen.previewReopened = !!document.querySelector('[aria-label="Previews"]'); setKind("draft"); });
+    at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); });
+    at(4700, () => { seen.previewSection = !!document.querySelector('[data-slot="summary-card"] [aria-label="Session previews"]'); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } }); });
+    at(4850, () => { seen.previewCleared = !document.querySelector('[aria-label="Session previews"]'); useBoard.setState({ board: { ...useBoard.getState().board!, previews } }); });
+    at(5000, () => { seen.previewReturned = !!document.querySelector('[data-slot="summary-card"] [aria-label="Session previews"]'); setKind("draft"); });
     const buttons = (scope: string) => [...document.querySelectorAll(`${scope} button`)].map((button) => button.textContent?.trim());
     at(5200, () => { seen.draftControls = controls(); seen.draftRight = right();
       // ⇧⌘E shows Files, whether the sidebar is open or not.
@@ -236,7 +236,7 @@ function Fixture() {
                 <button aria-label="Composer worker" onClick={() => agents.setPanel("worker")}>Composer worker</button>
                 <button aria-label="Context worker" onClick={() => agents.setPanel(null)}>Context worker</button>
                 <button aria-label="Open plan" onClick={() => { showPlanDoc(id, { type: "plan", id: "plan" }); panel.openTab("plan"); }}>Open plan</button>
-                <PreviewChip conversationId={id} />
+                {kind === "session" && <aside data-slot="summary-card"><PreviewsSection conversationId={id} /></aside>}
               </SummaryPane>
             </div>
         </main>

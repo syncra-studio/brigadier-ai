@@ -48,8 +48,9 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.closingShown, "", "closing gives the room back at once");
   assert.equal(seen.closedShown, "");
   assert.equal(seen.planTab, "plan");
-  assert.equal(seen.previewPopover, true);
-  assert.equal(seen.previewReopened, false, "a chip cleared while open comes back closed");
+  assert.equal(seen.previewSection, true);
+  assert.equal(seen.previewCleared, true, "the section disappears when previews are cleared");
+  assert.equal(seen.previewReturned, true, "the context section returns when previews arrive");
   assert.equal(seen.draftFiles, "files");
   assert.match(String(seen.draftTree), /src.*package\.json/);
   assert.equal(seen.draftComposer, "@package.json ");

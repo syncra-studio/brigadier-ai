@@ -20,7 +20,6 @@ import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { takePaneClose } from "@/state/closedPanes";
 import { undoTabClose } from "@/state/terminalPlaces";
 import { ChatActions } from "@/app/conversation/ChatActions";
-import { PreviewChip } from "@/app/conversation/PreviewChip";
 import { MockupTabIcon, MockupTabStatus, useMockupTab } from "@/app/conversation/MockupTabIcon";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
@@ -457,7 +456,6 @@ export function SessionTabBar({
       </div>
       {newTab}
       {connecting}
-      <PreviewChip conversationId={id} />
       <div ref={setGap} data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
       <BarDivider hidden={!full} />
       {children}

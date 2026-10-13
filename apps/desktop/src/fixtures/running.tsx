@@ -3,7 +3,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { PreviewChip } from "@/app/conversation/PreviewChip";
+import { PreviewsSection } from "@/app/conversation/RunningTab";
 import { previewActive } from "@/app/conversation/previewStatus";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -57,7 +57,6 @@ const labels = (name: string) => [...(row(name)?.querySelectorAll("button") ?? [
 
 function Fixture() {
   const [result, setResult] = useState("");
-  useEffect(() => { document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click(); }, []);
   useEffect(() => {
     const seen: Record<string, unknown> = {};
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -84,8 +83,6 @@ function Fixture() {
         const tabs = sessionTabs(id);
         const browser = tabs.tabs.find((tab) => tab.id === tabs.active);
         seen.browser = browser?.kind === "browser" ? browser.url : undefined;
-        const chip = document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]');
-        if (chip?.getAttribute("aria-expanded") !== "true") chip?.click();
       });
       at(3000, () => { press("Clear finished"); });
       at(3300, () => { seen.cleared = Object.keys(useBoard.getState().board!.previews); press("Stop", row("Web app")!); });
@@ -104,12 +101,13 @@ function Fixture() {
       <main className="bg-background text-foreground flex h-screen w-full min-w-0">
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="h-titlebar flex items-center justify-between gap-3 px-5">
-            <span className="text-sm font-medium">Build the web app</span><PreviewChip conversationId={id} />
+            <span className="text-sm font-medium">Build the web app</span>
           </header>
           <div className="mx-auto max-w-xl space-y-4 px-6 py-12 text-sm">
             <p>The web app is ready to preview.</p>
-            <p className="text-muted-foreground">Open its local address from Running. Pause a preview to hold it, or stop it when you are finished.</p>
+            <p className="text-muted-foreground">Open its local address from Previews. Pause a preview to hold it, or stop it when you are finished.</p>
           </div>
+          <aside data-slot="summary-card" className="bg-popover rounded-card mx-auto w-summary-stack py-2.5"><PreviewsSection conversationId={id} /></aside>
         </div>
       </main>
       {result && <pre id="running-result">{result}</pre>}
