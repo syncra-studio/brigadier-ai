@@ -17,6 +17,7 @@ test("approval cards show safe session scopes, dispatch decisions and stack on n
   for (const id of ["outside", "permissions", "tool", "unscoped-command"]) {
     assert.deepEqual(seen.buttons[id], ["DenyEsc", "Allow once⏎"]);
   }
+  assert.deepEqual(seen.buttons["peer"], ["Don't sendEsc", "Send⏎"]);
   assert.deepEqual(seen.calls, [
     { id: "command", decision: "allowSimilar" },
     { id: "command", decision: "allow" },

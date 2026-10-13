@@ -376,8 +376,14 @@ impl SessionManager {
 
     /// The user answered the card of a send that waited for their OK: on Send it goes as
     /// written, unless its target is gone or archived or the hop or rate rule no longer
-    /// holds; on Don't send it is declined. The sender's next turn hears which.
-    pub(super) async fn answer_peer_card(&self, approval: &Approval, send: bool) {
+    /// holds; on Don't send it is declined. The sender's next turn hears which, and what the
+    /// user wrote when they didn't send it (a card's Reply…).
+    pub(super) async fn answer_peer_card(
+        &self,
+        approval: &Approval,
+        send: bool,
+        said: Option<&str>,
+    ) {
         let ApprovalSubject::PeerMessage {
             message_id, title, ..
         } = &approval.subject
@@ -386,7 +392,10 @@ impl SessionManager {
         };
         let from = &approval.conversation_id;
         let note = match self.release_peer_card(from, message_id, send).await {
-            Ok(None) => "The user didn't send it.".to_owned(),
+            Ok(None) => match said.map(str::trim).filter(|said| !said.is_empty()) {
+                Some(said) => format!("The user didn't send it, and said: {said}"),
+                None => "The user didn't send it.".to_owned(),
+            },
             Ok(Some(())) => format!("Sent to {title}: the user pressed Send."),
             Err(reason) => format!("It wasn't sent: {reason}"),
         };
@@ -777,9 +786,9 @@ impl SessionManager {
             let ApprovalSubject::PeerMessage { message_id, .. } = &approval.subject else {
                 continue;
             };
-            let send = match approval.state {
-                CardState::Allowed { .. } => true,
-                CardState::Denied { .. } => false,
+            let (send, said) = match &approval.state {
+                CardState::Allowed { .. } => (true, None),
+                CardState::Denied { message, .. } => (false, message.as_deref()),
                 CardState::Pending | CardState::Expired { .. } => continue,
             };
             let waiting = board
@@ -787,7 +796,7 @@ impl SessionManager {
                 .get(message_id)
                 .is_some_and(|record| record.outgoing && record.state == PeerState::WaitingForOk);
             if waiting {
-                self.answer_peer_card(approval, send).await;
+                self.answer_peer_card(approval, send, said).await;
             }
         }
     }

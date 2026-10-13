@@ -304,8 +304,11 @@ impl SessionManager {
                 {
                     return Ok(());
                 }
-                let send = !matches!(decision, ApprovalDecision::Deny { .. });
-                self.answer_peer_card(&approval, send).await;
+                let said = match &decision {
+                    ApprovalDecision::Deny { message } => Some(message.as_str()),
+                    _ => None,
+                };
+                self.answer_peer_card(&approval, said.is_none(), said).await;
             }
             ApprovalSubject::OutwardCommand { .. }
             | ApprovalSubject::Landing { .. }

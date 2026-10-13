@@ -159,6 +159,38 @@ async fn dont_send_on_the_card_declines_the_message() {
     flow.stop().await;
 }
 
+/// The card's Reply…: the message is declined as with Don't send, and the sender's next turn
+/// hears what the user wrote, so it can write the message again their way.
+#[tokio::test]
+async fn a_reply_on_the_card_declines_and_reaches_the_sender() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-ask-reply", ask(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    let (card, id) = sent_for_ok(&flow, &peers, &api).await;
+    flow.manager
+        .answer_card(
+            flow.conversation.clone(),
+            card,
+            ApprovalDecision::Deny {
+                message: "Ask about the `email` column too.".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let board = flow.settled().await;
+    assert_eq!(state_of(&board, &id), PeerState::Declined);
+    let note = next_note(&flow, &peers).await;
+    assert!(
+        note.contains("The user didn't send it, and said: Ask about the `email` column too."),
+        "{note}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(peers.inputs_of(&api).is_empty());
+    flow.stop().await;
+}
+
 /// A restart while the card waits: the card comes back, nothing was delivered, and its Send
 /// delivers the message then.
 #[tokio::test]

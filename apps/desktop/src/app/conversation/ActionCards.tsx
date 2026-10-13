@@ -262,6 +262,8 @@ type Shown = {
   body?: ReactNode;
   /** The primary button's words; "Allow once" by default. */
   allow?: string;
+  /** The refusing button's words; "Deny" by default. */
+  deny?: string;
 };
 
 /** A file's line counts, at the end of its row. */
@@ -391,6 +393,7 @@ function describe(
         title: `Send a message to ${subject.title} in ${subject.project}?`,
         body: <CardProse>{subject.text}</CardProse>,
         allow: "Send",
+        deny: "Don't send",
       };
   }
 }
@@ -521,7 +524,7 @@ export function ApprovalAction({
           disabled={action.busy}
           onClick={deny}
         >
-          Deny
+          {shown.deny ?? "Deny"}
           <ActionKbd variant="outline">Esc</ActionKbd>
         </button>
         {grant && (

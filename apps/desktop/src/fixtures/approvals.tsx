@@ -27,6 +27,12 @@ const approvals = Object.fromEntries(variants.map(([id, overrides]): [string, Sh
     escalation: false, input: null, grant: null, ...overrides,
   } },
 }]));
+// A message to another session waiting for the user's OK: Send or Don't send.
+approvals["peer"] = {
+  id: "peer", conversationId, taskId: null, requestId: null, position: 0, state: { type: "pending" }, createdAtMs: 0, resolvedAtMs: null,
+  subject: { type: "peerMessage", messageId: "m-1", to: "c-2", title: "Math helper", project: "Alpha", text: "What is 9 + 10?" },
+};
+const shown = [...variants.map(([id]) => id), "peer"];
 useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, approvals } });
 const calls: { id: string; decision: string }[] = [];
 mockIPC((command, payload) => {
@@ -47,7 +53,7 @@ function Fixture() {
     const buttons = (id: string) => [...card(id).querySelectorAll<HTMLButtonElement>("button")];
     const session = (id: string) => buttons(id).find((button) => button.textContent?.includes("for this session"));
     at(1000, () => {
-      seen.buttons = Object.fromEntries(variants.map(([id]) => [id, buttons(id).map((button) => button.textContent?.replaceAll("\u00a0", " "))]));
+      seen.buttons = Object.fromEntries(shown.map((id) => [id, buttons(id).map((button) => button.textContent?.replaceAll("\u00a0", " "))]));
       seen.narrow = buttons("narrow").map((button) => {
         const rect = button.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
@@ -74,7 +80,7 @@ function Fixture() {
     <main className="bg-background text-foreground min-h-screen p-8">
       <h1 className="mb-6 text-xl font-semibold">Session approval scopes</h1>
       <div className="flex flex-wrap items-start gap-6">
-        {variants.filter(([id]) => !keyboardOnly || id === "command").map(([id]) => (
+        {shown.filter((id) => !keyboardOnly || id === "command").map((id) => (
           <div key={id} data-fixture={id} style={{ width: id === "narrow" || id === "long" ? 320 : 680 }} className="bg-composer rounded-xl">
             <ApprovalAction id={id} />
           </div>
