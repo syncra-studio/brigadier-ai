@@ -298,7 +298,8 @@ impl SessionManager {
             ApprovalSubject::OutwardCommand { .. }
             | ApprovalSubject::Landing { .. }
             | ApprovalSubject::FinishSession { .. }
-            | ApprovalSubject::Outline { .. } => {}
+            | ApprovalSubject::Outline { .. }
+            | ApprovalSubject::PeerMessage { .. } => {}
         }
         self.waiters
             .answer(&card_id, CardAnswer::Decision(decision.clone()));
@@ -730,6 +731,8 @@ impl SessionManager {
             match &approval.subject {
                 // Answering it delivers the decision itself; nothing needs to wait.
                 ApprovalSubject::Action { live: false, .. } => continue,
+                // Its Send delivers the stored text: the card comes back after a restart.
+                ApprovalSubject::PeerMessage { .. } => continue,
                 // The landing that asked is gone; `recover` tells the orchestrator to accept
                 // the task again.
                 ApprovalSubject::Landing { .. } => {}

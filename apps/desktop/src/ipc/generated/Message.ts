@@ -4,6 +4,7 @@ import type { ConversationId } from "./ConversationId";
 import type { Mention } from "./Mention";
 import type { MessageRole } from "./MessageRole";
 import type { ModelChoice } from "./ModelChoice";
+import type { PeerRef } from "./PeerRef";
 
 /**
  * One message in a conversation.
@@ -39,4 +40,8 @@ requestId: string | null,
  * (an edit). Absent for messages from before branches existed: those follow the message
  * before them.
  */
-parentId: string | null, };
+parentId: string | null, 
+/**
+ * A peer message's sender (its role is [`MessageRole::Peer`]).
+ */
+peer?: PeerRef, };

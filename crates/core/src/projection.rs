@@ -167,6 +167,10 @@ impl Projection {
             | DomainEvent::DecidedForYou { .. }
             | DomainEvent::WaitingOnYou { .. }
             | DomainEvent::WaitingResolved { .. }
+            | DomainEvent::PeerMessageSent { .. }
+            | DomainEvent::PeerMessageReceived { .. }
+            | DomainEvent::PeerMessageState { .. }
+            | DomainEvent::PeerWaitSettled { .. }
             | DomainEvent::Probe { .. } => {}
         }
     }

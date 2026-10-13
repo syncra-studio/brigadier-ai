@@ -384,6 +384,14 @@ function describe(
         body: <CardProse>{subject.outline}</CardProse>,
         allow: "Yes, start it",
       };
+    case "peerMessage":
+      return {
+        icon: <Sparkle />,
+        kind: "Message",
+        title: `Send a message to ${subject.title} in ${subject.project}?`,
+        body: <CardProse>{subject.text}</CardProse>,
+        allow: "Send",
+      };
   }
 }
 

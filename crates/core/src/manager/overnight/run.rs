@@ -216,6 +216,8 @@ impl SessionManager {
                             to_ms: None,
                         }],
                         quota_wait: false,
+                        waiting_for: Vec::new(),
+                        from_peer: None,
                     },
                 }],
             )

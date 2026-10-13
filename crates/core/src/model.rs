@@ -542,6 +542,54 @@ pub enum MessageRole {
     User,
     Assistant,
     System,
+    /// Another session's message ([`Message::peer`] says which): never the user's word.
+    Peer,
+}
+
+/// Where a session's peer message came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerRef {
+    pub message_id: String,
+    /// The session that sent it.
+    pub from: ConversationId,
+    /// The message of this session's it answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reply_to: Option<String>,
+}
+
+/// Where a message between sessions stands (SESSION-MESSAGING-PLAN.md §4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PeerState {
+    /// Under Ask for approval: its card waits for the user's Send.
+    WaitingForOk,
+    /// The user's Don't send.
+    Declined,
+    /// Recorded for the receiver, not yet in its inbox.
+    Pending,
+    /// In the receiver's inbox.
+    Delivered,
+    /// The receiver's CLI took it: a turn started with it, or a steer of it was acknowledged.
+    Seen,
+    /// A reply to it came.
+    Replied,
+    /// It was never sent.
+    Refused { reason: String },
+    /// It was sent and will never be delivered.
+    Dropped { reason: String },
+}
+
+impl PeerState {
+    /// The receiver still has to get it.
+    pub fn due(&self) -> bool {
+        matches!(self, Self::Pending | Self::Delivered)
+    }
 }
 
 /// One message in a conversation.
@@ -575,6 +623,10 @@ pub struct Message {
     /// before them.
     #[serde(default)]
     pub parent_id: Option<String>,
+    /// A peer message's sender (its role is [`MessageRole::Peer`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub peer: Option<Box<PeerRef>>,
 }
 
 /// Global size and spacing scale for every control.
@@ -2044,6 +2096,53 @@ pub enum DomainEvent {
         id: String,
         by: crate::work::ResolvedBy,
     },
+    /// This session sent a message to another (SESSION-MESSAGING-PLAN.md §4), or under Ask
+    /// for approval asked the user to send it. The text is whole: its start, and the rest in
+    /// `blob` when it is too large to keep inline.
+    PeerMessageSent {
+        message_id: String,
+        to: ConversationId,
+        text: String,
+        #[serde(default)]
+        blob: Option<String>,
+        #[serde(default)]
+        reply_to: Option<String>,
+        chain_id: String,
+        hop: u32,
+        /// The sender's request whose turn sent it.
+        request_id: Option<String>,
+        /// The newest input of that turn before the send.
+        #[serde(default)]
+        turn_input_id: Option<String>,
+        state: PeerState,
+        /// When it was allowed to go: now, or the user's Send under Ask for approval.
+        #[serde(default)]
+        sent_at_ms: Option<i64>,
+    },
+    /// This session got a message from another. Its text is the transcript message with the
+    /// same id, appended with it.
+    PeerMessageReceived {
+        message_id: String,
+        from: ConversationId,
+        #[serde(default)]
+        reply_to: Option<String>,
+        chain_id: String,
+        hop: u32,
+        /// The request of this session's it is filed under.
+        request_id: String,
+    },
+    /// A message between sessions moved on; written to both sides.
+    PeerMessageState {
+        message_id: String,
+        state: PeerState,
+        /// Set when this change let it go (the user's Send).
+        #[serde(default)]
+        sent_at_ms: Option<i64>,
+    },
+    /// The thread no longer waits for a reply to this message (`settle_wait`).
+    PeerWaitSettled {
+        message_id: String,
+    },
     /// Diagnostic probe used to measure ingest → paint latency end to end.
     Probe {
         burst_id: String,
@@ -2120,6 +2219,10 @@ impl DomainEvent {
             Self::WaitingOnYou { .. } => "waiting.updated",
             Self::WaitingResolved { .. } => "waiting.resolved",
             Self::OvernightUpdated { .. } => "overnight.updated",
+            Self::PeerMessageSent { .. } => "peer.sent",
+            Self::PeerMessageReceived { .. } => "peer.received",
+            Self::PeerMessageState { .. } => "peer.state",
+            Self::PeerWaitSettled { .. } => "peer.settled",
             Self::Probe { .. } => "diag.probe",
         }
     }

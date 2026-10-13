@@ -973,6 +973,7 @@ impl SessionManager {
                     MessageRole::User => "user",
                     MessageRole::Assistant => "assistant",
                     MessageRole::System => "brigadier",
+                    MessageRole::Peer => "peer",
                 };
                 let text = crate::sessions::display_text(
                     &self.full_words(&message).await,

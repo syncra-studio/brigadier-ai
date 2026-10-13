@@ -749,6 +749,9 @@ impl SessionManager {
                 }
                 ApprovalSubject::Action { action, .. } => action.clone(),
                 ApprovalSubject::Outline { title, .. } => format!("starting the plan “{title}”"),
+                ApprovalSubject::PeerMessage { title, .. } => {
+                    format!("sending a message to the session “{title}”")
+                }
             };
             text.push_str(&format!(
                 "Waiting for the user's approval: {}\n",
@@ -1007,15 +1010,18 @@ impl SessionManager {
                 continue;
             }
             let who = match message.role {
-                MessageRole::User => "User",
-                MessageRole::Assistant => "You",
-                MessageRole::System => "Brigadier",
+                MessageRole::User => "User".to_owned(),
+                MessageRole::Assistant => "You".to_owned(),
+                MessageRole::System => "Brigadier".to_owned(),
+                MessageRole::Peer => self.core.peer_speaker(message),
             };
-            if message.role == MessageRole::User && !current.is_empty() {
+            // A peer's message starts an exchange as the user's does, but stays a peer's.
+            let input = matches!(message.role, MessageRole::User | MessageRole::Peer);
+            if input && !current.is_empty() {
                 close(&mut current, &mut exchanges);
             }
             let full = self.full_words(message).await;
-            let max = if message.role == MessageRole::User {
+            let max = if input {
                 USER_MESSAGE_BYTES
             } else {
                 MESSAGE_BYTES

@@ -45,4 +45,12 @@ worked: Array<WorkSpan>,
  * It is `Waiting` only for quota (a worker paused until a model is free), not for the
  * user.
  */
-quotaWait: boolean, };
+quotaWait: boolean, 
+/**
+ * The sessions whose replies it waits for: it rests "Waiting for ‹title›".
+ */
+waitingFor?: Array<ConversationId>, 
+/**
+ * The session whose message started it (not the user).
+ */
+fromPeer?: ConversationId, };

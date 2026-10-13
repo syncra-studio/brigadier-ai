@@ -1003,6 +1003,15 @@ pub enum ApprovalSubject {
         title: String,
         outline: String,
     },
+    /// Ask for approval: send the thread's message to another session ("Send a message to
+    /// ‹title› in ‹project›?"), exactly as written.
+    PeerMessage {
+        message_id: String,
+        to: ConversationId,
+        title: String,
+        project: String,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1993,6 +2002,14 @@ pub struct UserRequest {
     /// user.
     #[serde(default)]
     pub quota_wait: bool,
+    /// The sessions whose replies it waits for: it rests "Waiting for ‹title›".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<ConversationId>>", optional)]
+    pub waiting_for: Vec<ConversationId>,
+    /// The session whose message started it (not the user).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub from_peer: Option<ConversationId>,
 }
 
 /// A stretch of time a request worked.

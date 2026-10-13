@@ -153,6 +153,14 @@ function summary(event: DomainEvent): string {
       return event.item.what;
     case "waitingResolved":
       return `done by ${event.by}`;
+    case "peerMessageSent":
+      return `to ${event.to}: ${event.state.type}`;
+    case "peerMessageReceived":
+      return `from ${event.from}, hop ${event.hop}`;
+    case "peerMessageState":
+      return event.state.type;
+    case "peerWaitSettled":
+      return event.messageId;
   }
 }
 

@@ -225,6 +225,8 @@ export type { Page } from "./Page";
 export type { PageContent } from "./PageContent";
 export type { PageSummary } from "./PageSummary";
 export type { PageWriteOutcome } from "./PageWriteOutcome";
+export type { PeerRef } from "./PeerRef";
+export type { PeerState } from "./PeerState";
 export type { PendingRunNotification } from "./PendingRunNotification";
 export type { PermissionLevel } from "./PermissionLevel";
 export type { PhaseRange } from "./PhaseRange";

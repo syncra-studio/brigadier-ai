@@ -599,6 +599,9 @@ fn pending_approval(event: &EventEnvelope) -> Option<(String, String)> {
         ApprovalSubject::Landing { branch, .. } => format!("Land a commit on {branch}?"),
         ApprovalSubject::Action { action, .. } => action,
         ApprovalSubject::Outline { title, .. } => format!("Implement this plan? {title}"),
+        ApprovalSubject::PeerMessage { title, project, .. } => {
+            format!("Send a message to {title} in {project}?")
+        }
     };
     Some((approval.id.0, what))
 }
@@ -742,6 +745,8 @@ mod tests {
                 undo: None,
                 worked: Vec::new(),
                 quota_wait: false,
+                waiting_for: Vec::new(),
+                from_peer: None,
             },
         }
     }

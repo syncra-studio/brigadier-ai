@@ -5,7 +5,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::knowledge::MemoryChange;
 use crate::model::ConversationId;
-use crate::model::{DomainEvent, MessageRole, Notice, OvernightRunId, Rating, StreamingMessage};
+use crate::model::{
+    DomainEvent, MessageRole, Notice, OvernightRunId, PeerState, Rating, StreamingMessage,
+};
 use crate::overnight::OvernightRun;
 use crate::work::{
     Approval, CardId, CardState, Compaction, ConversationActivity, Decision, MessageQueue,
@@ -43,7 +45,37 @@ pub(crate) const KINDS: &[&str] = &[
     "waiting.updated",
     "waiting.resolved",
     "overnight.updated",
+    "peer.sent",
+    "peer.received",
+    "peer.state",
+    "peer.settled",
 ];
+
+/// A message between this session and another, as its side recorded it
+/// (SESSION-MESSAGING-PLAN.md §4).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PeerRecord {
+    pub(crate) message_id: String,
+    /// This session sent it (else it received it).
+    pub(crate) outgoing: bool,
+    /// The other session: where it went, or where it came from.
+    pub(crate) peer: ConversationId,
+    pub(crate) reply_to: Option<String>,
+    pub(crate) chain_id: String,
+    pub(crate) hop: u32,
+    /// Sent: the request whose turn sent it. Received: the request it is filed under.
+    pub(crate) request_id: Option<String>,
+    pub(crate) state: PeerState,
+    /// Sent: its text (the start of it, when `blob` holds the rest).
+    pub(crate) text: String,
+    pub(crate) blob: Option<String>,
+    /// Sent: when it was allowed to go.
+    pub(crate) sent_at_ms: Option<i64>,
+    /// Sent: the thread no longer waits for its reply (`settle_wait`).
+    pub(crate) settled: bool,
+    /// Its position in the stream.
+    pub(crate) position: i64,
+}
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Board {
@@ -96,6 +128,8 @@ pub(crate) struct Board {
     pub(crate) previews: HashMap<String, crate::work::Preview>,
     /// Highest preview number ever recorded, including cleared rows.
     pub(crate) preview_number: u64,
+    /// Its messages to and from other sessions, by message id.
+    pub(crate) peer_messages: HashMap<String, PeerRecord>,
 }
 
 impl Board {
@@ -218,6 +252,82 @@ impl Board {
             }
             DomainEvent::RequestUpdated { request } => {
                 self.requests.insert(request.id.clone(), request.clone());
+            }
+            DomainEvent::PeerMessageSent {
+                message_id,
+                to,
+                text,
+                blob,
+                reply_to,
+                chain_id,
+                hop,
+                request_id,
+                state,
+                sent_at_ms,
+                ..
+            } => {
+                self.peer_messages.insert(
+                    message_id.clone(),
+                    PeerRecord {
+                        message_id: message_id.clone(),
+                        outgoing: true,
+                        peer: to.clone(),
+                        reply_to: reply_to.clone(),
+                        chain_id: chain_id.clone(),
+                        hop: *hop,
+                        request_id: request_id.clone(),
+                        state: state.clone(),
+                        text: text.clone(),
+                        blob: blob.clone(),
+                        sent_at_ms: *sent_at_ms,
+                        settled: false,
+                        position: stream_seq,
+                    },
+                );
+            }
+            DomainEvent::PeerMessageReceived {
+                message_id,
+                from,
+                reply_to,
+                chain_id,
+                hop,
+                request_id,
+            } => {
+                self.peer_messages.insert(
+                    message_id.clone(),
+                    PeerRecord {
+                        message_id: message_id.clone(),
+                        outgoing: false,
+                        peer: from.clone(),
+                        reply_to: reply_to.clone(),
+                        chain_id: chain_id.clone(),
+                        hop: *hop,
+                        request_id: Some(request_id.clone()),
+                        state: PeerState::Pending,
+                        text: String::new(),
+                        blob: None,
+                        sent_at_ms: None,
+                        settled: false,
+                        position: stream_seq,
+                    },
+                );
+            }
+            DomainEvent::PeerMessageState {
+                message_id,
+                state,
+                sent_at_ms,
+            } => {
+                if let Some(record) = self.peer_messages.get_mut(message_id) {
+                    record.state = state.clone();
+                    if sent_at_ms.is_some() {
+                        record.sent_at_ms = *sent_at_ms;
+                    }
+                }
+            }
+            DomainEvent::PeerWaitSettled { message_id } => {
+                if let Some(record) = self.peer_messages.get_mut(message_id) {
+                    record.settled = true;
+                }
             }
             DomainEvent::WorkerStepped { step } => {
                 let mut step = step.clone();

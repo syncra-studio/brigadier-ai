@@ -140,6 +140,13 @@ function describe(
         subtitle: byline(by, subject.title),
         body: <p className="text-sm whitespace-pre-wrap">{subject.outline}</p>,
       };
+    case "peerMessage":
+      return {
+        icon: <Sparkle />,
+        title: `Send a message to ${subject.title} in ${subject.project}?`,
+        subtitle: by,
+        body: <p className="text-sm whitespace-pre-wrap">{subject.text}</p>,
+      };
   }
 }
 

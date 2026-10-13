@@ -620,6 +620,11 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "rankingsChanged":
       return { ...slice, rankingsRevision: slice.rankingsRevision + 1 };
     case "probe":
+    // Messages between sessions show from the board.
+    case "peerMessageSent":
+    case "peerMessageReceived":
+    case "peerMessageState":
+    case "peerWaitSettled":
     // A draft's pinned attachments only matter to blob collection.
     case "draftPinned":
     // The cleanup ledger shows in the event list only.

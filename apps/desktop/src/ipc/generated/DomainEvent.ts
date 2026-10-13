@@ -20,6 +20,7 @@ import type { Notice } from "./Notice";
 import type { OrchestratorEntry } from "./OrchestratorEntry";
 import type { OrchestratorStep } from "./OrchestratorStep";
 import type { OvernightRun } from "./OvernightRun";
+import type { PeerState } from "./PeerState";
 import type { Plan } from "./Plan";
 import type { Preview } from "./Preview";
 import type { Project } from "./Project";
@@ -92,4 +93,24 @@ durationMs: number,
 /**
  * The `out-…` alias of its stored output, which `read_artifact` reads.
  */
-artifact: string | null, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "previewsCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "brainJobUpdated", job: BrainJob, } | { "type": "memoryUpdated", conversationId: ConversationId, memory: MemoryChange, } | { "type": "decidedForYou", decision: Decision, } | { "type": "waitingOnYou", item: WaitingItem, } | { "type": "overnightUpdated", run: OvernightRun, } | { "type": "waitingResolved", id: string, by: ResolvedBy, } | { "type": "probe", burstId: string, index: number, count: number, };
+artifact: string | null, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "previewsCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "brainJobUpdated", job: BrainJob, } | { "type": "memoryUpdated", conversationId: ConversationId, memory: MemoryChange, } | { "type": "decidedForYou", decision: Decision, } | { "type": "waitingOnYou", item: WaitingItem, } | { "type": "overnightUpdated", run: OvernightRun, } | { "type": "waitingResolved", id: string, by: ResolvedBy, } | { "type": "peerMessageSent", messageId: string, to: ConversationId, text: string, blob: string | null, replyTo: string | null, chainId: string, hop: number, 
+/**
+ * The sender's request whose turn sent it.
+ */
+requestId: string | null, 
+/**
+ * The newest input of that turn before the send.
+ */
+turnInputId: string | null, state: PeerState, 
+/**
+ * When it was allowed to go: now, or the user's Send under Ask for approval.
+ */
+sentAtMs: number | null, } | { "type": "peerMessageReceived", messageId: string, from: ConversationId, replyTo: string | null, chainId: string, hop: number, 
+/**
+ * The request of this session's it is filed under.
+ */
+requestId: string, } | { "type": "peerMessageState", messageId: string, state: PeerState, 
+/**
+ * Set when this change let it go (the user's Send).
+ */
+sentAtMs: number | null, } | { "type": "peerWaitSettled", messageId: string, } | { "type": "probe", burstId: string, index: number, count: number, };

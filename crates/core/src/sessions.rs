@@ -704,6 +704,8 @@ impl Core {
                             to_ms: None,
                         }],
                         quota_wait: false,
+                        waiting_for: Vec::new(),
+                        from_peer: None,
                     },
                 },
             ),
@@ -798,6 +800,7 @@ impl Core {
             model: None,
             request_id: None,
             parent_id,
+            peer: None,
         })
     }
 
@@ -920,6 +923,19 @@ impl Core {
             push_block(&mut words, &format!("{start}{cut}"));
         }
         words
+    }
+
+    /// How a transcript names a peer message's sender: `Session "‹title›"` (its title now, or
+    /// "a deleted session").
+    pub(crate) fn peer_speaker(&self, message: &Message) -> String {
+        match message
+            .peer
+            .as_ref()
+            .and_then(|peer| self.conversation(&peer.from).ok())
+        {
+            Some(from) => format!("Session \"{}\"", from.title),
+            None => "A deleted session".to_owned(),
+        }
     }
 
     /// A derived snippet may quote a user message; match images against its conversation.
@@ -1492,6 +1508,7 @@ impl Core {
         state: RequestState,
         quota_wait: bool,
         card_wait: bool,
+        waiting_for: Vec<ConversationId>,
     ) -> Result<bool> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
@@ -1507,6 +1524,7 @@ impl Core {
         };
         let before = request.clone();
         request.moved_to(state, quota_wait, card_wait, now_ms());
+        request.waiting_for = waiting_for;
         if request == before {
             return Ok(false);
         }

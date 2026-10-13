@@ -2470,8 +2470,9 @@ impl SessionManager {
         let mut bytes = 0;
         for message in branch.iter().rev().take(MENTIONED_CHAT_MESSAGES) {
             let who = match message.role {
-                MessageRole::User => "User",
-                MessageRole::Assistant => "Assistant",
+                MessageRole::User => "User".to_owned(),
+                MessageRole::Assistant => "Assistant".to_owned(),
+                MessageRole::Peer => self.core.peer_speaker(message),
                 MessageRole::System => continue,
             };
             let words = self
@@ -4493,9 +4494,10 @@ impl SessionManager {
                 continue;
             }
             let who = match message.role {
-                MessageRole::User => "User",
-                MessageRole::Assistant => "You",
-                MessageRole::System => "Brigadier",
+                MessageRole::User => "User".to_owned(),
+                MessageRole::Assistant => "You".to_owned(),
+                MessageRole::System => "Brigadier".to_owned(),
+                MessageRole::Peer => self.core.peer_speaker(message),
             };
             let words = self
                 .core

@@ -200,6 +200,7 @@ impl SessionManager {
                     state,
                     wait == Some(Wait::Quota),
                     wait == Some(Wait::Card),
+                    Vec::new(),
                 )
                 .await
             {
@@ -580,6 +581,8 @@ mod tests {
             undo: None,
             worked: Vec::new(),
             quota_wait: false,
+            waiting_for: Vec::new(),
+            from_peer: None,
         }
     }
 
