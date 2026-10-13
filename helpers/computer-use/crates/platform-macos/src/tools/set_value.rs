@@ -22,13 +22,15 @@ use std::sync::Arc;
 
 use crate::apps;
 use crate::ax::bindings::{
-    copy_children, copy_number_attr, copy_string_attr, copy_stringified_attr, kAXErrorSuccess,
-    perform_action, set_number_attr, set_string_attr, AXUIElementRef,
+    copy_action_names, copy_children, copy_element_attr, copy_file_path_attr, copy_number_attr,
+    copy_string_attr, copy_stringified_attr, kAXErrorSuccess, perform_action, set_number_attr,
+    set_string_attr, AXUIElementRef,
 };
 use crate::browser::BrowserJs;
 use crate::focus_guard;
 use crate::window_change_detector::WindowChangeDetector;
 use core_foundation::base::CFRelease;
+use std::path::{Path, PathBuf};
 
 use super::ToolState;
 
@@ -292,6 +294,12 @@ fn set_value_blocking(
         // actions).
         let numeric_target = value.trim().parse::<f64>().ok();
         let before = unsafe { copy_stringified_attr(element, "AXValue") };
+        // A name field of an item that stands for a file (a folder listing):
+        // the write must rename the file, not only what the field shows.
+        let named_file = match (&before, role.as_str()) {
+            (Some(name), "AXTextField") => unsafe { file_named_by(element, name) },
+            _ => None,
+        };
         let err = match numeric_target {
             Some(n) => {
                 gate.check()?;
@@ -317,6 +325,35 @@ fn set_value_blocking(
                      take a value written directly. Use the app's own way to change it (click or \
                      double-click it, then type_text), or a menu command.",
                     before.unwrap_or_default()
+                );
+            }
+            if let Some(old) = named_file.filter(|old| rename_not_saved(old, value)) {
+                // Some listings apply a typed-in name only once it is confirmed.
+                if unsafe { copy_action_names(element) }
+                    .iter()
+                    .any(|a| a == "AXConfirm")
+                {
+                    gate.check()?;
+                    unsafe { perform_action(element, "AXConfirm") };
+                    if !rename_not_saved(&old, value) {
+                        return Ok(SetValueDispatch::Complete(format!(
+                            "✅ Renamed {} to {value:?} through [{element_index}] {role}.",
+                            old.display()
+                        )));
+                    }
+                }
+                // Put the shown name back so the listing doesn't claim a rename.
+                if let Some(before) = &before {
+                    gate.check()?;
+                    unsafe { set_string_attr(element, "AXValue", before) };
+                }
+                anyhow::bail!(
+                    "[{element_index}] {role} took the name {value:?}, but the file on disk is still \
+                     {}: writing a name directly only changes what is shown, so nothing was \
+                     renamed and the old name is shown again. Rename the file another way: a shell \
+                     command if you have one, or the app's own Rename command, which may need the \
+                     app in front.",
+                    old.display()
                 );
             }
             Ok(SetValueDispatch::Complete(format!(
@@ -353,6 +390,72 @@ fn write_ignored(before: Option<&str>, value: &str, read: impl Fn() -> Option<St
     }
     std::thread::sleep(std::time::Duration::from_millis(150));
     read().as_deref() == Some(before)
+}
+
+/// The file an item's name field stands for, when the app says so: a file
+/// URL on the field or one of its nearest ancestors whose name is the field's
+/// text (also with the extension hidden), or else that name inside the folder
+/// the window shows.
+unsafe fn file_named_by(element: AXUIElementRef, name: &str) -> Option<PathBuf> {
+    if name.is_empty() || name.contains('/') {
+        return None;
+    }
+    let names_it = |path: &Path| {
+        path.file_name().is_some_and(|n| n == name) || path.file_stem().is_some_and(|n| n == name)
+    };
+    let mut found = None;
+    let mut parents = Vec::new();
+    let mut node = element;
+    for _ in 0..4 {
+        if let Some(path) = copy_file_path_attr(node, "AXURL").filter(|p| names_it(p)) {
+            found = Some(path);
+            break;
+        }
+        let Some(parent) = copy_element_attr(node, "AXParent") else {
+            break;
+        };
+        parents.push(parent);
+        node = parent;
+    }
+    for parent in parents {
+        CFRelease(parent as _);
+    }
+    if found.is_none() {
+        if let Some(window) = copy_element_attr(element, "AXWindow") {
+            found = copy_file_path_attr(window, "AXDocument")
+                .filter(|dir| dir.is_dir())
+                .map(|dir| dir.join(name));
+            CFRelease(window as _);
+        }
+    }
+    found.filter(|path| path.symlink_metadata().is_ok())
+}
+
+/// Whether a new name written into a file's name field left the file as it
+/// was: the old path still exists after a short wait (a rename lands a moment
+/// later) and nothing by the new name appeared next to it.
+fn rename_not_saved(old: &Path, value: &str) -> bool {
+    let Some(old_name) = old.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    // A rename that only changes letter case keeps the old path reachable on
+    // a case-insensitive disk, so it can't be judged this way.
+    if old_name.eq_ignore_ascii_case(value) || value.is_empty() || value.contains('/') {
+        return false;
+    }
+    let renamed = || {
+        old.symlink_metadata().is_err()
+            || old
+                .parent()
+                .is_some_and(|dir| dir.join(value).symlink_metadata().is_ok())
+    };
+    for _ in 0..6 {
+        if renamed() {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    !renamed()
 }
 
 // ── AXIncrement / AXDecrement stepping fallback ──────────────────────────────
@@ -617,6 +720,20 @@ mod tests {
         assert!(!write_ignored(Some("5"), "5.0", || Some("5.0".into())));
         assert!(!write_ignored(Some("same"), "same", || Some("same".into())));
         assert!(!write_ignored(None, "x", || None));
+    }
+
+    #[test]
+    fn a_name_write_counts_as_not_saved_only_while_the_file_keeps_its_old_name() {
+        use super::rename_not_saved;
+        let dir = std::env::temp_dir().join(format!("set-value-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("rename-me.txt");
+        std::fs::write(&old, "x").unwrap();
+        assert!(rename_not_saved(&old, "renamed.txt"));
+        assert!(!rename_not_saved(&old, "Rename-Me.txt"));
+        std::fs::rename(&old, dir.join("renamed.txt")).unwrap();
+        assert!(!rename_not_saved(&old, "renamed.txt"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     use super::*;

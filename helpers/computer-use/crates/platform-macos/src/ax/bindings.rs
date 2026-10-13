@@ -185,6 +185,45 @@ pub unsafe fn copy_stringified_attr(element: AXUIElementRef, attr_name: &str) ->
     None
 }
 
+/// Copy a URL-valued attribute such as `AXURL` or `AXDocument` as a local
+/// path. Apps hand these out either as a CFURL or as URL text; anything that
+/// isn't a `file:` URL gives `None`.
+pub unsafe fn copy_file_path_attr(
+    element: AXUIElementRef,
+    attr_name: &str,
+) -> Option<std::path::PathBuf> {
+    use core_foundation::url::{CFURLCreateWithString, CFURL};
+
+    let attr = CFStr::new(attr_name);
+    let mut value: CFTypeRef = std::ptr::null();
+    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value);
+    if err != kAXErrorSuccess || value.is_null() {
+        return None;
+    }
+    let type_id = core_foundation::base::CFGetTypeID(value);
+    let url = if type_id == CFURL::type_id() {
+        CFURL::wrap_under_create_rule(value as _)
+    } else if type_id == CFStr::type_id() {
+        let text = CFStr::wrap_under_create_rule(value as _);
+        if !text.to_string().starts_with("file:") {
+            return None;
+        }
+        let url = CFURLCreateWithString(
+            std::ptr::null(),
+            text.as_concrete_TypeRef(),
+            std::ptr::null(),
+        );
+        if url.is_null() {
+            return None;
+        }
+        CFURL::wrap_under_create_rule(url)
+    } else {
+        CFRelease(value);
+        return None;
+    };
+    url.to_path()
+}
+
 /// Copy an AXValue(CFRange) attribute such as `AXVisibleCharacterRange`.
 pub unsafe fn copy_range_attr(
     element: AXUIElementRef,
