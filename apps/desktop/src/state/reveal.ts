@@ -105,15 +105,16 @@ function centre(scroller: HTMLElement, element: HTMLElement): void {
 /** The flash's tint: the link colour, faint (what a picked sidebar row shows). */
 const TINT = "bg-link/20";
 
-/** One tint over the row, held a moment, then gone. */
+/** One tint over the row (or the part of it marked `data-flash`), held a moment, then gone. */
 function flash(element: HTMLElement): void {
+  const target = element.querySelector<HTMLElement>("[data-flash]") ?? element;
   // The tint as the design tokens make it, read off the element itself.
-  element.classList.add(TINT);
-  const tint = getComputedStyle(element).backgroundColor;
-  element.classList.remove(TINT);
+  target.classList.add(TINT);
+  const tint = getComputedStyle(target).backgroundColor;
+  target.classList.remove(TINT);
   const total = FLASH_MS + FADE_MS;
   element.dataset["revealed"] = "true";
-  element.animate(
+  target.animate(
     [
       { backgroundColor: tint, offset: 0 },
       { backgroundColor: tint, offset: FLASH_MS / total },

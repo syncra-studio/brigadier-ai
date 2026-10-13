@@ -46,7 +46,8 @@ export const PeerMessageBlock: FC<{ peer: PeerOf; text: string; atMs: number }> 
           <span className="min-w-0 truncate">{caption}</span>
         </span>
       )}
-      <div className="border-border text-foreground rounded-bubble max-w-full min-w-0 border px-4 py-2.5">
+      {/* A jump here flashes the message itself, inside its outline. */}
+      <div data-flash className="border-border text-foreground rounded-bubble max-w-full min-w-0 border px-4 py-2.5">
         <FoldedMarkdown text={text} />
       </div>
       <div className="text-muted-foreground flex items-center gap-1 opacity-0 transition-opacity group-hover/peer:opacity-100 group-focus-within/peer:opacity-100">
