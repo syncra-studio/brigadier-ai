@@ -3,6 +3,7 @@
 // A web page can't drag a file out of its window, so the drag runs here, in AppKit.
 
 #import <AppKit/AppKit.h>
+#import <objc/runtime.h>
 
 @interface BrigadierHelperDragSource : NSObject <NSDraggingSource>
 @end
@@ -51,8 +52,23 @@ int brigadier_drag_file(void *ns_window, const char *path) {
 // Shows the setup window on the Space the user is on, also over a full-screen app, without
 // making Brigadier the active app: an agent asked for setup, and the user should see it where
 // they work. Main thread only.
+//
+// A regular app's plain window can't show on another app's full-screen Space while the app is
+// inactive: it stays on its own Space, unpainted, whatever its collection behaviour. A
+// non-activating panel can. So the window becomes one: NSPanel adds no instance variables to
+// NSWindow, which makes the class change safe; the window keeps its view, delegate and webview.
+// Clicking it gives it the keyboard without bringing Brigadier's other windows forward.
 void brigadier_show_on_active_space(void *ns_window) {
   NSWindow *window = (__bridge NSWindow *)ns_window;
+  if (![window isKindOfClass:[NSPanel class]] &&
+      class_getInstanceSize([NSPanel class]) <= class_getInstanceSize(object_getClass(window))) {
+    object_setClass(window, [NSPanel class]);
+  }
+  if ([window isKindOfClass:[NSPanel class]]) {
+    NSPanel *panel = (NSPanel *)window;
+    panel.styleMask |= NSWindowStyleMaskNonactivatingPanel;
+    panel.hidesOnDeactivate = NO;
+  }
   window.collectionBehavior |= NSWindowCollectionBehaviorMoveToActiveSpace |
                                NSWindowCollectionBehaviorFullScreenAuxiliary;
   [window orderFrontRegardless];
