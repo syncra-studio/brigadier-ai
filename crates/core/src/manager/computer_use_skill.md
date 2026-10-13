@@ -9,12 +9,12 @@ The `computer` tools let you read and drive apps on the user's Mac while the use
 
 ## The loop for every run
 
-1. **`start_session`** with a stable id you pick for this run, such as `"invoice-check-1"`. Pass the same `session` on every later call. It gives your run its own visible agent cursor. Other runs or subagents use their own ids.
-2. **`launch_app`** with `bundle_id` (preferred, for example `com.apple.TextEdit`) or `name`. It is safe to call even when the app is already running, and it returns the `pid` plus a `windows` array. Pick the `window_id` from there. Call `list_windows` with `pid` only for long-running apps or when you need another window.
-3. **`get_window_state`** with `pid` and `window_id`. You get the Accessibility tree, where every actionable element has an `element_index`, plus a screenshot of the window.
-4. **Act** with `click`, `type_text`, `set_value`, `press_key`, `scroll` and so on, using `pid`, `window_id` and an `element_index` from step 3.
-5. **`get_window_state` again** to check it worked: a changed value, a new window, a menu that closed, a button that is now disabled. If nothing changed in the tree or the screenshot, the action probably did nothing. Say so instead of assuming it worked.
-6. **`end_session`** with your `session` when the run is done.
+Brigadier already gives your run its own session and visible agent cursor, so don't call `start_session` or `end_session`, and leave out `session`.
+
+1. **`launch_app`** with `bundle_id` (preferred, for example `com.apple.TextEdit`) or `name`. It is safe to call even when the app is already running, and it returns the `pid` plus a `windows` array. Pick the `window_id` from there. Call `list_windows` with `pid` only for long-running apps or when you need another window.
+2. **`get_window_state`** with `pid` and `window_id`. You get the Accessibility tree, where every actionable element has an `element_index`, plus a screenshot of the window.
+3. **Act** with `click`, `type_text`, `set_value`, `press_key`, `scroll` and so on, using `pid`, `window_id` and an `element_index` from step 2.
+4. **`get_window_state` again** to check it worked: a changed value, a new window, a menu that closed, a button that is now disabled. If nothing changed in the tree or the screenshot, the action probably did nothing. Say so instead of assuming it worked.
 
 Rules that come with the loop:
 
@@ -87,7 +87,7 @@ Rules that come with the loop:
 
 ## Recording
 
-Record only when the user asks. `start_recording` takes `output_dir` (and `record_video: true` if they want video). `stop_recording` finishes the recording, and `end_session` also stops any recording your session owns.
+Record only when the user asks. `start_recording` takes `output_dir` (and `record_video: true` if they want video). `stop_recording` finishes the recording; a recording still running also stops when your run ends.
 
 ## Blocked targets and permissions
 

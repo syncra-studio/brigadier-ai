@@ -182,19 +182,31 @@ pub fn initialize_result() -> Value {
         "protocolVersion": "2025-06-18",
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "brigadier-cu", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": agent_instructions()
+        "instructions": agent_instructions(host_manages_session())
     })
+}
+
+/// Whether the host that started this process already gives each connection its own session
+/// (and with it the agent cursor): every call then carries that session, and the connection
+/// closing ends it.
+fn host_manages_session() -> bool {
+    std::env::var(crate::DEFAULT_SESSION_ENV).is_ok_and(|value| !value.trim().is_empty())
 }
 
 /// MCP `instructions` (`InitializeResult.instructions`) sent to every
 /// connecting client. Clients may add this to the system prompt on every
 /// turn, so it stays short; the long-form workflow lives in the
 /// `computer-use` skill that Brigadier gives its agents.
-fn agent_instructions() -> String {
+fn agent_instructions(host_manages_session: bool) -> String {
+    let session_step = if host_manages_session {
+        "0. Your session and agent cursor are already set up for you: don't call start_session or end_session, and leave out `session`."
+    } else {
+        "0. start_session(session) once per run with a stable id you choose; pass the same `session` on every action; end_session(session) when done. Parallel runs use their own ids."
+    };
     r#"Computer Use: see and drive apps on this Mac in the background, without taking keyboard focus or moving the user's pointer. Prefer element_index (Accessibility tree) targets over pixel coordinates; they work on hidden and background windows.
 
 Each turn:
-0. start_session(session) once per run with a stable id you choose; pass the same `session` on every action; end_session(session) when done. Parallel runs use their own ids.
+SESSION_STEP
 1. launch_app: idempotent, returns the pid and its windows in one call.
 2. get_window_state(pid, window_id): fresh Accessibility snapshot with element indices.
 3. click / type_text / press_key / set_value with an element_index from step 2. Batch several grounded steps with perform_actions.
@@ -203,7 +215,27 @@ Each turn:
 Never bring a window to the front unless the user asked for it. If the `computer-use` skill is available, follow it for the full workflow.
 
 Calls that target the user's Brigadier, terminal apps, or macOS security surfaces return target_not_allowed; do not retry them."#
-        .to_owned()
+        .replace("SESSION_STEP", session_step)
+}
+
+#[cfg(test)]
+mod instructions_tests {
+    use super::agent_instructions;
+
+    #[test]
+    fn a_session_the_host_manages_takes_no_session_calls() {
+        let hosted = agent_instructions(true);
+        assert!(
+            hosted.contains("don't call start_session or end_session"),
+            "{hosted}"
+        );
+        assert!(!hosted.contains("SESSION_STEP"));
+        let standalone = agent_instructions(false);
+        assert!(
+            standalone.contains("start_session(session) once per run"),
+            "{standalone}"
+        );
+    }
 }
 
 #[cfg(test)]
