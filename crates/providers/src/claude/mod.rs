@@ -713,6 +713,10 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
         // At a usage limit the session reports it and stops, so Brigadier can hand the work to
         // another model, instead of waiting for the reset on its own.
         "autoContinueAtUsageLimit": false,
+        // Claude compacts a long conversation on its own while it sits idle, before its prompt
+        // cache expires (a server-side rollout, 2.1.296); a session's context changes only
+        // where Brigadier or the user asks for it.
+        "idleCompaction": false,
         "permissions": permissions,
         "sandbox": sandbox,
         // A repository's `AGENTS.md` files load next to its `CLAUDE.md` files (by default
@@ -2599,6 +2603,31 @@ mod tests {
         let denied = denied_tools(&worker, &SubAgents::Any).unwrap();
         for tool in ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"] {
             assert!(denied.split(',').any(|name| name == tool), "{denied}");
+        }
+    }
+
+    /// Every kind of session, compacting ones included, keeps its context while it sits idle.
+    #[test]
+    fn no_session_compacts_while_idle() {
+        let cwd = Temp::new();
+        let cwd = cwd.path();
+        for tools in [
+            ToolSet::Default,
+            ToolSet::Lean,
+            ToolSet::None,
+            ToolSet::Web,
+            ToolSet::Thread,
+            ToolSet::Review,
+        ] {
+            let session = SessionSpec {
+                tools,
+                auto_compact: true,
+                ..spec(cwd, &[])
+            };
+            assert_eq!(
+                settings(&session, cwd, &SubAgents::Any, false)["idleCompaction"],
+                json!(false)
+            );
         }
     }
 
