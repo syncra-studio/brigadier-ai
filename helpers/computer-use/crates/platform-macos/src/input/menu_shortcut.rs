@@ -4,14 +4,20 @@
 //! accessibility instead, which is what the app does with the shortcut, and
 //! nothing comes to the front.
 //!
+//! An app in the background has no key window, so AppKit disables the menu
+//! items that act on one (Select All, Undo, Bold…). For ⌘A, the text field
+//! is then selected through accessibility instead; the others can't be done
+//! from the background and fall back to the posted combo.
+//!
 //! Chromium and Electron apps keep the posted combo: their pages see key
 //! events before the menu does, and may handle the shortcut themselves.
 
 use core_foundation::base::{CFRelease, CFTypeRef};
 
 use crate::ax::bindings::{
-    copy_children, copy_element_attr, copy_number_attr, copy_string_attr, copy_stringified_attr,
-    perform_action, AXUIElementCreateApplication, AXUIElementRef,
+    ax_get_window_id, copy_ax_windows, copy_children, copy_element_attr, copy_number_attr,
+    copy_string_attr, copy_stringified_attr, perform_action, set_range_attr,
+    AXUIElementCreateApplication, AXUIElementRef,
 };
 
 // AXMenuItemCmdModifiers: no bits set means ⌘ alone.
@@ -81,6 +87,83 @@ pub fn press(pid: i32, key: &str, modifiers: &[&str]) -> Option<String> {
         }
         pressed
     }
+}
+
+/// Selects all the text of `pid`'s focused text field (in `window_id`, when
+/// given), or else of the first text field in that window. Returns what was
+/// selected, for the reply.
+pub fn select_all_text(pid: i32, window_id: Option<u32>) -> Option<String> {
+    if chromium_family(pid) {
+        return None;
+    }
+    unsafe {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return None;
+        }
+        let mut target = copy_element_attr(app, "AXFocusedUIElement").filter(|&focused| {
+            let keep = is_text(focused)
+                && window_id.is_none_or(|id| {
+                    copy_element_attr(focused, "AXWindow").is_some_and(|window| {
+                        let same = ax_get_window_id(window) == Some(id);
+                        CFRelease(window as CFTypeRef);
+                        same
+                    })
+                });
+            if !keep {
+                CFRelease(focused as CFTypeRef);
+            }
+            keep
+        });
+        if target.is_none() {
+            if let Some(id) = window_id {
+                for window in copy_ax_windows(app) {
+                    if target.is_none() && ax_get_window_id(window) == Some(id) {
+                        target = first_text(window);
+                    }
+                    CFRelease(window as CFTypeRef);
+                }
+            }
+        }
+        CFRelease(app as CFTypeRef);
+        let element = target?;
+        let length = copy_number_attr(element, "AXNumberOfCharacters").unwrap_or(0.0) as isize;
+        let done = set_range_attr(
+            element,
+            "AXSelectedTextRange",
+            core_foundation::base::CFRange::init(0, length),
+        ) == 0;
+        let role = copy_string_attr(element, "AXRole").unwrap_or_default();
+        CFRelease(element as CFTypeRef);
+        done.then(|| format!("all {length} characters of the {role}"))
+    }
+}
+
+/// An editable text element: it has a text selection to set.
+unsafe fn is_text(element: AXUIElementRef) -> bool {
+    matches!(
+        copy_string_attr(element, "AXRole").as_deref(),
+        Some("AXTextArea" | "AXTextField" | "AXSearchField" | "AXComboBox")
+    ) && copy_number_attr(element, "AXNumberOfCharacters").is_some()
+}
+
+/// The first text element under `root`, retained.
+unsafe fn first_text(root: AXUIElementRef) -> Option<AXUIElementRef> {
+    let mut pending = copy_children(root);
+    let mut found = None;
+    let mut seen = 0;
+    while let Some(element) = pending.pop() {
+        seen += 1;
+        if found.is_none() && seen <= MAX_ITEMS && is_text(element) {
+            found = Some(element);
+            continue;
+        }
+        if found.is_none() && seen <= MAX_ITEMS {
+            pending.extend(copy_children(element));
+        }
+        CFRelease(element as CFTypeRef);
+    }
+    found
 }
 
 unsafe fn press_if_shortcut(element: AXUIElementRef, key: &str, modifiers: i64) -> Option<String> {

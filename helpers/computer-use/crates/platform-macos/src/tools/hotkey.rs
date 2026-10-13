@@ -81,6 +81,18 @@ fn def() -> &'static ToolDef {
 }
 
 /// Modifier key names — split the keys array into modifiers + base key.
+/// How a background combo was carried out when it wasn't posted as keys.
+enum Delivered {
+    /// The menu item with that shortcut was pressed.
+    MenuItem(String),
+    /// ⌘A selected the text field's whole text.
+    Selected(String),
+}
+
+fn is_command(k: &str) -> bool {
+    matches!(k.to_ascii_lowercase().as_str(), "cmd" | "command")
+}
+
 fn is_modifier(k: &str) -> bool {
     matches!(
         k.to_lowercase().as_str(),
@@ -232,7 +244,15 @@ impl Tool for HotkeyTool {
                                 if let Some(title) =
                                     crate::input::menu_shortcut::press(pid, &key, &m)
                                 {
-                                    return Ok(Some(title));
+                                    return Ok(Some(Delivered::MenuItem(title)));
+                                }
+                                if key.eq_ignore_ascii_case("a") && m.len() == 1 && is_command(m[0])
+                                {
+                                    if let Some(what) =
+                                        crate::input::menu_shortcut::select_all_text(pid, window_id)
+                                    {
+                                        return Ok(Some(Delivered::Selected(what)));
+                                    }
                                 }
                             }
                             crate::input::keyboard::hotkey(pid, &key, &m).map(|()| None)
@@ -247,7 +267,7 @@ impl Tool for HotkeyTool {
         let changes = snapshot.detect_async_for_args(&args).await;
 
         match result {
-            Ok(Ok(Some(title))) => ToolResult::text(format!(
+            Ok(Ok(Some(Delivered::MenuItem(title)))) => ToolResult::text(format!(
                 "Pressed {title} ({key_display}) in the menu bar of pid {pid}.{}",
                 changes.result_suffix()
             ))
@@ -256,6 +276,15 @@ impl Tool for HotkeyTool {
                 "menu_item": title,
                 "verified": false,
                 "effect": "unverifiable",
+            })),
+            Ok(Ok(Some(Delivered::Selected(what)))) => ToolResult::text(format!(
+                "Selected {what} ({key_display}) in pid {pid}.{}",
+                changes.result_suffix()
+            ))
+            .with_structured(serde_json::json!({
+                "path": "ax_select_all",
+                "verified": true,
+                "effect": "confirmed",
             })),
             Ok(Ok(None)) => {
                 let label = if fg {
