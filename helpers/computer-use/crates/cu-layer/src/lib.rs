@@ -1,12 +1,9 @@
 //! Brigadier's behaviour on top of the vendored driver (`../../upstream`).
 //!
-//! The driver's registry stays as the driver builds it, except that
-//! `page::install` puts Brigadier's own `page` tool in place of the
-//! driver's (call it first); [`guard::install`] then puts every tool behind
-//! Brigadier's rules, and [`configure_environment`]
-//! points the driver's state at Brigadier's helper home. Call
-//! [`configure_environment`] first thing, before any thread starts or the
-//! registry is built.
+//! Call [`configure_environment`] first thing, before any thread starts: it
+//! points the driver's state at Brigadier's helper home. Then build the
+//! registry with `registry::build`: the driver's tools, Brigadier's own in
+//! place of some of them, and [`guard::install`] around every tool.
 
 // A refusal is the driver's own `ToolResult`, returned as is to the agent.
 #![allow(clippy::result_large_err)]
@@ -21,8 +18,11 @@ pub mod hotkey;
 pub mod launch;
 pub mod lookup;
 pub mod never_front;
+pub mod no_tcc;
 #[cfg(target_os = "macos")]
 pub mod page;
+#[cfg(target_os = "macos")]
+pub mod registry;
 pub mod scope;
 pub mod scroll;
 pub mod target_policy;

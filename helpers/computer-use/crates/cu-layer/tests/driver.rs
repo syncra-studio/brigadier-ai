@@ -26,13 +26,16 @@ fn snapshot(name: &str, actual: &str) {
     );
 }
 
-/// The driver's registry with Brigadier's own tools in place of the
-/// driver's, as agents get it.
-fn brigadier_registry() -> cua_driver_core::tool::ToolRegistry {
-    let mut registry = platform_macos::register_tools();
-    cu_layer::page::install(&mut registry);
-    cu_layer::launch::install(&mut registry);
-    registry
+/// The registry as the helper builds it, as agents get it.
+fn brigadier_registry() -> std::sync::Arc<cua_driver_core::tool::ToolRegistry> {
+    cu_layer::registry::build(cu_layer::registry::Options {
+        cursor: cursor_overlay::CursorConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap()
 }
 
 #[test]

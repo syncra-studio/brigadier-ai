@@ -6,6 +6,8 @@
 //! same way for a single call, for each `run_steps` step and for its own
 //! re-routes and retries. So every rule here holds on every path:
 //!
+//! 0. a test process runs only tools that need no privacy permission
+//!    ([`crate::no_tcc`]);
 //! 1. never bring an app to the front or move the user's pointer
 //!    ([`crate::never_front`]);
 //! 2. only tools Brigadier offers ([`crate::catalog`]);
@@ -24,7 +26,7 @@ use serde_json::{json, Value};
 
 use crate::lookup::Lookups;
 use crate::target_policy::{self, TargetResolver};
-use crate::{catalog, never_front, scope, text, tokens};
+use crate::{catalog, never_front, no_tcc, scope, text, tokens};
 
 /// A driver tool with Brigadier's rules around it.
 pub struct GuardedTool {
@@ -40,6 +42,9 @@ impl GuardedTool {
     /// The rules, in order. `Err` is the refusal the agent gets; the tool
     /// has not run.
     fn admit(&self, tool: &str, args: &Value) -> Result<(), ToolResult> {
+        if let Some(refusal) = no_tcc::refusal(tool) {
+            return Err(refusal);
+        }
         if let Some(refusal) = never_front::check(tool, args) {
             return Err(refusal);
         }
