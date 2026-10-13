@@ -240,6 +240,13 @@ impl Tool for HotkeyTool {
                         // combo; anything else is an auth-envelope post to the
                         // pid, no raise — even when window_id was supplied.
                         _ => {
+                            // A combo, or the menu item it presses, acts on the
+                            // app's key window; with a window named, it must be
+                            // that one.
+                            let _keys = crate::input::key_window::lease(pid);
+                            if let Some(wid) = window_id {
+                                crate::input::key_window::ensure_in(pid, wid, None)?;
+                            }
                             if !px_focus {
                                 if let Some(title) =
                                     crate::input::menu_shortcut::press(pid, &key, &m)

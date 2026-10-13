@@ -245,7 +245,13 @@ impl Tool for PressKeyTool {
                             }
                         }
                     }
-                    // background (default): auth-envelope post, no raise.
+                    // background (default): auth-envelope post, no raise. The key
+                    // lands in the app's key window; with a window named, it must
+                    // be that one.
+                    let _keys = crate::input::key_window::lease(pid);
+                    if let Some(wid) = window_id {
+                        crate::input::key_window::ensure_in(pid, wid, pre_focus_ptr)?;
+                    }
                     crate::input::keyboard::press_key_guarded(pid, &key, &m, &key_gate)
                 })
                 .await

@@ -9,6 +9,7 @@
 //!    the activity-monitor tickle required for live-input detection.
 
 pub mod ax_actions;
+pub mod key_window;
 pub mod keyboard;
 pub mod menu_shortcut;
 pub mod mouse;

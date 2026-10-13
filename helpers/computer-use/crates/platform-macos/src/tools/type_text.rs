@@ -632,6 +632,16 @@ fn type_text_blocking(
     window_id: Option<u32>,
     gate: &crate::dispatch_gate::NativeDispatchGate,
 ) -> anyhow::Result<(String, &'static str, bool)> {
+    // One call types into an app at a time, so another agent can't move the
+    // app's keyboard focus to its own window halfway through this text.
+    let _keys = crate::input::key_window::lease(pid);
+    // Keystrokes and focused-element writes land wherever the app's keyboard
+    // focus is; with a window named, make sure it is there before using them.
+    let element_ptr = element_ptr_and_idx.map(|(ptr, _)| ptr);
+    let ensure_focus = || match window_id {
+        Some(wid) => crate::input::key_window::ensure_in(pid, wid, element_ptr),
+        None => Ok(()),
+    };
     // Original field value before ANY rung — drives both the read-back delta and
     // the clear-then-type idempotency decision.
     let before = read_axvalue(pid, element_ptr_and_idx);
@@ -702,6 +712,7 @@ fn type_text_blocking(
             "type_text: pid {pid} is a terminal emulator; skipping AX value-set, \
              using CGEvent key-event synthesis"
         );
+        ensure_focus()?;
         let verified = cgevent_type_verified(
             pid,
             text,
@@ -720,6 +731,9 @@ fn type_text_blocking(
     }
 
     // --- Background rung 1: AX SelectedText write (element or focused). ---
+    if element_ptr_and_idx.is_none() {
+        ensure_focus()?;
+    }
     let ax_target: Option<(AXUIElementRef, bool, Option<usize>)> = match element_ptr_and_idx {
         Some((ptr, idx)) => Some((ptr as AXUIElementRef, /*owns=*/ false, idx)),
         None => unsafe { focused_element_of_pid(pid) }.map(|el| (el, /*owns=*/ true, None)),
@@ -764,6 +778,7 @@ fn type_text_blocking(
     // No clear-first here: a partial AX write is rare and clearing on every
     // background fallback would change insert-at-cursor semantics. The
     // foreground rung owns the idempotent clear-then-type.
+    ensure_focus()?;
     let verified = cgevent_type_verified(
         pid,
         text,
