@@ -986,6 +986,10 @@ pub const THREAD_TOOLS: &[&str] = &[
     "start_preview",
     "stop_preview",
     "preview_log",
+    "list_sessions",
+    "message_session",
+    "read_session",
+    "settle_wait",
 ];
 
 impl OrchestratorCall {

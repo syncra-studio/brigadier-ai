@@ -1793,6 +1793,8 @@ mod peer_reply_tests;
 #[cfg(test)]
 mod peer_restart_tests;
 #[cfg(test)]
+mod peer_revision_tests;
+#[cfg(test)]
 mod peer_session_tests;
 #[cfg(test)]
 mod plan_tests;
