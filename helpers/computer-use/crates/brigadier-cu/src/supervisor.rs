@@ -289,8 +289,9 @@ fn recorded_daemon(pid_file: &str) -> Option<u32> {
         return None;
     }
     let written = std::fs::metadata(pid_file).ok()?.modified().ok()?;
-    let path = process_executable(pid)?;
-    if !path.ends_with("Brigadier Computer Use.app/Contents/MacOS/brigadier-cu") {
+    // The helper's own executable, wherever its bundle is now: an update moves the old
+    // bundle aside (or deletes it) while its daemon still runs, and that daemon must still go.
+    if !is_helper_executable(&process_executable(pid)?) {
         return None;
     }
     let started = process_start_time(pid)?;
@@ -299,6 +300,18 @@ fn recorded_daemon(pid_file: &str) -> Option<u32> {
         return None;
     }
     Some(pid)
+}
+
+/// Whether `path` is the helper's executable inside a bundle
+/// (`<bundle>/Contents/MacOS/brigadier-cu`), whatever the bundle is called now:
+/// Brigadier swaps an update in by exchanging the two folders, so the old
+/// daemon's bundle ends up under a temporary name.
+fn is_helper_executable(path: &std::path::Path) -> bool {
+    let mut parts = path.components().rev().map(|part| part.as_os_str());
+    parts.next() == Some("brigadier-cu".as_ref())
+        && parts.next() == Some("MacOS".as_ref())
+        && parts.next() == Some("Contents".as_ref())
+        && parts.next().is_some()
 }
 
 /// Stop the daemon recorded in `pid_file`, if it is still ours. Sends
@@ -353,6 +366,17 @@ fn process_start_time(pid: u32) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_old_daemon_is_known_by_its_executable_wherever_its_bundle_moved() {
+        let helper = |path: &str| is_helper_executable(std::path::Path::new(path));
+        assert!(helper("/d/computer/Brigadier Computer Use.app/Contents/MacOS/brigadier-cu"));
+        // An update moved the old bundle aside while its daemon runs.
+        assert!(helper("/d/computer/.helper-new-42/Contents/MacOS/brigadier-cu"));
+        assert!(!helper("/usr/bin/brigadier-cu"));
+        assert!(!helper("/d/Other.app/Contents/MacOS/other"));
+        assert!(!helper("/d/cu-serve-under-test"));
+    }
 
     #[test]
     fn a_missing_socket_is_absent() {
