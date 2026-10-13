@@ -104,7 +104,7 @@ fn stem(path: &std::path::Path) -> Option<String> {
 
 /// `CFBundleIdentifier` of the `.app` bundle at `path`.
 #[cfg(target_os = "macos")]
-fn bundle_id_at(path: &std::path::Path) -> Option<String> {
+pub(crate) fn bundle_id_at(path: &std::path::Path) -> Option<String> {
     use objc2_foundation::{NSBundle, NSString};
     let bundle = unsafe { NSBundle::bundleWithPath(&NSString::from_str(path.to_str()?)) }?;
     let bundle_id = unsafe { bundle.bundleIdentifier() }?.to_string();

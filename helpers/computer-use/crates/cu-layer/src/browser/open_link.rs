@@ -143,7 +143,7 @@ pub fn wait_for_new_windows(
 }
 
 /// Layer-0 windows of `pid` with a real size.
-fn current_windows_for_pid(pid: i32) -> Vec<WindowInfo> {
+pub fn current_windows_for_pid(pid: i32) -> Vec<WindowInfo> {
     platform_macos::windows::all_windows()
         .into_iter()
         .filter(|w| w.pid == pid && w.layer == 0)

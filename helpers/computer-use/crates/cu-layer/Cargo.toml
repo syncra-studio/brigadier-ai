@@ -23,6 +23,8 @@ core-foundation = "0.10"
 objc2-foundation = { version = "0.2", features = [
     "NSArray", "NSBundle", "NSDate", "NSDictionary", "NSNotification", "NSOperation",
     "NSString", "NSURL", "block2",
+    # launch_app's own LaunchServices calls.
+    "NSAppleEventDescriptor", "NSError",
 ] }
 objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSRunningApplication", "NSWorkspace"] }
 objc2 = "0.5"

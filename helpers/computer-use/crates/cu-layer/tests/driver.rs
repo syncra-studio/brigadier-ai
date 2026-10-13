@@ -31,6 +31,7 @@ fn snapshot(name: &str, actual: &str) {
 fn brigadier_registry() -> cua_driver_core::tool::ToolRegistry {
     let mut registry = platform_macos::register_tools();
     cu_layer::page::install(&mut registry);
+    cu_layer::launch::install(&mut registry);
     registry
 }
 
