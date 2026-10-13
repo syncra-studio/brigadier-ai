@@ -90,6 +90,10 @@ mockIPC(async (command, payload) => {
     case "open_url":
       asked.push({ open: args.url });
       return null;
+    case "browser_open":
+    case "browser_navigate":
+      asked.push({ navigate: args.url });
+      return null;
     case "browser_site_count":
       return 0;
     case "browser_history":
@@ -164,6 +168,14 @@ const findCount = () => text(one('[data-slot="browser-find-count"]'));
 /** Types into the find field as React hears it. */
 const typeFind = (value: string) => {
   const input = findField();
+  if (!input) return;
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+};
+
+/** Types into the address field as React hears it. */
+const typeField = (value: string) => {
+  const input = field();
   if (!input) return;
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -257,6 +269,21 @@ function Fixture() {
       button("Open in external browser")?.click();
       await wait(50);
       seen.asked = asked.slice();
+
+      // Enter in the address: the form's default button (its first submit button) is clicked, as
+      // a browser does, then the form submits. Only the tab goes there; nothing opens outside.
+      const entered = asked.length;
+      field()?.focus();
+      typeField("example.org/next");
+      await wait(50);
+      const form = field()?.form;
+      const submitters = [...(form?.elements ?? [])].filter((element) => (element as HTMLButtonElement).type === "submit");
+      (submitters[0] as HTMLButtonElement | undefined)?.click();
+      form?.requestSubmit();
+      await wait(100);
+      seen.addressEnter = { submitters: submitters.length, asked: asked.slice(entered) };
+      setPage(PAGE);
+      await wait(100);
 
       openMenu();
       await until(() => menu() !== null);

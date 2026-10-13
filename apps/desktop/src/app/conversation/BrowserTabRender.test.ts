@@ -90,6 +90,9 @@ for (const full of [false, true]) {
     assert.deepEqual(seen.newTabBack, { disabled: true, opacity: "0.4" });
 
     assert.deepEqual(seen.asked, [{ go: "stop" }, { open: PAGE }]);
+    // Enter in the address goes there in the tab only: the form has no default button that would
+    // also open the address in the system browser.
+    assert.deepEqual(seen.addressEnter, { submitters: 0, asked: [{ navigate: "https://example.org/next" }] });
 
     // Zoom steps 10% and resets to 100%; the screenshot says where it went; each asks the shell.
     assert.deepEqual(seen.zoomStepped, { shows: "110%", group: zoom("110%", []) });

@@ -659,6 +659,7 @@ export function BrowserTab({
             />
             {outside && (url || typed !== null) && (
               <TooltipIconButton
+                type="button"
                 tooltip="Open in external browser"
                 size="icon-md"
                 className="shrink-0 rounded-full @max-lg/browser-toolbar:hidden"
