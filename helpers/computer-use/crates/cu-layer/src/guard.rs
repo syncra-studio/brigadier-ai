@@ -6,14 +6,15 @@
 //! same way for a single call, for each `run_steps` step and for its own
 //! re-routes and retries. So every rule here holds on every path:
 //!
-//! 0. a test process runs only tools that need no privacy permission
-//!    ([`crate::no_tcc`]);
 //! 1. never bring an app to the front or move the user's pointer
 //!    ([`crate::never_front`]);
 //! 2. only tools Brigadier offers ([`crate::catalog`]);
 //! 3. only apps the target policy allows ([`crate::target_policy`]), with an
 //!    element token resolved to its app first;
 //! 4. never an app the user told agents to stop using;
+//! 5. a test process runs only tools that need no privacy permission
+//!    ([`crate::no_tcc`]). The rules before it never use either, so a test
+//!    process goes through them as the real one does.
 //!
 //! and every result is put in Brigadier's words ([`crate::text`]).
 
@@ -42,9 +43,6 @@ impl GuardedTool {
     /// The rules, in order. `Err` is the refusal the agent gets; the tool
     /// has not run.
     fn admit(&self, tool: &str, args: &Value) -> Result<(), ToolResult> {
-        if let Some(refusal) = no_tcc::refusal(tool) {
-            return Err(refusal);
-        }
         if let Some(refusal) = never_front::check(tool, args) {
             return Err(refusal);
         }
@@ -54,20 +52,15 @@ impl GuardedTool {
         let target_args = resolve_token(tool, args)?;
         let scope = scope::current();
         let lookups = self.lookups.as_ref();
-        target_policy::enforce(
-            tool,
-            &target_args,
-            &scope.allowed_bundles,
-            &TargetResolver {
-                app_for_pid: &|pid| lookups.app_for_pid(pid),
-                pid_for_window: &|window| lookups.pid_for_window(window),
-            },
-        )?;
+        check_target_with(tool, &target_args, &scope.allowed_bundles, lookups)?;
         if let Some(hook) = scope.on_target.as_ref() {
             let app = crate::lookup::target_app(lookups, tool, &target_args);
             if let Some(message) = hook(tool, app.as_ref()) {
                 return Err(stopped(message));
             }
+        }
+        if let Some(refusal) = no_tcc::refusal(tool) {
+            return Err(refusal);
         }
         Ok(())
     }
@@ -121,6 +114,31 @@ impl Tool for GuardedTool {
         tokens::record(&result);
         text::result(result)
     }
+}
+
+/// The target policy alone, as [`GuardedTool`] applies it, with the real
+/// lookups: for a caller that refuses a call before it reaches the
+/// registry, e.g. in another process. An element token is checked by the
+/// guard that resolves it, not here.
+pub fn check_target(tool: &str, args: &Value, allowed: &[String]) -> Result<(), ToolResult> {
+    check_target_with(tool, args, allowed, &crate::lookup::System)
+}
+
+fn check_target_with(
+    tool: &str,
+    args: &Value,
+    allowed: &[String],
+    lookups: &dyn Lookups,
+) -> Result<(), ToolResult> {
+    target_policy::enforce(
+        tool,
+        args,
+        allowed,
+        &TargetResolver {
+            app_for_pid: &|pid| lookups.app_for_pid(pid),
+            pid_for_window: &|window| lookups.pid_for_window(window),
+        },
+    )
 }
 
 /// Put every tool of `registry` behind the guard, with the real lookups.

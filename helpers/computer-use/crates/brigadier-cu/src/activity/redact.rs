@@ -2,7 +2,7 @@
 //!
 //! Text an agent makes the machine type or inject is never stored in clear:
 //! only a marker and its length survive. That covers `type_text`, `set_value`,
-//! `page` insert/type/JavaScript, nested `perform_actions` steps, the Codex
+//! `page` insert/type/JavaScript, nested `run_steps` steps, the Codex
 //! compat tools, and single printable keys (with no modifier other than
 //! shift), which could otherwise spell a password one key at a time. Key
 //! names, shortcuts with a command modifier, coordinates and element indices
@@ -53,22 +53,24 @@ pub fn redact_args_with(tool: &str, args: &Value, policy: RedactPolicy) -> Value
 }
 
 fn redact_object(tool: &str, map: &Map<String, Value>, policy: RedactPolicy) -> Map<String, Value> {
-    // A `perform_actions` step (or any nested call) carries its own tool name.
-    if let (Some(Value::String(step_tool)), Some(step_args)) =
-        (map.get("tool"), map.get("arguments"))
-    {
-        let mut out = Map::new();
-        for (key, value) in map {
-            if key.starts_with('_') {
-                continue;
-            }
-            if key == "arguments" {
-                out.insert(key.clone(), redact_args_with(step_tool, step_args, policy));
-            } else {
+    // A `run_steps` step (or any nested call) carries its own tool name:
+    // `{tool, args}` (or `arguments`), or `{<tool>: args}`.
+    if let Some(Value::String(step_tool)) = map.get("tool") {
+        if map.contains_key("args") || map.contains_key("arguments") {
+            let mut out = Map::new();
+            for (key, value) in map {
+                if key.starts_with('_') {
+                    continue;
+                }
+                let tool = if key == "args" || key == "arguments" {
+                    step_tool.as_str()
+                } else {
+                    tool
+                };
                 out.insert(key.clone(), redact_args_with(tool, value, policy));
             }
+            return out;
         }
-        return out;
     }
 
     let printable_key = is_typed_key_call(tool, map);
@@ -92,6 +94,11 @@ fn redact_object(tool: &str, map: &Map<String, Value>, policy: RedactPolicy) -> 
         }
         if printable_key && (key == "key" || key == "keys") {
             out.insert(key.clone(), json!({"redacted": "key"}));
+            continue;
+        }
+        // `{<tool>: args}`: only the key tools redact by tool name.
+        if (key == "press_key" || key == "hotkey") && value.is_object() {
+            out.insert(key.clone(), redact_args_with(key, value, policy));
             continue;
         }
         out.insert(key.clone(), redact_args_with(tool, value, policy));
@@ -248,21 +255,26 @@ mod tests {
     }
 
     #[test]
-    fn perform_actions_steps_use_their_own_tool() {
-        let args = json!({"actions": [
-            {"tool": "type_text", "arguments": {"text": "abc", "pid": 1}},
-            {"tool": "press_key", "arguments": {"key": "x", "pid": 1}},
+    fn run_steps_steps_use_their_own_tool() {
+        let args = json!({"steps": [
+            {"tool": "type_text", "args": {"text": "abc", "pid": 1}},
+            {"tool": "press_key", "args": {"key": "x", "pid": 1}},
             {"tool": "press_key", "arguments": {"key": "return", "pid": 1}},
-            {"tool": "click", "arguments": {"x": 10, "y": 20}}
-        ]});
-        let out = redact_args("perform_actions", &args);
-        assert_eq!(out["actions"][0]["arguments"]["text"]["length"], json!(3));
-        assert_eq!(
-            out["actions"][1]["arguments"]["key"],
-            json!({"redacted": "key"})
-        );
-        assert_eq!(out["actions"][2]["arguments"]["key"], json!("return"));
-        assert_eq!(out["actions"][3]["arguments"], json!({"x": 10, "y": 20}));
+            {"tool": "click", "args": {"x": 10, "y": 20}},
+            {"press_key": {"key": "y"}, "expect": [{"text": "Thanks"}]},
+            {"hotkey": {"keys": ["cmd", "z"]}},
+            {"set_value": {"role": "textfield", "value": "ada@example.com"}}
+        ], "observe": {}});
+        let out = redact_args("run_steps", &args);
+        let steps = &out["steps"];
+        assert_eq!(steps[0]["args"]["text"]["length"], json!(3));
+        assert_eq!(steps[1]["args"]["key"], json!({"redacted": "key"}));
+        assert_eq!(steps[2]["arguments"]["key"], json!("return"));
+        assert_eq!(steps[3]["args"], json!({"x": 10, "y": 20}));
+        assert_eq!(steps[4]["press_key"]["key"], json!({"redacted": "key"}));
+        assert_eq!(steps[5]["hotkey"]["keys"], json!(["cmd", "z"]));
+        assert_eq!(steps[6]["set_value"]["value"]["length"], json!(15));
+        assert!(!contains_string(&out, "ada@example.com"));
     }
 
     #[test]
@@ -301,8 +313,8 @@ mod tests {
         for round in 0..500 {
             let secret = format!("S3cr{:x}t{}", next(), round);
             let field = ["text", "value", "javascript"][(next() % 3) as usize];
-            let tool = ["type_text", "set_value", "page", "perform_actions", "click"]
-                [(next() % 5) as usize];
+            let tool =
+                ["type_text", "set_value", "page", "run_steps", "click"][(next() % 5) as usize];
             let mut inner = Map::new();
             inner.insert(field.to_owned(), Value::String(secret.clone()));
             inner.insert("pid".to_owned(), json!(next() % 1000));

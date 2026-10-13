@@ -26,9 +26,9 @@
 use std::sync::Arc;
 
 use crate::mcp::initialize_result;
-use cu_core::protocol::{Request, Response};
+use cua_driver_core::protocol::{Request, Response};
 #[cfg(target_os = "macos")]
-use cu_core::protocol::{ToolCall, ToolResult};
+use cua_driver_core::protocol::{ToolCall, ToolResult};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, warn};
 
@@ -43,81 +43,18 @@ enum ControlConnectionState {
     Rejected(String),
 }
 
-const PERFORM_ACTIONS_TOOL: &str = "perform_actions";
-const MAX_ACTION_GROUP_SIZE: usize = 20;
-const ACTION_GROUP_TOOLS: &[&str] = &[
-    "click",
-    "double_click",
-    "right_click",
-    "type_text",
-    "press_key",
-    "hotkey",
-    "scroll",
-    "drag",
-    "set_value",
-    "move_cursor",
-];
-
-fn perform_actions_tool_entry() -> serde_json::Value {
-    serde_json::json!({
-        "name": PERFORM_ACTIONS_TOOL,
-        "description": "Execute up to 20 already-grounded UI actions in order inside one \
-            persistent Computer Use proxy call. Use this after one get_window_state when \
-            the referenced controls remain stable (for example, a Calculator button \
-            sequence), then verify the completed group with one fresh snapshot. Each step \
-            reuses the existing element-token cache and the same visible agent cursor, \
-            avoiding a new model/MCP round trip and accessibility-tree scan per click. \
-            Do not group navigation, modal-opening, or layout-changing actions whose later \
-            controls require a fresh snapshot.",
-        "inputSchema": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "actions": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": MAX_ACTION_GROUP_SIZE,
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "properties": {
-                            "tool": {
-                                "type": "string",
-                                "enum": ACTION_GROUP_TOOLS,
-                            },
-                            "arguments": {
-                                "type": "object",
-                            },
-                        },
-                        "required": ["tool", "arguments"],
-                    },
-                },
-                "stop_on_error": {
-                    "type": "boolean",
-                    "description": "Stop before later actions after the first failed step. Default true.",
-                },
-            },
-            "required": ["actions"],
-        },
-        "annotations": {
-            "readOnlyHint": false,
-            "destructiveHint": true,
-            "idempotentHint": false,
-            "openWorldHint": false,
-        },
-        "capabilities": ["input.action_group"],
-    })
-}
-
-fn with_proxy_tools(mut tools_list: serde_json::Value) -> serde_json::Value {
+/// The tool list as the proxy serves it. Brigadier's own refusals don't
+/// follow the driver's result schemas, so entries carry no `outputSchema`
+/// for a strict client to check results against.
+fn proxy_tools_list(mut tools_list: serde_json::Value) -> serde_json::Value {
     if let Some(tools) = tools_list
         .get_mut("tools")
         .and_then(serde_json::Value::as_array_mut)
     {
-        if !tools.iter().any(|tool| {
-            tool.get("name").and_then(serde_json::Value::as_str) == Some(PERFORM_ACTIONS_TOOL)
-        }) {
-            tools.push(perform_actions_tool_entry());
+        for tool in tools.iter_mut() {
+            if let Some(entry) = tool.as_object_mut() {
+                entry.remove("outputSchema");
+            }
         }
     }
     tools_list
@@ -189,8 +126,8 @@ pub async fn run_proxy(
     // reaper immediately (unchanged behaviour).
     #[cfg(target_os = "macos")]
     let bootstrap_tools_list = {
-        let registry = crate::build_macos_registry_with_compat(claude_code_compat);
-        Arc::new(with_proxy_tools(registry.tools_list()))
+        let registry = crate::one_shot_registry(claude_code_compat);
+        Arc::new(proxy_tools_list(crate::mcp::agent_tools_list(&registry)))
     };
 
     #[cfg(target_os = "macos")]
@@ -651,10 +588,8 @@ fn validate_daemon_profile_and_roster(
     Ok(())
 }
 
-/// One-shot daemon `list` over the UDS, reshaped into a MCP
-/// `tools/list` result. The daemon now returns the full ToolDef
-/// (`name`, `description`, `input_schema`, annotation hints) per
-/// commit 3's `serve.rs` change.
+/// One-shot daemon `list` over the UDS: the daemon answers with the MCP
+/// `tools/list` entries agents see, which the proxy passes through.
 ///
 /// macOS serves the in-process list only while its lazy proxy is dormant. Once
 /// connected, it fetches this daemon-authored list once per observed daemon
@@ -677,102 +612,17 @@ fn fetch_tools_list_from_daemon(
             resp.error.unwrap_or_else(|| "(no error message)".into())
         );
     }
-    let result = resp
+    let mut result = resp
         .result
         .ok_or_else(|| anyhow::anyhow!("daemon list response missing `result` field"))?;
     validate_daemon_profile_and_roster(&result, expected_profile, socket_path)?;
-    let tools_array = result
-        .get("tools")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| anyhow::anyhow!("daemon list response missing `tools` array"))?;
-
-    // Reshape the daemon's `{name, description, input_schema, read_only,
-    // ..., capabilities}` envelope into MCP's `{name, description,
-    // inputSchema, annotations: {...}, capabilities}` shape. Same
-    // translation `ToolDef::to_list_entry` does for the in-process
-    // path so MCP clients see identical tools/list output either way.
-    //
-    // `capabilities` is passed through verbatim when the daemon
-    // provides it; older daemons that don't emit the field fall back
-    // to a name-keyed lookup so the proxy still surfaces capability
-    // metadata without an extra round-trip.
-    let mcp_tools: Vec<serde_json::Value> = tools_array
-        .iter()
-        .map(|t| {
-            let name = t.get("name").cloned().unwrap_or(serde_json::Value::Null);
-            let description = t
-                .get("description")
-                .cloned()
-                .unwrap_or(serde_json::Value::String(String::new()));
-            let input_schema = t
-                .get("input_schema")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
-            let read_only = t
-                .get("read_only")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let destructive = t
-                .get("destructive")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let idempotent = t
-                .get("idempotent")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let open_world = t
-                .get("open_world")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let capabilities = t
-                .get("capabilities")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_else(|| {
-                    // Fallback: derive from the centralised map by
-                    // name. Keeps the proxy compatible with daemon
-                    // builds that pre-date the capabilities field.
-                    name.as_str()
-                        .map(cu_core::tool::default_capabilities_for)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(serde_json::Value::String)
-                        .collect()
-                });
-            let mut entry = serde_json::json!({
-                "name": name,
-                "description": description,
-                "inputSchema": input_schema,
-                "annotations": {
-                    "readOnlyHint": read_only,
-                    "destructiveHint": destructive,
-                    "idempotentHint": idempotent,
-                    "openWorldHint": open_world,
-                },
-            });
-            entry["capabilities"] = serde_json::Value::Array(capabilities);
-            entry
-        })
-        .collect();
-
-    // `capability_version` and `schema_version` are passed through
-    // when the daemon emits them; older daemons fall back to the
-    // proxy's compiled-in `CAPABILITY_VERSION` so MCP clients always
-    // see the envelope keys.
-    let capability_version = result
-        .get("capability_version")
-        .cloned()
-        .unwrap_or_else(|| serde_json::Value::String(cu_core::tool::CAPABILITY_VERSION.to_owned()));
-    let schema_version = result
-        .get("schema_version")
-        .cloned()
-        .unwrap_or_else(|| serde_json::Value::String("1".to_owned()));
-
-    Ok(with_proxy_tools(serde_json::json!({
-        "tools": mcp_tools,
-        "capability_version": capability_version,
-        "schema_version": schema_version,
-    })))
+    if !result.get("tools").is_some_and(serde_json::Value::is_array) {
+        anyhow::bail!("daemon list response missing `tools` array");
+    }
+    if let Some(object) = result.as_object_mut() {
+        object.remove("profile");
+    }
+    Ok(proxy_tools_list(result))
 }
 
 async fn send_daemon_request_async(
@@ -803,24 +653,21 @@ struct TransportFailure {
 }
 
 /// The target guard on the proxy side: refuse before anything reaches the
-/// daemon, whose build may predate the guard. The model-supplied private
-/// scope argument is ignored; `allowed` comes from this process's env.
+/// daemon or starts it. The model-supplied private scope argument is
+/// ignored; `allowed` comes from this process's env.
 fn proxy_target_guard(
     name: &str,
     args: &serde_json::Value,
     allowed: &[String],
-) -> Result<(), cu_core::protocol::ToolResult> {
-    #[cfg(target_os = "macos")]
-    {
-        let mut args = args.clone();
-        crate::scope_args::take_allowed(&mut args);
-        platform_macos::target_guard::enforce_native(name, &args, allowed)
-    }
+) -> Result<(), cua_driver_core::protocol::ToolResult> {
+    let mut args = args.clone();
+    crate::scope_args::take_allowed(&mut args);
+    cu_layer::guard::check_target(name, &args, allowed)
 }
 
 /// A guard refusal in the daemon's response shape, so the MCP client sees the
 /// same `isError` result the daemon's own guard returns.
-fn refusal_daemon_response(refusal: cu_core::protocol::ToolResult) -> DaemonResponse {
+fn refusal_daemon_response(refusal: cua_driver_core::protocol::ToolResult) -> DaemonResponse {
     DaemonResponse {
         ok: false,
         result: serde_json::to_value(refusal).ok(),
@@ -836,7 +683,7 @@ async fn call_daemon_tool(
     mut args: serde_json::Value,
 ) -> Result<DaemonResponse, TransportFailure> {
     // The model never sets the target scope; this process's env does.
-    let allowed_targets = cu_core::target_policy::allowed_from_env();
+    let allowed_targets = cu_layer::target_policy::allowed_from_env();
     if let Err(refusal) = proxy_target_guard(name, &args, &allowed_targets) {
         return Ok(refusal_daemon_response(refusal));
     }
@@ -1015,7 +862,7 @@ fn admit_bootstrap_tool_call(
         )));
     };
 
-    let def = cu_core::tool::ToolDef {
+    let def = cua_driver_core::tool::ToolDef {
         name: advertised_name.to_owned(),
         description: String::new(),
         input_schema: entry
@@ -1032,29 +879,11 @@ fn admit_bootstrap_tool_call(
     }
 
     // Target guard before anything starts the helper or waits for grants:
-    // a refused target is side-effect free. perform_actions is checked per
-    // step; call_daemon_tool and the daemon's registry check again.
-    let allowed_targets = cu_core::target_policy::allowed_from_env();
-    let steps: Vec<(&str, &serde_json::Value)> = if call.name == PERFORM_ACTIONS_TOOL {
-        call.args
-            .get("actions")
-            .and_then(serde_json::Value::as_array)
-            .map(|actions| {
-                actions
-                    .iter()
-                    .filter_map(|action| {
-                        Some((action.get("tool")?.as_str()?, action.get("arguments")?))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    } else {
-        vec![(call.name.as_str(), &call.args)]
-    };
-    for (tool, arguments) in steps {
-        if let Err(refusal) = proxy_target_guard(tool, arguments, &allowed_targets) {
-            return BootstrapToolCallAdmission::Rejected(refusal);
-        }
+    // a refused target is side-effect free. call_daemon_tool and the
+    // daemon's guard check again.
+    let allowed_targets = cu_layer::target_policy::allowed_from_env();
+    if let Err(refusal) = proxy_target_guard(&call.name, &call.args, &allowed_targets) {
+        return BootstrapToolCallAdmission::Rejected(refusal);
     }
 
     let wait_for_grants = tool_call_requires_grant_wait(req);
@@ -1365,6 +1194,16 @@ fn response_from_tool_result(id: serde_json::Value, result: ToolResult) -> Respo
     }
 }
 
+/// The outcome of forwarding one tool call to the daemon.
+enum Forwarded {
+    /// The daemon handled the call (successfully or not).
+    Done(Response),
+    /// The daemon went away and sending the call again is safe: it never
+    /// reached the daemon, or it only reads. The response describes the
+    /// failure if a retry is impossible.
+    Lost(Response),
+}
+
 /// Forward a single MCP `tools/call` to the daemon as a `call`
 /// request, then translate the `DaemonResponse` back into an MCP
 /// `CallTool.Result` envelope.
@@ -1378,267 +1217,6 @@ fn response_from_tool_result(id: serde_json::Value, result: ToolResult) -> Respo
 ///     task panic) → JSON-RPC error (`-32603`), because the MCP
 ///     client really does need to distinguish "tool said no" from
 ///     "I couldn't reach the tool at all."
-#[derive(Debug)]
-struct PreparedProxyAction {
-    tool: String,
-    request: DaemonRequest,
-}
-
-#[derive(Debug)]
-struct PreparedActionGroup {
-    actions: Vec<PreparedProxyAction>,
-    stop_on_error: bool,
-}
-
-fn prepare_action_group(
-    args: serde_json::Value,
-    session_id: &str,
-    managed_session: bool,
-) -> Result<PreparedActionGroup, String> {
-    let allowed_targets = cu_core::target_policy::allowed_from_env();
-    let object = args
-        .as_object()
-        .ok_or_else(|| "perform_actions arguments must be an object".to_owned())?;
-    let actions = object
-        .get("actions")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| "perform_actions requires an `actions` array".to_owned())?;
-    if actions.is_empty() {
-        return Err("perform_actions requires at least one action".to_owned());
-    }
-    if actions.len() > MAX_ACTION_GROUP_SIZE {
-        return Err(format!(
-            "perform_actions accepts at most {MAX_ACTION_GROUP_SIZE} actions"
-        ));
-    }
-    let stop_on_error = object
-        .get("stop_on_error")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
-
-    let mut prepared = Vec::with_capacity(actions.len());
-    for (index, action) in actions.iter().enumerate() {
-        let action = action
-            .as_object()
-            .ok_or_else(|| format!("perform_actions step {index} must be an object"))?;
-        if let Some(field) = action
-            .keys()
-            .find(|field| field.as_str() != "tool" && field.as_str() != "arguments")
-        {
-            return Err(format!(
-                "perform_actions step {index} has unknown field `{field}`"
-            ));
-        }
-        let tool = action
-            .get("tool")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| format!("perform_actions step {index} requires string `tool`"))?;
-        if !ACTION_GROUP_TOOLS.contains(&tool) {
-            return Err(format!(
-                "perform_actions step {index} cannot call `{tool}`; group only \
-                 already-grounded input actions"
-            ));
-        }
-        let arguments = action
-            .get("arguments")
-            .cloned()
-            .filter(serde_json::Value::is_object)
-            .ok_or_else(|| format!("perform_actions step {index} requires object `arguments`"))?;
-        let mut arguments = enforce_proxy_session_identity(arguments, session_id, managed_session);
-        if let Err(refusal) = proxy_target_guard(tool, &arguments, &allowed_targets) {
-            let text = refusal
-                .content
-                .iter()
-                .find_map(|content| match content {
-                    cu_core::protocol::Content::Text { text, .. } => Some(text.clone()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| "target_not_allowed".to_owned());
-            return Err(format!("perform_actions step {index}: {text}"));
-        }
-        crate::scope_args::scope_target_args(&mut arguments, &allowed_targets);
-        prepared.push(PreparedProxyAction {
-            tool: tool.to_owned(),
-            request: DaemonRequest {
-                method: "call".into(),
-                name: Some(tool.to_owned()),
-                args: Some(arguments),
-                session_id: Some(session_id.to_owned()),
-            },
-        });
-    }
-
-    Ok(PreparedActionGroup {
-        actions: prepared,
-        stop_on_error,
-    })
-}
-
-fn action_group_error_response(
-    id: serde_json::Value,
-    message: String,
-    requested_count: usize,
-    results: Vec<serde_json::Value>,
-) -> Response {
-    let succeeded_count = results
-        .iter()
-        .filter(|result| result.get("isError") == Some(&serde_json::Value::Bool(false)))
-        .count();
-    Response::ok(
-        id,
-        serde_json::json!({
-            "content": [{ "type": "text", "text": message }],
-            "isError": true,
-            "structuredContent": {
-                "requested_count": requested_count,
-                "attempted_count": results.len(),
-                "succeeded_count": succeeded_count,
-                "results": results,
-            },
-        }),
-    )
-}
-
-async fn forward_action_group(
-    id: serde_json::Value,
-    args: serde_json::Value,
-    socket_path: &str,
-    session_id: &str,
-) -> Forwarded {
-    let managed_session = configured_default_session()
-        .is_some_and(|base| session_id.starts_with(&format!("{base}-mcp-")));
-    let prepared = match prepare_action_group(args, session_id, managed_session) {
-        Ok(prepared) => prepared,
-        Err(message) => {
-            return Forwarded::Done(action_group_error_response(id, message, 0, Vec::new()));
-        }
-    };
-    let requested_count = prepared.actions.len();
-    let socket = socket_path.to_owned();
-    let blocking = tokio::task::spawn_blocking(move || {
-        let mut results = Vec::with_capacity(requested_count);
-        let mut any_error = false;
-        for (index, action) in prepared.actions.into_iter().enumerate() {
-            let response = match send_request(&socket, &action.request) {
-                Ok(response) => response,
-                Err(error) => {
-                    // Nothing ran yet only if the first step never reached the daemon.
-                    let nothing_ran = results.is_empty() && never_delivered(&error);
-                    return Err((
-                        format!(
-                            "Computer Use transport failed at perform_actions step {index} \
-                             (`{}`): {error}",
-                            action.tool
-                        ),
-                        results,
-                        nothing_ran,
-                    ));
-                }
-            };
-
-            let transport_ok = response.ok;
-            let result = if transport_ok {
-                response
-                    .result
-                    .unwrap_or_else(|| serde_json::json!({ "content": [], "isError": false }))
-            } else {
-                serde_json::json!({
-                    "content": [{
-                        "type": "text",
-                        "text": response.error.unwrap_or_else(|| "daemon reported failure".into()),
-                    }],
-                    "isError": true,
-                    "structuredContent": {
-                        "exit_code": response.exit_code.unwrap_or(1),
-                    },
-                })
-            };
-            let is_error = !transport_ok
-                || result
-                    .get("isError")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
-            results.push(serde_json::json!({
-                "index": index,
-                "tool": action.tool,
-                "isError": is_error,
-                "result": result,
-            }));
-            any_error |= is_error;
-            if is_error && prepared.stop_on_error {
-                break;
-            }
-        }
-        Ok((results, any_error))
-    })
-    .await;
-
-    let (results, any_error) = match blocking {
-        Err(error) => {
-            return Forwarded::Done(Response::error(
-                id,
-                -32603,
-                format!("internal join error forwarding perform_actions: {error}"),
-            ));
-        }
-        // Nothing ran yet, so the whole group can be retried safely.
-        Ok(Err((message, results, true))) => {
-            return Forwarded::Lost(action_group_error_response(
-                id,
-                message,
-                requested_count,
-                results,
-            ));
-        }
-        Ok(Err((message, results, false))) => {
-            return Forwarded::Done(action_group_error_response(
-                id,
-                message,
-                requested_count,
-                results,
-            ));
-        }
-        Ok(Ok(outcome)) => outcome,
-    };
-
-    let succeeded_count = results
-        .iter()
-        .filter(|result| result.get("isError") == Some(&serde_json::Value::Bool(false)))
-        .count();
-    let attempted_count = results.len();
-    let summary = if any_error {
-        format!(
-            "perform_actions attempted {attempted_count} of {requested_count} actions; \
-             {succeeded_count} succeeded."
-        )
-    } else {
-        format!("Completed all {requested_count} Computer Use actions in one ordered call.")
-    };
-    Forwarded::Done(Response::ok(
-        id,
-        serde_json::json!({
-            "content": [{ "type": "text", "text": summary }],
-            "isError": any_error,
-            "structuredContent": {
-                "requested_count": requested_count,
-                "attempted_count": attempted_count,
-                "succeeded_count": succeeded_count,
-                "results": results,
-            },
-        }),
-    ))
-}
-
-/// The outcome of forwarding one tool call to the daemon.
-enum Forwarded {
-    /// The daemon handled the call (successfully or not).
-    Done(Response),
-    /// The daemon went away and sending the call again is safe: it never
-    /// reached the daemon, or it only reads. The response describes the
-    /// failure if a retry is impossible.
-    Lost(Response),
-}
-
 async fn forward_tool_call(
     id: serde_json::Value,
     name: String,
@@ -1656,9 +1234,6 @@ async fn forward_tool_call(
                 "daemon session control connection unavailable before forwarding `{name}`: {error}"
             ),
         ));
-    }
-    if name == PERFORM_ACTIONS_TOOL {
-        return forward_action_group(id, args, socket_path, session_id).await;
     }
     let managed_session = configured_default_session()
         .is_some_and(|base| session_id.starts_with(&format!("{base}-mcp-")));
@@ -1753,13 +1328,6 @@ fn configured_default_session() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn configured_state_owner_pid() -> Option<u32> {
-    std::env::var("BRIGADIER_CU_STATE_OWNER_PID")
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok())
-        .filter(|value| *value > 1)
-}
-
 fn managed_host_session(session_id: &str) -> Option<&str> {
     session_id
         .rfind("-mcp-")
@@ -1801,12 +1369,6 @@ fn enforce_proxy_session_identity(
                     serde_json::Value::String(host_session.to_owned()),
                 );
             }
-            if let Some(owner_pid) = configured_state_owner_pid() {
-                object.insert(
-                    cu_core::session_state::STATE_OWNER_PID_ARG.to_owned(),
-                    serde_json::json!(owner_pid),
-                );
-            }
         }
     }
     args
@@ -1824,6 +1386,14 @@ fn enforce_proxy_session_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The list the proxy serves before the daemon is up.
+    #[cfg(target_os = "macos")]
+    fn bootstrap_tools_list() -> serde_json::Value {
+        proxy_tools_list(crate::mcp::agent_tools_list(&crate::one_shot_registry(
+            false,
+        )))
+    }
 
     #[test]
     fn only_a_read_only_tool_counts_as_safe_to_repeat() {
@@ -1946,76 +1516,6 @@ mod tests {
 
         assert_eq!(args["session"], "research-1");
         assert!(args.get("_session_id").is_none());
-    }
-
-    #[test]
-    fn action_group_preserves_order_and_managed_cursor_identity() {
-        let managed = "brigadier-C0D0FE9B-CB9C-421D-AD81-149B2318E7FF-mcp-4242-99";
-        let group = prepare_action_group(
-            serde_json::json!({
-                "actions": [
-                    {
-                        "tool": "click",
-                        "arguments": {
-                            "pid": 84,
-                            "window_id": 9,
-                            "element_token": "first",
-                            "session": "agent-override",
-                        },
-                    },
-                    {
-                        "tool": "press_key",
-                        "arguments": {
-                            "pid": 84,
-                            "key": "return",
-                        },
-                    },
-                ],
-            }),
-            managed,
-            true,
-        )
-        .expect("valid action group");
-
-        assert!(group.stop_on_error);
-        assert_eq!(group.actions.len(), 2);
-        assert_eq!(group.actions[0].tool, "click");
-        assert_eq!(group.actions[1].tool, "press_key");
-        for action in group.actions {
-            assert_eq!(action.request.session_id.as_deref(), Some(managed));
-            let arguments = action.request.args.expect("action arguments");
-            assert_eq!(arguments["session"], managed);
-            assert_eq!(arguments["_session_id"], managed);
-        }
-    }
-
-    #[test]
-    fn action_group_rejects_scans_and_unbounded_sequences() {
-        let scan = prepare_action_group(
-            serde_json::json!({
-                "actions": [{
-                    "tool": "get_window_state",
-                    "arguments": { "pid": 84, "window_id": 9 },
-                }],
-            }),
-            "mcp-1",
-            false,
-        )
-        .expect_err("read/scanning tools must stay outside action groups");
-        assert!(scan.contains("already-grounded input actions"));
-
-        let actions: Vec<_> = (0..=MAX_ACTION_GROUP_SIZE)
-            .map(|_| {
-                serde_json::json!({
-                    "tool": "press_key",
-                    "arguments": { "pid": 84, "key": "return" },
-                })
-            })
-            .collect();
-        let oversized =
-            prepare_action_group(serde_json::json!({ "actions": actions }), "mcp-1", false)
-                .expect_err("action group must be bounded");
-        assert!(oversized.contains("at most"));
     }
 
     /// Reconstruct the `!resp.ok` branch in isolation so we can assert
@@ -2212,7 +1712,7 @@ mod tests {
             .expect("request envelope")
         }
 
-        let tools_list = crate::build_macos_registry_with_compat(false).tools_list();
+        let tools_list = bootstrap_tools_list();
 
         let malformed = request(serde_json::json!({ "arguments": {} }));
         assert!(matches!(
@@ -2260,20 +1760,14 @@ mod tests {
             }))
             .expect("request envelope")
         }
-        let tools_list =
-            with_proxy_tools(crate::build_macos_registry_with_compat(false).tools_list());
+        let tools_list = bootstrap_tools_list();
         let own = std::process::id();
         for req in [
             request(
                 "get_window_state",
                 serde_json::json!({ "pid": own, "window_id": 1 }),
             ),
-            request(
-                "perform_actions",
-                serde_json::json!({ "actions": [
-                    { "tool": "press_key", "arguments": { "pid": own, "key": "a" } }
-                ] }),
-            ),
+            request("press_key", serde_json::json!({ "pid": own, "key": "a" })),
         ] {
             match admit_bootstrap_tool_call(&req, &tools_list) {
                 BootstrapToolCallAdmission::Rejected(result) => {
@@ -2305,7 +1799,7 @@ mod tests {
             .expect("request envelope")
         }
 
-        let tools_list = crate::build_macos_registry_with_compat(false).tools_list();
+        let tools_list = bootstrap_tools_list();
 
         match admit_bootstrap_tool_call(
             &request("check_permissions", serde_json::json!({ "prompt": false })),
@@ -2331,7 +1825,13 @@ mod tests {
             } => {
                 assert!(wait_for_grants, "ordinary tools retain the onboarding wait");
             }
-            _ => panic!("a schema-valid tool call must be admitted"),
+            BootstrapToolCallAdmission::Rejected(result) => panic!(
+                "a schema-valid tool call must be admitted: {}",
+                serde_json::to_string(&result).unwrap_or_default()
+            ),
+            BootstrapToolCallAdmission::InvalidParams(error) => {
+                panic!("a schema-valid tool call must be admitted: {error}")
+            }
         }
 
         assert!(matches!(

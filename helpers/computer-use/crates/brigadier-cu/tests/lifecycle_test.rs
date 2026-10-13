@@ -304,8 +304,10 @@ fn stop_using_an_app_holds_after_the_helper_is_replaced_and_only_for_that_agent(
             &home,
             serde_json::json!({
                 "method": "call",
-                "name": "get_screen_size",
-                "args": {"pid": finder, "_host_session": host_session},
+                // A test daemon refuses the key itself (it needs
+                // accessibility), after noting the app it names.
+                "name": "press_key",
+                "args": {"pid": finder, "key": "shift", "_host_session": host_session},
                 "session_id": minted,
             }),
         )
@@ -317,7 +319,10 @@ fn stop_using_an_app_holds_after_the_helper_is_replaced_and_only_for_that_agent(
         "stopped_by_user"
     );
     let listed = host(&home, &["request", "agent_sessions"]);
-    assert!(listed.to_string().contains("brigadier-itest"), "{listed}");
+    assert!(
+        listed.to_string().contains("brigadier-itest"),
+        "{listed} after {first}"
+    );
     assert!(listed.to_string().contains("com.apple.finder"), "{listed}");
 
     // The user chooses Stop using Finder.
@@ -420,7 +425,7 @@ fn a_test_daemon_never_asks_macos_about_accessibility_or_screen_capture() {
         "permissions_present",
         "permissions_refresh",
         "verify_screen_capture",
-        "application_windows",
+        "request_system_permission",
     ] {
         let answer = host(&home, &["request", method]);
         assert!(

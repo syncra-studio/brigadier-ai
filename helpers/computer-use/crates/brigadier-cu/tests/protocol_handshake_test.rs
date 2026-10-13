@@ -293,7 +293,7 @@ fn page_unknown_action_error() {
     //! Verify the cross-platform `page` tool is registered and rejects an
     //! unknown action with a meaningful error. On macOS a test process
     //! refuses `page` before it runs, since it reads the accessibility tree;
-    //! cu-core's page tests cover the unknown action there.
+    //! a granted helper covers the unknown action there.
     let Some(mut d) = RawDriver::spawn() else {
         return;
     };

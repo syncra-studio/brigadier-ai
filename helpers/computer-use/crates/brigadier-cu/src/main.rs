@@ -1,12 +1,13 @@
-//! brigadier-cu — cross-platform background computer-use automation daemon.
+//! brigadier-cu — Brigadier's background computer-use helper (MCP server).
 //!
-//! Runs as a MCP JSON-RPC 2.0 server over stdio.  The platform backend is
-//! selected at compile time via conditional compilation.
+//! Runs as a MCP JSON-RPC 2.0 server over stdio, as the daemon behind it, or
+//! as a one-shot CLI. Every entry point builds its tools through
+//! `cu_layer::registry::build`.
 //!
-//! Extra CLI flags (consumed here, not by MCP):
-//!   --cursor-icon  <path.svg|.ico|.png>   custom cursor shape
-//!   --cursor-id    <id>                   multi-cursor instance id
-//!   --cursor-palette <name>               named colour palette
+//! Extra CLI flags (consumed here, not by MCP), read by
+//! `cursor_overlay::CursorConfig::from_args`:
+//!   --cursor-theme <id>                   installed cursor theme
+//!   --cursor-reduced-motion <auto|on|off> motion preference
 //!   --no-overlay                          start with overlay disabled
 //!   --glide-ms     <f64>                  glide duration override
 //!   --dwell-ms     <f64>                  post-click dwell override
@@ -14,16 +15,14 @@
 //!
 //! ## macOS threading model
 //!
-//! AppKit requires the main thread.  On macOS the entry-point is a plain
-//! `fn main()` that:
-//!  1. Initialises the cursor overlay channel synchronously (so
-//!     `run_on_main_thread` always finds it ready).
-//!  2. Spawns a background tokio thread for the MCP server.
-//!  3. Runs AppKit on the main thread. With the cursor enabled this uses the
-//!     overlay loop; otherwise it uses the plain event loop so browser Apple
-//!     Events and other main-queue work remain serviceable.
-//!
-//! On all other platforms `#[tokio::main]` is used directly.
+//! AppKit requires the main thread. `main` spawns the server on a worker
+//! thread and runs AppKit on the main thread: the cursor overlay's loop when
+//! the cursor is on (it never returns, so the worker ends the process
+//! itself), otherwise the plain event loop so browser Apple Events and other
+//! main-queue work remain serviceable.
+
+// A refusal is the driver's own `ToolResult`, returned as is to the agent.
+#![allow(clippy::result_large_err)]
 
 // Moved whole from the old core; a few of its items have no caller here yet.
 #[allow(dead_code)]
@@ -58,16 +57,9 @@ mod scope_args;
 mod serve;
 mod supervisor;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// Set by the `Command::Mcp` arm when `--claude-code-computer-use-compat`
-/// is on argv. Read by `build_registry` / `build_registry_no_cursor` to
-/// pick which `screenshot` tool variant to register. Static keeps the
-/// thread of dependency arrows pointed away from the platform crates —
-/// they take `compat: bool` directly, but the binary crate decides what
-/// to pass without making every Command variant carry the flag.
-static CLAUDE_CODE_COMPAT: AtomicBool = AtomicBool::new(false);
+use cua_driver_core::tool::ToolRegistry;
 
 fn init_logging() {
     use tracing_subscriber::EnvFilter;
@@ -79,77 +71,43 @@ fn init_logging() {
         .init();
 }
 
-/// Wire up the experimental picture-in-picture preview window.
-///
-/// Called from every long-running entry point (Serve and Mcp on all
-/// platforms; the `Call` arm intentionally skips PiP since the
-/// per-call binaries don't keep an AppKit/event loop alive long
-/// enough to be useful).
-///
-/// No-op when `--experimental-pip` is not on argv. On Windows / Linux
-/// the factory returns "not yet implemented" — we log and continue
-/// without a window so the rest of the daemon keeps working.
-fn maybe_init_pip() {
-    // The preview captures the screen.
-    #[cfg(target_os = "macos")]
-    if permissions::tcc_off_for_tests() {
-        return;
-    }
-    let cfg = match pip_preview::default_config_path() {
-        Some(p) => pip_preview::PipConfig::from_args_and_file(&p),
-        None => pip_preview::PipConfig::from_args(),
-    };
-    if !cfg.enabled {
-        return;
-    }
+// ── Registry ─────────────────────────────────────────────────────────────
 
-    // Register the platform factory. The set is idempotent so multiple
-    // entry points calling this in the same process is safe.
-    #[cfg(target_os = "macos")]
-    pip_preview::set_pip_backend_factory(Box::new(platform_macos::pip::MacosPipBackendFactory));
-
-    match pip_preview::start_pip(&cfg) {
-        Ok(backend) => {
-            // Bridge: when the tool dispatcher in cu-core wants
-            // to push a frame, forward to the live backend handle.
-            // We move the Box into a static Mutex<Option<...>> so the
-            // closure can re-borrow on every call without taking
-            // ownership of the trait object.
-            use std::sync::Mutex as StdMutex;
-            static BACKEND: std::sync::OnceLock<
-                StdMutex<Option<Box<dyn pip_preview::PipBackend>>>,
-            > = std::sync::OnceLock::new();
-            let _ = BACKEND.set(StdMutex::new(Some(backend)));
-            cu_core::pip_hook::set_pip_push_fn(|frame| {
-                if let Some(slot) = BACKEND.get() {
-                    if let Some(b) = slot.lock().unwrap().as_ref() {
-                        b.push_frame(pip_preview::PipFrame {
-                            png_bytes: frame.png_bytes,
-                            action_label: frame.action_label,
-                            timestamp_ms: frame.timestamp_ms,
-                        });
-                    }
-                }
-            });
-            eprintln!("PiP preview enabled (experimental).");
-        }
-        Err(e) => {
-            eprintln!("⚗️  PiP preview requested but unavailable: {e}");
+/// Build the tool registry the one way every entry point does
+/// (`cu_layer::registry::build`). Exits when the driver's settings are
+/// invalid: no tool could run.
+#[cfg(target_os = "macos")]
+pub(crate) fn build_registry(
+    cursor: cursor_overlay::CursorConfig,
+    compat: bool,
+) -> Arc<ToolRegistry> {
+    let host_bundle_id = std::env::var(cu_layer::HOST_BUNDLE_ID_ENV)
+        .ok()
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty());
+    match cu_layer::registry::build(cu_layer::registry::Options {
+        cursor,
+        compat,
+        host_bundle_id,
+    }) {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!("brigadier-cu: the driver's settings are invalid: {error}");
+            std::process::exit(78);
         }
     }
 }
 
-// ── Registry helpers (macOS) ─────────────────────────────────────────────
-
-/// Build the macOS tool registry.
+/// The registry for an entry point that never shows the agent cursor.
 #[cfg(target_os = "macos")]
-fn build_macos_registry() -> cu_core::tool::ToolRegistry {
-    platform_macos::register_tools()
-}
-
-#[cfg(target_os = "macos")]
-fn build_macos_registry_with_compat(claude_compat: bool) -> cu_core::tool::ToolRegistry {
-    platform_macos::register_tools_with_compat(claude_compat)
+pub(crate) fn one_shot_registry(compat: bool) -> Arc<ToolRegistry> {
+    build_registry(
+        cursor_overlay::CursorConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        compat,
+    )
 }
 
 // ── macOS entry-point ─────────────────────────────────────────────────────
@@ -165,12 +123,41 @@ fn run_guarded_appkit_worker(name: &str, work: impl FnOnce()) -> i32 {
     }
 }
 
+/// End a worker paired with the main thread's AppKit loop. The cursor
+/// overlay's loop never returns, so when it owns the main thread the worker
+/// ends the process itself; otherwise it stops the plain loop and main joins.
+#[cfg(target_os = "macos")]
+fn end_appkit_worker(exit_code: i32, overlay_owns_main: bool) -> i32 {
+    appkit::request_appkit_main_loop_stop();
+    if overlay_owns_main {
+        std::process::exit(exit_code);
+    }
+    exit_code
+}
+
 #[cfg(target_os = "macos")]
 fn finish_appkit_worker(handle: std::thread::JoinHandle<i32>) {
     let exit_code = handle.join().unwrap_or(101);
     if exit_code != 0 {
         std::process::exit(exit_code);
     }
+}
+
+/// Run AppKit on the main thread while a worker serves: the overlay's loop
+/// when it owns main (never returns), else the plain loop when a Window
+/// Server is available, then join the worker.
+#[cfg(target_os = "macos")]
+fn run_main_thread(
+    handle: std::thread::JoinHandle<i32>,
+    overlay_owns_main: bool,
+    has_graphic_access: bool,
+) {
+    if overlay_owns_main {
+        platform_macos::cursor::overlay::run_on_main_thread();
+    } else if has_graphic_access {
+        appkit::run_appkit_main_loop();
+    }
+    finish_appkit_worker(handle);
 }
 
 /// Turn `--home <dir>` into the home environment variable before anything
@@ -196,6 +183,9 @@ fn apply_home_flag() {
 #[cfg(target_os = "macos")]
 fn main() {
     apply_home_flag();
+    // The driver keeps its state under the helper's home. Changes the
+    // environment, so it runs before logging and before any thread.
+    cu_layer::configure_environment(&crate::home::home());
     init_logging();
 
     // Standalone-helper identity: when Brigadier spawns the bundled helper (both the
@@ -206,8 +196,8 @@ fn main() {
     // attributes — and reports — its Accessibility / Screen Recording grants
     // under that bundle's identity ("Brigadier Computer Use") instead of Brigadier's.
     // Runs before command dispatch so it applies uniformly to every subcommand;
-    // reexec_disclaimed_if_needed is still a no-op for embedded mode, an
-    // already-disclaimed re-exec, or a binary inside Brigadier Computer Use.app.
+    // reexec_disclaimed_if_needed is still a no-op for an already-disclaimed
+    // re-exec or a binary inside Brigadier Computer Use.app.
     if crate::bundle::is_env_truthy("BRIGADIER_CU_RESPONSIBILITY_DISCLAIMED") {
         responsibility::reexec_disclaimed_if_needed();
     }
@@ -218,13 +208,11 @@ fn main() {
     let command = cli::parse_command();
     match command {
         cli::Command::ListTools => {
-            let reg = Arc::new(build_macos_registry());
-            cli::run_list_tools(&reg);
+            cli::run_list_tools(&one_shot_registry(false));
             return;
         }
         cli::Command::Describe(name) => {
-            let reg = Arc::new(build_macos_registry());
-            cli::run_describe(&reg, &name);
+            cli::run_describe(&one_shot_registry(false), &name);
             return;
         }
         cli::Command::Complain {
@@ -246,32 +234,7 @@ fn main() {
             screenshot_out_file,
             socket,
         } => {
-            // Register callbacks (needed if the tool does screenshots/recording).
-            cu_core::recording::set_screenshot_fn(|window_id, pid| {
-                if let Some(wid) = window_id {
-                    platform_macos::capture::screenshot_window_bytes(wid as u32).ok()
-                } else if let Some(p) = pid {
-                    platform_macos::windows::resolve_main_window_id(p as i32)
-                        .ok()
-                        .and_then(|wid| platform_macos::capture::screenshot_window_bytes(wid).ok())
-                } else {
-                    platform_macos::capture::screenshot_display_bytes().ok()
-                }
-            });
-            cu_core::recording::set_click_marker_fn(|png_bytes, cx, cy| {
-                platform_macos::capture::crosshair_png_bytes(png_bytes, cx, cy).ok()
-            });
-            cu_core::recording::set_ax_snapshot_fn(|window_id, pid| {
-                platform_macos::recording_hooks::app_state_json_for(window_id, pid)
-            });
-            cu_core::recording::set_element_bounds_fn(|wid, pid, idx| {
-                platform_macos::recording_hooks::element_window_local_xy(wid, pid, idx)
-            });
-            cu_core::video::set_video_backend_factory(Box::new(
-                platform_macos::video_sckit::SckitVideoBackendFactory,
-            ));
-            let reg = Arc::new(build_macos_registry());
-            reg.init_self_weak();
+            let reg = one_shot_registry(false);
             if platform_macos::session::has_graphic_access() {
                 // Browser automation dispatches NSAppleScript to the AppKit
                 // main queue. Run the one-shot tool on a worker while main
@@ -284,12 +247,10 @@ fn main() {
                         let exit_code = run_guarded_appkit_worker("call", || {
                             cli::run_call(reg, &tool, json_args, screenshot_out_file, socket);
                         });
-                        appkit::request_appkit_main_loop_stop();
-                        exit_code
+                        end_appkit_worker(exit_code, false)
                     })
                     .expect("spawn call thread");
-                appkit::run_appkit_main_loop();
-                finish_appkit_worker(call_handle);
+                run_main_thread(call_handle, false, true);
             } else {
                 // Headless calls cannot target GUI browsers and must avoid
                 // registering NSApplication with a missing Window Server.
@@ -305,55 +266,19 @@ fn main() {
         } => {
             responsibility::reexec_disclaimed_if_needed();
             let gate_opts = permissions::GateOpts::from_env_and_flag(no_permissions_gate);
-            cu_core::recording::set_screenshot_fn(|window_id, pid| {
-                if let Some(wid) = window_id {
-                    platform_macos::capture::screenshot_window_bytes(wid as u32).ok()
-                } else if let Some(p) = pid {
-                    platform_macos::windows::resolve_main_window_id(p as i32)
-                        .ok()
-                        .and_then(|wid| platform_macos::capture::screenshot_window_bytes(wid).ok())
-                } else {
-                    platform_macos::capture::screenshot_display_bytes().ok()
-                }
-            });
-            cu_core::recording::set_click_marker_fn(|png_bytes, cx, cy| {
-                platform_macos::capture::crosshair_png_bytes(png_bytes, cx, cy).ok()
-            });
-            cu_core::recording::set_ax_snapshot_fn(|window_id, pid| {
-                platform_macos::recording_hooks::app_state_json_for(window_id, pid)
-            });
-            cu_core::recording::set_element_bounds_fn(|wid, pid, idx| {
-                platform_macos::recording_hooks::element_window_local_xy(wid, pid, idx)
-            });
-            cu_core::video::set_video_backend_factory(Box::new(
-                platform_macos::video_sckit::SckitVideoBackendFactory,
-            ));
-            maybe_init_pip();
 
-            // Agent-cursor overlay. The DAEMON is the process that actually
-            // performs clicks / AX presses, so the overlay NSWindow + render
-            // loop must run HERE — not only in the in-process `mcp` arm. In the
-            // daemon-proxy setup (`mcp` relaunches `open -n -g … serve` and
-            // proxies to it), the proxy never renders and, before this, neither
-            // did the daemon — so every cursor command was a silent no-op and
-            // the agent cursor never appeared. Init the channel before spawning
-            // the serve thread so `run_on_main_thread()` always finds it ready
-            // (mirrors the Mcp arm).
+            // The DAEMON is the process that performs clicks and AX presses,
+            // so the agent-cursor overlay runs HERE: the builder starts it
+            // when the cursor is on and a Window Server is available, and the
+            // main thread then runs the overlay's loop. The compat flag is
+            // the one the MCP proxy forwards (`cli::launch_daemon`).
             let cursor_cfg = cli::cursor_config();
-            if cursor_cfg.enabled {
-                platform_macos::cursor::overlay::init(cursor_cfg.clone());
-            }
-
-            // Honour the compat flag forwarded by the MCP proxy
-            // (cli::launch_daemon passes `serve
-            // --claude-code-computer-use-compat`). The Serve arm is the daemon
-            // the proxy talks to, so without this the proxy path always served
-            // the full screenshot tool regardless of the client's request.
-            let reg = Arc::new(build_macos_registry_with_compat(claude_code_compat));
-            reg.init_self_weak();
+            let cursor_enabled = cursor_cfg.enabled;
+            let reg = build_registry(cursor_cfg, claude_code_compat);
             let pid_path = cli::daemon_pid_file_path(socket.as_deref());
             let sp = cli::daemon_socket_path(socket);
             let has_graphic_access = platform_macos::session::has_graphic_access();
+            let overlay_owns_main = cursor_enabled && has_graphic_access;
             appkit::prepare_appkit_main_loop();
 
             // Bind the Unix socket FIRST, on a background thread, BEFORE
@@ -389,8 +314,7 @@ fn main() {
                             owner_pid,
                         );
                     });
-                    appkit::request_appkit_main_loop_stop();
-                    exit_code
+                    end_appkit_worker(exit_code, overlay_owns_main)
                 })
                 .expect("spawn serve thread");
 
@@ -414,28 +338,15 @@ fn main() {
                 );
             }
 
-            // Keep the main thread alive for the daemon.
-            //
-            // The cursor loop also services PiP and browser automation main-
-            // queue dispatch. Without a cursor, keep a plain AppKit loop alive
-            // whenever a Window Server is available. Headless daemons retain
-            // the old join behavior and never touch NSApplication.
+            // Keep the main thread alive for the daemon: the overlay's loop
+            // or the plain AppKit loop, both of which service browser
+            // automation's main-queue dispatch. Headless daemons join and
+            // never touch NSApplication.
             if has_graphic_access {
                 appkit::mark_appkit_main_loop_available();
                 lifecycle::start_main_loop_heartbeat();
             }
-            if cursor_cfg.enabled && has_graphic_access {
-                // Render the agent-cursor overlay: park the main thread in the
-                // AppKit run loop so the overlay NSWindow draws. `run_on_main_thread`
-                // self-guards on `has_graphic_access()` and returns immediately
-                // when the daemon has no Window Server session — fall through to
-                // join so the daemon still serves headless. The serve thread runs
-                // on its background thread regardless.
-                platform_macos::cursor::overlay::run_on_main_thread();
-            } else if has_graphic_access {
-                appkit::run_appkit_main_loop();
-            }
-            finish_appkit_worker(serve_handle);
+            run_main_thread(serve_handle, overlay_owns_main, has_graphic_access);
             return;
         }
         cli::Command::Stop { socket } => {
@@ -462,13 +373,11 @@ fn main() {
             return;
         }
         cli::Command::Diagnose => {
-            let reg = Arc::new(build_macos_registry());
-            cli::run_diagnose_cmd(reg);
+            cli::run_diagnose_cmd(one_shot_registry(false));
             return;
         }
         cli::Command::Permissions { subcommand, json } => {
-            let reg = Arc::new(build_macos_registry());
-            cli::run_permissions_cmd(reg, &subcommand, json);
+            cli::run_permissions_cmd(one_shot_registry(false), &subcommand, json);
             return;
         }
         cli::Command::Config {
@@ -477,10 +386,8 @@ fn main() {
             value,
             socket,
         } => {
-            let reg = Arc::new(build_macos_registry());
-            reg.init_self_weak();
             cli::run_config_cmd(
-                reg,
+                one_shot_registry(false),
                 subcommand.as_deref(),
                 key.as_deref(),
                 value.as_deref(),
@@ -493,7 +400,6 @@ fn main() {
             socket,
             claude_code_compat,
         } => {
-            CLAUDE_CODE_COMPAT.store(claude_code_compat, Ordering::SeqCst);
             // TCC sidestep: if we're a shell-spawned bare binary that
             // resolves into /Applications/Brigadier Computer Use.app, run the
             // proxy path instead of the in-process MCP server. The
@@ -507,63 +413,31 @@ fn main() {
                 }
                 return;
             }
-            // Fall through to the in-process MCP server below. The
-            // `socket` flag is daemon-proxy-only; it has no meaning
-            // in the in-process path, so we drop it on the floor.
+            // The `socket` flag is daemon-proxy-only; it has no meaning in
+            // the in-process path.
             let _ = socket;
+            run_in_process_mcp(claude_code_compat);
         }
     }
+}
 
+/// The in-process MCP server: the server on a worker thread, AppKit on the
+/// main thread.
+#[cfg(target_os = "macos")]
+fn run_in_process_mcp(claude_code_compat: bool) {
     let cursor_cfg = cli::cursor_config();
-
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         cursor_id = %cursor_cfg.cursor_id,
         overlay_enabled = cursor_cfg.enabled,
-        has_custom_icon = cursor_cfg.shape.is_some(),
         "brigadier-cu starting (macOS)"
     );
-
-    let enabled = cursor_cfg.enabled;
-
-    // Initialise overlay channel synchronously BEFORE spawning background
-    // thread.  This eliminates a race where run_on_main_thread() could be
-    // called before init() and find an empty channel.
-    if enabled {
-        platform_macos::cursor::overlay::init(cursor_cfg.clone());
-    }
-
-    // Spawn tokio + MCP server on a background thread so the main thread
-    // is free for AppKit.
-    // Register screenshot callback for recording (post-action screenshots).
-    cu_core::recording::set_screenshot_fn(|window_id, pid| {
-        if let Some(wid) = window_id {
-            platform_macos::capture::screenshot_window_bytes(wid as u32).ok()
-        } else if let Some(p) = pid {
-            platform_macos::windows::resolve_main_window_id(p as i32)
-                .ok()
-                .and_then(|wid| platform_macos::capture::screenshot_window_bytes(wid).ok())
-        } else {
-            platform_macos::capture::screenshot_display_bytes().ok()
-        }
-    });
-
-    // Register click-marker callback for recording (click.png with red crosshair).
-    cu_core::recording::set_click_marker_fn(|png_bytes, cx, cy| {
-        platform_macos::capture::crosshair_png_bytes(png_bytes, cx, cy).ok()
-    });
-    cu_core::recording::set_ax_snapshot_fn(|window_id, pid| {
-        platform_macos::recording_hooks::app_state_json_for(window_id, pid)
-    });
-    cu_core::recording::set_element_bounds_fn(|wid, pid, idx| {
-        platform_macos::recording_hooks::element_window_local_xy(wid, pid, idx)
-    });
-    cu_core::video::set_video_backend_factory(Box::new(
-        platform_macos::video_sckit::SckitVideoBackendFactory,
-    ));
-    maybe_init_pip();
-
+    let cursor_enabled = cursor_cfg.enabled;
+    // The builder starts the overlay before the worker exists, so the main
+    // thread's overlay loop always finds it ready.
+    let registry = build_registry(cursor_cfg, claude_code_compat);
     let has_graphic_access = platform_macos::session::has_graphic_access();
+    let overlay_owns_main = cursor_enabled && has_graphic_access;
     appkit::prepare_appkit_main_loop();
     if has_graphic_access {
         appkit::mark_appkit_main_loop_available();
@@ -576,30 +450,17 @@ fn main() {
                     .enable_all()
                     .build()
                     .expect("tokio runtime");
-                let compat = CLAUDE_CODE_COMPAT.load(Ordering::SeqCst);
                 rt.block_on(async move {
-                    // Register tools; overlay init has already happened above.
-                    let registry = Arc::new(build_macos_registry_with_compat(compat));
-                    // Wire up replay tool's back-reference to the registry.
-                    registry.init_self_weak();
-                    let result = crate::mcp::run(registry.clone()).await;
-                    if let Err(e) = result {
+                    if let Err(e) = crate::mcp::run(registry).await {
                         tracing::error!("MCP server error: {e}");
                     }
-                    registry.remove_state_file();
                 });
             });
-            appkit::request_appkit_main_loop_stop();
-            exit_code
+            end_appkit_worker(exit_code, overlay_owns_main)
         })
         .expect("spawn mcp thread");
 
     // Main thread: AppKit overlay or plain event loop. Browser automation
     // requires main-queue dispatch even when `--no-overlay` is set.
-    if enabled && has_graphic_access {
-        platform_macos::cursor::overlay::run_on_main_thread();
-    } else if has_graphic_access {
-        appkit::run_appkit_main_loop();
-    }
-    finish_appkit_worker(mcp_handle);
+    run_main_thread(mcp_handle, overlay_owns_main, has_graphic_access);
 }

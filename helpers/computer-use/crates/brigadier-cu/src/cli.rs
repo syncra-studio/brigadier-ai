@@ -9,10 +9,10 @@
 //!   brigadier-cu call <tool> [json-args]      → invoke tool, print result
 //!   brigadier-cu <tool> [json-args]           → shorthand for call (snake_case names)
 //!
-//! Cursor-overlay flags (--cursor-id, --no-overlay, etc.) are consumed by
+//! Cursor-overlay flags (--cursor-theme, --no-overlay, etc.) are consumed by
 //! `CursorConfig::from_args()` and are ignored here.
 
-use cu_core::{protocol::Content, tool::ToolRegistry};
+use cua_driver_core::{protocol::Content, tool::ToolRegistry};
 use std::process;
 
 /// Which CLI command was requested.
@@ -122,10 +122,8 @@ pub enum Command {
 /// Flags whose next token is a value (not a subcommand).
 /// We skip both the flag and its value when scanning for the subcommand.
 const VALUE_FLAGS: &[&str] = &[
-    "--cursor-icon",
-    "--cursor-id",
-    "--cursor-palette",
-    "--cursor-shape",
+    "--cursor-theme",
+    "--cursor-reduced-motion",
     "--glide-ms",
     "--dwell-ms",
     "--idle-hide-ms",
@@ -137,16 +135,11 @@ const VALUE_FLAGS: &[&str] = &[
     "--host-bundle-id",
     "--owner-pid",
     "--home",
-    // Experimental PiP preview — value flag for the optional geometry
-    // override (--experimental-pip itself is a bare flag and doesn't
-    // need to be listed here).
-    "--experimental-pip-geometry",
 ];
 
-/// Parse the cursor-overlay flags from argv.
+/// Parse the cursor-overlay flags from argv, over the saved motion defaults.
 pub fn cursor_config() -> cursor_overlay::CursorConfig {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    cursor_overlay::CursorConfig::parse(&args)
+    cursor_overlay::CursorConfig::from_args()
 }
 
 /// Parse the first non-flag positional argument from argv to determine which
@@ -190,11 +183,8 @@ pub fn parse_command() -> Command {
         println!("mcp options (macOS):");
         println!("  --no-daemon-relaunch    Stay in-process; skip auto-launching the BrigadierCu daemon.");
         println!("                          Also: BRIGADIER_CU_MCP_NO_RELAUNCH=1");
-        println!("  --embedded              Run embedded inside a host app (also: BRIGADIER_CU_EMBEDDED=1).");
-        println!("                          Inherits the host's TCC grants; never prompts or relaunches.");
-        println!("                          See Skills/brigadier-cu/EMBEDDING.md.");
         println!(
-            "  --host-bundle-id <id>   Advisory host bundle id label for check_permissions output."
+            "  --host-bundle-id <id>   Bundle id of the app hosting the helper; agents may not target it."
         );
         println!(
             "  --socket <path>         Override the daemon UDS path used by the proxy fallback."
@@ -217,36 +207,20 @@ pub fn parse_command() -> Command {
         println!("                          for any future compat-gated tool.");
         println!();
         println!("agent cursor overlay (serve / mcp only — needs the daemon UI runloop):");
-        println!("  Embedded stdio processes (BRIGADIER_CU_EMBEDDED=1) get an automatic default");
         println!(
-            "  cursor keyed by BRIGADIER_CU_DEFAULT_SESSION (else embedded-<pid>), so anonymous"
+            "  Callers must pass an explicit `session` to get a cursor. The cursor shows where"
         );
-        println!("  calls show a cursor with no session arg. Non-embedded callers must pass an");
-        println!("  explicit `session` to get a cursor. The cursor shows where the agent acts");
-        println!("  without moving the real pointer and is removed when the session ends. A pure accessibility (AX)");
         println!(
-            "  action snaps the cursor with a brief pulse on its first action instead of a long"
+            "  the agent acts without moving the real pointer and is removed when the session"
         );
-        println!("  glide, so it can be easy to miss — do a pixel click or move_cursor first");
-        println!("  for a visibly gliding demo. These flags tune the overlay on `serve`/`mcp`:");
+        println!("  ends. These flags tune the overlay on `serve`/`mcp`:");
         println!("  --no-overlay            Disable the cursor overlay entirely for this daemon.");
-        println!(
-            "  --cursor-id <id>        Name the default cursor instance (default: 'default')."
-        );
-        println!("  --cursor-icon <path>    Use a custom PNG / SVG / ICO cursor asset.");
-        println!(
-            "  --cursor-shape <name>   Built-in silhouette: {} ('teardrop' is the default —",
-            cursor_overlay::BuiltinShape::names_help()
-        );
-        println!(
-            "                          embedded cursor-up SVG; 'arrow' is the procedural gradient"
-        );
-        println!(
-            "                          diamond; 'sky' is the gray kite cursor; 'Brigadier' is"
-        );
-        println!("                          Lawrence's fixed upright branded Sky kite).");
-        println!("                          Same vocabulary as MCP `cursor_icon`.");
-        println!("  --cursor-palette <name> Pick a built-in colour palette for the cursor.");
+        println!("  --cursor-theme <id>     Draw the cursor with this installed theme.");
+        println!("  --cursor-reduced-motion <auto|on|off>");
+        println!("                          Motion preference (auto follows the system setting).");
+        println!("  --glide-ms <ms>         Glide duration.");
+        println!("  --dwell-ms <ms>         Pause after a click.");
+        println!("  --idle-hide-ms <ms>     Hide the cursor after this much idle time.");
         println!(
             "  (These are no-ops for one-shot CLI calls like `brigadier-cu call` — the overlay"
         );
@@ -267,19 +241,6 @@ pub fn parse_command() -> Command {
         println!("doctor options:");
         println!("  --json                  Emit the probe report as JSON for scripting.");
         println!();
-        println!("experimental options (default: off):");
-        println!("  --experimental-pip          Show a small always-on-top window with the latest");
-        println!(
-            "                              post-action screenshot + a 1-line label. macOS only"
-        );
-        println!(
-            "                              today; Win/Linux print a not-yet-implemented notice."
-        );
-        println!(
-            "  --experimental-pip-geometry WxH[+X+Y]   Override window size (and optional top-left"
-        );
-        println!("                                          origin). Defaults to 480x360 in the top-right");
-        println!("                                          corner of the main display.");
         std::process::exit(0);
     }
 
@@ -287,12 +248,8 @@ pub fn parse_command() -> Command {
     let screenshot_out_file = flag_value(&args, "--screenshot-out-file");
     let socket = flag_value(&args, "--socket");
 
-    // `--embedded` / `--host-bundle-id` export to the environment rather
-    // than threading through `Command`: all consumers read
-    // `crate::env::embedded_mode()` and children inherit the mode.
-    if args.iter().any(|a| a == "--embedded") {
-        std::env::set_var(crate::env::EMBEDDED_ENV, "1");
-    }
+    // `--host-bundle-id` exports to the environment rather than threading
+    // through `Command`: the registry builder reads it and children inherit it.
     if let Some(id) = flag_value(&args, "--host-bundle-id") {
         std::env::set_var(crate::env::HOST_BUNDLE_ID_ENV, id);
     }
@@ -574,14 +531,30 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
     None
 }
 
-/// Print all tools in the registry, one per line: `name: first sentence`.
+/// Print the tools agents are offered, one per line: `name: first sentence`.
 pub fn run_list_tools(registry: &ToolRegistry) {
-    // Sort alphabetically by name to match Swift's
-    // `ListToolsCommand.run()` `tools.sorted(by: { $0.name < $1.name })`.
-    let mut entries: Vec<(&str, &cu_core::tool::ToolDef)> = registry.iter_defs().collect();
+    let list = crate::mcp::agent_tools_list(registry);
+    let mut entries: Vec<(&str, &str)> = list
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| {
+                    Some((
+                        tool.get("name")?.as_str()?,
+                        tool.get("description")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(""),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // Sorted by name, like Swift's `ListToolsCommand.run()`.
     entries.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, def) in entries {
-        let summary = first_sentence(&def.description);
+    for (name, description) in entries {
+        let summary = first_sentence(description);
         if summary.is_empty() {
             println!("{name}");
         } else {
@@ -590,33 +563,49 @@ pub fn run_list_tools(registry: &ToolRegistry) {
     }
 }
 
-/// Print a tool's full description and JSON input schema.
-/// Exits 64 (EX_USAGE) if the tool is unknown.
+/// Print an offered tool's full description and JSON input schema.
+/// Exits 64 (EX_USAGE) if agents are not offered the tool.
 pub fn run_describe(registry: &ToolRegistry, name: &str) {
-    match registry.get_def(name) {
+    match crate::mcp::agent_tool_entry(registry, name) {
         None => {
             eprintln!("Unknown tool: {name}");
             eprintln!("Available tools:");
-            // Sort alphabetically to match Swift's `printUnknownTool`
-            // (`registry.allTools.map(\.name).sorted()`).
-            let mut names: Vec<&str> = registry.tool_names().collect();
+            let list = crate::mcp::agent_tools_list(registry);
+            let mut names: Vec<&str> = list
+                .get("tools")
+                .and_then(serde_json::Value::as_array)
+                .map(|tools| {
+                    tools
+                        .iter()
+                        .filter_map(|tool| tool.get("name")?.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
             names.sort();
             for n in names {
                 eprintln!("  {n}");
             }
             process::exit(64);
         }
-        Some(def) => {
-            println!("name: {}", def.name);
-            if !def.description.is_empty() {
-                print!("\ndescription:\n{}", def.description);
-                if !def.description.ends_with('\n') {
+        Some(entry) => {
+            println!("name: {name}");
+            let description = entry
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if !description.is_empty() {
+                print!("\ndescription:\n{description}");
+                if !description.ends_with('\n') {
                     println!();
                 }
             }
             print!("\ninput_schema:\n");
-            let pretty = serde_json::to_string_pretty(&def.input_schema)
-                .unwrap_or_else(|_| def.input_schema.to_string());
+            let schema = entry
+                .get("inputSchema")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let pretty =
+                serde_json::to_string_pretty(&schema).unwrap_or_else(|_| schema.to_string());
             println!("{pretty}");
         }
     }
@@ -850,7 +839,7 @@ pub fn run_call(
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
         crate::scope_args::scope_target_args(
             &mut args_for_daemon,
-            &cu_core::target_policy::allowed_from_env(),
+            &cu_layer::target_policy::allowed_from_env(),
         );
         let req = crate::serve::DaemonRequest {
             method: "call".into(),
@@ -979,12 +968,17 @@ pub fn run_call(
         .build()
         .expect("tokio runtime");
 
-    let mut args = json_args.unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-    crate::scope_args::scope_target_args(&mut args, &cu_core::target_policy::allowed_from_env());
+    let args = json_args.unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    // The caller never sets the target scope; this process's env does, as the
+    // daemon does for its calls.
+    let scope = cu_layer::scope::DispatchScope {
+        allowed_bundles: cu_layer::target_policy::allowed_from_env(),
+        on_target: None,
+    };
     let tool_name = tool.to_string();
     let out_path = screenshot_out_file;
     let is_error = rt.block_on(async move {
-        let result = registry.invoke(&tool_name, args).await;
+        let result = cu_layer::scope::with_scope(scope, registry.invoke(&tool_name, args)).await;
         let is_err = result.is_error.unwrap_or(false);
 
         // Emit content.
@@ -1278,7 +1272,7 @@ fn run_recording_render(args: &[String]) {
         }
     }
 
-    let opts = cu_core::recording_render::RenderOptions {
+    let opts = cua_driver_core::recording_render::RenderOptions {
         no_zoom,
         default_scale: scale,
     };
@@ -1288,7 +1282,7 @@ fn run_recording_render(args: &[String]) {
         output_path.display(),
         if no_zoom { " (no-zoom baseline)" } else { "" }
     );
-    match cu_core::recording_render::render(&input_dir, &output_path, &opts) {
+    match cua_driver_core::recording_render::render(&input_dir, &output_path, &opts) {
         Ok(res) => {
             println!("✅ Wrote {}", res.output_path.display());
             println!("   input_duration_ms: {:.0}", res.input_duration_ms);
@@ -2232,7 +2226,7 @@ pub fn run_config_cmd(
             let result = rt.block_on(async { registry.invoke("set_config", args).await });
             if result.is_error.unwrap_or(false) {
                 for item in &result.content {
-                    if let cu_core::protocol::Content::Text { text, .. } = item {
+                    if let Content::Text { text, .. } = item {
                         eprintln!("{text}");
                     }
                 }

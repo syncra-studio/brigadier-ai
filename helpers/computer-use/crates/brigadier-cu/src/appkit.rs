@@ -3,13 +3,18 @@
 //!
 //! Browser automation and the permissions panel dispatch work to the AppKit
 //! main queue. That work waits forever unless main pumps the queue, so the
-//! loop says when it is available, and a stop request is latched so a worker
-//! that finishes before the loop starts still ends it.
+//! loop says when it is available (through `cu_layer::browser::main_loop`,
+//! which the page tool reads), and a stop request is latched so a worker that
+//! finishes before the loop starts still ends it.
+//!
+//! When the agent cursor is on, the overlay's own loop owns the main thread
+//! instead; it never returns, so its worker ends the process itself.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-static APPKIT_LOOP_AVAILABLE: AtomicBool = AtomicBool::new(false);
+use cu_layer::browser::main_loop;
+
 static APPKIT_LOOP_RUNNING: AtomicBool = AtomicBool::new(false);
 static APPKIT_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -19,21 +24,17 @@ static APPKIT_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 pub fn prepare_appkit_main_loop() {
     APPKIT_STOP_REQUESTED.store(false, Ordering::Release);
     APPKIT_LOOP_RUNNING.store(false, Ordering::Release);
-    APPKIT_LOOP_AVAILABLE.store(false, Ordering::Release);
-    // The old driver's cursor overlay loop reads its own flags until the switch.
-    platform_macos::pip::prepare_appkit_main_loop();
+    main_loop::mark_appkit_main_loop_stopped();
 }
 
 /// Advertise that the current process is about to pump the AppKit main queue.
 pub fn mark_appkit_main_loop_available() {
-    APPKIT_LOOP_AVAILABLE.store(true, Ordering::Release);
-    // The old driver's browser automation reads its own flag until the switch.
-    platform_macos::pip::mark_appkit_main_loop_available();
+    main_loop::mark_appkit_main_loop_available();
 }
 
 /// Whether worker-thread AppKit dispatch is guaranteed to be serviced.
 pub fn appkit_main_loop_available() -> bool {
-    APPKIT_LOOP_AVAILABLE.load(Ordering::Acquire)
+    main_loop::appkit_main_loop_available()
 }
 
 pub fn appkit_main_loop_stop_requested() -> bool {
@@ -46,7 +47,7 @@ fn mark_appkit_main_loop_running() {
 
 fn mark_appkit_main_loop_stopped() {
     APPKIT_LOOP_RUNNING.store(false, Ordering::Release);
-    APPKIT_LOOP_AVAILABLE.store(false, Ordering::Release);
+    main_loop::mark_appkit_main_loop_stopped();
 }
 
 /// Ask the paired AppKit loop to return. Safe before the loop starts: the
@@ -54,10 +55,7 @@ fn mark_appkit_main_loop_stopped() {
 pub fn request_appkit_main_loop_stop() {
     // Close the dispatch gate before latching shutdown so a concurrent browser
     // request cannot enter a queue that this loop is about to abandon.
-    APPKIT_LOOP_AVAILABLE.store(false, Ordering::Release);
-    // The old driver's browser automation and cursor overlay loop read its
-    // own flags until the switch; this also stops the overlay's loop.
-    platform_macos::pip::request_appkit_main_loop_stop();
+    main_loop::mark_appkit_main_loop_stopped();
     APPKIT_STOP_REQUESTED.store(true, Ordering::Release);
     if APPKIT_LOOP_RUNNING.load(Ordering::Acquire) {
         // CFRunLoopStop/WakeUp are explicitly cross-thread APIs. The main
@@ -152,8 +150,6 @@ mod tests {
         assert_eq!(worker.join().unwrap(), 101);
         assert!(super::appkit_main_loop_stop_requested());
         assert!(!super::appkit_main_loop_available());
-        // The old driver's flags follow until the switch.
-        assert!(platform_macos::pip::appkit_main_loop_stop_requested());
-        assert!(!platform_macos::pip::appkit_main_loop_available());
+        assert!(!cu_layer::browser::main_loop::appkit_main_loop_available());
     }
 }

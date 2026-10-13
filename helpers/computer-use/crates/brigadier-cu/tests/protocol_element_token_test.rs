@@ -1,10 +1,10 @@
-//! Integration tests for Surface 6 — opaque `element_token` alongside
-//! the existing integer `element_index`.
+//! Integration tests for Surface 6 — the opaque `element_token` that
+//! addresses an element.
 //!
 //! These exercise the MCP protocol surface (schema + capability claims)
 //! by spawning the real `brigadier-cu` binary and walking `tools/list`.
-//! Unit tests for the resolution logic live in
-//! `cu-core::element_token` and the per-platform tool modules —
+//! Unit tests for the resolution logic live in the driver's
+//! `element_token` module and its per-platform tool modules —
 //! this file is only for what's visible across the JSON-RPC boundary.
 
 // element_token resolution is exercised on macOS/Linux only; gate the whole
@@ -88,7 +88,7 @@ fn token_accepting_tools_advertise_element_token_in_schema_and_capabilities() {
 
     // Tools that gained `element_token` in Surface 6. Keep in sync with
     // the per-platform schema additions + the centralised
-    // `default_capabilities_for` map in cu-core.
+    // capability map in the driver core.
     const TOKEN_TOOLS: &[&str] = &[
         "click",
         "double_click",
@@ -164,13 +164,11 @@ fn get_window_state_claims_element_tokens_capability() {
     );
 }
 
-/// Surface 6 hard constraint: `element_index` MUST still be present on
-/// every token-accepting tool's schema — the new `element_token` field
-/// is additive, not a replacement. This is the regression guard for
-/// the back-compat contract.
+/// Elements are addressed by `element_token` alone: no token-accepting
+/// tool offers the old integer `element_index`.
 #[test]
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn element_index_field_still_present_on_token_accepting_tools() {
+fn element_token_is_the_only_element_target() {
     let resp = match fetch_tools_list() {
         Some(r) => r,
         None => return,
@@ -194,9 +192,8 @@ fn element_index_field_still_present_on_token_accepting_tools() {
             .unwrap_or_else(|| panic!("{tool_name} missing"));
         let props = tool["inputSchema"]["properties"].as_object().unwrap();
         assert!(
-            props.contains_key("element_index"),
-            "Surface 6 hard constraint: {tool_name}.element_index must \
-             stay on the schema — element_token is purely additive"
+            props.contains_key("element_token") && !props.contains_key("element_index"),
+            "{tool_name} must take element_token and not element_index"
         );
     }
 }

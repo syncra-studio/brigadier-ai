@@ -10,22 +10,16 @@
 //!   {"method":"permissions_status"}       (private macOS operator control)
 //!   {"method":"permissions_present"}      (private macOS operator control)
 //!   {"method":"permissions_refresh"}      (private macOS operator control)
-//!   {"method":"application_windows"}      (private authenticated Brigadier host control)
-//!   {"method":"application_surface_start","args":{...}}
-//!   {"method":"application_surface_stop","args":{"session":"..."}}
-//!   {"method":"application_surface_event","args":{...}}
-//!   {"method":"reassert_cursor","args":{"session":"...","window_id":123}}
 //!
 //! Response shapes:
 //!   {"ok":true,"result":...}
 //!   {"ok":false,"error":"...","exit_code":1}
 //!
 //! The socket file is at:
-//!   macOS  — <home>/cu.sock (see `pip_preview::home`)
+//!   macOS  — <home>/cu.sock (see `crate::home`)
 //!   Linux  — ~/.cache/brigadier-cu/brigadier-cu.sock
 //!   Windows — \\.\pipe\brigadier-cu  (TODO: use named pipe; stubs only for now)
 
-use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 /// Why `run_serve_with_owner` returned without an error.
@@ -688,6 +682,66 @@ fn now_unix_secs() -> u64 {
         .as_secs()
 }
 
+/// The driver's own key for a daemon-side session id. The driver keeps every
+/// session's state (activity, end hooks, tombstones) under a key private to
+/// this daemon run; a bare id would silently miss it.
+fn runtime_session_key(session_id: &str) -> String {
+    cua_driver_core::session_authorization::configured_registry()
+        .and_then(|registry| registry.legacy_context())
+        .map(|context| context.runtime_session_key(session_id))
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "driver authorization unavailable; using the bare session id");
+            session_id.to_owned()
+        })
+}
+
+/// Session ids held by a live control connection, with a holder count. The
+/// idle-TTL sweep exists to reclaim sessions whose owner vanished; a session
+/// whose proxy still holds its control connection has a live owner, so the
+/// sweep must not end it however long the agent pauses between calls. The
+/// control-connection EOF releases the hold and reaps the session itself.
+static HELD_SESSIONS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, usize>>,
+> = std::sync::OnceLock::new();
+
+fn held_sessions() -> &'static std::sync::Mutex<std::collections::HashMap<String, usize>> {
+    HELD_SESSIONS.get_or_init(Default::default)
+}
+
+/// Whether `id` is a real, trackable session id (not the anonymous fallback).
+fn is_trackable_session(id: &str) -> bool {
+    !id.is_empty() && id != "default"
+}
+
+/// Mark `session_id` as owned by a live control connection.
+fn hold_session(session_id: &str) {
+    if !is_trackable_session(session_id) {
+        return;
+    }
+    *held_sessions()
+        .lock()
+        .unwrap()
+        .entry(session_id.to_owned())
+        .or_insert(0) += 1;
+}
+
+/// Release one control-connection hold on `session_id`.
+fn release_session(session_id: &str) {
+    let mut map = held_sessions().lock().unwrap();
+    if let Some(count) = map.get_mut(session_id) {
+        *count -= 1;
+        if *count == 0 {
+            map.remove(session_id);
+        }
+    }
+}
+
+/// Whether a live control connection currently holds `session_id`.
+#[cfg(test)]
+fn is_session_held(session_id: &str) -> bool {
+    held_sessions().lock().unwrap().contains_key(session_id)
+}
+
 /// Resolve + apply the session identity for a tool call at the daemon boundary.
 ///
 /// A session is a **caller-declared** identity (the public `session` arg), not a
@@ -718,7 +772,7 @@ fn apply_session_identity(args: &mut serde_json::Value, minted: &Option<String>)
         }
     }
     if let Some(sess) = &explicit {
-        cu_core::session::touch_session(sess);
+        cua_driver_core::session::touch_session(&runtime_session_key(sess));
     }
     args.as_object()
         .and_then(|o| o.get("_session_id"))
@@ -755,7 +809,7 @@ fn recording_idle_ttl_secs() -> u64 {
 /// every turn and the idle window never reaches the TTL. `stop()` is idempotent,
 /// so racing with the proxy-exit hook or an explicit `stop_recording` is benign.
 fn spawn_recording_idle_backstop(
-    registry: std::sync::Arc<cu_core::tool::ToolRegistry>,
+    registry: std::sync::Arc<cua_driver_core::tool::ToolRegistry>,
     last_activity: std::sync::Arc<std::sync::atomic::AtomicU64>,
 ) {
     let ttl = recording_idle_ttl_secs();
@@ -815,14 +869,16 @@ fn session_idle_ttl_secs() -> u64 {
 /// every session whose last activity is older than the TTL; `session::evict_idle`
 /// fans `fire_session_end` out to the cursor/recording/config cleanup hooks. A
 /// session that keeps issuing tool calls bumps its activity every turn and never
-/// reaches the idle window. Idempotent and cheap.
+/// reaches the idle window. A session a live control connection holds is
+/// touched first on every tick, so the sweep never ends it while its agent
+/// thinks. Idempotent and cheap.
 fn spawn_session_idle_sweep() {
     let ttl = std::time::Duration::from_secs(session_idle_ttl_secs());
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
         loop {
             tick.tick().await;
-            let ended = cu_core::session::evict_idle(ttl);
+            let ended = sweep_idle_sessions(ttl);
             if !ended.is_empty() {
                 tracing::info!(
                     count = ended.len(),
@@ -833,39 +889,14 @@ fn spawn_session_idle_sweep() {
     });
 }
 
-/// Register a `session_end` hook that stops a recording the ending session owns.
-///
-/// The per-platform cursor-remove + config-clear hooks already run on
-/// `fire_session_end`; this adds recording teardown to the SAME signal, so
-/// `end_session`, the idle-TTL sweep, and the control-connection EOF reaper all
-/// stop a session's recording uniformly (matching `end_session`'s contract).
-/// `stop_owner(Some(sid))` is a no-op unless `sid` owns the live recording, and
-/// runs on a detached thread so finalizing the mp4 never blocks the synchronous
-/// `fire_session_end` caller (the sweep task or an async tool invoke). The EOF
-/// arm keeps its own inline `spawn_blocking` stop for ordered finalize-then-reply;
-/// a second stop here is an idempotent no-op.
-fn register_recording_session_end_hook(
-    recording: std::sync::Arc<cu_core::recording::RecordingSession>,
-) {
-    cu_core::session::register_session_end_hook(move |sid| {
-        let recording = recording.clone();
-        let sid = sid.to_owned();
-        std::thread::spawn(move || {
-            let _ = recording.stop_owner(Some(&sid));
-        });
-    });
-}
-
-/// Removes per-session activity state when the same lifecycle fan-out tears
-/// down cursor, recording, and config ownership. A weak registry avoids keeping
-/// a stopped daemon alive through the process-global hook list.
-fn register_state_file_session_end_hook(registry: &std::sync::Arc<cu_core::tool::ToolRegistry>) {
-    let registry = std::sync::Arc::downgrade(registry);
-    cu_core::session::register_session_end_hook(move |session_id| {
-        if let Some(registry) = registry.upgrade() {
-            registry.remove_session_state_file(session_id);
-        }
-    });
+/// One tick of the idle sweep: touch every held session, then end the
+/// sessions idle for `ttl`. Returns the driver's keys of the ended sessions.
+fn sweep_idle_sessions(ttl: std::time::Duration) -> Vec<String> {
+    let held: Vec<String> = held_sessions().lock().unwrap().keys().cloned().collect();
+    for session_id in held {
+        cua_driver_core::session::touch_session(&runtime_session_key(&session_id));
+    }
+    cua_driver_core::session::evict_idle(ttl)
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -992,16 +1023,6 @@ fn host_request_is_authorized(
     } else {
         peer_is_authorized_root
     }
-}
-
-fn state_authentication_key(args: Option<&serde_json::Value>) -> Option<Vec<u8>> {
-    let encoded = args?
-        .get("key_base64")
-        .and_then(serde_json::Value::as_str)?;
-    let key = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .ok()?;
-    (key.len() == 32).then_some(key)
 }
 
 #[cfg(test)]
@@ -1160,47 +1181,6 @@ fn macos_process_is_authorized(
         current = parent;
     }
     false
-}
-
-/// Replaces any caller-supplied state provenance with a kernel-authenticated
-/// process generation. A managed proxy may nominate its long-lived agent PID;
-/// the daemon accepts it only when that exact live process is an ancestor of
-/// the kernel-reported socket peer. This lets authenticated activity outlive a
-/// short-lived proxy without allowing a client to nominate a sibling process.
-fn attach_state_writer_identity(
-    args: &mut serde_json::Value,
-    peer_process_identity: Option<ProcessIdentity>,
-) {
-    let Some(args) = args.as_object_mut() else {
-        return;
-    };
-    let requested_owner_pid = args
-        .remove(cu_core::session_state::STATE_OWNER_PID_ARG)
-        .and_then(|value| value.as_u64())
-        .and_then(|value| u32::try_from(value).ok())
-        .filter(|value| *value > 1);
-    args.remove(cu_core::session_state::STATE_WRITER_PID_ARG);
-    args.remove(cu_core::session_state::STATE_WRITER_START_SECONDS_ARG);
-    args.remove(cu_core::session_state::STATE_WRITER_START_MICROSECONDS_ARG);
-    #[cfg(target_os = "macos")]
-    let writer_identity = requested_owner_pid
-        .and_then(macos_process_identity)
-        .filter(|owner| macos_process_is_authorized(peer_process_identity, *owner))
-        .or(peer_process_identity);
-    if let Some(identity) = writer_identity.filter(|identity| identity.process_id > 1) {
-        args.insert(
-            cu_core::session_state::STATE_WRITER_PID_ARG.to_owned(),
-            serde_json::json!(identity.process_id),
-        );
-        args.insert(
-            cu_core::session_state::STATE_WRITER_START_SECONDS_ARG.to_owned(),
-            serde_json::json!(identity.start_seconds),
-        );
-        args.insert(
-            cu_core::session_state::STATE_WRITER_START_MICROSECONDS_ARG.to_owned(),
-            serde_json::json!(identity.start_microseconds),
-        );
-    }
 }
 
 /// Serialize one daemon request, adding the authenticated envelope when the
@@ -1565,7 +1545,7 @@ pub fn send_request(socket_path: &str, req: &DaemonRequest) -> anyhow::Result<Da
     // temporarily unavailable (os error 35)" transport error. Mirrors the 120s
     // read budget.
     let write_deadline = Instant::now() + Duration::from_secs(120);
-    cu_core::socket_io::write_all_with_retry(&mut w, line.as_bytes(), write_deadline)?;
+    cua_driver_core::socket_io::write_all_with_retry(&mut w, line.as_bytes(), write_deadline)?;
 
     // Read the single newline-terminated response line. A blocking UnixStream
     // with SO_RCVTIMEO returns `WouldBlock`/`TimedOut` (EAGAIN, os error 35)
@@ -1624,7 +1604,7 @@ pub fn send_request(socket_path: &str, req: &DaemonRequest) -> anyhow::Result<Da
 #[cfg(unix)]
 #[cfg(test)]
 pub async fn run_serve(
-    registry: std::sync::Arc<cu_core::tool::ToolRegistry>,
+    registry: std::sync::Arc<cua_driver_core::tool::ToolRegistry>,
     socket_path: &str,
     pid_file_path: Option<&str>,
     profile: DaemonProfile,
@@ -1654,7 +1634,7 @@ async fn owner_exited(watch: &mut Option<tokio::sync::oneshot::Receiver<()>>) {
 /// exits. If the owner is already dead, it returns at once without binding.
 #[cfg(unix)]
 pub async fn run_serve_with_owner(
-    registry: std::sync::Arc<cu_core::tool::ToolRegistry>,
+    registry: std::sync::Arc<cua_driver_core::tool::ToolRegistry>,
     socket_path: &str,
     pid_file_path: Option<&str>,
     profile: DaemonProfile,
@@ -1746,8 +1726,6 @@ pub async fn run_serve_with_owner(
     let last_activity = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(now_unix_secs()));
     spawn_recording_idle_backstop(registry.clone(), last_activity.clone());
     spawn_session_idle_sweep();
-    register_recording_session_end_hook(registry.recording.clone());
-    register_state_file_session_end_hook(&registry);
     let activity = crate::activity_daemon::open(profile, socket_path);
     let mut authorized_root_health = tokio::time::interval(std::time::Duration::from_secs(1));
 
@@ -2009,172 +1987,6 @@ pub async fn run_serve_with_owner(
                                     );
                                 }
                             }
-                            "application_windows" => {
-                                #[cfg(target_os = "macos")]
-                                let resp = if !host_request_authorized
-                                    || profile != DaemonProfile::Native
-                                {
-                                    DaemonResponse::err(
-                                        "Unauthorized host-only application-surface request",
-                                        77,
-                                    )
-                                } else {
-                                    match tokio::task::spawn_blocking(
-                                        platform_macos::application_surface::list_windows,
-                                    ).await {
-                                        Ok(Ok(windows)) => DaemonResponse::ok(
-                                            serde_json::json!({"windows": windows}),
-                                        ),
-                                        Ok(Err(error)) => {
-                                            DaemonResponse::err(format!("{error:#}"), 1)
-                                        }
-                                        Err(error) => DaemonResponse::err(
-                                            format!("Application-window task failed: {error}"),
-                                            1,
-                                        ),
-                                    }
-                                };
-                                let _ = writer.write_all(
-                                    (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
-                                ).await;
-                            }
-                            "application_surface_start" => {
-                                #[cfg(target_os = "macos")]
-                                let resp = if !host_request_authorized
-                                    || profile != DaemonProfile::Native
-                                {
-                                    DaemonResponse::err(
-                                        "Unauthorized host-only application-surface request",
-                                        77,
-                                    )
-                                } else {
-                                    let request = req.args
-                                        .ok_or("Missing application-surface arguments")
-                                        .and_then(|args| {
-                                            serde_json::from_value::<
-                                                platform_macos::application_surface::
-                                                    ApplicationSurfaceStartRequest,
-                                            >(args)
-                                            .map_err(|_| {
-                                                "Invalid application-surface arguments"
-                                            })
-                                        });
-                                    match request {
-                                        Ok(request) => match tokio::task::spawn_blocking(
-                                            move || {
-                                                platform_macos::application_surface::start(request)
-                                            },
-                                        ).await {
-                                            Ok(Ok(result)) => DaemonResponse::ok(
-                                                serde_json::to_value(result).expect(
-                                                    "application start result is serializable"
-                                                ),
-                                            ),
-                                            Ok(Err(error)) => {
-                                                DaemonResponse::err(format!("{error:#}"), 1)
-                                            }
-                                            Err(error) => DaemonResponse::err(
-                                                format!(
-                                                    "Application-capture task failed: {error}"
-                                                ),
-                                                1,
-                                            ),
-                                        },
-                                        Err(error) => DaemonResponse::err(error, 64),
-                                    }
-                                };
-                                let _ = writer.write_all(
-                                    (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
-                                ).await;
-                            }
-                            "application_surface_stop" => {
-                                #[cfg(target_os = "macos")]
-                                let resp = if !host_request_authorized
-                                    || profile != DaemonProfile::Native
-                                {
-                                    DaemonResponse::err(
-                                        "Unauthorized host-only application-surface request",
-                                        77,
-                                    )
-                                } else {
-                                    let session = req.args.as_ref()
-                                        .and_then(|args| args.get("session"))
-                                        .and_then(serde_json::Value::as_str)
-                                        .map(str::trim)
-                                        .filter(|value| {
-                                            !value.is_empty() && value.len() <= 128
-                                        })
-                                        .map(str::to_owned);
-                                    match session {
-                                        Some(session) => {
-                                            let stopped = tokio::task::spawn_blocking(
-                                                move || {
-                                                    platform_macos::application_surface::stop(
-                                                        &session,
-                                                    )
-                                                },
-                                            ).await.unwrap_or(false);
-                                            DaemonResponse::ok(
-                                                serde_json::json!({"stopped": stopped}),
-                                            )
-                                        }
-                                        None => DaemonResponse::err(
-                                            "application_surface_stop requires a session",
-                                            64,
-                                        ),
-                                    }
-                                };
-                                let _ = writer.write_all(
-                                    (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
-                                ).await;
-                            }
-                            "application_surface_event" => {
-                                #[cfg(target_os = "macos")]
-                                let resp = if !host_request_authorized
-                                    || profile != DaemonProfile::Native
-                                {
-                                    DaemonResponse::err(
-                                        "Unauthorized host-only application-surface request",
-                                        77,
-                                    )
-                                } else {
-                                    let event = req.args
-                                        .ok_or("Missing application-surface event")
-                                        .and_then(|args| {
-                                            serde_json::from_value::<
-                                                platform_macos::application_surface::
-                                                    ApplicationSurfaceEvent,
-                                            >(args)
-                                            .map_err(|_| "Invalid application-surface event")
-                                        });
-                                    match event {
-                                        Ok(event) => match tokio::task::spawn_blocking(
-                                            move || {
-                                                platform_macos::application_surface::send_event(
-                                                    event,
-                                                )
-                                            },
-                                        ).await {
-                                            Ok(Ok(())) => DaemonResponse::ok(
-                                                serde_json::json!({"sent": true}),
-                                            ),
-                                            Ok(Err(error)) => {
-                                                DaemonResponse::err(format!("{error:#}"), 1)
-                                            }
-                                            Err(error) => DaemonResponse::err(
-                                                format!(
-                                                    "Application-input task failed: {error}"
-                                                ),
-                                                1,
-                                            ),
-                                        },
-                                        Err(error) => DaemonResponse::err(error, 64),
-                                    }
-                                };
-                                let _ = writer.write_all(
-                                    (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
-                                ).await;
-                            }
                             "verify_screen_capture" => {
                                 if !host_request_authorized {
                                     let resp = DaemonResponse::err(
@@ -2198,141 +2010,6 @@ pub async fn run_serve_with_owner(
                                 };
                                 let _ = writer.write_all(
                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
-                                ).await;
-                            }
-                            "configure_state_authentication" => {
-                                let response = if !host_request_authorized
-                                    || (!host_authority_configured
-                                        && authorized_root_identity.is_none())
-                                {
-                                    DaemonResponse::err(
-                                        "Unauthorized host-only daemon request".to_owned(),
-                                        77,
-                                    )
-                                } else if let Some(key) =
-                                    state_authentication_key(req.args.as_ref())
-                                {
-                                    if reg.set_state_authentication_key(key) {
-                                        DaemonResponse::ok(serde_json::json!({
-                                            "state_authentication": true
-                                        }))
-                                    } else {
-                                        DaemonResponse::err(
-                                            "State authentication is unavailable".to_owned(),
-                                            1,
-                                        )
-                                    }
-                                } else {
-                                    DaemonResponse::err(
-                                        "Invalid state authentication key".to_owned(),
-                                        64,
-                                    )
-                                };
-                                let _ = writer.write_all(
-                                    (serde_json::to_string(&response).unwrap() + "\n").as_bytes()
-                                ).await;
-                            }
-                            "set_cursor_enabled" => {
-                                #[cfg(target_os = "macos")]
-                                let response = if !host_request_authorized {
-                                    DaemonResponse::err(
-                                        "Unauthorized host-only daemon request".to_owned(),
-                                        77,
-                                    )
-                                } else {
-                                    let session = req
-                                        .args
-                                        .as_ref()
-                                        .and_then(|args| args.get("session"))
-                                        .and_then(serde_json::Value::as_str)
-                                        .map(str::trim)
-                                        .filter(|value| {
-                                            !value.is_empty() && value.len() <= 1_024
-                                        });
-                                    let enabled = req
-                                        .args
-                                        .as_ref()
-                                        .and_then(|args| args.get("enabled"))
-                                        .and_then(serde_json::Value::as_bool);
-                                    let generation = req
-                                        .args
-                                        .as_ref()
-                                        .and_then(|args| args.get("generation"))
-                                        .and_then(serde_json::Value::as_str)
-                                        .map(str::trim)
-                                        .filter(|value| {
-                                            !value.is_empty() && value.len() <= 1_024
-                                        })
-                                        .map(str::to_owned);
-                                    match (session, enabled) {
-                                        (Some(session), Some(enabled)) => {
-                                            platform_macos::cursor::overlay::
-                                                set_enabled_for_host_session_generation(
-                                                    session.to_owned(),
-                                                    enabled,
-                                                    generation,
-                                                );
-                                            DaemonResponse::ok(serde_json::json!({
-                                                "session": session,
-                                                "cursor_enabled": enabled,
-                                            }))
-                                        }
-                                        _ => DaemonResponse::err(
-                                            "set_cursor_enabled requires a non-empty `session` and boolean `enabled`",
-                                            64,
-                                        ),
-                                    }
-                                };
-                                let _ = writer.write_all(
-                                    (serde_json::to_string(&response).unwrap() + "\n").as_bytes()
-                                ).await;
-                            }
-                            "reassert_cursor" => {
-                                #[cfg(target_os = "macos")]
-                                let response = if !host_request_authorized {
-                                    DaemonResponse::err(
-                                        "Unauthorized host-only daemon request".to_owned(),
-                                        77,
-                                    )
-                                } else {
-                                    let session = req
-                                        .args
-                                        .as_ref()
-                                        .and_then(|args| args.get("session"))
-                                        .and_then(serde_json::Value::as_str)
-                                        .map(str::trim)
-                                        .filter(|value| {
-                                            !value.is_empty() && value.len() <= 1_024
-                                        });
-                                    let window_id = req
-                                        .args
-                                        .as_ref()
-                                        .and_then(|args| args.get("window_id"))
-                                        .and_then(serde_json::Value::as_u64)
-                                        .filter(|value| {
-                                            *value > 0 && *value <= u64::from(u32::MAX)
-                                        });
-                                    match (session, window_id) {
-                                        (Some(session), Some(window_id)) => {
-                                            let reasserted =
-                                                platform_macos::cursor::overlay::reassert_for_host_session(
-                                                    session.to_owned(),
-                                                    window_id,
-                                                );
-                                            DaemonResponse::ok(serde_json::json!({
-                                                "session": session,
-                                                "window_id": window_id,
-                                                "reasserted": reasserted,
-                                            }))
-                                        }
-                                        _ => DaemonResponse::err(
-                                            "reassert_cursor requires a non-empty `session` and positive `window_id`",
-                                            64,
-                                        ),
-                                    }
-                                };
-                                let _ = writer.write_all(
-                                    (serde_json::to_string(&response).unwrap() + "\n").as_bytes()
                                 ).await;
                             }
                             "agent_sessions" => {
@@ -2404,68 +2081,26 @@ pub async fn run_serve_with_owner(
                                 ).await;
                             }
                             "list" => {
-                                // Include full ToolDef (input_schema + annotation
-                                // hints + capabilities) so MCP proxy callers can
-                                // build a complete `tools/list` response from
-                                // one daemon round-trip. Older clients that only
-                                // read name/description still work — the extra
-                                // fields are ignored.
-                                //
-                                // `capabilities` is sourced from the centralised
-                                // `cu_core::tool::default_capabilities_for`
-                                // name → tokens map so the daemon and in-process
-                                // paths emit identical capability arrays.
-                                let tools: Vec<serde_json::Value> = reg.iter_defs()
-                                    .map(|(name, def)| {
-                                        let caps = cu_core::tool::default_capabilities_for(name);
-                                        serde_json::json!({
-                                            "name": name,
-                                            "description": def.description,
-                                            "input_schema": def.input_schema,
-                                            "read_only": def.read_only,
-                                            "destructive": def.destructive,
-                                            "idempotent": def.idempotent,
-                                            "open_world": def.open_world,
-                                            "capabilities": caps,
-                                        })
-                                    })
-                                    .collect();
-                                // Mirror `tools_list` envelope: include
-                                // capability_version + schema_version so MCP
-                                // proxy callers can pass them through verbatim
-                                // (one daemon round-trip, complete response).
-                                let resp = DaemonResponse::ok(serde_json::json!({
-                                    "tools": tools,
-                                    "capability_version": cu_core::tool::CAPABILITY_VERSION,
-                                    "schema_version": "1",
-                                    "profile": profile,
-                                }));
+                                // The MCP `tools/list` entries agents see, in
+                                // Brigadier's words and without the tools
+                                // Brigadier withholds, so the proxy passes them
+                                // through from one daemon round-trip.
+                                let mut list = crate::mcp::agent_tools_list(&reg);
+                                list["profile"] = serde_json::json!(profile);
+                                let resp = DaemonResponse::ok(list);
                                 let _ = writer.write_all(
                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                 ).await;
                             }
                             "describe" => {
                                 let name = req.name.as_deref().unwrap_or("");
-                                match reg.get_def(name) {
-                                    Some(def) => {
-                                        let resp = DaemonResponse::ok(serde_json::json!({
-                                            "name": def.name,
-                                            "description": def.description,
-                                            "input_schema": def.input_schema
-                                        }));
-                                        let _ = writer.write_all(
-                                            (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
-                                        ).await;
-                                    }
-                                    None => {
-                                        let resp = DaemonResponse::err(
-                                            format!("Unknown tool: {name}"), 64
-                                        );
-                                        let _ = writer.write_all(
-                                            (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
-                                        ).await;
-                                    }
-                                }
+                                let resp = match crate::mcp::agent_tool_entry(&reg, name) {
+                                    Some(entry) => DaemonResponse::ok(entry),
+                                    None => DaemonResponse::err(format!("Unknown tool: {name}"), 64),
+                                };
+                                let _ = writer.write_all(
+                                    (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                ).await;
                             }
                             method if crate::activity_daemon::is_activity_method(method) => {
                                 let Some(activity) = activity.as_ref() else {
@@ -2553,10 +2188,16 @@ pub async fn run_serve_with_owner(
                                 let mut args = req.args.unwrap_or(serde_json::Value::Object(
                                     serde_json::Map::new()
                                 ));
-                                attach_state_writer_identity(
-                                    &mut args,
-                                    peer_process_identity,
-                                );
+                                // The private arguments only the daemon reads;
+                                // the driver never sees them.
+                                let host_session = args
+                                    .as_object_mut()
+                                    .and_then(|object| object.remove(crate::env::HOST_SESSION_ARG))
+                                    .and_then(|value| value.as_str().map(str::to_owned));
+                                let allowed_bundles = crate::scope_args::take_allowed(&mut args);
+                                if let Some(object) = args.as_object_mut() {
+                                    object.retain(|key, _| !key.starts_with("_state_"));
+                                }
                                 // Only authenticated calls keep session-owned
                                 // recording state alive.
                                 last_activity.store(
@@ -2591,7 +2232,9 @@ pub async fn run_serve_with_owner(
                                 // anonymous calls pass through unchanged.
                                 if let Some(sid) = &effective_session {
                                     if !is_session_lifecycle_tool(&tool_name)
-                                        && cu_core::session::is_session_ended(sid)
+                                        && cua_driver_core::session::is_session_ended(
+                                            &runtime_session_key(sid),
+                                        )
                                     {
                                         let resp = DaemonResponse::err(
                                             format!(
@@ -2617,35 +2260,35 @@ pub async fn run_serve_with_owner(
                                     continue;
                                 }
                                 // Note the app a Brigadier agent acts on, and refuse
-                                // one the user stopped it from using.
-                                #[cfg(target_os = "macos")]
-                                if let Some(host_session) = args
-                                    .get(crate::env::HOST_SESSION_ARG)
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(str::to_owned)
-                                {
-                                    let app = platform_macos::target_guard::target_app(&tool_name, &args)
-                                        .map(|target| crate::agent_apps::App {
-                                            name: target.name,
-                                            bundle_id: target.bundle_id,
-                                            pid: target.pid,
-                                        });
-                                    if tool_name == "end_session" {
-                                        crate::agent_apps::session_ended(&host_session);
-                                    } else if let Some(message) =
-                                        crate::agent_apps::note_call(&host_session, activity_peer_pid, app)
-                                    {
-                                        let resp = DaemonResponse::ok(serde_json::json!({
-                                            "content": [{"type": "text", "text": message}],
-                                            "isError": true,
-                                            "structuredContent": {"error": "stopped_by_user", "message": message},
-                                        }));
-                                        let _ = writer.write_all(
-                                            (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
-                                        ).await;
-                                        continue;
+                                // one the user stopped it from using: the guard
+                                // calls this for every tool the call reaches.
+                                if tool_name == "end_session" {
+                                    if let Some(host_session) = host_session.as_deref() {
+                                        crate::agent_apps::session_ended(host_session);
                                     }
                                 }
+                                let on_target = host_session.clone().map(|host_session| {
+                                    std::sync::Arc::new(
+                                        move |tool: &str, app: Option<&cu_layer::target_policy::TargetIdentity>| {
+                                            if tool == "end_session" {
+                                                return None;
+                                            }
+                                            crate::agent_apps::note_call(
+                                                &host_session,
+                                                activity_peer_pid,
+                                                app.map(|app| crate::agent_apps::App {
+                                                    name: app.name.clone(),
+                                                    bundle_id: app.bundle_id.clone(),
+                                                    pid: app.pid,
+                                                }),
+                                            )
+                                        },
+                                    ) as cu_layer::scope::TargetHook
+                                });
+                                let scope = cu_layer::scope::DispatchScope {
+                                    allowed_bundles,
+                                    on_target,
+                                };
                                 // Activity log (computer-use.md section 4): the
                                 // gate refuses calls the user stopped or paused
                                 // and records every call that runs.
@@ -2672,23 +2315,17 @@ pub async fn run_serve_with_owner(
                                     None => None,
                                 };
                                 let activity_args = activity_start.as_ref().map(|_| args.clone());
-                                let result = reg.invoke(&tool_name, args).await;
-                                let is_err = result.is_error.unwrap_or(false);
-                                let content: Vec<serde_json::Value> = result.content.iter().map(|c| {
-                                    match c {
-                                        cu_core::protocol::Content::Text { text, .. } =>
-                                            serde_json::json!({"type":"text","text":text}),
-                                        cu_core::protocol::Content::Image { data, mime_type, .. } =>
-                                            serde_json::json!({"type":"image","data":data,"mimeType":mime_type}),
-                                    }
-                                }).collect();
-                                let mut result_obj = serde_json::json!({
-                                    "content": content,
-                                    "isError": is_err
-                                });
-                                if let Some(sc) = result.structured_content {
-                                    result_obj["structuredContent"] = sc;
-                                }
+                                // The session travels as the adapter's evidence
+                                // (`_session_id`), which plain `invoke` would drop.
+                                let result = cu_layer::scope::with_scope(
+                                    scope,
+                                    reg.invoke_from_trusted_adapter(&tool_name, args),
+                                )
+                                .await;
+                                let mut result_obj = serde_json::to_value(&result)
+                                    .unwrap_or_else(|_| serde_json::json!({"content": []}));
+                                result_obj["isError"] =
+                                    serde_json::json!(result.is_error.unwrap_or(false));
                                 if let (Some(host), Some(start), Some(call_args)) =
                                     (activity.clone(), activity_start, activity_args)
                                 {
@@ -2714,21 +2351,12 @@ pub async fn run_serve_with_owner(
                                     // this daemon stayed alive, its EOF reaper tombstoned the
                                     // session first; the new control declaration revives it
                                     // before accepting more calls.
-                                    cu_core::session::revive_session(sid);
-                                    #[cfg(target_os = "macos")]
-                                    if let Some(host_session) =
-                                        crate::env::host_session_id_from_proxy(sid)
-                                    {
-                                        platform_macos::cursor::overlay::begin_reusable_cursor_generation(
-                                            host_session.to_owned(),
-                                            sid.to_owned(),
-                                        );
-                                    }
+                                    cua_driver_core::session::revive_session(&runtime_session_key(sid));
                                     if control_session_id.as_deref() != Some(sid) {
                                         if let Some(previous) = control_session_id.as_deref() {
-                                            cu_core::session::release_session(previous);
+                                            release_session(previous);
                                         }
-                                        cu_core::session::hold_session(sid);
+                                        hold_session(sid);
                                     }
                                     control_session_id = Some(sid.to_owned());
                                     if let Some(host) = crate::agent_apps::host_session_of(sid) {
@@ -2766,7 +2394,7 @@ pub async fn run_serve_with_owner(
                                     // fire_session_end, after the mark). stop_owner does
                                     // not consult is_session_ended, so reaping after the
                                     // mark is safe.
-                                    cu_core::session::fire_session_end(sid);
+                                    cua_driver_core::session::fire_session_end(&runtime_session_key(sid));
                                     let reg2 = reg.clone();
                                     let sid_for_stop = sid.to_owned();
                                     let _ = tokio::task::spawn_blocking(move || {
@@ -2803,7 +2431,7 @@ pub async fn run_serve_with_owner(
                     // benign.
                     if let Some(sid) = control_session_id {
                         crate::agent_apps::shim_gone(activity_peer_pid);
-                        cu_core::session::release_session(&sid);
+                        release_session(&sid);
                         {
                             // stop_owner can SYNCHRONOUSLY finalize the recording's
                             // mp4, on macOS it hits SCStream::stop_capture(), which
@@ -2815,7 +2443,7 @@ pub async fn run_serve_with_owner(
                             // sees ended=true and bails (mark-before-reap; the cursor/config
                             // hooks already reap inside fire_session_end after the mark).
                             // stop_owner ignores is_session_ended, so reaping after is safe.
-                            cu_core::session::fire_session_end(&sid);
+                            cua_driver_core::session::fire_session_end(&runtime_session_key(&sid));
                             let reg2 = reg.clone();
                             let sid_for_stop = sid.clone();
                             let _ = tokio::task::spawn_blocking(move || {
@@ -2856,13 +2484,10 @@ pub async fn run_serve_with_owner(
     }
 
     // Clean up.
-    #[cfg(target_os = "macos")]
-    platform_macos::application_surface::stop_all();
     let _ = std::fs::remove_file(socket_path);
     if let Some(pid_path) = pid_file_path {
         let _ = std::fs::remove_file(pid_path);
     }
-    registry.remove_state_file();
 
     Ok(exit)
 }
@@ -2874,7 +2499,7 @@ pub async fn run_serve_with_owner(
 /// With `owner_pid`, the process exits 0 once the owner exits (after the
 /// daemon removed its socket), so a blocked main thread cannot keep it alive.
 pub fn run_serve_cmd(
-    registry: std::sync::Arc<cu_core::tool::ToolRegistry>,
+    registry: std::sync::Arc<cua_driver_core::tool::ToolRegistry>,
     socket_path: &str,
     pid_file_path: Option<&str>,
     profile: DaemonProfile,
@@ -2921,7 +2546,6 @@ pub fn run_serve_cmd(
         Ok(ServeExit::OwnerExited) => std::process::exit(0),
         Ok(ServeExit::Shutdown) => {}
         Err(e) => {
-            registry.remove_state_file();
             eprintln!("brigadier-cu serve error: {e}");
             std::process::exit(1);
         }
@@ -3053,9 +2677,9 @@ mod external_permission_flow_tests {
 #[cfg(test)]
 mod socket_authentication_tests {
     use super::{
-        attach_state_writer_identity, host_request_is_authorized, parse_request_with_token,
-        parse_request_with_tokens, process_descends_from, socket_peer_requires_authorized_root,
-        state_authentication_key, DaemonRequest, ProcessIdentity,
+        host_request_is_authorized, parse_request_with_token, parse_request_with_tokens,
+        process_descends_from, socket_peer_requires_authorized_root, DaemonRequest,
+        ProcessIdentity,
     };
     use std::collections::HashMap;
 
@@ -3171,27 +2795,6 @@ mod socket_authentication_tests {
     }
 
     #[test]
-    fn state_authentication_configuration_accepts_only_32_byte_keys() {
-        use base64::Engine as _;
-
-        let encoded = base64::engine::general_purpose::STANDARD.encode([0x5a; 32]);
-        assert_eq!(
-            state_authentication_key(Some(&serde_json::json!({
-                "key_base64": encoded
-            }))),
-            Some(vec![0x5a; 32])
-        );
-        assert!(state_authentication_key(Some(&serde_json::json!({
-            "key_base64": base64::engine::general_purpose::STANDARD.encode([0x5a; 31])
-        })))
-        .is_none());
-        assert!(state_authentication_key(Some(&serde_json::json!({
-            "key_base64": "not-base64"
-        })))
-        .is_none());
-    }
-
-    #[test]
     fn configured_authentication_rejects_legacy_and_missing_requests() {
         let legacy = serde_json::to_string(&list_request()).expect("serialize request");
         let rejected = parse_request_with_token(&legacy, Some("secret-A1B2C3"))
@@ -3210,69 +2813,6 @@ mod socket_authentication_tests {
         let parsed = parse_request_with_token(&legacy, None)
             .expect("legacy request should work when auth is not configured");
         assert_eq!(parsed.method, "list");
-    }
-
-    #[test]
-    fn authenticated_peer_pid_replaces_untrusted_state_writer_identity() {
-        let mut args = serde_json::json!({
-            "pid": 42,
-            "_state_writer_pid": 999_999,
-        });
-
-        attach_state_writer_identity(
-            &mut args,
-            Some(ProcessIdentity {
-                process_id: 4_321,
-                parent_process_id: 4_000,
-                start_seconds: 1_700_000_000,
-                start_microseconds: 123_456,
-            }),
-        );
-        assert_eq!(args["_state_writer_pid"], serde_json::json!(4_321));
-        assert_eq!(
-            args["_state_writer_start_seconds"],
-            serde_json::json!(1_700_000_000)
-        );
-        assert_eq!(
-            args["_state_writer_start_microseconds"],
-            serde_json::json!(123_456)
-        );
-
-        attach_state_writer_identity(&mut args, None);
-        assert!(args.get("_state_writer_pid").is_none());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn authenticated_peer_generation_replaces_untrusted_state_writer_identity() {
-        let mut args = serde_json::json!({
-            "pid": 42,
-            "_state_writer_pid": 999_999,
-            "_state_writer_start_seconds": 999_999,
-            "_state_writer_start_microseconds": 999_999,
-        });
-
-        let identity =
-            super::macos_process_identity(std::process::id()).expect("current process identity");
-        attach_state_writer_identity(&mut args, Some(identity));
-
-        assert_eq!(
-            args["_state_writer_pid"],
-            serde_json::json!(identity.process_id)
-        );
-        assert_eq!(
-            args["_state_writer_start_seconds"],
-            serde_json::json!(identity.start_seconds)
-        );
-        assert_eq!(
-            args["_state_writer_start_microseconds"],
-            serde_json::json!(identity.start_microseconds)
-        );
-
-        attach_state_writer_identity(&mut args, None);
-        assert!(args.get("_state_writer_pid").is_none());
-        assert!(args.get("_state_writer_start_seconds").is_none());
-        assert!(args.get("_state_writer_start_microseconds").is_none());
     }
 
     #[test]
@@ -3349,8 +2889,8 @@ mod gate_tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use cu_core::protocol::ToolResult;
-    use cu_core::tool::{Tool, ToolDef, ToolRegistry};
+    use cua_driver_core::protocol::ToolResult;
+    use cua_driver_core::tool::{Tool, ToolDef, ToolRegistry};
     use serde_json::Value;
 
     static PROBE_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -3670,7 +3210,7 @@ mod gate_tests {
         reg.register(Box::new(ProbeTool::new()));
         // The real start_session tool so we can prove an explicit re-declare
         // REVIVES an ended id end-to-end through the daemon boundary.
-        reg.register(Box::new(cu_core::session_tools::StartSessionTool));
+        reg.register(Box::new(cua_driver_core::session_tools::StartSessionTool));
         let registry = Arc::new(reg);
 
         // Unique private temp socket, never the default socket or app daemon.
@@ -3824,7 +3364,7 @@ mod owner_pid_tests {
     //! (for example the host app crashes), and it removes its socket.
 
     use super::{run_serve_with_owner, DaemonProfile, ServeExit};
-    use cu_core::tool::ToolRegistry;
+    use cua_driver_core::tool::ToolRegistry;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
     use std::time::Duration;
@@ -3980,6 +3520,24 @@ mod session_boundary_tests {
         let eff = apply_session_identity(&mut args, &Some("mcp-999".to_owned()));
         assert_eq!(args["_session_id"], "caller-set");
         assert_eq!(eff.as_deref(), Some("caller-set"));
+    }
+
+    #[test]
+    fn held_session_survives_idle_sweep_until_released() {
+        let sid = "test-held-session-5F3A";
+        let key = super::runtime_session_key(sid);
+        let ttl = std::time::Duration::from_millis(50);
+        let idle = std::time::Duration::from_millis(100);
+        cua_driver_core::session::touch_session(&key);
+        super::hold_session(sid);
+        std::thread::sleep(idle);
+        assert!(super::sweep_idle_sessions(ttl).iter().all(|id| id != &key));
+        assert!(!cua_driver_core::session::is_session_ended(&key));
+        super::release_session(sid);
+        assert!(!super::is_session_held(sid));
+        std::thread::sleep(idle);
+        assert!(super::sweep_idle_sessions(ttl).iter().any(|id| id == &key));
+        assert!(cua_driver_core::session::is_session_ended(&key));
     }
 
     #[test]

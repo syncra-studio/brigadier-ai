@@ -97,9 +97,9 @@ fn concurrent_clients_with_cursor_moves() {
 }
 
 #[test]
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn concurrent_multi_driver_isolation() {
-    //! Two brigadier-cu processes running simultaneously with different cursor IDs.
+    //! Two brigadier-cu processes running simultaneously with different sessions.
     //! Verifies that concurrent sessions don't interfere — each tracks its own
     //! cursor state and the overlay stays alive under concurrent load.
     let Some(mut child_a) = RawDriver::spawn() else {
@@ -115,36 +115,35 @@ fn concurrent_multi_driver_isolation() {
     child_a.recv();
     child_b.recv();
 
-    // Driver A: set_agent_cursor_enabled for cursor "alpha", Driver B for cursor "beta".
+    // Driver A: enable the cursor of session "alpha", Driver B disables "beta".
     child_a.send(&serde_json::json!({
         "jsonrpc":"2.0","id":2,"method":"tools/call",
-        "params":{"name":"set_agent_cursor_enabled","arguments":{"cursor_id":"alpha","enabled":true}}
+        "params":{"name":"set_agent_cursor_enabled","arguments":{"session":"alpha","enabled":true}}
     }));
     child_b.send(&serde_json::json!({
         "jsonrpc":"2.0","id":2,"method":"tools/call",
-        "params":{"name":"set_agent_cursor_enabled","arguments":{"cursor_id":"beta","enabled":false}}
+        "params":{"name":"set_agent_cursor_enabled","arguments":{"session":"beta","enabled":false}}
     }));
     let resp_a = child_a.recv();
     let resp_b = child_b.recv();
     assert!(
-        resp_a["error"].is_null(),
+        resp_a["error"].is_null() && !resp_a["result"]["isError"].as_bool().unwrap_or(false),
         "Driver A set_agent_cursor_enabled failed: {resp_a:?}"
     );
     assert!(
-        resp_b["error"].is_null(),
+        resp_b["error"].is_null() && !resp_b["result"]["isError"].as_bool().unwrap_or(false),
         "Driver B set_agent_cursor_enabled failed: {resp_b:?}"
     );
 
-    // Each driver queries its own cursor state — should reflect what it set.
-    // get_agent_cursor_state is session-scoped, so pass the cursor_id each
-    // driver owns; the response carries { "cursors": [<that one>], "enabled" }.
+    // Each driver queries its own session's cursor; the answer is scoped to
+    // that session and reflects what it set. The state lives per process.
     child_a.send(&serde_json::json!({
         "jsonrpc":"2.0","id":3,"method":"tools/call",
-        "params":{"name":"get_agent_cursor_state","arguments":{"cursor_id":"alpha"}}
+        "params":{"name":"get_agent_cursor_state","arguments":{"session":"alpha"}}
     }));
     child_b.send(&serde_json::json!({
         "jsonrpc":"2.0","id":3,"method":"tools/call",
-        "params":{"name":"get_agent_cursor_state","arguments":{"cursor_id":"beta"}}
+        "params":{"name":"get_agent_cursor_state","arguments":{"session":"beta"}}
     }));
     let state_a = child_a.recv();
     let state_b = child_b.recv();
@@ -156,65 +155,46 @@ fn concurrent_multi_driver_isolation() {
         state_b["error"].is_null(),
         "Driver B get_agent_cursor_state failed: {state_b:?}"
     );
-
-    // cursors is an array of { config: { cursor_id, enabled, ... }, x, y }.
-    // Cursor alpha should be enabled (we set true), beta disabled (we set false).
-    // The state lives per process — processes don't share CursorRegistry.
-    let cursors_a = state_a["result"]["structuredContent"]["cursors"].as_array();
-    let cursors_b = state_b["result"]["structuredContent"]["cursors"].as_array();
-
-    let alpha_enabled = cursors_a
-        .and_then(|arr| {
-            arr.iter()
-                .find(|c| c["config"]["cursor_id"].as_str() == Some("alpha"))
-        })
-        .and_then(|c| c["config"]["enabled"].as_bool());
-    let beta_enabled = cursors_b
-        .and_then(|arr| {
-            arr.iter()
-                .find(|c| c["config"]["cursor_id"].as_str() == Some("beta"))
-        })
-        .and_then(|c| c["config"]["enabled"].as_bool());
-
+    let state_a = &state_a["result"]["structuredContent"];
+    let state_b = &state_b["result"]["structuredContent"];
+    assert_eq!(state_a["session"], "alpha", "{state_a}");
     assert_eq!(
-        alpha_enabled,
+        state_a["enabled"].as_bool(),
         Some(true),
         "Cursor alpha should be enabled in driver A"
     );
+    assert_eq!(state_b["session"], "beta", "{state_b}");
     assert_eq!(
-        beta_enabled,
+        state_b["enabled"].as_bool(),
         Some(false),
         "Cursor beta should be disabled in driver B"
     );
 
-    // macOS additionally exercises move_cursor on both drivers to confirm
-    // neither crashes the other (the Windows variant stops after the state check).
-    if !cfg!(target_os = "windows") {
-        child_a.send(&serde_json::json!({
-            "jsonrpc":"2.0","id":4,"method":"tools/call",
-            "params":{"name":"move_cursor","arguments":{"cursor_id":"alpha","x":100,"y":100}}
-        }));
-        child_b.send(&serde_json::json!({
-            "jsonrpc":"2.0","id":4,"method":"tools/call",
-            "params":{"name":"move_cursor","arguments":{"cursor_id":"beta","x":200,"y":200}}
-        }));
-        let mv_a = child_a.recv();
-        let mv_b = child_b.recv();
-        assert!(
-            mv_a["error"].is_null(),
-            "Driver A move_cursor failed: {mv_a:?}"
-        );
-        assert!(
-            mv_b["error"].is_null(),
-            "Driver B move_cursor failed: {mv_b:?}"
-        );
-    }
+    // Exercise move_cursor on both drivers to confirm neither crashes the other.
+    child_a.send(&serde_json::json!({
+        "jsonrpc":"2.0","id":4,"method":"tools/call",
+        "params":{"name":"move_cursor","arguments":{"session":"alpha","x":100,"y":100}}
+    }));
+    child_b.send(&serde_json::json!({
+        "jsonrpc":"2.0","id":4,"method":"tools/call",
+        "params":{"name":"move_cursor","arguments":{"session":"beta","x":200,"y":200}}
+    }));
+    let mv_a = child_a.recv();
+    let mv_b = child_b.recv();
+    assert!(
+        mv_a["error"].is_null(),
+        "Driver A move_cursor failed: {mv_a:?}"
+    );
+    assert!(
+        mv_b["error"].is_null(),
+        "Driver B move_cursor failed: {mv_b:?}"
+    );
 }
 
 #[test]
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn multi_cursor_instance_state() {
-    //! Two cursor instances can be created with different IDs; each has independent state.
+    //! Two sessions' cursors can be driven independently; each has its own state.
     let Some(mut d) = RawDriver::spawn() else {
         return;
     };
@@ -222,125 +202,83 @@ fn multi_cursor_instance_state() {
     d.send(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
     d.recv();
 
-    // Move cursor "agent1" to (100, 200).
-    d.send(&serde_json::json!({
-        "jsonrpc":"2.0","id":2,"method":"tools/call",
-        "params":{"name":"move_cursor","arguments":{"x":100.0,"y":200.0,"cursor_id":"agent1"}}
-    }));
-    let r2 = d.recv();
-    assert!(!r2["result"]["isError"].as_bool().unwrap_or(false));
+    let mut call = |id: u64, name: &str, arguments: serde_json::Value| {
+        d.send(&serde_json::json!({
+            "jsonrpc":"2.0","id":id,"method":"tools/call",
+            "params":{"name":name,"arguments":arguments}
+        }));
+        let resp = d.recv();
+        assert!(
+            !resp["result"]["isError"].as_bool().unwrap_or(false),
+            "{name} failed: {resp}"
+        );
+        resp
+    };
 
-    // Move cursor "agent2" to (300, 400).
-    d.send(&serde_json::json!({
-        "jsonrpc":"2.0","id":3,"method":"tools/call",
-        "params":{"name":"move_cursor","arguments":{"x":300.0,"y":400.0,"cursor_id":"agent2"}}
-    }));
-    let r3 = d.recv();
-    assert!(!r3["result"]["isError"].as_bool().unwrap_or(false));
+    // Move session agent1's cursor to (100, 200) and agent2's to (300, 400).
+    call(
+        2,
+        "move_cursor",
+        serde_json::json!({"x":100.0,"y":200.0,"session":"agent1"}),
+    );
+    call(
+        3,
+        "move_cursor",
+        serde_json::json!({"x":300.0,"y":400.0,"session":"agent2"}),
+    );
+    // Tune agent1's motion only.
+    let motion = call(
+        4,
+        "set_agent_cursor_motion",
+        serde_json::json!({"session":"agent1","glide_duration_ms":450}),
+    );
+    assert_eq!(
+        motion["result"]["structuredContent"]["motion"]["glide_duration_ms"].as_f64(),
+        Some(450.0),
+        "{motion}"
+    );
+    // Hide agent2's cursor.
+    call(
+        5,
+        "set_agent_cursor_enabled",
+        serde_json::json!({"enabled":false,"session":"agent2"}),
+    );
 
-    // Configure cursor "agent1" with a custom color.
-    d.send(&serde_json::json!({
-        "jsonrpc":"2.0","id":4,"method":"tools/call",
-        "params":{"name":"set_agent_cursor_motion","arguments":{
-            "cursor_id":"agent1","cursor_color":"#FF0000","cursor_label":"AI-1"
-        }}
-    }));
-    let r4 = d.recv();
-    assert!(!r4["result"]["isError"].as_bool().unwrap_or(false));
+    // get_agent_cursor_state answers for the named session only: agent1 is
+    // still enabled, agent2 hidden.
+    let resp1 = call(
+        6,
+        "get_agent_cursor_state",
+        serde_json::json!({"session":"agent1"}),
+    );
+    let state1 = &resp1["result"]["structuredContent"];
+    assert_eq!(state1["session"], "agent1", "{state1}");
+    assert_eq!(
+        state1["enabled"].as_bool(),
+        Some(true),
+        "agent1 was never disabled"
+    );
 
-    // Hide cursor "agent2".
-    d.send(&serde_json::json!({
-        "jsonrpc":"2.0","id":5,"method":"tools/call",
-        "params":{"name":"set_agent_cursor_enabled","arguments":{"enabled":false,"cursor_id":"agent2"}}
-    }));
-    let r5 = d.recv();
-    assert!(!r5["result"]["isError"].as_bool().unwrap_or(false));
-
-    // get_agent_cursor_state reports independent per-cursor state. macOS scopes
-    // the response to the resolved cursor_id (returns ONLY that cursor); Windows
-    // returns ALL cursors in one list. Either way, agent1 must read back enabled
-    // and agent2 disabled.
-    d.send(&serde_json::json!({
-        "jsonrpc":"2.0","id":6,"method":"tools/call",
-        "params":{"name":"get_agent_cursor_state","arguments":{"cursor_id":"agent1"}}
-    }));
-    let resp1 = d.recv();
-    assert!(!resp1["result"]["isError"].as_bool().unwrap_or(false));
-    let cursors1 = resp1["result"]["structuredContent"]["cursors"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    if cfg!(target_os = "windows") {
-        // Windows returns the full cursor list; find agent1 within it.
-        let a1 = cursors1
-            .iter()
-            .find(|c| c["config"]["cursor_id"].as_str() == Some("agent1"))
-            .expect("agent1 in returned cursor list");
-        assert_eq!(
-            a1["config"]["enabled"].as_bool(),
-            Some(true),
-            "agent1 was never disabled"
-        );
-    } else {
-        assert_eq!(
-            cursors1.len(),
-            1,
-            "agent1 query must return exactly its own cursor, got: {cursors1:?}"
-        );
-        assert_eq!(cursors1[0]["config"]["cursor_id"].as_str(), Some("agent1"));
-        assert_eq!(
-            resp1["result"]["structuredContent"]["enabled"].as_bool(),
-            Some(true),
-            "agent1 was never disabled"
-        );
-    }
-
-    d.send(&serde_json::json!({
-        "jsonrpc":"2.0","id":7,"method":"tools/call",
-        "params":{"name":"get_agent_cursor_state","arguments":{"cursor_id":"agent2"}}
-    }));
-    let resp2 = d.recv();
-    assert!(!resp2["result"]["isError"].as_bool().unwrap_or(false));
-    let cursors2 = resp2["result"]["structuredContent"]["cursors"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    if cfg!(target_os = "windows") {
-        // Windows returns the full cursor list; find agent2 within it.
-        let a2 = cursors2
-            .iter()
-            .find(|c| c["config"]["cursor_id"].as_str() == Some("agent2"))
-            .expect("agent2 in returned cursor list");
-        assert_eq!(
-            a2["config"]["enabled"].as_bool(),
-            Some(false),
-            "agent2 was hidden"
-        );
-    } else {
-        assert_eq!(
-            cursors2.len(),
-            1,
-            "agent2 query must return exactly its own cursor, got: {cursors2:?}"
-        );
-        assert_eq!(cursors2[0]["config"]["cursor_id"].as_str(), Some("agent2"));
-        assert_eq!(
-            resp2["result"]["structuredContent"]["enabled"].as_bool(),
-            Some(false),
-            "agent2 was hidden"
-        );
-    }
+    let resp2 = call(
+        7,
+        "get_agent_cursor_state",
+        serde_json::json!({"session":"agent2"}),
+    );
+    let state2 = &resp2["result"]["structuredContent"];
+    assert_eq!(state2["session"], "agent2", "{state2}");
+    assert_eq!(
+        state2["enabled"].as_bool(),
+        Some(false),
+        "agent2 was hidden"
+    );
 
     std::thread::sleep(std::time::Duration::from_millis(50));
     // Process must still be alive: probe with one more request (a crashed
     // process would EOF and panic in recv()).
-    d.send(&serde_json::json!({
-        "jsonrpc":"2.0","id":99,"method":"tools/call",
-        "params":{"name":"get_agent_cursor_state","arguments":{"cursor_id":"agent1"}}
-    }));
-    let resp = d.recv();
-    assert_eq!(
-        resp["id"], 99,
-        "brigadier-cu crashed during multi-cursor test"
+    call(
+        8,
+        "get_agent_cursor_state",
+        serde_json::json!({"session":"agent1"}),
     );
 }
 
@@ -423,7 +361,7 @@ fn set_agent_cursor_motion_bezier_knobs() {
     d.send(&serde_json::json!({
         "jsonrpc":"2.0","id":2,"method":"tools/call",
         "params":{"name":"set_agent_cursor_motion","arguments":{
-            "cursor_id": "agent1",
+            "session": "agent1",
             "arc_size": 0.4,
             "spring": 0.85,
             "glide_duration_ms": 500,

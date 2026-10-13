@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use cu_core::protocol::{Request, Response, ToolResult};
-use cu_core::tool::{ToolDef, ToolRegistry};
+use cua_driver_core::protocol::{Request, Response, ToolResult};
+use cua_driver_core::tool::{ToolDef, ToolRegistry};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, warn};
@@ -38,19 +38,37 @@ fn agent_instructions(host_manages_session: bool) -> String {
     } else {
         "0. start_session(session) once per run with a stable id you choose; pass the same `session` on every action; end_session(session) when done. Parallel runs use their own ids."
     };
-    r#"Computer Use: see and drive apps on this Mac in the background, without taking keyboard focus or moving the user's pointer. Prefer element_index (Accessibility tree) targets over pixel coordinates; they work on hidden and background windows.
+    r#"Computer Use: see and drive apps on this Mac in the background, without taking keyboard focus or moving the user's pointer. Prefer element targets (element_token from the Accessibility tree) over pixel coordinates; they work on hidden, covered and background windows.
 
 Each turn:
 SESSION_STEP
 1. launch_app: idempotent, returns the pid and its windows in one call.
-2. get_window_state(pid, window_id): fresh Accessibility snapshot with element indices.
-3. click / type_text / press_key / set_value with an element_index from step 2. Batch several grounded steps with perform_actions.
-4. get_window_state again to confirm the action landed.
+2. get_window_state(pid, window_id): Accessibility tree and screenshot. Row [N] of a read with snapshot_id S is element_token "S:N".
+3. click / type_text / press_key / set_value with an element_token from step 2. Prefer run_steps: one or more actions in one call, with observe:{} to get what changed.
+4. Check the result: get_window_state(pid, window_id, since:"latest") returns only what changed.
 
-Never bring a window to the front unless the user asked for it. If the `computer-use` skill is available, follow it for the full workflow.
+If the `computer-use` skill is available, follow it for the full workflow.
 
 Calls that target the user's Brigadier, terminal apps, or macOS security surfaces return target_not_allowed; do not retry them."#
         .replace("SESSION_STEP", session_step)
+}
+
+// ── Tool list ─────────────────────────────────────────────────────────────────
+
+/// The `tools/list` result agents see: only the tools Brigadier offers, in
+/// Brigadier's words.
+pub fn agent_tools_list(registry: &ToolRegistry) -> Value {
+    cu_layer::text::tools_list(registry.tools_list())
+}
+
+/// One entry of [`agent_tools_list`]; `None` for a tool agents are not offered.
+pub fn agent_tool_entry(registry: &ToolRegistry, name: &str) -> Option<Value> {
+    agent_tools_list(registry)
+        .get("tools")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+        .cloned()
 }
 
 // ── In-process stdio server ───────────────────────────────────────────────────
@@ -58,10 +76,6 @@ Calls that target the user's Brigadier, terminal apps, or macOS security surface
 /// Serve MCP over stdio against `registry`: JSON-RPC lines from stdin,
 /// answers to stdout, until stdin reaches EOF or an I/O error.
 pub async fn run(registry: Arc<ToolRegistry>) -> anyhow::Result<()> {
-    // One stdio process is one embedded MCP session. Keep its implicit cursor
-    // under the same session_end lifecycle as declared sessions, including I/O
-    // errors: the guard fires cleanup when this function returns or unwinds.
-    let _embedded_session = EmbeddedSessionGuard(cu_core::embedded_default_session_id());
     let mut reader = BufReader::new(tokio::io::stdin());
     let mut writer = tokio::io::BufWriter::new(tokio::io::stdout());
     let mut line = String::new();
@@ -97,30 +111,21 @@ pub async fn run(registry: Arc<ToolRegistry>) -> anyhow::Result<()> {
     Ok(())
 }
 
-struct EmbeddedSessionGuard(Option<&'static str>);
-
-impl Drop for EmbeddedSessionGuard {
-    fn drop(&mut self) {
-        if let Some(session_id) = self.0 {
-            cu_core::session::fire_session_end(session_id);
-        }
-    }
-}
-
 async fn handle_request(req: Request, id: Value, registry: &Arc<ToolRegistry>) -> Response {
     match req.method.as_str() {
         "initialize" => Response::ok(id, initialize_result()),
-        "tools/list" => Response::ok(id, registry.tools_list()),
+        "tools/list" => Response::ok(id, agent_tools_list(registry)),
         "tools/call" => match req.tool_call() {
             Err(e) => Response::error(id, -32602, format!("Invalid params: {e}")),
             Ok(call) => {
-                let mut args = call.args;
                 // The model never sets the target scope; this process's env does.
-                crate::scope_args::scope_target_args(
-                    &mut args,
-                    &cu_core::target_policy::allowed_from_env(),
-                );
-                let result = registry.invoke(&call.name, args).await;
+                let scope = cu_layer::scope::DispatchScope {
+                    allowed_bundles: cu_layer::target_policy::allowed_from_env(),
+                    on_target: None,
+                };
+                let result =
+                    cu_layer::scope::with_scope(scope, registry.invoke(&call.name, call.args))
+                        .await;
                 match serde_json::to_value(result) {
                     Ok(v) => Response::ok(id, v),
                     Err(e) => Response::error(id, -32603, format!("Serialize error: {e}")),
@@ -147,6 +152,8 @@ async fn handle_request(req: Request, id: Value, registry: &Arc<ToolRegistry>) -
 /// ignored because they are injected after client-side schema validation.
 /// So is `session` on a tool that doesn't take one: agents are told to pass
 /// their session on every call, and a tool that has no use for it ignores it.
+/// Nor is a missing `session` refused here: a Brigadier-managed proxy fills
+/// it in after this check, and otherwise the driver answers for it.
 pub fn validate_dispatch_args(def: &ToolDef, args: &Value) -> Result<(), ToolResult> {
     let Some(object) = args.as_object() else {
         return Err(dispatch_validation_error(
@@ -158,7 +165,11 @@ pub fn validate_dispatch_args(def: &ToolDef, args: &Value) -> Result<(), ToolRes
     let properties = schema.get("properties").and_then(Value::as_object);
 
     if let Some(required) = schema.get("required").and_then(Value::as_array) {
-        for field in required.iter().filter_map(Value::as_str) {
+        for field in required
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|field| *field != "session")
+        {
             if !object.get(field).is_some_and(|value| !value.is_null()) {
                 return Err(dispatch_validation_error(
                     &def.name,

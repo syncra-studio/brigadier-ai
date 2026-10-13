@@ -14,7 +14,7 @@ use crate::activity::model::{
     RecordingMode, SessionId, Target,
 };
 use crate::activity::redact::RedactPolicy;
-use cu_core::recording::now_ms;
+use cua_driver_core::recording::now_ms;
 use serde_json::{json, Value};
 
 use crate::serve::{DaemonProfile, DaemonResponse};
@@ -293,7 +293,7 @@ pub async fn finish(host: Arc<ActivityHost>, start: CallStart, args: &Value, res
             let pid = args.get("pid").and_then(Value::as_i64);
             if window_id.is_some() || pid.is_some() {
                 let capture = tokio::task::spawn_blocking(move || {
-                    cu_core::recording::screenshot_for(window_id, pid)
+                    cua_driver_core::recording::screenshot_for(window_id, pid)
                 });
                 tokio::time::timeout(
                     std::time::Duration::from_millis(FRAME_CAPTURE_BUDGET_MS),

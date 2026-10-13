@@ -777,8 +777,8 @@ fn double_click_and_right_click_pixel_path() {
 
 #[test]
 #[cfg(target_os = "macos")]
-fn set_value_via_element_index() {
-    //! get_window_state on TextEdit → find a text-area element → set_value on it.
+fn set_value_via_element_token() {
+    //! get_window_state on TextEdit → take an element token → set_value on it.
     //! Skips gracefully if TextEdit is not available.
     let Some(mut d) = RawDriver::spawn() else {
         return;
@@ -828,31 +828,35 @@ fn set_value_via_element_index() {
     };
     let wid = win["window_id"].as_u64().unwrap();
 
-    // Walk AX tree to get element_count — we'll target element_index 0.
+    // Walk the AX tree; every element carries its element_token.
     d.send(&serde_json::json!({
         "jsonrpc":"2.0","id":5,"method":"tools/call",
-        "params":{"name":"get_window_state","arguments":{"pid": pid, "window_id": wid, "capture_mode": "ax"}}
+        "params":{"name":"get_window_state","arguments":{"pid": pid, "window_id": wid, "tree_format": "elements"}}
     }));
     let resp = d.recv();
     assert!(
         resp["error"].is_null(),
         "Protocol error from get_window_state: {resp:?}"
     );
-    let element_count = resp["result"]["structuredContent"]["element_count"]
-        .as_u64()
-        .unwrap_or(0);
-    if element_count == 0 {
+    let Some(token) = resp["result"]["structuredContent"]["elements"]
+        .as_array()
+        .and_then(|elements| {
+            elements
+                .iter()
+                .find_map(|element| element["element_token"].as_str().map(str::to_owned))
+        })
+    else {
         eprintln!("No AX elements — skipping set_value test");
         return;
-    }
+    };
 
-    // set_value on element 0 — this is the document / text area in a new TextEdit document.
+    // set_value on the first element; it may not be settable.
     d.send(&serde_json::json!({
         "jsonrpc":"2.0","id":6,"method":"tools/call",
-        "params":{"name":"set_value","arguments":{"pid": pid, "window_id": wid, "element_index": 0, "value": "cu-test-value"}}
+        "params":{"name":"set_value","arguments":{"element_token": token, "value": "cu-test-value"}}
     }));
     let resp = d.recv();
-    // set_value may fail if element 0 is not settable; accept tool-level errors but not protocol errors.
+    // set_value may fail if the element is not settable; accept tool-level errors but not protocol errors.
     assert!(
         resp["error"].is_null(),
         "Protocol error from set_value: {resp:?}"
