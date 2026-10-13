@@ -2449,7 +2449,9 @@ pub async fn run_serve_with_owner(
                                             bundle_id: target.bundle_id,
                                             pid: target.pid,
                                         });
-                                    if let Some(message) =
+                                    if tool_name == "end_session" {
+                                        crate::agent_apps::session_ended(&host_session);
+                                    } else if let Some(message) =
                                         crate::agent_apps::note_call(&host_session, activity_peer_pid, app)
                                     {
                                         let resp = DaemonResponse::ok(serde_json::json!({

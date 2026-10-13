@@ -178,6 +178,16 @@ pub fn shim_connected(session: &str, shim: Option<u32>) {
     }
 }
 
+/// The agent ended its computer-use session: it no longer uses any app. Its shims stay noted,
+/// so a stop still holds if it starts using apps again.
+pub fn session_ended(session: &str) {
+    if let Ok(mut state) = state().lock() {
+        if let Some(entry) = state.sessions.get_mut(session) {
+            entry.apps.clear();
+        }
+    }
+}
+
 /// A shim's control connection ended: its agent is gone.
 pub fn shim_gone(shim: Option<u32>) {
     let Some(shim) = shim else { return };
@@ -310,6 +320,26 @@ mod tests {
         assert_eq!(mine[0]["apps"][0]["last_used_ms"], 20);
         shim_gone(Some(7001));
         assert!(!list().to_string().contains(s));
+    }
+
+    #[test]
+    fn an_ended_session_is_no_longer_listed_until_it_uses_an_app_again() {
+        let all_alive = |_: u32| true;
+        let s = "brigadier-end-test";
+        let textedit = || Some(app("TextEdit", "com.apple.TextEdit"));
+        assert_eq!(
+            note_call_with(s, Some(7101), textedit(), &all_alive, 10),
+            None
+        );
+        assert!(list().to_string().contains(s));
+        session_ended(s);
+        assert!(!list().to_string().contains(s));
+        assert_eq!(
+            note_call_with(s, Some(7101), textedit(), &all_alive, 20),
+            None
+        );
+        assert!(list().to_string().contains(s));
+        shim_gone(Some(7101));
     }
 
     #[test]
