@@ -14,7 +14,8 @@
 //!   delete (before the `session:<id>` owner's worktree goes) and Brigadier's quit; the launch
 //!   sweep ends any a crash left running, and its record reads as stopped.
 //! - Stopping it is SIGTERM to its process group, then, after [`STOP_GRACE`], SIGKILL to it
-//!   and everything it started.
+//!   and everything it started. The grace is for all of them, not only the leader: one that
+//!   quits at once doesn't cut short the others' handling of SIGTERM.
 //! - Its stdout and stderr go to one log file in `<data>/previews/<conversation>`. Reading it
 //!   (`preview_log`) stores a snapshot in the blob store under an `out-<id>` alias, as a long
 //!   command output is (`super::tool_output`), and the final log is stored when it ends.
@@ -53,6 +54,8 @@ use crate::{Error, Result, now_ms};
 /// Why a preview the user stopped ended: their Stop on its chip, or on the conversation.
 pub(crate) const USER_STOP: &str = "stopped by the user";
 const STOP_GRACE: Duration = Duration::from_secs(5);
+/// How often a stop looks whether what the leader left has quit.
+const STOP_POLL: Duration = Duration::from_millis(20);
 /// How long `start_preview` watches a new preview for an early exit before it answers.
 const START_WATCH: Duration = Duration::from_millis(1500);
 /// Lines `preview_log` shows by default, and at most.
@@ -518,11 +521,23 @@ impl SessionManager {
             () = live.stop.cancelled() => {
                 // Serialize with Pause: once stop is requested no later pause can win.
                 let updating = live.updating.lock().await;
-                terminate_group(&*platform, &live);
+                let asked = terminate_group(&*platform, &live);
                 drop(updating);
-                if tokio::time::timeout(STOP_GRACE, child.wait()).await.is_err() {
+                let grace = tokio::time::Instant::now() + STOP_GRACE;
+                if tokio::time::timeout_at(grace, child.wait()).await.is_err() {
                     // It didn't go: it and everything it started are killed.
                     let _ = platform.processes().kill_tree(live.pid);
+                } else {
+                    // It went, and what is left of its group and of what was asked to stop
+                    // outside it is killed below: they get the rest of the grace to quit.
+                    while tokio::time::Instant::now() < grace
+                        && (group_alive(live.pid)
+                            || asked
+                                .iter()
+                                .any(|proc| crate::machine::still(&*platform, *proc)))
+                    {
+                        tokio::time::sleep(STOP_POLL).await;
+                    }
                 }
                 let _ = child.wait().await;
                 PreviewState::Stopped { reason: live.reason() }
@@ -1261,8 +1276,27 @@ fn signal_preview_group(pid: u32, paused: bool) -> Result<()> {
     }
 }
 
-/// SIGTERM to the process group `pid` leads (still the caller's child: not yet reaped).
-fn terminate_group(platform: &dyn brigadier_sandbox::Platform, live: &LivePreview) {
+/// Whether any process is left in the group `pid` led.
+fn group_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        i32::try_from(pid).is_ok_and(|pid| {
+            nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid), None).is_ok()
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// SIGTERM to the process group `pid` leads (still the caller's child: not yet reaped), and to
+/// what it started or paused outside the group; returns those outside it.
+fn terminate_group(
+    platform: &dyn brigadier_sandbox::Platform,
+    live: &LivePreview,
+) -> Vec<crate::machine::builds::Proc> {
     let pid = live.pid;
     #[cfg(unix)]
     {
@@ -1289,21 +1323,32 @@ fn terminate_group(platform: &dyn brigadier_sandbox::Platform, live: &LivePrevie
             );
             descendants.sort_unstable();
             descendants.dedup();
+            let mut outside = Vec::new();
             for child in descendants {
                 if platform.processes().group_of(child) != Some(live.pid) {
                     let _ = platform.processes().terminate(child);
+                    outside.extend(
+                        members
+                            .iter()
+                            .find(|member| member.pid == child)
+                            .copied()
+                            .or_else(|| crate::machine::proc_of(platform, child)),
+                    );
                 }
             }
             // SIGTERM is pending when a stopped process receives SIGCONT, letting it quit.
             let _ = signal_preview_group(live.pid, false);
             crate::machine::continue_tree(platform, root, &members);
+            outside
         } else {
             let _ = signal_preview_group(live.pid, false);
+            Vec::new()
         }
     }
     #[cfg(not(unix))]
     {
         let _ = platform.processes().terminate(pid);
+        Vec::new()
     }
 }
 

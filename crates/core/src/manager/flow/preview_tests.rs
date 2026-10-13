@@ -970,7 +970,9 @@ async fn preview_data_pass_through_does_not_claim_or_create_folders() {
     flow.stop().await;
 }
 
-/// A stopped group includes grandchildren and descendants that start another session.
+/// A stopped group includes grandchildren and descendants that start another session. Stop
+/// gives each of them the grace to quit, not only the leader: the parent quits at once, and the
+/// others take a moment to.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn pause_and_resume_stop_the_group_and_detached_grandchildren_and_stop_quits_them() {
@@ -986,6 +988,8 @@ import os, signal, sys, time
 root = sys.argv[1]
 def heartbeat(name):
     def quit(signum, frame):
+        if name != 'parent':
+            time.sleep(0.5)
         with open(root + '/' + name + '.quit', 'w') as f: f.write('term')
         sys.exit(0)
     signal.signal(signal.SIGTERM, quit)
