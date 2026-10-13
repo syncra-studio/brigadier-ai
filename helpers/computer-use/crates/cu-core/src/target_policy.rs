@@ -225,15 +225,19 @@ pub fn check(tool: &str, identity: &TargetIdentity, allowed: &[String]) -> Resul
 /// System Settings may be opened and read (a version, whether a setting is
 /// on), never changed: an agent must not grant itself permissions there.
 fn reads_settings(tool: &str, identity: &TargetIdentity) -> bool {
-    let bundle = identity.bundle_id.as_deref().unwrap_or_default();
-    let name = identity.name.trim().to_ascii_lowercase();
-    let settings = bundle.eq_ignore_ascii_case("com.apple.systempreferences")
-        || (bundle.is_empty() && matches!(name.as_str(), "system settings" | "system preferences"));
-    settings
+    is_settings(identity)
         && matches!(
             tool,
             "launch_app" | "get_window_state" | "get_accessibility_tree" | "zoom"
         )
+}
+
+/// Whether `identity` is System Settings.
+fn is_settings(identity: &TargetIdentity) -> bool {
+    let bundle = identity.bundle_id.as_deref().unwrap_or_default();
+    let name = identity.name.trim().to_ascii_lowercase();
+    bundle.eq_ignore_ascii_case("com.apple.systempreferences")
+        || (bundle.is_empty() && matches!(name.as_str(), "system settings" | "system preferences"))
 }
 
 /// The refusal reason for `identity`, or `None` when it may be targeted.
@@ -369,6 +373,16 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
         }
         RefusalReason::Driver => {
             "Brigadier Computer Use does not act on itself or on the app that hosts it."
+        }
+        RefusalReason::SecuritySurface if is_settings(identity) => {
+            "System Settings can be opened and read, never clicked or typed into. To read a \
+             pane, open it directly: launch_app with bundle_id com.apple.systempreferences and \
+             urls [\"x-apple.systempreferences:<pane id>\"], for example \
+             com.apple.SystemProfiler.AboutExtension (General › About, the macOS version), \
+             com.apple.Software-Update-Settings.extension, com.apple.Displays-Settings.extension, \
+             com.apple.Network-Settings.extension, com.apple.BluetoothSettings or \
+             com.apple.settings.PrivacySecurity.extension, then get_window_state. To change a \
+             setting, ask the user to do this step."
         }
         RefusalReason::SecuritySurface => {
             "Brigadier Computer Use does not act on macOS authentication or security surfaces \
@@ -578,10 +592,16 @@ mod tests {
                 "hotkey",
                 "scroll",
             ] {
+                let refused = enforce(tool, &json!({"pid": 106}), &[], resolver);
+                let text = format!("{refused:?}");
                 assert_eq!(
-                    reason_of(enforce(tool, &json!({"pid": 106}), &[], resolver)).as_deref(),
+                    reason_of(refused).as_deref(),
                     Some("security_surface"),
                     "{tool}"
+                );
+                assert!(
+                    text.contains("x-apple.systempreferences:"),
+                    "{tool}: the refusal shows how to open a pane"
                 );
             }
             assert_eq!(
