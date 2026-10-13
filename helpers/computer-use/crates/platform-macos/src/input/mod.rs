@@ -10,6 +10,7 @@
 
 pub mod ax_actions;
 pub mod keyboard;
+pub mod menu_shortcut;
 pub mod mouse;
 pub mod skylight;
 

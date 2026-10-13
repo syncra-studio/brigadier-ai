@@ -221,11 +221,22 @@ impl Tool for HotkeyTool {
                                 wid,
                                 || crate::input::keyboard::hotkey_no_auth(pid, &key, &m),
                             )?;
-                            Ok(())
+                            Ok(None)
                         }
-                        // background (default): auth-envelope post to the pid, no
-                        // raise — even when window_id was supplied for targeting.
-                        _ => crate::input::keyboard::hotkey(pid, &key, &m),
+                        // background (default): a menu shortcut presses its menu
+                        // item, which a background app never gets from a posted
+                        // combo; anything else is an auth-envelope post to the
+                        // pid, no raise — even when window_id was supplied.
+                        _ => {
+                            if !px_focus {
+                                if let Some(title) =
+                                    crate::input::menu_shortcut::press(pid, &key, &m)
+                                {
+                                    return Ok(Some(title));
+                                }
+                            }
+                            crate::input::keyboard::hotkey(pid, &key, &m).map(|()| None)
+                        }
                     }
                 })
                 .await
@@ -236,7 +247,17 @@ impl Tool for HotkeyTool {
         let changes = snapshot.detect_async_for_args(&args).await;
 
         match result {
-            Ok(Ok(())) => {
+            Ok(Ok(Some(title))) => ToolResult::text(format!(
+                "Pressed {title} ({key_display}) in the menu bar of pid {pid}.{}",
+                changes.result_suffix()
+            ))
+            .with_structured(serde_json::json!({
+                "path": "menu_item",
+                "menu_item": title,
+                "verified": false,
+                "effect": "unverifiable",
+            })),
+            Ok(Ok(None)) => {
                 let label = if fg {
                     " (delivery_mode:foreground)"
                 } else {
