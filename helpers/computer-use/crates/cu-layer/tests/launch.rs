@@ -219,6 +219,42 @@ fn files_and_links_among_launch_arguments_are_told_apart_from_flags() {
 }
 
 #[test]
+fn an_options_value_stays_with_it_instead_of_being_opened() {
+    let (targets, rest) = split_open_targets(
+        [
+            "--user-data-dir",
+            "/tmp/profile",
+            "/tmp/doc.txt",
+            "--profile-directory",
+            "~/profile",
+            "--lang",
+            "en",
+            "~/notes.txt",
+            "--window-name",
+            "https://example.com",
+        ]
+        .map(String::from)
+        .to_vec(),
+    );
+    assert_eq!(
+        targets,
+        ["/tmp/doc.txt", "~/notes.txt", "https://example.com"]
+    );
+    assert_eq!(
+        rest,
+        [
+            "--user-data-dir",
+            "/tmp/profile",
+            "--profile-directory",
+            "~/profile",
+            "--lang",
+            "en",
+            "--window-name"
+        ]
+    );
+}
+
+#[test]
 fn local_file_target_treats_plain_paths_as_files() {
     assert_eq!(
         local_file_target("/tmp/does-not-exist.md"),

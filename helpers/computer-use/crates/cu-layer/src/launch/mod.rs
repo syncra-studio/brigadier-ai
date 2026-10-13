@@ -652,12 +652,25 @@ fn structured_launch_error(code: &str, message: String, details: Value) -> ToolR
 }
 
 /// Splits launch arguments into files and links to open (a link, or an
-/// absolute or `~` path) and the rest (flags and their values).
+/// absolute or `~` path) and the rest (flags and their values). A path right
+/// after an option given without `=` (`--user-data-dir /tmp/profile`) is that
+/// option's value, not a file to open; a link is always opened.
 pub fn split_open_targets(arguments: Vec<String>) -> (Vec<String>, Vec<String>) {
-    arguments.into_iter().partition(|argument| {
-        !argument.starts_with('-')
-            && (argument.contains("://") || argument.starts_with('/') || argument.starts_with('~'))
-    })
+    let mut targets = Vec::new();
+    let mut rest = Vec::new();
+    let mut after_option = false;
+    for argument in arguments {
+        let is_option = argument.starts_with('-');
+        let is_path = argument.starts_with('/') || argument.starts_with('~');
+        let opens = !is_option && (argument.contains("://") || (is_path && !after_option));
+        after_option = is_option && !argument.contains('=');
+        if opens {
+            targets.push(argument);
+        } else {
+            rest.push(argument);
+        }
+    }
+    (targets, rest)
 }
 
 /// A structured `FILE_NOT_FOUND` error for the first local file among
