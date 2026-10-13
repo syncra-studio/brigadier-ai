@@ -14,7 +14,7 @@ import { createRoot } from "react-dom/client";
 import { SearchPanel } from "@/app/conversation/SearchPanel";
 import type { Request, SearchFile } from "@/ipc/generated";
 import { useApp } from "@/state/store";
-import { emitSearchUpdate } from "@/state/workspaceSearch";
+import { emitSearchUpdate, runSearch } from "@/state/workspaceSearch";
 
 const files: SearchFile[] = [
   { path: "src/app.ts", matches: 2, hash: "h-app", lines: [
@@ -172,16 +172,33 @@ function Fixture() {
       await sleep(80);
       seen.emptySummary = summary();
       seen.emptyFocus = document.activeElement?.getAttribute("aria-label");
+      // An automatic refresh must distinguish hidden matches from no matches.
+      silent = true;
+      const refreshQuery = (starts().at(-1) as Extract<Request, { method: "startSearch" }>).query;
+      runSearch(session, refreshQuery);
+      await until(() => summary() === "Searching…");
+      seen.dismissedStreaming = summary();
+      emitSearchUpdate(ids, { type: "files", files });
+      await sleep(50);
+      seen.filteredStreaming = summary();
+      emitSearchUpdate(ids, { type: "done", files: 2, matches: 3, capped: false });
+      await until(() => summary()?.startsWith("All results dismissed") === true);
+      seen.filteredDone = summary();
+      runSearch(session, refreshQuery);
+      await until(() => summary() === "Searching…");
+      emitSearchUpdate(ids, { type: "done", files: 0, matches: 0, capped: false });
+      await until(() => summary() === "No results");
+      seen.emptyRefresh = summary();
       // The connection drops mid-search, which the new one doesn't carry on: it is asked again.
       silent = true;
       button("session", "Match case")!.click();
-      await until(() => starts().length === 4);
+      await until(() => starts().length === 6);
       connection("disconnected");
       await sleep(50);
       silent = false;
       connection("connected");
-      await until(() => starts().length === 5 && summary() === "3 results in 2 files");
-      seen.reconnected = (starts()[4] as Extract<Request, { method: "startSearch" }>).query.matchCase;
+      await until(() => starts().length === 7 && summary() === "3 results in 2 files");
+      seen.reconnected = (starts()[6] as Extract<Request, { method: "startSearch" }>).query.matchCase;
       button("session", "Regular expression")!.click();
       type(field("session", "Search"), "(");
       await until(() => !!inPanel("session").querySelector('[role="alert"]'));

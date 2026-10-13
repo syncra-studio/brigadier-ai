@@ -59,7 +59,6 @@ export function SearchPanel({ target, onOpen, readOnly }: {
   const id = searchId(target);
   const checkout = useCheckoutKey(target);
   const form = useWorkspaceSearch((s) => s.entries[id]?.form ?? EMPTY_FORM);
-  const dismissed = useWorkspaceSearch((s) => s.entries[id]?.dismissed?.length ?? 0);
   const dismissFile = useCallback((path: string) => dismissSearchFile(target, path), [target]);
   const stored = useWorkspaceSearch((s) => s.entries[id]?.results ?? null);
   // Results for another checkout of the same session (its copy made since) don't show.
@@ -178,7 +177,7 @@ export function SearchPanel({ target, onOpen, readOnly }: {
             <div className="flex h-control-sm items-center gap-1 px-1">
               <p data-slot="search-summary" className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
                 {results.files.length === 0
-                  ? dismissed ? "All results dismissed. Press Enter in Search to show them again." : results.done ? "No results" : "Searching…"
+                  ? !results.done ? "Searching…" : results.filteredFiles ? "All results dismissed. Press Enter in Search to show them again." : "No results"
                   : `${plural(matches, "result")} in ${plural(results.files.length, "file")}${searching ? "…" : ""}`}
               </p>
               {results.files.length > 0 && (

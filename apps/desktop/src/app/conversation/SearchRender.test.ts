@@ -23,6 +23,10 @@ test("Search streams grouped results, opens a line, asks again on its options, r
   assert.equal(seen.refreshDismissed, true);
   assert.match(String(seen.emptySummary), /^All results dismissed/);
   assert.equal(seen.emptyFocus, "Search results");
+  assert.equal(seen.dismissedStreaming, "Searching…");
+  assert.equal(seen.filteredStreaming, "Searching…");
+  assert.match(String(seen.filteredDone), /^All results dismissed/);
+  assert.equal(seen.emptyRefresh, "No results");
   assert.equal(seen.confirm, "Replace 1 match in 1 file?");
   assert.deepEqual(seen.replace, {
     replacement: "bar", matchCase: true,

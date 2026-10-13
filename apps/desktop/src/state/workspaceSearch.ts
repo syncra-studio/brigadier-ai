@@ -26,12 +26,14 @@ export type SearchResults = {
   checkout: string;
   query: SearchQuery;
   files: SearchFile[];
+  /** Files hidden from this run by dismissal, including rows dismissed after they arrived. */
+  filteredFiles?: number;
   /** Set once it ended: how many it found, and whether its limits stopped it first. */
   done: { files: number; matches: number; capped: boolean } | null;
   error: string | null;
 };
 
-type Entry = { form: SearchForm; results: SearchResults | null; dismissed?: string[] };
+type Entry = { form: SearchForm; results: SearchResults | null; dismissed?: { checkout: string; query: SearchQuery; paths: string[] } | null };
 
 type SearchState = { entries: Record<string, Entry>; order: readonly string[] };
 
@@ -89,8 +91,8 @@ export function dismissSearchFile(target: WorkspaceTarget, path: string): void {
     if (!results) return {};
     const files = results.files.filter((file) => file.path !== path);
     return {
-      dismissed: [...new Set([...dismissed ?? [], path])],
-      results: { ...results, files },
+      dismissed: { checkout: results.checkout, query: results.query, paths: [...new Set([...dismissed?.paths ?? [], path])] },
+      results: { ...results, files, filteredFiles: (results.filteredFiles ?? 0) + results.files.length - files.length },
     };
   });
 }
@@ -112,9 +114,9 @@ export function runSearch(target: WorkspaceTarget, query: SearchQuery, resetDism
   early.clear();
   running = { token, id: null, owner, fresh: true };
   patch(owner, (entry) => ({
-    dismissed: !resetDismissed && entry.results?.checkout === checkout && sameQuery(entry.results.query, query) ? entry.dismissed ?? [] : [],
+    dismissed: !resetDismissed && entry.dismissed?.checkout === checkout && sameQuery(entry.dismissed.query, query) ? entry.dismissed : null,
     results: entry.results?.checkout === checkout
-      ? { ...entry.results, query, done: null, error: null }
+      ? { ...entry.results, query, done: null, error: null, filteredFiles: 0 }
       : { checkout, query, files: [], done: null, error: null },
   }));
   request({ method: "startSearch", target, query }).then(({ id }) => {
@@ -149,7 +151,7 @@ export function stopSearch(target: WorkspaceTarget): void {
 /** Stops a target's search and forgets its results: the query was cleared. */
 export function clearSearch(target: WorkspaceTarget): void {
   stopSearch(target);
-  patch(searchId(target), { results: null, dismissed: [] });
+  patch(searchId(target), { results: null, dismissed: null });
 }
 
 function applyUpdate(id: number, update: SearchUpdate): void {
@@ -161,9 +163,15 @@ function applyUpdate(id: number, update: SearchUpdate): void {
   patch(owner, ({ results, dismissed }) => {
     if (!results) return {};
     const files = fresh ? [] : results.files;
-    return update.type === "files"
-      ? { results: { ...results, files: [...files, ...update.files.filter((file) => !dismissed?.includes(file.path))] } }
-      : { results: { ...results, files, done: { files: update.files, matches: update.matches, capped: update.capped } } };
+    const filteredFiles = fresh ? 0 : results.filteredFiles ?? 0;
+    if (update.type === "files") {
+      const paths = new Set(dismissed?.paths);
+      const incoming = update.files.filter((file) => !paths.has(file.path));
+      return { results: { ...results, files: [...files, ...incoming],
+        filteredFiles: filteredFiles + update.files.length - incoming.length } };
+    }
+    return { results: { ...results, files, filteredFiles,
+      done: { files: update.files, matches: update.matches, capped: update.capped } } };
   });
 }
 

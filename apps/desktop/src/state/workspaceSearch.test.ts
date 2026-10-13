@@ -105,3 +105,40 @@ test("dismissals filter late batches and replacements, survive refresh, and rese
   finish();
   assert.deepEqual(current().files, [a, b]);
 });
+
+
+test("dismissals survive byte-budget and close eviction independently of the result payload", async () => {
+  let id = 0;
+  mockIPC((command, args) => {
+    if (command !== "ipc_request") return null;
+    const req = (args as { request: Request }).request;
+    return req.method === "startSearch" ? { method: req.method, id: ++id } : { method: req.method };
+  });
+  const a = results(1).files[0]!;
+  const b = { ...results(CACHE_BYTES).files[0]!, path: "big.txt" };
+  const start = async (reset = false, next = query) => {
+    runSearch(target, next, reset);
+    await new Promise((resolve) => setImmediate(resolve));
+    emitSearchUpdate(id, { type: "files", files: [a, b] });
+    emitSearchUpdate(id, { type: "done", files: 2, matches: 2, capped: false });
+  };
+  await start();
+  dismissSearchFile(target, a.path);
+  stopSearch(target);
+  assert.equal(current(), null, "closing evicts the oversized remaining payload");
+  await start();
+  assert.deepEqual(current().files.map((file) => file.path), [b.path]);
+  assert.equal(current().filteredFiles, 1);
+  useWorkspaceSearch.setState(kept(useWorkspaceSearch.getState(), "other", { results: results(300) }, 4, 1200));
+  assert.equal(current(), null, "the byte budget evicts the old payload");
+  await start();
+  assert.deepEqual(current().files.map((file) => file.path), [b.path]);
+  assert.equal(current().filteredFiles, 1);
+  stopSearch(target);
+  await start(true);
+  assert.deepEqual(current().files.map((file) => file.path), [a.path, b.path], "Enter resets even after eviction");
+  dismissSearchFile(target, a.path);
+  stopSearch(target);
+  await start(false, { ...query, include: "*.txt" });
+  assert.deepEqual(current().files.map((file) => file.path), [a.path, b.path], "changed options reset after eviction");
+});
