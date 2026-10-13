@@ -1,7 +1,7 @@
 //! The guard holds the same way for a single call and for a `run_steps`
 //! step. Fake tools and fake apps: no permission grant, no real app.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use cu_layer::lookup::Lookups;
@@ -110,10 +110,16 @@ const TOOLS: &[&str] = &[
 struct Harness {
     registry: Arc<ToolRegistry>,
     calls: Arc<Mutex<Vec<(String, Value)>>>,
+    // The driver lets one text input at a time into an app, process-wide,
+    // so the tests take turns.
+    _turn: MutexGuard<'static, ()>,
 }
+
+static TURN: Mutex<()> = Mutex::new(());
 
 impl Harness {
     fn new() -> Self {
+        let turn = TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mut registry = ToolRegistry::new();
         for name in TOOLS {
@@ -134,7 +140,11 @@ impl Harness {
         cu_layer::guard::install_with(&mut registry, Arc::new(FakeApps));
         let registry = Arc::new(registry);
         registry.init_self_weak();
-        Self { registry, calls }
+        Self {
+            registry,
+            calls,
+            _turn: turn,
+        }
     }
 
     async fn call(&self, tool: &str, args: Value) -> ToolResult {
