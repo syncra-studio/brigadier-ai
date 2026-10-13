@@ -242,10 +242,13 @@ Rules:
   - an icon, then "Messaged ‹title›" for a session in the same project, or "Messaged ‹title› in ‹project›" for one in
     another project;
   - the title is a link that opens that session at the message;
-  - a new `OrchestratorStepKind::MessagedSession { message_id }` points at the record, so the full text comes from §4.
+  - the row comes from the sent record itself (§4), placed at its position in the request's work, so its full text
+    and state need no step of their own. (As built: no `MessagedSession` step. A send refused before any record
+    exists leaves an `OrchestratorStepKind::MessageRefused { to?, title?, reason }` step instead, its only trace.)
 - **Live words:**
   - "Messaging ‹title›";
   - "Waiting for your OK to message ‹title›";
+  - a message the user chose not to send: "Didn't message ‹title›", with "You didn't send it" when opened;
   - in the rested request's live line, "Waiting for ‹title›".
 - **Failure:** "Couldn't message ‹title›", with the reason in plain words when opened.
 - **A group's summary** uses "messaged a session" / "messaged sessions" among its kinds, e.g. "Read files, messaged a
@@ -271,7 +274,7 @@ Rules:
   2. loads the history page that holds the message, if it isn't loaded;
   3. unfolds the work block around the row;
   4. scrolls it to the centre;
-  5. flashes it once (200 ms tint).
+  5. flashes it once (a tint held 200 ms, then faded over 400 ms), once its folds have finished opening.
 - Without `at`, it behaves as today.
 
 ### 6.4 Sidebar and notifications
