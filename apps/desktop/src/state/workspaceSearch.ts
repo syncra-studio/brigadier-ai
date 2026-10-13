@@ -31,7 +31,7 @@ export type SearchResults = {
   error: string | null;
 };
 
-type Entry = { form: SearchForm; results: SearchResults | null };
+type Entry = { form: SearchForm; results: SearchResults | null; dismissed?: string[] };
 
 type SearchState = { entries: Record<string, Entry>; order: readonly string[] };
 
@@ -83,6 +83,18 @@ export function setSearchForm(target: WorkspaceTarget, change: Partial<SearchFor
   patch(searchId(target), (entry) => ({ form: { ...entry.form, ...change } }));
 }
 
+/** Hides a file for this run only, including any later streamed matches for it. */
+export function dismissSearchFile(target: WorkspaceTarget, path: string): void {
+  patch(searchId(target), ({ results, dismissed }) => {
+    if (!results) return {};
+    const files = results.files.filter((file) => file.path !== path);
+    return {
+      dismissed: [...new Set([...dismissed ?? [], path])],
+      results: { ...results, files },
+    };
+  });
+}
+
 /**
  * The search running for this window (the daemon runs one per connection): whose, and its id
  * once the daemon gave it. Until the first update arrives the earlier results stay, so a
@@ -92,14 +104,15 @@ let running: { token: object; id: number | null; owner: string; fresh: boolean }
 /** Updates that came before the id their search was given. */
 const early = new Map<number, SearchUpdate[]>();
 
-/** Searches a target's checkout, in place of any search running. */
-export function runSearch(target: WorkspaceTarget, query: SearchQuery): void {
+/** Searches again, preserving dismissals unless the query/checkout changes or Enter resets them. */
+export function runSearch(target: WorkspaceTarget, query: SearchQuery, resetDismissed = false): void {
   const owner = searchId(target);
   const checkout = workspaceKey(target);
   const token = {};
   early.clear();
   running = { token, id: null, owner, fresh: true };
   patch(owner, (entry) => ({
+    dismissed: !resetDismissed && entry.results?.checkout === checkout && sameQuery(entry.results.query, query) ? entry.dismissed : [],
     results: entry.results?.checkout === checkout
       ? { ...entry.results, query, done: null, error: null }
       : { checkout, query, files: [], done: null, error: null },
@@ -136,7 +149,7 @@ export function stopSearch(target: WorkspaceTarget): void {
 /** Stops a target's search and forgets its results: the query was cleared. */
 export function clearSearch(target: WorkspaceTarget): void {
   stopSearch(target);
-  patch(searchId(target), { results: null });
+  patch(searchId(target), { results: null, dismissed: [] });
 }
 
 function applyUpdate(id: number, update: SearchUpdate): void {
@@ -145,11 +158,11 @@ function applyUpdate(id: number, update: SearchUpdate): void {
   const fresh = running.fresh;
   running.fresh = false;
   if (update.type === "done") running = null;
-  patch(owner, ({ results }) => {
+  patch(owner, ({ results, dismissed }) => {
     if (!results) return {};
     const files = fresh ? [] : results.files;
     return update.type === "files"
-      ? { results: { ...results, files: [...files, ...update.files] } }
+      ? { results: { ...results, files: [...files, ...update.files.filter((file) => !dismissed?.includes(file.path))] } }
       : { results: { ...results, files, done: { files: update.files, matches: update.matches, capped: update.capped } } };
   });
 }
