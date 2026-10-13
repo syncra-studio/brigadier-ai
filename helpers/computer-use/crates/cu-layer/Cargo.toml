@@ -11,15 +11,29 @@ publish = false
 [dependencies]
 cua-driver-core = { path = "../../upstream/crates/cua-driver-core" }
 async-trait = "0.1"
+anyhow = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 platform-macos = { path = "../../upstream/crates/platform-macos" }
+cursor-overlay = { path = "../../upstream/crates/cursor-overlay" }
 core-foundation = "0.10"
-objc2-foundation = { version = "0.2", features = ["NSBundle", "NSDate", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.2", features = [
+    "NSArray", "NSBundle", "NSDate", "NSDictionary", "NSNotification", "NSOperation",
+    "NSString", "NSURL", "block2",
+] }
 objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSRunningApplication", "NSWorkspace"] }
+objc2 = "0.5"
+block2 = "0.5"
+libc = "0.2"
+# The page tool's debugging-port client.
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+
+[build-dependencies]
+cc = "1"
 
 [lints]
 workspace = true

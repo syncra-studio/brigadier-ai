@@ -659,14 +659,22 @@ dependencies = [
 name = "cu-layer"
 version = "0.8.12"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "block2 0.5.1",
+ "cc",
  "core-foundation",
  "cua-driver-core",
+ "cursor-overlay 0.35.2",
+ "futures-util",
+ "libc",
+ "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
  "platform-macos 0.35.2",
  "serde_json",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
 ]
 

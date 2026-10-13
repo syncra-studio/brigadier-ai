@@ -26,6 +26,14 @@ fn snapshot(name: &str, actual: &str) {
     );
 }
 
+/// The driver's registry with Brigadier's own tools in place of the
+/// driver's, as agents get it.
+fn brigadier_registry() -> cua_driver_core::tool::ToolRegistry {
+    let mut registry = platform_macos::register_tools();
+    cu_layer::page::install(&mut registry);
+    registry
+}
+
 #[test]
 fn every_driver_tool_is_classified() {
     let registry = platform_macos::register_tools();
@@ -54,7 +62,7 @@ fn every_driver_tool_is_classified() {
 /// foreground anywhere in the list.
 #[test]
 fn agents_see_only_background_tools() {
-    let registry = platform_macos::register_tools();
+    let registry = brigadier_registry();
     let list = cu_layer::text::tools_list(registry.tools_list());
     let rendered = serde_json::to_string(&list).unwrap().to_ascii_lowercase();
     for word in [
@@ -128,7 +136,7 @@ fn driver_text_that_suggests_the_foreground_is_reviewed() {
 
 #[test]
 fn listed_tools_have_object_schemas() {
-    let registry = platform_macos::register_tools();
+    let registry = brigadier_registry();
     let list = cu_layer::text::tools_list(registry.tools_list());
     for tool in list["tools"].as_array().unwrap() {
         assert_eq!(
@@ -143,7 +151,7 @@ fn listed_tools_have_object_schemas() {
 #[test]
 #[ignore]
 fn dump_rewritten_tools_list() {
-    let registry = platform_macos::register_tools();
+    let registry = brigadier_registry();
     let list = cu_layer::text::tools_list(registry.tools_list());
     std::fs::write(
         std::env::var("DUMP").unwrap(),
