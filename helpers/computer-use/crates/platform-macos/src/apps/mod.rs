@@ -305,6 +305,34 @@ pub(crate) fn locate_by_name(name: &str) -> Option<AppLocator> {
     resolve_bundle_id_to_locator(name)
 }
 
+/// The app a launch reference names (a bundle id, an app name, or an
+/// `.app` path): its bundle id when known, and its name as its bundle is
+/// named. So the same app has one identity however a call names it.
+pub fn identify(reference: &str) -> Option<(Option<String>, String)> {
+    let stem = |path: &str| {
+        std::path::Path::new(path)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+    };
+    if reference.ends_with(".app") && std::path::Path::new(reference).is_dir() {
+        return Some((bundle_id_for_app_path(reference), stem(reference)?));
+    }
+    match locate_by_name(reference.trim_end_matches(".app"))? {
+        AppLocator::Path(path) => Some((bundle_id_for_app_path(&path), stem(&path)?)),
+        AppLocator::BundleId(bundle_id) => {
+            use objc2_app_kit::NSWorkspace;
+            use objc2_foundation::NSString;
+            let path = unsafe {
+                NSWorkspace::sharedWorkspace()
+                    .URLForApplicationWithBundleIdentifier(&NSString::from_str(&bundle_id))?
+                    .path()?
+                    .to_string()
+            };
+            Some((Some(bundle_id), stem(&path)?))
+        }
+    }
+}
+
 /// Read `CFBundleIdentifier` from an `.app` bundle's `Info.plist`.
 /// NSBundle reads both XML and binary property lists in-process.
 fn bundle_id_for_app_path(app_path: &str) -> Option<String> {

@@ -65,14 +65,26 @@ pub fn target_app(tool: &str, args: &Value) -> Option<TargetIdentity> {
         return pid_for_window(window_id).and_then(app_for_pid);
     }
     if tool == "launch_app" {
+        // One identity per app, whether the call names it by bundle id or
+        // by name, so a stop by one holds against the other.
         if let Some(bundle_id) = args.get("bundle_id").and_then(Value::as_str) {
+            let name = crate::apps::identify(bundle_id)
+                .map(|(_, name)| name)
+                .unwrap_or_else(|| bundle_id.to_owned());
             return Some(TargetIdentity {
-                name: bundle_id.to_owned(),
+                name,
                 bundle_id: Some(bundle_id.to_owned()),
                 pid: None,
             });
         }
         if let Some(name) = args.get("name").and_then(Value::as_str) {
+            if let Some((bundle_id, name)) = crate::apps::identify(name) {
+                return Some(TargetIdentity {
+                    name,
+                    bundle_id,
+                    pid: None,
+                });
+            }
             let name = name.trim_end_matches(".app");
             let name = name.rsplit('/').next().unwrap_or(name);
             return Some(TargetIdentity {
@@ -113,6 +125,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(named.name, "TextEdit");
+    }
+
+    #[test]
+    fn an_app_has_one_identity_whether_named_by_bundle_id_name_or_path() {
+        let by_id = target_app("launch_app", &json!({"bundle_id": "com.apple.TextEdit"})).unwrap();
+        let by_name = target_app("launch_app", &json!({"name": "TextEdit"})).unwrap();
+        let by_path = target_app(
+            "launch_app",
+            &json!({"name": "/System/Applications/TextEdit.app"}),
+        )
+        .unwrap();
+        for app in [&by_id, &by_name, &by_path] {
+            assert_eq!(app.name, "TextEdit", "{app:?}");
+            assert_eq!(
+                app.bundle_id.as_deref(),
+                Some("com.apple.TextEdit"),
+                "{app:?}"
+            );
+        }
     }
 
     #[test]
