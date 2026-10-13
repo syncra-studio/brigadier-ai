@@ -34,6 +34,10 @@ libc = "0.2"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Plans glides in a test of the saved cursor motion.
+cua-cursor-motion = { path = "../../upstream/crates/cua-cursor-motion" }
+
 [build-dependencies]
 cc = "1"
 

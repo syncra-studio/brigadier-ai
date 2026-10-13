@@ -669,6 +669,7 @@ dependencies = [
  "block2 0.5.1",
  "cc",
  "core-foundation",
+ "cua-cursor-motion",
  "cua-driver-core",
  "cursor-overlay 0.35.2",
  "futures-util",
