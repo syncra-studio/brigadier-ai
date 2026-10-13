@@ -509,13 +509,104 @@ fn validate_peer_matches_daemon_code(peer_pid: libc::pid_t) -> Result<(), String
         CFRelease(daemon_requirement as CFTypeRef);
         CFRelease(daemon_code as CFTypeRef);
     }
-    if validity_status == 0 {
+    if validity_status == 0
+        || (validity_status == ERR_SEC_CS_STATIC_CODE_CHANGED
+            && peer_runs_this_helper_replaced_by_an_update(peer_pid))
+    {
         Ok(())
     } else {
         Err(format!(
             "broker pid {peer_pid} does not match the running daemon code identity (OSStatus {validity_status})"
         ))
     }
+}
+
+/// `errSecCSStaticCodeChanged`: the file a process was started from no
+/// longer matches the process, as after an update replaced the bundle.
+#[cfg(all(unix, target_os = "macos"))]
+const ERR_SEC_CS_STATIC_CODE_CHANGED: SecurityStatus = -67034;
+
+/// The kernel's code-signing facts about a running process.
+#[cfg(all(unix, target_os = "macos"))]
+#[derive(Debug, PartialEq, Eq)]
+struct KernelSigning {
+    valid: bool,
+    team_id: Option<String>,
+    identifier: Option<String>,
+    path: Option<std::path::PathBuf>,
+}
+
+#[cfg(all(unix, target_os = "macos"))]
+fn kernel_signing(pid: libc::pid_t) -> KernelSigning {
+    extern "C" {
+        fn csops(
+            pid: libc::pid_t,
+            ops: libc::c_uint,
+            useraddr: *mut libc::c_void,
+            usersize: libc::size_t,
+        ) -> libc::c_int;
+    }
+    const CS_OPS_STATUS: libc::c_uint = 0;
+    const CS_OPS_IDENTITY: libc::c_uint = 11;
+    const CS_OPS_TEAMID: libc::c_uint = 14;
+    const CS_VALID: u32 = 0x1;
+    // CS_OPS_IDENTITY and CS_OPS_TEAMID answer a blob: an 8-byte header,
+    // then a NUL-terminated string.
+    let blob_string = |op| {
+        let mut buf = [0u8; 512];
+        let rc = unsafe { csops(pid, op, buf.as_mut_ptr().cast(), buf.len()) };
+        (rc == 0).then_some(())?;
+        let text = &buf[8..];
+        let end = text.iter().position(|&b| b == 0)?;
+        std::str::from_utf8(&text[..end])
+            .ok()
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+    };
+    let mut flags: u32 = 0;
+    let status = unsafe {
+        csops(
+            pid,
+            CS_OPS_STATUS,
+            (&mut flags as *mut u32).cast(),
+            std::mem::size_of::<u32>(),
+        )
+    };
+    let mut path = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let len = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+    KernelSigning {
+        valid: status == 0 && flags & CS_VALID != 0,
+        team_id: blob_string(CS_OPS_TEAMID),
+        identifier: blob_string(CS_OPS_IDENTITY),
+        path: (len > 0).then(|| {
+            std::path::PathBuf::from(String::from_utf8_lossy(&path[..len as usize]).into_owned())
+        }),
+    }
+}
+
+/// Whether `peer` may talk to the daemon `own` although its file on disk
+/// changed: an agent's shim started before an update replaced the helper
+/// bundle in place. The kernel still vouches for it: validly signed, with
+/// the daemon's own team and identifier, started from the daemon's own
+/// executable path.
+#[cfg(all(unix, target_os = "macos"))]
+fn replaced_by_an_update(peer: &KernelSigning, own: &KernelSigning) -> bool {
+    peer.valid
+        && own.valid
+        && peer.team_id.is_some()
+        && peer.team_id == own.team_id
+        && peer.identifier.is_some()
+        && peer.identifier == own.identifier
+        && peer.path.is_some()
+        && peer.path == own.path
+}
+
+#[cfg(all(unix, target_os = "macos"))]
+fn peer_runs_this_helper_replaced_by_an_update(peer_pid: libc::pid_t) -> bool {
+    replaced_by_an_update(
+        &kernel_signing(peer_pid),
+        &kernel_signing(std::process::id() as libc::pid_t),
+    )
 }
 
 /// Optional shared secret for authenticating daemon socket requests.
@@ -2945,6 +3036,36 @@ mod socket_authentication_tests {
             args: None,
             session_id: None,
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn signing(team: &str, id: &str, path: &str) -> super::KernelSigning {
+        super::KernelSigning {
+            valid: true,
+            team_id: (!team.is_empty()).then(|| team.to_owned()),
+            identifier: (!id.is_empty()).then(|| id.to_owned()),
+            path: (!path.is_empty()).then(|| path.into()),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_shim_from_before_an_update_is_accepted_only_as_this_same_helper() {
+        let own = signing("TEAM", "helper", "/data/Helper.app/Contents/MacOS/cu");
+        assert!(super::replaced_by_an_update(&own, &own));
+        let other_team = signing("OTHER", "helper", "/data/Helper.app/Contents/MacOS/cu");
+        assert!(!super::replaced_by_an_update(&other_team, &own));
+        let other_id = signing("TEAM", "other", "/data/Helper.app/Contents/MacOS/cu");
+        assert!(!super::replaced_by_an_update(&other_id, &own));
+        let other_path = signing("TEAM", "helper", "/tmp/Copy.app/Contents/MacOS/cu");
+        assert!(!super::replaced_by_an_update(&other_path, &own));
+        let unsigned = signing("", "", "/data/Helper.app/Contents/MacOS/cu");
+        assert!(!super::replaced_by_an_update(&unsigned, &unsigned));
+        let invalid = super::KernelSigning {
+            valid: false,
+            ..signing("TEAM", "helper", "/data/Helper.app/Contents/MacOS/cu")
+        };
+        assert!(!super::replaced_by_an_update(&invalid, &own));
     }
 
     #[test]
