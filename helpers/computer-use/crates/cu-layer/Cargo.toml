@@ -1,0 +1,24 @@
+[package]
+name = "cu-layer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Brigadier's behaviour on top of the vendored driver: target guard, never-front rules, restore policy and Brigadier's own tools."
+publish = false
+
+[dependencies]
+cua-driver-core = { path = "../../upstream/crates/cua-driver-core" }
+async-trait = "0.1"
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+platform-macos = { path = "../../upstream/crates/platform-macos" }
+objc2-foundation = { version = "0.2", features = ["NSBundle", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.2", features = ["NSRunningApplication", "NSWorkspace"] }
+
+[lints]
+workspace = true

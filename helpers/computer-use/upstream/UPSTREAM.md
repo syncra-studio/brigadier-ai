@@ -82,10 +82,13 @@ want, never continuously.
 3. `cargo build`, `cargo clippy --workspace --all-targets -- -D warnings` and
    `cargo test --workspace` in `helpers/computer-use`. Fix Brigadier's layer
    for API changes.
-4. Review the tool-list and foreground-text snapshot tests in `cu-layer`. Each
-   new tool or argument is allowed or denied in the layer's policy on
-   purpose, and each new text that suggests bringing an app forward gets its
-   rewrite.
+4. `cargo test -p cu-layer --test driver` checks what agents see against
+   the snapshots in `crates/cu-layer/tests/snapshots/`. A new driver tool
+   fails `every_driver_tool_is_classified` until it is offered or withheld
+   in `crates/cu-layer/src/catalog.rs`. Review each new argument and each
+   new text that suggests bringing an app forward (the rewrite in
+   `crates/cu-layer/src/text.rs` must cover it), then re-run with
+   `UPDATE_SNAPSHOTS=1` and commit the snapshot diff with the update.
 5. `scripts/sync-upstream.sh --verify`, then `tools/full-checks.sh` from the
    repository root.
 6. On a signed dev build: the scripted benchmark (warm 5, cold 3) against the
