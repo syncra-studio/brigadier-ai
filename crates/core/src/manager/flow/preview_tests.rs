@@ -1344,7 +1344,7 @@ async fn a_web_preview_runs_once_a_port_its_group_listens_on_answers() {
 }
 
 /// A desktop app preview never gets the frontend address it prints, and without a window of
-/// its own it stays Starting (where windows can be seen). The user's Stop leaves it listed, until Clear finished.
+/// its own it stays Starting (where windows can be seen). The user's Stop removes it from the list.
 #[tokio::test]
 async fn an_app_preview_has_no_url_and_waits_for_its_window() {
     use std::time::Duration;
@@ -1396,7 +1396,6 @@ async fn an_app_preview_has_no_url_and_waits_for_its_window() {
         .await
         .unwrap();
     assert!(!flow.board().await.previews.contains_key("preview-1"));
-    assert_eq!(board.previews["preview-1"].url, None);
 
     drop(listener);
     flow.stop().await;

@@ -1280,7 +1280,7 @@ impl SessionManager {
         let stopped: Vec<_> = stopped.into_iter().filter(|preview|
             matches!(&preview.state, PreviewState::Stopped { reason } if reason == USER_STOP)
         ).collect();
-        self.remove_stopped_previews(id, &stopped).await?;
+        let removed = self.remove_stopped_previews(id, &stopped).await;
         if let Ok(conv) = self.conv(id) {
             for preview in stopped {
                 let log = preview
@@ -1290,13 +1290,19 @@ impl SessionManager {
                         format!(" Its stored log remains readable: read_artifact {alias}.")
                     })
                     .unwrap_or_default();
+                let outcome = if removed.is_ok() {
+                    "was stopped by the user and removed; its ID is no longer available"
+                } else {
+                    "was stopped by the user; it is not running now, but its ID remains listed"
+                };
                 conv.note(format!(
-                    "[preview] {} \"{}\" was stopped by the user and removed; its ID is no longer available.{log}",
+                    "[preview] {} \"{}\" {outcome}.{log}",
                     preview.id, preview.name
-                )).await;
+                ))
+                .await;
             }
         }
-        Ok(())
+        removed
     }
 
     /// The user's Stop on a preview row, or Stop all, removes what it stops.

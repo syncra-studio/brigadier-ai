@@ -1292,6 +1292,9 @@ impl SessionManager {
             Ok(stopped) => self.remove_user_stopped_previews(&id, stopped).await,
             Err(err) => Err(err),
         };
+        if let Err(err) = stopped {
+            tracing::warn!(conversation = %id, error = %err, "could not remove user-stopped previews");
+        }
         self.drop_prewarm(&id, "stopped by the user");
         // What Brigadier still owed the stopped answers ends with them, so nothing wakes the
         // thread for them later or merges on its own: the CI watches, and the held merge
@@ -1300,7 +1303,7 @@ impl SessionManager {
         self.stop_ci_watches(&id).await;
         self.stop_merge_for_stop(&id).await;
         self.settle_requests(&id).await;
-        interrupted.and(stopped)
+        interrupted
     }
 
     /// Continues the latest request after the user stopped it: a turn for that request, in its
