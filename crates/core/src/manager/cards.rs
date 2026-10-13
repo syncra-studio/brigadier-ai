@@ -456,10 +456,13 @@ impl SessionManager {
         // Recorded before it is delivered: until the answer is in the inbox, the request
         // counts as carried, or a settle in between would end it (its card answered, nothing
         // queued) and open its time again with the answer's turn.
-        let delivers = matches!(
-            question.kind,
-            QuestionKind::Orchestrator | QuestionKind::Merge { .. }
-        ) && typed.is_none();
+        // Only "Merge into main" starts work on the asking request: "Not yet" leaves its
+        // finished block closed, and the decision rides on the thread's next turn.
+        let delivers = match &question.kind {
+            QuestionKind::Orchestrator => true,
+            QuestionKind::Merge { base, .. } => merge_chosen(&answers[0], base),
+            _ => false,
+        };
         if delivers {
             self.answering(&conversation_id, &card_id, question.request_id.clone())
                 .await;
@@ -528,18 +531,24 @@ impl SessionManager {
                 conflicted,
                 ..
             } => {
-                let text = if merge_chosen(&answers[0], base) && *conflicted {
+                if !delivers {
+                    self.conv(&conversation_id)?
+                        .note(format!(
+                            "[answer] The user doesn't want `{branch}` merged into `{base}` yet: they answered the merge card \"{}\". Don't merge, and don't ask again until they bring it up.",
+                            answers[0]
+                        ))
+                        .await;
+                    self.waiters.answer(&card_id, CardAnswer::Answered);
+                    self.settle_requests(&conversation_id).await;
+                    return Ok(());
+                }
+                let text = if *conflicted {
                     format!(
                         "[answer] The user chose to merge `{branch}` into `{base}` and have its conflicts resolved. Call finish_session now, without user_words: it names the merge task that resolves them, and the merge goes through on this answer once that lands."
                     )
-                } else if merge_chosen(&answers[0], base) {
-                    format!(
-                        "[answer] The user chose to merge `{branch}` into `{base}`. Call finish_session now, without user_words."
-                    )
                 } else {
                     format!(
-                        "[answer] The user doesn't want `{branch}` merged into `{base}` yet: \"{}\". Don't merge, and don't ask again until they bring it up.",
-                        answers[0]
+                        "[answer] The user chose to merge `{branch}` into `{base}`. Call finish_session now, without user_words."
                     )
                 };
                 self.deliver_for(
