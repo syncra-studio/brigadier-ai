@@ -71,6 +71,55 @@ impl CdpClient {
         let mut session = CdpSession::connect(port, TargetSelector::UrlContains(None)).await?;
         do_evaluate(&mut session, javascript).await
     }
+
+    /// The browser-wide websocket address the debugging port on `port`
+    /// reports in `/json/version`. Fails when the port is not a debugging
+    /// port.
+    pub async fn browser_websocket_url(port: u16) -> anyhow::Result<String> {
+        let version: serde_json::Value =
+            serde_json::from_str(&http_get(port, "/json/version").await?)
+                .map_err(|e| anyhow::anyhow!("CDP /json/version parse error: {e}"))?;
+        version["webSocketDebuggerUrl"]
+            .as_str()
+            .filter(|url| url.starts_with("ws://"))
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("Port {port} reports no browser webSocketDebuggerUrl"))
+    }
+
+    /// Sends `method` once for each of `params`, in order, on the browser's
+    /// own websocket (the `webSocketDebuggerUrl` `/json/version` gives), and
+    /// returns each `result`. Stops at the first error. The whole exchange
+    /// is bounded to a few seconds.
+    pub async fn call_on_browser(
+        port: u16,
+        method: &str,
+        params: Vec<serde_json::Value>,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let ws_url = Self::browser_websocket_url(port).await?;
+            let (ws, _) = tokio_tungstenite::connect_async(ws_url.as_str())
+                .await
+                .map_err(|e| anyhow::anyhow!("WebSocket connect failed: {e}"))?;
+            let mut session = CdpSession {
+                ws,
+                session_id: None,
+                target_id: None,
+                current_target_url: None,
+                next_id: 1,
+            };
+            let mut results = Vec::with_capacity(params.len());
+            for params in params {
+                let response = session.call(method, params).await?;
+                if let Some(error) = response.get("error") {
+                    anyhow::bail!("CDP {method} failed: {error}");
+                }
+                results.push(response["result"].clone());
+            }
+            Ok(results)
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("CDP {method} on port {port} timed out after 5s"))?
+    }
 }
 
 /// Caches one open `CdpSession` per port across calls, instead of opening a
@@ -1190,6 +1239,10 @@ pub(super) async fn listening_ports(pid: i32) -> Vec<u16> {
 }
 
 async fn http_get_json(port: u16) -> anyhow::Result<String> {
+    http_get(port, "/json").await
+}
+
+async fn http_get(port: u16, path: &str) -> anyhow::Result<String> {
     // The whole round-trip is timeout-guarded as one unit, not just the
     // connect — see the read loop below for why a bare `read_to_end` isn't
     // safe here.
@@ -1199,7 +1252,7 @@ async fn http_get_json(port: u16) -> anyhow::Result<String> {
             .map_err(|e| anyhow::anyhow!("TCP connect error: {e}"))?;
 
         let req =
-            format!("GET /json HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
         stream.write_all(req.as_bytes()).await?;
 
         // Chrome's CDP HTTP server ignores our `Connection: close` request

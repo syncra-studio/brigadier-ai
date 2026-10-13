@@ -2,6 +2,7 @@ pub mod ax_page_reader;
 pub mod browser_js;
 pub mod cdp_client;
 pub mod electron_js;
+pub mod open_link;
 pub mod wk_web_view;
 
 pub use ax_page_reader::AXPageReader;

@@ -1,3 +1,4 @@
+use crate::browser::open_link::OpenedBy;
 use async_trait::async_trait;
 use cu_core::{
     protocol::ToolResult,
@@ -18,7 +19,9 @@ fn def() -> &'static ToolDef {
              Provide either `bundle_id` (preferred — unambiguous, e.g. `com.apple.calculator`) \
              or `name` (e.g. \"Calculator\"). If both are given, bundle_id wins.\n\n\
              Optional `urls` are handed to the app as open targets — for Finder, pass a folder \
-             path to open a backgrounded Finder window there.\n\n\
+             path to open a backgrounded Finder window there. A web browser that is already \
+             running opens web links in a new background window of its own, listed first in \
+             `windows`.\n\n\
              Optional `cdp_debugging_port`: opens a Chrome DevTools Protocol (CDP) server \
              on the specified port (appends --remote-debugging-port=N to the app's argv). \
              Use this to automate Electron/VS Code/Cursor, or Chrome/Brave/Edge, via CDP.\n\n\
@@ -238,22 +241,59 @@ impl Tool for LaunchAppTool {
             )
         });
 
+        // A web browser that is already running is asked to open the links
+        // itself, in a new window it keeps in the background, instead of
+        // through LaunchServices, which brings it to the front. The
+        // suppression armed above stays as a safety net.
+        let opened_in_background = if creates_new_instance {
+            None
+        } else {
+            crate::browser::open_link::open_in_running_browser(
+                bundle_id.as_deref(),
+                name.as_deref(),
+                &urls,
+                cdp_debugging_port,
+            )
+            .await
+        };
+        let link_count = urls.len();
+        let windows_before_open = preexisting_windows.clone();
+        let windows_before_summary = preexisting_windows.clone();
+
         // Predicate captured BEFORE moving inputs into spawn_blocking.
         // Same condition that selects the `openURLs:withApplicationAtURL:`
         // chain over the simpler `openApplicationAtURL:` path. Used after
         // the spawn returns to size the suppression window — the slow
         // path triggers a SECOND activation when the file-open delivers,
         // which lands AFTER the bundle-only-launch activation window.
-        let slow_launch_path = !urls.is_empty()
-            || !additional_arguments.is_empty()
-            || !env.is_empty()
-            || creates_new_instance;
+        // Links the browser opened itself deliver no such second activation.
+        let slow_launch_path = opened_in_background.is_none()
+            && (!urls.is_empty()
+                || !additional_arguments.is_empty()
+                || !env.is_empty()
+                || creates_new_instance);
 
         // Move the launch closure inputs into spawn_blocking. The
         // blocking task returns (pid, app_info, windows). Suppression
         // upgrade happens AFTER the blocking call returns (back on the
         // async runtime), then we sleep holding the targeted lease.
         let launch_result = tokio::task::spawn_blocking(move || {
+            if let Some(opened) = opened_in_background {
+                let pid = opened.pid;
+                let (mut windows, new) = crate::browser::open_link::wait_for_new_windows(
+                    pid,
+                    &windows_before_open,
+                    urls.len(),
+                );
+                if new == 0 {
+                    main_window_first(pid, &mut windows);
+                }
+                crate::ax::offspace::remember_front_windows(pid);
+                let app_info = crate::apps::list_running_apps()
+                    .into_iter()
+                    .find(|a| a.pid == pid);
+                return Ok((pid, app_info, windows));
+            }
             // An app already running opens the documents in windows of its
             // own; watch it first so each one is caught as it opens, also
             // when other documents open right after it.
@@ -548,8 +588,35 @@ impl Tool for LaunchAppTool {
                 } else {
                     "background"
                 };
-                let mut summary =
-                    format!("Launched {app_name} (pid {pid}) in {placement}.{port_summary}");
+                let mut summary = match opened_in_background {
+                    Some(opened) => {
+                        let links = if link_count == 1 {
+                            "the link".to_owned()
+                        } else {
+                            format!("{link_count} links")
+                        };
+                        let how = match opened.by {
+                            OpenedBy::DevTools(port) => {
+                                format!("through its debugging port {port}")
+                            }
+                            OpenedBy::AppleEvents => "by Apple Events".to_owned(),
+                        };
+                        let mut s = format!(
+                            "{app_name} (pid {pid}) was already running: opened {links} in a new \
+                             background window, {how}."
+                        );
+                        if windows
+                            .first()
+                            .is_some_and(|w| !windows_before_summary.contains(&w.window_id))
+                        {
+                            s.push_str(" The new window is listed first.");
+                        }
+                        s
+                    }
+                    None => {
+                        format!("Launched {app_name} (pid {pid}) in {placement}.{port_summary}")
+                    }
+                };
 
                 if !windows.is_empty() {
                     summary.push_str("\n\nWindows:");
@@ -606,6 +673,14 @@ impl Tool for LaunchAppTool {
                         ));
                     }
                     structured["placement"] = p;
+                }
+                if let Some(opened) = opened_in_background {
+                    structured["opened_in_background"] = match opened.by {
+                        OpenedBy::DevTools(port) => {
+                            serde_json::json!({ "by": "debugging_port", "port": port })
+                        }
+                        OpenedBy::AppleEvents => serde_json::json!({ "by": "apple_events" }),
+                    };
                 }
                 if !moved_targets.is_empty() {
                     summary.push_str(&format!(

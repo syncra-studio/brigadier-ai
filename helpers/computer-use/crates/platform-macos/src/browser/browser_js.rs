@@ -75,6 +75,21 @@ impl BrowserJs {
         execute_script_on_main_queue(script, gate).await
     }
 
+    /// Runs `script` in-process only when the user has already let the
+    /// helper send Apple Events to `bundle_id`. Fails at once otherwise,
+    /// without showing macOS's prompt, so callers can fall back to another
+    /// way instead of interrupting the user with a question.
+    pub(crate) async fn run_script_if_allowed(
+        bundle_id: &str,
+        script: String,
+    ) -> anyhow::Result<String> {
+        let status = automation_permission(bundle_id, false);
+        if status != 0 {
+            anyhow::bail!("Apple Events to {bundle_id} are not allowed yet (status {status})");
+        }
+        execute_script_on_main_queue(script, NativeDispatchGate::default()).await
+    }
+
     /// Patch the browser Preferences JSON to enable Allow JavaScript from Apple Events,
     /// then relaunch the browser.
     pub async fn enable_javascript_apple_events(bundle_id: &str) -> anyhow::Result<()> {
@@ -667,7 +682,7 @@ fn patch_preferences_file(path: &str) -> anyhow::Result<()> {
 }
 
 /// Escape a plain string value for embedding inside an AppleScript double-quoted string.
-fn escape_for_applescript_string(s: &str) -> String {
+pub(crate) fn escape_for_applescript_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
