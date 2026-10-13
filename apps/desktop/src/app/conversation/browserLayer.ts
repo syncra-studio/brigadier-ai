@@ -22,10 +22,17 @@ let next = 0;
 let cut = "";
 let sent = "";
 
-/** Whether an open layer of the app takes clicks: any menu, popover or dialog, not a tooltip. */
+/** A popover that leaves the page live around it, taking clicks only on itself. */
+const ABOVE = "[data-above-page]";
+
+/**
+ * Whether an open layer of the app takes clicks: any menu, popover or dialog, not a tooltip nor
+ * a popover above the page (`data-above-page`, such as a page's question for the camera).
+ */
 export function modalOpen(layers: Iterable<Element>): boolean {
   for (const layer of layers) {
     if (layer.matches("[data-radix-popper-content-wrapper]") && layer.querySelector(TOOLTIP)) continue;
+    if (layer.matches(ABOVE) || layer.querySelector(ABOVE)) continue;
     return true;
   }
   return false;
@@ -59,7 +66,7 @@ function sync() {
     document.documentElement.toggleAttribute("data-page-beneath", shown);
   }
   const above = shown
-    ? [...document.querySelectorAll("[data-above-page]")].map(areaOf).filter((area) => area !== null)
+    ? [...document.querySelectorAll(ABOVE)].map(areaOf).filter((area) => area !== null)
     : [];
   const modal = shown && modalOpen(document.querySelectorAll(MODAL));
   const layer = JSON.stringify([above, modal]);

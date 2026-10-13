@@ -3,4 +3,4 @@
 /**
  * What the side panel's Browser tab hears about its page, over the channel it opened it with.
  */
-export type BrowserEvent = { "type": "load", url: string, loading: boolean, } | { "type": "title", title: string, } | { "type": "favicon", url: string, dataUrl: string, } | { "type": "blocked", url: string, } | { "type": "downloaded", path: string, ok: boolean, } | { "type": "escape" } | { "type": "zoomIn" } | { "type": "popup", id: string, url: string, } | { "type": "closed" };
+export type BrowserEvent = { "type": "load", url: string, loading: boolean, } | { "type": "title", title: string, } | { "type": "favicon", url: string, dataUrl: string, } | { "type": "blocked", url: string, } | { "type": "downloaded", path: string, ok: boolean, } | { "type": "escape" } | { "type": "zoomIn" } | { "type": "popup", id: string, url: string, } | { "type": "closed" } | { "type": "permission", request: number, origin: string, camera: boolean, microphone: boolean, };

@@ -8,6 +8,8 @@
 
 mod bridge;
 mod browser;
+#[cfg(any(target_os = "macos", test))]
+mod browser_grants;
 mod browser_import;
 mod browser_store;
 mod documents;
@@ -743,6 +745,7 @@ fn main() {
             browser::browser_navigate,
             browser::browser_place,
             browser::browser_layer,
+            browser::browser_permission,
             browser::browser_go,
             browser::browser_zoom,
             browser::browser_find,
@@ -756,6 +759,7 @@ fn main() {
             browser::browser_clear,
             browser::browser_site_count,
             browser::browser_downloads,
+            browser::browser_download_open,
             browser::browser_downloads_remove,
             browser::browser_sites,
             browser::browser_site_set,

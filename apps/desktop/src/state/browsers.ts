@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { stepZoom } from "@/app/conversation/browserKeys";
 
-import { browserClose, browserNavigate, browserOpen, browserZoom, revealPath } from "@/ipc/client";
+import { browserClose, browserNavigate, browserOpen, browserPermission, browserZoom, revealPath } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
 import { closeFind, findState, forgetFind } from "@/state/browserFind";
 import { closeTabAnywhere, openPopupTab } from "@/state/sessionTabs";
@@ -23,13 +23,20 @@ export type BrowserPage = {
   blocked: string | null;
   /** The page zoom (1 is 100%) the shell last said; it stays from page to page in the tab. */
   zoom?: number;
+  /** The page's question for the camera or microphone, waiting for an answer (macOS). */
+  asking?: BrowserAsking | null;
 };
+
+export type BrowserAsking = { request: number; origin: string; camera: boolean; microphone: boolean };
+
+/** How the tab answers a page's question: see `browserPermission`. */
+export type PermissionAnswer = Parameters<typeof browserPermission>[1];
 
 /** The tabs whose page the shell has made, so it is told where to go, not made again. */
 const made = new Set<string>();
 
-export const useBrowsers = create<{ pages: Record<string, BrowserPage> }>(
-  () => ({ pages: {} }),
+export const useBrowsers = create<{ pages: Record<string, BrowserPage>; downloads: number }>(
+  () => ({ pages: {}, downloads: 0 }),
 );
 
 function update(id: string, patch: Partial<BrowserPage>): void {
@@ -87,9 +94,13 @@ export async function openPage(
       return;
     }
     await browserOpen(id, url, bounds, agent, (event) => {
-      if (event.type === "load")
+      if (event.type === "load") {
+        const shown = useBrowsers.getState().pages[id];
         update(id, { url: event.url, loading: event.loading,
-          ...(event.url !== useBrowsers.getState().pages[id]?.url ? { favicon: null } : {}) });
+          ...(event.url !== shown?.url ? { favicon: null } : {}),
+          // The shell drops a question from a site the page left.
+          ...(shown?.asking && originOf(event.url) !== shown.asking.origin ? { asking: null } : {}) });
+      }
       else if (event.type === "title") update(id, { title: event.title });
       else if (event.type === "favicon") {
         if (faviconFits(useBrowsers.getState().pages[id], event.url)) update(id, { favicon: event.dataUrl });
@@ -107,7 +118,11 @@ export async function openPage(
         if (!openPopupTab(id, event.id, event.url)) browserClose(event.id).catch(() => {});
       }
       else if (event.type === "closed") closeTabAnywhere(id);
-      else update(id, { blocked: event.url, loading: false });
+      else if (event.type === "permission") {
+        const { request, origin, camera, microphone } = event;
+        update(id, { asking: { request, origin, camera, microphone } });
+      }
+      else if (event.type === "blocked") update(id, { blocked: event.url, loading: false });
     });
     if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }
     made.add(id);
@@ -118,8 +133,29 @@ export async function openPage(
   }
 }
 
+/** A page's site, `scheme://host[:port]`, as the shell names it; null for none. */
+export function originOf(url: string): string | null {
+  try {
+    const { protocol, host } = new URL(url);
+    return host ? `${protocol}//${host}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The tab answers its page's question, which goes. */
+export function answerPermission(id: string, answer: PermissionAnswer): void {
+  const asking = useBrowsers.getState().pages[id]?.asking;
+  if (!asking) return;
+  update(id, { asking: null });
+  browserPermission(asking.request, answer).catch((error: unknown) =>
+    console.error("answering the page failed", error),
+  );
+}
+
 /** A download finished or failed: a toast says so, and finds the file. */
 function downloaded(path: string, ok: boolean): void {
+  useBrowsers.setState(({ downloads }) => ({ downloads: downloads + 1 }));
   const name = path.split(/[\\/]/).pop() || path;
   if (!ok) {
     toast(`Couldn't download ${name}`, { tone: "error" });

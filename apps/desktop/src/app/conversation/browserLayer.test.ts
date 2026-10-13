@@ -29,4 +29,10 @@ test("menus, popovers and dialogs take clicks over a page; tooltips don't", () =
   assert.equal(modalOpen([layer(["[data-radix-popper-content-wrapper]"], ["[role=tooltip]"])]), false);
   assert.equal(modalOpen([tooltip, menu]), true);
   assert.equal(modalOpen([dialog]), true);
+  // A page's question for the camera leaves the page live around it: its wrapper and its
+  // content (a dialog) both pass.
+  const asking = layer(["[data-radix-popper-content-wrapper]"], ["[data-above-page]"]);
+  const content = layer(["[role=dialog]", "[data-above-page]"]);
+  assert.equal(modalOpen([asking, content]), false);
+  assert.equal(modalOpen([asking, content, menu]), true);
 });

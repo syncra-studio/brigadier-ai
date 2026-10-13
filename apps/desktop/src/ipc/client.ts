@@ -300,6 +300,15 @@ export function browserConfigure(options: BrowserOptions): Promise<void> {
   return invoke("browser_configure", { options });
 }
 
+/**
+ * Answers a Browser tab page's question `question` for the camera or microphone (macOS): `once`
+ * for this request, `visiting` while the tab stays on the site, `never` saved for the site;
+ * `dismiss` refuses this request only.
+ */
+export function browserPermission(question: number, answer: "once" | "visiting" | "never" | "dismiss"): Promise<void> {
+  return invoke("browser_permission", { request: question, answer });
+}
+
 /** Drops the Browser tab's page (what it saved stays in the browser's store). */
 export function browserClose(id: string): Promise<void> {
   return invoke("browser_close", { id });

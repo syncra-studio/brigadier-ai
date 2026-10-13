@@ -113,6 +113,14 @@ pub enum BrowserEvent {
     Popup { id: String, url: String },
     /// The page closed itself (`window.close()` in a popup): its tab closes.
     Closed,
+    /// The page asked for the camera or microphone, which its site's choices leave to the user:
+    /// the tab asks, and answers `request` (`browser_permission`).
+    Permission {
+        request: u32,
+        origin: String,
+        camera: bool,
+        microphone: bool,
+    },
 }
 
 /// What a Browser tab's page shows, for the chat beside it: its address, its title, its text

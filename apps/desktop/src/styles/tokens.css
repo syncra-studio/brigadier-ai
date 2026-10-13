@@ -85,7 +85,9 @@
  *               text-browser                  its address and its ⋯ menu's rows (13px)
  *               --browser-address-mask        the fade at the address field's end
  *                                             (`.browser-address-field`)
- *               w-browser-site-info           the popover of its site information button
+ *               w-browser-site-info           the popover of its site information button (and
+ *                                             of a page's question for the camera)
+ *               w-browser-downloads           its Downloads popover
  *               h-browser-zoom, w-browser-zoom-value  the ⋯ menu's zoom stepper and its 100%
  *               w-browser-find, h-browser-find-row, shadow-browser-find  the page's find bar
  *               w-browser-menu, h-browser-menu-item, rounded-browser-menu  its ⋯ menu
@@ -341,6 +343,7 @@
   --text-browser: 0.8125rem;
   --text-browser--line-height: 1.125rem;
   --spacing-browser-site-info: 20rem;
+  --spacing-browser-downloads: 22rem;
   --spacing-browser-zoom: 1.625rem;
   --spacing-browser-zoom-value: 2.75rem;
   /* The page's find bar: 340 wide, a 44 high row. */

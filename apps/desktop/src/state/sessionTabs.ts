@@ -203,7 +203,7 @@ export function openBrowserTab(conversationId: string, url: string, agent = fals
 }
 
 /** The session that has tab `id`. */
-function sessionWith(id: string): string | null {
+export function sessionWith(id: string): string | null {
   const sessions = useSessionTabs.getState().sessions;
   return Object.keys(sessions).find((conversationId) => sessions[conversationId]?.tabs.some((tab) => tab.id === id)) ?? null;
 }

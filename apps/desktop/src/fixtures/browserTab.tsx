@@ -2,8 +2,8 @@
  * The Browser tab's toolbar over a faked shell: its measurements, the address idle and focused,
  * the site information button and popover, Reload while loading, the ⋯ menu, and where each of
  * the menu's Settings rows leads (Settings › Browser and Import Browser Data render beside it as
- * they do in the app's main area). Then the page's native actions: the zoom stepper, Print and
- * the screenshot, the find bar (typed, stepped, kept per tab, closed) and the tab's keys.
+ * they do in the app's main area). Then the page's native actions: the zoom stepper, Print, the
+ * toolbar's screenshot, the find bar (typed, stepped, kept per tab, closed) and the tab's keys.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -223,6 +223,7 @@ function Fixture() {
         addressRing: getComputedStyle(one('[data-slot="browser-address"]') ?? document.body).boxShadow,
         external: box(button("Open in external browser")),
         options: box(button("Browser options")),
+        screenshot: box(button("Take a screenshot")),
         font: field() ? parseFloat(getComputedStyle(field()!).fontSize) : null,
         fade: field() ? getComputedStyle(field()!).maskImage : null,
       };
@@ -338,7 +339,9 @@ function Fixture() {
       button("Reset zoom", menu() ?? document)?.click();
       await until(() => zoomShown() === "100%");
       seen.zoomReset = zoomShown();
-      pickMenu("Take a screenshot");
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await until(() => menu() === null);
+      button("Take a screenshot")?.click();
       await until(() => useToasts.getState().toasts.length > 0);
       seen.screenshotToast = useToasts.getState().toasts.map((toast) => toast.text);
       openMenu();
@@ -449,7 +452,8 @@ function Fixture() {
       // Its ⋯ menu: nothing to find, print, zoom or picture; ⌘F does nothing.
       openMenu();
       await until(() => menu() !== null);
-      seen.newTabMenu = menuRows().filter((row) => row !== "|").slice(0, 4);
+      seen.newTabMenu = menuRows().filter((row) => row !== "|").slice(0, 3);
+      seen.newTabScreenshot = button("Take a screenshot")?.disabled;
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await until(() => menu() === null);
       press("KeyF");

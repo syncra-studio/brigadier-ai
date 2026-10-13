@@ -41,6 +41,11 @@ export function browserDownloads(query: string): Promise<BrowserDownload[]> {
   return invoke<BrowserDownload[]>("browser_downloads", { query });
 }
 
+/** Opens a finished download with the system's app for its type. */
+export function openDownload(id: number): Promise<void> {
+  return invoke("browser_download_open", { id });
+}
+
 /** Forgets downloads (the files stay): `ids`, or every finished one. */
 export function removeDownloads(ids: number[] | null): Promise<void> {
   return invoke("browser_downloads_remove", { ids });

@@ -569,6 +569,18 @@ mod embedded {
         url: String,
         features: wry::NewWindowFeatures,
     ) -> NewWindowResponse {
+        // The page's right-click menu's "Open Link in External Browser".
+        #[cfg(target_os = "macos")]
+        if crate::browser_ui::popup_goes_outside() {
+            use tauri_plugin_opener::OpenerExt;
+
+            if web_page(&url)
+                && let Err(err) = app.opener().open_url(url, None::<&str>)
+            {
+                tracing::warn!(error = %err, "Browser tab: a link couldn't open outside");
+            }
+            return NewWindowResponse::Deny;
+        }
         if !(web_page(&url) || url.is_empty() || url == "about:blank") {
             return NewWindowResponse::Deny;
         }
@@ -578,7 +590,7 @@ mod embedded {
             POPUPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
         let events = Events::new(Sink::Waiting(Vec::new()));
-        let tab = match build(app, Start::Popup(features), bounds, agent, events) {
+        let tab = match build(app, &id, Start::Popup(features), bounds, agent, events) {
             Ok(tab) => tab,
             Err(err) => {
                 tracing::warn!(error = %err.message, "Browser tab: a popup's page couldn't be made");
@@ -643,6 +655,7 @@ mod embedded {
         }
         let tab = build(
             app,
+            &id,
             Start::Url(url),
             bounds,
             agent,
@@ -657,9 +670,10 @@ mod embedded {
         BROWSERS.with_borrow(|browsers| browsers.get(id).is_some_and(|tab| tab.events.waiting()))
     }
 
-    /// Makes a tab's page.
+    /// Makes tab `id`'s page.
     fn build(
         app: &AppHandle,
+        id: &str,
         start: Start,
         bounds: BrowserBounds,
         agent: bool,
@@ -682,6 +696,8 @@ mod embedded {
         let visit = Arc::new(Mutex::new(Visit::default()));
         let title_visit = visit.clone();
         let load_limit = limit.clone();
+        #[cfg(target_os = "macos")]
+        let load_tab = id.to_owned();
         let saved = super::data_dir();
         // Windows: the browser's folder in Brigadier's data folder, apart from the app's webview.
         #[cfg(target_os = "windows")]
@@ -813,6 +829,10 @@ mod embedded {
             })
             .with_on_page_load_handler(move |event, url| {
                 let loading = matches!(event, PageLoadEvent::Started);
+                #[cfg(target_os = "macos")]
+                if loading {
+                    media::navigated(&load_tab, &url);
+                }
                 let mut held = load_limit.lock().expect("favicon lock");
                 if loading {
                     held.reset();
@@ -844,10 +864,14 @@ mod embedded {
             .build_as_child(&window)
             .map_err(|err| failed(format!("could not make the browser: {err}")))?;
         #[cfg(target_os = "macos")]
-        let closed = events.clone();
+        let (closed, asking, tab) = (events.clone(), events.clone(), id.to_owned());
         Ok(Tab {
             #[cfg(target_os = "macos")]
-            _ui: crate::browser_ui::install(&webview, move || closed.send(BrowserEvent::Closed)),
+            _ui: crate::browser_ui::install(
+                &webview,
+                move || closed.send(BrowserEvent::Closed),
+                move |origin, devices, answer| media::asked(&tab, &asking, origin, devices, answer),
+            ),
             webview,
             events,
         })
@@ -931,6 +955,144 @@ mod embedded {
 
     pub fn close(id: &str) {
         BROWSERS.with_borrow_mut(|browsers| browsers.remove(id));
+        #[cfg(target_os = "macos")]
+        media::closed(id);
+    }
+
+    /// A tab's camera and microphone requests (macOS): the site's saved choices answer, then
+    /// what the tab allows while visiting (`browser_grants`), else the tab asks.
+    #[cfg(target_os = "macos")]
+    pub mod media {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+
+        use brigadier_ipc::app::{BrowserEvent, SitePermission};
+
+        use super::Events;
+        use crate::browser_grants::{self, Answer, Visiting};
+        use crate::browser_store::{self, Device};
+
+        /// A question the tab shows, waiting for its answer.
+        struct Asking {
+            tab: String,
+            origin: String,
+            devices: Vec<Device>,
+            answer: crate::browser_ui::MediaAnswer,
+        }
+
+        thread_local! {
+            static VISITING: RefCell<Visiting> = RefCell::default();
+            static ASKING: RefCell<HashMap<u32, Asking>> = RefCell::default();
+        }
+
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+        /// Tab `tab`'s page, on `origin`, asked for `devices`.
+        pub(super) fn asked(
+            tab: &str,
+            events: &Events,
+            origin: String,
+            devices: Vec<Device>,
+            answer: crate::browser_ui::MediaAnswer,
+        ) {
+            // Every site that asks is listed in Site settings, with the user's choices.
+            let now = browser_store::now_ms();
+            let saved = devices
+                .iter()
+                .map(|device| browser_store::with(|store| store.site_asked(&origin, *device, now)))
+                .collect::<Option<Vec<SitePermission>>>()
+                .map_or(SitePermission::Block, |choices| {
+                    browser_store::combined(&choices)
+                });
+            let visiting = VISITING.with_borrow(|visiting| visiting.allows(tab, &origin, &devices));
+            let decided = browser_grants::answer(saved, visiting);
+            tracing::info!(%origin, ?devices, ?decided, "Browser tab: camera or microphone asked for");
+            match decided {
+                Answer::Grant => answer(true),
+                Answer::Deny => answer(false),
+                Answer::Ask => {
+                    let request = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // The newest question takes the place of one the tab still shows.
+                    drop_asking(|asking| asking.tab == tab);
+                    let (camera, microphone) = (
+                        devices.contains(&Device::Camera),
+                        devices.contains(&Device::Microphone),
+                    );
+                    ASKING.with_borrow_mut(|asks| {
+                        asks.insert(
+                            request,
+                            Asking {
+                                tab: tab.to_owned(),
+                                origin: origin.clone(),
+                                devices,
+                                answer,
+                            },
+                        )
+                    });
+                    events.send(BrowserEvent::Permission {
+                        request,
+                        origin,
+                        camera,
+                        microphone,
+                    });
+                }
+            }
+        }
+
+        /// The tab's answer to question `request`: `once` (this request), `visiting` (while the
+        /// tab shows the site) or `never` (saved as the site's choice); anything else denies it.
+        pub fn answered(request: u32, choice: &str) {
+            let Some(asking) = ASKING.with_borrow_mut(|asks| asks.remove(&request)) else {
+                return;
+            };
+            match choice {
+                "once" => (asking.answer)(true),
+                "visiting" => {
+                    VISITING.with_borrow_mut(|visiting| {
+                        visiting.grant(&asking.tab, &asking.origin, &asking.devices);
+                    });
+                    (asking.answer)(true);
+                }
+                "never" => {
+                    for device in &asking.devices {
+                        browser_store::with(|store| {
+                            store.set_site(&asking.origin, *device, SitePermission::Block)
+                        });
+                    }
+                    (asking.answer)(false);
+                }
+                _ => (asking.answer)(false),
+            }
+        }
+
+        /// Denies and forgets the questions `matching` picks.
+        fn drop_asking(matching: impl Fn(&Asking) -> bool) {
+            let gone: Vec<Asking> = ASKING.with_borrow_mut(|asks| {
+                let ids: Vec<u32> = asks
+                    .iter()
+                    .filter(|(_, asking)| matching(asking))
+                    .map(|(id, _)| *id)
+                    .collect();
+                ids.iter().filter_map(|id| asks.remove(id)).collect()
+            });
+            for asking in gone {
+                (asking.answer)(false);
+            }
+        }
+
+        /// Tab `tab` started loading `url`: on another site, what it allowed while visiting
+        /// ends, and a question from the site it left goes unanswered.
+        pub fn navigated(tab: &str, url: &str) {
+            VISITING.with_borrow_mut(|visiting| visiting.navigated(tab, url));
+            let site = browser_grants::origin_of(url);
+            drop_asking(|asking| asking.tab == tab && site.as_deref() != Some(&asking.origin));
+        }
+
+        /// Tab `tab` closed: what it allowed ends, and its question goes unanswered.
+        pub fn closed(tab: &str) {
+            VISITING.with_borrow_mut(|visiting| visiting.closed(tab));
+            drop_asking(|asking| asking.tab == tab);
+        }
     }
 
     pub fn close_all() {
@@ -1350,6 +1512,19 @@ pub fn browser_downloads(query: String) -> Vec<BrowserDownload> {
     browser_store::with(|store| store.downloads(&query)).unwrap_or_default()
 }
 
+/// Opens finished download `id` with the system's app for its type.
+#[tauri::command]
+pub fn browser_download_open(app: tauri::AppHandle, id: i64) -> Result<(), IpcError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let path = browser_store::with(|store| store.finished_download(id))
+        .flatten()
+        .ok_or_else(|| failed("that download isn't there any more"))?;
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|err| failed(format!("could not open it: {err}")))
+}
+
 /// Forgets downloads (the files stay): `ids`, or every finished one with none.
 #[tauri::command]
 pub fn browser_downloads_remove(ids: Option<Vec<i64>>) -> Result<(), IpcError> {
@@ -1461,6 +1636,15 @@ pub async fn browser_site_count(app: tauri::AppHandle) -> Result<Option<u32>, Ip
 /// Drops every tab's page (on the main thread): the app's own page started again.
 pub fn close_all() {
     embedded::close_all();
+}
+
+/// The answer to a Browser tab's camera or microphone question `request` (macOS): `once`,
+/// `visiting` or `never`; anything else denies it.
+#[tauri::command]
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+pub fn browser_permission(request: u32, answer: String) {
+    #[cfg(target_os = "macos")]
+    embedded::media::answered(request, &answer);
 }
 
 /// The tab closed: its page goes (what it saved stays in the browser's store).

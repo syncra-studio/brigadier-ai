@@ -3,27 +3,29 @@
 //!
 //! wry's own delegate grants every camera and microphone request a page makes. That is right
 //! for the app's page, but a web page in the Browser tab may listen or watch only as the user
-//! chose for its site, so the tab's webview gets this delegate instead: it answers media
-//! capture from the site's choices (Allow, Block, or Ask: WebKit's own question), and leaves
-//! popups (`window.open`, `target=_blank`; new tabs, see `browser::popup`) and the file picker to
-//! wry's delegate as before. It also puts each page beneath the app's own web view (`Layer`). It also reaches the browser's saved WebKit data store (clearing it,
-//! counting its sites, adding imported cookies) and asks where to save a download. A tab's page
-//! also zooms, finds text, prints, copies a screenshot and reloads past the cache here. Talking
-//! to WebKit through objc2 needs `unsafe`; every use says why it holds.
+//! chose for its site, so the tab's webview gets this delegate instead: it hands media capture
+//! requests to the tab (the site's choices answer, or the tab asks; see `browser_grants`), and
+//! leaves popups (`window.open`, `target=_blank`; new tabs, see `browser::popup`) and the file
+//! picker to wry's delegate as before. It also puts each page beneath the app's own web view
+//! (`Layer`), names the page's right-click menu's link items for tabs (`link_items`), reaches
+//! the browser's saved WebKit data store (clearing it, counting its sites, adding imported
+//! cookies) and asks where to save a download. A tab's page also zooms, finds text, prints,
+//! copies a screenshot and reloads past the cache here. Talking to WebKit through objc2 needs
+//! `unsafe`; every use says why it holds.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 use std::ptr::NonNull;
+use std::time::{Duration, Instant};
 
 use block2::{DynBlock, RcBlock};
-use brigadier_ipc::app::SitePermission;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, ProtocolObject, Sel};
 use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventMask, NSEventPhase, NSImage,
-    NSModalResponseOK, NSPasteboard, NSPasteboardTypePNG, NSPrintInfo, NSSavePanel, NSView,
-    NSWindowOrderingMode,
+    NSApplication, NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventMask, NSEventPhase,
+    NSImage, NSMenu, NSMenuItem, NSModalResponseOK, NSPasteboard, NSPasteboardTypePNG, NSPrintInfo,
+    NSSavePanel, NSUserInterfaceItemIdentification, NSView, NSWindowOrderingMode,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain,
@@ -45,13 +47,18 @@ use objc2_web_kit::{
 };
 use wry::WebViewExtMacOS;
 
-use crate::browser_store::{self, Device};
+use crate::browser_store::Device;
+
+/// Answers a page's request for devices: `true` grants it.
+pub type MediaAnswer = Box<dyn FnOnce(bool)>;
 
 struct Ivars {
     /// wry's delegate, which still shows the file picker.
     wry: Option<Retained<ProtocolObject<dyn WKUIDelegate>>>,
     /// The page closed itself.
     on_close: Box<dyn Fn()>,
+    /// The page asked for devices: the site's choices, or the tab, answer (`true` grants).
+    on_media: Box<dyn Fn(String, Vec<Device>, MediaAnswer)>,
 }
 
 define_class!(
@@ -90,20 +97,22 @@ define_class!(
                 WKMediaCaptureType::CameraAndMicrophone => &[Device::Camera, Device::Microphone],
                 _ => &[],
             };
-            // Every site that asks is listed in Site settings, with the user's choices.
-            let now = browser_store::now_ms();
-            let choices: Option<Vec<SitePermission>> = devices
-                .iter()
-                .map(|device| browser_store::with(|store| store.site_asked(&origin, *device, now)))
-                .collect();
-            let answer = match choices.map(|choices| browser_store::combined(&choices)) {
-                Some(SitePermission::Allow) => WKPermissionDecision::Grant,
-                // WebKit's own question, naming the site.
-                Some(SitePermission::Ask) => WKPermissionDecision::Prompt,
-                _ => WKPermissionDecision::Deny,
-            };
-            tracing::info!(%origin, ?devices, ?answer, "Browser tab: camera or microphone asked for");
-            decision.call((answer,));
+            if devices.is_empty() {
+                decision.call((WKPermissionDecision::Deny,));
+                return;
+            }
+            let decision = decision.copy();
+            (self.ivars().on_media)(
+                origin,
+                devices.to_vec(),
+                Box::new(move |grant| {
+                    decision.call((if grant {
+                        WKPermissionDecision::Grant
+                    } else {
+                        WKPermissionDecision::Deny
+                    },));
+                }),
+            );
         }
 
         #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
@@ -327,6 +336,127 @@ thread_local! {
     static ORIGINAL: RefCell<Vec<(Sel, objc2::runtime::Imp)>> = const { RefCell::new(Vec::new()) };
     /// The web view class's own `hitTest:`.
     static HIT_TEST: Cell<Option<objc2::runtime::Imp>> = const { Cell::new(None) };
+    /// The web view class's own `willOpenMenu:withEvent:`.
+    static WILL_OPEN_MENU: Cell<Option<objc2::runtime::Imp>> = const { Cell::new(None) };
+    /// The right-click menu's target for "Open Link in External Browser".
+    static MENU_TARGET: RefCell<Option<Retained<MenuTarget>>> = const { RefCell::new(None) };
+    /// When "Open Link in External Browser" was picked: the popup it makes opens outside.
+    static OUTSIDE: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements, and the class adds no `Drop`.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "BrigadierBrowserMenuTarget"]
+    struct MenuTarget;
+
+    // SAFETY: NSObjectProtocol has no requirements.
+    unsafe impl NSObjectProtocol for MenuTarget {}
+
+    impl MenuTarget {
+        /// "Open Link in External Browser": WebKit's "Open Link in New Window" item, its
+        /// represented object, acts, and the popup it makes opens in the system's browser.
+        #[unsafe(method(openLinkOutside:))]
+        fn open_link_outside(&self, sender: &NSMenuItem) {
+            let Some(item) = sender
+                .representedObject()
+                .and_then(|object| object.downcast::<NSMenuItem>().ok())
+            else {
+                return;
+            };
+            let Some(action) = item.action() else {
+                return;
+            };
+            OUTSIDE.set(Some(Instant::now()));
+            let target = item.target();
+            // SAFETY: WebKit's own item's action, sent to its own target from that item, as
+            // AppKit sends it when the item is picked.
+            unsafe {
+                NSApplication::sharedApplication(self.mtm()).sendAction_to_from(
+                    action,
+                    target.as_deref(),
+                    Some(&item),
+                )
+            };
+        }
+    }
+);
+
+/// Whether the popup a page makes now came from "Open Link in External Browser" (picked in the
+/// last few seconds), so it opens in the system's browser instead of a tab.
+pub fn popup_goes_outside() -> bool {
+    OUTSIDE
+        .take()
+        .is_some_and(|at| at.elapsed() < Duration::from_secs(3))
+}
+
+/// WebKit names its right-click menu's items with these identifiers.
+const OPEN_LINK_IN_NEW_WINDOW: &str = "WKMenuItemIdentifierOpenLinkInNewWindow";
+
+/// A page's right-click menu, as WebKit made it: "Open Link in New Window" makes a tab here
+/// (`browser::popup`), so it says so, and "Open Link in External Browser" follows it.
+fn link_items(menu: &NSMenu) {
+    let mtm = menu.mtm();
+    let items = menu.itemArray();
+    let Some(index) = items.iter().position(|item| {
+        item.identifier()
+            .is_some_and(|id| id.to_string() == OPEN_LINK_IN_NEW_WINDOW)
+    }) else {
+        return;
+    };
+    let new_window = items.objectAtIndex(index);
+    new_window.setTitle(ns_string!("Open Link in New Tab"));
+    let target = MENU_TARGET.with_borrow_mut(|target| {
+        target
+            .get_or_insert_with(|| {
+                // SAFETY: NSObject's plain `init` on a fresh allocation of a class without ivars.
+                unsafe { msg_send![MenuTarget::alloc(mtm), init] }
+            })
+            .clone()
+    });
+    // SAFETY: a fresh item with a title, an action the target answers and no key equivalent.
+    let outside = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            ns_string!("Open Link in External Browser"),
+            Some(sel!(openLinkOutside:)),
+            ns_string!(""),
+        )
+    };
+    // SAFETY: the target outlives the menu (`MENU_TARGET` keeps it), and answers the action.
+    unsafe {
+        outside.setTarget(Some(&target));
+        outside.setRepresentedObject(Some(&new_window));
+    }
+    menu.insertItem_atIndex(&outside, index as isize + 1);
+}
+
+/// The web view class's `willOpenMenu:withEvent:`: a page's right-click menu gets its link
+/// items (`link_items`); every other menu opens as before.
+unsafe extern "C-unwind" fn will_open_menu(
+    this: &NSView,
+    cmd: Sel,
+    menu: &NSMenu,
+    event: &NSEvent,
+) {
+    if let Some(original) = WILL_OPEN_MENU.get() {
+        // SAFETY: `original` is the class's own method for `cmd`, taking a menu and an event.
+        unsafe {
+            std::mem::transmute::<
+                objc2::runtime::Imp,
+                unsafe extern "C-unwind" fn(&NSView, Sel, &NSMenu, &NSEvent),
+            >(original)(this, cmd, menu, event);
+        }
+    }
+    let page = LAYER.with(|layer| {
+        layer
+            .try_borrow()
+            .is_ok_and(|layer| layer.pages.iter().any(|page| std::ptr::eq(&**page, this)))
+    });
+    if page {
+        link_items(menu);
+    }
 }
 
 /// The events the app's web view hands to a page beneath.
@@ -576,13 +706,41 @@ fn clear_app(app: &NSView) -> bool {
             types,
         );
     }
+    let selector = sel!(willOpenMenu:withEvent:);
+    // SAFETY: NSView declares `willOpenMenu:withEvent:`, taking a menu and an event and
+    // returning nothing; `will_open_menu` has that signature and calls the method it replaces.
+    // Without it the menu stays WebKit's own.
+    unsafe {
+        let method = objc2::ffi::class_getInstanceMethod(class, selector);
+        if let Some(imp) = (!method.is_null())
+            .then(|| objc2::ffi::method_getImplementation(method))
+            .flatten()
+        {
+            WILL_OPEN_MENU.set(Some(imp));
+            let types = objc2::ffi::method_getTypeEncoding(method);
+            let replacement = std::mem::transmute::<
+                unsafe extern "C-unwind" fn(&NSView, Sel, &NSMenu, &NSEvent),
+                objc2::runtime::Imp,
+            >(will_open_menu);
+            objc2::ffi::class_replaceMethod(
+                std::ptr::from_ref(class).cast_mut(),
+                selector,
+                replacement,
+                types,
+            );
+        }
+    }
     true
 }
 
-/// Makes `webview` answer camera and microphone requests from the site's choices, tell
-/// `on_close` when its page closes itself, and lie beneath the app's web view. Call it on the
+/// Makes `webview` hand camera and microphone requests to `on_media`, tell `on_close` when its
+/// page closes itself, and lie beneath the app's web view. Call it on the
 /// main thread, right after building the webview.
-pub fn install(webview: &wry::WebView, on_close: impl Fn() + 'static) -> BrowserUi {
+pub fn install(
+    webview: &wry::WebView,
+    on_close: impl Fn() + 'static,
+    on_media: impl Fn(String, Vec<Device>, MediaAnswer) + 'static,
+) -> BrowserUi {
     let view = webview.webview();
     // SAFETY: a property read on a live web view, on the main thread (it is MainThreadOnly).
     let wry = unsafe { view.UIDelegate() };
@@ -591,6 +749,7 @@ pub fn install(webview: &wry::WebView, on_close: impl Fn() + 'static) -> Browser
         Ivars {
             wry,
             on_close: Box::new(on_close),
+            on_media: Box::new(on_media),
         },
     );
     // SAFETY: the delegate implements WKUIDelegate; WebKit keeps it weakly, and the returned
