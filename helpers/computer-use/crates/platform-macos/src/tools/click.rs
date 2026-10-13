@@ -23,8 +23,9 @@ use std::sync::Arc;
 
 use crate::apps;
 use crate::ax::bindings::{
-    copy_action_names, copy_children, copy_string_attr, element_at_screen_position,
-    element_screen_rect, kAXErrorSuccess, AXUIElementPerformAction, AXUIElementRef,
+    copy_action_names, copy_children, copy_string_attr, copy_stringified_attr,
+    element_at_screen_position, element_screen_rect, kAXErrorSuccess, AXUIElementPerformAction,
+    AXUIElementRef,
 };
 use crate::focus_guard;
 use crate::window_change_detector::WindowChangeDetector;
@@ -482,6 +483,7 @@ impl Tool for ClickTool {
                                         &action_clone,
                                         &ck,
                                         &gate,
+                                        false,
                                     )?);
                                     std::thread::sleep(std::time::Duration::from_millis(150));
                                     Ok(())
@@ -492,8 +494,17 @@ impl Tool for ClickTool {
                             })?;
                             Ok((outcome, fronted))
                         } else {
-                            perform_ax_click(element_ptr, idx, pid, wid, &action_clone, &ck, &gate)
-                                .map(|outcome| (outcome, false))
+                            perform_ax_click(
+                                element_ptr,
+                                idx,
+                                pid,
+                                wid,
+                                &action_clone,
+                                &ck,
+                                &gate,
+                                true,
+                            )
+                            .map(|outcome| (outcome, false))
                         }
                     })
                     .await
@@ -1021,6 +1032,26 @@ impl std::fmt::Display for AxActionFailure {
 
 impl std::error::Error for AxActionFailure {}
 
+/// A menu item the app shows dimmed right now: pressing it would do nothing.
+fn dimmed_menu_item(
+    role: &str,
+    enabled: Option<&str>,
+    idx: usize,
+    title: &str,
+) -> Option<AxActionFailure> {
+    (role == "AXMenuItem" && enabled == Some("false")).then(|| AxActionFailure {
+        code: "menu_item_dimmed",
+        effect: "not_landed",
+        message: format!(
+            "[{idx}] AXMenuItem \"{title}\" is dimmed in the app's menu right now, so pressing \
+             it would do nothing and it was not pressed. Apps dim a command that doesn't apply \
+             at the moment, often while the app is in the background or nothing it acts on is \
+             selected. Select what it should act on first, or press it with delivery_mode \
+             \"foreground\"."
+        ),
+    })
+}
+
 /// Maps an `AXUIElementPerformAction` error to what the agent should do.
 /// A press is not idempotent, so an error that leaves the effect unknown is
 /// never retried here: the agent must observe before it acts again.
@@ -1071,9 +1102,22 @@ fn perform_ax_click(
     action_str: &str,
     cursor_key: &str,
     gate: &crate::dispatch_gate::NativeDispatchGate,
+    in_background: bool,
 ) -> anyhow::Result<(String, bool, bool)> {
     let ax_action = map_action(action_str);
     let element = element_ptr as AXUIElementRef;
+
+    // A dimmed menu item does nothing when pressed, yet the press still
+    // reports success. In the background the app's own dimming is current;
+    // brought to the front, it re-checks its menus only afterwards.
+    if in_background && ax_action == "AXPress" {
+        let role = unsafe { copy_string_attr(element, "AXRole") }.unwrap_or_default();
+        let enabled = unsafe { copy_stringified_attr(element, "AXEnabled") };
+        let title = unsafe { copy_string_attr(element, "AXTitle") }.unwrap_or_default();
+        if let Some(failure) = dimmed_menu_item(&role, enabled.as_deref(), idx, &title) {
+            return Err(failure.into());
+        }
+    }
 
     // Capture advertised actions BEFORE dispatching so we can detect silent no-ops
     // (AX returns success even when the element doesn't advertise the action).
@@ -1195,6 +1239,20 @@ mod tests {
         assert_eq!(failure.effect, "unknown");
         assert!(failure.message.contains("observe"), "{}", failure.message);
         assert!(failure.message.contains("AXPress"), "{}", failure.message);
+    }
+
+    #[test]
+    fn a_dimmed_menu_item_is_not_pressed_and_says_so() {
+        let failure = super::dimmed_menu_item("AXMenuItem", Some("false"), 223, "Bold").unwrap();
+        assert_eq!(failure.effect, "not_landed");
+        assert!(
+            failure.message.contains("\"Bold\" is dimmed"),
+            "{}",
+            failure.message
+        );
+        assert!(super::dimmed_menu_item("AXMenuItem", Some("true"), 1, "Bold").is_none());
+        assert!(super::dimmed_menu_item("AXMenuItem", None, 1, "Bold").is_none());
+        assert!(super::dimmed_menu_item("AXButton", Some("false"), 1, "OK").is_none());
     }
 
     #[test]
