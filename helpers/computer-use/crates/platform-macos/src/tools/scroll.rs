@@ -451,12 +451,12 @@ impl Tool for ScrollTool {
                 let foreground = delivery_mode.is_foreground();
                 let ax_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
                     let Some(element_guard) = native_element_guard else {
-                        return Ok((false, false, None, None));
+                        return Ok((None, false, None, None));
                     };
                     let element = element_guard.as_ptr() as AXUIElementRef;
                     let before = unsafe { read_scroll_observation(element, &direction_for_ax) };
                     if foreground {
-                        let mut delivered = false;
+                        let mut delivered = None;
                         let fronted = crate::input::skylight::with_foreground_assist(
                             pid as libc::pid_t,
                             wid,
@@ -486,16 +486,18 @@ impl Tool for ScrollTool {
                 })
                 .await;
                 match ax_result {
-                    Ok(Ok((true, fronted, before, after))) => {
+                    Ok(Ok((Some(done), fronted, before, after))) => {
                         let mut structured = scroll_verification(before, after);
                         structured["path"] =
                             serde_json::json!(if fronted { "ax_fg" } else { "ax" });
-                        return ToolResult::text(format!(
-                        "✅ Scrolled native macOS control {direction} by {by} × {amount} through AX."
-                    ))
-                    .with_structured(structured);
+                        structured["steps"] = serde_json::json!(done.steps);
+                        structured["reached_end"] = serde_json::json!(done.at_end);
+                        return ToolResult::text(native_scroll_summary(
+                            &direction, &by, amount, done,
+                        ))
+                        .with_structured(structured);
                     }
-                    Ok(Ok((false, _, _, _))) => {}
+                    Ok(Ok((None, _, _, _))) => {}
                     Ok(Err(error)) => {
                         return ToolResult::error(format!("Native AX scroll failed: {error}"));
                     }
@@ -866,27 +868,80 @@ impl Tool for ScrollTool {
     }
 }
 
+/// The answer for a scroll through a text area's scroll-bar buttons.
+fn native_scroll_summary(direction: &str, by: &str, amount: usize, done: NativeScroll) -> String {
+    let edge = if direction == "up" { "start" } else { "end" };
+    if done.stalled {
+        format!(
+            "⚠️ Scrolled native macOS control {direction} by {by} × {} of {amount} through AX: \
+             the text stopped moving before its {edge}, even after waiting for the app. Take a \
+             fresh get_window_state before scrolling again.",
+            done.steps
+        )
+    } else if done.at_end && done.steps < amount {
+        format!(
+            "✅ Scrolled native macOS control {direction} by {by} × {} through AX and reached \
+             the {edge} of the text; the other {} step(s) weren't needed.",
+            done.steps,
+            amount - done.steps
+        )
+    } else {
+        format!("✅ Scrolled native macOS control {direction} by {by} × {amount} through AX.")
+    }
+}
+
+/// What a scroll through a text area's scroll-bar buttons did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NativeScroll {
+    /// Presses that moved the text (or every press, when the position can't be read).
+    steps: usize,
+    /// The text reached its start or end, so the remaining presses were skipped.
+    at_end: bool,
+    /// The text stopped moving short of its end, even after waiting for the app.
+    stalled: bool,
+}
+
+/// A press that leaves the text where it was, short of its end, usually means the app is
+/// still laying the text out or is busy: wait this long and press again, up to
+/// [`STALL_RETRIES`] times in a row.
+const STALL_WAIT: std::time::Duration = std::time::Duration::from_millis(120);
+const STALL_RETRIES: usize = 6;
+
+/// The visible part of a text area as (first character, characters shown, all characters).
+unsafe fn text_view_position(element: AXUIElementRef) -> Option<(isize, isize, isize)> {
+    let range = copy_range_attr(element, "AXVisibleCharacterRange")?;
+    let total = copy_number_attr(element, "AXNumberOfCharacters")?;
+    Some((range.location, range.length, total as isize))
+}
+
+/// Whether a text view showing `(location, length, total)` can't scroll further that way.
+fn text_view_at_end((location, length, total): (isize, isize, isize), reverse: bool) -> bool {
+    if reverse {
+        location <= 0
+    } else {
+        location + length >= total
+    }
+}
+
 unsafe fn scroll_native_text_area(
     element: AXUIElementRef,
     direction: &str,
     by: &str,
     amount: usize,
-) -> bool {
+) -> Option<NativeScroll> {
     if copy_string_attr(element, "AXRole").as_deref() != Some("AXTextArea") {
-        return false;
+        return None;
     }
-    let Some(scroll_area) = copy_element_attr(element, "AXParent") else {
-        return false;
-    };
+    let scroll_area = copy_element_attr(element, "AXParent")?;
     if copy_string_attr(scroll_area, "AXRole").as_deref() != Some("AXScrollArea") {
         CFRelease(scroll_area as CFTypeRef);
-        return false;
+        return None;
     }
     let mut buttons = Vec::new();
     collect_ax_buttons(scroll_area, 0, &mut buttons);
     CFRelease(scroll_area as CFTypeRef);
     if buttons.is_empty() {
-        return false;
+        return None;
     }
 
     let reverse = direction == "up";
@@ -896,20 +951,55 @@ unsafe fn scroll_native_text_area(
         0
     };
     let index = base + usize::from(reverse);
-    let mut delivered = false;
+    let mut done = NativeScroll {
+        steps: 0,
+        at_end: false,
+        stalled: false,
+    };
+    let mut pressed = false;
     if let Some(target) = buttons.get(index).copied() {
-        for _ in 0..amount.max(1) {
+        let mut position = text_view_position(element);
+        let mut stalls = 0;
+        while done.steps < amount.max(1) {
+            if position.is_some_and(|p| text_view_at_end(p, reverse)) {
+                done.at_end = true;
+                break;
+            }
             if perform_action(target, "AXPress") != kAXErrorSuccess {
                 break;
             }
-            delivered = true;
+            pressed = true;
             std::thread::sleep(std::time::Duration::from_millis(30));
+            let unmoved = |now: Option<(isize, isize, isize)>| match (position, now) {
+                (Some(before), Some(after)) => {
+                    before.0 == after.0 && !text_view_at_end(after, reverse)
+                }
+                _ => false,
+            };
+            let mut now = text_view_position(element);
+            if unmoved(now) {
+                // Give a busy app a moment; press again only if the text still hasn't moved,
+                // so a late update never turns into an extra step.
+                std::thread::sleep(STALL_WAIT);
+                now = text_view_position(element);
+            }
+            if unmoved(now) {
+                stalls += 1;
+                if stalls > STALL_RETRIES {
+                    done.stalled = true;
+                    break;
+                }
+            } else {
+                stalls = 0;
+                done.steps += 1;
+            }
+            position = now;
         }
     }
     for button in buttons {
         CFRelease(button as CFTypeRef);
     }
-    delivered
+    (pressed || done.at_end).then_some(done)
 }
 
 unsafe fn collect_ax_buttons(
@@ -988,6 +1078,47 @@ mod tests {
         assert_eq!(result["verified"], false);
         assert!(result["observed_delta"].is_null());
         assert_eq!(result["effect"], "unobservable");
+    }
+}
+
+#[cfg(test)]
+mod native_scroll_tests {
+    use super::*;
+
+    #[test]
+    fn the_text_view_is_at_its_end_only_when_its_last_character_shows() {
+        assert!(text_view_at_end((7830, 869, 8699), false));
+        assert!(!text_view_at_end((1653, 899, 8699), false));
+        assert!(text_view_at_end((0, 870, 8699), true));
+        assert!(!text_view_at_end((29, 870, 8699), true));
+    }
+
+    #[test]
+    fn a_scroll_that_stopped_short_of_the_end_says_so() {
+        let stalled = NativeScroll {
+            steps: 2,
+            at_end: false,
+            stalled: true,
+        };
+        let text = native_scroll_summary("down", "page", 50, stalled);
+        assert!(text.starts_with("⚠️"), "{text}");
+        assert!(text.contains("× 2 of 50"), "{text}");
+        let ended = NativeScroll {
+            steps: 11,
+            at_end: true,
+            stalled: false,
+        };
+        let text = native_scroll_summary("down", "page", 50, ended);
+        assert!(
+            text.starts_with("✅") && text.contains("reached the end"),
+            "{text}"
+        );
+        let full = NativeScroll {
+            steps: 3,
+            at_end: false,
+            stalled: false,
+        };
+        assert!(native_scroll_summary("up", "line", 3, full).starts_with("✅ Scrolled"));
     }
 }
 
