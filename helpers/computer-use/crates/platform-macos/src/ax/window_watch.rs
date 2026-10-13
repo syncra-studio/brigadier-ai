@@ -119,7 +119,7 @@ fn alive(pid: i32) -> bool {
 
 /// Starts watching `pid`'s windows, once per app.
 pub(crate) fn watch(pid: i32) {
-    if pid <= 0 {
+    if pid <= 0 || crate::permissions::tcc_off_for_tests() {
         return;
     }
     let Ok(mut watched) = watched().lock() else {

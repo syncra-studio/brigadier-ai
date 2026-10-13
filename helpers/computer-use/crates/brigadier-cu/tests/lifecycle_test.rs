@@ -37,6 +37,7 @@ fn a_running_shim_is_refused_once_computer_use_is_turned_off_and_starts_nothing(
     std::fs::create_dir_all(&home).unwrap();
     let mut shim = Command::new(env!("CARGO_BIN_EXE_brigadier-cu"))
         .arg("mcp")
+        .env("BRIGADIER_CU_NO_TCC_FOR_TESTS", "1")
         .env("BRIGADIER_CU_HOME", &home)
         // Any start attempt would fail loudly with a different message.
         .env("BRIGADIER_CU_DAEMON_APP", home.join("Missing Helper.app"))
@@ -61,6 +62,7 @@ fn a_running_shim_is_refused_once_computer_use_is_turned_off_and_starts_nothing(
     // Brigadier turns computer use off while the agent's shim is running.
     let host = Command::new(env!("CARGO_BIN_EXE_brigadier-cu"))
         .args(["host", "off"])
+        .env("BRIGADIER_CU_NO_TCC_FOR_TESTS", "1")
         .env("BRIGADIER_CU_HOME", &home)
         .output()
         .unwrap();
@@ -107,6 +109,10 @@ fn spawn_daemon_with(home: &std::path::Path, extra: &[&str]) -> std::process::Ch
         .args(["serve", "--no-permissions-gate", "--no-overlay"])
         .args(extra)
         .env("BRIGADIER_CU_HOME", home)
+        // Every copy is a new unsigned identity, which must never ask macOS
+        // about accessibility or screen capture: each one that does is added
+        // to the privacy lists in System Settings.
+        .env("BRIGADIER_CU_NO_TCC_FOR_TESTS", "1")
         .env_remove("BRIGADIER_CU_SOCKET_AUTH_TOKEN")
         .env_remove("BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_PID")
         .env_remove("BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_START_SECONDS")
@@ -160,6 +166,7 @@ fn host_launching(
     args: &[&str],
 ) -> serde_json::Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_brigadier-cu"));
+    command.env("BRIGADIER_CU_NO_TCC_FOR_TESTS", "1");
     match app {
         Some(app) => command.env("BRIGADIER_CU_DAEMON_APP", app),
         None => command.env_remove("BRIGADIER_CU_DAEMON_APP"),
@@ -378,4 +385,50 @@ fn a_daemon_started_after_brigadier_finished_setup_is_ready_at_once() {
     wait_healthy(&home);
     let status = host(&home, &["request", "permissions_status"]);
     assert_eq!(status["external_permission_ready"], false, "{status}");
+}
+
+#[test]
+fn a_test_daemon_never_asks_macos_about_accessibility_or_screen_capture() {
+    let home = std::env::temp_dir().join(format!("cu-lifecycle-no-tcc-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let _cleanup = Cleanup(spawn_daemon(&home), home.clone());
+    wait_healthy(&home);
+
+    let status = host(&home, &["request", "permissions_status"]);
+    assert_eq!(status["accessibility"], false, "{status}");
+    assert_eq!(status["screen_recording"], false, "{status}");
+
+    // A tool that reads windows is refused before it runs; one that needs
+    // neither permission still works.
+    let refused = host(&home, &["request", "call", "{}", "--name", "list_windows"]);
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("never uses"),
+        "{refused}"
+    );
+    let size = host(
+        &home,
+        &["request", "call", "{}", "--name", "get_screen_size"],
+    );
+    assert_ne!(size["isError"], true, "{size}");
+
+    // So are the requests that would prompt, refresh or capture.
+    for method in [
+        "permissions_present",
+        "permissions_refresh",
+        "verify_screen_capture",
+        "application_windows",
+    ] {
+        let answer = host(&home, &["request", method]);
+        assert!(
+            answer["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("never uses"),
+            "{method}: {answer}"
+        );
+    }
 }

@@ -71,6 +71,11 @@ fn init_logging() {
 /// the factory returns "not yet implemented" — we log and continue
 /// without a window so the rest of the daemon keeps working.
 fn maybe_init_pip() {
+    // The preview captures the screen.
+    #[cfg(target_os = "macos")]
+    if platform_macos::permissions::tcc_off_for_tests() {
+        return;
+    }
     let cfg = match pip_preview::default_config_path() {
         Some(p) => pip_preview::PipConfig::from_args_and_file(&p),
         None => pip_preview::PipConfig::from_args(),

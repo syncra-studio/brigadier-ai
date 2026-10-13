@@ -51,7 +51,7 @@ pub use cli::CliDriver;
 pub use driver::{BehaviorRecording, Driver};
 pub use journal::FixtureJournal;
 pub use mcp::McpDriver;
-pub use paths::{driver_binary, harness_app, workspace_root};
+pub use paths::{driver_binary, driver_env, harness_app, workspace_root};
 pub use raw::RawDriver;
 pub use reaper::{spawn_in_job, ChildReaper};
 pub use response::ToolResponse;

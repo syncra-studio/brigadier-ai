@@ -830,6 +830,7 @@ mod tests {
     /// take the key-events path — i.e. it doesn't hit the AX branches
     /// where `set_string_attr(0)` would crash.
     #[test]
+    #[ignore = "sends accessibility requests and posts key events; run with --ignored from a granted, signed helper"]
     fn terminal_flag_routes_past_ax_path() {
         // Pid -1 is invalid; the AX path would unconditionally call
         // focused_element_of_pid which is safe but it would never reach

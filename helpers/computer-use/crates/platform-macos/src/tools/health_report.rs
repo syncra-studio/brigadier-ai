@@ -303,6 +303,9 @@ async fn check_screen_capture_capability() -> CheckEntry {
 fn probe_shareable_displays() -> Result<u32, String> {
     use crate::capture_deadline::{self, CaptureOperation};
     use screencapturekit::prelude::SCShareableContent;
+    if crate::permissions::tcc_off_for_tests() {
+        return Err("not probed in a test process".to_owned());
+    }
     capture_deadline::run(
         CaptureOperation::ShareableContent,
         capture_deadline::SHAREABLE_CONTENT_BUDGET,

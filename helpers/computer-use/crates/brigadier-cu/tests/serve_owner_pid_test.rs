@@ -17,6 +17,11 @@ use std::time::{Duration, Instant};
 /// this file runs under one lock.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
+/// Every copy is a new unsigned identity, which must never ask macOS about
+/// accessibility or screen capture: each one that does is added to the
+/// privacy lists in System Settings.
+const NO_TCC: &str = "BRIGADIER_CU_NO_TCC_FOR_TESTS";
+
 fn spawn_lock() -> MutexGuard<'static, ()> {
     SPAWN_LOCK
         .lock()
@@ -60,6 +65,7 @@ fn spawn_serve(root: &Path, socket: &Path, owner_pid: u32) -> Child {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .env(NO_TCC, "1")
         .env_remove("BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_PID")
         .env_remove("BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_START_SECONDS")
         .env_remove("BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_START_MICROSECONDS")
@@ -147,6 +153,7 @@ fn serve_refuses_an_invalid_owner_pid() {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .env(NO_TCC, "1")
             .spawn()
             .expect("spawn brigadier-cu serve"),
     );

@@ -47,6 +47,9 @@ fn bounded_with_fallback(
     primary: impl FnOnce() -> anyhow::Result<Vec<u8>> + Send + 'static,
     fallback: impl FnOnce() -> anyhow::Result<Vec<u8>> + Send + 'static,
 ) -> anyhow::Result<Vec<u8>> {
+    if crate::permissions::tcc_off_by_env() {
+        anyhow::bail!("a test process never captures the screen");
+    }
     match capture_deadline::run(operation, capture_deadline::SCREENSHOT_BUDGET, primary) {
         Ok(bytes) => Ok(bytes),
         Err(error) if CaptureTimeout::find(&error).is_some() => Err(error),

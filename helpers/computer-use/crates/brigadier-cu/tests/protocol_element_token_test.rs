@@ -39,6 +39,7 @@ fn fetch_tools_list() -> Option<serde_json::Value> {
     }
 
     let mut child = Command::new(&binary)
+        .envs(cu_testkit::driver_env().iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

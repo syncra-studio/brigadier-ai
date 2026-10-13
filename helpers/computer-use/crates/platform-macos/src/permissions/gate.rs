@@ -429,7 +429,10 @@ impl GateOpts {
             })
             .unwrap_or(false);
         Self {
-            opt_out: no_gate_flag || env_disabled || cu_core::embedded_mode(),
+            opt_out: no_gate_flag
+                || env_disabled
+                || cu_core::embedded_mode()
+                || super::tcc_off_by_env(),
             ..Self::default()
         }
     }

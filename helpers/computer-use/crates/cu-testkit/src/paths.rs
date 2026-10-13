@@ -54,6 +54,20 @@ pub fn driver_binary() -> PathBuf {
     root.join("target/debug").join(name)
 }
 
+/// Environment for a driver a test starts. Every build of the driver is a
+/// new unsigned identity, and macOS adds an entry to its privacy lists for
+/// each identity that asks about or uses accessibility or screen capture,
+/// so a test-built driver is told to do neither. A driver named by
+/// `BRIGADIER_CU_TEST_DRIVER_BIN` (a live run against a signed, granted
+/// helper) runs unrestricted.
+pub fn driver_env() -> &'static [(&'static str, &'static str)] {
+    if std::env::var_os("BRIGADIER_CU_TEST_DRIVER_BIN").is_some() {
+        &[]
+    } else {
+        &[("BRIGADIER_CU_NO_TCC_FOR_TESTS", "1")]
+    }
+}
+
 /// A built harness app under `test-apps/<dir>/<exe>` (produced by
 /// `tests/fixtures/build/{windows.ps1,macos.sh}`). Example:
 /// `harness_app("harness-wpf", "CuTestHarness.Wpf.exe")`.

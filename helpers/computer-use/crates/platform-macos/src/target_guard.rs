@@ -41,6 +41,11 @@ fn pid_for_window(window_id: u64) -> Option<i64> {
 
 /// The registry's target policy hook on macOS.
 pub fn enforce_native(tool: &str, args: &Value, allowed: &[String]) -> Result<(), ToolResult> {
+    if crate::permissions::tcc_off_by_env() && !crate::permissions::TCC_FREE_TOOLS.contains(&tool) {
+        return Err(ToolResult::error(format!(
+            "{tool} needs accessibility or screen capture, which this test process never uses."
+        )));
+    }
     target_policy::enforce(
         tool,
         args,

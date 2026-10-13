@@ -848,6 +848,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "sends accessibility requests; run with --ignored from a granted, signed helper"]
     fn walk_tree_bounded_signature_accepts_caps_no_panic() {
         // Regression guard for #22865: the bounded variant must accept
         // arbitrary cap values without panicking, even against a pid that

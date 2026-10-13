@@ -1284,11 +1284,54 @@ fn daemon_permission_attribution() -> &'static str {
 }
 
 #[cfg(target_os = "macos")]
+/// Daemon requests that never reach accessibility or screen capture. A test
+/// daemon (see `platform_macos::permissions::NO_TCC_FOR_TESTS_ENV`) answers
+/// only these; `call` itself runs only the tools in
+/// `platform_macos::permissions::TCC_FREE_TOOLS`.
+#[cfg(target_os = "macos")]
+const TCC_FREE_METHODS: &[&str] = &[
+    "shutdown",
+    "permissions_status",
+    "set_external_permission_ready",
+    "agent_sessions",
+    "stop_app",
+    "health",
+    "list",
+    "describe",
+    "call",
+    "session_begin",
+    "session_end",
+];
+
+#[cfg(target_os = "macos")]
+fn tcc_free_test_refusal(req: &DaemonRequest) -> Option<DaemonResponse> {
+    (platform_macos::permissions::tcc_off_for_tests()
+        && !TCC_FREE_METHODS.contains(&req.method.as_str()))
+    .then(|| {
+        DaemonResponse::err(
+            format!(
+                "{} may need accessibility or screen capture, which this test daemon never uses",
+                req.method
+            ),
+            1,
+        )
+    })
+}
+
 fn daemon_permission_status(
     profile: DaemonProfile,
     external_permission_ready: bool,
 ) -> serde_json::Value {
-    let status = platform_macos::permissions::current_status();
+    // This crate's unit tests serve in-process, where the switch in
+    // platform_macos is off at compile time.
+    let status = if cfg!(test) {
+        platform_macos::permissions::PermissionsStatus {
+            accessibility: false,
+            screen_recording: false,
+        }
+    } else {
+        platform_macos::permissions::current_status()
+    };
     crate::lifecycle::record_permissions(status.accessibility, status.screen_recording);
     let panel = platform_macos::permissions::panel::lifecycle();
     let recovery = platform_macos::permissions::gate::recovery_lifecycle();
@@ -1694,6 +1737,14 @@ pub async fn run_serve_with_owner(
                             peer_is_authorized_root,
                         );
                         let req = parsed.request;
+
+                        #[cfg(target_os = "macos")]
+                        if let Some(resp) = tcc_free_test_refusal(&req) {
+                            let _ = writer.write_all(
+                                (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                            ).await;
+                            continue;
+                        }
 
                         match req.method.as_str() {
                             "shutdown" => {

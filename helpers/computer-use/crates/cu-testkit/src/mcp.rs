@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::driver::{BehaviorRecording, Driver};
-use crate::paths::driver_binary;
+use crate::paths::{driver_binary, driver_env};
 use crate::reaper::{spawn_in_job, ChildReaper};
 use crate::response::ToolResponse;
 use crate::CALL_TIMEOUT;
@@ -64,6 +64,7 @@ impl McpDriver {
 
         let mut reaper = ChildReaper::new();
         let mut cmd = Command::new(&bin);
+        cmd.envs(driver_env().iter().copied());
         let stderr = if std::env::var_os("BRIGADIER_CU_TEST_DRIVER_STDERR").is_some() {
             Stdio::inherit()
         } else {

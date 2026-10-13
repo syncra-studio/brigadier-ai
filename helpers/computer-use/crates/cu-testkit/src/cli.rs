@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 
 use crate::driver::Driver;
-use crate::paths::driver_binary;
+use crate::paths::{driver_binary, driver_env};
 use crate::response::ToolResponse;
 
 /// Drives brigadier-cu over the stateless CLI surface.
@@ -41,6 +41,7 @@ impl Default for CliDriver {
 impl Driver for CliDriver {
     fn call(&mut self, tool: &str, args: Value) -> ToolResponse {
         let mut child = match Command::new(&self.bin)
+            .envs(driver_env().iter().copied())
             .arg("call")
             .arg(tool)
             .stdin(Stdio::piped())

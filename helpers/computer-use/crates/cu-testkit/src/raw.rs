@@ -13,7 +13,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use serde_json::Value;
 
-use crate::paths::driver_binary;
+use crate::paths::{driver_binary, driver_env};
 
 /// A spawned brigadier-cu with raw stdio access and no handshake performed.
 /// Killed on drop.
@@ -34,6 +34,7 @@ impl RawDriver {
             return None;
         }
         let mut child = Command::new(&bin)
+            .envs(driver_env().iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

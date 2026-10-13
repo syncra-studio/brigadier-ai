@@ -5,6 +5,43 @@
 //! both the `check_permissions` MCP tool and the startup permissions gate
 //! (`super::gate`).
 
+/// Set (to `1`) by the helper's own tests on the processes they start.
+/// Every build of such a process is a new unsigned identity, and macOS adds
+/// an entry to its privacy lists for each identity that asks about or uses
+/// accessibility or screen capture, so a test process must do neither: it
+/// reports nothing granted, raises no prompt, and runs only the tools in
+/// [`TCC_FREE_TOOLS`].
+pub const NO_TCC_FOR_TESTS_ENV: &str = "BRIGADIER_CU_NO_TCC_FOR_TESTS";
+
+/// Tools that need neither accessibility nor screen capture.
+pub const TCC_FREE_TOOLS: &[&str] = &[
+    "get_screen_size",
+    "get_cursor_position",
+    "get_config",
+    "set_config",
+    "list_apps",
+    "move_cursor",
+    "get_agent_cursor_state",
+    "set_agent_cursor_enabled",
+    "set_agent_cursor_motion",
+    "set_agent_cursor_style",
+];
+
+/// True in a test process that must make no accessibility or screen-capture
+/// call at all (see [`NO_TCC_FOR_TESTS_ENV`]), and always in this crate's own
+/// unit tests.
+pub fn tcc_off_for_tests() -> bool {
+    cfg!(test) || tcc_off_by_env()
+}
+
+/// [`tcc_off_for_tests`] for a process started with [`NO_TCC_FOR_TESTS_ENV`]
+/// only, so this crate's unit tests can still exercise what the switch
+/// changes.
+pub fn tcc_off_by_env() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var(NO_TCC_FOR_TESTS_ENV).is_ok_and(|v| v == "1"))
+}
+
 /// Snapshot of which TCC grants are active for the current process.
 ///
 /// Field naming matches the JSON shape used by the `check_permissions`
@@ -65,6 +102,9 @@ pub fn current_status() -> PermissionsStatus {
 
 /// Live AX trust state — `AXIsProcessTrusted()`.
 pub fn accessibility_granted() -> bool {
+    if tcc_off_for_tests() {
+        return false;
+    }
     unsafe { crate::ax::bindings::AXIsProcessTrusted() }
 }
 
@@ -86,6 +126,9 @@ pub fn screen_recording_granted() -> bool {
     extern "C" {
         fn CGPreflightScreenCaptureAccess() -> bool;
     }
+    if tcc_off_for_tests() {
+        return false;
+    }
     unsafe { CGPreflightScreenCaptureAccess() }
 }
 
@@ -97,6 +140,9 @@ pub fn request_accessibility() -> bool {
     use core_foundation::dictionary::CFDictionary;
     use core_foundation::string::CFString;
 
+    if tcc_off_for_tests() {
+        return false;
+    }
     let key = CFString::new("AXTrustedCheckOptionPrompt");
     let val = CFBoolean::true_value();
     let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), val.as_CFType())]);
@@ -109,6 +155,9 @@ pub fn request_screen_recording() -> bool {
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
         fn CGRequestScreenCaptureAccess() -> bool;
+    }
+    if tcc_off_for_tests() {
+        return false;
     }
     unsafe { CGRequestScreenCaptureAccess() }
 }
@@ -140,6 +189,17 @@ mod tests {
             state(true, true).grant_state(),
             PermissionGrantState::BothGranted
         );
+    }
+
+    #[test]
+    fn a_test_process_never_asks_macos_about_permissions() {
+        assert!(tcc_off_for_tests());
+        assert!(!accessibility_granted());
+        assert!(!screen_recording_granted());
+        assert!(!request_accessibility());
+        assert!(!request_screen_recording());
+        assert!(!current_status().accessibility);
+        assert!(!current_status().screen_recording);
     }
 
     #[test]

@@ -38,6 +38,9 @@ pub(super) fn screen_recording_capturable() -> ScreenCaptureProbe {
 
     use crate::capture_deadline::{self, CaptureOperation};
 
+    if crate::permissions::tcc_off_for_tests() {
+        return Ok(false);
+    }
     verify_screen_capture_with(
         || {
             probe_step(

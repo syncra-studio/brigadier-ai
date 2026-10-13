@@ -24,8 +24,9 @@ pub mod panel;
 
 pub use gate::{run_if_needed, GateOpts, MissingPermission};
 pub use status::{
-    current_status, request_accessibility, request_screen_recording, PermissionGrantState,
-    PermissionsStatus,
+    current_status, request_accessibility, request_screen_recording, tcc_off_by_env,
+    tcc_off_for_tests, PermissionGrantState, PermissionsStatus, NO_TCC_FOR_TESTS_ENV,
+    TCC_FREE_TOOLS,
 };
 
 /// Crate-wide lock serializing tests that mutate process-global env vars.
