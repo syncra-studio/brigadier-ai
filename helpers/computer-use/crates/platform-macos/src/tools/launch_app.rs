@@ -335,7 +335,7 @@ impl Tool for LaunchAppTool {
                     // backed lease for the rest of that window, so a late
                     // activation is still demoted while the agent already
                     // gets its answer.
-                    let window_ms: u64 = if slow_launch_path { 300 } else { 250 };
+                    let window_ms: u64 = 60;
                     tokio::time::sleep(std::time::Duration::from_millis(window_ms)).await;
                     drop(targeted_lease);
 
@@ -408,8 +408,8 @@ impl Tool for LaunchAppTool {
                     // have a session that outlives the call.
                     //
                     // Tradeoffs:
-                    // - Caller latency: ~0.3 s (slow path), ~0.25 s (fast path).
-                    // - Total observer coverage: ~10.8 s post-launch (slow path).
+                    // - Caller latency: ~0.1 s.
+                    // - Total observer coverage: ~10.5 s post-launch (slow path).
                     // - CPU: the observer fires per activation event,
                     //   not per poll; the 250ms tick is just for the
                     //   manual belt-and-braces demote. Cheap.
