@@ -23,22 +23,26 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
       middle: { top: number; restored: number; offset: number; restoredOffset: number; button: boolean };
       bottom: number;
     };
-    expand: { midOpen: Toggle; midClose: Toggle; userOpen: Toggle; bottomOpen: Toggle; buttonAfter: Button; bottomClose: Toggle };
+    expand: { midOpen: Toggle; midClose: Toggle; userOpen: Toggle; bottomOpen: Toggle; gapOpen: number; buttonAfter: Button; bottomClose: Toggle };
     composerGrows: {
       before: { top: number; stackTop: number };
-      grown: { top: number; stackTop: number; distance: number; button: Button };
+      grown: { top: number; stackTop: number; distance: number; lastGap: number; button: Button };
+      scrolled: { before: number; after: number };
       atBottom: { lastGap: number; button: Button };
       shrunk: { distance: number; lastGap: number };
     };
     send: {
       topPadding: number;
-      placed: { userTop: number; distance: number; room: number; belowUser: number };
+      spring: { moved: number; at100: number; at200: number; settledMs: number; overshoot: boolean };
+      placed: { turnEnd: number; line: number; distance: number; room: number; userTop: number; viewHeight: number };
+      overflowed: { top: number; grew: number; distances: number[]; lastGap: number; button: Button; room: number };
       unfollowed: { top: number; tops: number[]; distance: number; button: Button };
       followed: { distances: number[]; grew: number };
       shrunkWindow: number;
       grownWindow: number;
     };
     resizeAtBottom: { placed: number; shrunk: number; grown: number };
+    returnAfterSend: { room: number; distance: number; roomBack: number; lastGap: number; button: boolean };
     newChat: { userTop: number | null; top: number };
     capsule: { atBottom: { capsule: boolean; capsuleInStack: number | null; lastGap: number; distance: number }; button: Button };
     working: { distance: number; rows: number };
@@ -81,24 +85,29 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(fullscreen.middle.button, true);
   assert.equal(fullscreen.bottom, 0);
 
-  // A toggle stays where it was, opening or closing, mid-scroll and at the bottom.
+  // Mid-scroll a toggle stays where it was, opening or closing. At the bottom, following, the
+  // bottom stays: the opened fold shows above the composer, the toggle moving up, then down.
   const { expand } = seen;
-  for (const [name, toggle] of Object.entries(expand)) {
-    if ("before" in toggle) near(toggle.after, toggle.before, `${name} toggle`);
+  for (const name of ["midOpen", "midClose", "userOpen"] as const) {
+    near(expand[name].after, expand[name].before, `${name} toggle`);
   }
-  assert.ok(expand.bottomOpen.distance > 8, "opening at the bottom leaves the view above it");
-  assert.equal(expand.buttonAfter.shown, true);
+  assert.equal(expand.bottomOpen.distance, 0);
+  assert.ok(expand.bottomOpen.after < expand.bottomOpen.before - 20, "the opened fold pushed its toggle up");
+  near(expand.gapOpen, 84, "opened fold to the composer");
+  assert.equal(expand.buttonAfter.shown, false);
   assert.equal(expand.bottomClose.distance, 0);
+  near(expand.bottomClose.after, expand.bottomOpen.before, "closed toggle back where it was");
 
-  // The composer growing doesn't scroll; the gaps are to the top of what floats over the thread.
-  // The notice covers only part of the gap above the composer: the content stays in view, so
-  // the button stays hidden.
+  // The composer growing at the bottom keeps the bottom: the content moves up with it, its gap to
+  // the notice kept. Scrolled up, the view stays still. The gaps are to the top of what floats
+  // over the thread.
   const { composerGrows } = seen;
-  assert.equal(composerGrows.grown.top, composerGrows.before.top);
   assert.ok(composerGrows.grown.stackTop < composerGrows.before.stackTop);
-  assert.equal(composerGrows.grown.distance, Math.round(composerGrows.before.stackTop - composerGrows.grown.stackTop));
-  assert.ok(composerGrows.grown.distance < 84, `the notice is ${composerGrows.grown.distance}px`);
+  assert.equal(composerGrows.grown.top - composerGrows.before.top, Math.round(composerGrows.before.stackTop - composerGrows.grown.stackTop));
+  assert.equal(composerGrows.grown.distance, 0);
+  near(composerGrows.grown.lastGap, 84, "last content to the grown footer");
   assert.equal(composerGrows.grown.button.shown, false);
+  assert.equal(composerGrows.scrolled.after, composerGrows.scrolled.before);
   near(composerGrows.atBottom.lastGap, 84, "last content to the notice");
   near(composerGrows.atBottom.button.aboveStack, 24, "button above the notice");
   assert.equal(composerGrows.shrunk.distance, 0);
@@ -107,15 +116,28 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   near(seen.capsule.atBottom.lastGap, 84, "last content to the capsule");
   near(seen.capsule.button.aboveStack, 24, "button above the capsule");
 
-  // A send: the turn 171px under the view's top, room down to the composer; the answer streams
-  // without moving the view, and is followed once the user goes to the bottom.
+  // A send: a critically damped spring of about half a second puts the turn's end a third of the
+  // way down the view (at least 240px), room below it down to the composer. The answer fills the
+  // room without moving the view and is followed past it. Scrolled away, it goes on under the
+  // composer; back at the bottom, it is followed again.
   const { send } = seen;
   near(send.topPadding, 32, "the list's top padding");
-  near(send.placed.userTop, 171, "sent message under the view's top");
+  assert.ok(send.spring.moved > 100, `the spring moved ${send.spring.moved}px`);
+  assert.equal(send.spring.overshoot, false);
+  assert.ok(send.spring.at100 > 0.35 && send.spring.at100 < 0.75, `left at 100ms: ${send.spring.at100}`);
+  assert.ok(send.spring.at200 > 0.04 && send.spring.at200 < 0.25, `left at 200ms: ${send.spring.at200}`);
+  assert.ok(send.spring.settledMs >= 300 && send.spring.settledMs <= 700, `settled in ${send.spring.settledMs}ms`);
+  near(send.placed.turnEnd, send.placed.line, "sent turn's end");
+  assert.ok(send.placed.line >= Math.max(240, send.placed.viewHeight / 4), `line at ${send.placed.line}`);
   assert.equal(send.placed.distance, 0);
   assert.ok(send.placed.room > 0, "room under the sent turn");
+  assert.ok(send.overflowed.grew > 0, "followed past the room");
+  assert.deepEqual(send.overflowed.distances, [0]);
+  near(send.overflowed.lastGap, 84, "followed answer to the composer");
+  assert.equal(send.overflowed.button.shown, false);
+  assert.equal(send.overflowed.room, 0);
   assert.deepEqual(send.unfollowed.tops, [send.unfollowed.top]);
-  assert.ok(send.unfollowed.distance > 8, "the answer went on under the composer");
+  assert.ok(send.unfollowed.distance > 200, "the answer went on under the composer");
   assert.equal(send.unfollowed.button.shown, true);
   assert.equal(send.unfollowed.button.dots, true);
   assert.deepEqual(send.followed.distances, [0]);
@@ -123,6 +145,14 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(send.shrunkWindow, 0);
   assert.equal(send.grownWindow, 0);
   assert.deepEqual(seen.resizeAtBottom, { placed: 0, shrunk: 0, grown: 0 });
+
+  // Left right after a send and back once it answered: the bottom, without the room.
+  const { returnAfterSend } = seen;
+  assert.ok(returnAfterSend.room > 0);
+  assert.equal(returnAfterSend.distance, 0);
+  assert.equal(returnAfterSend.roomBack, 0);
+  near(returnAfterSend.lastGap, 84, "returned to the bottom");
+  assert.equal(returnAfterSend.button, false);
 
   // The first message of a new chat sits at the top padding; an unseen working chat opens at
   // its bottom.
