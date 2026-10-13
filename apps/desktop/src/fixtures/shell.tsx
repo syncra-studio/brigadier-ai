@@ -324,6 +324,19 @@ const headerBottom = () => {
 const click = (selector: string) => one<HTMLButtonElement>(selector)?.click();
 const toggle = '[data-slot="session-tabs"] button[aria-label="Right sidebar"]';
 
+/** Waits until no titlebar control or sidebar width has changed for a quarter second, so a fold
+ * still easing in on a slow machine isn't counted as moved by what follows. */
+async function settle(ms = 4000) {
+  const shape = () => JSON.stringify([titlebar(), rect(one('[data-slot="sidebar-panel"]'))?.w]);
+  let last = shape();
+  let since = performance.now();
+  for (const end = performance.now() + ms; performance.now() < end && performance.now() - since < 250;) {
+    await frame();
+    const now = shape();
+    if (now !== last) [last, since] = [now, performance.now()];
+  }
+}
+
 /** The right panels opened and closed, one and then both: what moved, and where they opened. */
 async function panels() {
   const seen: Record<string, unknown> = {};
@@ -368,12 +381,14 @@ async function driveLayout(): Promise<Record<string, unknown>> {
   const seen: Record<string, unknown> = {};
   await until(() => Boolean(one('[data-slot="session-tabs"]')), 8000);
   await wait(800);
+  await settle();
   seen.expandedStart = tabsStart();
   seen.expanded = await panels();
   // The sidebar folded: New chat joins the titlebar's controls, the divider follows it.
   seen.folding = await watch(() => click('[data-slot="sidebar-toggle"]'), 700)
     // Only the tabs move over: the toolbar at the end stays, and the window never scrolls.
     .then((moved) => moved.filter((line) => /^(Context|Terminal|Right sidebar) |^(window|scrollingElement) /.test(line)));
+  await settle();
   seen.foldedStart = tabsStart();
   seen.folded = await panels();
   click('[data-slot="sidebar-toggle"]');
@@ -381,6 +396,7 @@ async function driveLayout(): Promise<Record<string, unknown>> {
   // A narrow window.
   await fixtureInput({ type: "viewport", width: 1000, height: 760 });
   await wait(800);
+  await settle();
   seen.narrowStart = tabsStart();
   seen.narrow = await panels();
   return seen;
