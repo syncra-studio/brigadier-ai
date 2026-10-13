@@ -1,5 +1,6 @@
 import { Chat, ChatCompose, MinimizeRight, X } from "@openai/apps-sdk-ui/components/Icon";
-import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from "react";
+import { createContext, type ReactNode, type RefObject, useContext, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { ConversationView } from "@/app/ConversationView";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -26,8 +27,9 @@ export function chatAbout(tab: ChatTab): string {
 }
 
 /**
- * The tab's chat button for a toolbar of the tab's own (a browser tab's, whose page draws over
- * the app so nothing can float above it). Outside a tab with a chat it shows nothing.
+ * The tab's chat button for a toolbar of the tab's own (a browser tab's where its page draws
+ * over the app, so nothing can float above it: not macOS). Outside a tab with a chat it shows
+ * nothing.
  */
 const ToolbarButton = createContext<ReactNode>(null);
 export function TabChatToolbarButton() {
@@ -44,19 +46,24 @@ export function TabWithChat({ conversationId, tab, children }: { conversationId:
   const chat = target ? tab.chat : undefined;
   const view = chat?.view ?? "hidden";
   const row = useRef<HTMLDivElement>(null);
-  const button = target && view === "hidden"
-    ? <ChatButton conversationId={conversationId} tab={tab} chat={chat} floating={tab.kind !== "browser"} />
-    : null;
+  const content = useRef<HTMLDivElement>(null);
+  // On macOS a browser tab's page lies beneath the app, so its button floats over the page too.
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const inToolbar = tab.kind === "browser" && !mac;
+  const hidden = target && view === "hidden";
+  const button = hidden ? <ChatButton conversationId={conversationId} tab={tab} chat={chat} floating={!inToolbar} /> : null;
   return (
-    <ToolbarButton.Provider value={tab.kind === "browser" ? button : null}>
+    <ToolbarButton.Provider value={inToolbar ? button : null}>
       <div ref={row} data-slot="tab-with-chat" className="relative flex min-h-0 min-w-0 flex-1">
         <div
+          ref={content}
           data-slot="tab-content"
           className="relative flex min-h-0 min-w-0 flex-col"
           style={{ flex: view === "split" && chat ? `0 0 ${(1 - chat.share) * 100}%` : "1 1 0%" }}
         >
           {children}
-          {tab.kind !== "browser" && button}
+          {tab.kind !== "browser" && button && <div className="absolute end-4 bottom-4 z-20">{button}</div>}
+          {tab.kind === "browser" && !inToolbar && button && <AbovePage anchor={content}>{button}</AbovePage>}
         </div>
         {chat && view === "split" && (
           <>
@@ -76,7 +83,7 @@ export function TabWithChat({ conversationId, tab, children }: { conversationId:
 function ChatButton({ conversationId, tab, chat, floating }: { conversationId: string; tab: ChatTab; chat: TabChatState | undefined; floating: boolean }) {
   const news = useNews(chat);
   return (
-    <div className={cn(floating && "absolute end-4 bottom-4 z-20")} data-slot="tab-chat-button">
+    <div data-slot="tab-chat-button">
       <TooltipIconButton
         tooltip={chatAbout(tab)}
         side={floating ? "left" : "bottom"}
@@ -89,6 +96,44 @@ function ChatButton({ conversationId, tab, chat, floating }: { conversationId: s
         {news && <span data-slot="tab-chat-dot" aria-label="New in the chat" className="bg-primary absolute end-1 top-1 size-2 rounded-full" />}
       </TooltipIconButton>
     </div>
+  );
+}
+
+/**
+ * Floats `children` in the bottom end corner of `anchor`, over a browser tab's page beneath the
+ * app. The app's own content is cut where the page shows, so it goes at the end of the body
+ * instead, and says where it is (`data-above-page`) so clicks there stay the app's. Nothing
+ * shows while the tab doesn't.
+ */
+function AbovePage({ anchor, children }: { anchor: RefObject<HTMLDivElement | null>; children: ReactNode }) {
+  const [corner, setCorner] = useState<{ end: number; bottom: number } | null>(null);
+  useEffect(() => {
+    let frame = 0;
+    let placed = "";
+    // The tab moves and resizes with the panels around it: followed every frame.
+    const follow = () => {
+      const element = anchor.current;
+      const box = element && !element.closest("[inert]") ? element.getBoundingClientRect() : null;
+      const rtl = document.dir === "rtl";
+      const next = box && box.width > 0 && box.height > 0
+        ? { end: (rtl ? box.left : window.innerWidth - box.right) + 16, bottom: window.innerHeight - box.bottom + 16 }
+        : null;
+      const key = JSON.stringify(next);
+      if (key !== placed) {
+        placed = key;
+        setCorner(next);
+      }
+      frame = requestAnimationFrame(follow);
+    };
+    follow();
+    return () => cancelAnimationFrame(frame);
+  }, [anchor]);
+  if (!corner) return null;
+  return createPortal(
+    <div data-above-page className="fixed z-20" style={{ insetInlineEnd: corner.end, bottom: corner.bottom }}>
+      {children}
+    </div>,
+    document.body,
   );
 }
 

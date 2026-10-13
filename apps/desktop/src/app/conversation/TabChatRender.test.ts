@@ -3,26 +3,25 @@ import { test } from "node:test";
 
 import { renderFixtureLive } from "@/fixtures/headless";
 
-type Button = { label: string; floating: boolean; fromTop: number; fromEnd: number; fromBottom: number; round: string; dot: boolean } | null;
+type Button = { label: string; floating: boolean; abovePage: boolean; fromTop: number; fromEnd: number; fromBottom: number; round: string; dot: boolean } | null;
 type Halves = { content: number; chat: number; whole: number; chatShare: number };
 
 test("a tab's own chat: its button, the split, resizing, folding, hiding, the dot and New chat", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "tab-chat.html?drive=1", "tab-chat-result", 90000)) as Record<string, unknown>;
   if (process.env.TAB_CHAT_SEEN) console.log(JSON.stringify(seen, null, 2));
   assert.equal(seen.error, undefined);
-  // A round button floats in the bottom-end corner of page and file tabs; the browser's sits at
-  // the end of its toolbar (its page draws over the app); Review and New tab have none.
+  // A round button floats in the bottom-end corner of page, file and browser tabs; on macOS the
+  // browser's floats over its page (beneath the app) from the end of the body, where the app's
+  // cut doesn't reach; Review and New tab have none.
   const buttons = seen.buttons as Record<string, Button>;
-  for (const kind of ["page", "file"]) {
+  for (const kind of ["page", "file", "browser"]) {
     const button = buttons[kind]!;
     assert.equal(button.label, kind === "file" ? "Chat about this file" : "Chat about this page");
     assert.equal(button.floating, true, kind);
+    assert.equal(button.abovePage, kind === "browser", kind);
     assert.deepEqual([button.fromEnd, button.fromBottom], [16, 16], `${kind}: 16 px from the corner`);
     assert.ok(Number.parseFloat(button.round) >= 20, `${kind}: round`);
   }
-  assert.equal(buttons.browser?.label, "Chat about this page");
-  assert.equal(buttons.browser?.floating, false);
-  assert.ok(buttons.browser!.fromTop < 48, "the browser's button is in its toolbar");
   assert.equal(buttons.review, null);
   assert.equal(buttons.newTab, null);
   // A click splits the tab half and half, the chat at the end, for this tab's page.

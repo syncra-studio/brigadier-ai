@@ -104,15 +104,20 @@ const chatOf = (tabId: string) => {
   const tab = sessionTabs(ID).tabs.find((entry) => entry.id === tabId);
   return tab && canChat(tab) ? tab.chat : undefined;
 };
+/** The tab in front's round button: in the tab, or floating over a browser tab's page from the body's end. */
+const chatButton = () =>
+  inFront('[data-slot="tab-chat-button"]') ??
+  (front()?.querySelector('[data-slot="tab-content"]') ? document.querySelector<HTMLElement>('body > [data-above-page] [data-slot="tab-chat-button"]') : null);
 /** The round button in the tab in front: what it says, and whether it floats in the tab's corner. */
 const button = () => {
-  const slot = inFront('[data-slot="tab-chat-button"]');
+  const slot = chatButton();
   if (!slot) return null;
   const panel = rect(front());
   const at = rect(slot.querySelector("button"));
   return {
     label: slot.querySelector(".sr-only")?.textContent ?? null,
-    floating: getComputedStyle(slot).position === "absolute",
+    floating: ["absolute", "fixed"].includes(getComputedStyle(slot.parentElement!).position),
+    abovePage: slot.closest("[data-above-page]") !== null,
     fromTop: panel && at ? at.y - panel.y : null,
     fromEnd: panel && at ? panel.x + panel.w - (at.x + at.w) : null,
     fromBottom: panel && at ? panel.y + panel.h - (at.y + at.h) : null,
@@ -149,7 +154,7 @@ async function drive(): Promise<Record<string, unknown>> {
   // The page's button opens the split, half and half, the chat at the end.
   selectTab(ID, PAGE_TAB);
   await until(() => button() !== null);
-  click(inFront('[data-slot="tab-chat-button"] button'));
+  click(chatButton()?.querySelector("button") ?? null);
   await until(() => inFront('[data-slot="tab-chat"]') !== null);
   await until(() => inFront('[data-slot="tab-chat"] [data-embedded-view]') !== null || inFront('[data-slot="tab-chat"] [role="alert"]') !== null);
   await wait(200);
@@ -210,7 +215,7 @@ async function drive(): Promise<Record<string, unknown>> {
   useApp.setState((state) => ({ conversations: { ...state.conversations, [chat.id]: { ...state.conversations[chat.id]!, updatedAtMs: (chatOf(PAGE_TAB)!.seenAt ?? 0) + 1000 } } }));
   await until(() => button()?.dot === true, 2000);
   seen.dotNews = button()?.dot;
-  click(inFront('[data-slot="tab-chat-button"] button'));
+  click(chatButton()?.querySelector("button") ?? null);
   await until(() => inFront('[data-slot="tab-chat"]') !== null);
   await wait(100);
   seen.reopened = { id: chatOf(PAGE_TAB)!.id === chat.id, share: chatOf(PAGE_TAB)!.share, halves: halves() };
@@ -229,7 +234,7 @@ async function drive(): Promise<Record<string, unknown>> {
   // A file tab's chat is about the file.
   selectTab(ID, "file:src/app.ts");
   await until(() => button() !== null);
-  click(inFront('[data-slot="tab-chat-button"] button'));
+  click(chatButton()?.querySelector("button") ?? null);
   await until(() => inFront('[data-slot="tab-chat"] [data-embedded-view]') !== null);
   await wait(100);
   seen.fileChat = {
