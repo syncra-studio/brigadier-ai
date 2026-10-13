@@ -79,6 +79,34 @@ impl Peers {
     }
 }
 
+/// The `message_session` replies of a session's turns: each text, and whether it failed.
+pub(super) type Sent = Arc<Mutex<Vec<(String, bool)>>>;
+
+impl Peers {
+    /// Has each turn of session `from` send `text` to `to` and answer "Sent.", keeping each
+    /// reply of the tool.
+    pub(super) fn sends(&self, from: &ConversationId, to: &ConversationId, text: &str) -> Sent {
+        let sent = Sent::default();
+        let (kept, to, text) = (sent.clone(), to.clone(), text.to_owned());
+        self.on(from, move |turn| {
+            let (kept, to, text) = (kept.clone(), to.clone(), text.clone());
+            async move {
+                let reply = send(&turn, &to, &text, None).await;
+                kept.lock().unwrap().push(reply);
+                Reply::text("Sent.")
+            }
+        });
+        sent
+    }
+}
+
+/// The one reply `sent` holds.
+pub(super) fn only(sent: &Sent) -> (String, bool) {
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    sent[0].clone()
+}
+
 /// Sends `text` to `to` from the turn's session; the tool's reply text, and whether it failed.
 pub(super) async fn send(
     turn: &Turn,

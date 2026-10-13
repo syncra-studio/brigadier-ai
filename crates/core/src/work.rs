@@ -2466,6 +2466,8 @@ pub enum InjectionKind {
     Reminder,
     /// An overnight run starts, restarts or ends.
     Run,
+    /// Another session's message (its label is `peer <message id>`).
+    PeerMessage,
 }
 
 /// An injection's kind as stored, older names included: an earlier run's per-phase `phase`
@@ -2488,6 +2490,7 @@ enum StoredInjectionKind {
     Reminder,
     Run,
     Phase,
+    PeerMessage,
 }
 
 impl<'de> Deserialize<'de> for InjectionKind {
@@ -2507,6 +2510,7 @@ impl<'de> Deserialize<'de> for InjectionKind {
             StoredInjectionKind::Briefing => Self::Briefing,
             StoredInjectionKind::Reminder => Self::Reminder,
             StoredInjectionKind::Run | StoredInjectionKind::Phase => Self::Run,
+            StoredInjectionKind::PeerMessage => Self::PeerMessage,
         })
     }
 }

@@ -318,7 +318,18 @@ impl Board {
                 sent_at_ms,
             } => {
                 if let Some(record) = self.peer_messages.get_mut(message_id) {
-                    record.state = state.clone();
+                    // Delivery never goes back: a late `delivered` or `seen` written after the
+                    // receiver already took or answered it changes nothing.
+                    let behind = match state {
+                        PeerState::Delivered => {
+                            matches!(record.state, PeerState::Seen | PeerState::Replied)
+                        }
+                        PeerState::Seen => record.state == PeerState::Replied,
+                        _ => false,
+                    };
+                    if !behind {
+                        record.state = state.clone();
+                    }
                     if sent_at_ms.is_some() {
                         record.sent_at_ms = *sent_at_ms;
                     }

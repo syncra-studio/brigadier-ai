@@ -459,6 +459,8 @@ impl SessionManager {
                 return Err(err);
             }
         };
+        // What other sessions sent it and it hasn't taken never goes (SESSION-MESSAGING-PLAN.md §4).
+        self.drop_due_peer_messages(&id).await;
         let manager = self.arc();
         self.start_cleanup(id.clone(), async move {
             manager.finish_archive(&id, runs).await;

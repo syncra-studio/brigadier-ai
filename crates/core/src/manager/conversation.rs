@@ -107,6 +107,37 @@ pub(crate) struct Envelope {
     pub text: String,
 }
 
+impl Envelope {
+    /// The message of another session's it carries.
+    pub(crate) fn peer_message(&self) -> Option<&str> {
+        (self.kind == InjectionKind::PeerMessage)
+            .then(|| self.label.strip_prefix("peer "))
+            .flatten()
+    }
+}
+
+/// The chain a turn's newest input belongs to, which a message it sends carries on
+/// (SESSION-MESSAGING-PLAN.md §5.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TurnChain {
+    pub chain_id: String,
+    /// How many messages between sessions led to that input with no one's word in between.
+    pub hop: u32,
+    /// That input: a user message's id, or a peer message's.
+    pub input_id: Option<String>,
+}
+
+impl TurnChain {
+    /// A user's message starts a chain of its own.
+    pub(crate) fn user(message_id: &str) -> Self {
+        Self {
+            chain_id: message_id.to_owned(),
+            hop: 0,
+            input_id: Some(message_id.to_owned()),
+        }
+    }
+}
+
 /// A live CLI session of a conversation or task.
 pub(crate) struct Cli {
     pub provider: ProviderKind,
@@ -166,6 +197,11 @@ struct ConvState {
     answering: HashMap<CardId, Option<String>>,
     /// User messages already in the transcript that the next turn carries.
     pending: Vec<Message>,
+    /// The chain of the running turn's newest input ([`TurnChain`]).
+    chain: Option<TurnChain>,
+    /// Replies from other sessions that came after their request was over (stopped, or its
+    /// overnight run ended), by message id: the next turn carries each as a note.
+    late: Vec<(String, String)>,
     /// A turn cut short by a limit, from its end until its messages are back in `pending` (on
     /// another account, a stand-in, or waiting for quota) or it has failed. No turn starts
     /// meanwhile: one would run on the CLI at its limit, as it closes.
@@ -597,6 +633,25 @@ impl ConvLive {
         state.busy.then(|| state.request.clone()).flatten()
     }
 
+    /// The running turn's request and chain, which a message it sends belongs to (none while
+    /// no turn runs).
+    pub(super) async fn sending_turn(&self) -> Option<(Option<String>, TurnChain)> {
+        let state = self.state.lock().await;
+        if !state.busy {
+            return None;
+        }
+        Some((state.request.clone(), state.chain.clone()?))
+    }
+
+    /// Keeps a reply from another session that came after its request was over for the next
+    /// turn, once.
+    pub(super) async fn hold_late(&self, message_id: &str, note: String) {
+        let mut state = self.state.lock().await;
+        if !state.late.iter().any(|(id, _)| id == message_id) {
+            state.late.push((message_id.to_owned(), note));
+        }
+    }
+
     /// A turn runs, or a message of `request` waits for one.
     pub(super) async fn works_for(&self, request: &str) -> bool {
         let state = self.state.lock().await;
@@ -779,6 +834,8 @@ impl SessionManager {
                     self.log_user_injection(&conv, &message).await;
                     // The user wrote again: whatever was asked of them is answered or moot.
                     state.asked_user.clear();
+                    // The user's word starts a chain of its own (SESSION-MESSAGING-PLAN.md §5.5).
+                    state.chain = Some(TurnChain::user(&message.id));
                     // The rest of the turn answers the new message: its own request.
                     into = std::mem::replace(&mut state.request, message.request_id.clone());
                     state.in_turn.push(message.clone());
@@ -787,7 +844,8 @@ impl SessionManager {
                     state.pending.push(message.clone());
                 }
                 drop(state);
-                self.note_steered(&conv, &message, into).await;
+                self.note_steered(&conv, message.request_id.as_deref(), into)
+                    .await;
                 self.settle_requests(&id).await;
                 return Ok(SendOutcome::Sent(message));
             }
@@ -942,6 +1000,8 @@ impl SessionManager {
             // The user wrote again: whatever was asked of them is answered or moot.
             state.asked_user.clear();
             state.in_turn.push(message.clone());
+            // The user's word starts a chain of its own (SESSION-MESSAGING-PLAN.md §5.5).
+            state.chain = Some(TurnChain::user(&message.id));
             // The rest of the turn answers the new message: its own request.
             std::mem::replace(&mut state.request, message.request_id.clone())
         } else {
@@ -950,7 +1010,8 @@ impl SessionManager {
             working
         };
         drop(state);
-        self.note_steered(conv, &message, into).await;
+        self.note_steered(conv, message.request_id.as_deref(), into)
+            .await;
         self.settle_requests(&conv.id).await;
         if !steered {
             self.kick(conv);
@@ -1126,8 +1187,8 @@ impl SessionManager {
     /// A message steered into the turn of request `into`: its request says so, and after
     /// which reply, so the thread shows it inside that request's block where it was sent. The
     /// reply streaming right now still answers `into`.
-    async fn note_steered(&self, conv: &ConvLive, message: &Message, into: Option<String>) {
-        let (Some(request), Some(into)) = (&message.request_id, into) else {
+    async fn note_steered(&self, conv: &ConvLive, request: Option<&str>, into: Option<String>) {
+        let (Some(request), Some(into)) = (request, into) else {
             return;
         };
         let streaming = match self.core.board(&conv.id).await {
@@ -1148,6 +1209,93 @@ impl SessionManager {
         {
             crate::logging::private_trace!(conv.private_logs, warn, "could not mark a steered request"; conversation = %conv.id, error = %err);
         }
+    }
+
+    /// Steers another session's message into the running turn (SESSION-MESSAGING-PLAN.md
+    /// §5.3): returns whether the CLI took it. A reply goes only into a turn of the request it
+    /// is filed under; any other message joins whatever runs, and the rest of the turn answers
+    /// its request, as a message the user steers in does.
+    pub(super) async fn steer_peer(
+        &self,
+        conv: &Arc<ConvLive>,
+        envelope: &Envelope,
+        request: &str,
+        reply: bool,
+        chain: TurnChain,
+    ) -> bool {
+        let mut state = conv.state.lock().await;
+        let Some(cli) = state.cli.clone() else {
+            return false;
+        };
+        if !state.busy || state.compacting || (reply && state.request.as_deref() != Some(request)) {
+            return false;
+        }
+        if cli
+            .session
+            .steer(TurnInput::text(envelope.text.clone()))
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        state.chain = Some(chain);
+        let into = if reply {
+            None
+        } else {
+            state.request.replace(request.to_owned())
+        };
+        drop(state);
+        self.log_injection(
+            &conv.id,
+            InjectionKind::PeerMessage,
+            envelope.label.clone(),
+            None,
+            envelope.text.len(),
+        )
+        .await;
+        self.note_steered(conv, Some(request), into).await;
+        self.settle_requests(&conv.id).await;
+        true
+    }
+
+    /// The chain a turn's newest input belongs to (SESSION-MESSAGING-PLAN.md §5.5): a user
+    /// message starts one; another session's message carries its sender's; anything else (a
+    /// worker's report, a timer) belongs to its request's.
+    async fn turn_chain(
+        &self,
+        id: &ConversationId,
+        users: &[Message],
+        envelopes: &[(Envelope, Option<String>)],
+        request: Option<&str>,
+    ) -> Option<TurnChain> {
+        if let Some(message) = users.last() {
+            return Some(TurnChain::user(&message.id));
+        }
+        let board = self.core.board(id).await.ok()?;
+        let received = |message_id: &str| {
+            board
+                .peer_messages
+                .get(message_id)
+                .filter(|record| !record.outgoing)
+                .map(|record| TurnChain {
+                    chain_id: record.chain_id.clone(),
+                    hop: record.hop,
+                    input_id: Some(message_id.to_owned()),
+                })
+        };
+        if let Some(chain) = envelopes
+            .iter()
+            .rev()
+            .find_map(|(envelope, _)| envelope.peer_message().and_then(received))
+        {
+            return Some(chain);
+        }
+        let request = request?;
+        Some(received(request).unwrap_or_else(|| TurnChain {
+            chain_id: request.to_owned(),
+            hop: 0,
+            input_id: None,
+        }))
     }
 
     /// Unpauses the queue and sends its next message if nothing runs.
@@ -1460,6 +1608,15 @@ impl SessionManager {
         if let Some(task) = &envelope.task_id {
             state.announcing.remove(task);
         }
+        // Another session's message is in the inbox once, however often it is delivered.
+        if envelope.peer_message().is_some()
+            && state
+                .inbox
+                .iter()
+                .any(|(queued, _)| queued.label == envelope.label)
+        {
+            return Some(conv.clone());
+        }
         if archived
             || envelope
                 .task_id
@@ -1668,6 +1825,10 @@ impl SessionManager {
             state.in_turn = users.clone();
             break (users, envelopes, request, notes);
         };
+        let chain = self
+            .turn_chain(&conv.id, &users, &envelopes, request.as_deref())
+            .await;
+        conv.state.lock().await.chain = chain;
         self.settle_requests(&conv.id).await;
         self.set_run_for(&conv.id, RunState::Starting, None, request.clone())
             .await;
@@ -1727,6 +1888,12 @@ impl SessionManager {
             .await;
         if unsent.len() < users.len() {
             input.prepend_text(prompts::CONTINUE_ON_ACCOUNT);
+        }
+        // Replies from other sessions that came after their request was over.
+        let late = std::mem::take(&mut conv.state.lock().await.late);
+        if !late.is_empty() {
+            let notes: Vec<&str> = late.iter().map(|(_, note)| note.as_str()).collect();
+            input.prepend_text(&notes.join("\n\n"));
         }
         let mut reborn = None;
         if let Some(plan) = briefing {
@@ -1791,7 +1958,14 @@ impl SessionManager {
         }
         conv.state.lock().await.awaiting_start = true;
         if let Err(err) = cli.session.send(input).await {
-            conv.state.lock().await.awaiting_start = false;
+            {
+                let mut state = conv.state.lock().await;
+                state.awaiting_start = false;
+                // They go with the next try.
+                let mut kept = late;
+                kept.append(&mut state.late);
+                state.late = kept;
+            }
             // The briefing goes with the next try.
             if let Some((plan, _)) = reborn {
                 conv.state.lock().await.briefing = Some(plan);
@@ -1801,6 +1975,14 @@ impl SessionManager {
             return;
         }
         self.told_notes(&conv, instruction_notes).await;
+        // The CLI took the messages of other sessions this turn carries.
+        let seen = envelopes
+            .iter()
+            .filter_map(|(envelope, _)| envelope.peer_message())
+            .chain(late.iter().map(|(id, _)| id.as_str()));
+        for message_id in seen {
+            self.peer_seen(&conv.id, message_id).await;
+        }
         if let Some((_, record)) = reborn {
             crate::logging::private_trace!(conv.private_logs, info, "orchestrator reborn"; conversation = %conv.id, generation = record.generation, tokens = record.briefing_tokens, trigger = ?record.trigger);
             self.log_orchestrator(

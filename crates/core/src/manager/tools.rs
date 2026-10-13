@@ -644,9 +644,12 @@ impl SessionManager {
             OrchestratorCall::ReadSession(args) => {
                 crate::heap(|| self.read_session(&args.id)).await
             }
-            OrchestratorCall::MessageSession(_) | OrchestratorCall::SettleWait(_) => Err(
-                Error::Invalid("Messaging other sessions isn't available yet.".into()),
-            ),
+            OrchestratorCall::MessageSession(args) => {
+                crate::heap(|| self.message_session(id, args)).await
+            }
+            OrchestratorCall::SettleWait(_) => Err(Error::Invalid(
+                "Settling a wait for a reply isn't available yet.".into(),
+            )),
             OrchestratorCall::ListTasks => {
                 let tasks = crate::heap(|| self.core.tasks(id)).await?;
                 if tasks.is_empty() {

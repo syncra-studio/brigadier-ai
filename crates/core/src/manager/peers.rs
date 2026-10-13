@@ -3,9 +3,22 @@
 //! the other hears as a peer's input, never as its user's.
 
 use super::SessionManager;
-use crate::model::{Conversation, ConversationId, ConversationKind, Lifecycle};
-use crate::work::RequestState;
+use super::conversation::{Envelope, TurnChain};
+use super::requests::ended_run_request;
+use crate::model::{
+    Conversation, ConversationId, ConversationKind, Lifecycle, PeerState, PermissionLevel,
+};
+use crate::sessions::PeerSend;
+use crate::tools::MessageSession;
+use crate::work::{InjectionKind, RequestState};
 use crate::{Error, Result, now_ms};
+
+/// Messages between sessions with no one's word in between after which a turn may send no
+/// more (SESSION-MESSAGING-PLAN.md §5.5).
+const MAX_HOPS: u32 = 8;
+/// Messages one session may send another in a minute.
+const PAIR_RATE: usize = 20;
+const MINUTE_MS: i64 = 60_000;
 
 /// Messages `read_session` returns.
 const READ_MESSAGES: usize = 6;
@@ -165,6 +178,339 @@ impl SessionManager {
             session.title,
             lines.join("\n\n")
         ))
+    }
+}
+
+/// Where a delivered message went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Delivery {
+    /// A turn takes it now: steered into the running one, or one starts with it.
+    Delivered,
+    /// The receiver is busy: its next turn takes it.
+    Queued,
+    /// Not in the inbox (the receiver is closing, archived or gone): a later launch looks
+    /// again, or it was dropped.
+    NotNow,
+}
+
+impl Delivery {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Delivered | Self::NotNow => "delivered",
+        }
+    }
+}
+
+/// The header line of a message as the receiving CLI reads it.
+fn header(title: &str, project: &str, message_id: &str, reply_to: Option<&str>) -> String {
+    let reply = reply_to
+        .map(|original| format!(" · reply to {original}"))
+        .unwrap_or_default();
+    format!("[message from session \"{title}\" in {project} · id {message_id}{reply}]")
+}
+
+impl SessionManager {
+    /// `message_session`: sends `args.text` from `caller`'s running turn to another session
+    /// (SESSION-MESSAGING-PLAN.md §§3, 5).
+    pub(super) async fn message_session(
+        &self,
+        caller: &ConversationId,
+        args: MessageSession,
+    ) -> Result<String> {
+        let text = args.text.trim();
+        if text.is_empty() {
+            return Err(Error::Invalid(
+                "Write the message: its text is empty.".into(),
+            ));
+        }
+        let target = self.peer_session(&args.to)?;
+        if target.id == *caller {
+            return Err(Error::Invalid("That's this session.".into()));
+        }
+        if target.lifecycle == Lifecycle::Archived {
+            return Err(Error::Invalid(format!(
+                "{} is archived. Nothing was sent.",
+                target.title
+            )));
+        }
+        let Some((request, chain)) = self.conv(caller)?.sending_turn().await else {
+            return Err(Error::Invalid(
+                "A message goes from a running turn; none runs now.".into(),
+            ));
+        };
+        let reply_to = args
+            .reply_to
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
+        if let Some(original) = &reply_to {
+            let board = self.core.board(caller).await?;
+            let from_target = board
+                .peer_messages
+                .get(original)
+                .is_some_and(|record| !record.outgoing && record.peer == target.id);
+            if !from_target {
+                return Err(Error::Invalid(format!(
+                    "That message wasn't from {}.",
+                    target.title
+                )));
+            }
+        }
+        if self.permission(caller) == PermissionLevel::AskForApproval {
+            return Err(Error::Invalid(
+                "Messaging other sessions under Ask for approval isn't available yet.".into(),
+            ));
+        }
+        let send = PeerSend {
+            message_id: uuid::Uuid::now_v7().to_string(),
+            from: caller.clone(),
+            to: target.id.clone(),
+            text: text.to_owned(),
+            reply_to,
+            chain_id: chain.chain_id.clone(),
+            hop: chain.hop + 1,
+            request_id: request,
+            turn_input_id: chain.input_id.clone(),
+        };
+        {
+            let _checked = self.peer_sends.lock().await;
+            self.may_send(caller, &target, &chain).await?;
+            self.core.record_peer_send(&send, false).await?;
+        }
+        let delivery = self.deliver_peer(&target.id, &send.message_id).await;
+        Ok(serde_json::json!({
+            "message_id": send.message_id,
+            "state": delivery.word(),
+        })
+        .to_string())
+    }
+
+    /// The engine's hard rules for one more send from `caller` to `target` in a turn on
+    /// `chain`: the hop limit and the pair rate (SESSION-MESSAGING-PLAN.md §5.5).
+    async fn may_send(
+        &self,
+        caller: &ConversationId,
+        target: &Conversation,
+        chain: &TurnChain,
+    ) -> Result<()> {
+        if chain.hop >= MAX_HOPS {
+            return Err(Error::Invalid(
+                "Eight messages have gone back and forth with no one's input. Ask your user \
+                 before sending more."
+                    .into(),
+            ));
+        }
+        let since = now_ms() - MINUTE_MS;
+        let board = self.core.board(caller).await?;
+        let recent = board
+            .peer_messages
+            .values()
+            .filter(|record| {
+                record.outgoing
+                    && record.peer == target.id
+                    && record.sent_at_ms.is_some_and(|at| at >= since)
+            })
+            .count();
+        if recent >= PAIR_RATE {
+            return Err(Error::Invalid(format!(
+                "Too many messages to {} this minute.",
+                target.title
+            )));
+        }
+        Ok(())
+    }
+
+    /// Puts a recorded message in its receiver's hands (SESSION-MESSAGING-PLAN.md §5.3): a
+    /// sleeping session wakes; a reply to a request that is over waits for the next turn as
+    /// a note; a busy turn has it steered in, else its next turn takes it; an idle session
+    /// starts a turn with it.
+    pub(super) async fn deliver_peer(&self, to: &ConversationId, message_id: &str) -> Delivery {
+        match self.try_deliver_peer(to, message_id).await {
+            Ok(delivery) => delivery,
+            Err(err) => {
+                tracing::warn!(conversation = %to, message = message_id, error = %err, "could not deliver a message from another session");
+                Delivery::NotNow
+            }
+        }
+    }
+
+    async fn try_deliver_peer(&self, to: &ConversationId, message_id: &str) -> Result<Delivery> {
+        let receiver = self.core.conversation(to)?;
+        let board = self.core.board(to).await?;
+        let Some(record) = board
+            .peer_messages
+            .get(message_id)
+            .filter(|record| !record.outgoing && record.state.due())
+            .cloned()
+        else {
+            return Ok(Delivery::NotNow);
+        };
+        let sides = [to, &record.peer];
+        if receiver.lifecycle == Lifecycle::Archived {
+            self.core
+                .record_peer_state(
+                    message_id,
+                    &sides,
+                    PeerState::Dropped {
+                        reason: "archived".into(),
+                    },
+                )
+                .await?;
+            return Ok(Delivery::NotNow);
+        }
+        if receiver.lifecycle == Lifecycle::Hibernated {
+            self.core
+                .set_lifecycle(to.clone(), Lifecycle::Active)
+                .await?;
+        }
+        let request = record
+            .request_id
+            .clone()
+            .unwrap_or_else(|| message_id.to_owned());
+        let sender = self.core.conversation(&record.peer).ok();
+        let (title, project) = match &sender {
+            Some(sender) => (sender.title.clone(), self.project_name(sender)),
+            None => ("a deleted session".to_owned(), String::new()),
+        };
+        let text = self.peer_message_text(to, &record.peer, message_id).await;
+        let reply = record.reply_to.is_some();
+        // A reply to a request the user stopped, or whose overnight run ended: shown, and
+        // carried by the next turn, which it doesn't start.
+        let over = board.requests.get(&request).and_then(|of| {
+            if ended_run_request(&board, &request) {
+                Some("after the overnight run ended")
+            } else if of.state == RequestState::Stopped {
+                Some("after you stopped")
+            } else {
+                None
+            }
+        });
+        let conv = self.conv(to)?;
+        if let (true, Some(when)) = (reply, over) {
+            self.core
+                .record_peer_state(message_id, &sides, PeerState::Delivered)
+                .await?;
+            conv.hold_late(
+                message_id,
+                format!(
+                    "A reply from \"{title}\" arrived {when} (id {message_id} · reply to {}):\n{text}",
+                    record.reply_to.as_deref().unwrap_or_default()
+                ),
+            )
+            .await;
+            return Ok(Delivery::Delivered);
+        }
+        let envelope = Envelope {
+            kind: InjectionKind::PeerMessage,
+            label: format!("peer {message_id}"),
+            task_id: None,
+            text: format!(
+                "{}\n{text}",
+                header(&title, &project, message_id, record.reply_to.as_deref())
+            ),
+        };
+        let chain = TurnChain {
+            chain_id: record.chain_id.clone(),
+            hop: record.hop,
+            input_id: Some(message_id.to_owned()),
+        };
+        if self
+            .steer_peer(&conv, &envelope, &request, reply, chain)
+            .await
+        {
+            self.core
+                .record_peer_state(message_id, &sides, PeerState::Seen)
+                .await?;
+            return Ok(Delivery::Delivered);
+        }
+        let busy = conv.is_busy().await;
+        // Recorded first: a turn that takes it at once records `seen` after this.
+        self.core
+            .record_peer_state(message_id, &sides, PeerState::Delivered)
+            .await?;
+        if self
+            .queue_envelope(to, envelope, Some(request))
+            .await
+            .is_none()
+        {
+            return Ok(Delivery::NotNow);
+        }
+        self.settle_requests(to).await;
+        self.kick(&conv);
+        Ok(if busy {
+            Delivery::Queued
+        } else {
+            Delivery::Delivered
+        })
+    }
+
+    /// The whole text of a message `to` received from `from`: its sender's record, else
+    /// (the sender deleted) the receiver's transcript message.
+    async fn peer_message_text(
+        &self,
+        to: &ConversationId,
+        from: &ConversationId,
+        message_id: &str,
+    ) -> String {
+        if let Some(text) = self.core.peer_text(from, message_id).await {
+            return text;
+        }
+        let message = self.core.all_messages(to).await.ok().and_then(|messages| {
+            messages
+                .into_iter()
+                .find(|message| message.id == message_id)
+        });
+        match message {
+            Some(message) => self.full_text(&message).await,
+            None => String::new(),
+        }
+    }
+
+    /// Archiving session `id`: the messages it received and hasn't taken are dropped, on
+    /// both sides.
+    pub(super) async fn drop_due_peer_messages(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        for record in board
+            .peer_messages
+            .values()
+            .filter(|record| !record.outgoing && record.state.due())
+        {
+            let dropped = PeerState::Dropped {
+                reason: "archived".into(),
+            };
+            if let Err(err) = self
+                .core
+                .record_peer_state(&record.message_id, &[id, &record.peer], dropped)
+                .await
+            {
+                tracing::warn!(conversation = %id, error = %err, "could not drop a message from another session");
+            }
+        }
+    }
+
+    /// The receiver `to`'s CLI took message `message_id`: it is seen, on both sides.
+    pub(super) async fn peer_seen(&self, to: &ConversationId, message_id: &str) {
+        let Ok(board) = self.core.board(to).await else {
+            return;
+        };
+        let Some(record) = board
+            .peer_messages
+            .get(message_id)
+            .filter(|record| !record.outgoing)
+        else {
+            return;
+        };
+        if let Err(err) = self
+            .core
+            .record_peer_state(message_id, &[to, &record.peer], PeerState::Seen)
+            .await
+        {
+            tracing::warn!(conversation = %to, message = message_id, error = %err, "could not record a message as seen");
+        }
     }
 }
 
