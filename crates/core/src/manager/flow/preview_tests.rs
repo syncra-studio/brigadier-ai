@@ -1339,7 +1339,7 @@ async fn a_web_preview_runs_once_a_port_its_group_listens_on_answers() {
 }
 
 /// A desktop app preview never gets the frontend address it prints, and without a window of
-/// its own it stays Starting. The user's Stop leaves it listed, until Clear finished.
+/// its own it stays Starting (where windows can be seen). The user's Stop leaves it listed, until Clear finished.
 #[tokio::test]
 async fn an_app_preview_has_no_url_and_waits_for_its_window() {
     use std::time::Duration;
@@ -1355,11 +1355,18 @@ async fn an_app_preview_has_no_url_and_waits_for_its_window() {
         .await;
     flow.settled().await;
     let started = replies.lock().unwrap()[0].1.clone();
-    assert!(
-        started.contains("preview-1 \"app\" is starting, not ready yet: it reads Starting until it opens its window"),
-        "{started}"
-    );
     assert!(started.contains("It is a desktop app"), "{started}");
+    // Where windows can't be seen, an app reads as running once started.
+    let sees = crate::manager::preview_ready::SEES_WINDOWS;
+    if sees {
+        assert!(
+            started.contains(
+                "preview-1 \"app\" is starting, not ready yet: it reads Starting until it \
+                 opens its window"
+            ),
+            "{started}"
+        );
+    }
     // Something listens on the address it printed: that isn't the app.
     tokio::time::sleep(Duration::from_secs(2)).await;
     let (_, url_seen) = flow
@@ -1373,7 +1380,12 @@ async fn an_app_preview_has_no_url_and_waits_for_its_window() {
         board.previews["preview-1"].kind,
         crate::work::PreviewKind::App
     );
-    assert_eq!(state_of(&board, "preview-1"), PreviewState::Starting);
+    let expected = if sees {
+        PreviewState::Starting
+    } else {
+        PreviewState::Running
+    };
+    assert_eq!(state_of(&board, "preview-1"), expected);
     flow.manager
         .stop_preview(flow.conversation.clone(), Some("preview-1".into()))
         .await

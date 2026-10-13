@@ -625,8 +625,9 @@ impl SessionManager {
                 () = live.ended.cancelled() => return,
                 url = self.preview_ready(&live) => url,
             };
-            if let Some(url) = url {
-                self.mark_ready(&live, url).await;
+            if let Some(url) = url
+                && self.mark_ready(&live, url).await
+            {
                 return;
             }
         }
@@ -636,8 +637,12 @@ impl SessionManager {
     /// while it isn't.
     async fn preview_ready(&self, live: &LivePreview) -> Option<Option<String>> {
         use super::preview_ready as ready;
+        let web = live.kind == PreviewKind::Web;
+        if !web && !ready::SEES_WINDOWS {
+            return Some(None);
+        }
         let platform = self.runtime.platform().clone();
-        let (group, path, web) = (live.pid, live.log.clone(), live.kind == PreviewKind::Web);
+        let (group, path) = (live.pid, live.log.clone());
         let (window, url) = blocking(move || {
             let processes = platform.processes();
             let window = ready::window_owners()
@@ -666,17 +671,20 @@ impl SessionManager {
         None
     }
 
-    /// Records a starting preview as running (with the URL it printed, for a web preview).
-    async fn mark_ready(&self, live: &LivePreview, url: Option<String>) {
+    /// Records a starting preview as running (with the URL it printed, for a web preview), and
+    /// only then says it is ready, so `start_preview` reads the recorded state. False when it
+    /// couldn't be recorded (it is checked again).
+    async fn mark_ready(&self, live: &LivePreview, url: Option<String>) -> bool {
         let _updating = live.updating.lock().await;
-        live.ready.cancel();
         let preview = match self.core.board(&live.conversation).await {
             Ok(board) => board.previews.get(&live.id).cloned(),
             Err(_) => None,
         };
+        // A paused one resumes as running.
         let Some(mut preview) = preview.filter(|preview| preview.state == PreviewState::Starting)
         else {
-            return;
+            live.ready.cancel();
+            return true;
         };
         tracing::info!(conversation = %live.conversation, preview = %live.id, "preview ready");
         preview.state = PreviewState::Running;
@@ -685,7 +693,10 @@ impl SessionManager {
         }
         if let Err(err) = self.record_preview(preview).await {
             tracing::warn!(conversation = %live.conversation, preview = %live.id, error = %err, "could not record a preview as running");
+            return false;
         }
+        live.ready.cancel();
+        true
     }
 
     /// Records how a preview ended, with its whole log stored, and removes its log file.

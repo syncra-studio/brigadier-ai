@@ -12,6 +12,7 @@ use crate::work::PreviewKind;
 /// How long one connection or HTTP answer may take.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 /// How long `lsof` may take.
+#[cfg(target_os = "macos")]
 const LSOF_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The kind of preview `command` starts: an app for the dev commands of Tauri and Electron,
@@ -39,6 +40,10 @@ pub(super) fn infer_kind(command: &str) -> PreviewKind {
         PreviewKind::Web
     }
 }
+
+/// Whether [`window_owners`] can see windows here. Where it can't, an app preview has no
+/// readiness signal and reads as running once started, as every preview did before.
+pub(super) const SEES_WINDOWS: bool = cfg!(target_os = "macos");
 
 /// The processes that own an on-screen window. The owner of a window is readable without the
 /// Screen Recording permission.
