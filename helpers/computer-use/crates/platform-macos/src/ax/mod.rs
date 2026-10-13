@@ -20,6 +20,7 @@ pub mod bindings;
 pub mod cache;
 pub(crate) mod offspace;
 pub mod tree;
+pub(crate) mod window_watch;
 
 pub use cache::ElementCache;
 pub use tree::{

@@ -14,6 +14,10 @@
 //! (at launch, when listing windows, on every tree read), so a document that
 //! another one opened after it has replaced as main is still found.
 //!
+//! The app's window notifications are watched from the first touch on
+//! ([`super::window_watch`]), so a document that was main only for a moment
+//! is remembered too.
+//!
 //! [`windows_by_token`] finds the elements for the app's on-screen-list
 //! windows that the regular attributes missed. Element ids are small and
 //! stable for a window's life, so a found id is remembered, and a window that
@@ -96,6 +100,7 @@ pub(crate) unsafe fn remember(pid: i32, window: AXUIElementRef) {
 /// Notes the app's focused and main windows: a window just opened is one of
 /// them only until the next one opens.
 pub(crate) fn remember_front_windows(pid: i32) {
+    super::window_watch::watch(pid);
     unsafe {
         let app = AXUIElementCreateApplication(pid);
         if app.is_null() {
@@ -128,6 +133,7 @@ fn server_windows(pid: i32) -> Vec<u32> {
 /// # Safety
 /// Calls the AX API; each returned element must be released by the caller.
 pub(crate) unsafe fn windows_by_token(pid: i32, have: &[u32]) -> Vec<AXUIElementRef> {
+    super::window_watch::watch(pid);
     let missing: Vec<u32> = server_windows(pid)
         .into_iter()
         .filter(|id| !have.contains(id))

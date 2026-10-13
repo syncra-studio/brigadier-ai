@@ -235,6 +235,21 @@ impl Tool for LaunchAppTool {
         // upgrade happens AFTER the blocking call returns (back on the
         // async runtime), then we sleep holding the targeted lease.
         let launch_result = tokio::task::spawn_blocking(move || {
+            // An app already running opens the documents in windows of its
+            // own; watch it first so each one is caught as it opens, also
+            // when other documents open right after it.
+            if !urls.is_empty() {
+                let running =
+                    crate::apps::list_running_apps().into_iter().find(|a| {
+                        match bundle_id.as_deref() {
+                            Some(bid) => a.bundle_id.as_deref() == Some(bid),
+                            None => name.as_deref() == Some(a.name.as_str()),
+                        }
+                    });
+                if let Some(app) = running {
+                    crate::ax::window_watch::watch(app.pid);
+                }
+            }
             let pid = if let Some(ref bid) = bundle_id {
                 if urls.is_empty()
                     && additional_arguments.is_empty()
