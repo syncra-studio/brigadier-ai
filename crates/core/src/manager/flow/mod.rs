@@ -1717,6 +1717,8 @@ mod owed_tests;
 #[cfg(test)]
 mod page_tools_tests;
 #[cfg(test)]
+mod peer_chain_tests;
+#[cfg(test)]
 mod peer_delivery_tests;
 #[cfg(test)]
 mod peer_kit;
