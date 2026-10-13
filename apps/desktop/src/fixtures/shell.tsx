@@ -299,14 +299,25 @@ function divider() {
   return Math.round(header.getBoundingClientRect().left + Number.parseFloat(getComputedStyle(header, "::before").left));
 }
 
-/** Runs `act`, then reads every frame for `ms`: whether a titlebar control moved, the window scrolled, or the left sidebar's width changed. */
-async function watch(act: () => void, ms = 600) {
+const stateOf = (slot: string) => one(`[data-slot="${slot}"]`)?.getAttribute("data-state");
+
+/** Runs `act`, then reads every frame for `ms`, and on until the panel `slot` names has opened or
+ * closed and come to rest (for at most five seconds more, as a busy machine can be that slow):
+ * whether a titlebar control moved, the window scrolled, or the left sidebar's width changed. */
+async function watch(act: () => void, ms = 600, slot?: string) {
   const titles = JSON.stringify(titlebar());
   const left = rect(one('[data-slot="sidebar-panel"]'))!.w;
   const moved = new Set<string>();
+  const before = slot && stateOf(slot);
+  const box = () => JSON.stringify(slot && rect(one(`[data-slot="${slot}"]`)));
   act();
-  for (const end = performance.now() + ms; performance.now() < end;) {
+  const end = performance.now() + ms;
+  let [last, since, still] = [box(), performance.now(), 0];
+  const busy = () => Boolean(slot) && (stateOf(slot!) === before || performance.now() - since < 250 || still < 5) && performance.now() < end + 5000;
+  while (performance.now() < end || busy()) {
     await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (box() === last) still++;
+    else [last, since, still] = [box(), performance.now(), 0];
     const now = titlebar();
     for (const [name, at] of Object.entries(now)) if (JSON.stringify(at) !== JSON.stringify(JSON.parse(titles)[name])) moved.add(`${name} ${JSON.stringify(JSON.parse(titles)[name])}→${JSON.stringify(at)}`);
     for (const name of Object.keys(JSON.parse(titles))) if (!(name in now)) moved.add(`${name} gone`);
@@ -327,15 +338,15 @@ const toggle = '[data-slot="session-tabs"] button[aria-label="Right sidebar"]';
 /** Where the titlebar's controls are and how wide the left sidebar is. */
 const shape = () => JSON.stringify([titlebar(), rect(one('[data-slot="sidebar-panel"]'))?.w]);
 
-/** Waits until no titlebar control or sidebar width has changed for a quarter second, so a fold
- * still easing in on a slow machine isn't counted as moved by what follows. */
+/** Waits until no titlebar control or sidebar width has changed for a quarter second and five
+ * frames, so a fold still easing in on a slow machine isn't counted as moved by what follows. */
 async function settle(ms = 4000) {
-  let last = shape();
-  let since = performance.now();
-  for (const end = performance.now() + ms; performance.now() < end && performance.now() - since < 250;) {
+  let [last, since, still] = [shape(), performance.now(), 0];
+  for (const end = performance.now() + ms; performance.now() < end && (performance.now() - since < 250 || still < 5);) {
     await frame();
     const now = shape();
-    if (now !== last) [last, since] = [now, performance.now()];
+    if (now === last) still++;
+    else [last, since, still] = [now, performance.now(), 0];
   }
 }
 
@@ -346,7 +357,7 @@ async function panels() {
   const last = [...header.querySelectorAll("button")].at(-1)!;
   seen.toggleLast = last.getAttribute("aria-label");
   seen.toggleToEdge = Math.round(innerWidth - last.getBoundingClientRect().right);
-  seen.filesOpening = await watch(() => click(toggle));
+  seen.filesOpening = await watch(() => click(toggle), 600, "workspace-pane");
   const pane = rect(one('[data-slot="workspace-pane"]'))!;
   seen.filesOpen = { top: pane.y - headerBottom(), width: pane.w, row: one('[data-slot="workspace-pane"] [role="tablist"]')?.textContent !== undefined && rect(one('[data-slot="workspace-pane"] [role="tablist"]'))!.y - headerBottom() };
   // The session's context, where its Workers row opens the Workers panel.
@@ -355,13 +366,13 @@ async function panels() {
     await until(() => Boolean(one('[data-slot="workers-summary"]')));
     await wait(400);
   }
-  seen.workersOpening = await watch(() => click('[data-slot="workers-summary"]'));
+  seen.workersOpening = await watch(() => click('[data-slot="workers-summary"]'), 600, "right-sidebar");
   const workers = rect(one('[data-slot="right-sidebar"]'))!;
   seen.workersOpen = { top: workers.y - headerBottom(), width: workers.w, state: one('[data-slot="right-sidebar"]')?.getAttribute("data-state"),
     files: one('[data-slot="workspace-pane"]')?.getAttribute("data-state"), row: rect(one('[data-slot="right-sidebar"] [role="tablist"]'))!.y - headerBottom() };
-  seen.filesClosing = await watch(() => click(toggle));
-  seen.filesAgain = await watch(() => click(toggle));
-  seen.workersClosing = await watch(() => click('[data-slot="right-sidebar"] button[aria-label="Close right panel"]'));
+  seen.filesClosing = await watch(() => click(toggle), 600, "workspace-pane");
+  seen.filesAgain = await watch(() => click(toggle), 600, "workspace-pane");
+  seen.workersClosing = await watch(() => click('[data-slot="right-sidebar"] button[aria-label="Close right panel"]'), 600, "right-sidebar");
   seen.filesClosingLast = await watch(() => one('[data-slot="workspace-pane"]')?.getAttribute("data-state") === "expanded" && click(toggle));
   return seen;
 }
