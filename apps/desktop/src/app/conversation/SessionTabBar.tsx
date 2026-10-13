@@ -564,6 +564,7 @@ const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ defau
 const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
 const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default: module.MockupView })));
 const PageTabView = lazy(() => import("./pages/PageTabView").then((module) => ({ default: module.PageTabView })));
+const TabWithChat = lazy(() => import("./TabChat").then((module) => ({ default: module.TabWithChat })));
 
 /**
  * The session's open tabs over its conversation, which stays as it was (scrolled, its draft
@@ -587,7 +588,9 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
           >
             <Suspense fallback={null}>
               {tab.kind === "file" ? (
-                <FileTabView conversationId={conversationId} tab={tab} active={shown} />
+                <TabWithChat conversationId={conversationId} tab={tab}>
+                  <FileTabView conversationId={conversationId} tab={tab} active={shown} />
+                </TabWithChat>
               ) : tab.kind === "review" ? (
                 <ReviewTab conversationId={conversationId} target={tab.target} active={shown} />
               ) : tab.kind === "newTab" && !browserOn ? (
@@ -595,17 +598,25 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <div className="@container/new-tab flex min-h-0 flex-1 flex-col">
                   <NewTabTools conversationId={conversationId} tabId={tab.id} />
                 </div>
-              ) : tab.kind === "newTab" || tab.kind === "browser" ? (
-                <BrowserTab conversationId={tab.id} initialUrl={tab.kind === "browser" ? tab.url : undefined} agent={tab.kind === "browser" && tab.agent} active={shown}
-                  onNavigate={tab.kind === "newTab" ? (url) => replaceNewTab(conversationId, tab.id, "browser", null, url) : undefined}>
-                  {tab.kind === "newTab" ? <NewTabTools conversationId={conversationId} tabId={tab.id} /> : null}
+              ) : tab.kind === "newTab" ? (
+                <BrowserTab conversationId={tab.id} active={shown}
+                  onNavigate={(url) => replaceNewTab(conversationId, tab.id, "browser", null, url)}>
+                  <NewTabTools conversationId={conversationId} tabId={tab.id} />
                 </BrowserTab>
+              ) : tab.kind === "browser" ? (
+                <TabWithChat conversationId={conversationId} tab={tab}>
+                  <BrowserTab conversationId={tab.id} initialUrl={tab.url} agent={tab.agent} active={shown} />
+                </TabWithChat>
               ) : tab.kind === "sideChat" ? (
                 <SideChatTab conversationId={conversationId} tab={tab} />
               ) : tab.kind === "terminal" ? (
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
-                : <PageTabView conversationId={conversationId} tab={tab} active={shown} />}
+                : (
+                  <TabWithChat conversationId={conversationId} tab={tab}>
+                    <PageTabView conversationId={conversationId} tab={tab} active={shown} />
+                  </TabWithChat>
+                )}
             </Suspense>
           </div>
         );

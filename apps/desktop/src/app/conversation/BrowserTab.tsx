@@ -45,6 +45,7 @@ import { useBrowserOn } from "@/state/links";
 import { useApp } from "@/state/store";
 import { cn } from "@/lib/utils";
 import { toast } from "@/state/toasts";
+import { TabChatToolbarButton } from "./TabChat";
 
 /**
  * A browser main tab (⌘⇧B): one page, such as the app a worker is
@@ -678,6 +679,7 @@ export function BrowserTab({
           onZoom={zoomTo}
           onScreenshot={screenshot}
         />
+        <TabChatToolbarButton />
       </div>
       {finding && native && <FindBar id={conversationId} input={findInput} onClose={hideFind} />}
       {page?.blocked && (

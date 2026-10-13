@@ -880,9 +880,9 @@ function greeting(now: number): string {
 }
 
 /** The hero over a new chat: a faint mark, a greeting by name once it's known, over "What
- * should we build in {project}?". A side chat says what it is for instead. */
+ * should we build in {project}?". A side chat, or a tab's own chat, says what it is for instead. */
 const Welcome: FC = () => {
-  const { selection, embedded } = useContext(ViewContext);
+  const { selection, conversation, embedded } = useContext(ViewContext);
   const name = useApp((s) => s.settings.userName);
   const now = useNow(name ? 60_000 : null);
   const project = useApp((s) =>
@@ -893,7 +893,11 @@ const Welcome: FC = () => {
   if (embedded) {
     return (
       <p className="text-muted-foreground px-2 text-center text-sm">
-        Ask about this conversation without adding to it
+        {conversation?.tabChat?.target.type === "file"
+          ? "Ask about this file"
+          : conversation?.tabChat
+            ? "Ask about this page"
+            : "Ask about this conversation without adding to it"}
       </p>
     );
   }

@@ -228,28 +228,3 @@
 .page-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .page-td, .page-th { min-width: 4rem; padding: .375rem .625rem; border: 1px solid var(--page-rule); vertical-align: top; text-align: start; }
 .page-th { background: var(--page-wash); font-weight: 600; }
-
-/* "Work with this page…": the session's agent, asked from under the page. */
-.page-composer-dock { flex-shrink: 0; padding: 0 1.25rem 1rem; }
-.page-composer-column { width: 100%; max-width: var(--page-column); margin-inline: auto; }
-.page-composer-input {
-  flex: 1;
-  min-width: 0;
-  min-height: 2rem;
-  max-height: 10rem;
-  padding: .375rem .5rem;
-  border: 0;
-  resize: none;
-  field-sizing: content;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: var(--page-font);
-  line-height: 1.25rem;
-  outline: none;
-}
-.page-composer-input::placeholder { color: var(--page-quiet); }
-.page-composer-status, .page-composer-problem { display: flex; gap: .375rem; margin: 0 0 .5rem .75rem; font-size: .8125rem; }
-.page-composer-status { color: var(--page-quiet); }
-.page-composer-problem { color: var(--destructive); }
-.page-composer-link { color: var(--foreground); text-decoration: underline; text-underline-offset: 2px; }
