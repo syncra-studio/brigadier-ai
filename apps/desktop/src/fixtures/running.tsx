@@ -76,7 +76,7 @@ function Fixture() {
     at(1000, () => {
       press("Show log", row("Web app")!);
       if (!params.has("drive")) return;
-      seen.initial = rows.map((preview) => ({ name: preview.name, text: row(preview.name)?.textContent, actions: labels(preview.name) }));
+      seen.initial = rows.map((preview) => ({ name: preview.name, text: row(preview.name)?.textContent, actions: labels(preview.name), indicator: row(preview.name)?.querySelector('[data-slot="agent-status-indicator"]')?.getAttribute("data-state") }));
       press("Pause", row("Web app")!);
     });
     if (params.has("drive")) {

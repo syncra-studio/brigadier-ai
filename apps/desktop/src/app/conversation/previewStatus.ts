@@ -1,3 +1,4 @@
+import type { AgentState } from "@/components/assistant-ui/elements/agent-status";
 import type { Preview, PreviewState } from "@/ipc/generated";
 
 export function previewActive(state: PreviewState): boolean {
@@ -42,8 +43,15 @@ export function previewChip(previews: Readonly<Record<string, Preview>>) {
   const active = previewActive(newest.state);
   return {
     label: newest.name,
-    status: active ? previewStateLabel(newest.state) : "Finished",
+    status: active ? previewStateLabel(newest.state) : previewIndicator(newest.state) === "failed" ? "Failed" : newest.state.type === "stopped" ? "Stopped" : "Finished",
     active,
+    startedAtMs: newest.startedAtMs,
+    indicator: previewIndicator(newest.state),
     title: all.map((preview) => `${preview.name}: ${preview.command} (in ${preview.workdir})`).join("\n"),
   };
+}
+
+export function previewIndicator(state: PreviewState): AgentState {
+  if (state.type === "exited") return state.code === 0 ? "done" : "failed";
+  return state.type;
 }

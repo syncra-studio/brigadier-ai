@@ -32,7 +32,7 @@ useApp.setState({ conversations: { [id]: { ...conversation, kind: "session" } },
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: { preview: {
   id: "preview", conversationId: id, name: "Web", command: "pnpm dev",
   workdir: "/fixture", workspace: "/fixture", pid: null, log: null,
-  state: { type: "running" }, startedAtMs: 0, endedAtMs: null, kind: "web",
+  state: { type: "running" }, startedAtMs: Date.now() - 90000, endedAtMs: null, kind: "web",
 } } } });
 let keyboardReturns = 0;
 let projectChanged = false;
@@ -188,8 +188,10 @@ function Fixture() {
       seen.backgroundClosed = !useSummary.getState().floating && !useApp.getState().pinnedSummary;
       const layout = useSummary.getState().layout;
       useSummary.setState({ layout: "beside" });
+      localStorage.setItem("brigadier.pinnedSummary", "false");
       arrival("beside-preview");
       seen.besideOpened = useApp.getState().pinnedSummary;
+      seen.preferenceKept = localStorage.getItem("brigadier.pinnedSummary") === "false";
       useApp.setState({ pinnedSummary: false, selection: { type: "conversation", id: "other" } });
       arrival("offscreen-preview");
       useApp.setState({ selection: { type: "conversation", id } });

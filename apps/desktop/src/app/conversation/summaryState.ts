@@ -42,7 +42,7 @@ function reveal(elementId: () => string): void {
   const session = `${useBoard.getState().board?.conversationId}/`;
   for (const key of keptScroll.keys()) if (key.startsWith(session)) keptScroll.delete(key);
   if (useSummary.getState().layout === "float")
-    useSummary.setState({ floating: true });
+    useSummary.setState({ floating: true, automatic: false });
   else setPinnedSummary(true);
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
@@ -71,5 +71,5 @@ export function revealNewPreviews(events: readonly EventEnvelope[]): void {
     && !board.previews[event.preview.id])) return;
   if (useSummary.getState().layout === "float") {
     if (!useSummary.getState().floating) useSummary.setState({ floating: true, automatic: true });
-  } else setPinnedSummary(true);
+  } else useApp.setState({ pinnedSummary: true });
 }

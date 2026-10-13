@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { latestLine, previewChip, previewActions, previewActive, previewStateLabel } from "@/app/conversation/previewStatus";
+import { latestLine, previewChip, previewIndicator, previewActions, previewActive, previewStateLabel } from "@/app/conversation/previewStatus";
 import type { EventEnvelope, Preview, PreviewState } from "@/ipc/generated";
 import { applyToBoard, emptyBoard } from "@/state/board";
 
@@ -46,5 +46,8 @@ test("the pill names the newest active preview, then the newest finished one", (
   assert.equal(previewChip({ paused: preview("paused", { type: "paused" }) })?.status, "Paused");
   assert.equal(previewChip({ finished })?.status, "Finished");
   assert.equal(previewChip({ finished })?.active, false);
+  assert.equal(previewChip({ finished })?.indicator, "done");
+  assert.equal(previewIndicator({ type: "exited", code: null, status: "signal 9" }), "failed");
+  assert.equal(previewChip({ failed: preview("failed", { type: "exited", code: 1, status: "exit 1" }) })?.status, "Failed");
   assert.equal(previewChip({}), null);
 });

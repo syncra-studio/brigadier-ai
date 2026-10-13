@@ -503,7 +503,7 @@ export function SummaryPane({
       useSummary.setState((state) =>
         state.layout === layout
           ? state
-          : { layout, floating: state.floating && layout === "float" },
+          : { layout, floating: state.floating && layout === "float", automatic: state.automatic && layout === "float" },
       );
     });
     observer.observe(element);
@@ -512,7 +512,7 @@ export function SummaryPane({
       cancelAnimationFrame(frame);
       delete element.dataset.summary;
       delete element.dataset.settled;
-      useSummary.setState({ layout: "beside", floating: false });
+      useSummary.setState({ layout: "beside", floating: false, automatic: false });
     };
   }, [summary]);
   return (
@@ -699,7 +699,7 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
     const away = panel !== shownPanel.current || (mainTab !== shownTab.current && mainTab !== CHAT_TAB);
     if (away && useSummary.getState().floating) {
       movedOn.current = true;
-      useSummary.setState({ floating: false });
+      useSummary.setState({ floating: false, automatic: false });
     }
     shownPanel.current = panel;
     shownTab.current = mainTab;

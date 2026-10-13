@@ -5,12 +5,13 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("Running renders all states and controls pause, resume, stop, clear and the session browser", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "running.html?drive=1", "running-result", 30000)) as {
     chip: string; linkClosed: boolean;
-    initial: { name: string; text: string; actions: string[] }[];
+    initial: { name: string; text: string; actions: string[]; indicator: string }[];
     paused: string[]; resumed: string[]; windows: string[]; error: string; browser: string;
     cleared: string[]; stopped: string[]; allStopped: boolean; empty: string; calls: string[];
   };
-  assert.equal(seen.chip, "Brigadier dev app· Starting");
+  assert.match(seen.chip, /Starting: Brigadier dev app.*1m/);
   assert.equal(seen.initial.length, 5);
+  assert.deepEqual(seen.initial.map((row) => row.indicator), ["starting", "running", "paused", "failed", "stopped"]);
   assert.match(seen.initial[0]!.text, /Starting/);
   assert.match(seen.initial[0]!.text, /Building \[======> \] 521\/731: brigadier-core/);
   assert.doesNotMatch(seen.initial[0]!.text, /Running|localhost/);
