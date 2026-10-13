@@ -131,9 +131,21 @@ const rows = () =>
     selected: row.getAttribute("aria-selected") === "true",
   }));
 const prompt = () => one('[data-slot="browser-permission"]');
-const ask = (asking: BrowserAsking) =>
-  useBrowsers.setState(({ pages }) => ({ pages: { ...pages, [ID]: { ...pages[ID]!, asking } } }));
+const ask = (asking: BrowserAsking | null, tab = ID) =>
+  useBrowsers.setState(({ pages }) => ({ pages: { ...pages, [tab]: { ...pages[tab]!, asking } } }));
+const showTab = (tab: string) =>
+  useSessionTabs.setState(({ sessions }) => ({ sessions: { ...sessions, session: { ...sessions.session!, active: tab } } }));
 const LAYERS = "[role=dialog], [role=alertdialog], [data-radix-popper-content-wrapper]";
+
+/** Both browser tabs, kept mounted as the session's tab view keeps them: the front one shown. */
+function Tabs() {
+  const front = useSessionTabs((state) => state.sessions.session?.active);
+  return [ID, OTHER].map((tab) => (
+    <div key={tab} className={tab === front ? "flex min-h-0 flex-1 flex-col" : "invisible absolute inset-0"} inert={tab !== front}>
+      <BrowserTab conversationId={tab} active={tab === front} />
+    </div>
+  ));
+}
 
 function Fixture() {
   const [result, setResult] = useState("");
@@ -176,7 +188,8 @@ function Fixture() {
         suggestions: suggestions() !== null,
         asked: asked.slice(switched).filter((entry) => !("history" in (entry as object))),
       };
-      useSessionTabs.setState(({ sessions }) => ({ sessions: { ...sessions, session: { ...sessions.session!, active: ID } } }));
+      showTab(ID);
+      await until(() => !field()?.closest("[inert]"));
 
       // × takes a page out of the history; its row goes, the keyboard stays in the field.
       field()?.focus();
@@ -245,6 +258,26 @@ function Fixture() {
       await until(() => prompt() === null);
       seen.answers = asked.slice(answers);
 
+      // A question shows only over its own tab: it waits, unanswered, while another tab is in
+      // front, and a tab behind never asks over the one in front.
+      const hidden = asked.length;
+      ask({ request: 12, origin: "https://meet.example", camera: true, microphone: false });
+      await until(() => prompt() !== null);
+      showTab(OTHER);
+      await until(() => prompt() === null);
+      await wait(100);
+      const awayShown = prompt() !== null;
+      showTab(ID);
+      await until(() => prompt() !== null);
+      const back = text(prompt()).includes("meet.example");
+      button("Allow this time", prompt() ?? document)?.click();
+      await until(() => prompt() === null);
+      ask({ request: 13, origin: "https://behind.example", camera: true, microphone: false }, OTHER);
+      await wait(200);
+      const behindShown = prompt() !== null;
+      ask(null, OTHER);
+      seen.ownTabOnly = { awayShown, back, behindShown, asked: asked.slice(hidden) };
+
       // Downloads: the newest, each finished one to open or show in Finder, and all of them.
       const downloadsAsked = asked.length;
       button("Downloads")?.click();
@@ -270,7 +303,7 @@ function Fixture() {
     <TooltipProvider>
       <div className="bg-background text-foreground flex h-screen">
         <main className="flex h-full min-w-0 flex-1 flex-col">
-          <BrowserTab conversationId={ID} active />
+          <Tabs />
         </main>
       </div>
       {result && <pre id="browser-tab-tools-result">{result}</pre>}

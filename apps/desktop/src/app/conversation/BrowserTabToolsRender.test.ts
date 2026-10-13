@@ -53,6 +53,12 @@ test("browser tab tools: address suggestions, the page's question for the camera
     { permission: 10, answer: "dismiss" },
     { permission: 11, answer: "dismiss" },
   ]);
+  assert.deepEqual(seen.ownTabOnly, {
+    awayShown: false,
+    back: true,
+    behindShown: false,
+    asked: [{ permission: 12, answer: "once" }],
+  }, "a question shows only over its own tab, and waits there unanswered");
 
   // Downloads: Open and Show in Finder for a finished file, a failed one says so.
   assert.deepEqual(seen.downloads, ["report.pdffiles.testOpenShow in Finder", "big.zipFailed · files.test"]);

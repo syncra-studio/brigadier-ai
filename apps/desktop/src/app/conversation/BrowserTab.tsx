@@ -737,7 +737,8 @@ export function BrowserTab({
             onRemove={suggestions.remove}
             onClose={() => setSuggesting(false)}
           />
-          {embedded && <PermissionPrompt id={conversationId} asking={page?.asking} anchor={address} />}
+          {/* Only over its own tab: a question waits, unanswered, while another tab is in front. */}
+          {embedded && <PermissionPrompt id={conversationId} asking={active ? page?.asking : null} anchor={address} />}
         </form>
         {embedded && <DownloadsButton />}
         {mac && (
