@@ -375,6 +375,10 @@ async fn a_settled_wait_lets_the_request_end() {
     peers.on(&flow.conversation, move |turn| {
         let (kept, to) = (kept.clone(), to.clone());
         async move {
+            // The reply still comes, and starts a turn of its own: it asks nothing again.
+            if header_id(&turn.input).is_some() {
+                return Reply::text("Noted.");
+            }
             let (reply, _) = send(&turn, &to, "Which column holds names?", None).await;
             let id = message_id(&reply);
             let settle = turn
@@ -398,6 +402,7 @@ async fn a_settled_wait_lets_the_request_end() {
     assert!(record.settled && !record.awaits_reply());
     gate.notify_one();
     flow.settled_in(&api).await;
+    assert_eq!(flow.board_of(&api).await.requests.len(), 1);
     flow.stop().await;
 }
 
