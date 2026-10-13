@@ -54,11 +54,22 @@ pub fn open_privacy_settings(
 /// Opens the setup window, or brings it forward. `focus`: it comes to the front (the user asked
 /// for it); opened for an agent, it shows without taking the keyboard from what the user does.
 pub fn open(app: &AppHandle, focus: bool) {
+    // Made on the main thread, where it is made at once: only then is it the window that
+    // becomes a panel.
+    let handle = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || open_here(&handle, focus)) {
+        tracing::warn!(%err, "couldn't open the computer-use setup window");
+    }
+}
+
+fn open_here(app: &AppHandle, focus: bool) {
     if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
         let _ = window.unminimize();
         bring_forward(&window, focus);
         return;
     }
+    #[cfg(target_os = "macos")]
+    let _ = native::next_window_is_panel();
     let built = WebviewWindowBuilder::new(
         app,
         SETUP_WINDOW,
@@ -76,6 +87,8 @@ pub fn open(app: &AppHandle, focus: bool) {
     // Shown once it is on the Space the user is on.
     .visible(false)
     .build();
+    #[cfg(target_os = "macos")]
+    native::no_panel_pending();
     match built {
         Ok(window) => bring_forward(&window, focus),
         Err(err) => tracing::warn!(%err, "couldn't open the computer-use setup window"),
@@ -90,8 +103,10 @@ fn bring_forward(window: &tauri::WebviewWindow, focus: bool) {
     {
         let target = window.clone();
         let _ = window.run_on_main_thread(move || {
-            if let Ok(ns_window) = target.ns_window() {
-                native::show_on_active_space(ns_window);
+            if let Ok(ns_window) = target.ns_window()
+                && !native::show_on_active_space(ns_window)
+            {
+                tracing::warn!("the computer-use setup window shows only on Brigadier's own Space");
             }
             if focus {
                 let _ = target.set_focus();
@@ -188,14 +203,31 @@ mod native {
 
     unsafe extern "C" {
         fn brigadier_drag_file(ns_window: *mut c_void, path: *const c_char) -> i32;
-        fn brigadier_show_on_active_space(ns_window: *mut c_void);
+        fn brigadier_show_on_active_space(ns_window: *mut c_void) -> i32;
+        fn brigadier_next_window_is_panel() -> i32;
+        fn brigadier_no_panel_pending();
     }
 
-    /// Shows `ns_window` on the active Space without activating the app. Main thread only.
-    pub fn show_on_active_space(ns_window: *mut c_void) {
+    /// Shows `ns_window` on the active Space without activating the app; false when it can
+    /// show only on the app's own Space. Main thread only.
+    pub fn show_on_active_space(ns_window: *mut c_void) -> bool {
         // SAFETY: `ns_window` is the live NSWindow of a window this thread (the main thread)
         // owns; the function keeps no reference to it.
-        unsafe { brigadier_show_on_active_space(ns_window) }
+        unsafe { brigadier_show_on_active_space(ns_window) == 1 }
+    }
+
+    /// Makes the window library's next window a non-activating panel; false if it can't.
+    /// Main thread only, right before the setup window is made.
+    pub fn next_window_is_panel() -> bool {
+        // SAFETY: called on the main thread, as the function and the window allocation it
+        // affects require; it takes no arguments.
+        unsafe { brigadier_next_window_is_panel() == 1 }
+    }
+
+    /// Right after the setup window is made: no other window becomes a panel. Main thread only.
+    pub fn no_panel_pending() {
+        // SAFETY: called on the main thread; it only clears a counter.
+        unsafe { brigadier_no_panel_pending() }
     }
 
     /// Drags `path` from `ns_window`. Main thread only.

@@ -401,16 +401,13 @@ fn notifier(app: tauri::AppHandle) -> Notify {
     })
 }
 
-/// Whether a Brigadier window is shown and focused, for the notifications that show only
-/// while it is in the background.
-/// Opens computer use's setup window for an agent, on the main thread.
+/// Opens computer use's setup window for an agent.
 fn open_setup(app: tauri::AppHandle) -> bridge::OpenSetup {
-    Box::new(move || {
-        let handle = app.clone();
-        let _ = app.run_on_main_thread(move || computer_setup::open(&handle, false));
-    })
+    Box::new(move || computer_setup::open(&app, false))
 }
 
+/// Whether a Brigadier window is shown and focused, for the notifications that show only
+/// while it is in the background.
 fn in_front(app: tauri::AppHandle) -> bridge::InFront {
     Box::new(move || {
         app.webview_windows().values().any(|window| {
