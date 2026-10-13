@@ -6,7 +6,8 @@ use std::collections::{HashMap, HashSet};
 use crate::knowledge::MemoryChange;
 use crate::model::ConversationId;
 use crate::model::{
-    DomainEvent, MessageRole, Notice, OvernightRunId, PeerState, Rating, StreamingMessage,
+    DomainEvent, MessageRole, Notice, OvernightRunId, PeerState, Rating, ReplyHold,
+    StreamingMessage,
 };
 use crate::overnight::OvernightRun;
 use crate::work::{
@@ -49,6 +50,8 @@ pub(crate) const KINDS: &[&str] = &[
     "peer.received",
     "peer.state",
     "peer.settled",
+    "peer.held",
+    "peer.answered",
 ];
 
 /// A message between this session and another, as its side recorded it
@@ -75,6 +78,12 @@ pub(crate) struct PeerRecord {
     pub(crate) settled: bool,
     /// Its position in the stream.
     pub(crate) position: i64,
+    /// Sent: Brigadier sent it for this session, as its answer to `reply_to`.
+    pub(crate) automatic: bool,
+    /// An automatic reply: the answer message it carries.
+    pub(crate) answer_id: Option<String>,
+    /// Received reply: where it stands with a wait of this session's thread.
+    pub(crate) hold: Option<ReplyHold>,
 }
 
 impl PeerRecord {
@@ -295,6 +304,8 @@ impl Board {
                 request_id,
                 state,
                 sent_at_ms,
+                automatic,
+                answer_id,
                 ..
             } => {
                 self.peer_messages.insert(
@@ -313,6 +324,9 @@ impl Board {
                         sent_at_ms: *sent_at_ms,
                         settled: false,
                         position: stream_seq,
+                        automatic: *automatic,
+                        answer_id: answer_id.clone(),
+                        hold: None,
                     },
                 );
             }
@@ -323,6 +337,8 @@ impl Board {
                 chain_id,
                 hop,
                 request_id,
+                automatic,
+                answer_id,
             } => {
                 self.peer_messages.insert(
                     message_id.clone(),
@@ -340,6 +356,9 @@ impl Board {
                         sent_at_ms: None,
                         settled: false,
                         position: stream_seq,
+                        automatic: *automatic,
+                        answer_id: answer_id.clone(),
+                        hold: None,
                     },
                 );
             }
@@ -369,6 +388,11 @@ impl Board {
             DomainEvent::PeerWaitSettled { message_id } => {
                 if let Some(record) = self.peer_messages.get_mut(message_id) {
                     record.settled = true;
+                }
+            }
+            DomainEvent::PeerReplyHeld { message_id, hold } => {
+                if let Some(record) = self.peer_messages.get_mut(message_id) {
+                    record.hold = Some(hold.clone());
                 }
             }
             DomainEvent::WorkerStepped { step } => {
@@ -655,6 +679,9 @@ impl Board {
                 sent_at_ms: record.sent_at_ms,
                 settled: record.settled,
                 position: record.position,
+                automatic: record.automatic,
+                answer_id: record.answer_id.clone(),
+                hold: record.hold.clone(),
             })
             .collect()
     }

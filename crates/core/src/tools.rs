@@ -727,6 +727,19 @@ pub struct ReadSession {
     pub id: String,
 }
 
+/// `wait_for_replies`: waits in the running turn for replies to messages it sent.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WaitForReplies {
+    /// The message_ids message_session returned to wait for. Leave it out to wait for every
+    /// message your request sent that has no reply yet.
+    #[serde(default)]
+    pub message_ids: Option<Vec<String>>,
+    /// Seconds to wait at most: 300 when left out, at most 1800.
+    #[serde(default)]
+    pub timeout_s: Option<u64>,
+}
+
 /// `settle_wait`: no reply to this message is needed any more.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -939,6 +952,7 @@ pub enum OrchestratorCall {
     PreviewLog(PreviewLog),
     ListSessions(ListSessions),
     MessageSession(MessageSession),
+    WaitForReplies(WaitForReplies),
     ReadSession(ReadSession),
     SettleWait(SettleWait),
 }
@@ -989,6 +1003,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "preview_log",
     "list_sessions",
     "message_session",
+    "wait_for_replies",
     "read_session",
     "settle_wait",
 ];
@@ -1040,6 +1055,7 @@ impl OrchestratorCall {
             Self::PreviewLog(_) => "preview_log",
             Self::ListSessions(_) => "list_sessions",
             Self::MessageSession(_) => "message_session",
+            Self::WaitForReplies(_) => "wait_for_replies",
             Self::ReadSession(_) => "read_session",
             Self::SettleWait(_) => "settle_wait",
         }

@@ -65,7 +65,7 @@ const DELTA_WINDOW: Duration = Duration::from_millis(30);
 /// thread's `run`) waits for its command (THREAD-PLAN.md Q4, Q8 lever 3), so the longest
 /// command timeout plus a minute, so a command that runs out its time is still reaped and its
 /// output stored before the call itself expires (the call's clock starts first).
-const RUNNER_TOOL_TIMEOUT_SECS: u64 = super::run::RUN_TIMEOUT_MAX.as_secs() + 60;
+pub(super) const RUNNER_TOOL_TIMEOUT_SECS: u64 = super::run::RUN_TIMEOUT_MAX.as_secs() + 60;
 const _: () = assert!(RUNNER_TOOL_TIMEOUT_SECS > super::run::RUN_TIMEOUT_MAX.as_secs());
 /// A Chat's Brigadier tools (saving a memory) answer within this.
 const CHAT_TOOL_TIMEOUT_SECS: u64 = 60;
@@ -361,6 +361,11 @@ pub(crate) struct ConvLive {
     /// The CLI session a turn on each provider resumes, as [`SessionManager::last_native_id`]
     /// last found it in the log, kept up to date as sessions start and reset.
     native_ids: std::sync::Mutex<NativeIds>,
+    /// The replies the running turn holds for its waits (`wait_for_replies`). Taken after
+    /// `state` when both are.
+    pub(super) replies: std::sync::Mutex<super::peer_wait::PeerReplies>,
+    /// Wakes a wait when a reply comes for it, or its turn ends.
+    pub(super) reply_wake: tokio::sync::Notify,
     /// Tests: what a merge waits for once prepared, before its last look at consent.
     #[cfg(test)]
     pub(super) merge_pause:
@@ -401,6 +406,8 @@ impl ConvLive {
             ci_watches: std::sync::Mutex::new(Vec::new()),
             status: std::sync::Mutex::default(),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
+            replies: std::sync::Mutex::default(),
+            reply_wake: tokio::sync::Notify::new(),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -654,6 +661,31 @@ impl ConvLive {
             return None;
         }
         Some((state.request.clone(), state.chain.clone()?))
+    }
+
+    /// The running turn sent message `message_id`: a reply to it is held for its waits.
+    pub(super) async fn note_turn_send(&self, message_id: &str) {
+        let state = self.state.lock().await;
+        if state.busy {
+            self.replies
+                .lock()
+                .unwrap()
+                .sent
+                .insert(message_id.to_owned());
+        }
+    }
+
+    /// Runs `hold` on the replies the running turn holds, while a turn runs on a CLI: returns
+    /// what it returns, else false.
+    pub(super) async fn while_serving(
+        &self,
+        hold: impl FnOnce(&mut super::peer_wait::PeerReplies) -> bool,
+    ) -> bool {
+        let state = self.state.lock().await;
+        if !state.busy || state.cli.is_none() {
+            return false;
+        }
+        hold(&mut self.replies.lock().unwrap())
     }
 
     /// Keeps a note about message `message_id` for the next turn, once ([`ConvState`]'s
@@ -3323,6 +3355,10 @@ impl SessionManager {
             } => {
                 let name = name.rsplit("__").next().unwrap_or(name);
                 let name = name.rsplit('.').next().unwrap_or(name);
+                // The CLI has the wait's result: the replies handed to it are taken.
+                if name == "wait_for_replies" && *status == ItemStatus::Completed {
+                    self.replies_taken(conv, item_id).await;
+                }
                 let shell = crate::digest::is_shell_tool(name);
                 if shell {
                     conv.running_command(item_id, *status).await;
@@ -3746,6 +3782,8 @@ impl SessionManager {
             self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, &text)
                 .await;
         }
+        // Replies the turn held for its waits and didn't take go by ordinary delivery.
+        self.return_held_replies(conv).await;
         // Follow-ups the turn left undecided wait in the queue for their own turn.
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);

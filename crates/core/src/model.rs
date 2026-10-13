@@ -478,8 +478,9 @@ pub struct Conversation {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(skip)]
     pub deleting: bool,
-    /// When it last received a message from another session (its sidebar row's unread dot,
-    /// SESSION-MESSAGING-PLAN.md §6.4); folded from its messages, never stored as such.
+    /// When it last finished answering a message from another session (its sidebar row's
+    /// unread dot, SESSION-MESSAGING-PLAN.md §6.4); folded from those events, never stored as
+    /// such.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub peer_at_ms: Option<i64>,
@@ -616,6 +617,35 @@ pub struct PeerMessage {
     pub settled: bool,
     /// Where it was first recorded in the conversation's stream.
     pub position: i64,
+    /// A reply Brigadier sent for this session: its answer to the message it replies to.
+    #[serde(default)]
+    pub automatic: bool,
+    /// An automatic reply: the answer message it carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub answer_id: Option<String>,
+    /// A received reply: where it stands with a wait of this session's thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hold: Option<ReplyHold>,
+}
+
+/// Where a reply stands with a wait of its sender's thread (`wait_for_replies`): handed to
+/// the waiting call as its result, taken once the CLI shows that call finished, or returned
+/// to ordinary delivery when the call ended without taking it (a Stop, a restart).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ReplyHold {
+    Handed,
+    /// `item_id` is the wait's tool call in the thread's work.
+    Taken {
+        item_id: String,
+    },
+    Returned,
 }
 
 impl PeerState {
@@ -2154,6 +2184,12 @@ pub enum DomainEvent {
         /// When it was allowed to go: now, or the user's Send under Ask for approval.
         #[serde(default)]
         sent_at_ms: Option<i64>,
+        /// Brigadier sent it for this session: its answer to the message it replies to.
+        #[serde(default)]
+        automatic: bool,
+        /// An automatic reply: the answer message it carries.
+        #[serde(default)]
+        answer_id: Option<String>,
     },
     /// This session got a message from another. Its text is the transcript message with the
     /// same id, appended with it.
@@ -2166,6 +2202,12 @@ pub enum DomainEvent {
         hop: u32,
         /// The request of this session's it is filed under.
         request_id: String,
+        /// A reply Brigadier sent for the other session: its answer.
+        #[serde(default)]
+        automatic: bool,
+        /// An automatic reply: the other session's answer message it carries.
+        #[serde(default)]
+        answer_id: Option<String>,
     },
     /// A message between sessions moved on; written to both sides.
     PeerMessageState {
@@ -2178,6 +2220,18 @@ pub enum DomainEvent {
     /// The thread no longer waits for a reply to this message (`settle_wait`).
     PeerWaitSettled {
         message_id: String,
+    },
+    /// This session's answer to another session's message went back to it, as the reply
+    /// Brigadier sent for it: the session finished what it was asked (its sidebar row's unread
+    /// dot, SESSION-MESSAGING-PLAN.md §6.4).
+    PeerAnswered {
+        conversation_id: ConversationId,
+        message_id: String,
+    },
+    /// A reply this session received moved on with a wait of its thread (`wait_for_replies`).
+    PeerReplyHeld {
+        message_id: String,
+        hold: ReplyHold,
     },
     /// Diagnostic probe used to measure ingest → paint latency end to end.
     Probe {
@@ -2259,6 +2313,8 @@ impl DomainEvent {
             Self::PeerMessageReceived { .. } => "peer.received",
             Self::PeerMessageState { .. } => "peer.state",
             Self::PeerWaitSettled { .. } => "peer.settled",
+            Self::PeerReplyHeld { .. } => "peer.held",
+            Self::PeerAnswered { .. } => "peer.answered",
             Self::Probe { .. } => "diag.probe",
         }
     }

@@ -2,7 +2,9 @@
 //! transaction over both sessions' streams, so nothing is ever shown without also being due.
 
 use super::{INLINE_TEXT_BYTES, PREVIEW_BYTES, prefix, preview};
-use crate::model::{ConversationId, DomainEvent, MessageRole, PeerRef, PeerState, streams};
+use crate::model::{
+    ConversationId, DomainEvent, MessageRole, PeerRef, PeerState, ReplyHold, streams,
+};
 use crate::work::{RequestState, UserRequest, WorkSpan};
 use crate::{Core, Result, now_ms};
 
@@ -20,6 +22,10 @@ pub(crate) struct PeerSend {
     pub request_id: Option<String>,
     /// The newest input of that turn before the send.
     pub turn_input_id: Option<String>,
+    /// Brigadier sends it for the session: its answer to `reply_to`.
+    pub automatic: bool,
+    /// An automatic reply: the answer message it carries.
+    pub answer_id: Option<String>,
 }
 
 impl Core {
@@ -93,6 +99,8 @@ impl Core {
                     PeerState::Pending
                 },
                 sent_at_ms: (!waits_for_ok).then_some(now),
+                automatic: send.automatic,
+                answer_id: send.answer_id.clone(),
             },
         )];
         if waits_for_ok {
@@ -101,6 +109,17 @@ impl Core {
         }
         let (receipt, request) = self.receipt(send).await?;
         events.extend(receipt);
+        if send.automatic
+            && let Some(original) = &send.reply_to
+        {
+            events.push((
+                streams::conversation(&send.from),
+                DomainEvent::PeerAnswered {
+                    conversation_id: send.from.clone(),
+                    message_id: original.clone(),
+                },
+            ));
+        }
         self.record_on_boards(events).await?;
         Ok(Some(request))
     }
@@ -164,6 +183,24 @@ impl Core {
         .map(drop)
     }
 
+    /// Records where reply `message_id`, received by `id`, stands with a wait of its thread.
+    pub(crate) async fn record_reply_hold(
+        &self,
+        id: &ConversationId,
+        message_id: &str,
+        hold: ReplyHold,
+    ) -> Result<()> {
+        self.record_on_boards(vec![(
+            streams::conversation(id),
+            DomainEvent::PeerReplyHeld {
+                message_id: message_id.to_owned(),
+                hold,
+            },
+        )])
+        .await
+        .map(drop)
+    }
+
     /// The receiver's records of `send`: its `Received`, its transcript message (role Peer,
     /// the message's own id), a new request unless it is a reply (a reply is filed under the
     /// request that asked), and for a reply its original marked replied on both sides.
@@ -205,6 +242,8 @@ impl Core {
                     chain_id: send.chain_id.clone(),
                     hop: send.hop,
                     request_id: request.clone(),
+                    automatic: send.automatic,
+                    answer_id: send.answer_id.clone(),
                 },
             ),
             (

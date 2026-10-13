@@ -34,16 +34,17 @@ fn sent_id(board: &Board) -> String {
     sent[0].message_id.clone()
 }
 
-/// Waits until message `id` is seen on both sides, then that `to`'s turns took it once.
+/// Whether message `id` was taken on `board`: seen, or already answered.
+fn taken(board: &Board, id: &str) -> bool {
+    stands(board, id, &PeerState::Seen) || stands(board, id, &PeerState::Replied)
+}
+
+/// Waits until message `id` is taken on both sides, then that `to`'s turns took it once.
 async fn delivered_once(flow: &Flow, peers: &Peers, to: &ConversationId, id: &str) {
-    flow.until_in(to, "the message seen", |board| {
-        stands(board, id, &PeerState::Seen)
-    })
-    .await;
-    flow.until("the sender's record seen", |board| {
-        stands(board, id, &PeerState::Seen)
-    })
-    .await;
+    flow.until_in(to, "the message seen", |board| taken(board, id))
+        .await;
+    flow.until("the sender's record seen", |board| taken(board, id))
+        .await;
     // Anything still to come would have come by now.
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(peers.count_in(to, &format!("· id {id}]")), 1);

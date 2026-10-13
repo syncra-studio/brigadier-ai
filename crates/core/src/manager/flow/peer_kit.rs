@@ -17,6 +17,8 @@ pub(super) type Handler = Arc<dyn Fn(Turn) -> BoxFuture<'static, Reply> + Send +
 #[derive(Default)]
 pub(super) struct Peers {
     handlers: Mutex<HashMap<ConversationId, Handler>>,
+    /// Answers every worker's turns, when set.
+    worker: Mutex<Option<Handler>>,
     inputs: Mutex<Vec<(ConversationId, String)>>,
 }
 
@@ -26,14 +28,18 @@ impl Peers {
     }
 
     /// The script every CLI runs: a thread's turn goes to its session's handler (else it
-    /// answers "Done."), after its input is logged.
+    /// answers "Done."), after its input is logged; a worker's to the worker handler.
     pub(super) fn script(self: &Arc<Self>) -> Script {
         let peers = self.clone();
         Arc::new(move |turn: Turn| {
             let peers = peers.clone();
             Box::pin(async move {
                 let Some(id) = turn.conversation() else {
-                    return Reply::text("Done.");
+                    let worker = peers.worker.lock().unwrap().clone();
+                    return match worker {
+                        Some(worker) => worker(turn).await,
+                        None => Reply::text("Done."),
+                    };
                 };
                 peers
                     .inputs
@@ -57,6 +63,16 @@ impl Peers {
     {
         let handler: Handler = Arc::new(move |turn| Box::pin(f(turn)));
         self.handlers.lock().unwrap().insert(id.clone(), handler);
+    }
+
+    /// Answers every worker's turns with `f`.
+    pub(super) fn worker<F, Fut>(&self, f: F)
+    where
+        F: Fn(Turn) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Reply> + Send + 'static,
+    {
+        let handler: Handler = Arc::new(move |turn| Box::pin(f(turn)));
+        *self.worker.lock().unwrap() = Some(handler);
     }
 
     /// The inputs session `id`'s turns took, in order.
@@ -84,13 +100,16 @@ pub(super) type Sent = Arc<Mutex<Vec<(String, bool)>>>;
 
 impl Peers {
     /// Has each turn of session `from` send `text` to `to` and answer "Sent.", keeping each
-    /// reply of the tool.
+    /// reply of the tool; a turn a reply started only notes it.
     pub(super) fn sends(&self, from: &ConversationId, to: &ConversationId, text: &str) -> Sent {
         let sent = Sent::default();
         let (kept, to, text) = (sent.clone(), to.clone(), text.to_owned());
         self.on(from, move |turn| {
             let (kept, to, text) = (kept.clone(), to.clone(), text.clone());
             async move {
+                if is_reply(&turn.input) {
+                    return Reply::text("Noted.");
+                }
                 let reply = send(&turn, &to, &text, None).await;
                 kept.lock().unwrap().push(reply);
                 Reply::text("Sent.")
@@ -152,6 +171,30 @@ pub(super) async fn send(
     (reply.text, reply.is_error)
 }
 
+/// Waits in the turn for replies (`wait_for_replies` with `args`), shown as a tool call
+/// that starts and then finishes with its result, as a CLI shows it; the result's text, and
+/// whether it failed.
+pub(super) async fn wait(turn: &Turn, args: Value) -> (String, bool) {
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let item_id = format!("wait-{}", uuid::Uuid::now_v7());
+    let event = |status, output| ProviderEvent::ToolCall {
+        item_id: item_id.clone(),
+        name: "mcp__brigadier__wait_for_replies".into(),
+        input: Some(args.to_string()),
+        status,
+        output,
+    };
+    turn.emit(event(ItemStatus::InProgress, None)).await;
+    let reply = turn.call("wait_for_replies", args.clone()).await;
+    let status = if reply.is_error {
+        ItemStatus::Failed
+    } else {
+        ItemStatus::Completed
+    };
+    turn.emit(event(status, Some(reply.text.clone()))).await;
+    (reply.text, reply.is_error)
+}
+
 /// The message id a `message_session` reply names.
 pub(super) fn message_id(reply: &str) -> String {
     let value: Value = serde_json::from_str(reply).unwrap_or_else(|_| panic!("{reply}"));
@@ -165,4 +208,12 @@ pub(super) fn header_id(input: &str) -> Option<String> {
         .find(|line| line.starts_with("[message from session"))?;
     let rest = header.split(" · id ").nth(1)?;
     Some(rest.split([' ', ']']).next()?.to_owned())
+}
+
+/// Whether a turn's input is a reply from another session: its header says what it replies
+/// to.
+pub(super) fn is_reply(input: &str) -> bool {
+    input
+        .lines()
+        .any(|line| line.starts_with("[message from session") && line.contains(" · reply to "))
 }
