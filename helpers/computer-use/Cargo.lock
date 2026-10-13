@@ -660,6 +660,7 @@ name = "cu-layer"
 version = "0.8.12"
 dependencies = [
  "async-trait",
+ "core-foundation",
  "cua-driver-core",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",

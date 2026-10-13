@@ -15,6 +15,7 @@ pub mod guard;
 pub mod lookup;
 pub mod never_front;
 pub mod scope;
+pub mod scroll;
 pub mod target_policy;
 pub mod text;
 pub mod tokens;
