@@ -31,7 +31,8 @@ use std::sync::Arc;
 
 use crate::apps;
 use crate::ax::bindings::{
-    copy_string_attr, focused_element_of_pid, kAXErrorSuccess, set_string_attr, AXUIElementRef,
+    copy_string_attr, focused_element_of_pid, kAXErrorSuccess, perform_action, set_string_attr,
+    AXUIElementRef,
 };
 use crate::focus_guard;
 use crate::window_change_detector::WindowChangeDetector;
@@ -571,7 +572,43 @@ fn cgevent_type_verified(
     }
     crate::input::keyboard::type_text_with_delay_guarded(pid, text, delay_ms, gate)?;
     let after = read_axvalue(pid, element_ptr_and_idx);
+    if after.as_deref().is_some_and(|v| v.contains(text)) {
+        return Ok(true);
+    }
+    if refresh_web_value(pid, element_ptr_and_idx, text) {
+        return Ok(true);
+    }
     Ok(verify_typed(before, after.as_deref(), text))
+}
+
+/// A web view in a window that isn't painting (background, another Space)
+/// sends its accessibility changes only when it next handles an event, so the
+/// keystrokes have landed but `AXValue` still shows older text — and so does
+/// the agent's next snapshot. Asking the element to scroll itself into view (a
+/// no-op for a visible field) makes the renderer send its pending changes; the
+/// keystrokes may still be on their way, so ask again until the text shows.
+/// Keystrokes go through the renderer, so this read-back is real, unlike an
+/// echoed AX write. Only the text itself counts: the stale value may grow from
+/// an earlier change.
+fn refresh_web_value(
+    pid: i32,
+    element_ptr_and_idx: Option<(usize, Option<usize>)>,
+    text: &str,
+) -> bool {
+    let Some((ptr, _)) = element_ptr_and_idx else {
+        return false;
+    };
+    if text.is_empty() || !target_in_web_area(pid, element_ptr_and_idx) {
+        return false;
+    }
+    for _ in 0..10 {
+        let _ = unsafe { perform_action(ptr as AXUIElementRef, "AXScrollToVisible") };
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        if read_axvalue(pid, element_ptr_and_idx).is_some_and(|v| v.contains(text)) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Best-effort-background ladder for `type_text`.
