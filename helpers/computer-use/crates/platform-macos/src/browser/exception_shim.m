@@ -1,3 +1,4 @@
+#import <CoreServices/CoreServices.h>
 #import <Foundation/Foundation.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -93,4 +94,22 @@ bool cu_browser_exception_boundary_probe(char **error_out) {
 
 void cu_browser_free_string(char *value) {
     free(value);
+}
+
+// Whether macOS lets this process send Apple Events to the app `bundle_id`
+// (Privacy & Security > Automation): noErr, errAEEventNotPermitted (-1743),
+// errAEEventWouldRequireUserConsent (-1744) when nobody has answered yet, or
+// procNotFound (-600) when the app isn't running. With `ask`, it shows macOS's
+// prompt when nobody has answered, and waits for the answer.
+int32_t cu_automation_permission(const char *bundle_id, bool ask) {
+    @autoreleasepool {
+        NSString *bundle = bundle_id == NULL ? nil : [NSString stringWithUTF8String:bundle_id];
+        if (bundle == nil) {
+            return paramErr;
+        }
+        NSAppleEventDescriptor *target =
+            [NSAppleEventDescriptor descriptorWithBundleIdentifier:bundle];
+        return AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard,
+                                                     ask);
+    }
 }

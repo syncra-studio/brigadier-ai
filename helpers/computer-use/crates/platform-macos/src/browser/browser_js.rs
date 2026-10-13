@@ -63,6 +63,7 @@ impl BrowserJs {
         if !Self::supports(bundle_id) {
             anyhow::bail!("Unsupported browser bundle: {bundle_id}");
         }
+        automation_allowed(bundle_id)?;
         let javascript = javascript.to_owned();
         let bundle_id = bundle_id.to_owned();
         let script = tokio::task::spawn_blocking(move || {
@@ -205,6 +206,62 @@ impl Drop for QueuedScriptCancellation {
     }
 }
 
+const AUTOMATION_DENIED: i32 = -1743;
+const AUTOMATION_UNANSWERED: i32 = -1744;
+
+/// Whether macOS lets the helper drive `bundle_id` with Apple Events, asked
+/// without a prompt. Until the user answers macOS's prompt, every Apple Event
+/// would wait out its whole timeout, so a browser call fails at once instead
+/// and the prompt is requested once, in the background.
+fn automation_allowed(bundle_id: &str) -> anyhow::Result<()> {
+    let app = app_name_for_bundle(bundle_id).unwrap_or(bundle_id);
+    match automation_permission(bundle_id, false) {
+        AUTOMATION_DENIED => anyhow::bail!(
+            "Browser Apple Event failed: macOS doesn't allow the computer-use helper to control \
+             {app}. The user can allow it in System Settings > Privacy & Security > Automation. \
+             Until then, read and act on the page through get_window_state."
+        ),
+        AUTOMATION_UNANSWERED => {
+            ask_for_automation(bundle_id);
+            anyhow::bail!(
+                "Browser Apple Event failed: macOS is asking the user to let the computer-use \
+                 helper control {app}. Until they allow it, read and act on the page through \
+                 get_window_state."
+            )
+        }
+        // Allowed, or not running (the script reports that itself).
+        _ => Ok(()),
+    }
+}
+
+fn automation_permission(bundle_id: &str, ask: bool) -> i32 {
+    let Ok(bundle_id) = std::ffi::CString::new(bundle_id) else {
+        return AUTOMATION_DENIED;
+    };
+    unsafe { cu_automation_permission(bundle_id.as_ptr(), ask) }
+}
+
+/// Shows macOS's Automation prompt for `bundle_id`, once per helper run: the
+/// answer is kept by macOS, and asking blocks until the user gives it.
+fn ask_for_automation(bundle_id: &str) {
+    static ASKED: std::sync::Mutex<Option<HashSet<String>>> = std::sync::Mutex::new(None);
+    let Ok(mut asked) = ASKED.lock() else {
+        return;
+    };
+    if !asked
+        .get_or_insert_with(HashSet::new)
+        .insert(bundle_id.to_owned())
+    {
+        return;
+    }
+    let bundle_id = bundle_id.to_owned();
+    let _ = std::thread::Builder::new()
+        .name("automation-consent".into())
+        .spawn(move || {
+            automation_permission(&bundle_id, true);
+        });
+}
+
 #[link(name = "dispatch", kind = "dylib")]
 extern "C" {
     static _dispatch_main_q: u8;
@@ -343,6 +400,7 @@ fn execute_script_on_main_thread(
 
 #[link(name = "cu_browser_exception_shim", kind = "static")]
 extern "C" {
+    fn cu_automation_permission(bundle_id: *const std::ffi::c_char, ask: bool) -> i32;
     fn cu_browser_execute_script(
         source_utf8: *const std::ffi::c_char,
         result_out: *mut *mut std::ffi::c_char,
