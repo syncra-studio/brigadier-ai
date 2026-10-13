@@ -13,6 +13,7 @@ import type {
   ModelChoice,
   OrchestratorStep,
   OrchestratorStepKind,
+  PeerMessage,
   Plan,
   Question,
   RequestState,
@@ -71,6 +72,12 @@ export type BlockRow = { type: "task"; taskId: string; taskIds?: string[]; kind?
  */
 export type DecidedStep = { type: "decided"; what: string; why: string };
 
+/**
+ * A message this session sent another, as its row in the work (SESSION-MESSAGING-PLAN.md §6.1):
+ * the record says where it went, how it stands and what it said.
+ */
+export type PeerSentStep = { type: "peerSent"; messageId: string };
+
 /** A row about the machine: work waiting for it to cool down, a build paused or resumed. */
 export type MachineWords = {
   type: "machine";
@@ -85,7 +92,7 @@ export type MachineWords = {
  * the order it happened.
  */
 export type BlockOrchestratorStep = {
-  kind: OrchestratorStepKind | DecidedStep | MachineWords;
+  kind: OrchestratorStepKind | DecidedStep | MachineWords | PeerSentStep;
   position: number;
   /** When the step began (a tool call: when it was first seen). */
   atMs?: number;
@@ -107,19 +114,37 @@ export type BlockCompaction = {
   endedAtMs: number | null;
 };
 
-/** A message the user steered into the block's running turn: a bubble inside the block. */
+/**
+ * A message steered into the block's running turn: the user's bubble, or another session's
+ * message block (a message steered in, or a reply to the request), inside the block.
+ */
 export type BlockSteer = {
   message: Message;
   text: string;
   position: number;
 };
 
+/**
+ * Another session's message that opened a request: its block in the input position. `earlier`
+ * marks a reply to a request older than the newest, shown at its own place in the thread
+ * ("to your earlier message").
+ */
+export type PeerAnchor = { kind: "peer"; message: Message; text: string; earlier: boolean };
+
+/** The message a block's request started with: the user's, or another session's. */
+export function anchorMessage(block: Pick<Block, "user">): Message | null {
+  return block.user?.kind === "message" || block.user?.kind === "peer" ? block.user.message : null;
+}
+
 export type BlockState = RequestState["type"];
 
 export type Block = {
   key: string;
-  /** The user's message; absent for replies older than any loaded user message. */
-  user: { kind: "message"; message: Message; text: string } | { kind: "pending"; pending: PendingMessage } | null;
+  /**
+   * The message it answers: the user's, or another session's; absent for replies older than any
+   * loaded user message.
+   */
+  user: { kind: "message"; message: Message; text: string } | { kind: "pending"; pending: PendingMessage } | PeerAnchor | null;
   texts: BlockText[];
   cards: BlockCard[];
   /** Workers the request started, by task number. */
@@ -145,6 +170,8 @@ export type Block = {
   quotaWait: boolean;
   /** It waits for the answer to its own question card (and maybe quota), so it still works. */
   cardWait: boolean;
+  /** The sessions whose replies it waits for: it rests "Waiting for ‹title›". */
+  waitingFor: string[];
 };
 
 /** The parts of the board the blocks depend on (not worker activity or transcripts). */
@@ -162,6 +189,8 @@ export type BoardDigest = {
   compactions: Readonly<Record<string, Compaction>>;
   runRequest: string | null;
   streaming: Board["streaming"];
+  /** Messages to and from other sessions, by message id. */
+  peerMessages?: Readonly<Record<string, PeerMessage>>;
 };
 
 const WORKING: ReadonlySet<Task["state"]> = new Set([
@@ -413,6 +442,18 @@ export function buildBlocks(
       atMs: step.atMs,
     });
   }
+  // A message to another session is a row of the work that sent it, from its record.
+  for (const peer of Object.values(board.peerMessages ?? {})) {
+    if (!peer.outgoing) continue;
+    const atMs = peer.sentAtMs ?? board.requests[peer.requestId ?? ""]?.startedAtMs ?? 0;
+    placed.push({
+      kind: "orchestrator",
+      position: peer.position,
+      requestId: peer.requestId,
+      step: { kind: { type: "peerSent", messageId: peer.messageId }, position: peer.position, atMs },
+      atMs,
+    });
+  }
   for (const step of board.machineSteps) {
     if (step.taskId !== null) continue;
     placed.push({
@@ -546,6 +587,7 @@ export function buildBlocks(
         worked: request ? requestSpans(request) : [{ fromMs: startedAtMs, toMs: null }],
         quotaWait: !!request?.quotaWait,
         cardWait: !!request && requestWaitsOnCard(request),
+        waitingFor: request?.waitingFor ?? [],
       };
       blocks.set(key, block);
       order.push(key);
@@ -562,6 +604,10 @@ export function buildBlocks(
   let latest: string | null = null;
   // The block each message of the branch shows in.
   const blockOf = new Map<string, string>();
+  // A request whose reply came after a newer request: its work from the reply on shows in the
+  // reply's own block, by request id.
+  const continued = new Map<string, string>();
+  const blockKey = (requestId: string): string => continued.get(requestId) ?? requestId;
   for (const item of current) {
     // Anything older than the loaded page waits until that page loads.
     if (hasMore && item.position < oldest) continue;
@@ -574,8 +620,38 @@ export function buildBlocks(
         open(key, message.createdAtMs).user = { kind: "message", message, text: item.text };
         continue;
       }
+      if (message.role === "peer") {
+        const request = message.requestId ?? message.id;
+        // Another session's message that opened a request of its own stands where the user's would.
+        if (request === message.id) {
+          latest = request;
+          blockOf.set(message.id, request);
+          open(request, message.createdAtMs).user = { kind: "peer", message, text: item.text, earlier: false };
+          continue;
+        }
+        // A reply, filed under the request that asked: a block inside its turn, or, after a
+        // newer request, a turn of its own.
+        const key = blockKey(request);
+        const block = blocks.get(key);
+        if (!block) continue;
+        if (latest === key) {
+          blockOf.set(message.id, key);
+          block.steers.push({ message, text: item.text, position: item.position });
+          continue;
+        }
+        const next = continueRequest(block, board.requests[request], `${request}~${message.id}`, message, item.text);
+        blocks.set(next.key, next);
+        order.push(next.key);
+        blockOf.set(message.id, next.key);
+        // A reply after the user's Stop starts no turn: nothing of the request follows it.
+        if (next.state !== "done" || next.worked.length > 0) {
+          continued.set(request, next.key);
+          latest = next.key;
+        }
+        continue;
+      }
       if (message.role === "system") continue;
-      const key = message.requestId ?? latest ?? `orphan:${message.id}`;
+      const key = message.requestId ? blockKey(message.requestId) : (latest ?? `orphan:${message.id}`);
       // A request whose message is on an older page, or on a branch not shown.
       if (message.requestId && !blocks.has(key) &&
         !(key.startsWith("run-") && board.requests[key])) continue;
@@ -593,7 +669,9 @@ export function buildBlocks(
     const key =
       item.kind === "compaction" && item.requestId === null && item.after !== null
         ? (blockOf.get(item.after) ?? null)
-        : (item.requestId ?? latest);
+        : item.requestId
+          ? blockKey(item.requestId)
+          : latest;
     if (key === null) continue;
     if (item.requestId && !blocks.has(key)) continue;
     const block = open(key, 0);
@@ -608,7 +686,7 @@ export function buildBlocks(
   // What streams belongs to the turn's request.
   const streaming = board.streaming;
   if (streaming && !messages.some((message) => message.id === streaming.messageId)) {
-    const key = streaming.requestId ?? latest;
+    const key = streaming.requestId ? blockKey(streaming.requestId) : latest;
     const block = key !== null ? blocks.get(key) : undefined;
     block?.texts.push({
       messageId: streaming.messageId,
@@ -653,13 +731,81 @@ export function buildBlocks(
       worked: [{ fromMs: entry.createdAtMs, toMs: null }],
       quotaWait: false,
       cardWait: false,
+      waitingFor: [],
     });
   }
   return result;
 }
 
 function blockTime(block: Block): number {
-  return block.user?.kind === "message" ? block.user.message.createdAtMs : block.startedAtMs;
+  return anchorMessage(block)?.createdAtMs ?? block.startedAtMs;
+}
+
+/** The parts of `spans` from `fromMs` on (`after`), or before it. */
+function cutSpans(spans: readonly WorkSpan[], atMs: number, after: boolean): WorkSpan[] {
+  return spans.flatMap((span): WorkSpan[] => {
+    const to = span.toMs ?? Number.POSITIVE_INFINITY;
+    if (after) {
+      if (to <= atMs) return [];
+      return [{ fromMs: Math.max(span.fromMs, atMs), toMs: span.toMs }];
+    }
+    if (span.fromMs >= atMs) return [];
+    return [{ fromMs: span.fromMs, toMs: Math.min(to, atMs) }];
+  });
+}
+
+/**
+ * A reply to an earlier request that came after a newer one: a block of its own where it came,
+ * which carries on the request from there ("Reply from ‹title› · to your earlier message"),
+ * while the earlier block reads as done when it came. A request the user stopped, or one that
+ * failed, keeps its state: the reply shows, and no turn follows it.
+ */
+function continueRequest(earlier: Block, request: UserRequest | undefined, key: string, message: Message, text: string): Block {
+  const atMs = message.createdAtMs;
+  const anchor: PeerAnchor = { kind: "peer", message, text, earlier: true };
+  const base: Block = {
+    key,
+    user: anchor,
+    texts: [],
+    cards: [],
+    tasks: [],
+    rows: [],
+    orchestratorSteps: [],
+    thinking: [],
+    steers: [],
+    compactions: [],
+    requestIds: [...earlier.requestIds],
+    state: "done",
+    error: null,
+    startedAtMs: atMs,
+    endedAtMs: atMs,
+    worked: [],
+    quotaWait: false,
+    cardWait: false,
+    waitingFor: [],
+  };
+  const over = earlier.state === "stopped" || earlier.state === "failed" || !request;
+  if (over) return base;
+  const worked = cutSpans(earlier.worked, atMs, true);
+  Object.assign(earlier, {
+    state: "done",
+    error: null,
+    endedAtMs: atMs,
+    worked: cutSpans(earlier.worked, atMs, false),
+    quotaWait: false,
+    cardWait: false,
+    waitingFor: [],
+  } satisfies Partial<Block>);
+  return {
+    ...base,
+    state: request.state.type,
+    error: request.state.type === "failed" ? request.state.error : null,
+    endedAtMs: request.endedAtMs,
+    worked: worked.length > 0 ? worked : [{ fromMs: atMs, toMs: request.endedAtMs }],
+    quotaWait: request.quotaWait,
+    cardWait: requestWaitsOnCard(request),
+    waitingFor: request.waitingFor ?? [],
+  };
 }
 
 /**
@@ -672,7 +818,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
   for (const block of blocks) {
     const into = requests[block.key]?.steeredInto;
     const previous = joined.at(-1);
-    if (!into || !previous?.requestIds.includes(into) || block.user?.kind !== "message") {
+    if (!into || !previous?.requestIds.includes(into) || (block.user?.kind !== "message" && block.user?.kind !== "peer")) {
       joined.push(block);
       continue;
     }
@@ -700,6 +846,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
         ...block.steers,
       ],
       requestIds: [...previous.requestIds, ...block.requestIds],
+      waitingFor: [...new Set([...previous.waitingFor, ...block.waitingFor])],
       state,
       error: state === block.state ? block.error : null,
       // The turn's time runs from its first message, the follow-ups' work counted with it.
@@ -992,7 +1139,7 @@ export function buildThread(
   ): { id: string; order: number } | null => {
     for (const block of blocks) {
       if (block.user) {
-        const message = block.user.kind === "message" ? block.user.message : null;
+        const message = anchorMessage(block);
         const id = message
           ? shownIdOf(message.id)
           : block.user.kind === "pending"
@@ -1013,7 +1160,7 @@ export function buildThread(
           parentId: parent?.id ?? null,
           kind: "block",
           block,
-          head: stored.at(-1)?.messageId ?? (block.user?.kind === "message" ? block.user.message.id : null),
+          head: stored.at(-1)?.messageId ?? anchorMessage(block)?.id ?? null,
         },
         order,
       });
@@ -1083,7 +1230,7 @@ function settled(block: Block, chain: readonly Message[]): Block {
   const times = chain
     .filter((message) => block.texts.some((text) => text.messageId === message.id))
     .map((message) => message.createdAtMs);
-  const user = block.user?.kind === "message" ? block.user.message.createdAtMs : undefined;
+  const user = anchorMessage(block)?.createdAtMs;
   const start = user ?? times[0] ?? block.startedAtMs;
   const end = times.at(-1) ?? start;
   return { ...block, state: "done", error: null, startedAtMs: start, endedAtMs: end, worked: [{ fromMs: start, toMs: end }], quotaWait: false, cardWait: false };

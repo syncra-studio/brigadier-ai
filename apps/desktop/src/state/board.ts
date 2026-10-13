@@ -21,6 +21,8 @@ import type {
   OrchestratorLogEntry,
   OrchestratorStep,
   OvernightRun,
+  PeerMessage,
+  PeerState,
   Plan,
   Preview,
   ProviderEvent,
@@ -127,6 +129,8 @@ export type Board = {
   computer: Record<string, ComputerLog>;
   /** A Chat's Memory chips: the latest change per memory, in the order they were saved. */
   memories: MemoryChange[];
+  /** Its messages to and from other sessions, by message id (SESSION-MESSAGING-PLAN.md §6). */
+  peerMessages: Record<string, PeerMessage>;
 };
 
 /**
@@ -285,6 +289,7 @@ export function emptyBoard(conversationId: string): Board {
     transcripts: {},
     computer: {},
     memories: [],
+    peerMessages: {},
   };
 }
 
@@ -321,6 +326,10 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "waitingOnYou",
   "computerActed",
   "waitingResolved",
+  "peerMessageSent",
+  "peerMessageReceived",
+  "peerMessageState",
+  "peerWaitSettled",
 ]);
 
 /** Conversation view reads in flight, each collecting the board events that arrive meanwhile. */
@@ -386,6 +395,8 @@ export function boardFromView(
     transcripts: keep?.transcripts ?? {},
     computer: keep?.computer ?? {},
     memories: view.memories,
+    // A daemon from before messages between sessions sends none.
+    peerMessages: Object.fromEntries((view.peerMessages ?? []).map((message) => [message.messageId, message])),
   };
   return arrived.reduce(applyToBoard, board);
 }
@@ -465,6 +476,16 @@ function placed<T extends { id: string; position: number }>(
     known?.position ??
     (envelope.stream === `conversation:${board.conversationId}` ? envelope.streamSeq : item.position);
   return { ...items, [item.id]: { ...item, position } };
+}
+
+/**
+ * A message's state after a change, as the daemon's board keeps it: delivery never goes back, so
+ * a late "delivered" or "seen" after the receiver took or answered it changes nothing.
+ */
+export function peerStateAfter(current: PeerState, next: PeerState): PeerState {
+  if (next.type === "delivered" && (current.type === "seen" || current.type === "replied")) return current;
+  if (next.type === "seen" && current.type === "replied") return current;
+  return next;
 }
 
 export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
@@ -576,6 +597,40 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return board.decisions.some((decision) => decision.id === event.decision.id)
         ? board
         : { ...board, decisions: [...board.decisions, { ...event.decision, position: streamSeq }] };
+    case "peerMessageSent":
+    case "peerMessageReceived": {
+      const known = board.peerMessages[event.messageId];
+      // Applied again after a view read: the record keeps what came after it.
+      if (known) return board;
+      const sent = event.type === "peerMessageSent";
+      const message: PeerMessage = {
+        messageId: event.messageId,
+        outgoing: sent,
+        peer: sent ? event.to : event.from,
+        ...(event.replyTo !== null && { replyTo: event.replyTo }),
+        requestId: event.requestId,
+        state: sent ? event.state : { type: "pending" },
+        text: sent ? event.text : "",
+        blob: sent ? event.blob : null,
+        sentAtMs: sent ? event.sentAtMs : null,
+        settled: false,
+        position: streamSeq,
+      };
+      return { ...board, peerMessages: { ...board.peerMessages, [event.messageId]: message } };
+    }
+    case "peerMessageState": {
+      const known = board.peerMessages[event.messageId];
+      if (!known) return board;
+      const state = peerStateAfter(known.state, event.state);
+      const sentAtMs = event.sentAtMs ?? known.sentAtMs;
+      if (state === known.state && sentAtMs === known.sentAtMs) return board;
+      return { ...board, peerMessages: { ...board.peerMessages, [event.messageId]: { ...known, state, sentAtMs } } };
+    }
+    case "peerWaitSettled": {
+      const known = board.peerMessages[event.messageId];
+      if (!known || known.settled) return board;
+      return { ...board, peerMessages: { ...board.peerMessages, [event.messageId]: { ...known, settled: true } } };
+    }
     case "waitingOnYou":
       return { ...board, waiting: { ...board.waiting, [event.item.id]: event.item } };
     case "waitingResolved": {

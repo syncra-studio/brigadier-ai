@@ -1,5 +1,6 @@
 import {
   Book,
+  Chat,
   CheckCircle,
   Dock,
   EditPencil,
@@ -50,5 +51,6 @@ export const WORK_ICONS: Record<WorkKind, FC<{ className?: string }>> = {
   memory: Sparkle,
   checks: CheckCircle,
   preview: PlayCircle,
+  message: Chat,
   other: Tools,
 };

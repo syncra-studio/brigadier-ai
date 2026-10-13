@@ -10,7 +10,7 @@ import type { Approval, ItemStatus, OrchestratorStepKind, Task } from "@/ipc/gen
  */
 
 /** The kinds of work a group sums up, in the order of the plan's table. */
-export type WorkKind = "read" | "edit" | "run" | "code" | "web" | "memory" | "checks" | "preview" | "other";
+export type WorkKind = "read" | "edit" | "run" | "code" | "web" | "memory" | "checks" | "preview" | "message" | "other";
 
 /** A call as both threads know it: the tool's name, its one-line detail and how it stands. */
 export type StepCall = { name: string; detail: string | null; status: ItemStatus };
@@ -67,6 +67,9 @@ const PLUMBING = new Set([
   "propose_merge",
   "suggest_full_access",
   "submit_report",
+  // Its row comes from the message's record, or says why it was refused.
+  "message_session",
+  "settle_wait",
 ]);
 
 /** Whether a call is plumbing, shown by what came of it rather than as a row. */
@@ -88,6 +91,8 @@ const OTHER: Record<string, [doing: string, done: string]> = {
   request_approval: ["Asking for approval", "Asked for approval"],
   ask_orchestrator: ["Asking the lead", "Asked the lead"],
   submit_outline: ["Sending an outline", "Sent an outline"],
+  list_sessions: ["Looking for sessions", "Looked for sessions"],
+  read_session: ["Reading another session", "Read another session"],
   imagegen: ["Creating an image", "Created an image"],
 };
 
@@ -427,6 +432,7 @@ const LEADING: Record<Exclude<WorkKind, "other">, [one: string, many: string]> =
   memory: ["Checked project memory", "Checked project memory"],
   checks: ["Ran checks", "Ran checks"],
   preview: ["Started a preview", "Started a preview"],
+  message: ["Messaged a session", "Messaged sessions"],
 };
 
 /** "A, B and C". */

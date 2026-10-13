@@ -551,10 +551,17 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
       const id = message.conversationId;
       let { conversations, threads } = slice;
       const conversation = conversations[id];
-      if (conversation && conversation.updatedAtMs < message.createdAtMs) {
+      // Another session's message also marks when one last came (the sidebar's unread dot).
+      const peerAtMs =
+        message.role === "peer" ? Math.max(conversation?.peerAtMs ?? 0, message.createdAtMs) : conversation?.peerAtMs;
+      if (conversation && (conversation.updatedAtMs < message.createdAtMs || peerAtMs !== conversation.peerAtMs)) {
         conversations = {
           ...conversations,
-          [id]: { ...conversation, updatedAtMs: message.createdAtMs },
+          [id]: {
+            ...conversation,
+            updatedAtMs: Math.max(conversation.updatedAtMs, message.createdAtMs),
+            ...(peerAtMs !== undefined && { peerAtMs }),
+          },
         };
       }
       const thread = threads[id];
