@@ -871,7 +871,12 @@ impl Tool for ScrollTool {
 /// The answer for a scroll through a text area's scroll-bar buttons.
 fn native_scroll_summary(direction: &str, by: &str, amount: usize, done: NativeScroll) -> String {
     let edge = if direction == "up" { "start" } else { "end" };
-    if done.stalled {
+    if done.at_end && done.steps == 0 {
+        format!(
+            "✅ Nothing to scroll {direction}: the text area already shows its {edge}, so no \
+             scroll was sent."
+        )
+    } else if done.stalled {
         format!(
             "⚠️ Scrolled native macOS control {direction} by {by} × {} of {amount} through AX: \
              the text stopped moving before its {edge}, even after waiting for the app. Take a \
@@ -940,11 +945,19 @@ unsafe fn scroll_native_text_area(
     let mut buttons = Vec::new();
     collect_ax_buttons(scroll_area, 0, &mut buttons);
     CFRelease(scroll_area as CFTypeRef);
+    let reverse = direction == "up";
     if buttons.is_empty() {
-        return None;
+        // No scroll bar because the whole text shows: there is nothing to
+        // scroll, and no event needs to be sent.
+        return text_view_position(element)
+            .filter(|p| text_view_at_end(*p, reverse))
+            .map(|_| NativeScroll {
+                steps: 0,
+                at_end: true,
+                stalled: false,
+            });
     }
 
-    let reverse = direction == "up";
     let base = if by == "page" && buttons.len() >= 4 {
         2
     } else {
@@ -1119,6 +1132,16 @@ mod native_scroll_tests {
             stalled: false,
         };
         assert!(native_scroll_summary("up", "line", 3, full).starts_with("✅ Scrolled"));
+        let nothing = NativeScroll {
+            steps: 0,
+            at_end: true,
+            stalled: false,
+        };
+        let text = native_scroll_summary("up", "line", 2, nothing);
+        assert!(
+            text.starts_with("✅ Nothing to scroll up") && text.contains("its start"),
+            "{text}"
+        );
     }
 }
 
