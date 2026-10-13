@@ -20,7 +20,7 @@ fn def() -> &'static ToolDef {
              or `name` (e.g. \"Calculator\"). If both are given, bundle_id wins.\n\n\
              Optional `urls` are handed to the app as open targets — for Finder, pass a folder \
              path to open a backgrounded Finder window there. A web browser that is already \
-             running opens web links in a new background window of its own, listed first in \
+             running opens web links and local pages in a new background window of its own, listed first in \
              `windows`.\n\n\
              Optional `cdp_debugging_port`: opens a Chrome DevTools Protocol (CDP) server \
              on the specified port (appends --remote-debugging-port=N to the app's argv). \

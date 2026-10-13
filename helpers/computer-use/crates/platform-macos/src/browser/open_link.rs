@@ -69,11 +69,11 @@ pub(crate) fn browser_kind(bundle_id: &str) -> Option<BrowserKind> {
     }
 }
 
-/// A web address a browser window can show: `http` or `https`, with no
-/// spaces or control characters.
+/// A link a browser window can show: a web address (`http` or `https`) or a
+/// local page (`file://`), with no spaces or control characters.
 pub(crate) fn is_web_link(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    (lower.starts_with("http://") || lower.starts_with("https://"))
+    (lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("file:///"))
         && !url.chars().any(|c| c.is_control() || c.is_whitespace())
 }
 
@@ -135,7 +135,7 @@ pub(crate) fn wait_for_new_windows(
 
 /// Opens `urls` in a new window of the running browser the caller named,
 /// without bringing it to the front. `None` when the app is not a running
-/// web browser, a link is not a web address, or the browser could not be
+/// web browser, a link is not a web address or local page, or the browser could not be
 /// asked directly; the caller then opens the links the usual way.
 pub(crate) async fn open_in_running_browser(
     bundle_id: Option<&str>,
@@ -238,10 +238,11 @@ mod tests {
     }
 
     #[test]
-    fn only_web_addresses_go_to_a_browser_window() {
+    fn only_web_addresses_and_local_pages_go_to_a_browser_window() {
         assert!(is_web_link("https://example.com/a?b=c#d"));
         assert!(is_web_link("HTTP://example.com"));
-        assert!(!is_web_link("file:///tmp/page.html"));
+        assert!(is_web_link("file:///tmp/page.html"));
+        assert!(!is_web_link("file://host/tmp/page.html"));
         assert!(!is_web_link("/tmp/page.html"));
         assert!(!is_web_link("mailto:someone@example.com"));
         assert!(!is_web_link("https://example.com/a b"));
