@@ -447,15 +447,18 @@ impl Snapshot {
     /// list of currently-visible windows, return the (opened, closed)
     /// classification.
     ///
-    /// Used by the reply observation and by guard settling.
+    /// Used by the reply observation and by guard settling. The helper's own windows (the
+    /// agent cursor and other overlays) are never reported as opened: the agent didn't open
+    /// them and can't act on them.
     pub(crate) fn diff(
         snapshot_ids: &HashSet<u32>,
         current: &[WindowInfo],
     ) -> (Vec<WindowEvent>, Vec<u32>) {
+        let own_pid = i32::try_from(std::process::id()).unwrap_or(-1);
         let current_ids: HashSet<u32> = current.iter().map(|w| w.window_id).collect();
         let opened: Vec<WindowEvent> = current
             .iter()
-            .filter(|w| !snapshot_ids.contains(&w.window_id))
+            .filter(|w| !snapshot_ids.contains(&w.window_id) && w.pid != own_pid)
             .map(|w| WindowEvent {
                 window_id: w.window_id,
                 pid: w.pid,
@@ -711,6 +714,22 @@ mod tests {
         assert_eq!(opened[0].app_name, "Mail");
         assert_eq!(opened[0].title, "Inbox");
         assert!(closed.is_empty());
+    }
+
+    #[test]
+    fn diff_leaves_out_the_helpers_own_windows() {
+        let snap: HashSet<u32> = [1].into_iter().collect();
+        let own = i32::try_from(std::process::id()).unwrap();
+        let cur = vec![
+            win(1, 100, "Safari", "Home"),
+            win(2, own, "Brigadier Computer Use", ""),
+            win(3, 101, "Mail", "Inbox"),
+        ];
+        let (opened, _) = Snapshot::diff(&snap, &cur);
+        assert_eq!(
+            opened.iter().map(|w| w.window_id).collect::<Vec<_>>(),
+            vec![3]
+        );
     }
 
     #[test]
