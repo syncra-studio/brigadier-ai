@@ -462,7 +462,8 @@ impl Tool for LaunchAppTool {
                     // It now also covers what used to be the in-call window
                     // (2.5 s slow path, 0.5 s fast path).
                     {
-                        let ticks = if slow_launch_path { 42 } else { 2 };
+                        let ticks =
+                            watchdog_ticks(slow_launch_path, !preexisting_pids.contains(pid));
                         let launched_pid = *pid;
                         let prior_pid = prior;
                         tokio::spawn(async move {
@@ -631,6 +632,19 @@ impl Tool for LaunchAppTool {
     }
 }
 
+/// How many 250 ms ticks the detached watchdog keeps a launched app from
+/// coming to the front. An app that starts from scratch activates itself
+/// once its first window is ready, seconds after the launch returns
+/// (Electron apps especially), as does one that is handed documents, so
+/// both get ~10.5 s; an app that was already running only reacts at once.
+fn watchdog_ticks(slow_launch_path: bool, cold_start: bool) -> u32 {
+    if slow_launch_path || cold_start {
+        42
+    } else {
+        2
+    }
+}
+
 /// Whether `launch_app` should arm background-launch focus-steal suppression.
 ///
 /// Ordinary embedded/serve/daemon/one-shot use: `true` — keep the launched app
@@ -790,8 +804,18 @@ fn hex_value(byte: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{local_file_target, preflight_file_urls, suppresses_activation};
+    use super::{local_file_target, preflight_file_urls, suppresses_activation, watchdog_ticks};
     use std::path::PathBuf;
+
+    #[test]
+    fn an_app_started_from_scratch_is_kept_in_the_background_as_long_as_one_handed_documents() {
+        assert_eq!(watchdog_ticks(false, true), watchdog_ticks(true, false));
+        assert_eq!(watchdog_ticks(true, true), watchdog_ticks(true, false));
+        // ~10.5 s: past an Electron app's own activation once its window is ready.
+        assert!(watchdog_ticks(false, true) * 250 >= 10_000);
+        // An app already running reacts at once; no long hold on the user's clicks.
+        assert!(watchdog_ticks(false, false) * 250 <= 500);
+    }
 
     #[test]
     fn ordinary_launch_still_suppresses_activation() {
