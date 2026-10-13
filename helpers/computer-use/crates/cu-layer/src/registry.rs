@@ -23,7 +23,8 @@ pub struct Options {
 
 /// Build the registry. Call [`crate::configure_environment`] first.
 ///
-/// Installs the focus policy (once per process), the recording hooks, then
+/// Installs the focus policy (once per process), the recording hooks and
+/// Brigadier's cursor motion as the saved default, then
 /// builds the driver's tools under the driver's own runtime scope, so
 /// element tokens taken in one call resolve in the next. Brigadier's
 /// `page`, `scroll`, `hotkey` and `launch_app` go in before the guard,
@@ -33,6 +34,7 @@ pub fn build(options: Options) -> Result<Arc<ToolRegistry>, String> {
     crate::focus_policy::install();
     crate::offspace::install();
     install_recording_hooks();
+    crate::cursor_motion::seed_default();
     let scope = cua_driver_core::session_authorization::configured_registry()?
         .legacy_context()?
         .runtime_scope_key();
