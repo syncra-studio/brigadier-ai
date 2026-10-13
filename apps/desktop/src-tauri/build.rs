@@ -15,11 +15,11 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=ServiceManagement");
         println!("cargo:rerun-if-changed=src/login_item.m");
         cc::Build::new()
-            .file("src/computer_setup_drag.m")
+            .file("src/computer_setup.m")
             .flag("-fobjc-arc")
-            .compile("brigadier_computer_setup_drag");
+            .compile("brigadier_computer_setup");
         println!("cargo:rustc-link-lib=framework=AppKit");
-        println!("cargo:rerun-if-changed=src/computer_setup_drag.m");
+        println!("cargo:rerun-if-changed=src/computer_setup.m");
     }
     tauri_build::build();
 }

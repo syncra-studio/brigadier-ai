@@ -56,10 +56,7 @@ pub fn open_privacy_settings(
 pub fn open(app: &AppHandle, focus: bool) {
     if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
         let _ = window.unminimize();
-        let _ = window.show();
-        if focus {
-            let _ = window.set_focus();
-        }
+        bring_forward(&window, focus);
         return;
     }
     let built = WebviewWindowBuilder::new(
@@ -76,9 +73,37 @@ pub fn open(app: &AppHandle, focus: bool) {
     // The helper's card is dragged out natively; nothing is dropped in.
     .disable_drag_drop_handler()
     .focused(focus)
+    // Shown once it is on the Space the user is on.
+    .visible(false)
     .build();
-    if let Err(err) = built {
-        tracing::warn!(%err, "couldn't open the computer-use setup window");
+    match built {
+        Ok(window) => bring_forward(&window, focus),
+        Err(err) => tracing::warn!(%err, "couldn't open the computer-use setup window"),
+    }
+}
+
+/// Shows the setup window where the user is, also over a full-screen app (where a background
+/// app's new window would otherwise open on another Space, unseen). `focus`: it takes the
+/// keyboard too.
+fn bring_forward(window: &tauri::WebviewWindow, focus: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let target = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            if let Ok(ns_window) = target.ns_window() {
+                native::show_on_active_space(ns_window);
+            }
+            if focus {
+                let _ = target.set_focus();
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.show();
+        if focus {
+            let _ = window.set_focus();
+        }
     }
 }
 
@@ -121,7 +146,7 @@ pub fn computer_setup_drag(app: AppHandle, state: State<'_, AppState>) -> Result
         window
             .run_on_main_thread(move || {
                 if let Ok(ns_window) = target.ns_window()
-                    && !drag::file(ns_window, &path)
+                    && !native::drag_file(ns_window, &path)
                 {
                     tracing::warn!("couldn't start dragging the computer-use helper");
                 }
@@ -152,21 +177,29 @@ pub fn reveal_computer_helper(app: AppHandle, state: State<'_, AppState>) -> Res
     }
 }
 
-/// The drag itself, in AppKit (`computer_setup_drag.m`): the shell's narrow unsafe exception
-/// for it, as for the other Objective-C parts.
+/// The setup window's AppKit parts (`computer_setup.m`): the shell's narrow unsafe exception
+/// for them, as for the other Objective-C parts.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
-mod drag {
+mod native {
     use std::ffi::{CString, c_char, c_void};
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
 
     unsafe extern "C" {
         fn brigadier_drag_file(ns_window: *mut c_void, path: *const c_char) -> i32;
+        fn brigadier_show_on_active_space(ns_window: *mut c_void);
+    }
+
+    /// Shows `ns_window` on the active Space without activating the app. Main thread only.
+    pub fn show_on_active_space(ns_window: *mut c_void) {
+        // SAFETY: `ns_window` is the live NSWindow of a window this thread (the main thread)
+        // owns; the function keeps no reference to it.
+        unsafe { brigadier_show_on_active_space(ns_window) }
     }
 
     /// Drags `path` from `ns_window`. Main thread only.
-    pub fn file(ns_window: *mut c_void, path: &Path) -> bool {
+    pub fn drag_file(ns_window: *mut c_void, path: &Path) -> bool {
         let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
             return false;
         };

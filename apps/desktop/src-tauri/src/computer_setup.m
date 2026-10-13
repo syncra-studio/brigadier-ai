@@ -1,4 +1,5 @@
-// Computer use's setup window: the helper app's card is dragged into a list in System Settings.
+// Computer use's setup window, natively: where it shows, and the helper app's card dragged into a
+// list in System Settings.
 // A web page can't drag a file out of its window, so the drag runs here, in AppKit.
 
 #import <AppKit/AppKit.h>
@@ -45,4 +46,14 @@ int brigadier_drag_file(void *ns_window, const char *path) {
                                                             source:source];
   session.animatesToStartingPositionsOnCancelOrFail = YES;
   return session != nil ? 1 : 0;
+}
+
+// Shows the setup window on the Space the user is on, also over a full-screen app, without
+// making Brigadier the active app: an agent asked for setup, and the user should see it where
+// they work. Main thread only.
+void brigadier_show_on_active_space(void *ns_window) {
+  NSWindow *window = (__bridge NSWindow *)ns_window;
+  window.collectionBehavior |= NSWindowCollectionBehaviorMoveToActiveSpace |
+                               NSWindowCollectionBehaviorFullScreenAuxiliary;
+  [window orderFrontRegardless];
 }
