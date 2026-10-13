@@ -27,7 +27,8 @@ pub struct Options {
 /// Brigadier's cursor motion as the saved default, then
 /// builds the driver's tools under the driver's own runtime scope, so
 /// element tokens taken in one call resolve in the next. Brigadier's
-/// `page`, `scroll`, `hotkey` and `launch_app` go in before the guard,
+/// `page`, `scroll`, `hotkey`, `type_text`, `get_window_state` and
+/// `launch_app` go in before the guard,
 /// which wraps every tool last. A session's recording stops when the
 /// session ends.
 pub fn build(options: Options) -> Result<Arc<ToolRegistry>, String> {
@@ -51,6 +52,7 @@ pub fn build(options: Options) -> Result<Arc<ToolRegistry>, String> {
         crate::scroll::install(&mut registry);
         crate::hotkey::install(&mut registry);
         crate::web_typing::install(&mut registry);
+        crate::keep_drawn::install(&mut registry);
         crate::launch::install(&mut registry);
         stop_recording_when_session_ends(&mut registry);
         crate::guard::install(&mut registry);

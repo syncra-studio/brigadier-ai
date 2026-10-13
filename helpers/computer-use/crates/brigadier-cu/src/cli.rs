@@ -974,6 +974,7 @@ pub fn run_call(
     let scope = cu_layer::scope::DispatchScope {
         allowed_bundles: cu_layer::target_policy::allowed_from_env(),
         on_target: None,
+        session: None,
     };
     let tool_name = tool.to_string();
     let out_path = screenshot_out_file;

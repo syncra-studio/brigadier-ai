@@ -16,6 +16,7 @@ pub mod cursor_motion;
 pub mod focus_policy;
 pub mod guard;
 pub mod hotkey;
+pub mod keep_drawn;
 pub mod key_window;
 #[cfg(target_os = "macos")]
 pub mod launch;

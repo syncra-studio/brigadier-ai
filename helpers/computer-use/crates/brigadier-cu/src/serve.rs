@@ -2288,6 +2288,7 @@ pub async fn run_serve_with_owner(
                                 let scope = cu_layer::scope::DispatchScope {
                                     allowed_bundles,
                                     on_target,
+                                    session: effective_session.as_deref().map(runtime_session_key),
                                 };
                                 // Activity log (computer-use.md section 4): the
                                 // gate refuses calls the user stopped or paused

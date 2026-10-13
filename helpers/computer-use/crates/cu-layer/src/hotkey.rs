@@ -212,6 +212,12 @@ impl MenuBar for System {
     }
 }
 
+/// Whether `pid`'s app embeds Chromium (Electron apps and Chromium browsers).
+#[cfg(target_os = "macos")]
+pub fn chromium_family(pid: i32) -> bool {
+    system::chromium_family(pid)
+}
+
 #[cfg(target_os = "macos")]
 mod system {
     use core_foundation::base::{CFRange, CFRelease, CFTypeRef, TCFType};

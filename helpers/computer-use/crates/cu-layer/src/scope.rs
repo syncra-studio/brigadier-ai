@@ -22,6 +22,9 @@ pub struct DispatchScope {
     pub allowed_bundles: Vec<String>,
     /// Notes the app each call acts on and refuses apps the user stopped.
     pub on_target: Option<TargetHook>,
+    /// The agent session's key, as session-end hooks get it; `None` when
+    /// the call has no session (one-shot commands).
+    pub session: Option<String>,
 }
 
 impl std::fmt::Debug for DispatchScope {
@@ -29,6 +32,7 @@ impl std::fmt::Debug for DispatchScope {
         f.debug_struct("DispatchScope")
             .field("allowed_bundles", &self.allowed_bundles)
             .field("on_target", &self.on_target.is_some())
+            .field("session", &self.session)
             .finish()
     }
 }

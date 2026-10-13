@@ -122,6 +122,7 @@ async fn handle_request(req: Request, id: Value, registry: &Arc<ToolRegistry>) -
                 let scope = cu_layer::scope::DispatchScope {
                     allowed_bundles: cu_layer::target_policy::allowed_from_env(),
                     on_target: None,
+                    session: None,
                 };
                 let result =
                     cu_layer::scope::with_scope(scope, registry.invoke(&call.name, call.args))
