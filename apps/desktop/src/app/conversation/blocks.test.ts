@@ -629,6 +629,14 @@ test("a session's sent messages are rows of the turn that sent them, in every st
   assert.deepEqual(steps, ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "messageRefused"]);
 });
 
+test("an overnight run's refused message keeps its row, as its sent ones do", () => {
+  const refusal: OrchestratorStep = { requestId: "run-1", atMs: 3000, position: 3, kind: { type: "messageRefused", title: "Billing", reason: "Billing is archived." } };
+  const sent = record("m1", 4, "run-1", { type: "delivered" });
+  const blocks = buildBlocks([said("run-1-said", 2, "assistant", "run-1"), said("run-1-done", 5, "assistant", "run-1")], {}, false, peerDigest([peerRequest("run-1", 1)], [sent], [refusal]), []);
+  const steps = keyed(blocks, "run-1").orchestratorSteps.map((step) => step.kind.type === "peerSent" ? step.kind.messageId : step.kind.type);
+  assert.deepEqual(steps, ["messageRefused", "m1"]);
+});
+
 test("another session's message opens its request's turn where the user's message would stand", () => {
   const blocks = buildBlocks([fromPeer("m1", 1, "m1"), said("m1-answer", 3, "assistant", "m1")], {}, false, peerDigest([peerRequest("m1", 1, { fromPeer: "api" })]), []);
   const block = keyed(blocks, "m1");
@@ -682,6 +690,33 @@ test("a reply to a request the user stopped shows, and no turn follows it: the r
   assert.deepEqual(blocks[2]!.worked, []);
   // The newer request's answer stays its own: nothing was carried on.
   assert.deepEqual(blocks[1]!.texts.map((text) => text.messageId), ["a2-answer"]);
+});
+
+test("a reply after its request ended starts no turn, however it ended; one it carried on keeps how that turn ended", () => {
+  const thread = [said("a1", 1, "user", "a1"), said("a2", 3, "user", "a2"), said("a2-answer", 4, "assistant", "a2"), fromPeer("r1", 5, "a1", "q1")];
+  // Done before the reply came (its overnight run ended): the reply shows on its own.
+  const ended = buildBlocks(thread, {}, false, peerDigest([
+    peerRequest("a1", 1, { endedAtMs: 2000, worked: [{ fromMs: 1000, toMs: 2000 }] }),
+    peerRequest("a2", 3, { endedAtMs: 4000, worked: [{ fromMs: 3000, toMs: 4000 }] }),
+  ]), []);
+  assert.deepEqual(ended.map((block) => block.key), ["a1", "a2", "a1~r1"]);
+  assert.equal(ended[0]!.endedAtMs, 2000);
+  assert.deepEqual(ended[0]!.worked, [{ fromMs: 1000, toMs: 2000 }]);
+  assert.equal(ended[2]!.state, "done");
+  assert.deepEqual(ended[2]!.worked, []);
+
+  // Carried on from the reply, then stopped or failed: the reply's turn holds that work and ending.
+  for (const state of [{ type: "stopped" }, { type: "failed", error: "The model is gone." }] as UserRequest["state"][]) {
+    const blocks = buildBlocks([...thread, said("a1-answer", 6, "assistant", "a1")], {}, false, peerDigest([
+      peerRequest("a1", 1, { state, endedAtMs: 7000, worked: [{ fromMs: 1000, toMs: 2000 }, { fromMs: 5000, toMs: 7000 }] }),
+      peerRequest("a2", 3, { endedAtMs: 4000, worked: [{ fromMs: 3000, toMs: 4000 }] }),
+    ]), []);
+    assert.deepEqual(blocks.map((block) => block.key), ["a1", "a2", "a1~r1"], state.type);
+    assert.equal(blocks[0]!.state, "done");
+    assert.equal(blocks[2]!.state, state.type);
+    assert.deepEqual(blocks[2]!.worked, [{ fromMs: 5000, toMs: 7000 }]);
+    assert.deepEqual(blocks[2]!.texts.map((text) => text.messageId), ["a1-answer"]);
+  }
 });
 
 test("another session's message steered into a running turn joins it, as the user's would", () => {

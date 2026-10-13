@@ -445,7 +445,8 @@ export function buildBlocks(
     }
     // Plumbing shows by what came of it: a worker's sentence, a card, the merge.
     if (step.kind.type === "tool" && isPlumbing(step.kind.name)) continue;
-    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool")) continue;
+    // A run's own steps show as its phases, but a refused message has no other trace.
+    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool" && step.kind.type !== "messageRefused")) continue;
     if (step.kind.type === "tool" && toolHasOwnResult(step.kind, authoredResults, step.requestId, step.position)) continue;
     placed.push({
       kind: "orchestrator",
@@ -770,8 +771,9 @@ function cutSpans(spans: readonly WorkSpan[], atMs: number, after: boolean): Wor
 /**
  * A reply to an earlier request that came after a newer one: a block of its own where it came,
  * which carries on the request from there ("Reply from ‹title› · to your earlier message"),
- * while the earlier block reads as done when it came. A request the user stopped, or one that
- * failed, keeps its state: the reply shows, and no turn follows it.
+ * while the earlier block reads as done when it came. A request that had ended before the reply
+ * came (the user's Stop, a failure, its overnight run's end) keeps its state: the reply shows,
+ * and no turn follows it.
  */
 function continueRequest(earlier: Block, request: UserRequest | undefined, key: string, message: Message, text: string): Block {
   const atMs = message.createdAtMs;
@@ -797,7 +799,9 @@ function continueRequest(earlier: Block, request: UserRequest | undefined, key: 
     cardWait: false,
     waitingFor: [],
   };
-  const over = earlier.state === "stopped" || earlier.state === "failed" || !request;
+  const final = request?.state.type === "done" || request?.state.type === "stopped" || request?.state.type === "failed";
+  // One that went on from the reply and ended after it carries on here, however it ended.
+  const over = !request || (final && (request.endedAtMs === null || request.endedAtMs <= atMs));
   if (over) return base;
   const worked = cutSpans(earlier.worked, atMs, true);
   Object.assign(earlier, {
