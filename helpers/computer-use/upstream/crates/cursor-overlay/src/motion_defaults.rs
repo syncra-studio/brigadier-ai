@@ -75,6 +75,9 @@ impl SavedMotionDefaults {
 
 /// `~/.cua-driver/config.json`, the file `set_config` writes everywhere.
 pub fn default_config_path() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("CUA_DRIVER_STATE_DIR").filter(|dir| !dir.is_empty()) {
+        return Some(PathBuf::from(dir).join("config.json"));
+    }
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(|home| PathBuf::from(home).join(".cua-driver").join("config.json"))

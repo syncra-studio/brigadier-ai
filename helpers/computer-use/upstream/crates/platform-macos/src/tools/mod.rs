@@ -624,6 +624,9 @@ impl Default for DriverConfig {
 
 /// Path to the persistent JSON config file shared by the CLI and MCP session.
 pub fn config_file_path() -> std::path::PathBuf {
+    if let Some(dir) = std::env::var_os("CUA_DRIVER_STATE_DIR").filter(|dir| !dir.is_empty()) {
+        return std::path::PathBuf::from(dir).join("config.json");
+    }
     let home = std::env::var("HOME").unwrap_or_default();
     std::path::PathBuf::from(format!("{home}/.cua-driver/config.json"))
 }

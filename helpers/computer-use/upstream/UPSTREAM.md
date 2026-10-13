@@ -43,8 +43,27 @@ backends, the optional perception add-on and the test and tooling crates.
 | Also copied | `Skills/cua-driver/` `LICENSE.md` `THIRD_PARTY_NOTICES.md` |
 | Files | 292 (sha256 of PRISTINE.sha256: `641816768fe20ea78d15e0f17ad63c15614e14299f6780c0da0de48b05de7f43`) |
 
-Patches applied: none.
+Patches applied, in order:
+
+- `patches/0001-state-dir.diff`: one state folder for the driver's own config (CUA_DRIVER_STATE_DIR), so an embedding app keeps it beside its other state instead of ~/.cua-driver.
 <!-- sync:end -->
+
+## Where the driver keeps state
+
+Brigadier's helper sets these before it builds the driver's tool registry, so
+everything the driver keeps lives in the helper's home folder:
+
+| Variable | What moves there |
+|---|---|
+| `CUA_DRIVER_STATE_DIR` (patch 0001) | `config.json` (settings, preview window, cursor motion defaults, the `run_script` switch) |
+| `CUA_DRIVER_CURSOR_THEME_DIR` | installed cursor themes |
+| `CUA_DRIVER_BROWSER_PROFILE_ROOT` | browser profiles the driver would create |
+
+Other uses of `HOME` in these crates are the user's own paths and stay there:
+`~` in paths an agent passes (screenshots, recordings, launch arguments),
+`~/Applications`, and the browsers' own profile folders. The direct-capture
+evidence file is only written for the upstream app's own bundle ids, and the
+upstream daemon's socket path is unused (the helper has its own daemon).
 
 ## Updating
 
