@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * Icons from Codicons (CC BY 4.0, see THIRD_PARTY_NOTICES.md): the right sidebar's views and
- * Search's options. Current colour, at the text's size unless the caller sizes them.
+ * Search's options, except the locally drawn SourceControlGlyph. Current colour, at the
+ * text's size unless the caller sizes them.
  */
 
 type GlyphProps = SVGProps<SVGSVGElement>;
@@ -18,11 +19,11 @@ export const FilesGlyph: FC<GlyphProps> = ({ className, ...props }) => (
 
 /** Source control: two nodes on the left, with a curved branch from the top right. */
 export const SourceControlGlyph: FC<GlyphProps> = ({ className, ...props }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden className={cn("size-icon-text", className)} {...props}>
-    <path d="M6 7.5v9M18 7.5v1.5a10.5 10.5 0 0 1-9 10.392" />
-    <circle cx="6" cy="4.5" r="3" />
-    <circle cx="6" cy="19.5" r="3" />
-    <circle cx="18" cy="4.5" r="3" />
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden className={cn("size-icon-text", className)} {...props}>
+    <path d="M4 5v6M12 5v1a7 7 0 0 1-6 6.928" />
+    <circle cx="4" cy="3" r="2" />
+    <circle cx="4" cy="13" r="2" />
+    <circle cx="12" cy="3" r="2" />
   </svg>
 );
 
