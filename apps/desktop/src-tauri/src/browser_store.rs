@@ -85,7 +85,6 @@ fn permission(text: &str) -> SitePermission {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn state_text(state: DownloadState) -> &'static str {
     match state {
         DownloadState::Running => "running",
