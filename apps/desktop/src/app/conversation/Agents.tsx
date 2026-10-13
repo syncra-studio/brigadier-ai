@@ -1,5 +1,5 @@
-import { ArrowLeft, DotsHorizontal } from "@openai/apps-sdk-ui/components/Icon";
-import { memo, useContext, useMemo, useState } from "react";
+import { ArrowLeft } from "@openai/apps-sdk-ui/components/Icon";
+import { type ReactNode, memo, useContext, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { workerDone, workerWorking, workerState, workerPreview } from "@/app/conversation/workerPresentation";
@@ -15,12 +15,8 @@ import {
 import { WorkerThread } from "@/app/conversation/WorkerThread";
 import { effortLabel } from "@/components/assistant-ui/elements/model-selector";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { composerPill } from "@/components/assistant-ui/elements/surfaces";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import type { Task } from "@/ipc/generated";
 import { brainUseLabel, brainUseText } from "@/lib/brainUse";
@@ -173,17 +169,6 @@ function AgentSection({
   );
 }
 
-function WorkerMenu({ onDetails }: { onDetails: () => void }) {
-  return <DropdownMenu>
-    <DropdownMenuTrigger asChild>
-      <TooltipIconButton tooltip="Worker actions" size="icon-sm"><DotsHorizontal /></TooltipIconButton>
-    </DropdownMenuTrigger>
-    <DropdownMenuContent align="end">
-      <DropdownMenuItem onSelect={onDetails}>Details</DropdownMenuItem>
-    </DropdownMenuContent>
-  </DropdownMenu>;
-}
-
 /** Active workers first, then finished workers, newest first within each group. */
 export function useWorkerIds(conversationId: string): { active: string[]; finished: string[] } {
   const ids = useBoard(
@@ -244,7 +229,7 @@ function WorkerList({ conversationId }: { conversationId: string }) {
 }
 
 /** One worker: its glyph, name and model in the header, its thread below. */
-function WorkerDetail({ task }: { task: Task }) {
+function WorkerDetail({ task, headerActions }: { task: Task; headerActions?: ReactNode }) {
   const { setPanel } = useContext(AgentsPanelContext);
   const name = useWorkerName(task.id);
   const [details, setDetails] = useState(false);
@@ -254,7 +239,7 @@ function WorkerDetail({ task }: { task: Task }) {
   const model = `${modelName(groups, choice)}${choice.effort ? ` · ${effortLabel(choice.effort)}` : ""}`;
   return (
     <>
-      <header className="border-border flex h-10 shrink-0 items-center gap-2 border-b px-4">
+      <header data-slot="worker-header" className="border-border flex h-page-toolbar min-w-0 shrink-0 items-center gap-2 border-b px-2">
         <TooltipIconButton
           tooltip={details ? "Back to worker" : `Back to ${WORKERS_LABEL.toLowerCase()}`}
           size="icon-sm"
@@ -269,10 +254,20 @@ function WorkerDetail({ task }: { task: Task }) {
         >
           {name ?? task.title}
         </h2>
-        <span className="text-foreground/50 max-w-1/2 truncate text-xs">{model}</span>
-        <WorkerMenu onDetails={() => setDetails(true)} />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" aria-label={`Worker details: ${model}`} aria-pressed={details}
+              data-state={details ? "open" : "closed"}
+              className={cn(composerPill, "max-w-1/2 shrink text-muted-foreground")}
+              onClick={() => setDetails((open) => !open)}>
+              <span className="truncate">{model}</span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Worker details · {model}</TooltipContent>
+        </Tooltip>
+        {headerActions}
       </header>
-      {details ? <div data-slot="worker-details" data-selectable className="min-h-0 flex-1 overflow-y-auto px-8 py-5">
+      {details ? <div data-slot="worker-details" data-selectable className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-5 wrap-anywhere">
         <div className="flex flex-col gap-4">
           <h3 className="text-sm font-medium">Details</h3>
           <TaskDetails task={task} model={model} inThread detailsPage />
@@ -287,9 +282,9 @@ function WorkerDetail({ task }: { task: Task }) {
 }
 
 /** The Workers tab of the side panel: every worker of the session, or one of them working. */
-export function WorkersTab({ conversationId }: { conversationId: string }) {
+export function WorkersTab({ conversationId, headerActions }: { conversationId: string; headerActions?: ReactNode }) {
   const { panel } = useContext(AgentsPanelContext);
   const selected = useBoard((s) => (panel ? s.board?.tasks[panel] : undefined));
-  if (selected) return <WorkerDetail key={selected.id} task={selected} />;
+  if (selected) return <WorkerDetail key={selected.id} task={selected} headerActions={headerActions} />;
   return <WorkerList conversationId={conversationId} />;
 }

@@ -1,6 +1,7 @@
-import { Agent, Lightbulb, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Lightbulb, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type CSSProperties, createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { WorkersTab } from "@/app/conversation/Agents";
 import { workerDone } from "@/app/conversation/workerPresentation";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
@@ -13,7 +14,7 @@ import { useBoard } from "@/state/board";
 import { usePlanTab } from "@/state/planDoc";
 
 const PlanTab = lazy(() => import("@/app/conversation/PlanTab").then((m) => ({ default: m.PlanTab })));
-const TABS = [{ id: "workers", title: "Workers", Icon: Agent }] as const;
+const TABS = [{ id: "workers", title: "Workers", Icon: null }] as const;
 /** Plan joins the tabs only after the user opens a plan. */
 const WITH_PLAN = [...TABS, { id: "plan", title: "Plan", Icon: Lightbulb }] as const;
 
@@ -65,6 +66,9 @@ export const RightSidebarContext = createContext<ReturnType<typeof useRightSideb
  */
 export function RightSidebar({ conversationId }: { conversationId: string }) {
   const panel = useContext(RightSidebarContext);
+  const { panel: workerId } = useContext(AgentsPanelContext);
+  const selectedWorker = useBoard((s) => workerId ? s.board?.tasks[workerId] : undefined);
+  const workerHeader = panel?.active === "workers" && !!selectedWorker;
   const content = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const column = useRef<HTMLDivElement>(null);
@@ -113,7 +117,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
     >
       <SidebarReveal side="right" open={panel.open} hidden={!panel.open} resizing={panel.resizing}>
         <div ref={content} className="right-sidebar-panel-width flex h-full flex-col">
-          <div role="tablist" aria-label="Right panel" className="h-page-toolbar bg-background flex shrink-0 items-center gap-1 px-2">
+          {!workerHeader && <div role="tablist" aria-label="Right panel" className="h-page-toolbar bg-background flex shrink-0 items-center gap-1 px-2">
             <TitlebarTips>
               {tabs.map(({ id, title, Icon }, index) => (
                 <TitlebarButton
@@ -122,7 +126,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
                   id={`right-sidebar-${id}`}
                   aria-controls="right-sidebar-content"
                   aria-selected={panel.active === id}
-                  className="aria-selected:bg-toolbar-pressed aria-selected:text-foreground"
+                  className={cn("aria-selected:bg-toolbar-pressed aria-selected:text-foreground", id === "workers" && "w-auto px-2 text-label")}
                   tabIndex={panel.active === id ? 0 : -1}
                   tooltip={id === "workers" && done > 0 ? `${title} · ${done} done` : title}
                   onClick={() => panel.selectTab(id)}
@@ -137,7 +141,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
                     document.getElementById(`right-sidebar-${tab.id}`)?.focus();
                   }}
                 >
-                  <Icon />
+                  {Icon ? <Icon /> : "Workers"}
                 </TitlebarButton>
               ))}
             </TitlebarTips>
@@ -145,11 +149,12 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
             <TitlebarTips>
               <TitlebarButton tooltip="Close right panel" onClick={() => panel.setOpen(false)}><X /></TitlebarButton>
             </TitlebarTips>
-          </div>
+          </div>}
           <div
             id="right-sidebar-content"
             role="tabpanel"
-            aria-labelledby={`right-sidebar-${panel.active}`}
+            aria-labelledby={workerHeader ? undefined : `right-sidebar-${panel.active}`}
+            aria-label={workerHeader ? "Workers" : undefined}
             data-pane={panel.active}
             className={cn(
               "bg-background text-sidebar-foreground flex min-h-0 flex-1 flex-col overflow-clip transition-opacity duration-150 motion-reduce:transition-none",
@@ -157,7 +162,10 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
             )}
           >
             {mounted && <Suspense fallback={null}>
-              {panel.active === "plan" ? <PlanTab conversationId={conversationId} /> : <WorkersTab conversationId={conversationId} />}
+              {panel.active === "plan" ? <PlanTab conversationId={conversationId} /> : <WorkersTab conversationId={conversationId} headerActions={<TitlebarTips>
+                {tabs.length > 1 && <TitlebarButton tooltip="Plan" onClick={() => panel.selectTab("plan")}><Lightbulb /></TitlebarButton>}
+                <TitlebarButton tooltip="Close right panel" onClick={() => panel.setOpen(false)}><X /></TitlebarButton>
+              </TitlebarTips>} />}
             </Suspense>}
           </div>
         </div>

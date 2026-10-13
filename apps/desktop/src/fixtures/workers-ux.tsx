@@ -1,11 +1,16 @@
+/* oxlint-disable brigadier/no-raw-design-values -- Fixed widths exercise user-resized panels. */
 /** Production chat/panel fixture with stored worker events. No live workers or daemon. */
 import { leadTranscript } from "@/fixtures/flow";
 import type { Message, ProviderEvent, RawEntry, Report, Task } from "@/ipc/generated";
+import { showPlanDoc } from "@/state/planDoc";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
 const done = query.get("view") === "done";
+const stress = query.has("panel-test");
+if (stress) localStorage.setItem("brigadier.rightSidebarWidth", "600");
+const longPath = `/workspace/${"longdirectoryname".repeat(18)}/worker.tsx`;
 const now = Date.now();
 const id = "flow-session";
 const board = useBoard.getState().board!;
@@ -28,6 +33,9 @@ function worker(taskId: string, number: number, title: string): Task {
   };
 }
 const tasks = { t1: worker("t1", 1, "File summary"), t2: worker("t2", 2, "Readme draft") };
+if (stress) {
+  tasks.t1.spec = `Brigadier desktop app (Tauri + React, apps/desktop/src). Fix the worker panel and verify it in the running app. Read ${longPath}. ${"Keep the brief readable at every width. ".repeat(8)}`;
+}
 if (query.get("waiting") === "1") { tasks.t2.state = "blocked"; tasks.t2.blockedReason = "Waiting for plan review"; }
 useApp.setState((s) => ({ providers: { ...s.providers, view: { providers: [{ provider: "codex", status: null, quota: null, usage: null, error: null, checkedAtMs: now,
   models: { provider: "codex", fetchedAtMs: now, cliVersion: "fixture", models: [{ id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", description: "", resolved: null, efforts: ["high"], defaultEffort: "high", isDefault: true, inputModalities: ["text"], fast: null, legacy: false }] } }], sessions: [], fixtures: [] } } }));
@@ -37,6 +45,10 @@ const events: ProviderEvent[] = done ? [
   { type: "toolCall", itemId: "report", name: "mcp__brigadier__submit_report", input: "{}", status: "completed", output: null },
   { type: "command", itemId: "recent", command: "python3 -B - <<'PY'\nfrom pathlib import Path\nprint(list(Path('.').rglob('*')))\nPY", cwd: null, status: "completed", exitCode: 0, output: "43 files", durationMs: null },
 ] : [{ type: "command", itemId: "listing", command: "ls .", cwd: null, status: "inProgress", exitCode: null, output: null, durationMs: null }];
+if (stress) events.push(
+  { type: "message", itemId: "wide-reply", role: "assistant", text: `Inspect ${longPath}.\n\n\`\`\`text\n${"long code line ".repeat(40)}\n\`\`\`` },
+  { type: "command", itemId: "wide-command", command: `cat ${longPath}`, cwd: null, status: "completed", exitCode: 0, output: "Read file", durationMs: null },
+);
 const entries: RawEntry[] = events.map((event, index) => ({ streamSeq: index + 1, atMs: now - 60000 + index * 100, event }));
 leadTranscript.splice(0, leadTranscript.length, ...entries);
 useBoard.setState({ board: { ...board, tasks, plans: {}, approvals: {}, waiting: {}, questions: {}, decisions: [], thinking: [], machineSteps: [], orchestratorSteps: [],
@@ -62,3 +74,107 @@ useApp.setState((s) => ({ threads: { ...s.threads, [id]: { ...s.threads[id]!, it
   ...(done ? [message(19, "assistant", "The README draft is ready."), message(23, "assistant", "Both workers have completed their inspections."),
     message(30, "assistant", "The files have been summarized and the README draft is ready. Both workers verified the project without changing any source files.")] : []),
 ] } }, conversations: { ...s.conversations, [id]: { ...s.conversations[id]!, title: "Summarize probe project" } } }));
+
+// The render test uses the real sidebar and chat. Manual mode leaves it ready for screenshots.
+const wait = (ms = 150) => new Promise((resolve) => setTimeout(resolve, ms));
+const find = (selector: string) => document.querySelector<HTMLElement>(selector);
+if (stress && !query.has("manual")) {
+  const result = document.body.appendChild(document.createElement("pre"));
+  result.id = "workers-result";
+  const button = (label: string) => find(`button[aria-label="${label}"]`);
+  const ready = async (selector: string) => {
+    for (let i = 0; i < 100; i++) {
+      const element = find(selector);
+      if (element) return element;
+      await wait(50);
+    }
+    throw new Error(`Missing ${selector}`);
+  };
+  const bounds = () => {
+    const thread = find('[data-slot="worker-thread"]')!;
+    const rect = thread.getBoundingClientRect();
+    return {
+      width: rect.width, overflow: thread.scrollWidth - thread.clientWidth,
+      content: [...thread.querySelectorAll<HTMLElement>('[data-slot="worker-brief"], pre, [data-kind]')].map((node) => {
+        const box = node.getBoundingClientRect();
+        return { slot: node.dataset.slot ?? node.tagName, left: box.left - rect.left, right: rect.right - box.right };
+      }),
+    };
+  };
+  void (async () => {
+    await ready('button[title="Open File summary"]');
+    find('button[title="Open File summary"]')!.click();
+    await ready('[data-slot="worker-brief"] .aui-md');
+    await ready('[data-slot="worker-thread"] pre');
+    await wait(500);
+    const sidebar = find('[data-slot="right-sidebar"]')!;
+    const wide = bounds();
+    // This is the same live CSS variable the sidebar drag updates before persisting its width.
+    sidebar.style.setProperty("--right-sidebar-width", "320px");
+    if (query.has("live-resize")) await new Promise(requestAnimationFrame);
+    await wait(300);
+    const narrow = bounds();
+    const brief = find('[data-slot="worker-brief"]')!;
+    const originalClass = brief.className;
+    brief.className = "bg-secondary rounded-thread ms-8 flex flex-col gap-1 self-end px-3 py-2 text-sm";
+    const body = find('[data-slot="worker-instructions"]')!;
+    const bodyClass = body.className;
+    body.className = "leading-relaxed wrap-break-word line-clamp-3";
+    const reproduced = bounds();
+    brief.className = originalClass;
+    body.className = bodyClass;
+    brief.querySelector<HTMLButtonElement>("button")!.click();
+    await wait();
+    const expanded = bounds();
+    const header = find('[data-slot="worker-header"]')!;
+    const close = button("Close right panel")!;
+    const headerRect = header.getBoundingClientRect();
+    const closeRect = close.getBoundingClientRect();
+    const pill = find('button[aria-label^="Worker details:"]')!;
+    pill.focus();
+    await wait(350);
+    const tooltip = find('[role="tooltip"]')?.textContent;
+    pill.click();
+    await ready('[data-slot="worker-details"]');
+    const details = !!find('[data-slot="worker-details"]');
+    pill.click();
+    await ready('[data-slot="worker-thread"]');
+    const toggled = !find('[data-slot="worker-details"]');
+    const noMenu = !button("Worker actions");
+    const noTabs = !find('[role="tablist"][aria-label="Right panel"]');
+    showPlanDoc(id, { type: "plan", id: "fixture-plan" });
+    await wait();
+    button("Plan")!.click();
+    await ready('[data-pane="plan"]');
+    const plan = !!find('[data-pane="plan"]');
+    find('[role="tab"][id="right-sidebar-workers"]')!.click();
+    await ready('[data-slot="worker-thread"]');
+    (await ready('[data-slot="worker-header"] button')).click();
+    await ready('[role="tablist"][aria-label="Right panel"]');
+    const listClose = !!button("Close right panel");
+    button("Close right panel")!.click();
+    await wait();
+    const closed = sidebar.dataset.state === "collapsed";
+    // A worker first shown without truncation gains its disclosure after a width change.
+    useBoard.setState(({ board: current }) => ({ board: { ...current!, tasks: { ...current!.tasks,
+      t1: { ...current!.tasks.t1!, spec: "Inspect the desktop worker panel and make its header compact. Keep its close button and model details easy to reach when the sidebar gets narrow." },
+    } } }));
+    find('button[title="Open File summary"]')!.click();
+    await ready('[data-slot="worker-brief"] .aui-md');
+    sidebar.style.setProperty("--right-sidebar-width", "600px");
+    if (query.has("live-resize")) await new Promise(requestAnimationFrame);
+    await wait(300);
+    const shortWideBounds = bounds();
+    const shortWide = !!find('[data-slot="worker-brief"] button');
+    sidebar.style.setProperty("--right-sidebar-width", "280px");
+    if (query.has("live-resize")) await new Promise(requestAnimationFrame);
+    await wait(300);
+    const shortBody = find('[data-slot="worker-instructions"]')!;
+    const shortMetrics = { width: shortBody.clientWidth, height: shortBody.clientHeight, scroll: shortBody.scrollHeight };
+    const shortNarrow = !!find('[data-slot="worker-brief"] button');
+    const minimum = bounds();
+    result.textContent = JSON.stringify({ wide, narrow, expanded, minimum, reproduced, details, toggled, tooltip, noMenu, noTabs,
+      closeInHeader: closeRect.top >= headerRect.top && closeRect.bottom <= headerRect.bottom && closeRect.right <= headerRect.right,
+      listClose, closed, plan, shortWide, shortNarrow, shortWideBounds, shortMetrics });
+  })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
+}
