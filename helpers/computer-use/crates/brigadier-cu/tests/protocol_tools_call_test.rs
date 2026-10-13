@@ -87,8 +87,8 @@ fn get_config_and_check_permissions() {
         "params":{"name":"check_permissions","arguments":{}}
     }));
     let resp = d.recv();
-    assert!(!resp["result"]["isError"].as_bool().unwrap_or(false));
     if cfg!(target_os = "windows") {
+        assert!(!resp["result"]["isError"].as_bool().unwrap_or(false));
         let sc = &resp["result"]["structuredContent"];
         // Windows returns elevated, uia, post_message booleans.
         assert!(
@@ -104,8 +104,16 @@ fn get_config_and_check_permissions() {
             "elevated should be a boolean: {sc:?}"
         );
     } else {
-        // Returns structured content with accessibility and screen_recording booleans.
-        assert!(resp["result"]["structuredContent"]["accessibility"].is_boolean());
+        // A test build never asks macOS: each one that does is added to the
+        // privacy lists in System Settings.
+        assert_eq!(resp["result"]["isError"], true, "{resp:?}");
+        assert!(
+            resp["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("never uses"),
+            "{resp:?}"
+        );
     }
 
     // set_config — change max_image_dimension and verify get_config reflects it.
@@ -140,6 +148,10 @@ fn get_config_and_check_permissions() {
 
 #[test]
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "reads windows through accessibility; run with --ignored and BRIGADIER_CU_TEST_DRIVER_BIN set to a granted, signed helper"
+)]
 fn get_accessibility_tree() {
     //! get_accessibility_tree returns a lightweight process+window snapshot.
     let Some(mut d) = RawDriver::spawn() else {
@@ -183,6 +195,10 @@ fn get_accessibility_tree() {
 
 #[test]
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "reads window titles, which needs screen capture; run with --ignored and BRIGADIER_CU_TEST_DRIVER_BIN set to a granted, signed helper"
+)]
 fn list_windows_structured_content() {
     //! Verify list_windows returns structuredContent.windows array with expected fields.
     let Some(mut d) = RawDriver::spawn() else {
@@ -515,6 +531,7 @@ fn type_text_tool() {
 
 #[test]
 #[cfg(target_os = "macos")]
+#[ignore = "types into a running TextEdit; run with --ignored and BRIGADIER_CU_TEST_DRIVER_BIN set to a granted, signed helper"]
 fn type_text_chars_tool() {
     //! Verify type_text_chars with delay_ms is accepted without error (dry-run via TextEdit or
     //! a pid that accepts WM_CHAR). We just verify the tool responds with a non-error.

@@ -629,6 +629,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_an_unknown_action_by_name() {
+        let tool = PageTool::new(Arc::new(RecordingBackend::default()));
+
+        let result = tool
+            .invoke(serde_json::json!({
+                "pid": 42,
+                "window_id": 7,
+                "action": "definitely_not_a_real_action"
+            }))
+            .await;
+
+        assert_eq!(result.is_error, Some(true));
+        let crate::protocol::Content::Text { text, .. } = &result.content[0] else {
+            panic!("expected text content");
+        };
+        assert!(text.contains("Unknown action: definitely_not_a_real_action"));
+    }
+
+    #[tokio::test]
     async fn rejects_out_of_range_cdp_port_before_dispatch() {
         let backend = Arc::new(RecordingBackend::default());
         let tool = PageTool::new(backend.clone());

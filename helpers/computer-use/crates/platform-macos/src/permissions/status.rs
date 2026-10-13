@@ -25,6 +25,12 @@ pub const TCC_FREE_TOOLS: &[&str] = &[
     "set_agent_cursor_enabled",
     "set_agent_cursor_motion",
     "set_agent_cursor_style",
+    // Recording captures only through the screenshot and video paths, which
+    // a test process skips; a replay runs each step through this list again.
+    "start_recording",
+    "stop_recording",
+    "get_recording_state",
+    "replay_trajectory",
 ];
 
 /// True in a test process that must make no accessibility or screen-capture

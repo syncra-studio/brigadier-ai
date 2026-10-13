@@ -291,7 +291,9 @@ fn tools_call_unknown_tool() {
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn page_unknown_action_error() {
     //! Verify the cross-platform `page` tool is registered and rejects an
-    //! unknown action with a meaningful error.
+    //! unknown action with a meaningful error. On macOS a test process
+    //! refuses `page` before it runs, since it reads the accessibility tree;
+    //! cu-core's page tests cover the unknown action there.
     let Some(mut d) = RawDriver::spawn() else {
         return;
     };
@@ -314,8 +316,11 @@ fn page_unknown_action_error() {
         "expected isError=true for unknown action: {resp:?}"
     );
     let text = resp["result"]["content"][0]["text"].as_str().unwrap_or("");
-    assert!(
-        text.to_ascii_lowercase().contains("unknown action"),
-        "error text should mention 'Unknown action': {text}"
-    );
+    assert!(!text.contains("Unknown tool"), "page is registered: {text}");
+    if cfg!(target_os = "windows") {
+        assert!(
+            text.to_ascii_lowercase().contains("unknown action"),
+            "error text should mention 'Unknown action': {text}"
+        );
+    }
 }

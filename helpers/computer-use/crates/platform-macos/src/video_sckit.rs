@@ -40,6 +40,9 @@ pub struct SckitVideoBackendFactory;
 
 impl VideoBackendFactory for SckitVideoBackendFactory {
     fn start(&self, output_path: &Path) -> anyhow::Result<Box<dyn VideoBackend>> {
+        if crate::permissions::tcc_off_by_env() {
+            anyhow::bail!("a test process never records the screen");
+        }
         SckitVideoBackend::start(output_path).map(|b| Box::new(b) as Box<dyn VideoBackend>)
     }
 }
