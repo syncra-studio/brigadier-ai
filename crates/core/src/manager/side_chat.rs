@@ -127,7 +127,7 @@ impl SessionManager {
             if let Err(err) =
                 Box::pin(self.delete_conversation(side.id.clone(), false, false)).await
             {
-                tracing::warn!(side_chat = %side.id, error = %err, "could not delete a side chat");
+                crate::logging::private_trace!(side.tab_chat.is_some(), warn, "could not delete a side chat"; side_chat = %side.id, error = %err);
             }
         }
     }
@@ -247,11 +247,25 @@ impl SessionManager {
         }
     }
 
+    /// Live drivers retain this bit after their catalog entry has gone. Unknown ids are
+    /// treated as private too: a late failure must not reintroduce a deleted tab's id.
+    pub(super) fn tab_chat_logs(&self, id: &ConversationId) -> bool {
+        self.core
+            .conversation(id)
+            .map(|chat| chat.tab_chat.is_some())
+            .unwrap_or_else(|_| {
+                self.convs_lock()
+                    .get(id)
+                    .map(|live| live.private_logs)
+                    .unwrap_or(true)
+            })
+    }
+
     /// Stops a tab chat if it works and removes all of it: its messages, files and records.
     async fn wipe_tab_chat(&self, id: ConversationId) {
         self.tab_chats.pages_lock().remove(&id);
         if let Err(err) = Box::pin(self.delete_conversation(id.clone(), false, false)).await {
-            tracing::warn!(tab_chat = %id, error = %err, "could not delete a tab chat");
+            crate::logging::private_trace!(true, warn, "could not delete a tab chat"; tab_chat = %id, error = %err);
         }
     }
 

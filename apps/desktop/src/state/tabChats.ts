@@ -76,7 +76,7 @@ export function tabChatIds(sessions: Record<string, SessionTabs>): Set<string> {
 
 /** Deletes a tab chat for good: the daemon stops it if it works and removes all of it. */
 function wipe(id: string): void {
-  void request({ method: "delete", ids: [id] }).catch(console.error);
+  void request({ method: "delete", ids: [id] }).catch(() => console.error("Could not delete a tab chat"));
 }
 
 /** Tab chats that left the tabs (a tab closed, a page deleted, New chat) go at once. */
@@ -91,7 +91,8 @@ export function followTabChats(state: { sessions: Record<string, SessionTabs> },
  * closed while Brigadier or the app was down), and until it hears this none runs.
  */
 export async function keepTabChats(): Promise<void> {
-  await request({ method: "keepTabChats", chatIds: [...tabChatIds(useSessionTabs.getState().sessions)] });
+  await request({ method: "keepTabChats", chatIds: [...tabChatIds(useSessionTabs.getState().sessions)] })
+    .catch(() => { throw new Error("Could not keep tab chats"); });
 }
 
 /** What runs before each message a tab chat sends: a browser tab sends what its page shows. */
@@ -103,5 +104,5 @@ export function prepareBeforeSend(chatId: string, prepare: () => Promise<void>):
 /** Nothing for a chat with nothing to read first, so its send waits for nothing. */
 export function prepareTabChatSend(chatId: string): Promise<void> | undefined {
   // A page that can't be read still lets the message go: the chat says what it lacks.
-  return preparers.get(chatId)?.().catch(console.error);
+  return preparers.get(chatId)?.().catch(() => console.error("Could not prepare a tab chat"));
 }

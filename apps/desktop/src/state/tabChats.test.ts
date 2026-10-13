@@ -14,7 +14,7 @@ Object.defineProperty(globalThis, "window", { configurable: true, value: { local
 const { closeTab, newSessionTab, openBrowserTab, openFileTab, openPageTab, reopenTab, restoreSessionTabs, sessionTabs } = await import("./sessionTabs");
 // Its subscriptions are how a tab's chat goes with the tab.
 await import("./sessionTabResources");
-const { canChat, chatTarget, keepTabChats, newTabChat, setTabChatShare, setTabChatView, showTabChat, MAX_SHARE, MIN_SHARE } = await import("./tabChats");
+const { canChat, chatTarget, keepTabChats, prepareBeforeSend, prepareTabChatSend, newTabChat, setTabChatShare, setTabChatView, showTabChat, MAX_SHARE, MIN_SHARE } = await import("./tabChats");
 const { abandonedSideChats } = await import("./sideChats");
 
 type Sent = RequestOf<"delete"> | RequestOf<"keepTabChats">;
@@ -148,4 +148,40 @@ test("tab chats are never pruned as abandoned side chats; the daemon sorts them 
     { id: "tab", kind: "chat" as const, sideOf: "session", tabChat: { tabId: "page:1", target: { type: "browser" as const } } },
   ];
   assert.deepEqual(abandonedSideChats(conversations, new Set()), ["side"]);
+});
+
+test("tab chat errors leave no id, title or message in the app console", async () => {
+  const canaries = [crypto.randomUUID(), `canary-title-${crypto.randomUUID()}`, `canary-message-${crypto.randomUUID()}`];
+  const lines: unknown[][] = [];
+  const before = console.error;
+  const beforeWarn = console.warn;
+  console.warn = (...args: unknown[]) => { lines.push(args); };
+  console.error = (...args: unknown[]) => { lines.push(args); };
+  try {
+    const session = "log-canaries";
+    const page = openPageTab(session, "canary-page", canaries[1]!);
+    showTabChat(session, page);
+    const chat = chatOf(session, page)!;
+    canaries[0] = chat.id;
+    const failure = () => Promise.reject(new Error(canaries.join(": ")));
+    mockIPC(() => failure());
+    const unprepare = prepareBeforeSend(chat.id, failure);
+    try { await prepareTabChatSend(chat.id); } finally { unprepare(); }
+    const { saveDraft } = await import("./drafts");
+    saveDraft(chat.id, canaries[2]!, [{ id: "attachment", name: canaries[1]!, mime: "text/plain", bytes: 1, pasted: false, inline: null }], []);
+    await settle();
+    // The same caller used after a reconnect logs only the safe thrown error.
+    await keepTabChats().catch(console.error);
+    closeTab(session, page);
+    await settle();
+    mockIPC((_command, payload) => ({ method: (payload as { request: Sent }).request.method }));
+    // Reconnect retries the deletion through the daemon's keep list.
+    await keepTabChats();
+    assert.ok(lines.length >= 4, "prepare, attachment, keep and deletion failures were logged");
+    const output = lines.flat().map(String).join("\n");
+    for (const canary of canaries) assert.ok(!output.includes(canary), output);
+  } finally {
+    console.error = before;
+    console.warn = beforeWarn;
+  }
 });

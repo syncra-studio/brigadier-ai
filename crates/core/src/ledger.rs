@@ -423,7 +423,7 @@ impl CleanupLedger {
                 })
                 .await
             {
-                tracing::warn!(owner, error = %err, "could not record a cleanup request");
+                crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not record a cleanup request"; owner, error = %err);
             }
             self.state().disposing.insert(owner.to_owned());
         }
@@ -451,7 +451,7 @@ impl CleanupLedger {
                 })
                 .await
             {
-                tracing::warn!(owner, error = %err, "could not record a finished cleanup");
+                crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not record a finished cleanup"; owner, error = %err);
             }
             self.state().disposing.remove(owner);
         }
@@ -477,12 +477,12 @@ impl CleanupLedger {
                 })
                 .collect(),
             Err(err) => {
-                tracing::warn!(owner, error = %err, "could not read a tab chat's records");
+                crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not read a tab chat's records"; owner, error = %err);
                 return;
             }
         };
         if let Err(err) = self.core.store().delete_streams(vec![stream]).await {
-            tracing::warn!(owner, error = %err, "could not forget a tab chat's records");
+            crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not forget a tab chat's records"; owner, error = %err);
             return;
         }
         let mut state = self.state();
@@ -501,17 +501,22 @@ impl CleanupLedger {
         if self.test_providers.lock().unwrap().is_some() {
             return;
         }
-        let threads: Vec<String> = self
+        let (private, threads): (Vec<_>, Vec<_>) = self
             .state()
             .artifacts
-            .values()
-            .flatten()
-            .filter_map(|artifact| match artifact {
-                Artifact::CodexThread { thread_id, .. } => Some(thread_id.clone()),
-                _ => None,
+            .iter()
+            .flat_map(|(owner, artifacts)| {
+                artifacts.iter().filter_map(move |artifact| match artifact {
+                    Artifact::CodexThread { thread_id, .. } => {
+                        Some((owner.starts_with(TAB_CHAT_OWNER), thread_id.clone()))
+                    }
+                    _ => None,
+                })
             })
-            .collect();
-        if threads.is_empty() {
+            .partition(|(private, _)| *private);
+        let private: Vec<String> = private.into_iter().map(|(_, id)| id).collect();
+        let threads: Vec<String> = threads.into_iter().map(|(_, id)| id).collect();
+        if threads.is_empty() && private.is_empty() {
             return;
         }
         // A conversation resumed meanwhile has a CLI process again: its thread stays open.
@@ -523,8 +528,19 @@ impl CleanupLedger {
                     })
             })
         };
-        if let Err(err) = self.codex.archive_threads(threads, open).await {
+        if !threads.is_empty()
+            && let Err(err) = self.codex.archive_threads(threads, false, &open).await
+        {
             tracing::debug!(error = %err, "could not archive codex threads");
+        }
+        if !private.is_empty()
+            && self
+                .codex
+                .archive_threads(private, true, open)
+                .await
+                .is_err()
+        {
+            tracing::debug!(conversation = "tab chat", "could not archive codex threads");
         }
     }
 
@@ -542,7 +558,7 @@ impl CleanupLedger {
             ended += processes.len();
             let leftovers = self.remove(owner, processes).await;
             if !leftovers.is_clean() {
-                tracing::warn!(owner, failures = ?leftovers.failures, "processes survived the sweep");
+                crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "processes survived the sweep"; owner, failures = ?leftovers.failures);
             }
         }
         if ended > 0 {
@@ -566,7 +582,7 @@ impl CleanupLedger {
             }
             let leftovers = self.dispose(&owner).await;
             if !leftovers.is_clean() {
-                tracing::warn!(owner, failures = ?leftovers.failures, "cleanup still incomplete");
+                crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "cleanup still incomplete"; owner, failures = ?leftovers.failures);
             }
         }
     }
@@ -728,7 +744,12 @@ impl CleanupLedger {
                 Artifact::ProcessesIn { dir } => {
                     let platform = self.platform.clone();
                     let dir = PathBuf::from(dir);
-                    match tokio::task::spawn_blocking(move || end_in_dir(&*platform, &dir)).await {
+                    let private_logs = owner.starts_with(TAB_CHAT_OWNER);
+                    match tokio::task::spawn_blocking(move || {
+                        end_in_dir(&*platform, &dir, private_logs)
+                    })
+                    .await
+                    {
                         Ok(Ok(())) => removed.push(artifact),
                         Ok(Err(err)) => leftovers.failures.push(err),
                         Err(err) => leftovers.failures.push(err.to_string()),
@@ -767,7 +788,7 @@ impl CleanupLedger {
                     {
                         Ok(Ok(Adopted::Removed)) => removed.push(artifact),
                         Ok(Ok(Adopted::Kept(why))) => {
-                            tracing::info!(owner, why, "left an adopted entry in place");
+                            crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), info, "left an adopted entry in place"; owner, why);
                             leftovers.kept.push(why);
                             removed.push(artifact);
                         }
@@ -777,7 +798,7 @@ impl CleanupLedger {
                 }
                 // Run segments share one worktree: the last owner using it removes it.
                 Artifact::Worktree { path, .. } if self.state().shares_worktree(owner, path) => {
-                    tracing::info!(owner, path, "left a worktree another owner still uses");
+                    crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), info, "left a worktree another owner still uses"; owner, path);
                     removed.push(artifact);
                 }
                 Artifact::Worktree { repo, path } => {
@@ -854,7 +875,10 @@ impl CleanupLedger {
         }
         for (kind, home, artifacts) in cli_files {
             let provider = self.remover(kind, home.as_deref());
-            match provider.remove(artifacts.clone()).await {
+            match provider
+                .remove_with_privacy(artifacts.clone(), owner.starts_with(TAB_CHAT_OWNER))
+                .await
+            {
                 Ok(()) => removed.extend(artifacts),
                 Err(err) => leftovers
                     .failures
@@ -880,13 +904,13 @@ impl CleanupLedger {
                     }
                 }
                 Err(err) => {
-                    tracing::warn!(owner, error = %err, "could not record removed artifacts");
+                    crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not record removed artifacts"; owner, error = %err);
                     leftovers.failures.push(err.to_string());
                 }
             }
         }
         if !leftovers.is_clean() {
-            tracing::warn!(owner, failures = ?leftovers.failures, "some artifacts were not removed");
+            crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "some artifacts were not removed"; owner, failures = ?leftovers.failures);
         }
         leftovers
     }
@@ -998,7 +1022,11 @@ fn is_process(artifact: &Artifact) -> bool {
 }
 
 /// Kills every process working inside `dir`, with its tree, until none is left.
-fn end_in_dir(platform: &dyn Platform, dir: &Path) -> std::result::Result<(), String> {
+fn end_in_dir(
+    platform: &dyn Platform,
+    dir: &Path,
+    private_logs: bool,
+) -> std::result::Result<(), String> {
     if !dir.exists() {
         return Ok(());
     }
@@ -1015,7 +1043,7 @@ fn end_in_dir(platform: &dyn Platform, dir: &Path) -> std::result::Result<(), St
         }
         for pid in found {
             if let Err(err) = processes.kill_tree(pid) {
-                tracing::debug!(pid, error = %err, "could not kill a process in a Brigadier folder");
+                crate::logging::private_trace!(private_logs, debug, "could not kill a process in a Brigadier folder"; pid, error = %err);
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1162,7 +1190,7 @@ impl CleanupLedger {
             }
         }
         for place in std::iter::once(dir).chain(folders.iter().map(PathBuf::as_path)) {
-            if let Err(err) = end_in_dir(&*self.platform, place) {
+            if let Err(err) = end_in_dir(&*self.platform, place, false) {
                 tracing::debug!(error = %err, "could not end a test's processes");
             }
         }
@@ -1190,6 +1218,10 @@ struct OwnerLedger {
 }
 
 impl brigadier_providers::Ledger for OwnerLedger {
+    fn private_logs(&self) -> bool {
+        self.owner.starts_with(TAB_CHAT_OWNER)
+    }
+
     fn record(
         &self,
         artifact: Artifact,

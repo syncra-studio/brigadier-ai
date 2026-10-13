@@ -69,6 +69,7 @@ pub enum Output {
 
 #[derive(Default)]
 pub struct Parser {
+    private_logs: bool,
     /// A session reported its own start; `thread/started` is then not a start.
     started: bool,
     turn_id: Option<String>,
@@ -88,6 +89,11 @@ pub struct Parser {
 }
 
 impl Parser {
+    pub fn with_private_logs(mut self, private_logs: bool) -> Self {
+        self.private_logs = private_logs;
+        self
+    }
+
     pub fn live() -> Self {
         Self {
             started: true,
@@ -151,7 +157,8 @@ impl Parser {
     fn notification(&mut self, method: &str, params: Value, out: &mut Vec<Output>) {
         match method {
             "thread/started" => {
-                let Some(started) = decode::<p::ThreadStartedNotification>(method, params, out)
+                let Some(started) =
+                    decode::<p::ThreadStartedNotification>(method, params, out, self.private_logs)
                 else {
                     return;
                 };
@@ -167,7 +174,8 @@ impl Parser {
                 }
             }
             "turn/started" => {
-                let Some(started) = decode::<p::TurnStartedNotification>(method, params, out)
+                let Some(started) =
+                    decode::<p::TurnStartedNotification>(method, params, out, self.private_logs)
                 else {
                     return;
                 };
@@ -178,7 +186,8 @@ impl Parser {
                 }));
             }
             "turn/completed" => {
-                let Some(completed) = decode::<p::TurnCompletedNotification>(method, params, out)
+                let Some(completed) =
+                    decode::<p::TurnCompletedNotification>(method, params, out, self.private_logs)
                 else {
                     return;
                 };
@@ -205,19 +214,26 @@ impl Parser {
                 }));
             }
             "item/started" => {
-                if let Some(started) = decode::<p::ItemStartedNotification>(method, params, out) {
+                if let Some(started) =
+                    decode::<p::ItemStartedNotification>(method, params, out, self.private_logs)
+                {
                     self.item(started.item, false, out);
                 }
             }
             "item/completed" => {
-                if let Some(completed) = decode::<p::ItemCompletedNotification>(method, params, out)
+                if let Some(completed) =
+                    decode::<p::ItemCompletedNotification>(method, params, out, self.private_logs)
                 {
                     self.item(completed.item, true, out);
                 }
             }
             "item/agentMessage/delta" => {
-                if let Some(delta) = decode::<p::AgentMessageDeltaNotification>(method, params, out)
-                {
+                if let Some(delta) = decode::<p::AgentMessageDeltaNotification>(
+                    method,
+                    params,
+                    out,
+                    self.private_logs,
+                ) {
                     out.push(Output::Event(ProviderEvent::MessageDelta {
                         item_id: delta.item_id,
                         text: delta.delta,
@@ -225,9 +241,12 @@ impl Parser {
                 }
             }
             "item/reasoning/summaryTextDelta" => {
-                if let Some(delta) =
-                    decode::<p::ReasoningSummaryTextDeltaNotification>(method, params, out)
-                {
+                if let Some(delta) = decode::<p::ReasoningSummaryTextDeltaNotification>(
+                    method,
+                    params,
+                    out,
+                    self.private_logs,
+                ) {
                     out.push(Output::Event(ProviderEvent::ReasoningDelta {
                         item_id: delta.item_id,
                         text: delta.delta,
@@ -235,9 +254,12 @@ impl Parser {
                 }
             }
             "item/commandExecution/outputDelta" => {
-                if let Some(delta) =
-                    decode::<p::CommandExecutionOutputDeltaNotification>(method, params, out)
-                {
+                if let Some(delta) = decode::<p::CommandExecutionOutputDeltaNotification>(
+                    method,
+                    params,
+                    out,
+                    self.private_logs,
+                ) {
                     out.push(Output::Event(ProviderEvent::CommandOutputDelta {
                         item_id: delta.item_id,
                         text: delta.delta,
@@ -245,9 +267,12 @@ impl Parser {
                 }
             }
             "thread/tokenUsage/updated" => {
-                let Some(update) =
-                    decode::<p::ThreadTokenUsageUpdatedNotification>(method, params, out)
-                else {
+                let Some(update) = decode::<p::ThreadTokenUsageUpdatedNotification>(
+                    method,
+                    params,
+                    out,
+                    self.private_logs,
+                ) else {
                     return;
                 };
                 let usage = update.token_usage;
@@ -268,9 +293,12 @@ impl Parser {
                 }));
             }
             "account/rateLimits/updated" => {
-                if let Some(update) =
-                    decode::<p::AccountRateLimitsUpdatedNotification>(method, params, out)
-                {
+                if let Some(update) = decode::<p::AccountRateLimitsUpdatedNotification>(
+                    method,
+                    params,
+                    out,
+                    self.private_logs,
+                ) {
                     let quota = quota_event(&update.rate_limits);
                     match &mut self.quota {
                         Some(known) => known.merge(&quota),
@@ -280,7 +308,9 @@ impl Parser {
                 }
             }
             "error" => {
-                if let Some(error) = decode::<p::ErrorNotification>(method, params, out) {
+                if let Some(error) =
+                    decode::<p::ErrorNotification>(method, params, out, self.private_logs)
+                {
                     self.turn_error |= !error.will_retry;
                     out.push(Output::Event(ProviderEvent::Error {
                         error: self.classify(&error.error, error.will_retry),
@@ -566,9 +596,12 @@ impl Parser {
         }
         let (request, kind) = match method {
             "item/commandExecution/requestApproval" => {
-                let Some(ask) =
-                    decode::<p::CommandExecutionRequestApprovalParams>(method, params, out)
-                else {
+                let Some(ask) = decode::<p::CommandExecutionRequestApprovalParams>(
+                    method,
+                    params,
+                    out,
+                    self.private_logs,
+                ) else {
                     return self.unsupported(rpc_id, method, out);
                 };
                 // An approved command runs outside the sandbox (see the adapter's docs).
@@ -606,8 +639,12 @@ impl Parser {
                 )
             }
             "item/fileChange/requestApproval" => {
-                let Some(ask) = decode::<p::FileChangeRequestApprovalParams>(method, params, out)
-                else {
+                let Some(ask) = decode::<p::FileChangeRequestApprovalParams>(
+                    method,
+                    params,
+                    out,
+                    self.private_logs,
+                ) else {
                     return self.unsupported(rpc_id, method, out);
                 };
                 let mut paths = self
@@ -637,8 +674,12 @@ impl Parser {
             }
             "item/permissions/requestApproval" => {
                 let requested = params.get("permissions").cloned().unwrap_or(Value::Null);
-                let Some(ask) = decode::<p::PermissionsRequestApprovalParams>(method, params, out)
-                else {
+                let Some(ask) = decode::<p::PermissionsRequestApprovalParams>(
+                    method,
+                    params,
+                    out,
+                    self.private_logs,
+                ) else {
                     return self.unsupported(rpc_id, method, out);
                 };
                 (
@@ -1097,11 +1138,16 @@ fn requested_permissions(asked: &p::AdditionalPermissionProfile) -> Vec<String> 
     lines
 }
 
-fn decode<T: DeserializeOwned>(method: &str, params: Value, out: &mut Vec<Output>) -> Option<T> {
+fn decode<T: DeserializeOwned>(
+    method: &str,
+    params: Value,
+    out: &mut Vec<Output>,
+    private_logs: bool,
+) -> Option<T> {
     match serde_json::from_value(params) {
         Ok(value) => Some(value),
         Err(err) => {
-            tracing::warn!(method, error = %err, "Could not decode a Codex message");
+            crate::logging::private_trace!(private_logs, warn, "Could not decode a Codex message"; method, error = %err);
             out.push(unreadable_message());
             None
         }

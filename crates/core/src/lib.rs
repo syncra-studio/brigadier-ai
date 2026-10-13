@@ -9,6 +9,7 @@ mod board;
 pub mod digest;
 pub mod knowledge;
 pub mod ledger;
+mod logging;
 mod machine;
 pub mod manager;
 pub mod model;

@@ -603,7 +603,13 @@ impl SessionManager {
         let mut convs = self.convs_lock();
         Ok(convs
             .entry(id.clone())
-            .or_insert_with(|| Arc::new(ConvLive::new(conversation.id.clone(), conversation.kind)))
+            .or_insert_with(|| {
+                Arc::new(ConvLive::new(
+                    conversation.id.clone(),
+                    conversation.kind,
+                    conversation.tab_chat.is_some(),
+                ))
+            })
             .clone())
     }
 

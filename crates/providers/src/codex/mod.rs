@@ -182,9 +182,10 @@ impl Codex {
     pub async fn archive_threads(
         &self,
         thread_ids: Vec<String>,
+        private_logs: bool,
         open: impl Fn(&str) -> bool + Send + Sync,
     ) -> Result<()> {
-        self.control(async |rpc: &Rpc| {
+        self.control_with_privacy(private_logs, async |rpc: &Rpc| {
             for thread_id in thread_ids.iter().filter(|id| !open(id)) {
                 archive_thread(rpc, thread_id).await?;
             }
@@ -252,6 +253,7 @@ impl Codex {
         session: Option<&SessionSpec>,
         recorder: Option<Arc<Recorder>>,
         ledger: Option<Arc<dyn Ledger>>,
+        private_logs: bool,
     ) -> Result<(Arc<Rpc>, mpsc::Receiver<String>)> {
         let mut spec = self.env.spec(self.binary()?);
         spec.args = app_server_args(session)
@@ -274,6 +276,7 @@ impl Codex {
             self.platform.clone(),
             &spec,
             process::Options {
+                private_logs,
                 recorder,
                 redactor,
                 ledger,
@@ -285,8 +288,18 @@ impl Codex {
 
     /// Runs `work` against a throwaway app-server, then shuts it down.
     async fn control<T>(&self, work: impl AsyncFnOnce(&Rpc) -> Result<T>) -> Result<T> {
+        self.control_with_privacy(false, work).await
+    }
+
+    async fn control_with_privacy<T>(
+        &self,
+        private_logs: bool,
+        work: impl AsyncFnOnce(&Rpc) -> Result<T>,
+    ) -> Result<T> {
         let cwd = self.platform.paths().data_dir.clone();
-        let (rpc, stdout) = self.app_server(&cwd, None, None, None).await?;
+        let (rpc, stdout) = self
+            .app_server(&cwd, None, None, None, private_logs)
+            .await?;
         let reader = tokio::spawn(control_reader(rpc.clone(), stdout));
         let result = async {
             rpc.initialize(false).await?;
@@ -410,7 +423,7 @@ fn terminal_command(
 
 /// Serves a control app-server's output: only responses matter.
 async fn control_reader(rpc: Arc<Rpc>, mut stdout: mpsc::Receiver<String>) {
-    let mut parser = Parser::live();
+    let mut parser = Parser::live().with_private_logs(rpc.process.private_logs());
     while let Some(line) = stdout.recv().await {
         for output in parser.feed(&line) {
             match output {
@@ -581,7 +594,13 @@ impl Provider for Codex {
                 None => None,
             };
             let (rpc, stdout) = self
-                .app_server(&cwd, Some(&spec), recorder, Some(ledger.clone()))
+                .app_server(
+                    &cwd,
+                    Some(&spec),
+                    recorder,
+                    Some(ledger.clone()),
+                    ledger.private_logs(),
+                )
                 .await?;
             ledger
                 .record(Artifact::Process {
@@ -685,6 +704,14 @@ impl Provider for Codex {
     }
 
     fn remove(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, Result<()>> {
+        self.remove_with_privacy(artifacts, false)
+    }
+
+    fn remove_with_privacy(
+        &self,
+        artifacts: Vec<Artifact>,
+        private_logs: bool,
+    ) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             let mut threads = Vec::new();
             let mut trusts = Vec::new();
@@ -710,7 +737,7 @@ impl Provider for Codex {
             if threads.is_empty() && trusts.is_empty() {
                 return Ok(());
             }
-            self.control(async |rpc: &Rpc| {
+            self.control_with_privacy(private_logs, async |rpc: &Rpc| {
                 for path in trusts {
                     remove_project_trust(rpc, &path).await?;
                 }
@@ -1664,7 +1691,7 @@ impl Rpc {
             }
         };
         serde_json::from_value(result).map_err(|err| {
-            tracing::warn!(method, error = %err, "Could not decode a Codex response");
+            crate::logging::private_trace!(self.process.private_logs(), warn, "Could not decode a Codex response"; method, error = %err);
             Error::Protocol("Brigadier could not read Codex's reply.".into())
         })
     }
@@ -1783,7 +1810,7 @@ impl CodexSession {
                 },
             )
             .await?;
-        tracing::debug!(turn = %started.turn.id, "codex turn started");
+        crate::logging::private_trace!(self.rpc.process.private_logs(), debug, "codex turn started"; turn = %started.turn.id);
         Ok(())
     }
 
@@ -1925,7 +1952,7 @@ impl ProviderSession for CodexSession {
             {
                 let why = TurnInput::text(format!("[Declined] {message}"));
                 if let Err(err) = self.steer_turn(turn_id, &why).await {
-                    tracing::debug!(thread = %self.thread_id, error = %err, "could not pass a decline's reason");
+                    crate::logging::private_trace!(self.rpc.process.private_logs(), debug, "could not pass a decline's reason"; thread = %self.thread_id, error = %err);
                 }
             }
             Ok(())
@@ -1940,10 +1967,10 @@ impl ProviderSession for CodexSession {
                 {
                     Ok(Ok(())) => {}
                     Ok(Err(err)) => {
-                        tracing::debug!(thread = %self.thread_id, error = %err, "could not archive a codex thread");
+                        crate::logging::private_trace!(self.rpc.process.private_logs(), debug, "could not archive a codex thread"; thread = %self.thread_id, error = %err);
                     }
                     Err(_) => {
-                        tracing::debug!(thread = %self.thread_id, "archiving a codex thread timed out");
+                        crate::logging::private_trace!(self.rpc.process.private_logs(), debug, "archiving a codex thread timed out"; thread = %self.thread_id);
                     }
                 }
             }
@@ -1965,7 +1992,7 @@ async fn read_loop(
     trusted: HashSet<String>,
     prompting: HashSet<String>,
 ) {
-    let mut parser = Parser::live();
+    let mut parser = Parser::live().with_private_logs(rpc.process.private_logs());
     while let Some(line) = stdout.recv().await {
         if shared.compact_asked.swap(false, Ordering::AcqRel) {
             parser.compact_requested();

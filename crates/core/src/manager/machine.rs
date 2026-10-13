@@ -111,7 +111,7 @@ impl SessionManager {
             ),
             Note::Resumed => (MachineStepKind::Resumed, MachineStepReason::Heat, "resumed"),
         };
-        tracing::info!(owner = %row.owner, command = %row.command, "{verb}");
+        crate::logging::private_trace!(row.owner.starts_with(crate::ledger::TAB_CHAT_OWNER), info, "{verb}"; owner = %row.owner, command = %row.command);
         let Some((kind_of, id)) = row.owner.split_once(':') else {
             return;
         };

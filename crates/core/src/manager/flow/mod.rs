@@ -431,6 +431,7 @@ pub(crate) struct FakeBehavior {
     pub refuse_steers: bool,
     pub cleanup: bool,
     pub fail_cleanup: std::sync::atomic::AtomicBool,
+    pub cleanup_error: Mutex<Option<String>>,
     pub removals: Mutex<Vec<Removal>>,
     /// The next CLI start signals the first and waits for the second before it records
     /// anything.
@@ -664,7 +665,12 @@ impl Provider for FakeCli {
                 .load(std::sync::atomic::Ordering::SeqCst)
             {
                 return Err(brigadier_providers::Error::Invalid(
-                    "cleanup refused".into(),
+                    self.behavior
+                        .cleanup_error
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .unwrap_or_else(|| "cleanup refused".into()),
                 ));
             }
             for artifact in artifacts {

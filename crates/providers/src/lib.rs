@@ -21,6 +21,7 @@ mod events;
 pub mod fixtures;
 pub mod history;
 pub mod leftovers;
+mod logging;
 mod looked;
 pub mod model;
 pub mod policy;
@@ -73,6 +74,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Records what a session creates, durably, before the session relies on it.
 pub trait Ledger: Send + Sync {
+    /// This session belongs to a tab: no dynamic diagnostics may reach machine logs.
+    fn private_logs(&self) -> bool {
+        false
+    }
+
     fn record(&self, artifact: Artifact) -> BoxFuture<'_, Result<()>>;
 
     /// Whether any session's ledger still holds `artifact`, i.e. Brigadier created it and it
@@ -102,6 +108,15 @@ pub trait Provider: Send + Sync {
     /// Removes the CLI-side artifacts of a finished session (transcripts, thread records).
     /// Processes are the caller's: see [`cleanup::end_process`]. Only what is listed is touched.
     fn remove(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, Result<()>>;
+
+    /// A tab's cleanup must also suppress identifying diagnostics from control processes.
+    fn remove_with_privacy(
+        &self,
+        artifacts: Vec<Artifact>,
+        _private_logs: bool,
+    ) -> BoxFuture<'_, Result<()>> {
+        self.remove(artifacts)
+    }
 
     /// A fresh parser over the CLI's raw output, for replaying recordings.
     fn replayer(&self) -> Box<dyn Replayer>;

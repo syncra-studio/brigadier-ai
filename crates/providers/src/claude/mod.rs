@@ -1071,6 +1071,7 @@ impl Provider for Claude {
                 self.platform.clone(),
                 &process_spec,
                 process::Options {
+                    private_logs: ledger.private_logs(),
                     recorder,
                     redactor: spec.redactor.clone(),
                     ledger: Some(ledger.clone()),

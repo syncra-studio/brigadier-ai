@@ -665,3 +665,186 @@ async fn the_side_chat_shortcut_never_opens_a_tab_chat() {
     );
     flow.stop().await;
 }
+
+/// Captures the same tracing events the daemon writes, including tasks spawned by the
+/// manager and ledger. The unique canaries distinguish this flow from concurrent tests.
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_tab_chat_leaves_no_canaries_in_logs_even_when_deletion_is_retried() {
+    use std::sync::atomic::Ordering;
+
+    let captured = CapturedLogs::default();
+    let writer = captured.clone();
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish(),
+    )
+    .unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let title = format!("canary-title-{}", uuid::Uuid::new_v4());
+    let text = format!("canary-message-{}", uuid::Uuid::new_v4());
+    let log = Log::default();
+    let mut flow = Flow::start(
+        "20261012-2245-review-fixes-w10-log-canaries",
+        cleaning(),
+        quiet(&log),
+    )
+    .await;
+    app_ready(&flow).await;
+    let chat = flow
+        .manager
+        .open_tab_chat(
+            &flow.conversation,
+            "canary-tab".into(),
+            TabTarget::Browser,
+            ConversationId(id.clone()),
+        )
+        .await
+        .unwrap()
+        .id;
+    flow.core
+        .rename_conversation(chat.clone(), title.clone())
+        .await
+        .unwrap();
+    say(&flow, &chat, &text).await;
+    // Real subprocess stderr can echo a whole prompt or a path. Exercise the shared
+    // process used by both adapters, with the tab's actual ledger handle.
+    #[cfg(unix)]
+    {
+        let mut spec = brigadier_sandbox::SpawnSpec::new("/bin/sh")
+            .arg("-c")
+            .arg("printf '%s\\n' \"$@\" >&2")
+            .arg("tab-chat-stderr")
+            .arg(id.as_str())
+            .arg(title.as_str())
+            .arg(text.as_str());
+        spec.cwd = Some(flow.dir.join("data/tabchat").join(&id));
+        let child = brigadier_providers::process::spawn(
+            flow.manager.runtime.platform().clone(),
+            &spec,
+            brigadier_providers::process::Options {
+                ledger: Some(flow.manager.runtime.ledger().handle(format!(
+                    "{}{}",
+                    crate::ledger::TAB_CHAT_OWNER,
+                    id
+                ))),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        child.process.exited().await;
+        super::eventually("stderr to be captured", || {
+            child.process.stderr_tail().is_some_and(|stderr| {
+                [&id, &title, &text]
+                    .into_iter()
+                    .all(|canary| stderr.contains(canary.as_str()))
+            })
+        })
+        .await;
+    }
+    flow.restart().await;
+    flow.manager
+        .keep_tab_chats(vec![chat.clone()])
+        .await
+        .unwrap();
+    assert_eq!(flow.core.conversation(&chat).unwrap().title, title);
+    say(&flow, &chat, &text).await;
+    let ids = natives(&log);
+
+    // The heat/build guard observes every CLI owner, including tab chats.
+    flow.manager
+        .machine_row(crate::machine::Row {
+            owner: format!("{}{id}", crate::ledger::TAB_CHAT_OWNER),
+            command: format!("{title}: {text}"),
+            note: crate::machine::builds::Note::Paused,
+        })
+        .await;
+
+    let mut parser = brigadier_providers::codex::parse::Parser::live().with_private_logs(true);
+    let malformed = serde_json::json!({
+        "method": "thread/started",
+        "params": { "thread": format!("{id}:{title}:{text}") },
+    });
+    assert!(!parser.feed(&malformed.to_string()).is_empty());
+
+    // A provider's formatted error may echo identifiers, titles and content together.
+    *flow.behavior.cleanup_error.lock().unwrap() = Some(format!("failed {id}: {title}: {text}"));
+    flow.behavior.fail_cleanup.store(true, Ordering::SeqCst);
+    flow.manager.delete(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    assert!(
+        flow.manager
+            .runtime
+            .ledger()
+            .owners()
+            .iter()
+            .any(|(owner, _, _)| owner.contains(&id))
+    );
+    assert!(cli_files(&flow, &ids[0])[0].exists());
+    assert!(!flow.behavior.removals.lock().unwrap().is_empty());
+    let action = crate::manager::disk::Action::Dispose {
+        owners: vec![(format!("{}{id}", crate::ledger::TAB_CHAT_OWNER), 0)],
+    };
+    assert!(action.private_logs());
+    let cleaned = flow
+        .manager
+        .clean_storage(action, crate::manager::disk::ScanContext::default())
+        .await
+        .unwrap();
+    assert!(
+        !cleaned.failures.is_empty(),
+        "the storage retry must fail too"
+    );
+    flow.behavior.fail_cleanup.store(false, Ordering::SeqCst);
+    flow.restart().await;
+    left_nothing_of(&flow, &chat, &ids).await;
+    // A normal conversation still logs its identifying fields.
+    let normal = flow.conversation.0.clone();
+    flow.manager
+        .delete(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.manager.cleanup_finished(&flow.conversation).await;
+    flow.stop().await;
+
+    let output = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(output.contains("Could not decode a Codex message"));
+    #[cfg(unix)]
+    assert!(output.contains("cli stderr"));
+    assert!(
+        output.contains("some artifacts were not removed"),
+        "failed cleanup wasn't captured: {output}"
+    );
+    assert!(
+        output.contains("conversation deleted"),
+        "successful deletion wasn't captured: {output}"
+    );
+    assert!(
+        output.contains(&normal),
+        "normal conversation logs lost their id: {output}"
+    );
+    let leaked: Vec<_> = [&id, &title, &text]
+        .into_iter()
+        .filter(|canary| output.contains(canary.as_str()))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "tab chat canaries leaked: {leaked:?}\n{output}"
+    );
+}

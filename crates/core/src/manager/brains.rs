@@ -1465,10 +1465,10 @@ impl SessionManager {
             blocking(move || brain.forget_transcript(&session).map_err(brain_error)).await;
         match forgotten {
             Ok(()) => {
-                tracing::info!(conversation = %id, "the Brain let go of a deleted conversation's transcript")
+                crate::logging::private_trace!(self.tab_chat_logs(id), info, "the Brain let go of a deleted conversation's transcript"; conversation = %id)
             }
             Err(err) => {
-                tracing::warn!(conversation = %id, error = %err, "could not clear a deleted conversation from the Brain")
+                crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not clear a deleted conversation from the Brain"; conversation = %id, error = %err)
             }
         }
     }

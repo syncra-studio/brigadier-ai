@@ -76,7 +76,10 @@ impl SessionManager {
         turn.duration_ms = duration_ms;
         turn.context = last.map(context_of).or(context);
         if let Err(err) = store.add_turn(turn).await {
-            tracing::warn!(error = %err, "could not record a turn's token use");
+            crate::logging::private_trace!(
+                matches!(&owner, TokenOwner::Conversation(id) | TokenOwner::Handoff(id) | TokenOwner::Task(id, _) if self.tab_chat_logs(id)),
+                warn, "could not record a turn's token use"; error = %err
+            );
         }
     }
 

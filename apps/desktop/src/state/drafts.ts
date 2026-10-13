@@ -1,4 +1,6 @@
 import { request } from "@/ipc/client";
+import { tabChatIds } from "@/state/tabChats";
+import { useSessionTabs } from "@/state/sessionTabs";
 import type { AttachmentRef, Mention } from "@/ipc/generated";
 
 /**
@@ -42,9 +44,11 @@ function writeAll(drafts: Record<string, Draft>): void {
 }
 
 function pin(scope: string, attachments: AttachmentRef[]): void {
-  request({ method: "pinDraftAttachments", scope, attachments }).catch((error: unknown) =>
-    console.warn("could not keep the draft's attachments", error),
-  );
+  const privateLogs = tabChatIds(useSessionTabs.getState().sessions).has(scope);
+  request({ method: "pinDraftAttachments", scope, attachments }).catch((error: unknown) => {
+    if (privateLogs) console.warn("could not keep a tab chat's attachments");
+    else console.warn("could not keep the draft's attachments", error);
+  });
 }
 
 const sameAttachments = (a: readonly AttachmentRef[], b: readonly AttachmentRef[]) =>

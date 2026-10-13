@@ -278,6 +278,7 @@ pub(super) type ReviewPause =
 
 /// A conversation's live state.
 pub(crate) struct ConvLive {
+    pub(super) private_logs: bool,
     pub id: ConversationId,
     pub kind: ConversationKind,
     state: tokio::sync::Mutex<ConvState>,
@@ -332,8 +333,9 @@ impl ConvLive {
         self.state.lock().await.cli.clone()
     }
 
-    pub fn new(id: ConversationId, kind: ConversationKind) -> Self {
+    pub fn new(id: ConversationId, kind: ConversationKind, private_logs: bool) -> Self {
         Self {
+            private_logs,
             id,
             kind,
             state: tokio::sync::Mutex::new(ConvState {
@@ -517,7 +519,7 @@ impl ConvLive {
         if let Some(cli) = cli
             && let Err(err) = cli.session.interrupt().await
         {
-            tracing::warn!(conversation = %self.id, error = %err, "could not stop the turn");
+            crate::logging::private_trace!(self.private_logs, warn, "could not stop the turn"; conversation = %self.id, error = %err);
         }
     }
 
@@ -1110,12 +1112,12 @@ impl SessionManager {
                 true
             }
             Ok(Some(Err(err))) => {
-                tracing::warn!(conversation = %conv.id, error = %err, "could not send a queued message");
+                crate::logging::private_trace!(conv.private_logs, warn, "could not send a queued message"; conversation = %conv.id, error = %err);
                 false
             }
             Ok(None) => false,
             Err(err) => {
-                tracing::warn!(conversation = %conv.id, error = %err, "could not read the queue");
+                crate::logging::private_trace!(conv.private_logs, warn, "could not read the queue"; conversation = %conv.id, error = %err);
                 false
             }
         }
@@ -1144,7 +1146,7 @@ impl SessionManager {
             .mark_steered(&conv.id, request, &into, streaming)
             .await
         {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not mark a steered request");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not mark a steered request"; conversation = %conv.id, error = %err);
         }
     }
 
@@ -1451,7 +1453,7 @@ impl SessionManager {
                 .await
                 .is_ok_and(|board| super::requests::ended_run_request(&board, request))
         {
-            tracing::info!(conversation = %id, request, label = %envelope.label, "dropped a message for an overnight run that has ended");
+            crate::logging::private_trace!(self.tab_chat_logs(id), info, "dropped a message for an overnight run that has ended"; conversation = %id, request, label = %envelope.label);
             return None;
         }
         let mut state = conv.state.lock().await;
@@ -1619,12 +1621,12 @@ impl SessionManager {
                     {
                         Ok(message) => users.push(message),
                         Err(err) => {
-                            tracing::warn!(conversation = %conv.id, error = %err, "could not send a queued message");
+                            crate::logging::private_trace!(conv.private_logs, warn, "could not send a queued message"; conversation = %conv.id, error = %err);
                         }
                     },
                     Ok(None) => {}
                     Err(err) => {
-                        tracing::warn!(conversation = %conv.id, error = %err, "could not read the queue");
+                        crate::logging::private_trace!(conv.private_logs, warn, "could not read the queue"; conversation = %conv.id, error = %err);
                     }
                 }
             }
@@ -1673,7 +1675,7 @@ impl SessionManager {
             // The user's message brings back the session's worktree a merge removed
             // (THREAD-PLAN.md Q9), from the base's tip now.
             if let Err(err) = self.effective_workspace(&conv.id).await {
-                tracing::warn!(conversation = %conv.id, error = %err, "could not make the session's worktree");
+                crate::logging::private_trace!(conv.private_logs, warn, "could not make the session's worktree"; conversation = %conv.id, error = %err);
             }
             // Its `[workspace]` note reaches this turn.
             user_notes.append(&mut conv.state.lock().await.notes);
@@ -1800,7 +1802,7 @@ impl SessionManager {
         }
         self.told_notes(&conv, instruction_notes).await;
         if let Some((_, record)) = reborn {
-            tracing::info!(conversation = %conv.id, generation = record.generation, tokens = record.briefing_tokens, trigger = ?record.trigger, "orchestrator reborn");
+            crate::logging::private_trace!(conv.private_logs, info, "orchestrator reborn"; conversation = %conv.id, generation = record.generation, tokens = record.briefing_tokens, trigger = ?record.trigger);
             self.log_orchestrator(
                 &conv.id,
                 OrchestratorEntry::Rebirth {
@@ -1842,7 +1844,7 @@ impl SessionManager {
         };
         // Its follow-ups wait in the queue; the carried envelopes ask again.
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not settle follow-ups");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);
         }
         // Said once: by the failed request when there is one, else as a notice. The run names
         // the request, so the app shows no second line for it.
@@ -2050,7 +2052,7 @@ impl SessionManager {
             && conv.kind == ConversationKind::Session
             && prompts::role_outdated(&self.told_from_log(&conv.id).await)
         {
-            tracing::info!(conversation = %conv.id, "the thread's CLI started on older instructions; starting over from the transcript");
+            crate::logging::private_trace!(conv.private_logs, info, "the thread's CLI started on older instructions; starting over from the transcript"; conversation = %conv.id);
             resume = None;
         }
         let reseed_needed = !fresh && resume.is_none() && self.has_history(&conv.id).await;
@@ -2119,7 +2121,7 @@ impl SessionManager {
         {
             Ok(started) => started,
             Err(err) if resume.is_some() => {
-                tracing::info!(conversation = %conv.id, error = %err, "resume failed; starting over from the transcript");
+                crate::logging::private_trace!(conv.private_logs, info, "resume failed; starting over from the transcript"; conversation = %conv.id, error = %err);
                 spec.origin = Origin::New;
                 resumed = false;
                 conv.state.lock().await.reseed = true;
@@ -2207,11 +2209,8 @@ impl SessionManager {
             .collect();
         let leftovers = self.runtime.ledger().release(owner, made).await;
         if !leftovers.is_clean() {
-            tracing::warn!(
-                owner,
-                ?leftovers,
-                "some leftovers of a cut-off start will be retried at the next launch"
-            );
+            crate::logging::private_trace!(owner.starts_with(crate::ledger::TAB_CHAT_OWNER), warn, "some leftovers of a cut-off start will be retried at the next launch"; owner,
+                ?leftovers);
         }
     }
 
@@ -2745,7 +2744,7 @@ impl SessionManager {
             return;
         }
         if let Err(err) = self.core.record_conversation(id, events).await {
-            tracing::debug!(conversation = %id, error = %err, "could not store streamed text");
+            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store streamed text"; conversation = %id, error = %err);
         }
     }
 
@@ -2850,7 +2849,7 @@ impl SessionManager {
             )
             .await
         {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not store a reply");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
         }
     }
 
@@ -2943,7 +2942,7 @@ impl SessionManager {
                     )
                     .await
                 {
-                    tracing::debug!(conversation = %conv.id, error = %err, "could not store reasoning summary");
+                    crate::logging::private_trace!(conv.private_logs, debug, "could not store reasoning summary"; conversation = %conv.id, error = %err);
                 }
             }
             ProviderEvent::Message {
@@ -2982,7 +2981,7 @@ impl SessionManager {
                         )
                         .await
                     {
-                        tracing::warn!(conversation = %conv.id, error = %err, "could not store a reply");
+                        crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
                     }
                 }
             }
@@ -3006,7 +3005,7 @@ impl SessionManager {
                     .answer(request.id.clone(), decision.clone())
                     .await
                 {
-                    tracing::warn!(conversation = %conv.id, error = %err, "could not answer an approval");
+                    crate::logging::private_trace!(conv.private_logs, warn, "could not answer an approval"; conversation = %conv.id, error = %err);
                 }
                 self.log_provider(
                     &conv.id,
@@ -3309,7 +3308,7 @@ impl SessionManager {
             .record_conversation(id, vec![DomainEvent::CompactionUpdated { compaction }])
             .await
         {
-            tracing::warn!(conversation = %id, error = %err, "could not store a compaction");
+            crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not store a compaction"; conversation = %id, error = %err);
         }
     }
 
@@ -3494,7 +3493,7 @@ impl SessionManager {
         }
         // Follow-ups the turn left undecided wait in the queue for their own turn.
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not settle follow-ups");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);
         }
         if let Some(limit) = limit_hit {
             self.runtime.note_limit(&cli.account, limit.clone()).await;
@@ -3648,7 +3647,7 @@ impl SessionManager {
                     (used, window),
                     rebirth::HandoffPurpose::Threshold,
                 );
-                tracing::info!(conversation = %conv.id, used, "preparing the orchestrator's rebirth");
+                crate::logging::private_trace!(conv.private_logs, info, "preparing the orchestrator's rebirth"; conversation = %conv.id, used);
                 conv.state.lock().await.rebirth = Some(prep.clone());
                 prep
             }
@@ -3844,7 +3843,7 @@ impl SessionManager {
             until_ms,
         };
         if let Err(err) = self.core.set_fallback(&conv.id, Some(fallback)).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not record the stand-in model");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the stand-in model"; conversation = %conv.id, error = %err);
         }
         let stopped = {
             let mut state = conv.state.lock().await;
@@ -3894,7 +3893,7 @@ impl SessionManager {
         .await;
         conv.close_cli().await;
         if let Err(err) = self.run_on_account(&conv.id, &cli.model, &next).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not record the account it moved to");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the account it moved to"; conversation = %conv.id, error = %err);
         }
         let stopped = {
             let mut state = conv.state.lock().await;
@@ -3971,7 +3970,7 @@ impl SessionManager {
             !std::mem::replace(&mut state.waiting, true)
         };
         if first {
-            tracing::info!(conversation = %conv.id, reason = %waiting.reason, "messages wait for quota");
+            crate::logging::private_trace!(conv.private_logs, info, "messages wait for quota"; conversation = %conv.id, reason = %waiting.reason);
             self.notice(
                 &conv.id,
                 brigadier_providers::NoticeLevel::Info,
@@ -4021,7 +4020,7 @@ impl SessionManager {
                 .set_conversation_wait(&conv.id, Some(wait.clone()))
                 .await
         {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not record the wait");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the wait"; conversation = %conv.id, error = %err);
         }
         let timer = {
             let mut state = conv.state.lock().await;
@@ -4149,7 +4148,7 @@ impl SessionManager {
             .conversation(&conv.id)
             .is_ok_and(|conversation| conversation.quota_wait.is_some());
         if recorded && let Err(err) = self.core.set_conversation_wait(&conv.id, None).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not end the wait");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not end the wait"; conversation = %conv.id, error = %err);
         }
     }
 
@@ -4249,7 +4248,7 @@ impl SessionManager {
             cli.ended.cancelled().await;
         }
         if let Err(err) = self.core.set_fallback(&conv.id, None).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not end the stand-in model");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not end the stand-in model"; conversation = %conv.id, error = %err);
         }
         {
             let mut state = conv.state.lock().await;
@@ -4561,7 +4560,7 @@ impl SessionManager {
             )
             .await
         {
-            tracing::debug!(conversation = %id, error = %err, "could not store the run state");
+            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store the run state"; conversation = %id, error = %err);
         }
     }
 
@@ -4580,7 +4579,7 @@ impl SessionManager {
             },
         };
         if let Err(err) = self.core.record_conversation(id, vec![event]).await {
-            tracing::debug!(conversation = %id, error = %err, "could not store a notice");
+            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store a notice"; conversation = %id, error = %err);
         }
     }
 
@@ -4674,7 +4673,7 @@ impl SessionManager {
             .record(vec![(streams::orchestrator(id), event)])
             .await
         {
-            tracing::debug!(conversation = %id, error = %err, "could not log the orchestrator");
+            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not log the orchestrator"; conversation = %id, error = %err);
             return;
         }
         if let Some((provider, event)) = start

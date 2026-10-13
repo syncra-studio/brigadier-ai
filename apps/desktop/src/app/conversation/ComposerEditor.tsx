@@ -167,6 +167,7 @@ function ComposerKeys({
   );
   const adapter = target?.queue.attachments ?? null;
   const owner = target?.conversation?.id ?? NEW_CHAT_SCOPE;
+  const privateLogs = Boolean(target?.conversation?.tabChat);
   const dictation = useDictation(owner);
   // Dictated text lands at the caret (or at the end, if the field never had one), spaced
   // from the word before it.
@@ -273,12 +274,12 @@ function ComposerKeys({
           if (files.length === 0 && (copied.size > 0 || text.length < PASTE_AS_ATTACHMENT_CHARS)) {
             if (imageMarkersIn(text).size === 0) return false;
             event.preventDefault();
-            pasteWithImages(text, copied, { editor, formatter, aui, reader, adapter, deleted });
+            pasteWithImages(text, copied, { editor, formatter, aui, reader, adapter, deleted, privateLogs });
             return true;
           }
           event.preventDefault();
           if (pastesInline({ files, uris: event.clipboardData.getData("text/uri-list") })) {
-            pasteImages(files, { editor, formatter, aui, reader, adapter, deleted });
+            pasteImages(files, { editor, formatter, aui, reader, adapter, deleted, privateLogs });
             return true;
           }
           const attach = files.length > 0 ? files : [pastedTextFile(text)];
@@ -293,6 +294,7 @@ function ComposerKeys({
     aui,
     reader,
     adapter,
+    privateLogs,
     formatter,
     deleted,
     pull,
@@ -350,6 +352,7 @@ function copiedImagesOn(clipboard: DataTransfer, text: string): Map<number, Atta
 
 /** What pasting into a composer works with. */
 type PasteContext = {
+  privateLogs: boolean;
   editor: LexicalEditor;
   formatter: Unstable_DirectiveFormatter;
   aui: ReturnType<typeof useAui>;
@@ -361,8 +364,11 @@ type PasteContext = {
 /** Merges of pasted images, one after another: each sees the composer as the last left it. */
 let merging = Promise.resolve();
 
-function afterMerges(merge: () => Promise<void>) {
-  merging = merging.then(merge).catch((error: unknown) => console.error("merge failed", error));
+function afterMerges(privateLogs: boolean, merge: () => Promise<void>) {
+  merging = merging.then(merge).catch((error: unknown) => {
+    if (privateLogs) console.error("tab chat merge failed");
+    else console.error("merge failed", error);
+  });
 }
 
 /** Images' content hashes (the blob store, too, keys bytes by their content), memoized. */
@@ -483,7 +489,7 @@ function mergeSameImages(
 ) {
   if (images.length === 0) return;
   for (const { image } of images) unmatched.add(image);
-  afterMerges(async () => {
+  afterMerges(context.privateLogs, async () => {
     const { aui, reader, editor, formatter } = context;
     const before = await pasted;
     await Promise.allSettled(images.map(({ added }) => added));
