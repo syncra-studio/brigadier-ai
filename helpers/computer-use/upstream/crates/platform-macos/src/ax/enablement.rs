@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 use core_foundation::base::{CFRelease, CFTypeRef};
 
 use super::bindings::{
-    copy_children, copy_string_attr, enable_chromium_accessibility, AXUIElementRef,
-    AccessibilityOptIn,
+    copy_children, copy_off_space_windows, copy_string_attr, enable_chromium_accessibility,
+    AXUIElementRef, AccessibilityOptIn,
 };
 
 const CHROMIUM_SETTLE_SECONDS: f64 = 0.5;
@@ -154,13 +154,23 @@ unsafe fn has_web_area(element: AXUIElementRef, depth: u32, visits: &mut u32) ->
     found
 }
 
-unsafe fn probe_web_content(app_element: AXUIElementRef) -> WebContent {
+/// Web content under the app element, or under one of `off_space_windows`
+/// (windows on another Space, which are not the app element's children).
+unsafe fn probe_web_content(
+    app_element: AXUIElementRef,
+    off_space_windows: &[AXUIElementRef],
+) -> WebContent {
     let mut visits = WEB_AREA_PROBE_NODES;
     if has_web_area(app_element, WEB_AREA_MAX_DEPTH, &mut visits) {
-        WebContent::Present
-    } else {
-        WebContent::Absent
+        return WebContent::Present;
     }
+    for &window in off_space_windows {
+        let mut visits = WEB_AREA_PROBE_NODES;
+        if has_web_area(window, WEB_AREA_MAX_DEPTH - 1, &mut visits) {
+            return WebContent::Present;
+        }
+    }
+    WebContent::Absent
 }
 
 fn pump_for(seconds: f64) {
@@ -229,13 +239,21 @@ pub unsafe fn ensure_chromium_ax_enabled(pid: i32, app_element: AXUIElementRef) 
         prior_timeouts,
         attempted_at,
         || {
-            await_web_content(
-                || probe_web_content(app_element),
+            // An app whose windows are all on another Space has no window
+            // among its children: look for the web content in those windows
+            // too, or the wait would always run to its timeout.
+            let off_space = copy_off_space_windows(app_element, pid);
+            let materialized = await_web_content(
+                || probe_web_content(app_element, &off_space),
                 || {
                     enable_chromium_accessibility(app_element);
                 },
                 pump_for,
-            )
+            );
+            for window in off_space {
+                CFRelease(window as CFTypeRef);
+            }
+            materialized
         },
     );
     if let (Some(stamp), Some(wait)) = (stamp, outcome) {

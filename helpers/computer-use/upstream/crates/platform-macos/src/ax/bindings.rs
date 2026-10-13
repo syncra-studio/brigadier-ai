@@ -949,6 +949,42 @@ pub unsafe fn copy_ax_windows_including(
     windows
 }
 
+/// Most windows [`copy_off_space_windows`] looks up.
+const OFF_SPACE_WINDOWS_MAX: usize = 8;
+
+/// The real windows of `pid` that `AXWindows` omits because they are on
+/// another Space, found the way [`copy_ax_windows_including`] finds one.
+/// Returns retained elements the caller must release.
+///
+/// # Safety
+///
+/// `app` must be the valid application element of `pid`, and the caller must
+/// release every returned element.
+pub unsafe fn copy_off_space_windows(app: AXUIElementRef, pid: i32) -> Vec<AXUIElementRef> {
+    let listed: Vec<u32> = copy_ax_windows(app)
+        .into_iter()
+        .filter_map(|window| {
+            let id = ax_get_window_id(window);
+            CFRelease(window as CFTypeRef);
+            id
+        })
+        .collect();
+    crate::windows::all_windows()
+        .into_iter()
+        .filter(|w| w.pid == pid && w.layer == 0 && w.bounds.width > 1.0 && w.bounds.height > 1.0)
+        .filter(|w| !listed.contains(&w.window_id))
+        .filter(|w| {
+            should_probe_off_space_window(false, || {
+                crate::windows::window_space_view_by_id(w.window_id)
+            })
+        })
+        .take(OFF_SPACE_WINDOWS_MAX)
+        .filter_map(|w| {
+            resolve_off_space_window(OFF_SPACE_WINDOW_RESOLVER.get().copied(), pid, w.window_id)
+        })
+        .collect()
+}
+
 /// Finds the window element for a window `AXWindows` omits, in place of
 /// [`copy_ax_window_by_remote_token`]. Same contract: only an `AXWindow`
 /// element whose `_AXUIElementGetWindow` equals `window_id`, retained, for
