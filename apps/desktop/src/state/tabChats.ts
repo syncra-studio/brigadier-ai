@@ -100,7 +100,8 @@ export function prepareBeforeSend(chatId: string, prepare: () => Promise<void>):
   preparers.set(chatId, prepare);
   return () => { if (preparers.get(chatId) === prepare) preparers.delete(chatId); };
 }
-export async function prepareTabChatSend(chatId: string): Promise<void> {
+/** Nothing for a chat with nothing to read first, so its send waits for nothing. */
+export function prepareTabChatSend(chatId: string): Promise<void> | undefined {
   // A page that can't be read still lets the message go: the chat says what it lacks.
-  await preparers.get(chatId)?.().catch(console.error);
+  return preparers.get(chatId)?.().catch(console.error);
 }

@@ -471,7 +471,8 @@ export async function send(
     return;
   }
 
-  await prepareTabChatSend(conversationId);
+  const prepared = prepareTabChatSend(conversationId);
+  if (prepared) await prepared;
   const board = boardOf(conversationId);
   const running = board !== null && (board.run === "running" || board.run === "starting");
   const session = useApp.getState().conversations[conversationId]?.kind === "session";
