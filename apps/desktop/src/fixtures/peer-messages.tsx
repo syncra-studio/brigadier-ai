@@ -41,6 +41,7 @@ import { openConversation } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { LAST_OPENED_KEY } from "@/state/lastOpened";
 import { useReveal } from "@/state/reveal";
+import { CHAT_TAB, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -541,10 +542,15 @@ function landing(messageId: string) {
   };
 }
 
-/** Waits for a jump to `messageId` to land, its folds still and its flash over. */
-async function landed(messageId: string): Promise<void> {
+/**
+ * Waits for a jump to `messageId` to land, its folds still and its flash over; how long after
+ * `from` it landed, in ms.
+ */
+async function landed(messageId: string, from = performance.now()): Promise<number> {
   await until(() => useReveal.getState().reveal === null && one(`[data-peer-message="${messageId}"][data-revealed=true]`) !== null, 15000);
+  const ms = Math.round(performance.now() - from);
   await wait(800);
+  return ms;
 }
 
 function dots(): Record<string, boolean> {
@@ -624,17 +630,21 @@ async function driveJump(): Promise<object> {
   all("[data-slot=work-group] > button[data-state=closed]").at(-1)?.click();
   await until(() => !!row());
   const loadedBefore = useApp.getState().threads[DOCS]?.items.length ?? 0;
+  const toReceiverAt = performance.now();
   one<HTMLButtonElement>("[data-slot=peer-link]", row() ?? document)?.click();
-  await landed("mk");
-  const toReceiver = { ...landing("mk"), pagesRead: (useApp.getState().threads[DOCS]?.items.length ?? 0) > 10, loadedBefore };
+  const toReceiverMs = await landed("mk", toReceiverAt);
+  const toReceiver = { ...landing("mk"), ms: toReceiverMs, pagesRead: (useApp.getState().threads[DOCS]?.items.length ?? 0) > 10, loadedBefore };
   const afterOpen = dots();
 
   // From Docs' older received message back to its sent row in API schema, years of turns ago.
   const caption = one<HTMLButtonElement>("[data-peer-message=ml] [data-slot=peer-caption]");
   const hadCaption = !!caption;
+  // API schema was left on another tab: the jump brings its chat back.
+  useSessionTabs.setState((state) => ({ sessions: { ...state.sessions, [API]: { tabs: [], ...state.sessions[API], active: "review" } } }));
+  const toSenderAt = performance.now();
   caption?.click();
-  await landed("ml");
-  const toSender = landing("ml");
+  const toSenderMs = await landed("ml", toSenderAt);
+  const toSender = { ...landing("ml"), ms: toSenderMs, pagesRead: (useApp.getState().threads[API]?.items.length ?? 0) > 10, chat: sessionTabs(API).active === CHAT_TAB };
   const afterBack = dots();
 
   // A message comes to Docs while API schema is open, and one to API schema itself.

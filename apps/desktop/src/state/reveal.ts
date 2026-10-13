@@ -36,7 +36,8 @@ function shownElement(messageId: string): HTMLElement | null {
 /** Whether a fold around `element` still opens: an animation runs on something that holds it. */
 function settling(element: Element): boolean {
   return document.getAnimations().some((animation) => {
-    if (animation.playState !== "running") return false;
+    // A scroll-driven one (a long group's fading edges) runs as long as its list scrolls: no fold.
+    if (animation.playState !== "running" || !(animation.timeline instanceof DocumentTimeline)) return false;
     const target = animation.effect instanceof KeyframeEffect ? animation.effect.target : null;
     return target instanceof Element && target !== element && target.contains(element);
   });

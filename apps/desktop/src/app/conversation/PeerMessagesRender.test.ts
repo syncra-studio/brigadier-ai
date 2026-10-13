@@ -88,8 +88,8 @@ test("Messages between sessions read in every state, on both sides", { timeout: 
 test("A jump opens the other session at the exact message, both ways, and the sidebar marks a message not yet seen", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "peer-messages.html?history=long&drive=jump", "peer-result", 90000)) as {
     error?: string;
-    before: Dots; toReceiver: Landing & { pagesRead: boolean; loadedBefore: number }; afterOpen: Dots; hadCaption: boolean;
-    toSender: Landing; afterBack: Dots; afterArrival: Dots; afterReopen: Dots;
+    before: Dots; toReceiver: Landing & { pagesRead: boolean; loadedBefore: number; ms: number }; afterOpen: Dots; hadCaption: boolean;
+    toSender: Landing & { pagesRead: boolean; ms: number; chat: boolean }; afterBack: Dots; afterArrival: Dots; afterReopen: Dots;
   };
   assert.equal(seen.error, undefined);
   const none: Dots = { "peer-api": false, "peer-docs": false, "peer-notes": false, "peer-style": false };
@@ -99,10 +99,18 @@ test("A jump opens the other session at the exact message, both ways, and the si
   assert.equal(seen.toReceiver.loadedBefore, 0);
   assert.equal(seen.toReceiver.pagesRead, true);
   assertLanded(seen.toReceiver, "peer-docs");
+  // It lands once its folds are still, not when the wait for them runs out (4 s).
+  assert.ok(seen.toReceiver.ms < 3000, `landed in ${seen.toReceiver.ms} ms`);
   assert.deepEqual(seen.afterOpen, none);
   // Back from the received message's caption to its sent row, deep in folded work 32 turns back.
   assert.equal(seen.hadCaption, true);
   assertLanded(seen.toSender, "peer-api");
+  // Reopened, the sender holds its newest page only: the jump read older ones to reach the row.
+  assert.equal(seen.toSender.pagesRead, true);
+  // Left on another tab, the sender shows its chat, where the row is.
+  assert.equal(seen.toSender.chat, true);
+  // A long group's list fades its edges as it scrolls, an animation that never ends: no fold.
+  assert.ok(seen.toSender.ms < 3000, `landed in ${seen.toSender.ms} ms`);
   assert.equal(seen.toSender.workOpen, true);
   assert.equal(seen.toSender.group, "open");
   assert.deepEqual(seen.afterBack, none);

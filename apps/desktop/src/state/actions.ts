@@ -34,6 +34,7 @@ import type {
 import { savePinnedSummary } from "@/lib/pinnedSummary";
 import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
+import { CHAT_TAB, selectTab } from "@/state/sessionTabs";
 import { setSetting } from "@/state/settings";
 import {
   boardFromView,
@@ -303,6 +304,8 @@ export function openConversation(id: string, options: { at?: OpenAt } = {}): voi
   // A jump within the open conversation stays where it is: only the thread moves.
   if (!options.at || shown.type !== "conversation" || shown.id !== id) select({ type: "conversation", id });
   if (options.at) {
+    // The message is in the thread: a session left on a file or its review shows its chat.
+    selectTab(id, CHAT_TAB);
     void revealMessage(id, options.at.message).catch((error: unknown) => console.error("showing the message failed", error));
   }
 }
