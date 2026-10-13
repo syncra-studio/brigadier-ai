@@ -173,12 +173,28 @@ pub fn prose(text: &str) -> String {
     rename(&drop_sentences(text, FRONT_WORDS))
 }
 
-/// [`prose`] for tool descriptions, which also lose desktop-input sentences.
+/// [`prose`] for tool descriptions, which also lose desktop-input sentences
+/// and every mention of a tool Brigadier doesn't offer.
 fn description(text: &str) -> String {
-    rename(&drop_sentences(
-        &drop_sentences(text, FRONT_WORDS),
-        DESKTOP_INPUT_WORDS,
-    ))
+    let text = drop_sentences(&drop_sentences(text, FRONT_WORDS), DESKTOP_INPUT_WORDS);
+    rename(&drop_sentences(&text, &withheld_mentions()).replace(", drag,", ","))
+}
+
+/// How descriptions name tools agents don't get: the withheld ones in
+/// backticks, and one the driver names but doesn't have.
+fn withheld_mentions() -> Vec<&'static str> {
+    static WORDS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    WORDS
+        .get_or_init(|| {
+            catalog::WITHHELD
+                .iter()
+                .map(|(name, _)| format!("`{name}`"))
+                .chain(["type_text_chars".to_owned()])
+                .collect()
+        })
+        .iter()
+        .map(String::as_str)
+        .collect()
 }
 
 /// Rewrite one tool result for agents.
@@ -301,6 +317,19 @@ fn schema_prose(schema: &mut Value) {
                         !mentions(value, FRONT_WORDS) && !value.eq_ignore_ascii_case("desktop")
                     })
                 });
+                // A list of tools (run_steps' step tools) offers only Brigadier's.
+                let names_tools = values
+                    .iter()
+                    .any(|value| value.as_str().is_some_and(|name| name == "click"));
+                if names_tools {
+                    values.retain(|value| {
+                        value.as_str().is_none_or(|name| {
+                            !catalog::WITHHELD
+                                .iter()
+                                .any(|(withheld, _)| *withheld == name)
+                        })
+                    });
+                }
             }
             for (key, value) in object.iter_mut() {
                 match (key.as_str(), value) {
@@ -424,8 +453,9 @@ mod tests {
                     }
                 },
                 {"name": "bring_to_front", "description": "x", "inputSchema": {}},
-                {"name": "run_steps", "description": "Batch.", "inputSchema": {"properties": {
-                    "foreground_fallback": {"type": "boolean"}, "steps": {"type": "array"}}}}
+                {"name": "run_steps", "description": "Batch. Each tool is one of click, drag, scroll and type_text. To paste, call `clipboard_write` first.", "inputSchema": {"properties": {
+                    "foreground_fallback": {"type": "boolean"}, "steps": {"type": "array", "items": {
+                        "properties": {"tool": {"enum": ["click", "drag", "scroll"]}}}}}}}
             ]
         });
         let list = tools_list(list);
@@ -455,5 +485,13 @@ mod tests {
         assert!(tools[1]["inputSchema"]["properties"]
             .get("foreground_fallback")
             .is_none());
+        assert_eq!(
+            tools[1]["description"],
+            "Batch. Each tool is one of click, scroll and type_text."
+        );
+        assert_eq!(
+            tools[1]["inputSchema"]["properties"]["steps"]["items"]["properties"]["tool"]["enum"],
+            json!(["click", "scroll"])
+        );
     }
 }
