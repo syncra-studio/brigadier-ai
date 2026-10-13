@@ -269,9 +269,10 @@ pub(crate) fn pixel_obstruction_error(
         .unwrap_or_default();
     Some(
         cu_core::protocol::ToolResult::error(format!(
-            "Pixel dispatch blocked{point_suffix}: {app}{title_suffix} window {} is in front at \
-             screen point ({screen_x:.0}, {screen_y:.0}). Retry with \
-             delivery_mode:\"foreground\" or clear the obstruction.",
+            "Not sent{point_suffix}: {app}{title_suffix} window {} is on top at screen point \
+             ({screen_x:.0}, {screen_y:.0}), so a pointer event there would reach it instead. \
+             Use an element_index target (it works under other windows), or try again once \
+             the window on top has moved.",
             occluder.window_id,
         ))
         .with_structured(serde_json::json!({
