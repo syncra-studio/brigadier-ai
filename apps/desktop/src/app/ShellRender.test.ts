@@ -11,7 +11,7 @@ test("the window never scrolls: only the panes inside it do", { timeout: 120000 
   const seen = JSON.parse(await renderFixtureLive(t, "shell.html?drive=scroll", "shell-result", 90000)) as Record<string, unknown>;
   if (process.env.SHELL_SEEN) console.log(JSON.stringify(seen, null, 2));
   assert.equal(seen.error, undefined);
-  assert.deepEqual(seen.rootStyles, ["html clip/clip static", "body clip/clip static", "#root clip/clip relative"]);
+  assert.deepEqual(seen.rootStyles, ["html visible/visible static", "body visible/visible static", "#root clip/clip relative"]);
   assert.equal(seen.documentFits, true, "nothing reaches past the window, a long thread's screen reader labels included");
   for (const name of ["threadTop", "threadBottom", "chrome", "threadIntoView", "tabs", "pageBottom", "pageTop", "pageIntoView", "pushed"]) {
     const check = seen[name] as Check;

@@ -490,18 +490,20 @@
   }
   /* The window never scrolls, only panes inside it do. Nothing reaches past it to scroll it:
      the root holds whatever is positioned with no box of its own to hold it (the thread's
-     screen reader labels, far down its scroll), and every box up to the window clips, so not
-     even a script can scroll one. Nor does a wheel past a pane's end bounce it. */
+     screen reader labels, far down its scroll) and clips it, so the page never grows past the
+     window and not even a script can scroll it. Nor does a wheel past a pane's end bounce it.
+     Only the root clips: clipping html and body too made the first paint on a machine without
+     a graphics card take about half a second longer. */
   html,
   body,
   #root {
-    @apply h-full w-full overflow-clip;
+    @apply h-full;
   }
   html {
     @apply overscroll-none;
   }
   #root {
-    @apply relative;
+    @apply relative w-full overflow-clip;
   }
   body {
     @apply bg-background text-foreground font-sans text-sm antialiased select-none;
