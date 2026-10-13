@@ -550,6 +550,8 @@ const ERR_SEC_CS_STATIC_CODE_CHANGED: SecurityStatus = -67034;
 #[derive(Debug, PartialEq, Eq)]
 struct KernelSigning {
     valid: bool,
+    /// Signed without a certificate, so the team and identifier prove nothing.
+    adhoc: bool,
     team_id: Option<String>,
     identifier: Option<String>,
     path: Option<std::path::PathBuf>,
@@ -569,6 +571,7 @@ fn kernel_signing(pid: libc::pid_t) -> KernelSigning {
     const CS_OPS_IDENTITY: libc::c_uint = 11;
     const CS_OPS_TEAMID: libc::c_uint = 14;
     const CS_VALID: u32 = 0x1;
+    const CS_ADHOC: u32 = 0x2;
     // CS_OPS_IDENTITY and CS_OPS_TEAMID answer a blob: an 8-byte header,
     // then a NUL-terminated string.
     let blob_string = |op| {
@@ -595,6 +598,7 @@ fn kernel_signing(pid: libc::pid_t) -> KernelSigning {
     let len = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
     KernelSigning {
         valid: status == 0 && flags & CS_VALID != 0,
+        adhoc: status != 0 || flags & CS_ADHOC != 0,
         team_id: blob_string(CS_OPS_TEAMID),
         identifier: blob_string(CS_OPS_IDENTITY),
         path: (len > 0).then(|| {
@@ -605,19 +609,22 @@ fn kernel_signing(pid: libc::pid_t) -> KernelSigning {
 
 /// Whether `peer` may talk to the daemon `own` although its file on disk
 /// changed: an agent's shim started before an update replaced the helper
-/// bundle in place. The kernel still vouches for it: validly signed, with
-/// the daemon's own team and identifier, started from the daemon's own
-/// executable path.
+/// bundle. The kernel still vouches for it: validly signed with a
+/// certificate (checked by macOS when it started), with the daemon's own
+/// team and identifier, and started from the daemon's own executable path
+/// while macOS still knows that path (an update that moved the old bundle
+/// away leaves none).
 #[cfg(all(unix, target_os = "macos"))]
 fn replaced_by_an_update(peer: &KernelSigning, own: &KernelSigning) -> bool {
     peer.valid
         && own.valid
+        && !peer.adhoc
+        && !own.adhoc
         && peer.team_id.is_some()
         && peer.team_id == own.team_id
         && peer.identifier.is_some()
         && peer.identifier == own.identifier
-        && peer.path.is_some()
-        && peer.path == own.path
+        && (peer.path.is_none() || peer.path == own.path)
 }
 
 #[cfg(all(unix, target_os = "macos"))]
@@ -3062,6 +3069,7 @@ mod socket_authentication_tests {
     fn signing(team: &str, id: &str, path: &str) -> super::KernelSigning {
         super::KernelSigning {
             valid: true,
+            adhoc: false,
             team_id: (!team.is_empty()).then(|| team.to_owned()),
             identifier: (!id.is_empty()).then(|| id.to_owned()),
             path: (!path.is_empty()).then(|| path.into()),
@@ -3079,6 +3087,14 @@ mod socket_authentication_tests {
         assert!(!super::replaced_by_an_update(&other_id, &own));
         let other_path = signing("TEAM", "helper", "/tmp/Copy.app/Contents/MacOS/cu");
         assert!(!super::replaced_by_an_update(&other_path, &own));
+        // An update that moved the old bundle away leaves macOS no path.
+        let moved_away = signing("TEAM", "helper", "");
+        assert!(super::replaced_by_an_update(&moved_away, &own));
+        let adhoc = super::KernelSigning {
+            adhoc: true,
+            ..signing("TEAM", "helper", "")
+        };
+        assert!(!super::replaced_by_an_update(&adhoc, &own));
         let unsigned = signing("", "", "/data/Helper.app/Contents/MacOS/cu");
         assert!(!super::replaced_by_an_update(&unsigned, &unsigned));
         let invalid = super::KernelSigning {
