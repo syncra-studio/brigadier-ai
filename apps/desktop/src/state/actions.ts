@@ -338,14 +338,14 @@ function storesReach(ready: () => boolean, withinMs: number): Promise<boolean> {
  */
 function revealNeeds(board: Board, messageId: string): { ids: string[]; position: number | null } {
   const record = board.peerMessages[messageId];
-  const ids = record?.outgoing ? [] : [messageId];
-  let asked = record?.requestId ?? null;
-  for (let hops = 0; asked && hops < 100 && !ids.includes(asked); hops += 1) {
+  const ids = new Set(record?.outgoing ? [] : [messageId]);
+  const visited = new Set<string>();
+  for (let asked = record?.requestId ?? null; asked && !visited.has(asked); asked = board.requests[asked]?.steeredInto ?? null) {
+    visited.add(asked);
     // A run's turns are no message of the thread.
-    if (!asked.startsWith("run-")) ids.push(asked);
-    asked = board.requests[asked]?.steeredInto ?? null;
+    if (!asked.startsWith("run-")) ids.add(asked);
   }
-  return { ids, position: record?.position ?? null };
+  return { ids: [...ids], position: record?.position ?? null };
 }
 
 /** Loads what `messageId` needs into `id`'s thread, then asks the thread to show it. */

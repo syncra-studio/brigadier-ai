@@ -44,7 +44,7 @@ export const FoldedMarkdown: FC<{ text: string; className?: string }> = ({ text,
       <div
         ref={ref}
         data-slot="peer-text"
-        className={cn("min-w-0 wrap-break-word", !expanded && "max-h-peer-message overflow-hidden", className)}
+        className={cn("min-w-0 wrap-break-word", !expanded && "max-h-peer-message overflow-hidden", clipped && !expanded && "plan-clip-fade", className)}
       >
         <div>
           <MarkdownBlock text={text} />

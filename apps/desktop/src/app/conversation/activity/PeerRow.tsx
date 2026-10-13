@@ -17,7 +17,6 @@ import {
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FoldedMarkdown, usePeerName } from "@/app/conversation/peerParts";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import type { Conversation, OrchestratorStepKind, PeerMessage, Project } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -113,11 +112,14 @@ const RowWords: FC<{ label: string; shown: PeerName; running: boolean; children:
   const verb = label.endsWith(named) ? label.slice(0, -named.length).trimEnd() : label;
   return (
     <span className="flex min-w-0 items-center gap-1">
-      <span className={cn("shrink-0", running && "shimmer")}>{verb}</span>
+      <span className={cn("shrink-0", running && "shimmer")}>{verb}</span>{" "}
       {children}
     </span>
   );
 };
+
+/** What a message row opens to: the row recipe's detail, as tall as the message (it folds itself). */
+const MESSAGE_DETAIL = "text-foreground/60 flex min-w-0 flex-col gap-1 ps-5.5 pt-1 pb-1 text-sm";
 
 /** One sent message's row, from its record. */
 export const PeerSentRow: FC<{ step: BlockOrchestratorStep; messageId: string }> = ({ step, messageId }) => {
@@ -166,7 +168,7 @@ export const PeerSentRow: FC<{ step: BlockOrchestratorStep; messageId: string }>
           </p>
         </div>
       )}
-      detailClassName={cn(ROW_DETAIL, "max-h-none")}
+      detailClassName={MESSAGE_DETAIL}
     >
       <Chat aria-hidden className="size-4 shrink-0" />
       <RowWords label={label} shown={shown} running={running}>
