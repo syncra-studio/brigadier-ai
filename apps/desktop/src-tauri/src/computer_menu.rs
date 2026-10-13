@@ -3,6 +3,7 @@
 //! which, [`set_computer_menu`]); the agents come from the daemon's computer-use status, which
 //! the bridge hands here ([`status_changed`]).
 
+use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
 use brigadier_core::{ComputerSession, ComputerSetup, ComputerUseStatus};
@@ -17,24 +18,53 @@ use crate::AppState;
 
 /// The item's id.
 const TRAY: &str = "computer-use";
-/// Menu ids: `<action>:<index into the sessions shown>`.
+/// Menu ids: `<action><menu generation>:<index into the sessions that menu shows>`.
 const OPEN: &str = "cu-open:";
 const SHOW: &str = "cu-show:";
 const STOP: &str = "cu-stop:";
 const SETTINGS: &str = "cu-settings";
 const SETUP: &str = "cu-setup";
-/// A label longer than this is cut, with an ellipsis.
+/// A session's title longer than this has its label cut, with an ellipsis; the app stays whole.
 const LABEL_CHARS: usize = 48;
+/// The menus remembered for their actions: one still open can be older than the latest.
+const MENUS_KEPT: usize = 4;
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static STATE: Mutex<MenuState> = Mutex::new(MenuState {
     shown: false,
     status: None,
+    generation: 0,
+    menus: VecDeque::new(),
 });
 
 struct MenuState {
     shown: bool,
     status: Option<ComputerUseStatus>,
+    /// The latest menu's generation.
+    generation: u64,
+    /// The sessions each recent menu was built with, by generation: an action names the session
+    /// its menu showed, even when the status changed while the menu was open.
+    menus: VecDeque<(u64, Vec<ComputerSession>)>,
+}
+
+impl MenuState {
+    /// Remembers the sessions a new menu shows; returns its generation.
+    fn built(&mut self, sessions: Vec<ComputerSession>) -> u64 {
+        self.generation += 1;
+        self.menus.push_back((self.generation, sessions));
+        while self.menus.len() > MENUS_KEPT {
+            self.menus.pop_front();
+        }
+        self.generation
+    }
+
+    /// The session a menu item names: `<generation>:<index>`.
+    fn session(&self, item: &str) -> Option<ComputerSession> {
+        let (generation, index) = item.split_once(':')?;
+        let (generation, index): (u64, usize) = (generation.parse().ok()?, index.parse().ok()?);
+        let (_, sessions) = self.menus.iter().find(|(built, _)| *built == generation)?;
+        sessions.get(index).cloned()
+    }
 }
 
 fn state() -> std::sync::MutexGuard<'static, MenuState> {
@@ -87,7 +117,8 @@ fn apply(app: &AppHandle) -> tauri::Result<()> {
         .as_ref()
         .map(|s| s.sessions.clone())
         .unwrap_or_default();
-    let menu = menu(app, status.as_ref(), &sessions)?;
+    let generation = state().built(sessions.clone());
+    let menu = menu(app, status.as_ref(), &sessions, generation)?;
     let icon = icon(!sessions.is_empty())?;
     let tooltip = if sessions.is_empty() {
         "Computer use".to_owned()
@@ -128,13 +159,16 @@ fn icon(active: bool) -> tauri::Result<Image<'static>> {
     })
 }
 
-fn cut(text: &str) -> String {
-    if text.chars().count() > LABEL_CHARS {
-        let cut: String = text.chars().take(LABEL_CHARS - 1).collect();
+/// A session's title, "<label> · <app>": a long label is cut, never the app's name.
+fn title(label: &str, app: &str) -> String {
+    let room = LABEL_CHARS.saturating_sub(app.chars().count() + 3).max(8);
+    let label = if label.chars().count() > room {
+        let cut: String = label.chars().take(room - 1).collect();
         format!("{}…", cut.trim_end())
     } else {
-        text.to_owned()
-    }
+        label.to_owned()
+    };
+    format!("{label} · {app}")
 }
 
 /// A line on setup, when it needs the user or the helper is in trouble.
@@ -153,6 +187,7 @@ fn menu(
     app: &AppHandle,
     status: Option<&ComputerUseStatus>,
     sessions: &[ComputerSession],
+    generation: u64,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let mut menu = MenuBuilder::new(app);
     if sessions.is_empty() {
@@ -166,24 +201,28 @@ fn menu(
             .build(app)?;
         menu = menu.item(&heading);
         for (index, session) in sessions.iter().enumerate() {
-            let open = MenuItemBuilder::with_id(format!("{OPEN}{index}"), "Open in Brigadier")
-                .enabled(session.conversation_id.is_some())
-                .build(app)?;
-            let show =
-                MenuItemBuilder::with_id(format!("{SHOW}{index}"), format!("Show {}", session.app))
-                    .build(app)?;
+            let open = MenuItemBuilder::with_id(
+                format!("{OPEN}{generation}:{index}"),
+                "Open in Brigadier",
+            )
+            .enabled(session.conversation_id.is_some())
+            .build(app)?;
+            let show = MenuItemBuilder::with_id(
+                format!("{SHOW}{generation}:{index}"),
+                format!("Show {}", session.app),
+            )
+            .build(app)?;
             let stop = MenuItemBuilder::with_id(
-                format!("{STOP}{index}"),
+                format!("{STOP}{generation}:{index}"),
                 format!("Stop using {}", session.app),
             )
             .build(app)?;
-            let submenu =
-                SubmenuBuilder::new(app, cut(&format!("{} · {}", session.label, session.app)))
-                    .item(&open)
-                    .item(&show)
-                    .separator()
-                    .item(&stop)
-                    .build()?;
+            let submenu = SubmenuBuilder::new(app, title(&session.label, &session.app))
+                .item(&open)
+                .item(&show)
+                .separator()
+                .item(&stop)
+                .build()?;
             menu = menu.item(&submenu);
         }
     }
@@ -201,10 +240,9 @@ fn menu(
     menu.separator().item(&settings).build()
 }
 
-/// The session the menu showed at `index` (the menu is rebuilt with every status).
-fn session(index: &str) -> Option<ComputerSession> {
-    let index: usize = index.parse().ok()?;
-    state().status.as_ref()?.sessions.get(index).cloned()
+/// The session a menu item names (the menu is rebuilt with every status).
+fn session(item: &str) -> Option<ComputerSession> {
+    state().session(item)
 }
 
 fn chosen(app: &AppHandle, id: &str) {
@@ -289,13 +327,47 @@ mod tests {
     }
 
     #[test]
-    fn long_labels_are_cut_with_an_ellipsis() {
-        assert_eq!(cut("Fix the login · TextEdit"), "Fix the login · TextEdit");
-        let long = "a".repeat(80);
-        let shown = cut(&long);
+    fn long_labels_are_cut_with_an_ellipsis_and_the_app_stays_whole() {
+        assert_eq!(
+            title("Fix the login", "TextEdit"),
+            "Fix the login · TextEdit"
+        );
+        let shown = title(&"a".repeat(80), "System Settings");
         assert_eq!(shown.chars().count(), LABEL_CHARS);
-        assert!(shown.ends_with('…'));
+        assert!(shown.ends_with("… · System Settings"));
         assert_eq!(plural(1), "1 app");
         assert_eq!(plural(3), "3 apps");
+    }
+
+    fn session(id: &str, app: &str) -> ComputerSession {
+        ComputerSession {
+            session: id.into(),
+            conversation_id: None,
+            task_id: None,
+            label: id.into(),
+            app: app.into(),
+            bundle_id: String::new(),
+            pid: 0,
+        }
+    }
+
+    #[test]
+    fn an_action_names_the_session_its_menu_showed_even_after_a_newer_menu() {
+        let mut state = MenuState {
+            shown: true,
+            status: None,
+            generation: 0,
+            menus: VecDeque::new(),
+        };
+        let first = state.built(vec![session("a", "TextEdit"), session("b", "Finder")]);
+        let second = state.built(vec![session("b", "Finder")]);
+        assert_eq!(state.session(&format!("{first}:1")).unwrap().session, "b");
+        assert_eq!(state.session(&format!("{second}:0")).unwrap().session, "b");
+        assert!(state.session(&format!("{second}:1")).is_none());
+        for _ in 0..MENUS_KEPT {
+            state.built(Vec::new());
+        }
+        assert!(state.session(&format!("{first}:0")).is_none());
+        assert!(state.session("junk").is_none());
     }
 }
