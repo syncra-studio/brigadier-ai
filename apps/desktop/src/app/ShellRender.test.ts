@@ -31,7 +31,7 @@ test("the window never scrolls: only the panes inside it do", { timeout: 120000 
 });
 
 type Panels = Record<string, unknown> & { filesOpen: { top: number; row: number }; workersOpen: { top: number; row: number; state: string; width: number } };
-type Start = { nav: string[]; divider: number; sidebarEnd: number; newChatEnd: number | null; firstTab: number; rule: { width: number; shown: boolean } };
+type Start = { nav: string[]; divider: number; sidebarEnd: number; toggleEnd: number; strip: string[]; firstTab: number; rule: { width: number; shown: boolean } };
 
 for (const [name, page] of [["", "shell.html?drive=layout"], [", a widened left sidebar", "shell.html?drive=layout&wide=1"], [", compact", "shell.html?drive=layout&density=compact"]] as const) {
   test(`the titlebar spans the window, the right panels open below it and nothing in it moves${name}`, { timeout: 120000 }, async (t) => {
@@ -55,14 +55,14 @@ for (const [name, page] of [["", "shell.html?drive=layout"], [", a widened left 
     // Expanded: the controls over the sidebar, the divider at its end edge, the tabs after it.
     const expanded = seen.expandedStart as Start;
     assert.deepEqual(expanded.nav, ["Back", "Forward", "Hide sidebar"]);
-    assert.equal(expanded.newChatEnd, null);
     assert.ok(Math.abs(expanded.divider - expanded.sidebarEnd) <= 1, `the divider at the sidebar's end edge: ${JSON.stringify(expanded)}`);
     assert.ok(expanded.firstTab > expanded.divider, "the tabs start after the divider");
     assert.equal(expanded.rule.shown, true);
-    // Folded: New chat after the toggle, then the divider, then the tabs.
+    // Folded: New chat above Search in the strip; the divider follows the sidebar toggle.
     const folded = seen.foldedStart as Start;
-    assert.deepEqual(folded.nav, ["Back", "Forward", "Show sidebar", "New chat"]);
-    assert.ok(folded.newChatEnd !== null && folded.divider > folded.newChatEnd && folded.divider - folded.newChatEnd <= 8, `the divider right after New chat: ${JSON.stringify(folded)}`);
+    assert.deepEqual(folded.nav, ["Back", "Forward", "Show sidebar"]);
+    assert.deepEqual(folded.strip.slice(0, 5), ["Show sidebar", "New chat", "Search", "Projects", "Chats"]);
+    assert.ok(folded.divider > folded.toggleEnd && folded.divider - folded.toggleEnd <= 8, `the divider right after the sidebar toggle: ${JSON.stringify(folded)}`);
     assert.ok(folded.firstTab > folded.divider && folded.firstTab - folded.divider <= 10, `the tabs right after the divider: ${JSON.stringify(folded)}`);
     assert.deepEqual(seen.folding, [], "folding the sidebar leaves the toolbar where it is");
   });

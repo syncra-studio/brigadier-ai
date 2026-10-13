@@ -119,12 +119,6 @@ export function TitlebarNav() {
         {canToggle && (
           <SidebarToggle open={open} onToggle={toggleSidebar} />
         )}
-        {/* With the panel and its New chat folded away, New chat comes up here. */}
-        {canToggle && !open && (
-          <TitlebarButton tooltip="New chat" data-slot="titlebar-new-chat" onClick={() => select({ type: "draft", kind: "chat" })}>
-            <ComposeEditSquare />
-          </TitlebarButton>
-        )}
       </TitlebarTips>
     </div>
   );
@@ -487,15 +481,21 @@ export function StripMark() {
 }
 
 /**
- * The Home panel collapsed: the mark, Search, and Projects and Chats, each opening
+ * The Home panel collapsed: the mark, New chat, Search, and Projects and Chats, each opening
  * its list beside the strip.
  */
 export function AppStrip() {
   const shortcuts = useShortcuts();
+  const isChatDraft = useApp((s) => s.selection.type === "draft" && s.selection.kind === "chat");
   return (
     <>
       <StripMark />
       <NavList className="px-2 pt-1">
+        <li>
+          <StripButton label="New chat" selected={isChatDraft} onClick={() => select({ type: "draft", kind: "chat" })}>
+            <ComposeEditSquare />
+          </StripButton>
+        </li>
         <li>
           <StripButton label="Search" shortcut={shortcuts.search} onClick={() => openSearch()}>
             <MagnifyingGlassSearch />

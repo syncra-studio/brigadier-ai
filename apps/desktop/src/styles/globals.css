@@ -187,12 +187,8 @@
   );
 }
 
-/* Where Back, Forward and the sidebar toggle end in the titlebar, and while the panel is
-   folded, New chat after them (AppSidebar's TitlebarNav). */
+/* Where Back, Forward and the sidebar toggle end in the titlebar (AppSidebar's TitlebarNav). */
 [data-slot="sidebar-wrapper"] {
-  --titlebar-nav-end: calc(var(--spacing-titlebar-nav-end) + var(--spacing-icon-button-md) + var(--spacing) * 1.5);
-}
-[data-slot="sidebar-wrapper"][data-state="expanded"] {
   --titlebar-nav-end: var(--spacing-titlebar-nav-end);
 }
 
@@ -314,7 +310,7 @@
 }
 
 /* A session's tabs start after a divider: at the sidebar panel's end edge, or where the panel is
-   folded, after the titlebar's controls and New chat. */
+   folded, after the titlebar's controls. */
 [data-slot="session-tabs"]::before {
   @apply transition-[inset-inline-start] duration-300 ease-sidebar motion-reduce:transition-none;
   inset-inline-start: max(

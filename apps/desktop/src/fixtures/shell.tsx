@@ -381,11 +381,14 @@ async function panels() {
 function tabsStart() {
   const sidebar = rect(one('[data-slot="sidebar-panel"]'))!;
   const nav = [...document.querySelectorAll<HTMLElement>('[data-slot="titlebar-nav"] button')].map((button) => button.getAttribute("aria-label"));
-  const newChat = rect(one('[data-slot="titlebar-new-chat"]'));
+  const toggle = rect(one('[data-slot="sidebar-toggle"]'))!;
+  const strip = [...document.querySelectorAll<HTMLElement>('[data-slot="sidebar-panel"] button[aria-label]')]
+    .filter((button) => !button.closest("[inert]"));
   const firstTab = rect(one('[data-slot="session-tabs"] [data-tab-id="chat"]'))!;
   const rule = getComputedStyle(one('[data-slot="session-tabs"]')!, "::before");
   return {
-    nav, divider: divider(), sidebarEnd: sidebar.x + sidebar.w, newChatEnd: newChat ? newChat.x + newChat.w : null, firstTab: firstTab.x,
+    nav, divider: divider(), sidebarEnd: sidebar.x + sidebar.w, toggleEnd: toggle.x + toggle.w,
+    strip: strip.map((button) => button.getAttribute("aria-label")), firstTab: firstTab.x,
     rule: { width: Number.parseFloat(rule.width), height: Math.round(Number.parseFloat(rule.height)), shown: rule.content !== "none" && rule.display !== "none" },
   };
 }
@@ -397,7 +400,7 @@ async function driveLayout(): Promise<Record<string, unknown>> {
   await settle();
   seen.expandedStart = tabsStart();
   seen.expanded = await panels();
-  // The sidebar folded: New chat joins the titlebar's controls, the divider follows it.
+  // The sidebar folded: New chat lives in the strip; the divider follows the sidebar toggle.
   seen.folding = await watch(() => click('[data-slot="sidebar-toggle"]'), 700)
     // Only the tabs move over: the toolbar at the end stays, and the window never scrolls.
     .then((moved) => moved.filter((line) => /^(Context|Terminal|Right sidebar) |^(window|scrollingElement) /.test(line)));
