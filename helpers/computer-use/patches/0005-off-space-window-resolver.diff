@@ -1,0 +1,83 @@
+Why: a host off-Space window resolver (ax::bindings::set_off_space_window_resolver) used in place of the built-in remote-token probe, so an embedding app can reach windows on another Space with element ids it remembers and a scan that resumes where it stopped.
+
+copy_ax_windows_including probes element ids 0..2000 from the first id on
+every call, within 300 ms. A long-running app's window can sit beyond what
+that budget covers (a document window at element id 2531 was measured out of
+reach), so every read of it and every action on it is refused. An app hands
+out such a window's element only while it is main or focused, and its id
+stays the same for the window's life, so a host that watches the app's
+window notifications and remembers ids can find it at once. The resolver,
+when set, replaces the probe (a miss does not pay both budgets) and keeps its
+contract: an AXWindow element for exactly that window id, retained. Without
+a resolver nothing changes. Upstreamable as is.
+
+diff --git a/crates/platform-macos/src/ax/bindings.rs b/crates/platform-macos/src/ax/bindings.rs
+index 21ac345d..5faaf3a4 100644
+--- a/crates/platform-macos/src/ax/bindings.rs
++++ b/crates/platform-macos/src/ax/bindings.rs
+@@ -940,11 +940,46 @@ pub unsafe fn copy_ax_windows_including(
+     if should_probe_off_space_window(listed, || {
+         crate::windows::window_space_view_by_id(window_id)
+     }) {
+-        windows.extend(copy_ax_window_by_remote_token(pid, window_id));
++        windows.extend(resolve_off_space_window(
++            OFF_SPACE_WINDOW_RESOLVER.get().copied(),
++            pid,
++            window_id,
++        ));
+     }
+     windows
+ }
+ 
++/// Finds the window element for a window `AXWindows` omits, in place of
++/// [`copy_ax_window_by_remote_token`]. Same contract: only an `AXWindow`
++/// element whose `_AXUIElementGetWindow` equals `window_id`, retained, for
++/// the caller to release.
++pub type OffSpaceWindowResolver = fn(pid: i32, window_id: u32) -> Option<AXUIElementRef>;
++
++static OFF_SPACE_WINDOW_RESOLVER: std::sync::OnceLock<OffSpaceWindowResolver> =
++    std::sync::OnceLock::new();
++
++/// Lets an embedding app find windows on another Space its own way (for
++/// example from element ids it remembered from the app's window
++/// notifications) instead of the built-in probe, which scans from the first
++/// element id on every call. The resolver replaces the probe, so a miss does
++/// not pay both. The first resolver set wins; returns whether this one was.
++pub fn set_off_space_window_resolver(resolver: OffSpaceWindowResolver) -> bool {
++    OFF_SPACE_WINDOW_RESOLVER.set(resolver).is_ok()
++}
++
++/// The element for an off-Space window: the host resolver's when one is set,
++/// else the built-in probe's.
++unsafe fn resolve_off_space_window(
++    resolver: Option<OffSpaceWindowResolver>,
++    pid: i32,
++    window_id: u32,
++) -> Option<AXUIElementRef> {
++    match resolver {
++        Some(resolve) => resolve(pid, window_id),
++        None => copy_ax_window_by_remote_token(pid, window_id),
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -998,6 +1033,17 @@ mod tests {
+         ))));
+     }
+ 
++    #[test]
++    fn a_host_off_space_resolver_replaces_the_probe() {
++        static ASKED: std::sync::Mutex<Vec<(i32, u32)>> = std::sync::Mutex::new(Vec::new());
++        fn resolver(pid: i32, window_id: u32) -> Option<AXUIElementRef> {
++            ASKED.lock().unwrap().push((pid, window_id));
++            None
++        }
++        assert!(unsafe { resolve_off_space_window(Some(resolver), 42, 7) }.is_none());
++        assert_eq!(*ASKED.lock().unwrap(), vec![(42, 7)]);
++    }
++
+     #[test]
+     fn binary_value_accepts_booleans_and_exact_zero_or_one() {
+         let true_value = CFBoolean::true_value();

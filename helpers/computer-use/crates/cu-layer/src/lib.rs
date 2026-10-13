@@ -20,6 +20,8 @@ pub mod lookup;
 pub mod never_front;
 pub mod no_tcc;
 #[cfg(target_os = "macos")]
+pub mod offspace;
+#[cfg(target_os = "macos")]
 pub mod page;
 #[cfg(target_os = "macos")]
 pub mod registry;

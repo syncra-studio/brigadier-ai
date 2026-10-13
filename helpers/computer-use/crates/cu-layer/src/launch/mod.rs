@@ -289,6 +289,7 @@ impl Tool for LaunchAppTool {
                 if new == 0 {
                     put_window_first(&mut windows, apps::main_window_id(pid));
                 }
+                crate::offspace::remember_front_windows(pid);
                 let app = apps::running_apps().into_iter().find(|a| a.pid == pid);
                 return Ok(Launched { pid, app, windows });
             }
@@ -301,9 +302,15 @@ impl Tool for LaunchAppTool {
                 )
             };
             // An app already running opens the documents in windows of its
-            // own, often only after LaunchServices returns.
-            let opens_in_running_app =
-                !urls.is_empty() && !creates_new_instance && apps::running_apps().iter().any(named);
+            // own, often only after LaunchServices returns; it is watched
+            // first so each one is caught as it opens, also on another Space.
+            let running = (!urls.is_empty())
+                .then(|| apps::running_apps().into_iter().find(|app| named(app)))
+                .flatten();
+            if let Some(app) = &running {
+                crate::offspace::watch(app.pid);
+            }
+            let opens_in_running_app = running.is_some() && !creates_new_instance;
             let request = apps::Launch {
                 bundle_id: bundle_id.as_deref(),
                 name: name.as_deref(),
@@ -343,6 +350,7 @@ impl Tool for LaunchAppTool {
                 put_window_first(&mut windows, apps::main_window_id(pid));
                 windows
             };
+            crate::offspace::remember_front_windows(pid);
             let app = apps::running_apps().into_iter().find(|a| a.pid == pid);
             Ok::<_, anyhow::Error>(Launched { pid, app, windows })
         })

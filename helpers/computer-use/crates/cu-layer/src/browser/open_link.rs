@@ -173,6 +173,8 @@ pub async fn open_in_running_browser(
     let app_bundle = app.bundle_id.clone()?;
     let kind = browser_kind(&app_bundle)?;
     let pid = app.pid;
+    // Catch the new window as it opens, also when it lands on another Space.
+    crate::offspace::watch(pid);
 
     if let Some(port) = debugging_port(pid, requested_port).await {
         let params = urls.iter().map(|u| background_window_params(u)).collect();

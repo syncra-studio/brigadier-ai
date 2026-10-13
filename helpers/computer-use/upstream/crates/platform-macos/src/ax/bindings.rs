@@ -940,9 +940,44 @@ pub unsafe fn copy_ax_windows_including(
     if should_probe_off_space_window(listed, || {
         crate::windows::window_space_view_by_id(window_id)
     }) {
-        windows.extend(copy_ax_window_by_remote_token(pid, window_id));
+        windows.extend(resolve_off_space_window(
+            OFF_SPACE_WINDOW_RESOLVER.get().copied(),
+            pid,
+            window_id,
+        ));
     }
     windows
+}
+
+/// Finds the window element for a window `AXWindows` omits, in place of
+/// [`copy_ax_window_by_remote_token`]. Same contract: only an `AXWindow`
+/// element whose `_AXUIElementGetWindow` equals `window_id`, retained, for
+/// the caller to release.
+pub type OffSpaceWindowResolver = fn(pid: i32, window_id: u32) -> Option<AXUIElementRef>;
+
+static OFF_SPACE_WINDOW_RESOLVER: std::sync::OnceLock<OffSpaceWindowResolver> =
+    std::sync::OnceLock::new();
+
+/// Lets an embedding app find windows on another Space its own way (for
+/// example from element ids it remembered from the app's window
+/// notifications) instead of the built-in probe, which scans from the first
+/// element id on every call. The resolver replaces the probe, so a miss does
+/// not pay both. The first resolver set wins; returns whether this one was.
+pub fn set_off_space_window_resolver(resolver: OffSpaceWindowResolver) -> bool {
+    OFF_SPACE_WINDOW_RESOLVER.set(resolver).is_ok()
+}
+
+/// The element for an off-Space window: the host resolver's when one is set,
+/// else the built-in probe's.
+unsafe fn resolve_off_space_window(
+    resolver: Option<OffSpaceWindowResolver>,
+    pid: i32,
+    window_id: u32,
+) -> Option<AXUIElementRef> {
+    match resolver {
+        Some(resolve) => resolve(pid, window_id),
+        None => copy_ax_window_by_remote_token(pid, window_id),
+    }
 }
 
 #[cfg(test)]
@@ -996,6 +1031,17 @@ mod tests {
             Some(true),
             false
         ))));
+    }
+
+    #[test]
+    fn a_host_off_space_resolver_replaces_the_probe() {
+        static ASKED: std::sync::Mutex<Vec<(i32, u32)>> = std::sync::Mutex::new(Vec::new());
+        fn resolver(pid: i32, window_id: u32) -> Option<AXUIElementRef> {
+            ASKED.lock().unwrap().push((pid, window_id));
+            None
+        }
+        assert!(unsafe { resolve_off_space_window(Some(resolver), 42, 7) }.is_none());
+        assert_eq!(*ASKED.lock().unwrap(), vec![(42, 7)]);
     }
 
     #[test]

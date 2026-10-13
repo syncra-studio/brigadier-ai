@@ -49,6 +49,7 @@ Patches applied, in order:
 - `patches/0002-registry-wrap.diff`: ToolRegistry::wrap lets an embedding app put its own checks around a tool in place, so direct calls, run_steps steps and the registry's own re-routes all pass them.
 - `patches/0003-restore-policy.diff`: a host restore policy (focus_steal::set_restore_policy) asked before every restore the driver makes, so an embedding app can leave the user's own switches and system prompts in front.
 - `patches/0004-host-authorized-wrap.diff`: ToolRegistry::wrap_host_authorized lets an embedding app that replaces a tool with its own implementation authorize the calls the driver admits only in unrestricted mode, with its own check, so unrestricted mode can stay off.
+- `patches/0005-off-space-window-resolver.diff`: a host off-Space window resolver (ax::bindings::set_off_space_window_resolver) used in place of the built-in remote-token probe, so an embedding app can reach windows on another Space with element ids it remembers and a scan that resumes where it stopped.
 <!-- sync:end -->
 
 ## Where the driver keeps state

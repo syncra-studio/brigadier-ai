@@ -31,6 +31,7 @@ pub struct Options {
 /// session ends.
 pub fn build(options: Options) -> Result<Arc<ToolRegistry>, String> {
     crate::focus_policy::install();
+    crate::offspace::install();
     install_recording_hooks();
     let scope = cua_driver_core::session_authorization::configured_registry()?
         .legacy_context()?
