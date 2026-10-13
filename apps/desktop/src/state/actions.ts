@@ -159,7 +159,7 @@ export async function loadEarlier(id: string): Promise<void> {
   }
 }
 
-/** Blob reads in flight, by message id, so each full text is requested once. */
+/** Blob reads in flight, by conversation and message, so each full text is requested once. */
 const fullTextLoading = new Set<string>();
 
 /** Fetches the full text of a message whose body lives in the blob store. */
@@ -168,8 +168,10 @@ export async function loadFullText(
   messageId: string,
   hash: string,
 ): Promise<void> {
-  if (fullTextLoading.has(messageId)) return;
-  fullTextLoading.add(messageId);
+  // By conversation too: a message between sessions has one id on both sides.
+  const key = `${conversationId}:${messageId}`;
+  if (fullTextLoading.has(key)) return;
+  fullTextLoading.add(key);
   try {
     const { text } = await request({ method: "readBlobText", hash });
     updateThread(conversationId, (thread) => ({
@@ -177,7 +179,7 @@ export async function loadFullText(
       fullText: { ...thread.fullText, [messageId]: text },
     }));
   } finally {
-    fullTextLoading.delete(messageId);
+    fullTextLoading.delete(key);
   }
 }
 
