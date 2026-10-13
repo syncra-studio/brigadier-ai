@@ -198,24 +198,39 @@ impl SessionManager {
         let (root, path) = self.tab_file(id)?;
         super::blocking(move || {
             let full = tab_file_in(&root, &path)?;
-            let now = std::fs::read(&full)
-                .map_err(|err| Error::Invalid(format!("couldn't read {path}: {err}")))?;
-            let current = file_revision(&now);
-            if current != args.base_revision {
-                return Err(Error::Invalid(format!(
-                    "not saved: {path} changed since revision {} (it is at revision {current} now). Read it again with read_tab_file and redo your change on what it holds now.",
-                    args.base_revision
-                )));
-            }
-            write_beside(&full, args.text.as_bytes())
-                .map_err(|err| Error::Invalid(format!("couldn't save {path}: {err}")))?;
-            Ok(format!(
-                "Saved: {path} is at revision {}. It shows in the user's open tab.",
-                file_revision(args.text.as_bytes())
-            ))
+            save_checked(&full, &path, &args.base_revision, args.text.as_bytes())
         })
         .await
     }
+}
+
+/// Saves `text` as `full` (the checkout's `path`) if it is still at `base_revision`. Saves are
+/// one at a time, so of two chats saving on the same revision, one gets a conflict.
+fn save_checked(
+    full: &std::path::Path,
+    path: &str,
+    base_revision: &str,
+    text: &[u8],
+) -> Result<String> {
+    // Few and quick: one lock for every tab chat's file saves.
+    static SAVES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = SAVES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = std::fs::read(full)
+        .map_err(|err| Error::Invalid(format!("couldn't read {path}: {err}")))?;
+    let current = file_revision(&now);
+    if current != base_revision {
+        return Err(Error::Invalid(format!(
+            "not saved: {path} changed since revision {base_revision} (it is at revision {current} now). Read it again with read_tab_file and redo your change on what it holds now."
+        )));
+    }
+    write_beside(full, text)
+        .map_err(|err| Error::Invalid(format!("couldn't save {path}: {err}")))?;
+    Ok(format!(
+        "Saved: {path} is at revision {}. It shows in the user's open tab.",
+        file_revision(text)
+    ))
 }
 
 /// A file's revision: a hash of its bytes.
@@ -253,4 +268,38 @@ fn write_beside(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&temp);
     }
     written
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn of_saves_on_the_same_revision_only_one_goes_in() {
+        let dir = std::env::temp_dir().join(format!("brigadier-tab-save-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.md");
+        std::fs::write(&file, "first").unwrap();
+        let base = file_revision(b"first");
+        let racers = 16;
+        let start = std::sync::Arc::new(std::sync::Barrier::new(racers));
+        let saved = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..racers)
+                .map(|n| {
+                    let (file, base, start) = (&file, &base, start.clone());
+                    scope.spawn(move || {
+                        start.wait();
+                        save_checked(file, "notes.md", base, format!("edit {n}").as_bytes()).is_ok()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .filter(|ok| *ok)
+                .count()
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(saved, 1, "every save but one must get a conflict");
+    }
 }
