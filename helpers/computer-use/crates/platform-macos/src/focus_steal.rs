@@ -57,7 +57,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use objc2_app_kit::{
     NSApplicationActivationOptions, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
@@ -83,11 +83,13 @@ pub struct SuppressionHandle(Uuid);
 /// Dispatcher-internal entry shape.
 #[derive(Debug)]
 struct Entry {
-    /// `Some(pid)` matches only that pid's activations. `None` is a
-    /// wildcard — matches any activation whose pid != `restore_to`.
-    /// The wildcard variant is used while a launch is in flight and the
-    /// real pid isn't known yet.
+    /// `Some(pid)` matches only that pid's activations. `None` matches
+    /// only an app launched after the entry began (one the action itself
+    /// launched, whose pid isn't known yet), never an app that was already
+    /// running: switching to one of those is the user's doing.
     target_pid: Option<i32>,
+    /// Wall-clock start, compared with an activated app's launch date.
+    created: SystemTime,
     /// Pid to restore focus to when an activation matches this entry.
     restore_to: i32,
     /// Monotonic deadline. After this, the entry is pruned without
@@ -238,6 +240,7 @@ impl Dispatcher {
         let entry = Entry {
             target_pid,
             restore_to,
+            created: SystemTime::now(),
             deadline: Instant::now() + ENTRY_DEADLINE,
             origin,
         };
@@ -269,7 +272,13 @@ impl Dispatcher {
     /// Snapshot the entries (cloned to a small Vec) — used by tests
     /// and the activation handler to evaluate matches without holding
     /// the lock across the restore call.
-    fn snapshot_matches(&self, activated_pid: i32) -> Vec<i32> {
+    /// The restore_to pids of the entries an activation matches, each with
+    /// whether the activated app was launched after that entry began.
+    fn snapshot_matches(
+        &self,
+        activated_pid: i32,
+        launched_at: Option<SystemTime>,
+    ) -> Vec<(i32, bool)> {
         let mut guard = self.entries.lock().unwrap();
         // Reap expired entries first — keeps the dispatcher honest even
         // if the janitor hasn't ticked yet.
@@ -280,13 +289,15 @@ impl Dispatcher {
             .filter(|e| {
                 match e.target_pid {
                     Some(p) => p == activated_pid,
-                    // Wildcard: match any activation except the restore_to
-                    // pid (don't fight ourselves when we re-activate the
-                    // prior frontmost).
-                    None => activated_pid != e.restore_to,
+                    // Wildcard: only an app the action launched (never the
+                    // restore_to pid, so we don't fight ourselves).
+                    None => {
+                        activated_pid != e.restore_to
+                            && launched_at.is_some_and(|at| at >= e.created)
+                    }
                 }
             })
-            .map(|e| e.restore_to)
+            .map(|e| (e.restore_to, launched_at.is_some_and(|at| at >= e.created)))
             .collect()
     }
 
@@ -454,10 +465,93 @@ fn handle_activation(dispatcher: &Arc<Dispatcher>, note: &objc2_foundation::NSNo
         pid as i32
     };
 
-    let restore_pids = dispatcher.snapshot_matches(activated_pid);
-    for pid in restore_pids {
+    let app =
+        unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(activated_pid) };
+    let launched_at = app
+        .as_ref()
+        .and_then(|app| unsafe { app.launchDate() })
+        .map(|date| {
+            SystemTime::UNIX_EPOCH
+                + Duration::from_secs_f64(unsafe { date.timeIntervalSince1970() }.max(0.0))
+        });
+    let matches = dispatcher.snapshot_matches(activated_pid, launched_at);
+    if matches.is_empty() {
+        return;
+    }
+    // An app the action itself launched can't be the user's own switch.
+    let launched_by_action = matches.iter().all(|(_, fresh)| *fresh);
+    let bundle = app
+        .as_ref()
+        .and_then(|app| unsafe { app.bundleIdentifier() })
+        .map(|id| id.to_string());
+    let regular = app.as_ref().is_some_and(|app| unsafe {
+        app.activationPolicy() == objc2_app_kit::NSApplicationActivationPolicy::Regular
+    });
+    let idle = if launched_by_action {
+        f64::INFINITY
+    } else {
+        seconds_since_user_input()
+    };
+    if let Some(reason) = leave_in_front(bundle.as_deref(), regular, idle) {
+        tracing::info!(activated_pid, ?bundle, reason, "focus-steal: left in front");
+        return;
+    }
+    for (pid, _) in matches {
         restore_focus(pid);
     }
+}
+
+/// System prompts and panels that must never be sent back: a password or
+/// Touch ID prompt, a permission or notification alert.
+const SYSTEM_UI: &[&str] = &[
+    "com.apple.LocalAuthentication.UIAgent",
+    "com.apple.SecurityAgent",
+    "com.apple.UserNotificationCenter",
+    "com.apple.notificationcenterui",
+    "com.apple.coreservices.uiagent",
+    "com.apple.CoreLocationAgent",
+    "com.apple.accessibility.universalAccessAuthWarn",
+    "com.apple.loginwindow",
+    "com.apple.dock",
+    "com.apple.controlcenter",
+    "com.apple.Spotlight",
+    "com.apple.systemuiserver",
+];
+
+/// Seconds a real person needs to have been idle before an activation can
+/// be taken for an app stealing the front rather than for their own switch.
+const USER_INPUT_GRACE_SECS: f64 = 1.0;
+
+/// Why an activation that matched a suppression is left alone, if it is:
+/// it followed the user's own keyboard or pointer input, or it is a system
+/// prompt or panel rather than a regular app.
+fn leave_in_front(
+    bundle: Option<&str>,
+    regular_app: bool,
+    secs_since_user_input: f64,
+) -> Option<&'static str> {
+    if bundle.is_some_and(|id| SYSTEM_UI.contains(&id)) {
+        return Some("system prompt");
+    }
+    if !regular_app {
+        return Some("not a regular app");
+    }
+    if secs_since_user_input < USER_INPUT_GRACE_SECS {
+        return Some("user input");
+    }
+    None
+}
+
+/// Seconds since the last keyboard, pointer or trackpad event from the
+/// hardware (events the helper posts to an app don't count).
+fn seconds_since_user_input() -> f64 {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
+    }
+    const HID_SYSTEM_STATE: i32 = 1;
+    const ANY_INPUT_EVENT: u32 = u32::MAX;
+    unsafe { CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, ANY_INPUT_EVENT) }
 }
 
 /// Re-activate `pid` if it's still running. Safe to call from any
@@ -488,24 +582,54 @@ mod tests {
         let d = Arc::new(Dispatcher::new());
         let h = d.add(Some(42), 7, "test.add");
         assert_eq!(d.len(), 1);
-        let matches = d.snapshot_matches(42);
-        assert_eq!(matches, vec![7]);
+        let matches = d.snapshot_matches(42, None);
+        assert_eq!(matches, vec![(7, false)]);
         // Non-matching pid: no restore candidates.
-        assert!(d.snapshot_matches(99).is_empty());
+        assert!(d.snapshot_matches(99, None).is_empty());
         d.remove(h);
         assert_eq!(d.len(), 0);
     }
 
-    /// Wildcard entries (`target_pid = None`) match every activation
-    /// except the entry's own restore_to pid.
+    /// Wildcard entries (`target_pid = None`) match only an app launched
+    /// after the entry began, never one that was already running (the
+    /// user switching to it), and never the entry's own restore_to pid.
     #[test]
-    fn wildcard_matches_all_but_restore_to() {
+    fn wildcard_matches_only_an_app_launched_during_the_action() {
         let d = Arc::new(Dispatcher::new());
+        let before = SystemTime::now() - Duration::from_secs(60);
         let _h = d.add(None, 7, "test.wild");
-        // pid 99 != restore_to 7 → should match.
-        assert_eq!(d.snapshot_matches(99), vec![7]);
-        // pid 7 == restore_to → must NOT match (don't fight ourselves).
-        assert!(d.snapshot_matches(7).is_empty());
+        let after = SystemTime::now() + Duration::from_millis(1);
+        assert_eq!(d.snapshot_matches(99, Some(after)), vec![(7, true)]);
+        assert!(d.snapshot_matches(99, Some(before)).is_empty());
+        assert!(d.snapshot_matches(99, None).is_empty());
+        assert!(d.snapshot_matches(7, Some(after)).is_empty());
+    }
+
+    /// The user's own input, system prompts and non-regular apps are
+    /// never sent back.
+    #[test]
+    fn user_switches_and_system_prompts_are_left_in_front() {
+        assert_eq!(
+            leave_in_front(Some("com.apple.LocalAuthentication.UIAgent"), true, 60.0),
+            Some("system prompt")
+        );
+        assert_eq!(
+            leave_in_front(Some("com.apple.UserNotificationCenter"), true, 60.0),
+            Some("system prompt")
+        );
+        assert_eq!(
+            leave_in_front(Some("x.agent"), false, 60.0),
+            Some("not a regular app")
+        );
+        assert_eq!(
+            leave_in_front(Some("company.browser"), true, 0.3),
+            Some("user input")
+        );
+        assert_eq!(leave_in_front(Some("com.apple.TextEdit"), true, 5.0), None);
+        assert_eq!(
+            leave_in_front(Some("com.apple.TextEdit"), true, f64::INFINITY),
+            None
+        );
     }
 
     /// Lease Drop is the standard remove path.
@@ -552,6 +676,7 @@ mod tests {
                 Entry {
                     target_pid: Some(42),
                     restore_to: 7,
+                    created: SystemTime::now(),
                     deadline: Instant::now() - Duration::from_secs(1),
                     origin: "test.leak",
                 },
@@ -559,7 +684,7 @@ mod tests {
         }
         assert_eq!(d.len(), 1);
         // snapshot_matches reaps expired entries before matching.
-        let matches = d.snapshot_matches(42);
+        let matches = d.snapshot_matches(42, None);
         assert!(matches.is_empty(), "expired entry should not fire");
         assert_eq!(d.len(), 0, "snapshot_matches should purge expired");
     }
@@ -644,10 +769,10 @@ mod tests {
         let d = Arc::new(Dispatcher::new());
         let _a = d.add(Some(42), 1, "test.m1");
         let _b = d.add(Some(42), 2, "test.m2");
-        let matches = d.snapshot_matches(42);
+        let matches = d.snapshot_matches(42, None);
         assert_eq!(matches.len(), 2);
         // Set equality — order is HashMap-dependent.
-        assert!(matches.contains(&1));
-        assert!(matches.contains(&2));
+        assert!(matches.contains(&(1, false)));
+        assert!(matches.contains(&(2, false)));
     }
 }
