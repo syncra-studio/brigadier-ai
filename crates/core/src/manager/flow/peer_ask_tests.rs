@@ -304,3 +304,59 @@ async fn the_twenty_first_approval_in_a_minute_is_refused() {
     flow.settled_in(&api).await;
     flow.stop().await;
 }
+
+/// The daemon dies once the user's answer to the card is stored, before the send went or was
+/// declined: the next launch does what the answer said, once.
+async fn an_answer_cut_off_by_a_crash_holds(name: &str, allow: bool) {
+    use crate::manager::peers::PeerFault;
+    let peers = Peers::new();
+    let mut flow = Flow::start(name, ask(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    let (card, id) = sent_for_ok(&flow, &peers, &api).await;
+    *flow.manager.peer_fault.lock().unwrap() = Some(PeerFault::AfterCardAnswer);
+    let decision = if allow {
+        ApprovalDecision::Allow
+    } else {
+        ApprovalDecision::Deny {
+            message: String::new(),
+        }
+    };
+    flow.manager
+        .answer_card(flow.conversation.clone(), card, decision)
+        .await
+        .unwrap();
+    assert!(flow.manager.peer_fault.lock().unwrap().is_none(), "it died");
+    flow.crash().await;
+    if allow {
+        flow.until_in(&api, "the message seen", |board| {
+            board
+                .peer_messages
+                .get(&id)
+                .is_some_and(|record| record.state == PeerState::Seen)
+        })
+        .await;
+        flow.settled_in(&api).await;
+        assert_eq!(peers.count_in(&api, &format!("· id {id}]")), 1);
+    } else {
+        flow.until("the send declined", |board| {
+            state_of(board, &id) == PeerState::Declined
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(flow.board_of(&api).await.peer_messages.is_empty());
+        assert!(peers.inputs_of(&api).is_empty());
+    }
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_send_cut_off_by_a_crash_goes_at_the_next_launch() {
+    an_answer_cut_off_by_a_crash_holds("peer-ask-crash-send", true).await;
+}
+
+#[tokio::test]
+async fn a_dont_send_cut_off_by_a_crash_declines_at_the_next_launch() {
+    an_answer_cut_off_by_a_crash_holds("peer-ask-crash-deny", false).await;
+}

@@ -297,6 +297,13 @@ impl SessionManager {
             }
             // The message waiting for the user's OK goes now, or never.
             ApprovalSubject::PeerMessage { .. } => {
+                #[cfg(test)]
+                if self
+                    .peer_fault_at(super::peers::PeerFault::AfterCardAnswer)
+                    .await
+                {
+                    return Ok(());
+                }
                 let send = !matches!(decision, ApprovalDecision::Deny { .. });
                 self.answer_peer_card(&approval, send).await;
             }

@@ -195,6 +195,13 @@ impl SessionManager {
             // Nothing runs any more: what was working is over or waits for the user.
             self.settle_requests(&conversation.id).await;
         }
+        // A message whose card the user answered just before the daemon stopped goes now, or
+        // is declined.
+        for conversation in self.core.catalog().conversations {
+            if !conversation.deleting {
+                self.recover_peer_cards(&conversation.id).await;
+            }
+        }
         self.sweep_test_data().await;
     }
 

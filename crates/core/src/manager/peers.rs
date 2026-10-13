@@ -10,7 +10,7 @@ use crate::model::{
 };
 use crate::sessions::PeerSend;
 use crate::tools::MessageSession;
-use crate::work::{Approval, ApprovalSubject, InjectionKind, RequestState};
+use crate::work::{Approval, ApprovalSubject, CardState, InjectionKind, RequestState};
 use crate::{Error, Result, now_ms};
 
 /// Messages between sessions with no one's word in between after which a turn may send no
@@ -190,6 +190,8 @@ pub(crate) enum PeerFault {
     BeforeEnqueue,
     /// The receiver's CLI took it in a turn; `seen` isn't recorded.
     AfterTaken,
+    /// The user's answer to its card is stored; the send isn't released or declined.
+    AfterCardAnswer,
 }
 
 /// Where a delivered message went.
@@ -702,6 +704,33 @@ impl SessionManager {
             } else {
                 self.deliver_peer(&conversation.id, &record.message_id)
                     .await;
+            }
+        }
+    }
+
+    /// At startup, once every session has had what it hadn't taken put back: a send of
+    /// session `id` still waiting for the user's OK whose card they answered before the
+    /// daemon stopped goes, or is declined, now (its receiver's own recovery would otherwise
+    /// deliver it a second time).
+    pub(super) async fn recover_peer_cards(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        for approval in board.approvals.values() {
+            let ApprovalSubject::PeerMessage { message_id, .. } = &approval.subject else {
+                continue;
+            };
+            let send = match approval.state {
+                CardState::Allowed { .. } => true,
+                CardState::Denied { .. } => false,
+                CardState::Pending | CardState::Expired { .. } => continue,
+            };
+            let waiting = board
+                .peer_messages
+                .get(message_id)
+                .is_some_and(|record| record.outgoing && record.state == PeerState::WaitingForOk);
+            if waiting {
+                self.answer_peer_card(approval, send).await;
             }
         }
     }
