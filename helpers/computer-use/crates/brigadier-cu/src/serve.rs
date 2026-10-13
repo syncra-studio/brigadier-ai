@@ -521,6 +521,25 @@ fn validate_peer_matches_daemon_code(peer_pid: libc::pid_t) -> Result<(), String
     }
 }
 
+/// Tell a peer the daemon won't serve it, so it doesn't take the closed
+/// connection for a hung daemon and replace one that serves everyone else.
+#[cfg(all(unix, target_os = "macos"))]
+fn tell_refused_peer(mut stream: tokio::net::UnixStream) {
+    use tokio::io::AsyncWriteExt;
+    tokio::spawn(async move {
+        let line = serde_json::json!({
+            "ok": false,
+            "refused": true,
+            "error": crate::supervisor::REFUSED_MESSAGE,
+        });
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            stream.write_all(format!("{line}\n").as_bytes()).await?;
+            stream.shutdown().await
+        })
+        .await;
+    });
+}
+
 /// `errSecCSStaticCodeChanged`: the file a process was started from no
 /// longer matches the process, as after an update replaced the bundle.
 #[cfg(all(unix, target_os = "macos"))]
@@ -1751,6 +1770,7 @@ pub async fn run_serve_with_owner(
                         });
                     if let Err(refusal) = verdict {
                         eprintln!("brigadier-cu: refused daemon socket peer: {refusal}");
+                        tell_refused_peer(stream);
                         continue;
                     }
                 }

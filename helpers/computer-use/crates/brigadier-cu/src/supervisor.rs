@@ -26,6 +26,11 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::serve::{serialize_request, DaemonRequest};
 
+/// What an agent is told when the running helper won't serve its process.
+pub const REFUSED_MESSAGE: &str = "Brigadier Computer Use refused this agent's connection: the \
+     program the agent reached it through isn't signed as part of Brigadier. Start the agent \
+     again from Brigadier";
+
 /// How long a probe may wait for the daemon to answer a `list` request.
 const PROBE_DEADLINE: Duration = Duration::from_secs(3);
 /// How long a launched daemon may take to answer its first probe.
@@ -44,6 +49,9 @@ pub enum Health {
     /// Something accepts connections but did not answer in time, or its main
     /// loop has stopped running.
     Hung,
+    /// The daemon answered that it won't serve this process. It is healthy
+    /// for everyone else, so it is never stopped for this.
+    Refused,
 }
 
 impl Health {
@@ -99,6 +107,9 @@ fn health_from_answer(line: &[u8]) -> Health {
     let Ok(answer) = serde_json::from_slice::<serde_json::Value>(line) else {
         return Health::Hung;
     };
+    if answer.get("refused").and_then(serde_json::Value::as_bool) == Some(true) {
+        return Health::Refused;
+    }
     if answer.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
         return Health::Hung;
     }
@@ -154,6 +165,10 @@ pub fn ensure(socket_path: &str, claude_code_compat: bool) -> anyhow::Result<()>
                 "daemon is from another build; replacing it",
             );
             stop_recorded_daemon(&pid_file);
+        }
+        Health::Refused => {
+            crate::journal::record_event("helper_recovery", "daemon refused this process");
+            anyhow::bail!(REFUSED_MESSAGE);
         }
         Health::Hung => {
             crate::journal::record_event("helper_recovery", "daemon accepted but did not answer");
@@ -422,6 +437,11 @@ mod tests {
             Health::Hung
         );
         assert_eq!(health_from_answer(b"garbage"), Health::Hung);
+        // A daemon that won't serve this process is healthy for the others.
+        assert_eq!(
+            health_from_answer(br#"{"ok":false,"refused":true,"error":"refused"}"#),
+            Health::Refused
+        );
     }
 
     #[test]

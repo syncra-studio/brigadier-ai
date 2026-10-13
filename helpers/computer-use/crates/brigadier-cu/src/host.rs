@@ -52,6 +52,7 @@ fn probe(socket: &str) -> serde_json::Value {
         Health::Healthy { build_id } => ("healthy", build_id.clone()),
         Health::Absent => ("absent", None),
         Health::Hung => ("hung", None),
+        Health::Refused => ("refused", None),
     };
     serde_json::json!({
         "state": state,
