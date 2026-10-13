@@ -100,6 +100,36 @@ impl Peers {
     }
 }
 
+impl Peers {
+    /// Has each turn of session `from` that took a message from `to` answer it with a reply
+    /// saying `text`, once `gate` (if any) lets it; other turns answer "Done.".
+    pub(super) fn replies(
+        &self,
+        from: &ConversationId,
+        to: &ConversationId,
+        text: &str,
+        gate: Option<Arc<tokio::sync::Notify>>,
+    ) -> Sent {
+        let sent = Sent::default();
+        let (kept, to, text) = (sent.clone(), to.clone(), text.to_owned());
+        self.on(from, move |turn| {
+            let (kept, to, text, gate) = (kept.clone(), to.clone(), text.clone(), gate.clone());
+            async move {
+                let Some(original) = header_id(&turn.input) else {
+                    return Reply::text("Done.");
+                };
+                if let Some(gate) = gate {
+                    gate.notified().await;
+                }
+                let reply = send(&turn, &to, &text, Some(&original)).await;
+                kept.lock().unwrap().push(reply);
+                Reply::text("Replied.")
+            }
+        });
+        sent
+    }
+}
+
 /// The one reply `sent` holds.
 pub(super) fn only(sent: &Sent) -> (String, bool) {
     let sent = sent.lock().unwrap();

@@ -150,7 +150,6 @@ impl Core {
     }
 
     /// Records that the thread of `id` no longer waits for a reply to `message_id`.
-    #[allow(dead_code)]
     pub(crate) async fn settle_peer_wait(
         &self,
         id: &ConversationId,

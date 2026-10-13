@@ -77,6 +77,20 @@ pub(crate) struct PeerRecord {
     pub(crate) position: i64,
 }
 
+impl PeerRecord {
+    /// A message this session sent asking for a reply, still on its way or being worked on:
+    /// its request waits for the reply (one waiting for the user's OK waits on its card).
+    pub(crate) fn awaits_reply(&self) -> bool {
+        self.outgoing
+            && self.reply_to.is_none()
+            && !self.settled
+            && matches!(
+                self.state,
+                PeerState::Pending | PeerState::Delivered | PeerState::Seen
+            )
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Board {
     pub(crate) tasks: HashMap<TaskId, Task>,
@@ -133,6 +147,23 @@ pub(crate) struct Board {
 }
 
 impl Board {
+    /// The sessions request `request` waits for a reply from, oldest message first.
+    pub(crate) fn awaited_peers(&self, request: &str) -> Vec<ConversationId> {
+        let mut awaited: Vec<&PeerRecord> = self
+            .peer_messages
+            .values()
+            .filter(|record| record.request_id.as_deref() == Some(request) && record.awaits_reply())
+            .collect();
+        awaited.sort_by_key(|record| record.position);
+        let mut peers: Vec<ConversationId> = Vec::new();
+        for record in awaited {
+            if !peers.contains(&record.peer) {
+                peers.push(record.peer.clone());
+            }
+        }
+        peers
+    }
+
     /// The conversation's activity, or `None` when it neither runs nor waits for the user.
     pub(crate) fn activity(&self, id: &ConversationId) -> Option<ConversationActivity> {
         let tasks: Vec<_> = self

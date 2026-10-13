@@ -287,6 +287,39 @@ impl SessionManager {
         .to_string())
     }
 
+    /// `settle_wait`: `caller`'s thread no longer needs a reply to `message_id`, so its
+    /// request can end.
+    pub(super) async fn settle_wait(
+        &self,
+        caller: &ConversationId,
+        message_id: &str,
+    ) -> Result<String> {
+        let message_id = message_id.trim();
+        let board = self.core.board(caller).await?;
+        let Some(record) = board
+            .peer_messages
+            .get(message_id)
+            .filter(|record| record.outgoing && record.reply_to.is_none())
+        else {
+            return Err(Error::Invalid(
+                "No message this session sent has that id.".into(),
+            ));
+        };
+        let title = self
+            .core
+            .conversation(&record.peer)
+            .map(|peer| peer.title)
+            .unwrap_or_else(|_| "that session".into());
+        if !record.settled {
+            self.core.settle_peer_wait(caller, message_id).await?;
+            self.settle_requests(caller).await;
+        }
+        Ok(format!(
+            "You no longer wait for {title}'s reply to that message. A reply that still comes \
+             reaches you all the same."
+        ))
+    }
+
     /// The engine's hard rules for one more send from `caller` to `target` in a turn on
     /// `chain`: the hop limit and the pair rate (SESSION-MESSAGING-PLAN.md §5.5).
     async fn may_send(

@@ -1723,6 +1723,8 @@ mod peer_delivery_tests;
 #[cfg(test)]
 mod peer_kit;
 #[cfg(test)]
+mod peer_reply_tests;
+#[cfg(test)]
 mod peer_session_tests;
 #[cfg(test)]
 mod plan_tests;

@@ -1,0 +1,512 @@
+//! Replies between sessions (SESSION-MESSAGING-PLAN.md §5.2): a reply goes back to the
+//! request that asked, which waits for it with nothing polling; one that comes after that
+//! request is over is shown and kept for the next turn, starting none.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use brigadier_providers::ProviderKind;
+use serde_json::json;
+use tokio::sync::Notify;
+
+use super::peer_kit::{Peers, Sent, header_id, message_id, only, send};
+use super::{Flow, Options, Reply};
+use crate::board::Board;
+use crate::model::{ConversationId, Message, MessageRole, PeerState};
+use crate::work::RequestState;
+
+/// Whether message `id` stands at `state` on `board`.
+fn stands(board: &Board, id: &str, state: &PeerState) -> bool {
+    board
+        .peer_messages
+        .get(id)
+        .is_some_and(|record| record.state == *state)
+}
+
+/// The peer's message `id` in session `of`'s transcript.
+async fn transcript_message(flow: &Flow, of: &ConversationId, id: &str) -> Message {
+    flow.core
+        .all_messages(of)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|message| message.id == id)
+        .expect("the message is in the transcript")
+}
+
+/// The id of the session's first request (its first user message).
+fn first_request(board: &Board) -> String {
+    board
+        .requests
+        .values()
+        .min_by_key(|request| request.started_at_ms)
+        .unwrap()
+        .id
+        .clone()
+}
+
+/// A reply to the request whose turn is still running is steered into that turn: the turn
+/// reads it under a header naming what it answers, and the asked message is replied on
+/// both sides.
+#[tokio::test]
+async fn a_reply_is_steered_into_the_turn_that_asked() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-reply-steer", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Codex)
+        .await;
+    let asked = Sent::default();
+    let read: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+    let (kept, seen, to) = (asked.clone(), read.clone(), api.clone());
+    peers.on(&flow.conversation, move |turn| {
+        let (kept, seen, to) = (kept.clone(), seen.clone(), to.clone());
+        async move {
+            let reply = send(&turn, &to, "Which column holds names?", None).await;
+            kept.lock().unwrap().push(reply);
+            *seen.lock().unwrap() = turn.steered().await;
+            Reply::text("Names are in `name`.")
+        }
+    });
+    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", None);
+    flow.say("Ask the API session where names live.").await;
+    let board = flow
+        .until("the turn's end", |_| read.lock().unwrap().is_some())
+        .await;
+    let request = first_request(&board);
+    let board = flow.settled().await;
+    let question = message_id(&only(&asked).0);
+    let answer = message_id(&only(&replied).0);
+    let input = read.lock().unwrap().clone().unwrap();
+    assert!(
+        input.contains(&format!(
+            "[message from session \"API work\" in Flow · id {answer} · reply to {question}]\nIt's `name`."
+        )),
+        "{input}"
+    );
+    assert_eq!(
+        peers.inputs_of(&flow.conversation).len(),
+        1,
+        "no second turn"
+    );
+    assert!(stands(&board, &question, &PeerState::Replied));
+    assert!(stands(&board, &answer, &PeerState::Seen));
+    let message = transcript_message(&flow, &flow.conversation, &answer).await;
+    assert_eq!(message.role, MessageRole::Peer);
+    assert_eq!(message.request_id.as_deref(), Some(request.as_str()));
+    assert_eq!(board.requests[&request].state, RequestState::Done);
+    assert!(
+        !board.requests.contains_key(&answer),
+        "a reply opens no request"
+    );
+    let at_api = flow.settled_in(&api).await;
+    assert!(stands(&at_api, &question, &PeerState::Replied));
+    flow.stop().await;
+}
+
+/// A request whose message waits for its reply rests "Waiting for ‹session›", not done; the
+/// reply starts a turn under it, and it ends once that turn has.
+#[tokio::test]
+async fn a_request_waits_for_its_reply_and_ends_after_the_replys_turn() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-wait", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    let gate = Arc::new(Notify::new());
+    let asked = peers.sends(&flow.conversation, &api, "Which column holds names?");
+    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", Some(gate.clone()));
+    flow.say("Ask the API session where names live.").await;
+    let board = flow
+        .until("the request waiting for API work", |board| {
+            board.requests.values().any(|request| {
+                request.state == RequestState::Waiting && request.waiting_for == [api.clone()]
+            })
+        })
+        .await;
+    let request = first_request(&board);
+    // Answering the reply is the thread's next turn: it works as soon as the reply comes.
+    peers.on(&flow.conversation, |_| async {
+        Reply::text("Names are in `name`.")
+    });
+    gate.notify_one();
+    flow.until("the reply replied", |board| {
+        stands(board, &message_id(&only(&asked).0), &PeerState::Replied)
+    })
+    .await;
+    let board = flow
+        .until("the request done", |board| {
+            board.requests[&request].state == RequestState::Done
+        })
+        .await;
+    assert!(board.requests[&request].waiting_for.is_empty());
+    let answer = message_id(&only(&replied).0);
+    let inputs = peers.inputs_of(&flow.conversation);
+    assert_eq!(inputs.len(), 2, "{inputs:?}");
+    assert_eq!(header_id(&inputs[1]).as_deref(), Some(answer.as_str()));
+    let message = transcript_message(&flow, &flow.conversation, &answer).await;
+    assert_eq!(message.request_id.as_deref(), Some(request.as_str()));
+    flow.settled_in(&api).await;
+    flow.stop().await;
+}
+
+/// A reply that comes while a newer request of the user's runs waits for that turn to end,
+/// then gets a turn of its own filed under the request that asked.
+#[tokio::test]
+async fn a_reply_after_a_newer_request_waits_and_is_filed_under_the_one_that_asked() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-later", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Codex)
+        .await;
+    let gate = Arc::new(Notify::new());
+    let asked = peers.sends(&flow.conversation, &api, "Which column holds names?");
+    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", Some(gate.clone()));
+    flow.say("Ask the API session where names live.").await;
+    let board = flow
+        .until("the request waiting", |board| {
+            board
+                .requests
+                .values()
+                .any(|request| request.state == RequestState::Waiting)
+        })
+        .await;
+    let first = first_request(&board);
+    // The user's newer message is a request of its own (the thread sorts it so), whose turn
+    // holds until the reply is in.
+    let hold = Arc::new(Notify::new());
+    let held = hold.clone();
+    peers.on(&flow.conversation, move |turn| {
+        let held = held.clone();
+        async move {
+            if let Some(rest) = turn.input.split("[follow-up ").nth(1) {
+                let item = rest.split(']').next().unwrap().to_owned();
+                let routed = turn
+                    .call(
+                        "route_follow_up",
+                        json!({ "follow_up": item, "joins": false }),
+                    )
+                    .await;
+                assert!(!routed.is_error, "{}", routed.text);
+                return Reply::text(crate::manager::prompts::QUIET);
+            }
+            if header_id(&turn.input).is_some() {
+                return Reply::text("Noted: names are in `name`.");
+            }
+            held.notified().await;
+            Reply::text("Renamed the file.")
+        }
+    });
+    flow.say("Meanwhile, rename the file.").await;
+    while !peers
+        .inputs_of(&flow.conversation)
+        .iter()
+        .any(|input| input.contains("rename the file") && !input.contains("[follow-up "))
+    {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let turns = peers.inputs_of(&flow.conversation).len();
+    gate.notify_one();
+    flow.until_in(&api, "the reply sent", |_| {
+        replied.lock().unwrap().len() == 1
+    })
+    .await;
+    let (reply, failed) = only(&replied);
+    assert!(!failed && reply.contains("\"state\":\"queued\""), "{reply}");
+    let answer = message_id(&reply);
+    hold.notify_one();
+    let board = flow
+        .until("the reply seen", |board| {
+            stands(board, &answer, &PeerState::Seen)
+        })
+        .await;
+    let board = if board.requests[&first].state == RequestState::Done {
+        board
+    } else {
+        flow.until("the first request done", |board| {
+            board.requests[&first].state == RequestState::Done
+        })
+        .await
+    };
+    let inputs = peers.inputs_of(&flow.conversation);
+    assert_eq!(inputs.len(), turns + 1, "{inputs:?}");
+    let last = inputs.last().unwrap();
+    assert!(last.contains("[for the user's earlier request:"), "{last}");
+    assert_eq!(header_id(last).as_deref(), Some(answer.as_str()));
+    let message = transcript_message(&flow, &flow.conversation, &answer).await;
+    assert_eq!(message.request_id.as_deref(), Some(first.as_str()));
+    assert!(stands(
+        &board,
+        &message_id(&only(&asked).0),
+        &PeerState::Replied
+    ));
+    flow.settled().await;
+    flow.settled_in(&api).await;
+    flow.stop().await;
+}
+
+/// The user stops a request that waits for a reply: it ends stopped, and a reply that comes
+/// later is recorded and shown but starts no turn; the next turn carries it as a note.
+#[tokio::test]
+async fn a_reply_after_the_users_stop_starts_no_turn_and_joins_the_next() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-stop", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    let gate = Arc::new(Notify::new());
+    peers.sends(&flow.conversation, &api, "Which column holds names?");
+    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", Some(gate.clone()));
+    flow.say("Ask the API session where names live.").await;
+    let board = flow
+        .until("the request waiting", |board| {
+            board
+                .requests
+                .values()
+                .any(|request| request.state == RequestState::Waiting)
+        })
+        .await;
+    let request = first_request(&board);
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.until("the request stopped", |board| {
+        board.requests[&request].state == RequestState::Stopped
+    })
+    .await;
+    gate.notify_one();
+    flow.until_in(&api, "the reply sent", |_| {
+        replied.lock().unwrap().len() == 1
+    })
+    .await;
+    let answer = message_id(&only(&replied).0);
+    let board = flow
+        .until("the late reply delivered", |board| {
+            stands(board, &answer, &PeerState::Delivered)
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        peers.inputs_of(&flow.conversation).len(),
+        1,
+        "no turn starts"
+    );
+    assert_eq!(board.requests[&request].state, RequestState::Stopped);
+    let message = transcript_message(&flow, &flow.conversation, &answer).await;
+    assert_eq!(message.text, "It's `name`.");
+    // The user's next message carries it.
+    peers.on(&flow.conversation, |_| async {
+        Reply::text("Carrying on.")
+    });
+    flow.say("Carry on with the rename.").await;
+    flow.until("the late reply seen", |board| {
+        stands(board, &answer, &PeerState::Seen)
+    })
+    .await;
+    let inputs = peers.inputs_of(&flow.conversation);
+    assert_eq!(inputs.len(), 2, "{inputs:?}");
+    assert!(
+        inputs[1].contains("A reply from \"API work\" arrived after you stopped")
+            && inputs[1].contains("It's `name`."),
+        "{}",
+        inputs[1]
+    );
+    flow.settled().await;
+    flow.settled_in(&api).await;
+    flow.stop().await;
+}
+
+/// A reply must answer a message the replying session got from the session it names.
+#[tokio::test]
+async fn a_reply_to_a_message_that_wasnt_from_its_target_is_refused() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-reply-to", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    let docs = flow.add_session("Docs", None, ProviderKind::Claude).await;
+    // Docs asks this session something; this session's reply names API work.
+    let asked = peers.sends(&docs, &flow.conversation, "Is the API stable?");
+    let wrong = Sent::default();
+    let (kept, api_id, docs_id) = (wrong.clone(), api.clone(), docs.clone());
+    peers.on(&flow.conversation, move |turn| {
+        let (kept, api_id, docs_id) = (kept.clone(), api_id.clone(), docs_id.clone());
+        async move {
+            if let Some(original) = header_id(&turn.input) {
+                for (to, reply_to) in [(&api_id, original.as_str()), (&docs_id, "made-up")] {
+                    let reply = send(&turn, to, "Yes.", Some(reply_to)).await;
+                    kept.lock().unwrap().push(reply);
+                }
+            }
+            Reply::text("Done.")
+        }
+    });
+    flow.say_to(&docs, "Ask the Flow session whether the API is stable.")
+        .await;
+    flow.settled_in(&docs).await;
+    message_id(&only(&asked).0);
+    flow.until("both replies refused", |_| wrong.lock().unwrap().len() == 2)
+        .await;
+    assert_eq!(
+        wrong.lock().unwrap().clone(),
+        vec![
+            ("That message wasn't from API work.".to_owned(), true),
+            ("That message wasn't from Docs.".to_owned(), true),
+        ]
+    );
+    let board = flow.settled().await;
+    assert!(board.peer_messages.values().all(|record| !record.outgoing));
+    assert!(flow.board_of(&api).await.peer_messages.is_empty());
+    flow.stop().await;
+}
+
+/// `settle_wait` lets a request end without the reply it asked for.
+#[tokio::test]
+async fn a_settled_wait_lets_the_request_end() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-settle", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    let gate = Arc::new(Notify::new());
+    peers.replies(&api, &flow.conversation, "It's `name`.", Some(gate.clone()));
+    let settled = Sent::default();
+    let (kept, to) = (settled.clone(), api.clone());
+    peers.on(&flow.conversation, move |turn| {
+        let (kept, to) = (kept.clone(), to.clone());
+        async move {
+            let (reply, _) = send(&turn, &to, "Which column holds names?", None).await;
+            let id = message_id(&reply);
+            let settle = turn
+                .call(
+                    "settle_wait",
+                    json!({ "message_id": id, "why": "I found it myself." }),
+                )
+                .await;
+            kept.lock().unwrap().push((settle.text, settle.is_error));
+            Reply::text("Found it: `name`.")
+        }
+    });
+    flow.say("Find where names live.").await;
+    let board = flow.settled().await;
+    let (text, failed) = only(&settled);
+    assert!(!failed, "{text}");
+    assert!(text.contains("API work"), "{text}");
+    let request = first_request(&board);
+    assert_eq!(board.requests[&request].state, RequestState::Done);
+    let record = board.peer_messages.values().next().unwrap();
+    assert!(record.settled && !record.awaits_reply());
+    gate.notify_one();
+    flow.settled_in(&api).await;
+    flow.stop().await;
+}
+
+/// A reply to a message an overnight run's turn sent, coming after the run ended, is kept
+/// for the morning: shown, no turn started, and carried by the user's next message.
+#[tokio::test]
+async fn a_reply_after_an_overnight_run_ended_waits_for_the_morning() {
+    use crate::overnight::{OvernightState, ProposedPhase, ProposedPlan};
+    let peers = Peers::new();
+    let flow = Flow::start("peer-overnight", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    let gate = Arc::new(Notify::new());
+    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", Some(gate.clone()));
+    let asked = Sent::default();
+    let (kept, to) = (asked.clone(), api.clone());
+    peers.on(&flow.conversation, move |turn| {
+        let (kept, to) = (kept.clone(), to.clone());
+        async move {
+            if !kept.lock().unwrap().is_empty() {
+                return Reply::text("Good morning: the API session was asked.");
+            }
+            let reply = send(&turn, &to, "Which column holds names?", None).await;
+            kept.lock().unwrap().push(reply);
+            let ended = turn
+                .call(
+                    "end_run",
+                    json!({ "outcome": "needsUser", "why": "The rest needs the API session." }),
+                )
+                .await;
+            assert!(!ended.is_error, "{}", ended.text);
+            Reply::text("Asked; ending the run.")
+        }
+    });
+    let plan = ProposedPlan {
+        name: "Names".into(),
+        phases: vec![ProposedPhase {
+            number: Some(1),
+            name: "Find names".into(),
+            scope: "Find where names live.".into(),
+            done_when: vec!["The column is known.".into()],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let run = flow
+        .manager
+        .propose_overnight(
+            flow.conversation.clone(),
+            "propose-1".into(),
+            "Find where names live overnight.".into(),
+            Some(plan),
+        )
+        .await
+        .unwrap();
+    flow.manager
+        .start_overnight(
+            flow.conversation.clone(),
+            run.id.clone(),
+            "start-1".into(),
+            run.revision,
+        )
+        .await
+        .unwrap();
+    flow.until("the run finished", |board| {
+        board
+            .runs
+            .get(&run.id)
+            .is_some_and(|run| run.state == OvernightState::Finished)
+    })
+    .await;
+    flow.settled().await;
+    let turns = peers.inputs_of(&flow.conversation).len();
+    gate.notify_one();
+    flow.until_in(&api, "the reply sent", |_| {
+        replied.lock().unwrap().len() == 1
+    })
+    .await;
+    let answer = message_id(&only(&replied).0);
+    flow.until("the late reply delivered", |board| {
+        stands(board, &answer, &PeerState::Delivered)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        peers.inputs_of(&flow.conversation).len(),
+        turns,
+        "no turn starts"
+    );
+    transcript_message(&flow, &flow.conversation, &answer).await;
+    flow.say("Morning. What did the API session say?").await;
+    flow.until("the late reply seen", |board| {
+        stands(board, &answer, &PeerState::Seen)
+    })
+    .await;
+    let inputs = peers.inputs_of(&flow.conversation);
+    let last = inputs.last().unwrap();
+    assert!(
+        last.contains("A reply from \"API work\" arrived after the overnight run ended")
+            && last.contains("It's `name`."),
+        "{last}"
+    );
+    assert!(stands(
+        &flow.board().await,
+        &message_id(&only(&asked).0),
+        &PeerState::Replied
+    ));
+    flow.settled().await;
+    flow.settled_in(&api).await;
+    flow.stop().await;
+}

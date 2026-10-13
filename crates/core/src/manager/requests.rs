@@ -155,6 +155,7 @@ impl SessionManager {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
             let mut wait = None;
+            let mut waiting_for = Vec::new();
             let state = if let Some(state) = ended_run_state(&board, request) {
                 // An overnight run's request is over with the run: its report is the answer,
                 // and nothing that comes later works or waits for it again.
@@ -178,6 +179,13 @@ impl SessionManager {
                 RequestState::Stopped | RequestState::Failed { .. }
             ) {
                 request.state.clone()
+            } else if let awaited = board.awaited_peers(id)
+                && !awaited.is_empty()
+            {
+                // A message it sent waits for its reply, which wakes the thread when it comes
+                // (SESSION-MESSAGING-PLAN.md §5.2): nothing polls.
+                waiting_for = awaited;
+                RequestState::Waiting
             } else if owed_a_turn(
                 &board,
                 id,
@@ -200,7 +208,7 @@ impl SessionManager {
                     state,
                     wait == Some(Wait::Quota),
                     wait == Some(Wait::Card),
-                    Vec::new(),
+                    waiting_for,
                 )
                 .await
             {
@@ -222,12 +230,22 @@ impl SessionManager {
         }
     }
 
-    /// The newest answer, when nothing but what Brigadier owes it keeps it working: no turn,
-    /// message, worker or wait of it is under way. The user's Stop has no turn to interrupt
+    /// The newest answer, when nothing but what Brigadier owes it keeps it working (or only
+    /// replies from other sessions keep it waiting): no turn, message, worker or wait of it is
+    /// under way. The user's Stop has no turn to interrupt
     /// for it, so it ends it.
     pub(super) async fn owed_only(&self, conv: &ConvLive) -> Option<String> {
         let board = self.core.board(&conv.id).await.ok()?;
         let latest = board.latest_request()?;
+        // So does one that only waits for other sessions' replies.
+        if latest.state == RequestState::Waiting
+            && Self::waiting_on(&board, &latest.id).is_none()
+            && !board.awaited_peers(&latest.id).is_empty()
+        {
+            let activity = conv.request_activity().await;
+            let idle = activity.running.is_none() && !activity.carried.contains(&latest.id);
+            return idle.then(|| latest.id.clone());
+        }
         if latest.state != RequestState::Working {
             return None;
         }
