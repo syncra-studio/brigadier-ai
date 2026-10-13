@@ -86,7 +86,7 @@ function Fixture() {
     const seen: Record<string, unknown> = {};
     const timers: ReturnType<typeof setTimeout>[] = [];
     const at = (ms: number, action: () => void) => timers.push(setTimeout(() => {
-      // Virtual time pauses animation frames: these geometry checks inspect the settled strip.
+      // Animations are finished first: these geometry checks inspect the settled strip.
       for (const animation of document.getAnimations()) animation.finish();
       action();
     }, ms));

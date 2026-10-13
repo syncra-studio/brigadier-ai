@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive } from "@/fixtures/headless";
 
 for (const compact of [false, true]) {
   test(`a session's chat is a tab alone and among others, measured, with widths kept after a close and Delete on a tab${compact ? " (compact)" : ""}`, { timeout: 60000 }, async (t) => {
-    const seen = JSON.parse(await renderFixturePage(t, `tabbar.html${compact ? "?compact=1" : ""}`, "tabbar-result", 4000)) as Record<string, unknown>;
+    // Live, so frames run between the steps: the rule before the toolbar follows a resize
+    // observer, which a frame delivers, and a busy machine's virtual time can skip them all.
+    const seen = JSON.parse(await renderFixtureLive(t, `tabbar.html${compact ? "?compact=1" : ""}`, "tabbar-result", 30000)) as Record<string, unknown>;
     if (process.env.TABBAR_SEEN) console.log(JSON.stringify(seen, null, 2));
     // Alone, the chat is a tab with its ⋯ inside, "+" right after it, then the toolbar.
     assert.equal(seen.plain, false);
