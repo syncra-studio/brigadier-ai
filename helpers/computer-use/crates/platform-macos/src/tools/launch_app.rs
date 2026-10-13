@@ -250,44 +250,69 @@ impl Tool for LaunchAppTool {
                     crate::ax::window_watch::watch(app.pid);
                 }
             }
-            let pid = if let Some(ref bid) = bundle_id {
-                if urls.is_empty()
-                    && additional_arguments.is_empty()
-                    && env.is_empty()
-                    && !creates_new_instance
-                {
-                    crate::apps::launch_app(bid)?
+            let launch_once = || -> anyhow::Result<i32> {
+                Ok(if let Some(ref bid) = bundle_id {
+                    if urls.is_empty()
+                        && additional_arguments.is_empty()
+                        && env.is_empty()
+                        && !creates_new_instance
+                    {
+                        crate::apps::launch_app(bid)?
+                    } else {
+                        crate::apps::launch_with_urls_by_bundle(
+                            bid,
+                            &urls,
+                            &additional_arguments,
+                            &env,
+                            creates_new_instance,
+                        )?
+                    }
                 } else {
-                    crate::apps::launch_with_urls_by_bundle(
-                        bid,
-                        &urls,
-                        &additional_arguments,
-                        &env,
-                        creates_new_instance,
-                    )?
-                }
-            } else {
-                let n = name.as_deref().unwrap();
-                if urls.is_empty()
-                    && additional_arguments.is_empty()
-                    && env.is_empty()
-                    && !creates_new_instance
-                {
-                    crate::apps::launch_app_by_name(n)?
-                } else {
-                    crate::apps::launch_with_urls_by_name(
-                        n,
-                        &urls,
-                        &additional_arguments,
-                        &env,
-                        creates_new_instance,
-                    )?
+                    let n = name.as_deref().unwrap();
+                    if urls.is_empty()
+                        && additional_arguments.is_empty()
+                        && env.is_empty()
+                        && !creates_new_instance
+                    {
+                        crate::apps::launch_app_by_name(n)?
+                    } else {
+                        crate::apps::launch_with_urls_by_name(
+                            n,
+                            &urls,
+                            &additional_arguments,
+                            &env,
+                            creates_new_instance,
+                        )?
+                    }
+                })
+            };
+            // An app that is still quitting (asked to quit just before) can't
+            // be launched until it is gone: try again while it goes.
+            let deadline = std::time::Instant::now() + QUITTING_WAIT;
+            let mut retried = false;
+            let pid = loop {
+                match launch_once() {
+                    Ok(pid) => break pid,
+                    Err(error) => {
+                        let quitting = crate::apps::list_running_apps().iter().any(|a| {
+                            match bundle_id.as_deref() {
+                                Some(bid) => a.bundle_id.as_deref() == Some(bid),
+                                None => name.as_deref() == Some(a.name.as_str()),
+                            }
+                        });
+                        if std::time::Instant::now() >= deadline || (retried && !quitting) {
+                            return Err(error);
+                        }
+                        retried = true;
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
                 }
             };
 
             // Retry loop: LaunchServices returns before WindowServer has
             // registered the new windows. Poll up to 5x100ms.
-            let windows = resolve_windows_for_pid(pid);
+            let mut windows = resolve_windows_for_pid(pid);
+            main_window_first(pid, &mut windows);
             crate::ax::offspace::remember_front_windows(pid);
 
             let app_info: Option<crate::apps::AppInfo> = {
@@ -619,6 +644,33 @@ fn suppresses_activation(watchable_front: bool) -> bool {
 
 /// Poll for the pid's layer-0 windows, retrying up to 5x100ms to absorb
 /// LaunchServices → WindowServer latency (mirrors the Swift reference).
+/// How long a launch waits for an earlier instance of the app to finish
+/// quitting.
+const QUITTING_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Lists the app's main window first: the one the launch opened or brought
+/// up, ahead of any panels or helper windows the app keeps.
+fn main_window_first(pid: i32, windows: &mut [crate::windows::WindowInfo]) {
+    use crate::ax::bindings::{ax_get_window_id, copy_element_attr, AXUIElementCreateApplication};
+    let main = unsafe {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return;
+        }
+        let window = copy_element_attr(app, "AXMainWindow");
+        core_foundation::base::CFRelease(app as _);
+        let Some(window) = window else {
+            return;
+        };
+        let id = ax_get_window_id(window);
+        core_foundation::base::CFRelease(window as _);
+        id
+    };
+    if let Some(at) = windows.iter().position(|w| Some(w.window_id) == main) {
+        windows[..=at].rotate_right(1);
+    }
+}
+
 fn resolve_windows_for_pid(pid: i32) -> Vec<crate::windows::WindowInfo> {
     for attempt in 0..5 {
         let found = crate::displays::current_windows_for_pid(pid);
