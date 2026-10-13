@@ -263,16 +263,20 @@ const START_PREVIEW: &str = "Start something the user wants to see running (a de
 the app, a docs site) and keep it running: it lives across your turns until you stop it, and \
 answers at once with its first output. Run the command in the foreground (no trailing `&`). It \
 runs in the workspace (or `workdir` inside it) with this session's access, in its own process \
-group. Tell the user where to look (the URL and port). It stops when you call stop_preview, \
-when the user presses Stop, and when the session is merged, archived or deleted; for one-off \
-commands use your shell instead.";
+group. It starts as Starting and reads running only once it is ready (a web preview's URL or \
+port answers, or an app's window opens): until preview_log says it is running, tell the user \
+it is starting, not that it runs. `kind` \"app\" (inferred for `tauri dev` and Electron) is a \
+desktop app with its own window and no URL; for \"web\" tell the user where to look (the URL \
+and port). It stops when you call stop_preview, when the user presses Stop, and when the \
+session is merged, archived or deleted; for one-off commands use your shell instead.";
 
 const STOP_PREVIEW: &str = "Stop a preview (`id`, e.g. \"preview-1\") or, without an id, \
-every running one: SIGTERM, then a kill after a few seconds. Returns how each ended.";
+every running one: SIGTERM, then a kill after a few seconds. It is removed from the user's \
+list; its log stays readable with read_artifact. Returns how each ended.";
 
 const PREVIEW_LOG: &str = "The last lines of a preview's output (stdout and stderr together; \
-the latest preview's by default), with its state and an out-… id to page through its whole log \
-with read_artifact.";
+the latest preview's by default), with its state (starting, running, paused or ended) and an \
+out-… id to page through its whole log with read_artifact.";
 
 const LIST_TASKS: &str = "List this session's tasks: id, title, kind, status and model.";
 

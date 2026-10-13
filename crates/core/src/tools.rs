@@ -410,9 +410,14 @@ pub struct StartPreview {
     /// inside the workspace.
     #[serde(default)]
     pub workdir: Option<String>,
+    /// "web" for a page the user opens in a browser, "app" for a desktop app that opens its own
+    /// window (it gets no URL). Left out, `tauri dev` and Electron commands are "app", anything
+    /// else "web".
+    #[serde(default)]
+    pub kind: Option<crate::work::PreviewKind>,
 }
 
-/// `stop_preview`: stop one preview, or every running one.
+/// `stop_preview`: stop one preview, or every running one, and remove it from the user's list.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StopPreview {

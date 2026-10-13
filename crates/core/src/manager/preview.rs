@@ -46,15 +46,18 @@ use tokio_util::sync::CancellationToken;
 use super::{OUTPUT_MAX_BYTES, SessionManager, blocking};
 use crate::model::{ConversationId, DomainEvent, Lifecycle};
 use crate::tools::StartPreview;
-use crate::work::{OutputSource, Preview, PreviewState};
+use crate::work::{OutputSource, Preview, PreviewKind, PreviewState};
 use crate::{Error, Result, now_ms};
 
 /// How long a stopped preview has to exit after SIGTERM before it is killed.
 /// Why a preview the user stopped ended: their Stop on its chip, or on the conversation.
 pub(crate) const USER_STOP: &str = "stopped by the user";
 const STOP_GRACE: Duration = Duration::from_secs(5);
-/// How long `start_preview` watches a new preview for an early exit before it answers.
+/// How long `start_preview` watches a new preview for an early exit (or its readiness) before
+/// it answers.
 const START_WATCH: Duration = Duration::from_millis(1500);
+/// How often a starting preview is checked for readiness.
+const READY_POLL: Duration = Duration::from_secs(1);
 /// Lines `preview_log` shows by default, and at most.
 const TAIL_DEFAULT: u32 = 40;
 const TAIL_MAX: u32 = 400;
@@ -75,8 +78,11 @@ pub(crate) struct LivePreview {
     conversation: ConversationId,
     id: String,
     pid: u32,
+    kind: PreviewKind,
     workspace: PathBuf,
     log: PathBuf,
+    /// Cancelled once it is ready to look at (it moved from Starting to Running).
+    ready: CancellationToken,
     /// Why it is being stopped (the first reason given wins).
     reason: Mutex<Option<String>>,
     /// Asks its watcher to stop it.
@@ -89,7 +95,8 @@ pub(crate) struct LivePreview {
     paused_members: Mutex<Vec<crate::machine::builds::Proc>>,
     /// Held while its record is read and written back, so a log snapshot can't undo its end.
     updating: tokio::sync::Mutex<()>,
-    /// Whether `start_preview` answered "running", and whether its end began: whichever
+    /// Whether `start_preview` answered (that it is starting or running), and whether its end
+    /// began: whichever
     /// comes first decides who tells the thread of an end on its own (the start's answer,
     /// or a message of its own).
     start_told: Mutex<StartTold>,
@@ -97,7 +104,7 @@ pub(crate) struct LivePreview {
 
 #[derive(Default)]
 struct StartTold {
-    running: bool,
+    answered: bool,
     ending: bool,
 }
 
@@ -209,6 +216,9 @@ impl SessionManager {
             ));
         }
         let workdir = preview_workdir(args.workdir.as_deref(), &workspace)?;
+        let kind = args
+            .kind
+            .unwrap_or_else(|| super::preview_ready::infer_kind(&command));
         let env = args.env.unwrap_or_default();
         #[cfg(target_os = "macos")]
         let mut env = env;
@@ -335,18 +345,21 @@ impl SessionManager {
             workdir: workdir.to_string_lossy().into_owned(),
             workspace: workspace.to_string_lossy().into_owned(),
             pid: Some(pid),
-            state: PreviewState::Running,
+            state: PreviewState::Starting,
             started_at_ms: now_ms(),
             ended_at_ms: None,
             log: None,
             url: None,
+            kind,
         };
         let live = Arc::new(LivePreview {
             conversation: id.clone(),
             id: preview_id.clone(),
             pid,
+            kind,
             workspace,
             log,
+            ready: CancellationToken::new(),
             reason: Mutex::default(),
             stop: CancellationToken::new(),
             ended: CancellationToken::new(),
@@ -381,6 +394,7 @@ impl SessionManager {
             if recorded_ok && let Some(data) = &mut data {
                 data.created = false;
             }
+            this.spawn(this.clone().watch_ready(watched.clone()));
             this.watch_preview(watched, child, artifact).await;
         });
         let recorded = recorded_rx.await.unwrap_or_else(|_| {
@@ -393,14 +407,19 @@ impl SessionManager {
             return Err(err);
         }
         tracing::info!(conversation = %id, preview = %preview_id, pid, workdir = %workdir.display(), "preview started");
-        let ended_at_once = tokio::time::timeout(START_WATCH, live.ended.cancelled())
-            .await
-            .is_ok()
-            || {
-                let mut told = live.start_told.lock().unwrap_or_else(|p| p.into_inner());
-                told.running = !told.ending;
-                told.ending
-            };
+        let ended = tokio::time::timeout(START_WATCH, async {
+            tokio::select! {
+                () = live.ended.cancelled() => true,
+                () = live.ready.cancelled() => false,
+            }
+        })
+        .await
+        .unwrap_or(false);
+        let ended_at_once = ended || {
+            let mut told = live.start_told.lock().unwrap_or_else(|p| p.into_inner());
+            told.answered = !told.ending;
+            told.ending
+        };
         if ended_at_once {
             live.ended.cancelled().await;
             return self
@@ -412,11 +431,27 @@ impl SessionManager {
             .preview_log(id, Some(&preview_id), Some(START_TAIL))
             .await
             .unwrap_or_default();
+        let state = if live.ready.is_cancelled() {
+            "is running".to_owned()
+        } else {
+            format!(
+                "is starting, not ready yet: it reads Starting until {}. Don't tell the user it \
+                 runs before preview_log says it is running",
+                waits_for(kind)
+            )
+        };
+        let app = match kind {
+            PreviewKind::App => {
+                " It is a desktop app: it opens its own window and gets no URL, so never send \
+                 the user to an address it prints."
+            }
+            PreviewKind::Web => "",
+        };
         Ok(format!(
-            "{preview_id} \"{name}\" is running (pid {pid}, its own process group) in {}. It keeps \
-             running across your turns until you call stop_preview, and stops when the session \
-             is merged, archived or deleted, when your workspace changes, when the user presses \
-             Stop and when Brigadier quits. Its output so far:\n{output}",
+            "{preview_id} \"{name}\" {state} (pid {pid}, its own process group) in {}.{app} It \
+             keeps running across your turns until you call stop_preview, and stops when the \
+             session is merged, archived or deleted, when your workspace changes, when the user \
+             presses Stop and when Brigadier quits. Its output so far:\n{output}",
             workdir.display()
         ))
     }
@@ -562,6 +597,97 @@ impl SessionManager {
         live.ended.cancel();
     }
 
+    /// Checks a starting preview for readiness every [`READY_POLL`] until it is ready (then
+    /// records it as running) or ends. A paused one isn't checked.
+    async fn watch_ready(self: Arc<Self>, live: Arc<LivePreview>) {
+        let mut wait = Duration::from_millis(250);
+        loop {
+            tokio::select! {
+                () = live.ended.cancelled() => return,
+                () = live.stop.cancelled() => return,
+                () = tokio::time::sleep(wait) => {}
+            }
+            wait = READY_POLL;
+            let state = match self.core.board(&live.conversation).await {
+                Ok(board) => board
+                    .previews
+                    .get(&live.id)
+                    .map(|preview| preview.state.clone()),
+                Err(_) => None,
+            };
+            match state {
+                Some(PreviewState::Starting) => {}
+                Some(PreviewState::Paused) => continue,
+                _ => return,
+            }
+            // A probe under way (`lsof`, a request) is dropped, and ended, with the preview.
+            let url = tokio::select! {
+                () = live.ended.cancelled() => return,
+                url = self.preview_ready(&live) => url,
+            };
+            if let Some(url) = url {
+                self.mark_ready(&live, url).await;
+                return;
+            }
+        }
+    }
+
+    /// Whether `live` is ready now: `Some` with the URL it printed (a web preview's), `None`
+    /// while it isn't.
+    async fn preview_ready(&self, live: &LivePreview) -> Option<Option<String>> {
+        use super::preview_ready as ready;
+        let platform = self.runtime.platform().clone();
+        let (group, path, web) = (live.pid, live.log.clone(), live.kind == PreviewKind::Web);
+        let (window, url) = blocking(move || {
+            let processes = platform.processes();
+            let window = ready::window_owners()
+                .into_iter()
+                .any(|owner| processes.group_of(owner) == Some(group));
+            Ok((window, if web { log_url(&path) } else { None }))
+        })
+        .await
+        .ok()?;
+        if window {
+            return Some(url);
+        }
+        if !web {
+            return None;
+        }
+        if let Some(url) = &url
+            && ready::url_answers(url).await
+        {
+            return Some(Some(url.clone()));
+        }
+        for port in ready::listening_ports(group).await {
+            if ready::port_answers(port).await {
+                return Some(url);
+            }
+        }
+        None
+    }
+
+    /// Records a starting preview as running (with the URL it printed, for a web preview).
+    async fn mark_ready(&self, live: &LivePreview, url: Option<String>) {
+        let _updating = live.updating.lock().await;
+        live.ready.cancel();
+        let preview = match self.core.board(&live.conversation).await {
+            Ok(board) => board.previews.get(&live.id).cloned(),
+            Err(_) => None,
+        };
+        let Some(mut preview) = preview.filter(|preview| preview.state == PreviewState::Starting)
+        else {
+            return;
+        };
+        tracing::info!(conversation = %live.conversation, preview = %live.id, "preview ready");
+        preview.state = PreviewState::Running;
+        if live.kind == PreviewKind::Web {
+            preview.url = preview.url.or(url);
+        }
+        if let Err(err) = self.record_preview(preview).await {
+            tracing::warn!(conversation = %live.conversation, preview = %live.id, error = %err, "could not record a preview as running");
+        }
+    }
+
     /// Records how a preview ended, with its whole log stored, and removes its log file.
     async fn end_preview(&self, live: &LivePreview, state: PreviewState) {
         let id = &live.conversation;
@@ -569,12 +695,16 @@ impl SessionManager {
         let status = match &state {
             PreviewState::Exited { status, .. } => status.clone(),
             PreviewState::Stopped { reason } => format!("stopped: {reason}"),
+            PreviewState::Starting => "starting".into(),
             PreviewState::Running => "running".into(),
             PreviewState::Paused => "paused".into(),
         };
         let log = self.store_log(live, &status).await;
         let path = live.log.clone();
-        let url = blocking(move || Ok(log_url(&path))).await.ok().flatten();
+        let url = match live.kind {
+            PreviewKind::Web => blocking(move || Ok(log_url(&path))).await.ok().flatten(),
+            PreviewKind::App => None,
+        };
         let _updating = live.updating.lock().await;
         let preview = match self.core.board(id).await {
             Ok(board) => board.previews.get(&live.id).cloned(),
@@ -591,14 +721,14 @@ impl SessionManager {
                 PreviewState::Exited { status, .. } => Some(format!("ended on its own ({status})")),
                 _ => None,
             };
-            // An end on its own after the start answered "running" is a failure the thread
-            // reports in the same turn (SESSION-FIXES-PLAN.md Q9): it hears it at once.
-            let running_told = {
+            // An end on its own after the start answered is a failure the thread reports in
+            // the same turn (SESSION-FIXES-PLAN.md Q9): it hears it at once.
+            let answered = {
                 let mut start = live.start_told.lock().unwrap_or_else(|p| p.into_inner());
                 start.ending = true;
-                start.running
+                start.answered
             };
-            if let (PreviewState::Exited { status, .. }, true) = (&state, running_told) {
+            if let (PreviewState::Exited { status, .. }, true) = (&state, answered) {
                 let path = live.log.clone();
                 let last = blocking(move || Ok(read_log(&path).0))
                     .await
@@ -799,7 +929,9 @@ impl SessionManager {
         // Once discovered it is persisted, so subsequent polls need only read the tail.
         let known = self.core.board(&id).await?;
         let url = match (&live, known.previews.get(&preview_id)) {
-            (Some(live), Some(preview)) if preview.url.is_none() => {
+            (Some(live), Some(preview))
+                if preview.url.is_none() && preview.kind == PreviewKind::Web =>
+            {
                 let path = live.log.clone();
                 blocking(move || Ok(log_url(&path))).await?
             }
@@ -901,8 +1033,10 @@ impl SessionManager {
         }
         preview.state = if paused {
             PreviewState::Paused
-        } else {
+        } else if live.ready.is_cancelled() {
             PreviewState::Running
+        } else {
+            PreviewState::Starting
         };
         if let Err(err) = self.record_preview(preview).await {
             // Never leave an unrecorded suspended process behind.
@@ -1070,7 +1204,8 @@ impl SessionManager {
         Ok(())
     }
 
-    /// `stop_preview`: stops one preview, or every running one.
+    /// `stop_preview`: stops one preview, or every running one, and removes what it stopped
+    /// from the user's list (as their Clear finished would); its stored log stays readable.
     pub(crate) async fn stop_preview_tool(
         &self,
         id: &ConversationId,
@@ -1082,11 +1217,34 @@ impl SessionManager {
         if stopped.is_empty() {
             return Ok("No preview is running.".into());
         }
+        // One the user resumed or started meanwhile can't be live here: each is recorded as
+        // ended before `stop_previews_of` returns, and a live one is never cleared.
+        let ids = stopped
+            .iter()
+            .filter(|preview| !preview.state.is_live())
+            .map(|preview| preview.id.clone())
+            .collect::<Vec<_>>();
+        if !ids.is_empty() {
+            self.core
+                .record_conversation(
+                    id,
+                    vec![DomainEvent::PreviewsCleared {
+                        conversation_id: id.clone(),
+                        ids,
+                    }],
+                )
+                .await?;
+        }
         Ok(stopped
             .iter()
             .map(|preview| {
+                let log = preview
+                    .log
+                    .as_ref()
+                    .map(|alias| format!(", its log: read_artifact {alias}"))
+                    .unwrap_or_default();
                 format!(
-                    "{} \"{}\": {}",
+                    "{} \"{}\": {}; removed from the user's list{log}",
                     preview.id,
                     preview.name,
                     state_words(preview)
@@ -1188,8 +1346,10 @@ impl SessionManager {
                 conversation: id.clone(),
                 id: preview.id.clone(),
                 pid: preview.pid.unwrap_or_default(),
+                kind: preview.kind,
                 workspace: PathBuf::from(&preview.workspace),
                 log: dir.join(format!("{}.log", preview.id)),
+                ready: CancellationToken::new(),
                 reason: Mutex::new(Some("Brigadier quit".into())),
                 stop: CancellationToken::new(),
                 ended: CancellationToken::new(),
@@ -1736,6 +1896,14 @@ fn last_line(bytes: &[u8]) -> String {
 
 fn state_words(preview: &Preview) -> String {
     match &preview.state {
+        PreviewState::Starting => format!(
+            "starting, not ready yet (it reads running once {}){}",
+            waits_for(preview.kind),
+            preview
+                .pid
+                .map(|pid| format!(", pid {pid}"))
+                .unwrap_or_default()
+        ),
         PreviewState::Running => match preview.pid {
             Some(pid) => format!("running, pid {pid}"),
             None => "running".into(),
@@ -1743,6 +1911,17 @@ fn state_words(preview: &Preview) -> String {
         PreviewState::Paused => "paused by the user".into(),
         PreviewState::Exited { status, .. } => format!("ended on its own ({status})"),
         PreviewState::Stopped { reason } => format!("stopped ({reason})"),
+    }
+}
+
+/// What a starting preview of `kind` waits for to be ready.
+fn waits_for(kind: PreviewKind) -> &'static str {
+    match kind {
+        PreviewKind::Web => {
+            "the local URL it prints, or a port it listens on, answers an HTTP request, or it \
+             opens a window"
+        }
+        PreviewKind::App => "it opens its window",
     }
 }
 
@@ -1803,7 +1982,9 @@ while True: time.sleep(0.03)
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
             pid: child.id(),
+            kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
+            ready: CancellationToken::new(),
             log: flow.repo.join("unused.log"),
             reason: Mutex::default(),
             stop: CancellationToken::new(),
@@ -1923,7 +2104,9 @@ while True:
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
             pid: child.id(),
+            kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
+            ready: CancellationToken::new(),
             log: flow.repo.join("unused.log"),
             reason: Mutex::default(),
             stop: CancellationToken::new(),
@@ -1990,7 +2173,9 @@ while True:
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
             pid: child.id(),
+            kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
+            ready: CancellationToken::new(),
             log: flow.repo.join("unused.log"),
             reason: Mutex::default(),
             stop: CancellationToken::new(),
@@ -2055,7 +2240,9 @@ while True:
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
             pid: child.id(),
+            kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
+            ready: CancellationToken::new(),
             log: flow.repo.join("unused.log"),
             reason: Mutex::default(),
             stop: CancellationToken::new(),
@@ -2111,6 +2298,7 @@ while True:
         let mut board = crate::board::Board::default();
         board.apply(&event, 1);
         assert_eq!(board.previews["preview-3"].url, None);
+        assert_eq!(board.previews["preview-3"].kind, crate::work::PreviewKind::Web);
         assert_eq!(board.preview_number, 3);
         let clear = DomainEvent::PreviewsCleared {
             conversation_id: ConversationId("c".into()),
