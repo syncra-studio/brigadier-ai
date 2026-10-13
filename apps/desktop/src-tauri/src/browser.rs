@@ -671,6 +671,7 @@ mod embedded {
     }
 
     /// Makes tab `id`'s page.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     fn build(
         app: &AppHandle,
         id: &str,
