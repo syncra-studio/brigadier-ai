@@ -4,6 +4,9 @@
 //!   - **Apple Events** (Chromium-family + Safari) — zero-config, uses
 //!     `osascript do JavaScript`.
 //!   - **CDP** (Electron) — port discovered from the running process.
+//!   - **CDP** (any other Chromium browser launched with a debugging port,
+//!     e.g. one that isn't scriptable) — the tab the window shows, over the
+//!     cached connection in `ToolState::cdp_sessions`.
 //!   - **AX-tree fallback** (WKWebView / Tauri) — read-only, no JS.
 //!
 //! The MCP tool definition (name, schema, action dispatch) lives in
@@ -11,10 +14,13 @@
 
 use async_trait::async_trait;
 use cu_core::page::{ClickElementResult, PageBackend};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::ToolState;
-use crate::browser::{is_wk_web_view_app, AXPageReader, BrowserJs, CdpClient, ElectronJs};
+use crate::browser::{
+    is_wk_web_view_app, AXPageReader, BrowserJs, CdpClient, CdpSessionCache, ElectronJs,
+};
 
 pub struct MacOsPageBackend {
     pub state: Arc<ToolState>,
@@ -54,7 +60,15 @@ impl PageBackend for MacOsPageBackend {
         }
 
         // Try JS path first; on error, fall back to AX walk.
-        match execute_js("document.body.innerText", &bundle_id, pid, window_id).await {
+        match execute_js(
+            "document.body.innerText",
+            &bundle_id,
+            pid,
+            window_id,
+            &self.state.cdp_sessions,
+        )
+        .await
+        {
             Ok(result) => Ok(result),
             Err(_) => ax_text_fallback(pid, window_id).await,
         }
@@ -80,7 +94,7 @@ impl PageBackend for MacOsPageBackend {
         }
 
         let js = build_query_selector_js(css_selector, attributes);
-        match execute_js(&js, &bundle_id, pid, window_id).await {
+        match execute_js(&js, &bundle_id, pid, window_id, &self.state.cdp_sessions).await {
             Ok(result) => Ok(result),
             Err(_) => {
                 let results = ax_query_fallback(pid, window_id, css_selector).await?;
@@ -96,7 +110,14 @@ impl PageBackend for MacOsPageBackend {
         javascript: &str,
     ) -> anyhow::Result<String> {
         let bundle_id = Self::bundle_id_for(pid).await;
-        execute_js(javascript, &bundle_id, pid, window_id).await
+        execute_js(
+            javascript,
+            &bundle_id,
+            pid,
+            window_id,
+            &self.state.cdp_sessions,
+        )
+        .await
     }
 
     async fn execute_javascript_targeted(
@@ -263,7 +284,13 @@ async fn resolve_cdp_port(pid: i32, cdp_port: Option<u16>, action: &str) -> anyh
 }
 
 /// Route JavaScript execution to the appropriate backend.
-async fn execute_js(js: &str, bundle_id: &str, pid: i32, window_id: u32) -> anyhow::Result<String> {
+async fn execute_js(
+    js: &str,
+    bundle_id: &str,
+    pid: i32,
+    window_id: u32,
+    cdp_sessions: &CdpSessionCache,
+) -> anyhow::Result<String> {
     if BrowserJs::supports(bundle_id) {
         return BrowserJs::execute(js, bundle_id, window_id).await;
     }
@@ -278,7 +305,63 @@ async fn execute_js(js: &str, bundle_id: &str, pid: i32, window_id: u32) -> anyh
              Use get_text or query_dom instead."
         );
     }
+    if let Some(result) = execute_js_over_cdp(js, pid, window_id, cdp_sessions).await {
+        return result;
+    }
     anyhow::bail!("Unsupported browser: bundle_id={bundle_id}");
+}
+
+/// Evaluate `js` over the debugging port `pid` listens on, in the tab
+/// `window_id` shows. `None` when the process has no debugging port, so the
+/// caller keeps its unsupported-browser path. Reaches a window on another
+/// Space too, where the accessibility tree has no page to read.
+async fn execute_js_over_cdp(
+    js: &str,
+    pid: i32,
+    window_id: u32,
+    cdp_sessions: &CdpSessionCache,
+) -> Option<anyhow::Result<String>> {
+    let port = cdp_port_for_pid(pid).await?;
+    let window_title = tokio::task::spawn_blocking(move || {
+        crate::windows::all_windows()
+            .into_iter()
+            .find(|window| window.window_id == window_id)
+            .map(|window| window.title)
+    })
+    .await
+    .ok()
+    .flatten();
+    let result = cdp_sessions
+        .evaluate_in_window(js, port, window_title.as_deref())
+        .await;
+    if result.is_err() {
+        // The browser may have quit or moved its port: look it up again
+        // next time.
+        cdp_ports().lock().map(|mut ports| ports.remove(&pid)).ok();
+    }
+    Some(result)
+}
+
+/// The debugging port each browser pid was last found on, so a repeat call
+/// skips the `lsof` scan `CdpClient::find_port_for_pid` runs.
+fn cdp_ports() -> &'static Mutex<HashMap<i32, u16>> {
+    static PORTS: OnceLock<Mutex<HashMap<i32, u16>>> = OnceLock::new();
+    PORTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+async fn cdp_port_for_pid(pid: i32) -> Option<u16> {
+    if let Some(port) = cdp_ports()
+        .lock()
+        .ok()
+        .and_then(|ports| ports.get(&pid).copied())
+    {
+        return Some(port);
+    }
+    let port = CdpClient::find_port_for_pid(pid).await?;
+    if let Ok(mut ports) = cdp_ports().lock() {
+        ports.insert(pid, port);
+    }
+    Some(port)
 }
 
 /// Extract page text via the AX tree.

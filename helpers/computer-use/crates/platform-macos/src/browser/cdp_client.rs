@@ -68,7 +68,7 @@ impl CdpClient {
     /// "Allow remote debugging?" confirmation the Chrome-toggle path does,
     /// so there's no reason to route it through `CdpSessionCache`.
     pub async fn evaluate(javascript: &str, port: u16) -> anyhow::Result<String> {
-        let mut session = CdpSession::connect(port, None).await?;
+        let mut session = CdpSession::connect(port, TargetSelector::UrlContains(None)).await?;
         do_evaluate(&mut session, javascript).await
     }
 }
@@ -102,13 +102,13 @@ impl CdpSessionCache {
     async fn get_or_connect(
         &self,
         port: u16,
-        target_url_contains: Option<&str>,
+        selector: TargetSelector<'_>,
     ) -> anyhow::Result<Arc<AsyncMutex<CdpSession>>> {
         let mut map = self.sessions.lock().await;
         if let Some(existing) = map.get(&port) {
             return Ok(existing.clone());
         }
-        let session = CdpSession::connect(port, target_url_contains).await?;
+        let session = CdpSession::connect(port, selector).await?;
         let arc = Arc::new(AsyncMutex::new(session));
         map.insert(port, arc.clone());
         Ok(arc)
@@ -128,22 +128,46 @@ impl CdpSessionCache {
         port: u16,
         target_url_contains: Option<&str>,
     ) -> anyhow::Result<String> {
-        let arc = self.get_or_connect(port, target_url_contains).await?;
+        self.evaluate_on(
+            javascript,
+            port,
+            TargetSelector::UrlContains(target_url_contains),
+        )
+        .await
+    }
+
+    /// Evaluate JavaScript in the tab a browser window shows, chosen by the
+    /// window's title (see `pick_window_target`), reusing the cached
+    /// connection the same way `evaluate` does. Fails when no tab can be
+    /// told apart as the window's own, so the caller can fall back.
+    pub async fn evaluate_in_window(
+        &self,
+        javascript: &str,
+        port: u16,
+        window_title: Option<&str>,
+    ) -> anyhow::Result<String> {
+        self.evaluate_on(javascript, port, TargetSelector::WindowTitle(window_title))
+            .await
+    }
+
+    async fn evaluate_on(
+        &self,
+        javascript: &str,
+        port: u16,
+        selector: TargetSelector<'_>,
+    ) -> anyhow::Result<String> {
+        let arc = self.get_or_connect(port, selector).await?;
         {
             let mut session = arc.lock().await;
-            if session
-                .ensure_target(port, target_url_contains)
-                .await
-                .is_ok()
-            {
+            if session.ensure_target(port, selector).await.is_ok() {
                 return do_evaluate(&mut session, javascript).await;
             }
         }
 
         self.evict(port).await;
-        let arc = self.get_or_connect(port, target_url_contains).await?;
+        let arc = self.get_or_connect(port, selector).await?;
         let mut session = arc.lock().await;
-        session.ensure_target(port, target_url_contains).await?;
+        session.ensure_target(port, selector).await?;
         do_evaluate(&mut session, javascript).await
     }
 
@@ -170,10 +194,11 @@ impl CdpSessionCache {
         port: u16,
         target_url_contains: Option<&str>,
     ) -> anyhow::Result<()> {
-        let arc = self.get_or_connect(port, target_url_contains).await?;
+        let selector = TargetSelector::UrlContains(target_url_contains);
+        let arc = self.get_or_connect(port, selector).await?;
         let first_attempt = {
             let mut session = arc.lock().await;
-            match session.ensure_target(port, target_url_contains).await {
+            match session.ensure_target(port, selector).await {
                 Ok(()) => do_insert_text(&mut session, text).await,
                 Err(e) => Err(e),
             }
@@ -186,9 +211,9 @@ impl CdpSessionCache {
         // session, so a dead cache entry self-heals instead of wedging
         // every future call.
         self.evict(port).await;
-        let arc = self.get_or_connect(port, target_url_contains).await?;
+        let arc = self.get_or_connect(port, selector).await?;
         let mut session = arc.lock().await;
-        session.ensure_target(port, target_url_contains).await?;
+        session.ensure_target(port, selector).await?;
         do_insert_text(&mut session, text).await
     }
 
@@ -214,10 +239,11 @@ impl CdpSessionCache {
         port: u16,
         target_url_contains: Option<&str>,
     ) -> anyhow::Result<()> {
-        let arc = self.get_or_connect(port, target_url_contains).await?;
+        let selector = TargetSelector::UrlContains(target_url_contains);
+        let arc = self.get_or_connect(port, selector).await?;
         let first_attempt = {
             let mut session = arc.lock().await;
-            match session.ensure_target(port, target_url_contains).await {
+            match session.ensure_target(port, selector).await {
                 Ok(()) => do_dispatch_keystrokes(&mut session, text).await,
                 Err(e) => Err(e),
             }
@@ -227,9 +253,9 @@ impl CdpSessionCache {
         }
 
         self.evict(port).await;
-        let arc = self.get_or_connect(port, target_url_contains).await?;
+        let arc = self.get_or_connect(port, selector).await?;
         let mut session = arc.lock().await;
-        session.ensure_target(port, target_url_contains).await?;
+        session.ensure_target(port, selector).await?;
         do_dispatch_keystrokes(&mut session, text).await
     }
 }
@@ -314,6 +340,17 @@ async fn do_dispatch_keystrokes(session: &mut CdpSession, text: &str) -> anyhow:
     .map_err(|_| anyhow::anyhow!("CDP keystroke dispatch timed out after 30s"))?
 }
 
+/// Which page target a call means.
+#[derive(Clone, Copy, Debug)]
+enum TargetSelector<'a> {
+    /// The unique page whose URL contains the hint (see `pick_target`), or,
+    /// with no hint, whichever page the connection already serves.
+    UrlContains(Option<&'a str>),
+    /// The tab a browser window shows, by the window's title (see
+    /// `pick_window_target`).
+    WindowTitle(Option<&'a str>),
+}
+
 /// An open CDP connection scoped to one page target, plus whatever session
 /// routing that required.
 ///
@@ -334,36 +371,39 @@ async fn do_dispatch_keystrokes(session: &mut CdpSession, text: &str) -> anyhow:
 struct CdpSession {
     ws: WsStream,
     session_id: Option<String>,
-    /// URL of whichever target we're currently attached to/connected to —
-    /// used by `ensure_target` to decide whether a re-attach is needed.
+    /// Id of the page target this connection serves — compared against a
+    /// fresh `Target.getTargets` by `ensure_target` to decide whether the
+    /// connection can be reused as is.
+    target_id: Option<String>,
+    /// URL of whichever target we're currently attached to/connected to.
     current_target_url: Option<String>,
     next_id: u64,
 }
 
 impl CdpSession {
-    async fn connect(port: u16, target_url_contains: Option<&str>) -> anyhow::Result<Self> {
-        match ws_url_for_page_target(port, target_url_contains).await {
-            Ok((ws_url, target_url)) => {
-                let (ws, _) = tokio_tungstenite::connect_async(&ws_url)
+    async fn connect(port: u16, selector: TargetSelector<'_>) -> anyhow::Result<Self> {
+        match ws_url_for_page_target(port, selector).await {
+            Ok(found) => {
+                let (ws, _) = tokio_tungstenite::connect_async(&found.ws_url)
                     .await
                     .map_err(|e| anyhow::anyhow!("WebSocket connect failed: {e}"))?;
                 Ok(Self {
                     ws,
                     session_id: None,
-                    current_target_url: Some(target_url),
+                    target_id: found.target_id,
+                    current_target_url: Some(found.target_url),
                     next_id: 1,
                 })
             }
             Err(page_discovery_err) => {
-                Self::connect_via_browser_endpoint(port, target_url_contains, page_discovery_err)
-                    .await
+                Self::connect_via_browser_endpoint(port, selector, page_discovery_err).await
             }
         }
     }
 
     async fn connect_via_browser_endpoint(
         port: u16,
-        target_url_contains: Option<&str>,
+        selector: TargetSelector<'_>,
         page_discovery_err: anyhow::Error,
     ) -> anyhow::Result<Self> {
         let browser_ws_url = format!("ws://127.0.0.1:{port}/devtools/browser");
@@ -378,77 +418,102 @@ impl CdpSession {
         let mut session = Self {
             ws,
             session_id: None,
+            target_id: None,
             current_target_url: None,
             next_id: 1,
         };
-        session.attach_to_target(port, target_url_contains).await?;
+        let pages = session.page_targets().await?.ok_or_else(|| {
+            anyhow::anyhow!("Target.getTargets failed on the browser endpoint of port {port}")
+        })?;
+        session.attach_to_target(port, &pages, selector).await?;
         Ok(session)
     }
 
-    /// Make sure we're attached to the tab `target_url_contains` selects
-    /// (or, with no hint, whatever we're already attached to — anything is
-    /// fine). Re-attaching on an already-open browser-endpoint connection
-    /// via `Target.getTargets`/`Target.attachToTarget` does NOT reopen the
-    /// socket, so it doesn't re-trigger Chrome's confirmation popup —
-    /// that's the whole reason this exists instead of always reconnecting.
+    /// Make sure this connection serves the tab `selector` picks, asking
+    /// Chrome for the live target list (`Target.getTargets`, answered by the
+    /// browser process over the already-open socket — no HTTP discovery, no
+    /// new socket, no new DevTools session in the page). When the picked
+    /// target is the one already served, nothing else happens, so repeat
+    /// calls on one tab cost a single round trip.
+    ///
+    /// The comparison is by target id, never by URL — a brand-new tab can
+    /// carry the exact same URL as a tab that was just closed (e.g. reopening
+    /// the same compose page). Confirmed live: trusting a URL-only match kept
+    /// sending Input.insertText into a closed target's dead session — no
+    /// error, text just never appeared anywhere.
+    ///
+    /// When the pick differs: browser-attached connections re-attach in
+    /// place (`Target.attachToTarget` on the SAME socket, so it doesn't
+    /// re-trigger Chrome's confirmation popup — the whole reason this
+    /// exists instead of always reconnecting); classic connections are tied
+    /// to one page's own websocket URL, so they reconnect through `/json`
+    /// (cheap and harmless: the classic route never shows the popup).
     async fn ensure_target(
         &mut self,
         port: u16,
-        target_url_contains: Option<&str>,
+        selector: TargetSelector<'_>,
     ) -> anyhow::Result<()> {
+        let Some(pages) = self.page_targets().await? else {
+            if self.session_id.is_some() {
+                anyhow::bail!("Target.getTargets failed on port {port}");
+            }
+            // A page endpoint that can't list targets: reconnect, as before
+            // target ids were compared.
+            *self = Self::connect(port, selector).await?;
+            return Ok(());
+        };
+        let refs = pages.iter().collect::<Vec<_>>();
+        let target = select_target(&refs, selector, self.target_id.as_deref())
+            .ok_or_else(|| no_target_error(port, selector))?;
+        let picked_id = target_id_of(target);
+        if picked_id.is_some() && picked_id == self.target_id.as_deref() {
+            self.current_target_url = Some(target_url_of(target));
+            return Ok(());
+        }
         if self.session_id.is_some() {
-            // Flattened browser-endpoint mode: always re-resolve + reattach
-            // on the SAME connection (Target.getTargets/attachToTarget,
-            // never a new socket, so it's cheap and doesn't reprompt).
-            //
-            // Deliberately does NOT skip this when `current_target_url`
-            // already matches the hint — a brand-new tab can carry the
-            // exact same URL as a tab that was just closed (e.g. reopening
-            // the same compose page), and the cache has no way to tell
-            // "same URL" apart from "same still-alive target" without
-            // asking Chrome. Confirmed live: skipping this on a URL-only
-            // match kept sending Input.insertText into a closed target's
-            // dead session — no error, text just never appeared anywhere.
-            self.attach_to_target(port, target_url_contains).await
+            self.attach_to_target(port, &pages, selector).await
         } else {
-            // Classic mode is tied to one page's own websocket URL — there's
-            // no in-place retarget, but this mode never shows the popup
-            // (it's the dedicated-automation-profile route), so a full
-            // reconnect here is cheap and harmless.
-            *self = Self::connect(port, target_url_contains).await?;
+            *self = Self::connect(port, selector).await?;
             Ok(())
         }
+    }
+
+    /// The page targets Chrome reports right now, or `None` when the
+    /// endpoint answers `Target.getTargets` with an error.
+    async fn page_targets(&mut self) -> anyhow::Result<Option<Vec<serde_json::Value>>> {
+        let targets = self
+            .call("Target.getTargets", serde_json::json!({}))
+            .await?;
+        if targets.get("error").is_some() {
+            return Ok(None);
+        }
+        Ok(Some(
+            targets["result"]["targetInfos"]
+                .as_array()
+                .map(|infos| {
+                    infos
+                        .iter()
+                        .filter(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ))
     }
 
     async fn attach_to_target(
         &mut self,
         port: u16,
-        target_url_contains: Option<&str>,
+        pages: &[serde_json::Value],
+        selector: TargetSelector<'_>,
     ) -> anyhow::Result<()> {
-        let targets = self
-            .call("Target.getTargets", serde_json::json!({}))
-            .await?;
-        let infos = targets["result"]["targetInfos"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let pages: Vec<&serde_json::Value> = infos
-            .iter()
-            .filter(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
-            .collect();
-        let target = pick_target(&pages, target_url_contains).ok_or_else(|| {
-            anyhow::anyhow!("Target.getTargets returned no page target on port {port}")
-        })?;
-        let target_id = target
-            .get("targetId")
-            .and_then(|v| v.as_str())
+        let refs = pages.iter().collect::<Vec<_>>();
+        let target = select_target(&refs, selector, self.target_id.as_deref())
+            .ok_or_else(|| no_target_error(port, selector))?;
+        let target_id = target_id_of(target)
             .ok_or_else(|| anyhow::anyhow!("Target.getTargets entry missing targetId"))?
             .to_owned();
-        let target_url = target
-            .get("url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+        let target_url = target_url_of(target);
 
         let attach = self
             .call(
@@ -461,6 +526,7 @@ impl CdpSession {
             .ok_or_else(|| anyhow::anyhow!("Target.attachToTarget did not return a sessionId"))?
             .to_owned();
         self.session_id = Some(session_id);
+        self.target_id = Some(target_id);
         self.current_target_url = Some(target_url);
         Ok(())
     }
@@ -507,15 +573,22 @@ impl CdpSession {
     }
 }
 
-/// Resolve the websocket debugger URL (and the target's own URL) for the
-/// page target `target_url_contains` selects, via the classic `/json` HTTP
+/// A page target found through the classic `/json` discovery.
+struct PageEndpoint {
+    ws_url: String,
+    target_url: String,
+    target_id: Option<String>,
+}
+
+/// Resolve the websocket debugger URL (and the target's own URL and id) for
+/// the page target `selector` picks, via the classic `/json` HTTP
 /// discovery. Errors (not just returns None) so `CdpSession::connect` can
 /// report exactly why the classic path failed if the browser-endpoint
 /// fallback also fails.
 async fn ws_url_for_page_target(
     port: u16,
-    target_url_contains: Option<&str>,
-) -> anyhow::Result<(String, String)> {
+    selector: TargetSelector<'_>,
+) -> anyhow::Result<PageEndpoint> {
     let json = http_get_json(port).await?;
     let targets: serde_json::Value =
         serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("CDP /json parse error: {e}"))?;
@@ -529,8 +602,8 @@ async fn ws_url_for_page_target(
         })
         .unwrap_or_default();
 
-    let target = pick_target(&pages, target_url_contains)
-        .ok_or_else(|| anyhow::anyhow!("No page target found on port {port}"))?;
+    let target =
+        select_target(&pages, selector, None).ok_or_else(|| no_target_error(port, selector))?;
     let ws_url = target
         .get("webSocketDebuggerUrl")
         .and_then(|v| v.as_str())
@@ -538,12 +611,74 @@ async fn ws_url_for_page_target(
             anyhow::anyhow!("No page target with webSocketDebuggerUrl found on port {port}")
         })?
         .to_owned();
-    let target_url = target
+    Ok(PageEndpoint {
+        ws_url,
+        target_url: target_url_of(target),
+        target_id: target_id_of(target).map(str::to_owned),
+    })
+}
+
+fn no_target_error(port: u16, selector: TargetSelector<'_>) -> anyhow::Error {
+    match selector {
+        TargetSelector::UrlContains(Some(hint)) => {
+            anyhow::anyhow!("No single page target whose URL contains {hint:?} on port {port}")
+        }
+        TargetSelector::UrlContains(None) => anyhow::anyhow!("No page target found on port {port}"),
+        TargetSelector::WindowTitle(title) => anyhow::anyhow!(
+            "No page target on port {port} can be told apart as the tab of the window titled \
+             {title:?}"
+        ),
+    }
+}
+
+/// A target's id: `targetId` in `Target.getTargets`, `id` in `/json`.
+fn target_id_of(target: &serde_json::Value) -> Option<&str> {
+    target
+        .get("targetId")
+        .or_else(|| target.get("id"))
+        .and_then(|v| v.as_str())
+}
+
+fn target_url_of(target: &serde_json::Value) -> String {
+    target
         .get("url")
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .to_owned();
-    Ok((ws_url, target_url))
+        .to_owned()
+}
+
+/// Pick the page `selector` means. With no URL hint, the page the
+/// connection already serves (`current_id`) stays picked while it exists,
+/// so a hint-less caller keeps talking to one tab instead of whichever page
+/// Chrome happens to list first.
+fn select_target<'a>(
+    pages: &[&'a serde_json::Value],
+    selector: TargetSelector<'_>,
+    current_id: Option<&str>,
+) -> Option<&'a serde_json::Value> {
+    match selector {
+        TargetSelector::UrlContains(None) => current_id
+            .and_then(|id| {
+                pages
+                    .iter()
+                    .copied()
+                    .find(|page| target_id_of(page) == Some(id))
+            })
+            .or_else(|| pick_target(pages, None)),
+        TargetSelector::UrlContains(hint) => pick_target(pages, hint),
+        TargetSelector::WindowTitle(title) => {
+            let pairs = pages
+                .iter()
+                .map(|page| {
+                    (
+                        page.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                        page.get("url").and_then(|v| v.as_str()).unwrap_or(""),
+                    )
+                })
+                .collect::<Vec<_>>();
+            pick_window_target(&pairs, title).map(|index| pages[index])
+        }
+    }
 }
 
 /// Pick the unique page target whose `url` contains `hint`
@@ -576,9 +711,31 @@ fn pick_target<'a>(
     }
 }
 
+/// Pick, from `(title, url)` page targets, the tab a browser window shows.
+/// A window's WindowServer title is its active tab's title, so the unique
+/// page with that title wins (a page without a title shows its URL there
+/// instead). With no unique title match, a browser with a single page has
+/// only one candidate; anything else is ambiguous — CDP target ids carry no
+/// relationship to a `window_id` — and picks nothing.
+pub(crate) fn pick_window_target(
+    targets: &[(&str, &str)],
+    window_title: Option<&str>,
+) -> Option<usize> {
+    if let Some(window_title) = window_title.map(str::trim).filter(|t| !t.is_empty()) {
+        let mut matches = targets.iter().enumerate().filter(|(_, (title, url))| {
+            let shown = if title.trim().is_empty() { url } else { title };
+            shown.trim() == window_title
+        });
+        if let Some((index, _)) = matches.next() {
+            return matches.next().is_none().then_some(index);
+        }
+    }
+    (targets.len() == 1).then_some(0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{pick_target, CdpSessionCache};
+    use super::{pick_target, pick_window_target, CdpSessionCache};
     use futures_util::{SinkExt, StreamExt};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -628,6 +785,197 @@ mod tests {
             pick_target(&refs, None).and_then(|target| target["url"].as_str()),
             Some("app://fixture/#window-a")
         );
+    }
+
+    fn tabs() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("Inbox", "https://mail.fixture/inbox"),
+            ("Heading", "file:///fixture/heading.html"),
+            ("", "file:///fixture/untitled.html"),
+        ]
+    }
+
+    #[test]
+    fn window_target_is_the_tab_titled_like_the_window() {
+        assert_eq!(pick_window_target(&tabs(), Some("Heading")), Some(1));
+        assert_eq!(pick_window_target(&tabs(), Some("  Inbox ")), Some(0));
+    }
+
+    #[test]
+    fn window_target_matches_an_untitled_tab_by_its_url() {
+        assert_eq!(
+            pick_window_target(&tabs(), Some("file:///fixture/untitled.html")),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn window_target_with_a_shared_title_is_ambiguous() {
+        let tabs = [
+            ("Same", "https://a.fixture/"),
+            ("Same", "https://b.fixture/"),
+        ];
+        assert_eq!(pick_window_target(&tabs, Some("Same")), None);
+    }
+
+    #[test]
+    fn window_target_falls_back_to_the_only_page() {
+        let tabs = [("Heading", "file:///fixture/heading.html")];
+        assert_eq!(pick_window_target(&tabs, Some("Other window")), Some(0));
+        assert_eq!(pick_window_target(&tabs, None), Some(0));
+        assert_eq!(pick_window_target(&tabs, Some("")), Some(0));
+    }
+
+    #[test]
+    fn window_target_among_many_pages_needs_a_title_match() {
+        assert_eq!(pick_window_target(&tabs(), Some("Other window")), None);
+        assert_eq!(pick_window_target(&tabs(), None), None);
+        assert_eq!(pick_window_target(&[], Some("Heading")), None);
+    }
+
+    /// Answer one classic `/json` discovery request on `listener`.
+    async fn serve_json(listener: &TcpListener, pages: serde_json::Value) {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 1024];
+        let read = socket.read(&mut request).await.unwrap();
+        assert!(String::from_utf8_lossy(&request[..read]).starts_with("GET /json "));
+        let body = pages.to_string();
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    }
+
+    fn json_page(port: u16, id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "type": "page",
+            "title": "Fixture",
+            "url": "app://fixture/#window-a",
+            "webSocketDebuggerUrl": format!("ws://127.0.0.1:{port}/devtools/page/{id}")
+        })
+    }
+
+    fn target_infos(id: u64, target_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "result": { "targetInfos": [{
+                "targetId": target_id,
+                "type": "page",
+                "title": "Fixture",
+                "url": "app://fixture/#window-a"
+            }] }
+        })
+    }
+
+    /// Answer CDP requests on one page websocket: `Target.getTargets` lists
+    /// `target_id`, each `Runtime.evaluate` answers the next of `values`.
+    /// Returns once every value went out, or at the first `Target.getTargets`
+    /// after `switch_after` evaluations (answered with `switched_to`).
+    async fn serve_page(
+        listener: &TcpListener,
+        target_id: &str,
+        values: &[&str],
+        switch_after: Option<(usize, &str)>,
+    ) {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(socket).await.unwrap();
+        let mut evaluated = 0;
+        while evaluated < values.len() {
+            let Message::Text(text) = websocket.next().await.unwrap().unwrap() else {
+                continue;
+            };
+            let request: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let id = request["id"].as_u64().unwrap();
+            assert!(request.get("sessionId").is_none());
+            let response = match request["method"].as_str().unwrap() {
+                "Target.getTargets" => match switch_after {
+                    Some((after, switched_to)) if evaluated == after => {
+                        let response = target_infos(id, switched_to);
+                        websocket
+                            .send(Message::Text(response.to_string().into()))
+                            .await
+                            .unwrap();
+                        return;
+                    }
+                    _ => target_infos(id, target_id),
+                },
+                "Runtime.evaluate" => {
+                    evaluated += 1;
+                    serde_json::json!({
+                        "id": id,
+                        "result": { "result": { "value": values[evaluated - 1] } }
+                    })
+                }
+                other => panic!("unexpected method {other}"),
+            };
+            websocket
+                .send(Message::Text(response.to_string().into()))
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn repeat_calls_on_one_tab_reuse_the_page_websocket() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = tokio::spawn(async move {
+            serve_json(&listener, serde_json::json!([json_page(port, "page-a")])).await;
+            serve_page(
+                &listener,
+                "page-a",
+                &["value-1", "value-2", "value-3"],
+                None,
+            )
+            .await;
+            // No further `/json` discovery or websocket for repeat calls.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(250), listener.accept())
+                    .await
+                    .is_err()
+            );
+        });
+
+        let cache = CdpSessionCache::new();
+        for expected in ["value-1", "value-2", "value-3"] {
+            assert_eq!(
+                cache.evaluate("1", port, Some("#window-a")).await.unwrap(),
+                expected
+            );
+        }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_replaced_tab_with_the_same_url_is_rediscovered() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = tokio::spawn(async move {
+            serve_json(&listener, serde_json::json!([json_page(port, "page-a")])).await;
+            serve_page(&listener, "page-a", &["value-1"], Some((1, "page-b"))).await;
+            serve_json(&listener, serde_json::json!([json_page(port, "page-b")])).await;
+            serve_page(&listener, "page-b", &["value-2"], None).await;
+        });
+
+        let cache = CdpSessionCache::new();
+        assert_eq!(
+            cache.evaluate("1", port, Some("#window-a")).await.unwrap(),
+            "value-1"
+        );
+        assert_eq!(
+            cache.evaluate("2", port, Some("#window-a")).await.unwrap(),
+            "value-2"
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]
