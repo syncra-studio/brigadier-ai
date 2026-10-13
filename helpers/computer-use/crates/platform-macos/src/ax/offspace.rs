@@ -11,8 +11,9 @@
 //! [`windows_by_token`] finds the elements for the app's on-screen-list
 //! windows that the regular attributes missed. Element ids are small and
 //! stable for a window's life, so a found id is remembered, and a window that
-//! a scan could not match (a hidden helper window, say) is not scanned for
-//! again.
+//! a whole scan could not match (a hidden helper window, say) is not scanned
+//! for again. A scan cut short by its time budget (a busy app) goes on where
+//! it stopped next time instead.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -41,6 +42,25 @@ struct AppMemory {
     found: HashMap<u32, u64>,
     /// Windows a full scan could not match.
     unmatched: HashSet<u32>,
+    /// Where the last scan ran out of time, to go on from; 0 when it didn't.
+    resume: u64,
+}
+
+impl AppMemory {
+    /// After a scan from `started` that ran out of time at `stopped` (or went
+    /// through, `None`) with `still_missing` unmatched: only a whole scan, from
+    /// the first id to the last, rules a window out.
+    fn after_scan(&mut self, started: u64, stopped: Option<u64>, still_missing: Vec<u32>) {
+        match stopped {
+            Some(at) => self.resume = at,
+            None => {
+                self.resume = 0;
+                if started == 0 {
+                    self.unmatched.extend(still_missing);
+                }
+            }
+        }
+    }
 }
 
 fn memory() -> &'static Mutex<HashMap<i32, AppMemory>> {
@@ -96,8 +116,14 @@ pub(crate) unsafe fn windows_by_token(pid: i32, have: &[u32]) -> Vec<AXUIElement
         return out;
     }
     let deadline = Instant::now() + SCAN_BUDGET;
-    for element_id in 0..SCAN_LIMIT {
-        if still_missing.is_empty() || Instant::now() >= deadline {
+    let started = app.resume;
+    let mut stopped = None;
+    for element_id in started..SCAN_LIMIT {
+        if still_missing.is_empty() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            stopped = Some(element_id);
             break;
         }
         let Some((element, window)) = window_element(pid, element_id, None) else {
@@ -112,7 +138,7 @@ pub(crate) unsafe fn windows_by_token(pid: i32, have: &[u32]) -> Vec<AXUIElement
             CFRelease(element as CFTypeRef);
         }
     }
-    app.unmatched.extend(still_missing);
+    app.after_scan(started, stopped, still_missing);
     out
 }
 
@@ -151,6 +177,23 @@ mod tests {
         assert_eq!(&token[4..8], &[0, 0, 0, 0]);
         assert_eq!(&token[8..12], &0x636f_636f_i32.to_ne_bytes());
         assert_eq!(&token[12..20], &42_u64.to_ne_bytes());
+    }
+
+    #[test]
+    fn only_a_whole_scan_rules_a_window_out() {
+        let mut app = super::AppMemory::default();
+        // Out of time at id 900: nothing is ruled out, the next scan goes on there.
+        app.after_scan(0, Some(900), vec![7]);
+        assert!(app.unmatched.is_empty());
+        assert_eq!(app.resume, 900);
+        // That scan goes through, but it began half way: still nothing ruled out,
+        // and the next one starts from the first id.
+        app.after_scan(900, None, vec![7]);
+        assert!(app.unmatched.is_empty());
+        assert_eq!(app.resume, 0);
+        // A whole scan that finds no element for the window rules it out.
+        app.after_scan(0, None, vec![7]);
+        assert!(app.unmatched.contains(&7));
     }
 
     #[test]
