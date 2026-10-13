@@ -67,6 +67,22 @@ async fn each_side_reads_the_message_and_the_receiver_when_it_came() {
         .find(|message| message.id == id)
         .unwrap();
     assert_eq!(theirs.conversation.peer_at_ms, Some(message.created_at_ms));
+    // A daemon started again on the same store still knows when it came (the event's own time,
+    // written with the message), and that the sender received none.
+    let reloaded = crate::Core::load(flow.core.store().clone()).await.unwrap();
+    let at = reloaded.conversation(&api).unwrap().peer_at_ms.unwrap();
+    assert!(
+        (message.created_at_ms..message.created_at_ms + 5_000).contains(&at),
+        "{at} vs {}",
+        message.created_at_ms
+    );
+    assert_eq!(
+        reloaded
+            .conversation(&flow.conversation)
+            .unwrap()
+            .peer_at_ms,
+        None
+    );
     flow.stop().await;
 }
 

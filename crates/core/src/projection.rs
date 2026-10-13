@@ -111,11 +111,8 @@ impl Projection {
             }
             DomainEvent::MessageAppended { message } => {
                 self.touch(&message.conversation_id, message.created_at_ms);
-                if message.role == crate::model::MessageRole::Peer
-                    && let Some(conversation) = self.conversations.get_mut(&message.conversation_id)
-                {
-                    conversation.peer_at_ms =
-                        conversation.peer_at_ms.max(Some(message.created_at_ms));
+                if message.role == crate::model::MessageRole::Peer {
+                    self.peer_at(&message.conversation_id, message.created_at_ms);
                 }
             }
             DomainEvent::SettingsChanged { settings } => {
@@ -184,6 +181,13 @@ impl Projection {
     pub(crate) fn touch(&mut self, id: &ConversationId, at_ms: i64) {
         if let Some(conversation) = self.conversations.get_mut(id) {
             conversation.updated_at_ms = conversation.updated_at_ms.max(at_ms);
+        }
+    }
+
+    /// `id` received a message from another session at `at_ms` (its sidebar's unread dot).
+    pub(crate) fn peer_at(&mut self, id: &ConversationId, at_ms: i64) {
+        if let Some(conversation) = self.conversations.get_mut(id) {
+            conversation.peer_at_ms = conversation.peer_at_ms.max(Some(at_ms));
         }
     }
 

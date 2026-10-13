@@ -658,6 +658,14 @@ impl Store {
             .await
     }
 
+    /// Each stream under `prefix` that has a `peer.received` event, with its newest one's
+    /// `stream_seq` and `at_ms`.
+    pub async fn peer_received_heads(&self, prefix: String) -> Result<Vec<StreamHead>> {
+        self.reads
+            .run(move |conn| reader::peer_received_heads(conn, &prefix))
+            .await
+    }
+
     /// The check result stored under `key` (THREAD-PLAN.md Q8 lever 3), with when it was
     /// stored, in ms since the Unix epoch. The body is the caller's own.
     pub async fn check_result(&self, key: String) -> Result<Option<(String, i64)>> {
@@ -856,5 +864,60 @@ mod tests {
         assert!(blobs.get(shared).await.unwrap().is_some());
         assert!(blobs.get(put_since).await.unwrap().is_some());
         assert!(blobs.get(soon).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn each_stream_names_its_newest_received_peer_message_off_its_own_index() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4())));
+        let store = Store::open(StoreConfig {
+            db_path: dir.join("db.sqlite"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .expect("a store");
+        let event = |stream: &str, kind: &str, at_ms: i64| {
+            NewEvent::new(stream, kind, at_ms, &serde_json::json!({})).unwrap()
+        };
+        store
+            .append(vec![
+                event("conversation:a", "peer.received", 10),
+                event("conversation:a", "message.appended", 11),
+                event("conversation:a", "peer.received", 20),
+                event("conversation:a", "message.appended", 30),
+                event("conversation:b", "message.appended", 40),
+                event("catalog", "peer.received", 50),
+            ])
+            .await
+            .unwrap();
+        let heads = store
+            .peer_received_heads("conversation:".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            heads
+                .iter()
+                .map(|head| (head.stream.as_str(), head.at_ms))
+                .collect::<Vec<_>>(),
+            [("conversation:a", 20)]
+        );
+        // Startup reads those rows alone, not every event of every conversation.
+        let plan = store
+            .reads
+            .run(|conn| {
+                let mut statement = conn.prepare(&format!(
+                    "EXPLAIN QUERY PLAN {}",
+                    reader::PEER_RECEIVED_HEADS
+                ))?;
+                let details = statement
+                    .query_map(rusqlite::params!["conversation:", "conversation;"], |row| {
+                        row.get::<_, String>(3)
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(details.join("\n"))
+            })
+            .await
+            .unwrap();
+        assert!(plan.contains("events_peer_received"), "{plan}");
     }
 }

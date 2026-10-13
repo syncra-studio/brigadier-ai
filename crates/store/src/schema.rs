@@ -41,6 +41,13 @@ fn migrations() -> Migrations<'static> {
             ) STRICT, WITHOUT ROWID;",
         )
         .comment("check result cache"),
+        // When each conversation last got a message from another session (its sidebar's unread
+        // dot, SESSION-MESSAGING-PLAN.md §6.4), read at startup off these few rows alone.
+        M::up(
+            "CREATE INDEX events_peer_received ON events (stream, at_ms) \
+             WHERE kind = 'peer.received';",
+        )
+        .comment("received peer messages by stream"),
     ])
 }
 
