@@ -13,9 +13,17 @@ Screen Recording to the outermost app bundle.
 
 ## Origin
 
-Forked from an MIT-licensed driver at its release 0.8.12, commit
-`e8a8dbfd45a5d050058e7340f97ffe6f157c3128`. The licence and copyright are in
-the repository's `THIRD_PARTY_NOTICES.md`. Changes from the original:
+The driving itself (Accessibility, input, capture, the agent cursor, the
+tool set) is an MIT-licensed driver's macOS backend, vendored unmodified in
+`upstream/` at one pinned release. `upstream/UPSTREAM.md` names the release,
+the few hooks in `patches/`, and how to move to a newer one
+(`scripts/sync-upstream.sh`). Brigadier's own behaviour sits on top of it in
+`crates/cu-layer`.
+
+The `brigadier-cu` binary started as a fork of an MIT-licensed driver at its
+release 0.8.12, commit `e8a8dbfd45a5d050058e7340f97ffe6f157c3128`. Both
+licences and copyrights are in the repository's `THIRD_PARTY_NOTICES.md`.
+What Brigadier changed and added:
 
 - Renamed every product name, binary (`brigadier-cu`), bundle, environment
   variable (`BRIGADIER_CU_*`) and path to Brigadier's.
@@ -49,10 +57,11 @@ the repository's `THIRD_PARTY_NOTICES.md`. Changes from the original:
   agents are told to pass theirs on every call.
 - The bundle explains its Apple Events use, so macOS can ask before browser
   page actions control Safari or Chrome.
-- Windows on another Space (an app launched in the background while the
-  user works in a full-screen app) are found by remote token
-  (`ax/offspace.rs`), so they can be read, captured and driven without
-  switching Spaces.
+- `cu-layer` wraps the driver's tools: which apps agents may drive, never
+  bringing an app to the front, menu shortcuts and scrolling for apps in the
+  background, opening apps hidden and links in a running browser behind the
+  user's work, the browser `page` tool, typing into desktop web apps in the
+  background, and answers that say plainly what happened.
 - Development builds of Brigadier stay targetable; the user's release
   Brigadier is not.
 
@@ -60,12 +69,10 @@ the repository's `THIRD_PARTY_NOTICES.md`. Changes from the original:
 
 | Crate | Purpose |
 | --- | --- |
-| `brigadier-cu` | CLI, stdio MCP shim, daemon, supervisor |
-| `cu-core` | Protocol, tool registry, sessions, recording, CDP helpers |
-| `platform-macos` | Accessibility, capture, input, browser, permissions |
-| `cursor-overlay` | Agent cursor rendering |
-| `pip-preview` | Home directory and the optional preview window |
+| `brigadier-cu` | CLI, stdio MCP shim, daemon, supervisor, permissions panel |
+| `cu-layer` | Brigadier's behaviour around the driver's tools |
 | `cu-testkit` | Test helpers |
+| `upstream/crates/*` | The vendored driver (see `upstream/UPSTREAM.md`) |
 
 ## Build and check
 

@@ -3,10 +3,6 @@ resolver = "2"
 members = [
     "crates/brigadier-cu",
     "crates/cu-testkit",
-    "crates/cu-core",
-    "crates/platform-macos",
-    "crates/cursor-overlay",
-    "crates/pip-preview",
     "crates/cu-layer",
 ]
 # The vendored upstream crates are their own workspace (upstream/UPSTREAM.md).
