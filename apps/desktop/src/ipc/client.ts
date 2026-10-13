@@ -241,6 +241,15 @@ export function browserPlace(id: string, bounds: BrowserBounds | null): Promise<
 }
 
 /**
+ * What the app has over the Browser tabs' pages (macOS, where a page lies beneath the app): its
+ * floating controls' areas, which take clicks there, and whether a menu, popover or dialog is open,
+ * which takes every click over a page.
+ */
+export function browserLayer(above: BrowserBounds[], modal: boolean): Promise<void> {
+  return invoke("browser_layer", { above, modal });
+}
+
+/**
  * Back, forward, reload, reload past the cache (macOS) or stop in the Browser tab's page. The
  * `-unless-typing` ones are ⌘← and ⌘→ while the page has the keyboard: in a text field they move
  * the caret to the line's start or end instead.

@@ -742,6 +742,7 @@ fn main() {
             browser::browser_open,
             browser::browser_navigate,
             browser::browser_place,
+            browser::browser_layer,
             browser::browser_go,
             browser::browser_zoom,
             browser::browser_find,

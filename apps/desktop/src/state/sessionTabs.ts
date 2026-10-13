@@ -202,6 +202,36 @@ export function openBrowserTab(conversationId: string, url: string, agent = fals
   return id;
 }
 
+/** The session that has tab `id`. */
+function sessionWith(id: string): string | null {
+  const sessions = useSessionTabs.getState().sessions;
+  return Object.keys(sessions).find((conversationId) => sessions[conversationId]?.tabs.some((tab) => tab.id === id)) ?? null;
+}
+
+/**
+ * A Browser tab's page opened a popup: a Browser tab `id` showing it (its page already made)
+ * goes right after the opener's tab, in front. `false` when the opener's tab is gone.
+ */
+export function openPopupTab(opener: string, id: string, url: string): boolean {
+  const conversationId = sessionWith(opener);
+  if (!conversationId) return false;
+  update(conversationId, (current) => {
+    const from = current.tabs.find((tab) => tab.id === opener);
+    const agent = from?.kind === "browser" && from.agent === true;
+    const tab: BrowserTabState = { kind: "browser", id, opener, url: url || "about:blank", title: "", ...(agent ? { agent } : {}) };
+    const tabs = [...current.tabs];
+    tabs.splice(tabs.findIndex((entry) => entry.id === opener) + 1, 0, tab);
+    return { tabs, active: id };
+  });
+  return true;
+}
+
+/** Tab `id` closes, in whichever session has it. */
+export function closeTabAnywhere(id: string): void {
+  const conversationId = sessionWith(id);
+  if (conversationId) closeTab(conversationId, id);
+}
+
 /**
  * The built-in browser was turned off: every Browser tab goes, and none can be reopened. A
  * session whose tab in front was one shows the tab that opened it.
@@ -558,6 +588,8 @@ export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSave
     const remapped = new Map<string, string>();
     const tabs = (session.tabs as (SessionTab | LegacyDocumentTab)[]).flatMap((tab): SessionTab[] => {
       if (tab.kind === "terminal") return [{ ...tab, title: "" }];
+      // A popup its opener wrote (about:blank) is gone with its page: its tab starts empty.
+      if (tab.kind === "browser" && !/^https?:/i.test(tab.url)) return [{ ...tab, url: "" }];
       if (tab.kind !== "document") return [tab];
       if (tab.savedPath && tab.relativePath && isSaved(tab.id, tab.savedPath)) {
         const file = { kind: "file" as const, id: fileId(tab.relativePath), path: tab.relativePath, preview: false, line: null, reveal: 0, opener: tab.opener };

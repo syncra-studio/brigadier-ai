@@ -642,3 +642,14 @@
 .browser-address-field {
   mask-image: var(--browser-address-mask);
 }
+
+/* A Browser tab's page shows through a hole cut in #root (browserLayer.ts): the background is the
+   root's, which the hole cuts too, not the page's or the body's, which would fill it. Outside any
+   layer, so it wins over their bg-background classes in index.html. */
+html[data-page-beneath],
+html[data-page-beneath] body {
+  background-color: transparent;
+}
+html[data-page-beneath] #root {
+  @apply bg-background;
+}

@@ -18,6 +18,7 @@ import {
 import { type ReactNode, type RefObject, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { browserAddress, shownAddress, siteSecurity, webAddress } from "./browserAddress";
+import { showPage } from "./browserLayer";
 import { type BrowserKey, browserKey, stepZoom, ZOOM_LEAST, ZOOM_MOST, zoomLabel } from "./browserKeys";
 
 import { Spinner } from "@/components/glyphs/spinner";
@@ -384,6 +385,8 @@ export function BrowserTab({
   const page = useBrowsers((s) => s.pages[conversationId]);
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
+  /** The page lies beneath the app, which draws above it (see `browserLayer`). */
+  const beneath = mac;
   const area = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const findInput = useRef<HTMLInputElement>(null);
@@ -429,17 +432,20 @@ export function BrowserTab({
         placedBounds.width,
         placedBounds.height,
       );
+      // Beneath the app (macOS) the page stays live under what the app opens over it; over the
+      // app it hides while anything of the app's overlaps it.
       const bounds: BrowserBounds | null =
         !element.closest("[inert]") &&
         placedBounds.width > 0 &&
         placedBounds.height > 0 &&
-        !covered(rendered, layers)
+        (beneath || !covered(rendered, layers))
           ? placedBounds
           : null;
       const key = JSON.stringify(bounds);
       if (key !== placed) {
         placed = key;
         browserPlace(conversationId, bounds).catch(() => {});
+        if (beneath) showPage(conversationId, bounds);
       }
       shown.current = bounds !== null;
       next = requestAnimationFrame(place);
@@ -450,8 +456,9 @@ export function BrowserTab({
       observer.disconnect();
       shown.current = false;
       browserPlace(conversationId, null).catch(() => {});
+      if (beneath) showPage(conversationId, null);
     };
-  }, [conversationId, page?.ready, active]);
+  }, [conversationId, page?.ready, active, beneath]);
 
   const url = page?.url ?? "";
   const loading = page?.loading === true;

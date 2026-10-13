@@ -107,6 +107,12 @@ pub enum BrowserEvent {
     Escape,
     /// The shifted + key zooms the sender's page in, like the = menu accelerator.
     ZoomIn,
+    /// The page opened a popup (`window.open`, `target=_blank`): its page waits, as tab `id`,
+    /// for a tab to the right of this one; `url` is where it goes ("" or `about:blank` when the
+    /// page writes it itself).
+    Popup { id: String, url: String },
+    /// The page closed itself (`window.close()` in a popup): its tab closes.
+    Closed,
 }
 
 /// What a Browser tab's page shows, for the chat beside it: its address, its title, its text

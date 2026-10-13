@@ -4,6 +4,7 @@ import { stepZoom } from "@/app/conversation/browserKeys";
 import { browserClose, browserNavigate, browserOpen, browserZoom, revealPath } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
 import { closeFind, findState, forgetFind } from "@/state/browserFind";
+import { closeTabAnywhere, openPopupTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -101,6 +102,11 @@ export async function openPage(
         const zoom = useBrowsers.getState().pages[id]?.zoom ?? 1;
         zoomPage(id, stepZoom(zoom, 1)).catch(() => {});
       }
+      else if (event.type === "popup") {
+        // Its page waits for a tab; with the opener's tab gone it has none.
+        if (!openPopupTab(id, event.id, event.url)) browserClose(event.id).catch(() => {});
+      }
+      else if (event.type === "closed") closeTabAnywhere(id);
       else update(id, { blocked: event.url, loading: false });
     });
     if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }

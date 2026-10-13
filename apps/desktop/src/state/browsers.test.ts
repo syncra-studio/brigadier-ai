@@ -5,6 +5,7 @@ import type { Channel } from "@tauri-apps/api/core";
 import type { BrowserEvent } from "@/ipc/generated";
 import { findState, openFind, useBrowserFind } from "./browserFind";
 import { closePage, faviconFits, openPage, useBrowsers } from "./browsers";
+import { type BrowserTabState, CHAT_TAB, restoreSessionTabs, sessionTabs, useSessionTabs } from "./sessionTabs";
 
 test("favicons follow same-document navigations but not other pages", () => {
   const loaded = { url: "https://example.com/app?x=1", loading: false };
@@ -57,5 +58,41 @@ test("native page keys affect only their tab: Escape keeps the find query, shift
   } finally {
     closePage("first");
     closePage("second");
+  }
+});
+
+test("a page's popup opens as a tab right after its opener's, in front; it closes itself; with the opener's tab gone it goes", async () => {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { crypto: globalThis.crypto } });
+  const channels = new Map<string, Channel<BrowserEvent>>();
+  const closed: string[] = [];
+  mockIPC((command, payload) => {
+    const args = payload as { id: string; events?: Channel<BrowserEvent> };
+    if (command === "browser_open") channels.set(args.id, args.events!);
+    if (command === "browser_close") closed.push(args.id);
+    return null;
+  });
+  const opener: BrowserTabState = { kind: "browser", id: "browser:opener", opener: CHAT_TAB, url: "https://example.com/", title: "", agent: true };
+  const other: BrowserTabState = { kind: "browser", id: "browser:other", opener: CHAT_TAB, url: "https://example.org/", title: "" };
+  useSessionTabs.setState({ sessions: { session: { tabs: [opener, other], active: other.id } } });
+  try {
+    await openPage(opener.id, opener.url, { x: 0, y: 0, width: 800, height: 600 });
+    channels.get(opener.id)!.onmessage({ type: "popup", id: "browser:popup-1", url: "" });
+    const shown = sessionTabs("session");
+    assert.deepEqual(shown.tabs.map((tab) => tab.id), [opener.id, "browser:popup-1", other.id]);
+    assert.equal(shown.active, "browser:popup-1");
+    assert.deepEqual(shown.tabs[1], { kind: "browser", id: "browser:popup-1", opener: opener.id, url: "about:blank", title: "", agent: true });
+    const restored = restoreSessionTabs({ session: shown }).session!.tabs;
+    assert.deepEqual(restored.map((tab) => tab.kind === "browser" ? tab.url : null), ["https://example.com/", "", "https://example.org/"], "a written popup starts empty after a restart");
+    await openPage("browser:popup-1", "about:blank", { x: 0, y: 0, width: 800, height: 600 });
+    channels.get("browser:popup-1")!.onmessage({ type: "closed" });
+    assert.deepEqual(sessionTabs("session").tabs.map((tab) => tab.id), [opener.id, other.id]);
+    assert.equal(sessionTabs("session").active, opener.id, "closing returns to its opener");
+    useSessionTabs.setState({ sessions: {} });
+    channels.get(opener.id)!.onmessage({ type: "popup", id: "browser:popup-2", url: "https://example.net/" });
+    assert.deepEqual(closed, ["browser:popup-2"], "a popup no tab can take is dropped");
+  } finally {
+    closePage(opener.id);
+    closePage("browser:popup-1");
+    useSessionTabs.setState({ sessions: {} });
   }
 });
