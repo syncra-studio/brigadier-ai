@@ -323,6 +323,26 @@ impl Tool for TypeTextTool {
                 let ax_echo_surface =
                     verified && path == PATH_AX && target_in_web_area(pid, element_ptr);
                 let verified = verified && !ax_echo_surface;
+                // A page in a window the browser never brought forward takes
+                // neither the accessibility write nor key events, though the
+                // field has the page's focus. Ask the page itself, through the
+                // browser's debugging port, and insert the text there when it
+                // isn't in yet.
+                let web = if verified {
+                    None
+                } else {
+                    web_field_over_cdp(&self.state, pid, window_id, element_ptr, &text).await
+                };
+                let verified = verified || web.is_some();
+                let ax_echo_surface = ax_echo_surface && web.is_none();
+                let (detail, path) = match web {
+                    Some(WebField::Inserted) => (
+                        " into the page's focused field through the browser's debugging port"
+                            .to_string(),
+                        PATH_CDP,
+                    ),
+                    _ => (detail, path),
+                };
 
                 // `verified:false` means the driver could not confirm the text
                 // landed (Electron AX echo, unreadable AXValue on Catalyst, or a
@@ -428,6 +448,81 @@ impl Tool for TypeTextTool {
 const PATH_AX: &str = "ax";
 const PATH_KEY_EVENTS: &str = "key_events";
 const PATH_KEY_EVENTS_FG: &str = "key_events_fg";
+const PATH_CDP: &str = "cdp";
+
+/// What the page said about a web field the text was typed into.
+enum WebField {
+    /// The field already holds the text.
+    AlreadyThere,
+    /// The text was inserted through the debugging port and the field holds it.
+    Inserted,
+}
+
+/// Checks a web field through the browser's debugging port: the page's focused
+/// field (the one `element` points at, when the page gave it an id) holds
+/// `text`, or gets it inserted with `Input.insertText`. `None` when there is no
+/// debugging port, the element isn't in a page, or the page's focus is
+/// elsewhere, so the caller keeps its unconfirmed answer.
+async fn web_field_over_cdp(
+    state: &ToolState,
+    pid: i32,
+    window_id: Option<u32>,
+    element: Option<(usize, Option<usize>)>,
+    text: &str,
+) -> Option<WebField> {
+    let (wid, (ptr, _)) = (window_id?, element?);
+    if text.is_empty() || !target_in_web_area(pid, element) {
+        return None;
+    }
+    let port = super::page::cdp_port_for_pid(pid).await?;
+    let dom_id =
+        unsafe { copy_string_attr(ptr as AXUIElementRef, "AXDOMIdentifier") }.unwrap_or_default();
+    let title = tokio::task::spawn_blocking(move || {
+        crate::windows::all_windows()
+            .into_iter()
+            .find(|w| w.window_id == wid)
+            .map(|w| w.title)
+    })
+    .await
+    .ok()
+    .flatten();
+    let probe = web_field_probe(&dom_id, text);
+    let sessions = &state.cdp_sessions;
+    match sessions
+        .evaluate_in_window(&probe, port, title.as_deref())
+        .await
+        .ok()?
+        .as_str()
+    {
+        "there" => return Some(WebField::AlreadyThere),
+        "missing" => {}
+        _ => return None,
+    }
+    sessions
+        .insert_text_in_window(text, port, title.as_deref())
+        .await
+        .ok()?;
+    let after = sessions
+        .evaluate_in_window(&probe, port, title.as_deref())
+        .await
+        .ok()?;
+    (after == "there").then_some(WebField::Inserted)
+}
+
+/// JavaScript answering "there" when the page's focused editable field (with
+/// `dom_id`, when given) holds `text`, "missing" when it doesn't, and "none"
+/// when the focus is on something else.
+fn web_field_probe(dom_id: &str, text: &str) -> String {
+    let id = serde_json::to_string(dom_id).unwrap_or_else(|_| "\"\"".into());
+    let text = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        "(() => {{ const e = document.activeElement; \
+         if (!e || !(e.isContentEditable || e.tagName === 'INPUT' || e.tagName === 'TEXTAREA')) return 'none'; \
+         const id = {id}; if (id && e.id !== id) return 'none'; \
+         const v = (e.value !== undefined ? e.value : e.textContent) || ''; \
+         return v.includes({text}) ? 'there' : 'missing'; }})()"
+    )
+}
 
 /// Read-back verification for a keystroke rung: did the typed text actually land?
 ///
@@ -815,6 +910,14 @@ fn type_text_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_web_field_probe_quotes_the_text_and_the_field_id() {
+        let probe = web_field_probe("name", "it's \"x\"\n");
+        assert!(probe.contains(r#"const id = "name";"#), "{probe}");
+        assert!(probe.contains(r#"v.includes("it's \"x\"\n")"#), "{probe}");
+        assert!(web_field_probe("", "a").contains(r#"const id = "";"#));
+    }
 
     /// Sanity-check that the terminal short-circuit can be expressed as a
     /// pure function of `is_terminal_target`: when true, the code goes

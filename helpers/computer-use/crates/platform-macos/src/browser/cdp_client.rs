@@ -243,7 +243,28 @@ impl CdpSessionCache {
         port: u16,
         target_url_contains: Option<&str>,
     ) -> anyhow::Result<()> {
-        let selector = TargetSelector::UrlContains(target_url_contains);
+        self.insert_text_on(text, port, TargetSelector::UrlContains(target_url_contains))
+            .await
+    }
+
+    /// `insert_text` into the tab a browser window shows, chosen by the
+    /// window's title the way `evaluate_in_window` chooses it.
+    pub async fn insert_text_in_window(
+        &self,
+        text: &str,
+        port: u16,
+        window_title: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.insert_text_on(text, port, TargetSelector::WindowTitle(window_title))
+            .await
+    }
+
+    async fn insert_text_on(
+        &self,
+        text: &str,
+        port: u16,
+        selector: TargetSelector<'_>,
+    ) -> anyhow::Result<()> {
         let arc = self.get_or_connect(port, selector).await?;
         let first_attempt = {
             let mut session = arc.lock().await;

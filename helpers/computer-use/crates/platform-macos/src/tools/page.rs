@@ -349,7 +349,7 @@ fn cdp_ports() -> &'static Mutex<HashMap<i32, u16>> {
     PORTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-async fn cdp_port_for_pid(pid: i32) -> Option<u16> {
+pub(crate) async fn cdp_port_for_pid(pid: i32) -> Option<u16> {
     if let Some(port) = cdp_ports()
         .lock()
         .ok()
