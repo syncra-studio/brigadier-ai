@@ -286,3 +286,53 @@ async fn a_message_to_an_archived_unknown_or_own_session_is_refused() {
     assert!(flow.board_of(&old).await.peer_messages.is_empty());
     flow.stop().await;
 }
+
+/// The receiver's turn that took a message hits its usage limit: the message goes again with
+/// the turn handed over to the stand-in, which does the work.
+#[tokio::test]
+async fn a_message_goes_on_with_a_turn_a_usage_limit_hands_over() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-limit", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    peers.on(&api, |turn| async move {
+        match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Added the column."),
+        }
+    });
+    let text = "Please add a `name` column.";
+    let sent = peers.sends(&flow.conversation, &api, text);
+    flow.say("Ask the API session for a name column.").await;
+    flow.settled().await;
+    let id = message_id(&only(&sent).0);
+    let board = flow
+        .until_in(&api, "the stand-in's turn done", |board| {
+            board
+                .requests
+                .get(&id)
+                .is_some_and(|request| request.state == crate::work::RequestState::Done)
+        })
+        .await;
+    assert!(stands(&board, &id, &PeerState::Seen));
+    let inputs = peers.inputs_of(&api);
+    assert_eq!(inputs.len(), 2, "{inputs:?}");
+    assert!(
+        inputs
+            .iter()
+            .all(|input| input.contains(&format!("· id {id}]\n{text}"))),
+        "{inputs:?}"
+    );
+    assert_eq!(
+        flow.core
+            .conversation(&api)
+            .unwrap()
+            .fallback
+            .expect("Codex stands in")
+            .choice
+            .provider,
+        ProviderKind::Codex
+    );
+    flow.stop().await;
+}

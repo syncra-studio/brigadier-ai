@@ -199,6 +199,9 @@ struct ConvState {
     pending: Vec<Message>,
     /// The chain of the running turn's newest input ([`TurnChain`]).
     chain: Option<TurnChain>,
+    /// The messages of other sessions the running (or last) turn took, with their requests:
+    /// they go again, first, when a usage limit hands the turn over.
+    in_turn_peers: Vec<(Envelope, Option<String>)>,
     /// Notes about messages between sessions, by message id, which the next turn carries,
     /// starting none of its own: a reply that came after its request was over (stopped, or
     /// its overnight run ended), and the user's answer to a send that waited for their OK.
@@ -290,6 +293,15 @@ struct ConvState {
     cache: Option<CacheMark>,
     /// A handoff note written while the cache was warm, for a rebirth once it has expired.
     checkpoint: Option<Arc<RebirthPrep>>,
+}
+
+impl ConvState {
+    /// A usage limit hands the turn over: the messages of other sessions it took go again,
+    /// first (they were seen, so nothing else would bring them back).
+    fn carry_peers(&mut self) {
+        let peers = std::mem::take(&mut self.in_turn_peers);
+        self.inbox.splice(0..0, peers);
+    }
 }
 
 /// Where a request the orchestrator sent a worker back in stands, while the user has seen no
@@ -1240,6 +1252,9 @@ impl SessionManager {
             return false;
         }
         state.chain = Some(chain);
+        state
+            .in_turn_peers
+            .push((envelope.clone(), Some(request.to_owned())));
         let into = if reply {
             None
         } else {
@@ -1824,6 +1839,11 @@ impl SessionManager {
                 state.asked_user.clear();
             }
             state.in_turn = users.clone();
+            state.in_turn_peers = envelopes
+                .iter()
+                .filter(|(envelope, _)| envelope.peer_message().is_some())
+                .cloned()
+                .collect();
             break (users, envelopes, request, notes);
         };
         let chain = self
@@ -4079,6 +4099,7 @@ impl SessionManager {
                 let mut pending = carried;
                 pending.append(&mut state.pending);
                 state.pending = pending;
+                state.carry_peers();
             }
             stopped
         };
@@ -4129,6 +4150,7 @@ impl SessionManager {
                 let mut pending = carried;
                 pending.append(&mut state.pending);
                 state.pending = pending;
+                state.carry_peers();
             }
             stopped
         };
@@ -4186,6 +4208,7 @@ impl SessionManager {
             let mut pending = carried;
             pending.append(&mut state.pending);
             state.pending = pending;
+            state.carry_peers();
             // The request isn't over: its messages wait.
             if let Some(request) = &served {
                 state.outcomes.remove(request);
