@@ -273,6 +273,7 @@ impl Tool for LaunchAppTool {
             // Retry loop: LaunchServices returns before WindowServer has
             // registered the new windows. Poll up to 5x100ms.
             let windows = resolve_windows_for_pid(pid);
+            crate::ax::offspace::remember_front_windows(pid);
 
             let app_info: Option<crate::apps::AppInfo> = {
                 let apps = crate::apps::list_running_apps();

@@ -58,6 +58,12 @@ impl Tool for ListWindowsTool {
 
         if let Some(pid) = pid_filter {
             windows.retain(|w| w.pid == pid);
+            // Listing is how an agent finds a window it just opened: note it
+            // while it is still the app's main window (see ax::offspace).
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::ax::offspace::remember_front_windows(pid)
+            })
+            .await;
         }
 
         let windows_json: Vec<Value> = windows

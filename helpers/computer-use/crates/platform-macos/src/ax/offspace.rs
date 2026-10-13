@@ -8,6 +8,12 @@
 //! element built from that token works like any other: its tree can be read
 //! and its controls used, with nothing brought to the front.
 //!
+//! An element only gets its id once the app hands it to a client, and an app
+//! hands out a window on another Space only while it is the app's main or
+//! focused window. [`remember`] notes the id whenever such a window is seen
+//! (at launch, when listing windows, on every tree read), so a document that
+//! another one opened after it has replaced as main is still found.
+//!
 //! [`windows_by_token`] finds the elements for the app's on-screen-list
 //! windows that the regular attributes missed. Element ids are small and
 //! stable for a window's life, so a found id is remembered, and a window that
@@ -22,8 +28,8 @@ use std::time::{Duration, Instant};
 use core_foundation::base::{CFRelease, CFTypeRef};
 
 use super::bindings::{
-    ax_get_window_id, copy_string_attr, element_from_token, AXUIElementRef,
-    AXUIElementSetMessagingTimeout,
+    ax_get_window_id, copy_element_attr, copy_string_attr, element_from_token, element_id,
+    AXUIElementCreateApplication, AXUIElementRef, AXUIElementSetMessagingTimeout,
 };
 
 /// Element ids scanned for a missing window. Window elements sit far below
@@ -66,6 +72,45 @@ impl AppMemory {
 fn memory() -> &'static Mutex<HashMap<i32, AppMemory>> {
     static MEMORY: OnceLock<Mutex<HashMap<i32, AppMemory>>> = OnceLock::new();
     MEMORY.get_or_init(Default::default)
+}
+
+/// Notes the token id of `window`, a window element of `pid`.
+///
+/// # Safety
+/// `window` must be a valid AX element.
+pub(crate) unsafe fn remember(pid: i32, window: AXUIElementRef) {
+    let (Some(window_id), Some(element)) = (ax_get_window_id(window), element_id(window)) else {
+        return;
+    };
+    let Ok(mut memory) = memory().lock() else {
+        return;
+    };
+    if memory.len() >= MAX_APPS && !memory.contains_key(&pid) {
+        memory.clear();
+    }
+    let app = memory.entry(pid).or_default();
+    app.found.insert(window_id, element);
+    app.unmatched.remove(&window_id);
+}
+
+/// Notes the app's focused and main windows: a window just opened is one of
+/// them only until the next one opens.
+pub(crate) fn remember_front_windows(pid: i32) {
+    unsafe {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return;
+        }
+        // A busy app costs this call little: the note is only a head start.
+        AXUIElementSetMessagingTimeout(app, 0.25);
+        for attr in ["AXFocusedWindow", "AXMainWindow"] {
+            if let Some(window) = copy_element_attr(app, attr) {
+                remember(pid, window);
+                CFRelease(window as CFTypeRef);
+            }
+        }
+        CFRelease(app as CFTypeRef);
+    }
 }
 
 /// The app's real windows (layer 0, not zero-sized) from the window server,
@@ -169,6 +214,16 @@ unsafe fn window_element(
 #[cfg(test)]
 mod tests {
     use super::super::bindings::remote_token;
+
+    #[test]
+    fn a_token_gives_back_its_element_id() {
+        let token = super::super::bindings::remote_token(42, 319);
+        assert_eq!(super::super::bindings::token_element_id(&token), Some(319));
+        assert_eq!(super::super::bindings::token_element_id(&token[..12]), None);
+        let mut app = token;
+        app[8..12].copy_from_slice(b"appa");
+        assert_eq!(super::super::bindings::token_element_id(&app), None);
+    }
 
     #[test]
     fn a_remote_token_carries_the_pid_the_tag_and_the_element_id() {

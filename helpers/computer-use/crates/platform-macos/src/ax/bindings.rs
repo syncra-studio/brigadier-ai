@@ -91,6 +91,9 @@ extern "C" {
     /// `'coco'`, element id). It is the only way to reach the windows an app
     /// keeps on another Space: AppKit leaves them out of `AXWindows`.
     pub fn _AXUIElementCreateWithRemoteToken(token: CFDataRef) -> AXUIElementRef;
+    /// Private SPI: the 20-byte remote token of an element (created; the caller
+    /// releases it). An element only gets its id once it is handed to a client.
+    pub fn _AXUIElementRemoteTokenCreate(element: AXUIElementRef) -> CFDataRef;
     pub fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> AXError;
     /// Per-element request timeout in seconds; 0 restores the system default.
     pub fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, seconds: f32) -> AXError;
@@ -119,6 +122,7 @@ extern "C" {
         the_type: AXValueType,
         value_ptr: *mut c_void,
     ) -> bool;
+    pub fn AXValueCreate(the_type: AXValueType, value_ptr: *const c_void) -> AXValueRef;
 }
 
 // ── Helper functions ──────────────────────────────────────────────────────────
@@ -458,6 +462,22 @@ pub unsafe fn set_number_attr(element: AXUIElementRef, attr_name: &str, value: f
     AXUIElementSetAttributeValue(element, attr.as_concrete_TypeRef(), cf_value.as_CFTypeRef())
 }
 
+/// Set an AX attribute to an AXValue(CFRange), such as `AXSelectedTextRange`.
+pub unsafe fn set_range_attr(
+    element: AXUIElementRef,
+    attr_name: &str,
+    range: core_foundation::base::CFRange,
+) -> AXError {
+    let value = AXValueCreate(kAXValueCFRangeType, &range as *const _ as *const c_void);
+    if value.is_null() {
+        return kAXErrorFailure;
+    }
+    let attr = CFStr::new(attr_name);
+    let err = AXUIElementSetAttributeValue(element, attr.as_concrete_TypeRef(), value as CFTypeRef);
+    CFRelease(value as CFTypeRef);
+    err
+}
+
 /// Set an AX attribute to a CFBoolean true value.
 pub unsafe fn set_bool_attr_true(element: AXUIElementRef, attr_name: &str) -> AXError {
     use core_foundation::boolean::CFBoolean;
@@ -526,13 +546,17 @@ pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
             windows.push(w);
         }
     };
+    let mut pid = 0;
+    let pid_known = AXUIElementGetPid(element, &mut pid) == kAXErrorSuccess && pid > 0;
     for attr in ["AXFocusedWindow", "AXMainWindow"] {
         if let Some(w) = copy_element_attr(element, attr) {
+            if pid_known {
+                super::offspace::remember(pid, w);
+            }
             keep(w, &mut windows);
         }
     }
-    let mut pid = 0;
-    if AXUIElementGetPid(element, &mut pid) == kAXErrorSuccess && pid > 0 {
+    if pid_known {
         let have: Vec<u32> = windows
             .iter()
             .filter_map(|w| ax_get_window_id(*w))
@@ -551,6 +575,24 @@ pub(crate) fn remote_token(pid: i32, element_id: u64) -> [u8; 20] {
     token[8..12].copy_from_slice(&0x636f_636f_i32.to_ne_bytes());
     token[12..20].copy_from_slice(&element_id.to_ne_bytes());
     token
+}
+
+/// The element id in `element`'s remote token.
+pub(crate) unsafe fn element_id(element: AXUIElementRef) -> Option<u64> {
+    use core_foundation::{base::TCFType, data::CFData};
+    let data = _AXUIElementRemoteTokenCreate(element);
+    if data.is_null() {
+        return None;
+    }
+    let bytes = CFData::wrap_under_create_rule(data).bytes().to_vec();
+    token_element_id(&bytes)
+}
+
+/// The element id of a remote token, if it is one.
+pub(crate) fn token_element_id(token: &[u8]) -> Option<u64> {
+    let id: [u8; 8] = token.get(12..20)?.try_into().ok()?;
+    (token.len() == 20 && token[8..12] == 0x636f_636f_i32.to_ne_bytes())
+        .then(|| u64::from_ne_bytes(id))
 }
 
 /// The element for remote token `element_id` in `pid`, retained.
