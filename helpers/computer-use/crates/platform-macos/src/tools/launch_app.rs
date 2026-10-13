@@ -297,6 +297,7 @@ impl Tool for LaunchAppTool {
             // An app already running opens the documents in windows of its
             // own; watch it first so each one is caught as it opens, also
             // when other documents open right after it.
+            let mut opens_in_running_app = false;
             if !urls.is_empty() {
                 let running =
                     crate::apps::list_running_apps().into_iter().find(|a| {
@@ -307,6 +308,7 @@ impl Tool for LaunchAppTool {
                     });
                 if let Some(app) = running {
                     crate::ax::window_watch::watch(app.pid);
+                    opens_in_running_app = !creates_new_instance;
                 }
             }
             let launch_once = || -> anyhow::Result<i32> {
@@ -370,8 +372,24 @@ impl Tool for LaunchAppTool {
 
             // Retry loop: LaunchServices returns before WindowServer has
             // registered the new windows. Poll up to 5x100ms.
-            let mut windows = resolve_windows_for_pid(pid);
-            main_window_first(pid, &mut windows);
+            // The documents open in new windows of the running app, often
+            // only after LaunchServices returns: wait a little for them and
+            // list them first, so the caller needn't list the windows again.
+            let windows = if opens_in_running_app {
+                let (mut windows, new) = crate::browser::open_link::wait_for_new_windows(
+                    pid,
+                    &windows_before_open,
+                    urls.len(),
+                );
+                if new == 0 {
+                    main_window_first(pid, &mut windows);
+                }
+                windows
+            } else {
+                let mut windows = resolve_windows_for_pid(pid);
+                main_window_first(pid, &mut windows);
+                windows
+            };
             crate::ax::offspace::remember_front_windows(pid);
 
             let app_info: Option<crate::apps::AppInfo> = {
