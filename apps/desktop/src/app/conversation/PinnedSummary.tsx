@@ -25,8 +25,6 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { PreviewsSection } from "@/app/conversation/RunningTab";
-import { TitlebarButton } from "@/components/titlebar-button";
 import { showCard } from "@/app/conversation/ActionCards";
 import { isRunRequest } from "@/app/conversation/blocks";
 import { PlanSection } from "@/app/conversation/cards/PlanSection";
@@ -38,6 +36,7 @@ import {
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
 import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
+import { PreviewsSection } from "@/app/conversation/PreviewsSection";
 import { ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
@@ -54,6 +53,7 @@ import {
   SummarySection,
 } from "@/components/assistant-ui/elements/summary-section";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TitlebarButton } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -927,7 +927,6 @@ export function PinnedSummaryToggle() {
       <TitlebarButton
         tooltip="Context"
         aria-label="Context"
-        size="icon-md"
         aria-pressed={pinned}
         onClick={() => setPinnedSummary(!pinned)}
       >
@@ -940,7 +939,6 @@ export function PinnedSummaryToggle() {
       <TitlebarButton
         tooltip="Context"
         aria-label="Context"
-        size="icon-md"
         aria-pressed={floating}
       >
         <Tasks />

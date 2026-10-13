@@ -10,7 +10,7 @@ import { updateDraft } from "@/app/conversation/draftSetup";
 import { MentionMemory } from "@/app/conversation/Mentions";
 import { NewTabTools } from "@/app/conversation/NewTabTools";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
-import { PreviewsSection } from "@/app/conversation/RunningTab";
+import { PreviewsSection } from "@/app/conversation/PreviewsSection";
 import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { useSidePanel } from "@/app/conversation/SidePanel";
 import { WorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";

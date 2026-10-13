@@ -3,7 +3,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { PreviewsSection } from "@/app/conversation/RunningTab";
+import { PreviewsSection } from "@/app/conversation/PreviewsSection";
 import { previewActive } from "@/app/conversation/previewStatus";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";

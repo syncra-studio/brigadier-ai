@@ -58,7 +58,7 @@ function PreviewRow({ preview, disabled }: { preview: Preview; disabled: boolean
       } catch (cause) {
         if (!cancelled) setLogError(String(cause));
       }
-      if (!cancelled && active) timer = setTimeout(() => { void refresh(); }, expanded ? 2000 : 5000);
+      if (!cancelled && active && expanded) timer = setTimeout(() => { void refresh(); }, 2000);
     }
     void refresh();
     return () => { cancelled = true; clearTimeout(timer); };
