@@ -99,6 +99,9 @@ fn spawn_daemon(home: &std::path::Path) -> std::process::Child {
 
 fn spawn_daemon_with(home: &std::path::Path, extra: &[&str]) -> std::process::Child {
     let copy = home.join("cu-serve-under-test");
+    // A fresh file each time: macOS kills a process whose executable was
+    // rewritten in place while an earlier one still had it mapped.
+    let _ = std::fs::remove_file(&copy);
     std::fs::copy(env!("CARGO_BIN_EXE_brigadier-cu"), &copy).unwrap();
     Command::new(copy)
         .args(["serve", "--no-permissions-gate", "--no-overlay"])
@@ -332,8 +335,11 @@ fn stop_using_an_app_holds_after_the_helper_is_replaced_and_only_for_that_agent(
 
     // The helper is replaced; the agent's shim reconnects and acts again.
     assert!(home.join("stopped.json").exists());
-    drop(control);
+    // The helper dies first, as in a crash; the shim's control connection
+    // goes with it (a shim that hangs up itself has exited, and its stops
+    // lapse).
     cleanup.replace();
+    drop(control);
     wait_healthy(&home);
     let _control = control_connection(&home, &minted);
     let still = call("brigadier-itest");

@@ -370,9 +370,13 @@ mod tests {
     #[test]
     fn the_old_daemon_is_known_by_its_executable_wherever_its_bundle_moved() {
         let helper = |path: &str| is_helper_executable(std::path::Path::new(path));
-        assert!(helper("/d/computer/Brigadier Computer Use.app/Contents/MacOS/brigadier-cu"));
+        assert!(helper(
+            "/d/computer/Brigadier Computer Use.app/Contents/MacOS/brigadier-cu"
+        ));
         // An update moved the old bundle aside while its daemon runs.
-        assert!(helper("/d/computer/.helper-new-42/Contents/MacOS/brigadier-cu"));
+        assert!(helper(
+            "/d/computer/.helper-new-42/Contents/MacOS/brigadier-cu"
+        ));
         assert!(!helper("/usr/bin/brigadier-cu"));
         assert!(!helper("/d/Other.app/Contents/MacOS/other"));
         assert!(!helper("/d/cu-serve-under-test"));
