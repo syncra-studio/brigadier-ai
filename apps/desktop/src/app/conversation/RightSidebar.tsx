@@ -2,7 +2,7 @@ import { Lightbulb, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type CSSProperties, createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
-import { WorkersTab } from "@/app/conversation/Agents";
+import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
 import { workerDone } from "@/app/conversation/workerPresentation";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { SidebarReveal, SidebarResizeHandle, useSidebarChoice, useSidebarWidth } from "@/components/ui/sidebar-layout";
@@ -14,7 +14,7 @@ import { useBoard } from "@/state/board";
 import { usePlanTab } from "@/state/planDoc";
 
 const PlanTab = lazy(() => import("@/app/conversation/PlanTab").then((m) => ({ default: m.PlanTab })));
-const TABS = [{ id: "workers", title: "Workers", Icon: null }] as const;
+const TABS = [{ id: "workers", title: WORKERS_LABEL, Icon: null }] as const;
 /** Plan joins the tabs only after the user opens a plan. */
 const WITH_PLAN = [...TABS, { id: "plan", title: "Plan", Icon: Lightbulb }] as const;
 
@@ -71,6 +71,24 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
   const workerHeader = panel?.active === "workers" && !!selectedWorker;
   const content = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
+  const [tabFocus, setTabFocus] = useState<RightSidebarTab | null>(null);
+  const selectTab = (tab: RightSidebarTab) => {
+    setTabFocus(tab);
+    panel?.selectTab(tab);
+  };
+  // Switching to a worker removes the tabs; switching to Plan removes its header button.
+  // Focus the replacement only after React has mounted it.
+  useLayoutEffect(() => {
+    const tab = tabFocus;
+    if (tab === null) return;
+    const target = content.current?.querySelector<HTMLElement>(
+      workerHeader ? '[data-slot="worker-header"] button' : `#right-sidebar-${tab}`,
+    );
+    if (target) {
+      target.focus({ preventScroll: true });
+      setTabFocus(null);
+    }
+  }, [tabFocus, workerHeader]);
   const column = useRef<HTMLDivElement>(null);
   const tabs: readonly (typeof WITH_PLAN)[number][] = usePlanTab((s) => s.shown[conversationId] !== undefined) ? WITH_PLAN : TABS;
   // Finished workers leave the composer's strip once answered; they stay here, counted.
@@ -129,7 +147,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
                   className={cn("aria-selected:bg-toolbar-pressed aria-selected:text-foreground", id === "workers" && "w-auto px-2 text-label")}
                   tabIndex={panel.active === id ? 0 : -1}
                   tooltip={id === "workers" && done > 0 ? `${title} · ${done} done` : title}
-                  onClick={() => panel.selectTab(id)}
+                  onClick={() => selectTab(id)}
                   onKeyDown={(event) => {
                     const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
                       : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
@@ -137,11 +155,10 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
                     if (next === null) return;
                     event.preventDefault();
                     const tab = tabs[next]!;
-                    panel.selectTab(tab.id);
-                    document.getElementById(`right-sidebar-${tab.id}`)?.focus();
+                    selectTab(tab.id);
                   }}
                 >
-                  {Icon ? <Icon /> : "Workers"}
+                  {Icon ? <Icon /> : title}
                 </TitlebarButton>
               ))}
             </TitlebarTips>
@@ -163,7 +180,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
           >
             {mounted && <Suspense fallback={null}>
               {panel.active === "plan" ? <PlanTab conversationId={conversationId} /> : <WorkersTab conversationId={conversationId} headerActions={<TitlebarTips>
-                {tabs.length > 1 && <TitlebarButton tooltip="Plan" onClick={() => panel.selectTab("plan")}><Lightbulb /></TitlebarButton>}
+                {tabs.length > 1 && <TitlebarButton tooltip="Plan" onClick={() => selectTab("plan")}><Lightbulb /></TitlebarButton>}
                 <TitlebarButton tooltip="Close right panel" onClick={() => panel.setOpen(false)}><X /></TitlebarButton>
               </TitlebarTips>} />}
             </Suspense>}

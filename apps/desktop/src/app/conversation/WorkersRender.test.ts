@@ -13,7 +13,7 @@ test("workers fit narrow panels, open details from their pill and keep close and
     for (const box of bounds.content) assert.ok(box.left >= -1 && box.right >= -1, `${name}: ${JSON.stringify(box)}`);
   }
   assert.ok(seen.narrow.width <= 320);
-  for (const name of ["details", "toggled", "noMenu", "noTabs", "closeInHeader", "listClose", "closed", "workerClosed", "headerFits", "plan"]) assert.equal(seen[name], true, `${name}: ${JSON.stringify(seen)}`);
+  for (const name of ["details", "toggled", "noMenu", "noTabs", "closeInHeader", "listClose", "closed", "workerClosed", "headerFits", "plan", "planFocused", "workerFocused", "planFocusedAgain", "workerKeyFocused"]) assert.equal(seen[name], true, `${name}: ${JSON.stringify(seen)}`);
 
   assert.match(seen.tooltip, /Worker details.*GPT-6.1 Sol.*High/);
 });
