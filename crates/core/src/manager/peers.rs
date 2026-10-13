@@ -41,13 +41,14 @@ fn cut_at_line(text: &str) -> String {
     if text.len() <= READ_EACH_BYTES {
         return text.to_owned();
     }
-    let mut end = text[..READ_EACH_BYTES].rfind('\n').unwrap_or(0);
-    if end == 0 {
-        end = READ_EACH_BYTES;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
+    let mut within = READ_EACH_BYTES;
+    while !text.is_char_boundary(within) {
+        within -= 1;
     }
+    let end = match text[..within].rfind('\n') {
+        Some(end) if end > 0 => end,
+        _ => within,
+    };
     format!("{}\n[… {} more bytes]", &text[..end], text.len() - end)
 }
 
@@ -771,5 +772,17 @@ mod tests {
         let cut = cut_at_line(&wide);
         assert!(cut.starts_with("éé"));
         assert!(cut.split("\n[…").next().unwrap().len() <= READ_EACH_BYTES);
+        // The cut falls inside a character: before it, whatever the character's width.
+        for wide in [
+            "€".repeat(700),
+            format!("{}\n{}", "€".repeat(10), "€".repeat(700)),
+        ] {
+            let cut = cut_at_line(&wide);
+            let kept = cut.split("\n[…").next().unwrap();
+            assert!(
+                kept.len() <= READ_EACH_BYTES && kept.starts_with('€'),
+                "{cut}"
+            );
+        }
     }
 }
