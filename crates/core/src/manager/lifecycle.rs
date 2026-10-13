@@ -188,6 +188,8 @@ impl SessionManager {
             // A held merge whose writers ended while Brigadier was down is stopped, waits or
             // is due now (SESSION-FIXES-PLAN.md Q3).
             self.check_held_merge(&conversation.id).await;
+            // What other sessions sent it and it hadn't taken goes again (once).
+            self.recover_peer_messages(&conversation).await;
             // What waits for the user matches the tasks and reports as they are now.
             self.reconcile_waiting(&conversation.id).await;
             // Nothing runs any more: what was working is over or waits for the user.

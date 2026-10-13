@@ -800,6 +800,19 @@ impl Provider for Codex {
         })
     }
 
+    fn took_input(&self, native_id: &str, needle: &str) -> BoxFuture<'_, bool> {
+        let dir = self.history_home();
+        let (id, needle) = (native_id.to_owned(), needle.to_owned());
+        Box::pin(async move {
+            let Some(dir) = dir else {
+                return false;
+            };
+            tokio::task::spawn_blocking(move || crate::history::codex_took(&dir, &id, &needle))
+                .await
+                .unwrap_or(false)
+        })
+    }
+
     fn past_folders(&self) -> BoxFuture<'_, Vec<crate::history::PastFolder>> {
         let dir = self.history_home();
         Box::pin(async move {

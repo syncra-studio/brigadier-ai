@@ -502,6 +502,11 @@ impl Runtime {
         claude.chain(codex).collect()
     }
 
+    /// Whether CLI session `native_id` of `kind` took `needle` as input, by its transcript.
+    pub async fn took_input(&self, kind: ProviderKind, native_id: &str, needle: &str) -> bool {
+        self.provider(kind).took_input(native_id, needle).await
+    }
+
     /// What Brigadier last learned about a provider (login, models, quota).
     pub fn overview(&self, kind: ProviderKind) -> Option<ProviderOverview> {
         self.state().overviews.get(&kind).cloned()

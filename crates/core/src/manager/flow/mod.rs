@@ -56,6 +56,8 @@ pub(crate) struct Turn {
     pub account: Option<String>,
     /// Its CLI session.
     pub native_id: String,
+    /// Its CLI session's transcript ([`transcribe`]).
+    transcript: PathBuf,
     grant: String,
     /// A worker's computer-use grant (macOS only).
     computer_grant: String,
@@ -163,7 +165,15 @@ impl Turn {
     /// Calls a Brigadier tool as the session's model would.
     pub async fn call(&self, name: &str, args: Value) -> ToolReply {
         let call = tool_call(name, args, self.is_orchestrator());
-        ToolHost::call(&*self.host, &self.grant, call).await
+        let reply = ToolHost::call(&*self.host, &self.grant, call).await;
+        transcribe(&self.transcript, false, &reply.text);
+        reply
+    }
+
+    /// Records `text` as a tool's output in its CLI session's transcript, as if a tool of
+    /// the turn had shown it.
+    pub fn tool_output(&self, text: &str) {
+        transcribe(&self.transcript, false, text);
     }
 
     /// Calls a computer tool with the worker's computer grant, as its `computer` server would.
@@ -454,6 +464,20 @@ pub(crate) struct FakeBehavior {
     pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
+/// Adds a line to a scripted session's transcript, as a real CLI keeps one: an input it took
+/// (a turn's message or a steer), or a tool's output.
+fn transcribe(path: &Path, input: bool, text: &str) {
+    use std::io::Write;
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let line = serde_json::json!({ "input": input, "text": text });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap();
+    writeln!(file, "{line}").unwrap();
+}
+
 /// Files a scripted CLI keeps in its own home, even when a session is shared.
 fn fake_files(home: &Path, id: &str) -> [PathBuf; 2] {
     [home.join("sessions").join(id), home.join("local").join(id)]
@@ -462,6 +486,8 @@ fn fake_files(home: &Path, id: &str) -> [PathBuf; 2] {
 /// A scripted stand-in for one CLI.
 struct FakeCli {
     kind: ProviderKind,
+    /// Where each session's transcript is kept ([`transcribe`]), shared by every account.
+    transcripts: PathBuf,
     /// The extra account it stands in for.
     account: Option<String>,
     specs: Specs,
@@ -643,6 +669,7 @@ impl Provider for FakeCli {
             let brief = BRIEFS.lock().unwrap().get(&native_id).cloned();
             let session = Arc::new(FakeSession {
                 kind: self.kind,
+                transcript: self.transcripts.join(&native_id),
                 behavior: self.behavior.clone(),
                 account: self.account.clone(),
                 native_id,
@@ -664,6 +691,16 @@ impl Provider for FakeCli {
             });
             Ok(Started { session, events })
         })
+    }
+
+    fn took_input(&self, native_id: &str, needle: &str) -> BoxFuture<'_, bool> {
+        let text = std::fs::read_to_string(self.transcripts.join(native_id)).unwrap_or_default();
+        let took = text.lines().any(|line| {
+            serde_json::from_str::<Value>(line).is_ok_and(|line| {
+                line["input"] == true && line["text"].as_str().is_some_and(|t| t.contains(needle))
+            })
+        });
+        Box::pin(async move { took })
     }
 
     fn remove(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, brigadier_providers::Result<()>> {
@@ -782,6 +819,8 @@ impl Replayer for NoRecordings {
 
 struct FakeSession {
     kind: ProviderKind,
+    /// Its transcript ([`transcribe`]).
+    transcript: PathBuf,
     behavior: Arc<FakeBehavior>,
     account: Option<String>,
     native_id: String,
@@ -833,6 +872,7 @@ impl ProviderSession for FakeSession {
             let Some(tx) = self.sender() else {
                 return Err(brigadier_providers::Error::Invalid("the CLI exited".into()));
             };
+            transcribe(&self.transcript, true, &input_text(&input));
             // A manager that starts again may resume a session before it is reachable here.
             let host = tokio::time::timeout(PATIENCE, async {
                 loop {
@@ -873,6 +913,7 @@ impl ProviderSession for FakeSession {
                 earlier,
                 account: self.account.clone(),
                 native_id: self.native_id.clone(),
+                transcript: self.transcript.clone(),
                 grant: self.grant.clone(),
                 computer_grant: self.computer_grant.clone(),
                 host,
@@ -970,6 +1011,7 @@ impl ProviderSession for FakeSession {
         // A running turn reads it if its script asks for it ([`Turn::steered`]); otherwise its
         // reply is already decided and the steer changes nothing.
         if self.running.load(std::sync::atomic::Ordering::SeqCst) {
+            transcribe(&self.transcript, true, &input_text(&input));
             let _ = self.steer_tx.send(input_text(&input));
             return Box::pin(async { Ok(()) });
         }
@@ -1064,6 +1106,7 @@ async fn boot(
         move |kind: ProviderKind, account: Option<String>| -> Arc<dyn Provider> {
             Arc::new(FakeCli {
                 kind,
+                transcripts: data.join("transcripts"),
                 home: match &account {
                     Some(id) => data.join("accounts").join(id),
                     None => data.join("own").join(kind.to_string()),
@@ -1432,6 +1475,27 @@ impl Flow {
         self.core = core;
     }
 
+    /// The daemon dies (unless a fault already killed it) and a new one starts on the same
+    /// data folder: nothing of the old one is written after it died, and nothing of it is shut
+    /// down cleanly.
+    pub async fn crash(&mut self) {
+        self.manager.halt().await;
+        let data = self.dir.join("data");
+        let store = open_store(&data).await;
+        let (manager, core) = boot(
+            &data,
+            store,
+            &self.script,
+            &self.reviews,
+            &self.specs,
+            &self.behavior,
+        )
+        .await;
+        self.dir.ledger = Some(manager.runtime.ledger().clone());
+        self.manager = manager;
+        self.core = core;
+    }
+
     /// Starts another session on the same manager, its thread on `thread`: in the flow's
     /// project, or in a project of its own named `project` (on a fresh repository).
     pub async fn add_session(
@@ -1724,6 +1788,8 @@ mod peer_delivery_tests;
 mod peer_kit;
 #[cfg(test)]
 mod peer_reply_tests;
+#[cfg(test)]
+mod peer_restart_tests;
 #[cfg(test)]
 mod peer_session_tests;
 #[cfg(test)]

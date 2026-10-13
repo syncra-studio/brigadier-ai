@@ -1975,6 +1975,16 @@ impl SessionManager {
             return;
         }
         self.told_notes(&conv, instruction_notes).await;
+        #[cfg(test)]
+        if envelopes
+            .iter()
+            .any(|(envelope, _)| envelope.peer_message().is_some())
+            && self
+                .peer_fault_at(super::peers::PeerFault::AfterTaken)
+                .await
+        {
+            return;
+        }
         // The CLI took the messages of other sessions this turn carries.
         let seen = envelopes
             .iter()

@@ -134,6 +134,14 @@ pub trait Provider: Send + Sync {
     fn past_folders(&self) -> BoxFuture<'_, Vec<history::PastFolder>> {
         Box::pin(async { Vec::new() })
     }
+
+    /// Whether session `native_id` took `needle` as input, by its transcript: in a message
+    /// sent or steered in, never in a tool's output or the model's own words (read, never
+    /// changed).
+    fn took_input(&self, native_id: &str, needle: &str) -> BoxFuture<'_, bool> {
+        let _ = (native_id, needle);
+        Box::pin(async { false })
+    }
 }
 
 /// A CLI session continued in a terminal: the resolved binary (never a name looked up on a

@@ -208,6 +208,9 @@ pub struct SessionManager {
     /// none (never the real `~/.claude.json` or `~/.codex/config.toml`).
     #[cfg(test)]
     pub(crate) trust_home: std::sync::OnceLock<PathBuf>,
+    /// Tests: where the daemon dies while delivering a message between sessions.
+    #[cfg(test)]
+    pub(crate) peer_fault: std::sync::Mutex<Option<peers::PeerFault>>,
     /// Tests: what a landing runs once it has rewritten the task branch, before it moves
     /// the target.
     #[cfg(test)]
@@ -302,6 +305,8 @@ impl SessionManager {
             #[cfg(test)]
             trust_home: std::sync::OnceLock::new(),
             #[cfg(test)]
+            peer_fault: std::sync::Mutex::new(None),
+            #[cfg(test)]
             landing_rewritten: std::sync::Mutex::new(None),
             activity: Arc::default(),
         });
@@ -335,6 +340,13 @@ impl SessionManager {
     }
 
     /// Ends every live CLI session (their work stays in the log, ready to continue).
+    /// Tests: the daemon dies here: nothing new is admitted and nothing more is written.
+    #[cfg(test)]
+    pub(crate) async fn halt(&self) {
+        self.admitting.store(false, Ordering::Release);
+        let _ = self.core.store().shutdown().await;
+    }
+
     pub async fn shutdown(&self) {
         self.admitting.store(false, Ordering::Release);
         // Previews end with Brigadier (their ends recorded while the store is up).

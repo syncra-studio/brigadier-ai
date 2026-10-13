@@ -181,6 +181,16 @@ impl SessionManager {
     }
 }
 
+/// Tests: a point in a message's delivery where the daemon dies.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PeerFault {
+    /// Recorded on both sides, not yet in the receiver's inbox.
+    BeforeEnqueue,
+    /// The receiver's CLI took it in a turn; `seen` isn't recorded.
+    AfterTaken,
+}
+
 /// Where a delivered message went.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Delivery {
@@ -278,6 +288,10 @@ impl SessionManager {
             let _checked = self.peer_sends.lock().await;
             self.may_send(caller, &target, &chain).await?;
             self.core.record_peer_send(&send, false).await?;
+        }
+        #[cfg(test)]
+        if self.peer_fault_at(PeerFault::BeforeEnqueue).await {
+            return Err(Error::Invalid("the daemon died".into()));
         }
         let delivery = self.deliver_peer(&target.id, &send.message_id).await;
         Ok(serde_json::json!({
@@ -498,6 +512,74 @@ impl SessionManager {
         match message {
             Some(message) => self.full_text(&message).await,
             None => String::new(),
+        }
+    }
+
+    /// Tests: dies at `point` when a test armed it there: nothing more of this manager is
+    /// written (returns whether it died).
+    #[cfg(test)]
+    pub(super) async fn peer_fault_at(&self, point: PeerFault) -> bool {
+        let armed = {
+            let mut fault = self.peer_fault.lock().unwrap();
+            if *fault != Some(point) {
+                return false;
+            }
+            fault.take()
+        };
+        armed.is_some() && {
+            self.halt().await;
+            true
+        }
+    }
+
+    /// At startup: what other sessions sent session `id` that it hadn't taken goes again,
+    /// oldest first, unless its CLI's transcript shows it took it as input before the daemon
+    /// stopped (SESSION-MESSAGING-PLAN.md §4): then it is only recorded seen.
+    pub(super) async fn recover_peer_messages(&self, conversation: &Conversation) {
+        let Ok(board) = self.core.board(&conversation.id).await else {
+            return;
+        };
+        let mut due: Vec<_> = board
+            .peer_messages
+            .values()
+            .filter(|record| !record.outgoing && record.state.due())
+            .cloned()
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        due.sort_by_key(|record| record.position);
+        let provider = match &conversation.setup {
+            Some(crate::model::Setup::Session { orchestrator, .. }) => Some(
+                conversation
+                    .fallback
+                    .as_ref()
+                    .map_or(orchestrator.provider, |fallback| fallback.choice.provider),
+            ),
+            _ => None,
+        };
+        let native = match provider {
+            Some(provider) => self
+                .last_native_id(&conversation.id, provider)
+                .await
+                .map(|native| (provider, native)),
+            None => None,
+        };
+        for record in due {
+            let taken = match &native {
+                Some((provider, native)) => {
+                    self.runtime
+                        .took_input(*provider, native, &format!("id {}", record.message_id))
+                        .await
+                }
+                None => false,
+            };
+            if taken {
+                self.peer_seen(&conversation.id, &record.message_id).await;
+            } else {
+                self.deliver_peer(&conversation.id, &record.message_id)
+                    .await;
+            }
         }
     }
 
