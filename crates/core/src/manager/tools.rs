@@ -638,6 +638,15 @@ impl SessionManager {
             OrchestratorCall::PreviewLog(args) => {
                 crate::heap(|| self.preview_log(id, args.id.as_deref(), args.tail_lines)).await
             }
+            OrchestratorCall::ListSessions(args) => {
+                crate::heap(|| self.list_sessions(id, args.query.as_deref())).await
+            }
+            OrchestratorCall::ReadSession(args) => {
+                crate::heap(|| self.read_session(&args.id)).await
+            }
+            OrchestratorCall::MessageSession(_) | OrchestratorCall::SettleWait(_) => Err(
+                Error::Invalid("Messaging other sessions isn't available yet.".into()),
+            ),
             OrchestratorCall::ListTasks => {
                 let tasks = crate::heap(|| self.core.tasks(id)).await?;
                 if tasks.is_empty() {

@@ -53,6 +53,7 @@ mod outputs;
 pub mod overnight;
 mod page_tools;
 mod past_projects;
+mod peers;
 mod phases;
 mod preview;
 mod prewarm;

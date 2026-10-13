@@ -150,6 +150,16 @@ impl Turn {
             .ok()
     }
 
+    /// The conversation whose thread takes this turn (`None` for a worker or a review).
+    pub fn conversation(&self) -> Option<ConversationId> {
+        match self.host.grants().resolve(&self.grant)? {
+            crate::tools::Role::Orchestrator {
+                conversation_id, ..
+            } => Some(conversation_id),
+            _ => None,
+        }
+    }
+
     /// Calls a Brigadier tool as the session's model would.
     pub async fn call(&self, name: &str, args: Value) -> ToolReply {
         let call = tool_call(name, args, self.is_orchestrator());
@@ -347,6 +357,10 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
         "clean_up" => ToolCall::Orchestrator(O::CleanUp),
         "project_map" => ToolCall::Worker(W::ProjectMap),
+        "list_sessions" => ToolCall::Orchestrator(O::ListSessions(arg(name, args))),
+        "message_session" => ToolCall::Orchestrator(O::MessageSession(arg(name, args))),
+        "read_session" => ToolCall::Orchestrator(O::ReadSession(arg(name, args))),
+        "settle_wait" => ToolCall::Orchestrator(O::SettleWait(arg(name, args))),
         other => panic!("the flow harness doesn't know the tool {other}"),
     }
 }
@@ -1288,6 +1302,8 @@ pub(crate) struct Flow {
     reviews: Script,
     specs: Specs,
     pub behavior: Arc<FakeBehavior>,
+    /// The permission level its sessions start on.
+    permission: PermissionLevel,
 }
 
 /// What a scripted session is set up with.
@@ -1390,6 +1406,7 @@ impl Flow {
             reviews,
             specs,
             behavior: options.behavior,
+            permission: options.permission,
         }
     }
 
@@ -1415,17 +1432,81 @@ impl Flow {
         self.core = core;
     }
 
+    /// Starts another session on the same manager, its thread on `thread`: in the flow's
+    /// project, or in a project of its own named `project` (on a fresh repository).
+    pub async fn add_session(
+        &self,
+        title: &str,
+        project: Option<&str>,
+        thread: ProviderKind,
+    ) -> ConversationId {
+        let (project_id, repo) = match project {
+            None => (
+                self.core
+                    .conversation(&self.conversation)
+                    .unwrap()
+                    .project_id
+                    .unwrap(),
+                self.repo.clone(),
+            ),
+            Some(name) => {
+                let repo = self.dir.join(format!("repo-{name}"));
+                std::fs::create_dir_all(&repo).unwrap();
+                let repo = repo.canonicalize().unwrap();
+                git(&repo, &["init", "-q", "-b", "main"]);
+                std::fs::write(repo.join("README.md"), format!("# {name}\n")).unwrap();
+                git(&repo, &["add", "-A"]);
+                git(&repo, &["commit", "-q", "-m", "Start"]);
+                let project = self
+                    .core
+                    .create_project(name.into(), Some(repo.display().to_string()))
+                    .await
+                    .unwrap();
+                (project.id, repo)
+            }
+        };
+        self.manager
+            .create_conversation(
+                ConversationKind::Session,
+                Some(project_id),
+                Some(title.into()),
+                Some(SetupRequest::Session {
+                    repo: repo.display().to_string(),
+                    environment: EnvironmentRequest::NewWorktree {
+                        base: "main".into(),
+                        branch: None,
+                    },
+                    permission: self.permission,
+                    orchestrator: ModelChoice {
+                        provider: thread,
+                        model: Some(
+                            match thread {
+                                ProviderKind::Claude => "claude-opus-5-5",
+                                ProviderKind::Codex => "gpt-6-astra",
+                            }
+                            .into(),
+                        ),
+                        effort: None,
+                        fast: None,
+                        account: None,
+                    },
+                    plan_mode: false,
+                }),
+            )
+            .await
+            .unwrap()
+            .id
+    }
+
     /// Sends the user's message.
     pub async fn say(&self, text: &str) {
+        self.say_to(&self.conversation, text).await;
+    }
+
+    /// Sends the user's message to the session `id`.
+    pub async fn say_to(&self, id: &ConversationId, text: &str) {
         self.manager
-            .send_message(
-                self.conversation.clone(),
-                text.into(),
-                Vec::new(),
-                Vec::new(),
-                false,
-                None,
-            )
+            .send_message(id.clone(), text.into(), Vec::new(), Vec::new(), false, None)
             .await
             .unwrap();
     }
@@ -1488,14 +1569,29 @@ impl Flow {
     }
 
     pub async fn board(&self) -> Board {
-        self.core.board(&self.conversation).await.unwrap()
+        self.board_of(&self.conversation).await
+    }
+
+    /// The board of the session `id`.
+    pub async fn board_of(&self, id: &ConversationId) -> Board {
+        self.core.board(id).await.unwrap()
     }
 
     /// Waits until `done` holds for the conversation's board.
     pub async fn until(&self, what: &str, done: impl Fn(&Board) -> bool) -> Board {
+        self.until_in(&self.conversation, what, done).await
+    }
+
+    /// Waits until `done` holds for the board of the session `id`.
+    pub async fn until_in(
+        &self,
+        id: &ConversationId,
+        what: &str,
+        done: impl Fn(&Board) -> bool,
+    ) -> Board {
         let deadline = tokio::time::Instant::now() + PATIENCE;
         loop {
-            let board = self.board().await;
+            let board = self.board_of(id).await;
             if done(&board) {
                 return board;
             }
@@ -1514,7 +1610,12 @@ impl Flow {
 
     /// Waits until every request of the conversation is over.
     pub async fn settled(&self) -> Board {
-        self.until("the requests to settle", |board| {
+        self.settled_in(&self.conversation).await
+    }
+
+    /// Waits until every request of the session `id` is over.
+    pub async fn settled_in(&self, id: &ConversationId) -> Board {
+        self.until_in(id, "the requests to settle", |board| {
             !board.requests.is_empty()
                 && board
                     .requests
@@ -1526,7 +1627,12 @@ impl Flow {
 
     /// The conversation's stored events, oldest first.
     pub async fn events(&self) -> Vec<DomainEvent> {
-        let stream = crate::model::streams::conversation(&self.conversation);
+        self.events_of(&self.conversation).await
+    }
+
+    /// The stored events of the session `id`, oldest first.
+    pub async fn events_of(&self, id: &ConversationId) -> Vec<DomainEvent> {
+        let stream = crate::model::streams::conversation(id);
         let mut events = Vec::new();
         let mut before = None;
         loop {
@@ -1610,6 +1716,10 @@ mod overnight_tests;
 mod owed_tests;
 #[cfg(test)]
 mod page_tools_tests;
+#[cfg(test)]
+mod peer_kit;
+#[cfg(test)]
+mod peer_session_tests;
 #[cfg(test)]
 mod plan_tests;
 mod preview_tests;

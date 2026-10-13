@@ -2462,26 +2462,55 @@ impl SessionManager {
     /// A conversation's latest messages on the branch it shows, oldest first, as
     /// "User: …" / "Assistant: …" (bounded).
     async fn latest_messages(&self, id: &ConversationId) -> Vec<String> {
+        self.latest_messages_read(id, MENTIONED_CHAT_MESSAGES, MENTIONED_CHAT_BYTES, None)
+            .await
+    }
+
+    /// The same, `count` messages and `total` bytes at most, each message cut by `each` (its
+    /// id then shown, for `read_session`).
+    pub(super) async fn latest_messages_read(
+        &self,
+        id: &ConversationId,
+        count: usize,
+        total: usize,
+        each: Option<fn(&str) -> String>,
+    ) -> Vec<String> {
         let branch = match self.core.head(id).await {
             Ok(Some(head)) => self.core.branch(id, &head).await.unwrap_or_default(),
             _ => Vec::new(),
         };
         let mut lines = Vec::new();
         let mut bytes = 0;
-        for message in branch.iter().rev().take(MENTIONED_CHAT_MESSAGES) {
+        for message in branch
+            .iter()
+            .rev()
+            .filter(|message| message.role != MessageRole::System)
+            .take(count)
+        {
             let who = match message.role {
                 MessageRole::User => "User".to_owned(),
                 MessageRole::Assistant => "Assistant".to_owned(),
                 MessageRole::Peer => self.core.peer_speaker(message),
                 MessageRole::System => continue,
             };
-            let words = self
-                .core
-                .brief_words(&message.text, &message.attachments)
-                .await;
-            let line = format!("{who}: {words}");
+            let line = match each {
+                Some(cut) => {
+                    let words = crate::sessions::display_text(
+                        &self.full_words(message).await,
+                        &message.attachments,
+                    );
+                    format!("{who} [{}]: {}", message.id, cut(&words))
+                }
+                None => {
+                    let words = self
+                        .core
+                        .brief_words(&message.text, &message.attachments)
+                        .await;
+                    format!("{who}: {words}")
+                }
+            };
             bytes += line.len();
-            if bytes > MENTIONED_CHAT_BYTES {
+            if bytes > total {
                 break;
             }
             lines.push(line);

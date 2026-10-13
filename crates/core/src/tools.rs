@@ -694,6 +694,48 @@ pub struct FinishSession {
     pub message: Option<String>,
 }
 
+/// `list_sessions`: the project sessions this thread can message.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListSessions {
+    /// Keeps only the sessions whose title or project name contains it, ignoring case.
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+/// `message_session`: send another session a message. Returns at once; a reply comes later as
+/// a message of its own.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MessageSession {
+    /// The session's id, from list_sessions.
+    pub to: String,
+    /// Self-contained plain prose: the other session doesn't share your context.
+    pub text: String,
+    /// The id of the message from that session this one answers (it is the reply). Leave it
+    /// out to ask for a reply.
+    #[serde(default)]
+    pub reply_to: Option<String>,
+}
+
+/// `read_session`: another session's latest messages.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadSession {
+    /// The session's id, from list_sessions.
+    pub id: String,
+}
+
+/// `settle_wait`: no reply to this message is needed any more.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SettleWait {
+    /// The message_id message_session returned.
+    pub message_id: String,
+    /// Why, in a few words.
+    pub why: String,
+}
+
 /// What `note_for_user` records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -894,6 +936,10 @@ pub enum OrchestratorCall {
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
+    ListSessions(ListSessions),
+    MessageSession(MessageSession),
+    ReadSession(ReadSession),
+    SettleWait(SettleWait),
 }
 
 /// Every tool a thread may call, by name (the catalog's tests hold it to the catalog). Its
@@ -987,6 +1033,10 @@ impl OrchestratorCall {
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",
+            Self::ListSessions(_) => "list_sessions",
+            Self::MessageSession(_) => "message_session",
+            Self::ReadSession(_) => "read_session",
+            Self::SettleWait(_) => "settle_wait",
         }
     }
 }
