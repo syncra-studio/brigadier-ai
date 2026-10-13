@@ -31,8 +31,8 @@ use std::sync::Arc;
 
 use crate::apps;
 use crate::ax::bindings::{
-    copy_string_attr, focused_element_of_pid, kAXErrorSuccess, perform_action, set_string_attr,
-    AXUIElementRef,
+    copy_string_attr, focused_element_of_pid, kAXErrorCannotComplete, kAXErrorSuccess,
+    perform_action, set_string_attr, AXUIElementRef,
 };
 use crate::focus_guard;
 use crate::window_change_detector::WindowChangeDetector;
@@ -755,8 +755,25 @@ fn type_text_blocking(
         // its old (non-empty) value, which would otherwise report a false
         // success. `verify_typed` compares the read-back against `before`/`text`.
         let after = unsafe { copy_string_attr(element, "AXValue") };
-        let ax_landed =
+        let mut ax_landed =
             err == kAXErrorSuccess && verify_typed(before.as_deref(), after.as_deref(), text);
+        if err == kAXErrorCannotComplete && !ax_landed {
+            // The app didn't answer in time, but may have taken the write:
+            // look again rather than type it a second time.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let again = unsafe { copy_string_attr(element, "AXValue") };
+            ax_landed = verify_typed(before.as_deref(), again.as_deref(), text);
+            if !ax_landed {
+                if owns {
+                    unsafe { CFRelease(element as _) };
+                }
+                anyhow::bail!(
+                    "the app did not answer in time while the text was written, so it may or \
+                     may not have landed. Take a fresh get_window_state before typing it again, \
+                     or it may end up there twice."
+                );
+            }
+        }
         if owns {
             unsafe {
                 CFRelease(element as _);

@@ -30,6 +30,7 @@ pub type AXError = c_int;
 pub const kAXErrorSuccess: AXError = 0;
 pub const kAXErrorFailure: AXError = -25200;
 pub const kAXErrorInvalidUIElement: AXError = -25202;
+pub const kAXErrorCannotComplete: AXError = -25204;
 pub const kAXErrorAttributeUnsupported: AXError = -25205;
 pub const kAXErrorNoValue: AXError = -25212;
 pub const kAXErrorAPIDisabled: AXError = -25211;
