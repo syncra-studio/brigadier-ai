@@ -500,6 +500,11 @@ fn validate_peer_matches_daemon_code(peer_pid: libc::pid_t) -> Result<(), String
                 CFRelease(daemon_requirement as CFTypeRef);
                 CFRelease(daemon_code as CFTypeRef);
             }
+            // Security.framework can't look at a process whose file an update
+            // already removed; macOS itself still can.
+            if peer_runs_this_helper_replaced_by_an_update(peer_pid) {
+                return Ok(());
+            }
             return Err(error);
         }
     };
