@@ -324,10 +324,12 @@ const headerBottom = () => {
 const click = (selector: string) => one<HTMLButtonElement>(selector)?.click();
 const toggle = '[data-slot="session-tabs"] button[aria-label="Right sidebar"]';
 
+/** Where the titlebar's controls are and how wide the left sidebar is. */
+const shape = () => JSON.stringify([titlebar(), rect(one('[data-slot="sidebar-panel"]'))?.w]);
+
 /** Waits until no titlebar control or sidebar width has changed for a quarter second, so a fold
  * still easing in on a slow machine isn't counted as moved by what follows. */
 async function settle(ms = 4000) {
-  const shape = () => JSON.stringify([titlebar(), rect(one('[data-slot="sidebar-panel"]'))?.w]);
   let last = shape();
   let since = performance.now();
   for (const end = performance.now() + ms; performance.now() < end && performance.now() - since < 250;) {
