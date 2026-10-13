@@ -1,5 +1,5 @@
 import { Chat } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, type ReactNode, useEffect } from "react";
+import { type FC, type ReactNode, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import type { Described } from "@/app/conversation/activity/ActivityGroup";
@@ -121,6 +121,35 @@ const RowWords: FC<{ label: string; shown: PeerName; running: boolean; children:
 /** What a message row opens to: the row recipe's detail, as tall as the message (it folds itself). */
 const MESSAGE_DETAIL = "text-foreground/60 flex min-w-0 flex-col gap-1 ps-5.5 pt-1 pb-1 text-sm";
 
+/** How long a row takes to open (the collapsible's animation), with a frame to spare. */
+const OPENING_MS = 350;
+
+/**
+ * A row opened inside a group's scrolling list follows its opening, so its state line shows: the
+ * list scrolls just enough, never past the row's own top, and clears its faded bottom edge.
+ */
+function keepInList(row: HTMLElement): void {
+  let list: HTMLElement | null = null;
+  for (let holder = row.parentElement; holder && holder.dataset["slot"] !== "aui_thread-viewport"; holder = holder.parentElement) {
+    if (/auto|scroll/.test(getComputedStyle(holder).overflowY)) {
+      list = holder;
+      break;
+    }
+  }
+  if (!list) return;
+  const scroller = list;
+  const fade = Number.parseFloat(getComputedStyle(scroller).getPropertyValue("--spacing-group-fade")) * Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 0;
+  const until = performance.now() + OPENING_MS;
+  const follow = () => {
+    const box = scroller.getBoundingClientRect();
+    const rect = row.getBoundingClientRect();
+    const by = Math.min(rect.bottom + fade - box.bottom, rect.top - box.top);
+    if (by > 0) scroller.scrollTop += by;
+    if (performance.now() < until) requestAnimationFrame(follow);
+  };
+  requestAnimationFrame(follow);
+}
+
 /** One sent message's row, from its record. */
 export const PeerSentRow: FC<{ step: BlockOrchestratorStep; messageId: string }> = ({ step, messageId }) => {
   const record = useBoard((s) => s.board?.peerMessages[messageId]);
@@ -129,6 +158,7 @@ export const PeerSentRow: FC<{ step: BlockOrchestratorStep; messageId: string }>
   const reply = useBoard((s) => (record && s.board ? replyOf(record, s.board.peerMessages) : null));
   const full = useApp((s) => (here ? s.threads[here]?.fullText[messageId] : undefined));
   const blob = record?.blob ?? null;
+  const ref = useRef<HTMLDivElement>(null);
   // A long message keeps its text in the blob store: its row shows all of it once read.
   useEffect(() => {
     if (here && blob && full === undefined) void loadFullText(here, messageId, blob).catch((error: unknown) => console.error(error));
@@ -147,6 +177,10 @@ export const PeerSentRow: FC<{ step: BlockOrchestratorStep; messageId: string }>
       data-peer-message={messageId}
       data-state={record.state.type}
       data-at={step.position}
+      ref={ref}
+      onOpenChange={(open) => {
+        if (open && ref.current) keepInList(ref.current);
+      }}
       detail={running ? undefined : (
         <div data-slot="peer-sent-detail" className="flex min-w-0 flex-col gap-1.5">
           <FoldedMarkdown text={text} className="text-foreground/80" />

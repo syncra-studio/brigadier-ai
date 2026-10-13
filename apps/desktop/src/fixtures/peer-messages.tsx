@@ -565,6 +565,10 @@ async function driveGallery(): Promise<object> {
     link: !!one("[data-slot=peer-link]", row),
     line: text(one("[data-slot=peer-state]", row)),
   }));
+  // Opened inside its group's scrolling list, the replied row's state line shows.
+  await wait(200);
+  const replied = one("[data-peer-message=m1] [data-slot=peer-state]");
+  const lineShown = !!replied && within(replied, replied.getBoundingClientRect());
   // A message whose whole text is in the blob store shows all of it.
   const whole = text(one("[data-peer-message=m2] [data-slot=peer-sent-detail]"));
   const groups = all("[data-slot=work-group] > button").map((group) => text(group));
@@ -606,7 +610,7 @@ async function driveGallery(): Promise<object> {
     state: row.getAttribute("data-state"),
     label: text(one("[role=button] > span, :scope > span", row)),
   }));
-  return { rows, whole, groups, replyInSender, openReply, blocks, showMore: { clipped, opened }, waiting, docsRows };
+  return { rows, lineShown, whole, groups, replyInSender, openReply, blocks, showMore: { clipped, opened }, waiting, docsRows };
 }
 
 async function driveJump(): Promise<object> {

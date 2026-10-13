@@ -23,6 +23,7 @@ test("Messages between sessions read in every state, on both sides", { timeout: 
   const seen = JSON.parse(await renderFixtureLive(t, "peer-messages.html?drive=gallery", "peer-result", 90000)) as {
     error?: string;
     rows: { state: string; label: string; link: boolean; line: string | null }[];
+    lineShown: boolean;
     whole: string | null;
     groups: string[];
     replyInSender: { caption: string; inTurn: boolean }[];
@@ -45,6 +46,8 @@ test("Messages between sessions read in every state, on both sides", { timeout: 
     { state: "waitingForOk", label: "Waiting for your OK to message Docs in Handbook", link: true, line: "Waiting for your OK" },
     { state: "pending", label: "Messaging Release notes", link: true, line: null },
   ]);
+  // Opened inside its group's scrolling list, a row brings its state line into the list's view.
+  assert.equal(seen.lineShown, true);
   // A message too long for its record shows its whole text, read from the blob store.
   assert.match(seen.whole ?? "", /The rest of the long note: the migration runs before the deploy\./);
   assert.deepEqual(seen.groups, ["Read files and messaged a session", "Messaging Release notes"]);

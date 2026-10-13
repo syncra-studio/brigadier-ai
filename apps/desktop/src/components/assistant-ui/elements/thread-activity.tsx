@@ -6,13 +6,15 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { cn } from "@/lib/utils";
 
 /** One row of a thread's activity that opens to its detail when it has one. */
-export function ThreadActivity({ detail, detailClassName, className, children, ...props }: ComponentProps<"div"> & {
+export function ThreadActivity({ detail, detailClassName, className, children, onOpenChange, ...props }: ComponentProps<"div"> & {
   detail?: ReactNode;
   detailClassName?: string;
+  /** The row opened or closed. */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const row = className ?? ROW;
   if (!detail) return <div className={row} {...props}>{children}</div>;
-  return <Collapsible {...props}>
+  return <Collapsible {...props} {...(onOpenChange && { onOpenChange })}>
     <CollapsibleTrigger asChild>
       <div role="button" tabIndex={0}
         onKeyDown={(event) => {
