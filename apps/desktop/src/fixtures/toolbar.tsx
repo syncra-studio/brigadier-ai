@@ -32,7 +32,7 @@ useApp.setState({ conversations: { [id]: { ...conversation, kind: "session" } },
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: { preview: {
   id: "preview", conversationId: id, name: "Web", command: "pnpm dev",
   workdir: "/fixture", workspace: "/fixture", pid: null, log: null,
-  state: { type: "running" }, startedAtMs: 0, endedAtMs: null,
+  state: { type: "running" }, startedAtMs: 0, endedAtMs: null, kind: "web",
 } } } });
 let keyboardReturns = 0;
 let projectChanged = false;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { previewActions, previewActive, previewStateLabel } from "@/app/conversation/previewStatus";
+import { latestLine, previewActions, previewActive, previewStateLabel } from "@/app/conversation/previewStatus";
 import { useAction } from "@/app/conversation/useAction";
 import { SummarySection } from "@/components/assistant-ui/elements/summary-section";
 import { Button } from "@/components/ui/button";
@@ -42,9 +42,13 @@ function PreviewRow({ preview, disabled }: { preview: Preview; disabled: boolean
   const [expanded, setExpanded] = useState(false);
   const [log, setLog] = useState<string | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
-  const [url, setUrl] = useState(preview.url ?? null);
+  // An app preview opens its own window: whatever address it prints isn't it.
+  const web = preview.kind === "web";
+  const [found, setFound] = useState<string | null>(null);
+  const url = web ? preview.url ?? found : null;
   const [now, setNow] = useState(Date.now);
   const active = previewActive(preview.state);
+  const starting = preview.state.type === "starting";
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -54,21 +58,23 @@ function PreviewRow({ preview, disabled }: { preview: Preview; disabled: boolean
         if (cancelled) return;
         setLog(result.tail);
         setLogError(null);
-        if (result.url) setUrl(result.url);
+        if (result.url) setFound(result.url);
       } catch (cause) {
         if (!cancelled) setLogError(String(cause));
       }
-      if (!cancelled && active && expanded) timer = setTimeout(() => { void refresh(); }, 2000);
+      if (!cancelled && active && (expanded || starting)) timer = setTimeout(() => { void refresh(); }, 2000);
     }
     void refresh();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [preview.conversationId, preview.id, active, expanded]);
+  }, [preview.conversationId, preview.id, active, expanded, starting]);
   useEffect(() => {
     if (!active) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [active]);
   const actions = previewActions(preview.state, platform);
+  // While it starts (a build can take minutes), its latest output says what it is doing.
+  const line = starting && log ? latestLine(log) : "";
   return (
     <article aria-label={preview.name} className="py-2">
       <div className="flex items-baseline justify-between gap-3">
@@ -78,6 +84,7 @@ function PreviewRow({ preview, disabled }: { preview: Preview; disabled: boolean
         </span>
       </div>
       <p className={cn("mt-1 break-words text-xs", preview.state.type === "running" ? "text-success" : "text-muted-foreground")}>{previewStateLabel(preview.state)}</p>
+      {line && <p className="text-muted-foreground mt-1 truncate font-mono text-xs" title={line}>{line}</p>}
       <p className="text-muted-foreground mt-2 break-all font-mono text-xs">{preview.command}</p>
       {url && <Button variant="link" size="xs" className="mt-2 h-auto max-w-full justify-start whitespace-normal break-all p-0 text-start" onClick={() => {
         void openLink(url, { agent: true, conversationId: preview.conversationId });

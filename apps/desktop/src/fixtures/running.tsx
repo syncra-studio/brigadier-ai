@@ -1,4 +1,4 @@
-/** Production Running panel with four preview states and synthetic IPC; no daemon. */
+/** Production Running panel with five preview states and synthetic IPC; no daemon. */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -16,11 +16,12 @@ const id = "running-fixture";
 const params = new URLSearchParams(location.search);
 const now = Date.now();
 const rows: Preview[] = [
+  { id: "preview-5", name: "Brigadier dev app", command: "pnpm tauri dev", kind: "app", state: { type: "starting" }, startedAtMs: now - 90000, endedAtMs: null },
   { id: "preview-4", name: "Web app", command: "pnpm dev --host 127.0.0.1", state: { type: "running" }, url: "http://localhost:5173/", startedAtMs: now - 154000, endedAtMs: null },
   { id: "preview-3", name: "Component explorer", command: "pnpm storybook --port 6006", state: { type: "paused" }, url: "http://127.0.0.1:6006/", startedAtMs: now - 302000, endedAtMs: null },
   { id: "preview-2", name: "Static preview", command: "pnpm preview", state: { type: "exited", code: 1, status: "exit 1" }, startedAtMs: now - 500000, endedAtMs: now - 488000 },
-  { id: "preview-1", name: "Desktop app", command: "pnpm tauri dev --config src-tauri/tauri.dev.conf.json", state: { type: "stopped", reason: "stopped by the user" }, startedAtMs: now - 600000, endedAtMs: now - 350000 },
-].map((row) => ({ conversationId: id, pid: 42, workdir: "/work/session", workspace: "/work/session", log: null, ...row }) as Preview);
+  { id: "preview-1", name: "Desktop app", command: "pnpm tauri dev --config src-tauri/tauri.dev.conf.json", kind: "app", state: { type: "stopped", reason: "stopped by the user" }, url: "http://localhost:1420/", startedAtMs: now - 600000, endedAtMs: now - 350000 },
+].map((row) => ({ conversationId: id, pid: 42, workdir: "/work/session", workspace: "/work/session", log: null, kind: "web", ...row }) as Preview);
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: Object.fromEntries(rows.map((row) => [row.id, row])) } });
 useApp.setState({
   info: { platform: params.get("platform") === "windows" ? "windows" : "macos", version: "fixture", processStartMs: now, smoke: false, firstLaunch: false, budgetTolerance: 1 },
@@ -34,7 +35,7 @@ mockIPC((command, payload) => {
   calls.push(req);
   if (req.method === "previewLog") return {
     method: req.method,
-    tail: req.previewId === "preview-4" ? "VITE ready in 286 ms\nLocal: http://localhost:5173/\nWaiting for file changes…" : req.previewId === "preview-2" ? "Build output not found. Run pnpm build first." : "Preview output is ready.",
+    tail: req.previewId === "preview-5" ? "  VITE ready in 286 ms\n  Local: http://localhost:1420/\n   \u001b[1m\u001b[32mCompiling\u001b[0m brigadier-core v0.1.0\n    Building [=====>  ] 520/731: brigadier-core\r    Building [======> ] 521/731: brigadier-core\r\u001b[K" : req.previewId === "preview-4" ? "VITE ready in 286 ms\nLocal: http://localhost:5173/\nWaiting for file changes…" : req.previewId === "preview-2" ? "Build output not found. Run pnpm build first." : "Preview output is ready.",
     url: rows.find((row) => row.id === req.previewId)?.url ?? null,
   };
   if (req.method === "pausePreview" && failPause) throw new Error("The preview has ended.");
