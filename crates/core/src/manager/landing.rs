@@ -1760,7 +1760,7 @@ impl SessionManager {
         drop(landing_lock);
         // The session's work is merged: what showed it stops, and its worktree and branch go
         // (THREAD-PLAN.md Q9).
-        self.stop_previews(id, "the session was merged").await;
+        let _ = self.stop_previews(id, "the session was merged").await;
         // The landed workers kept for their reviews' findings are done with too.
         self.settle_all_holds(id).await;
         let released = self.release_merged_session(id).await;

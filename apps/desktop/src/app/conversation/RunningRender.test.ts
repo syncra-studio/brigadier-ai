@@ -4,14 +4,14 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 test("Running renders all states and controls pause, resume, stop, clear and the session browser", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "running.html?drive=1", "running-result", 30000)) as {
-    chip: string; linkClosed: boolean;
+    chip: string; section: string; reactivated: string; sectionRemoved: boolean; focusAfterStop: string; lastStopFocus: string; lastStopRemoved: boolean; linkClosed: boolean;
     initial: { name: string; text: string; actions: string[]; indicator: string }[];
     paused: string[]; resumed: string[]; windows: string[]; error: string; browser: string;
-    cleared: string[]; stopped: string[]; allStopped: boolean; empty: string; calls: string[];
+    cleared: string[]; stopped: boolean; allStopped: boolean; empty: string; calls: string[];
   };
-  assert.match(seen.chip, /Starting: Brigadier dev app.*1m/);
+  assert.match(seen.chip, /workingBrigadier dev app.*1m/);
   assert.equal(seen.initial.length, 5);
-  assert.deepEqual(seen.initial.map((row) => row.indicator), ["starting", "running", "paused", "failed", "stopped"]);
+  assert.deepEqual(seen.initial.map((row) => row.indicator), ["running", "running", "waiting", "failed", "ready"]);
   assert.match(seen.initial[0]!.text, /Starting/);
   assert.match(seen.initial[0]!.text, /Building \[======> \] 521\/731: brigadier-core/);
   assert.doesNotMatch(seen.initial[0]!.text, /Running|localhost/);
@@ -20,7 +20,7 @@ test("Running renders all states and controls pause, resume, stop, clear and the
   assert.match(seen.initial[1]!.text, /Running/);
   assert.match(seen.initial[2]!.text, /Paused/);
   assert.match(seen.initial[3]!.text, /Exited · code 1/);
-  assert.match(seen.initial[4]!.text, /Stopped · stopped by the user/);
+  assert.match(seen.initial[4]!.text, /Exited · code 0/);
   assert.doesNotMatch(seen.initial[4]!.text, /localhost:1420/, "a desktop app gets no URL");
   assert.ok(seen.paused.includes("Resume"));
   assert.ok(seen.resumed.includes("Pause"));
@@ -29,8 +29,14 @@ test("Running renders all states and controls pause, resume, stop, clear and the
   assert.equal(seen.linkClosed, true);
   assert.equal(seen.browser, "http://localhost:5173/");
   assert.deepEqual(seen.cleared, ["preview-5", "preview-4", "preview-3"]);
-  assert.ok(!seen.stopped.includes("Stop") && !seen.stopped.includes("Pause"));
+  assert.equal(seen.section, "Activities");
+  assert.equal(seen.stopped, true);
+  assert.equal(seen.sectionRemoved, true);
+  assert.equal(seen.focusAfterStop, "summary-card");
+  assert.equal(seen.lastStopFocus, "summary-card");
+  assert.equal(seen.lastStopRemoved, true);
+  assert.match(seen.reactivated, /1m/, "elapsed time refreshes immediately when activity restarts");
   assert.equal(seen.allStopped, true);
   assert.match(seen.empty, /No previews/);
-  assert.deepEqual(seen.calls, ["pausePreview", "resumePreview", "pausePreview", "clearPreviews", "stopPreview", "stopPreview", "clearPreviews"]);
+  assert.deepEqual(seen.calls, ["pausePreview", "resumePreview", "pausePreview", "clearPreviews", "stopPreview", "stopPreview"]);
 });

@@ -722,13 +722,9 @@ impl SessionManager {
             Err(_) => None,
         };
         if let Some(mut preview) = preview {
-            // What the thread didn't do itself and no other note tells it: the user's Stop
-            // (the chip's or the conversation's), or an end on its own. It hears of it with
-            // the user's next message, so it never says a stopped preview "is running".
+            // Natural exits stay in the list. User stops send their note after removal,
+            // when the ID is no longer available and the stored log is ready.
             let told = match &state {
-                PreviewState::Stopped { reason } if reason == USER_STOP => {
-                    Some("was stopped by the user".to_owned())
-                }
                 PreviewState::Exited { status, .. } => Some(format!("ended on its own ({status})")),
                 _ => None,
             };
@@ -1228,24 +1224,7 @@ impl SessionManager {
         if stopped.is_empty() {
             return Ok("No preview is running.".into());
         }
-        // One the user resumed or started meanwhile can't be live here: each is recorded as
-        // ended before `stop_previews_of` returns, and a live one is never cleared.
-        let ids = stopped
-            .iter()
-            .filter(|preview| !preview.state.is_live())
-            .map(|preview| preview.id.clone())
-            .collect::<Vec<_>>();
-        if !ids.is_empty() {
-            self.core
-                .record_conversation(
-                    id,
-                    vec![DomainEvent::PreviewsCleared {
-                        conversation_id: id.clone(),
-                        ids,
-                    }],
-                )
-                .await?;
-        }
+        self.remove_stopped_previews(id, &stopped).await?;
         Ok(stopped
             .iter()
             .map(|preview| {
@@ -1265,17 +1244,71 @@ impl SessionManager {
             .join("\n"))
     }
 
-    /// The user's Stop on a preview chip: stops `preview`, or every running preview of the
-    /// conversation.
-    pub async fn stop_preview(&self, id: ConversationId, preview: Option<String>) -> Result<()> {
-        if preview.is_none() {
-            self.core.board(&id).await?;
-            self.stop_previews(&id, USER_STOP).await;
-            return Ok(());
+    /// Records removal only after the stop has durably recorded each preview's end.
+    async fn remove_stopped_previews(
+        &self,
+        id: &ConversationId,
+        stopped: &[Preview],
+    ) -> Result<()> {
+        // One the user resumed or started meanwhile can't be live here: each is recorded as
+        // ended before `stop_previews_of` returns, and a live one is never cleared.
+        let ids = stopped
+            .iter()
+            .filter(|preview| !preview.state.is_live())
+            .map(|preview| preview.id.clone())
+            .collect::<Vec<_>>();
+        if !ids.is_empty() {
+            self.core
+                .record_conversation(
+                    id,
+                    vec![DomainEvent::PreviewsCleared {
+                        conversation_id: id.clone(),
+                        ids,
+                    }],
+                )
+                .await?;
         }
-        self.stop_previews_of(&id, preview.as_deref(), USER_STOP)
-            .await
-            .map(drop)
+        Ok(())
+    }
+
+    /// User stops remove only what they stopped. A concurrent natural exit stays inspectable.
+    pub(crate) async fn remove_user_stopped_previews(
+        &self,
+        id: &ConversationId,
+        stopped: Vec<Preview>,
+    ) -> Result<()> {
+        let stopped: Vec<_> = stopped.into_iter().filter(|preview|
+            matches!(&preview.state, PreviewState::Stopped { reason } if reason == USER_STOP)
+        ).collect();
+        self.remove_stopped_previews(id, &stopped).await?;
+        if let Ok(conv) = self.conv(id) {
+            for preview in stopped {
+                let log = preview
+                    .log
+                    .as_ref()
+                    .map(|alias| {
+                        format!(" Its stored log remains readable: read_artifact {alias}.")
+                    })
+                    .unwrap_or_default();
+                conv.note(format!(
+                    "[preview] {} \"{}\" was stopped by the user and removed; its ID is no longer available.{log}",
+                    preview.id, preview.name
+                )).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// The user's Stop on a preview row, or Stop all, removes what it stops.
+    pub async fn stop_preview(&self, id: ConversationId, preview: Option<String>) -> Result<()> {
+        let stopped = if preview.is_none() {
+            self.core.board(&id).await?;
+            self.stop_previews(&id, USER_STOP).await?
+        } else {
+            self.stop_previews_of(&id, preview.as_deref(), USER_STOP)
+                .await?
+        };
+        self.remove_user_stopped_previews(&id, stopped).await
     }
 
     /// Stops `preview` (every running one when `None`) of conversation `id` for `reason`, and
@@ -1312,12 +1345,16 @@ impl SessionManager {
 
     /// Stops every running preview of conversation `id` (the user's Stop, a merge, the
     /// session closing).
-    pub(crate) async fn stop_previews(&self, id: &ConversationId, reason: &str) {
+    pub(crate) async fn stop_previews(
+        &self,
+        id: &ConversationId,
+        reason: &str,
+    ) -> Result<Vec<Preview>> {
         // A start already under way is refused, and one that got past that check is waited
         // for, so this stop sees every preview there will be.
         self.previews.count_stop(id);
         drop(self.previews.starting.lock().await);
-        stop_all(&self.previews.of(id), reason).await;
+        self.stop_previews_of(id, None, reason).await
     }
 
     /// Stops the previews of conversation `id` that run in another workspace than the

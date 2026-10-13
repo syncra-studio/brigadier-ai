@@ -1288,7 +1288,10 @@ impl SessionManager {
                 .map_err(|err| Error::Provider(err.to_string())),
             None => Ok(()),
         };
-        self.stop_previews(&id, super::preview::USER_STOP).await;
+        let stopped = match self.stop_previews(&id, super::preview::USER_STOP).await {
+            Ok(stopped) => self.remove_user_stopped_previews(&id, stopped).await,
+            Err(err) => Err(err),
+        };
         self.drop_prewarm(&id, "stopped by the user");
         // What Brigadier still owed the stopped answers ends with them, so nothing wakes the
         // thread for them later or merges on its own: the CI watches, and the held merge
@@ -1297,7 +1300,7 @@ impl SessionManager {
         self.stop_ci_watches(&id).await;
         self.stop_merge_for_stop(&id).await;
         self.settle_requests(&id).await;
-        interrupted
+        interrupted.and(stopped)
     }
 
     /// Continues the latest request after the user stopped it: a turn for that request, in its

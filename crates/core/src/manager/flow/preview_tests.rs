@@ -317,6 +317,7 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
         .await
         .unwrap();
     gone(&flow, child).await;
+    assert!(!flow.board().await.previews.contains_key(&preview.id));
     flow.say("Is the site up?").await;
     flow.settled().await;
     let last = inputs.lock().unwrap().last().cloned().unwrap();
@@ -328,6 +329,12 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
         )),
         "{last}"
     );
+
+    assert!(
+        last.contains("removed; its ID is no longer available"),
+        "{last}"
+    );
+    assert!(last.contains("read_artifact"), "{last}");
 
     // An end on its own, after the start answered.
     flow.say("start sleep 2; echo 'Error: port 3000 is taken' >&2; exit 4")
@@ -411,12 +418,7 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
         .unwrap();
     gone(&flow, preview.pid.unwrap()).await;
     gone(&flow, child).await;
-    assert_eq!(
-        flow.board().await.previews[&preview.id].state,
-        PreviewState::Stopped {
-            reason: "stopped by the user".into()
-        }
-    );
+    assert!(!flow.board().await.previews.contains_key(&preview.id));
     flow.manager
         .resume_queue(flow.conversation.clone())
         .await
@@ -537,7 +539,12 @@ async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end(
     .await;
     let stops = flow.manager.previews.stops_of(&flow.conversation);
     let (manager, id) = (flow.manager.clone(), flow.conversation.clone());
-    let stop = tokio::spawn(async move { manager.stop_previews(&id, "stopped by the user").await });
+    let stop = tokio::spawn(async move {
+        manager
+            .stop_previews(&id, "stopped by the user")
+            .await
+            .unwrap()
+    });
     super::eventually("the stop to be counted", || {
         flow.manager.previews.stops_of(&flow.conversation) != stops
     })
@@ -567,7 +574,8 @@ async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end(
         .unwrap();
     flow.manager
         .stop_previews(&flow.conversation, "stopped by the user")
-        .await;
+        .await
+        .unwrap();
     gone(&flow, child).await;
     let ended = flow.board().await.previews[&preview.id].clone();
     assert!(!ended.state.is_running());
@@ -1069,10 +1077,7 @@ heartbeat('parent')
         .stop_preview(flow.conversation.clone(), Some(preview.id.clone()))
         .await
         .unwrap();
-    assert!(matches!(
-        flow.board().await.previews[&preview.id].state,
-        PreviewState::Stopped { .. }
-    ));
+    assert!(!flow.board().await.previews.contains_key(&preview.id));
     super::eventually(
         "all processes to handle SIGTERM, including the paused grandchild",
         || {
@@ -1390,10 +1395,67 @@ async fn an_app_preview_has_no_url_and_waits_for_its_window() {
         .stop_preview(flow.conversation.clone(), Some("preview-1".into()))
         .await
         .unwrap();
-    let ended = flow.board().await.previews["preview-1"].clone();
-    assert!(matches!(ended.state, PreviewState::Stopped { .. }));
-    assert_eq!(ended.url, None);
+    assert!(!flow.board().await.previews.contains_key("preview-1"));
+    assert_eq!(board.previews["preview-1"].url, None);
 
     drop(listener);
+    flow.stop().await;
+}
+
+// Row Stop, Stop all and the composer's Stop remove only user-stopped work.
+// Natural exits remain inspectable, even if Stop arrives after the process ended.
+#[tokio::test]
+async fn user_stops_remove_previews_but_keep_natural_exits() {
+    let flow = Flow::start(
+        "preview-user-removal",
+        Options::default(),
+        thread(Arc::default()),
+    )
+    .await;
+    let tmp = scratch("user-removal");
+    flow.say("start echo failed >&2; exit 3").await;
+    flow.settled().await;
+    let ended = flow.board().await.sorted_previews().pop().unwrap();
+    assert!(matches!(
+        ended.state,
+        PreviewState::Exited { code: Some(3), .. }
+    ));
+    flow.manager
+        .stop_preview(flow.conversation.clone(), Some(ended.id.clone()))
+        .await
+        .unwrap();
+    assert_eq!(flow.board().await.previews[&ended.id].state, ended.state);
+
+    for mode in ["row", "all", "composer"] {
+        let (preview, child) = start(&flow, &tmp.join(format!("{mode}.pid"))).await;
+        flow.settled().await;
+        match mode {
+            "row" => flow
+                .manager
+                .stop_preview(flow.conversation.clone(), Some(preview.id.clone()))
+                .await
+                .unwrap(),
+            "all" => flow
+                .manager
+                .stop_preview(flow.conversation.clone(), None)
+                .await
+                .unwrap(),
+            _ => flow
+                .manager
+                .interrupt(flow.conversation.clone())
+                .await
+                .unwrap(),
+        }
+        gone(&flow, child).await;
+        let board = flow.board().await;
+        assert!(
+            !board.previews.contains_key(&preview.id),
+            "{mode} kept its stopped preview"
+        );
+        assert_eq!(
+            board.previews[&ended.id].state, ended.state,
+            "{mode} removed a natural exit"
+        );
+    }
     flow.stop().await;
 }

@@ -610,6 +610,7 @@ function SummaryCard({
   return (
     <div
       data-slot="summary-card"
+      tabIndex={-1}
       style={
         height === null
           ? undefined
@@ -695,6 +696,8 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
   const shownPanel = useRef(panel);
   const shownTab = useRef(mainTab);
   const movedOn = useRef(false);
+  const automaticOpen = useRef(false);
+  const focusEntered = useRef(false);
   useEffect(() => {
     const away = panel !== shownPanel.current || (mainTab !== shownTab.current && mainTab !== CHAT_TAB);
     if (away && useSummary.getState().floating) {
@@ -714,19 +717,22 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
         sideOffset={0}
         aria-label="Context"
         onScroll={onScroll}
+        onFocusCapture={() => { focusEntered.current = true; }}
         // Focus the summary itself, not its first button (whose tip would open with it).
         onOpenAutoFocus={(event) => {
           event.preventDefault();
-          if (useSummary.getState().automatic) {
+          automaticOpen.current = useSummary.getState().automatic;
+          focusEntered.current = false;
+          if (automaticOpen.current) {
             useSummary.setState({ automatic: false });
             return;
           }
           if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
         }}
         onCloseAutoFocus={(event) => {
-          if (!movedOn.current) return;
+          if (movedOn.current || (automaticOpen.current && !focusEntered.current)) event.preventDefault();
           movedOn.current = false;
-          event.preventDefault();
+          automaticOpen.current = false;
         }}
         className={cn(
           STACK,

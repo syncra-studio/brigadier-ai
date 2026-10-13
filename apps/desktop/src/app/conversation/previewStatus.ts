@@ -53,5 +53,6 @@ export function previewChip(previews: Readonly<Record<string, Preview>>) {
 
 export function previewIndicator(state: PreviewState): AgentState {
   if (state.type === "exited") return state.code === 0 ? "done" : "failed";
-  return state.type;
+  if (state.type === "stopped") return "done";
+  return state.type === "paused" ? "waiting" : "working";
 }

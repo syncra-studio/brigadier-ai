@@ -542,7 +542,7 @@ impl SessionManager {
     pub(super) async fn wind_down(&self, conversation: &Conversation) {
         let id = &conversation.id;
         // Its previews run in the workspace that goes next: they stop first.
-        self.stop_previews(id, "the session closed").await;
+        let _ = self.stop_previews(id, "the session closed").await;
         self.drop_prewarm(id, "the session closed");
         let conv = self.convs_lock().remove(id);
         if let Some(conv) = conv {

@@ -5,7 +5,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { Button } from "@/components/ui/button";
 import type { Preview } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";
-import { BackgroundInbox, BackgroundInboxRow } from "@/components/assistant-ui/elements/background-inbox";
+import { BackgroundInbox, BackgroundInboxRow, type BackgroundState } from "@/components/assistant-ui/elements/background-inbox";
 import { clearPreviews, pausePreview, previewLogTail, resumePreview, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { openLink } from "@/state/links";
@@ -16,15 +16,8 @@ export function PreviewList({ conversationId, onOpenLink }: { conversationId: st
   const { busy, error, run } = useAction();
   const rows = Object.values(previews ?? {}).toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   const active = rows.filter((preview) => previewActive(preview.state)).length;
-  const summary = [
-    ...(["starting", "running", "paused"] as const).map((state) => {
-      const count = rows.filter((preview) => preview.state.type === state).length;
-      return count ? `${count} ${state}` : null;
-    }),
-    rows.length > active ? `${rows.length - active} finished` : null,
-  ].filter(Boolean).join(" · ");
   return (
-    <BackgroundInbox summary={summary} actions={<>
+    <BackgroundInbox aria-label="Session previews" runs={rows.map((preview) => ({ id: preview.id, title: preview.name, state: inboxState(preview), elapsed: "" }))} actions={<>
       <Button variant="ghost" size="xs" disabled={busy || !active} onClick={() => run(() => stopPreview(conversationId, null))}>Stop all</Button>
       <Button variant="ghost" size="xs" disabled={busy || rows.length === active} onClick={() => run(() => clearPreviews(conversationId))}>Clear finished</Button>
     </>}>
@@ -32,6 +25,11 @@ export function PreviewList({ conversationId, onOpenLink }: { conversationId: st
       {rows.map((preview) => <PreviewRow key={preview.id} preview={preview} disabled={busy} onOpenLink={onOpenLink} />)}
     </BackgroundInbox>
   );
+}
+
+function inboxState(preview: Preview): BackgroundState {
+  const state = previewIndicator(preview.state);
+  return state === "working" ? "running" : state === "done" ? "ready" : state;
 }
 
 function PreviewRow({ preview, disabled, onOpenLink }: { preview: Preview; disabled: boolean; onOpenLink: () => void }) {
@@ -66,6 +64,9 @@ function PreviewRow({ preview, disabled, onOpenLink }: { preview: Preview; disab
     return () => { cancelled = true; clearTimeout(timer); };
   }, [preview.conversationId, preview.id, active, expanded, starting]);
   useEffect(() => {
+    // Synchronize the clock immediately when restarting its external timer.
+    // eslint-disable-next-line react/set-state-in-effect
+    setNow(Date.now());
     if (!active) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -74,10 +75,11 @@ function PreviewRow({ preview, disabled, onOpenLink }: { preview: Preview; disab
   // While it starts (a build can take minutes), its latest output says what it is doing.
   const line = starting && log ? latestLine(log) : "";
   return (
-    <BackgroundInboxRow state={previewIndicator(preview.state)} status={previewStateLabel(preview.state)} name={preview.name}
-      description={line || `${preview.command} · ${previewStateLabel(preview.state)}`}
-      detail={line ? `${preview.command}\n${line}` : `${preview.command} · ${previewStateLabel(preview.state)}`}
-      elapsed={formatDuration(Math.max(0, (preview.endedAtMs ?? now) - preview.startedAtMs))}>
+    <BackgroundInboxRow run={{ id: preview.id, title: preview.name, state: inboxState(preview),
+      summary: line || `${preview.command} · ${previewStateLabel(preview.state)}`,
+      elapsed: formatDuration(Math.max(0, (preview.endedAtMs ?? now) - preview.startedAtMs)) }}
+      status={previewStateLabel(preview.state)}
+      detail={line ? `${preview.command}\n${line}` : `${preview.command} · ${previewStateLabel(preview.state)}`}>
       {url && <Button variant="link" size="xs" className="mt-2 h-auto max-w-full justify-start whitespace-normal break-all p-0 text-start" onClick={() => {
         onOpenLink();
         void openLink(url, { agent: true, conversationId: preview.conversationId });

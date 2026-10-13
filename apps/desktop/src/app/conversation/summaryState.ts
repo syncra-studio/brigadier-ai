@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import type { EventEnvelope } from "@/ipc/generated";
+import { CHAT_TAB, sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { useBoard } from "@/state/board";
 
@@ -70,6 +71,12 @@ export function revealNewPreviews(events: readonly EventEnvelope[]): void {
     && event.type === "previewUpdated" && event.preview.conversationId === board.conversationId
     && !board.previews[event.preview.id])) return;
   if (useSummary.getState().layout === "float") {
+    if (sessionTabs(board.conversationId).active !== CHAT_TAB) return;
     if (!useSummary.getState().floating) useSummary.setState({ floating: true, automatic: true });
   } else useApp.setState({ pinnedSummary: true });
+  // The section may have been folded in this or another session. Wait for the arrival to render.
+  requestAnimationFrame(() => {
+    document.querySelectorAll<HTMLElement>('[data-activities][data-folded] > header > button[aria-expanded="false"]')
+      .forEach((button) => button.click());
+  });
 }

@@ -51,3 +51,11 @@ test("the pill names the newest active preview, then the newest finished one", (
   assert.equal(previewChip({ failed: preview("failed", { type: "exited", code: 1, status: "exit 1" }) })?.status, "Failed");
   assert.equal(previewChip({}), null);
 });
+
+test("preview states map onto the standalone agent-status states", () => {
+  assert.deepEqual([
+    { type: "starting" }, { type: "running" }, { type: "paused" },
+    { type: "exited", code: 0, status: "exit 0" }, { type: "stopped", reason: "session closed" },
+    { type: "exited", code: 1, status: "exit 1" },
+  ].map((state) => previewIndicator(state as PreviewState)), ["working", "working", "waiting", "done", "done", "failed"]);
+});
