@@ -9,7 +9,15 @@ import { useApp } from "@/state/store";
 const query = new URLSearchParams(location.search);
 const done = query.get("view") === "done";
 const stress = query.has("panel-test");
-if (stress) localStorage.setItem("brigadier.rightSidebarWidth", "600");
+const previousWidth = localStorage.getItem("brigadier.rightSidebarWidth");
+if (stress) {
+  localStorage.setItem("brigadier.rightSidebarWidth", "600");
+  // React reads the starting width when the fixture mounts; do not alter later pages.
+  window.addEventListener("pagehide", () => {
+    if (previousWidth === null) localStorage.removeItem("brigadier.rightSidebarWidth");
+    else localStorage.setItem("brigadier.rightSidebarWidth", previousWidth);
+  }, { once: true });
+}
 const longPath = `/workspace/${"longdirectoryname".repeat(18)}/worker.tsx`;
 const now = Date.now();
 const id = "flow-session";
@@ -115,14 +123,6 @@ if (stress && !query.has("manual")) {
     await wait(300);
     const narrow = bounds();
     const brief = find('[data-slot="worker-brief"]')!;
-    const originalClass = brief.className;
-    brief.className = "bg-secondary rounded-thread ms-8 flex flex-col gap-1 self-end px-3 py-2 text-sm";
-    const body = find('[data-slot="worker-instructions"]')!;
-    const bodyClass = body.className;
-    body.className = "leading-relaxed wrap-break-word line-clamp-3";
-    const reproduced = bounds();
-    brief.className = originalClass;
-    body.className = bodyClass;
     brief.querySelector<HTMLButtonElement>("button")!.click();
     await wait();
     const expanded = bounds();
@@ -151,7 +151,11 @@ if (stress && !query.has("manual")) {
     await ready('[data-slot="worker-thread"]');
     (await ready('[data-slot="worker-header"] button')).click();
     await ready('[role="tablist"][aria-label="Right panel"]');
-    const listClose = !!button("Close right panel");
+    await wait(300);
+    const listButton = button("Close right panel")!;
+    const listRect = sidebar.getBoundingClientRect();
+    const listCloseRect = listButton.getBoundingClientRect();
+    const listClose = listCloseRect.width > 0 && listCloseRect.left >= listRect.left && listCloseRect.right <= listRect.right;
     button("Close right panel")!.click();
     await wait();
     const closed = sidebar.dataset.state === "collapsed";
@@ -173,8 +177,18 @@ if (stress && !query.has("manual")) {
     const shortMetrics = { width: shortBody.clientWidth, height: shortBody.clientHeight, scroll: shortBody.scrollHeight };
     const shortNarrow = !!find('[data-slot="worker-brief"] button');
     const minimum = bounds();
-    result.textContent = JSON.stringify({ wide, narrow, expanded, minimum, reproduced, details, toggled, tooltip, noMenu, noTabs,
+    const minimumHeader = find('[data-slot="worker-header"]')!.getBoundingClientRect();
+    const headerFits = [...find('[data-slot="worker-header"]')!.querySelectorAll("button, h2")].every((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.left >= minimumHeader.left && rect.right <= minimumHeader.right;
+    });
+    button("Close right panel")!.click();
+    await wait();
+    const workerClosed = sidebar.dataset.state === "collapsed";
+    if (previousWidth === null) localStorage.removeItem("brigadier.rightSidebarWidth");
+    else localStorage.setItem("brigadier.rightSidebarWidth", previousWidth);
+    result.textContent = JSON.stringify({ wide, narrow, expanded, minimum, details, toggled, tooltip, noMenu, noTabs,
       closeInHeader: closeRect.top >= headerRect.top && closeRect.bottom <= headerRect.bottom && closeRect.right <= headerRect.right,
-      listClose, closed, plan, shortWide, shortNarrow, shortWideBounds, shortMetrics });
+      listClose, closed, workerClosed, headerFits, plan, shortWide, shortNarrow, shortWideBounds, shortMetrics });
   })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
 }

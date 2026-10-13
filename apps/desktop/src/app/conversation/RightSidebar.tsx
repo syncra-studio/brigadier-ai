@@ -67,7 +67,7 @@ export const RightSidebarContext = createContext<ReturnType<typeof useRightSideb
 export function RightSidebar({ conversationId }: { conversationId: string }) {
   const panel = useContext(RightSidebarContext);
   const { panel: workerId } = useContext(AgentsPanelContext);
-  const selectedWorker = useBoard((s) => workerId ? s.board?.tasks[workerId] : undefined);
+  const selectedWorker = useBoard((s) => !!workerId && !!s.board?.tasks[workerId]);
   const workerHeader = panel?.active === "workers" && !!selectedWorker;
   const content = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -152,7 +152,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
           </div>}
           <div
             id="right-sidebar-content"
-            role="tabpanel"
+            role={workerHeader ? "region" : "tabpanel"}
             aria-labelledby={workerHeader ? undefined : `right-sidebar-${panel.active}`}
             aria-label={workerHeader ? "Workers" : undefined}
             data-pane={panel.active}

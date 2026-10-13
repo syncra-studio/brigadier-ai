@@ -249,7 +249,7 @@ function WorkerDetail({ task, headerActions }: { task: Task; headerActions?: Rea
         </TooltipIconButton>
         <WorkerGlyph taskId={task.id} className="size-6" />
         <h2
-          className="min-w-0 flex-1 truncate text-label font-medium"
+          className="min-w-8 flex-1 truncate text-label font-medium"
           title={name ?? task.title}
         >
           {name ?? task.title}
