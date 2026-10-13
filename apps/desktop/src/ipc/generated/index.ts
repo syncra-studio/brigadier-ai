@@ -46,6 +46,7 @@ export type { BrowserEvent } from "./BrowserEvent";
 export type { BrowserFound } from "./BrowserFound";
 export type { BrowserOptions } from "./BrowserOptions";
 export type { BrowserSite } from "./BrowserSite";
+export type { BrowserText } from "./BrowserText";
 export type { BrowserVisit } from "./BrowserVisit";
 export type { Budget } from "./Budget";
 export type { BudgetCheck } from "./BudgetCheck";

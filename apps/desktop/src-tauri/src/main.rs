@@ -745,6 +745,7 @@ fn main() {
             browser::browser_go,
             browser::browser_zoom,
             browser::browser_find,
+            browser::browser_read,
             browser::browser_print,
             browser::browser_snapshot,
             browser::browser_focus,

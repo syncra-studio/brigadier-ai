@@ -109,6 +109,17 @@ pub enum BrowserEvent {
     ZoomIn,
 }
 
+/// What a Browser tab's page shows, for the chat beside it: its address, its title, its text
+/// and what the user selected (each cut to a length a chat can take).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BrowserText {
+    pub url: String,
+    pub title: String,
+    pub text: String,
+    pub selection: String,
+}
+
 /// What finding text in a Browser tab's page came to.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

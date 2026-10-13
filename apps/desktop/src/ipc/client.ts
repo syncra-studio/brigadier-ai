@@ -7,6 +7,7 @@ import type {
   BrowserBounds,
   BrowserEvent,
   BrowserFound,
+  BrowserText,
   BrowserOptions,
   ConventionsExport,
   IpcError,
@@ -263,6 +264,11 @@ export function browserZoom(id: string, zoom: number | null): Promise<number> {
  */
 export function browserFind(id: string, query: string, step: "type" | "next" | "previous"): Promise<BrowserFound> {
   return invoke<BrowserFound>("browser_find", { id, query, step });
+}
+
+/** What the Browser tab's page shows (macOS): its address, title, text and selection. */
+export function browserRead(id: string): Promise<BrowserText> {
+  return invoke<BrowserText>("browser_read", { id });
 }
 
 /** Opens the print panel for the Browser tab's page (macOS). */

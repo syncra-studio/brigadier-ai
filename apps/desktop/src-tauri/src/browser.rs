@@ -1037,6 +1037,44 @@ pub async fn browser_find(
     }
 }
 
+/// What the page reads to the chat beside it: its address, title, text and selection.
+const READ_PAGE: &str = r#"({
+  url: location.href,
+  title: document.title,
+  text: (document.body ? document.body.innerText : "").slice(0, 200000),
+  selection: String(getSelection() || "").slice(0, 20000)
+})"#;
+
+/// What the tab's page shows, for the chat beside it.
+#[tauri::command]
+pub async fn browser_read(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<brigadier_ipc::app::BrowserText, IpcError> {
+    #[cfg(target_os = "macos")]
+    {
+        let json = on_page(&app, id, move |webview, sent| {
+            let sent = Mutex::new(Some(sent));
+            let _ = webview.evaluate_script_with_callback(READ_PAGE, move |json| {
+                if let Some(sent) = sent
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    let _ = sent.send(json);
+                }
+            });
+        })
+        .await?;
+        serde_json::from_str(&json).map_err(|err| failed(format!("the page didn't read: {err}")))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, id, READ_PAGE);
+        Err(unsupported())
+    }
+}
+
 /// Opens the print panel for the tab's page.
 #[tauri::command]
 pub fn browser_print(id: String) -> Result<(), IpcError> {
