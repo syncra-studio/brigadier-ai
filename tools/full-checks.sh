@@ -3,7 +3,7 @@
 #
 #   tools/full-checks.sh            fmt, generated types, build, clippy, tests, typecheck, lint, app tests
 #   tools/full-checks.sh --cross    also Linux and Windows clippy of the cross-buildable crates,
-#                                   and Windows clippy of the desktop crate
+#                                   and Linux and Windows clippy of the desktop crate
 #
 # Safe inside a Brigadier worker: it installs dependencies only when the checkout has none
 # (a worker's are already copied in), runs `nice` only when the process isn't low priority
@@ -74,13 +74,27 @@ if $cross; then
   # The desktop crate's Windows-only code. Its build wants the daemon's Windows sidecar beside
   # it; none is built here, so an empty stand-in takes its place (binaries/ is ignored) and goes
   # again after.
-  sidecar=apps/desktop/src-tauri/binaries/brigadierd-x86_64-pc-windows-gnu.exe
-  if [ ! -e "$sidecar" ]; then
-    mkdir -p "$(dirname "$sidecar")"
-    touch "$sidecar"
-    trap 'rm -f "$sidecar"' EXIT
-  fi
+  stand_ins=()
+  trap 'rm -f ${stand_ins[@]+"${stand_ins[@]}"}' EXIT
+  stand_in() {
+    if [ ! -e "$1" ]; then
+      mkdir -p "$(dirname "$1")"
+      touch "$1"
+      stand_ins+=("$1")
+    fi
+  }
+  stand_in apps/desktop/src-tauri/binaries/brigadierd-x86_64-pc-windows-gnu.exe
   run cargo clippy --locked --target x86_64-pc-windows-gnu -p brigadier-desktop \
+    --all-targets -- -D warnings
+  # The desktop crate's Linux-only code, the same way. Its GTK and WebKit libraries aren't here,
+  # and clippy links nothing, so a pkg-config that finds every library with no flags stands in.
+  stand_in apps/desktop/src-tauri/binaries/brigadierd-x86_64-unknown-linux-gnu
+  mkdir -p target/linux-pkg-config
+  printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = --modversion ] && echo 99.0; done\nexit 0\n' \
+    > target/linux-pkg-config/pkg-config
+  chmod +x target/linux-pkg-config/pkg-config
+  run env PKG_CONFIG="$PWD/target/linux-pkg-config/pkg-config" PKG_CONFIG_ALLOW_CROSS=1 \
+    cargo-zigbuild clippy --locked --target x86_64-unknown-linux-gnu -p brigadier-desktop \
     --all-targets -- -D warnings
 fi
 
