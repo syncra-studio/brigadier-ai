@@ -601,12 +601,23 @@ async fn held_consent_does_not_cover_an_unrelated_merge_parent() {
             &session,
         ],
     );
-    let error = flow
+    let mut error = flow
         .manager
         .finish_session(&flow.conversation, "merge it", None)
         .await
         .unwrap_err()
         .to_string();
+    // The unrelated work gets its own review as the merge is asked for; on a slow machine it
+    // still runs then, and the held merge waits for it before anything else is checked.
+    if error.contains("review of the session's work still runs") {
+        review_ended(&flow, &merge).await;
+        error = flow
+            .manager
+            .finish_session(&flow.conversation, "merge it", None)
+            .await
+            .unwrap_err()
+            .to_string();
+    }
     assert!(error.contains("consent doesn't cover it"), "{error}");
     assert_eq!(git(&flow.repo, &["show", "main:README.md"]), "# Base");
     flow.stop().await;
