@@ -247,7 +247,10 @@ fn stop_with(
 }
 
 /// The live sessions and the apps each is using, for Brigadier.
-pub fn list() -> serde_json::Value {
+/// An app an agent launched has no pid until a later call names one, and a
+/// relaunched app has a new one, so each app is listed with the pid
+/// `running_pid` finds for its bundle id when the noted one is gone.
+pub fn list(running_pid: &dyn Fn(&str) -> Option<i64>) -> serde_json::Value {
     let Ok(state) = state().lock() else {
         return serde_json::json!({"sessions": []});
     };
@@ -255,7 +258,20 @@ pub fn list() -> serde_json::Value {
         .sessions
         .iter()
         .filter(|(_, session)| !session.apps.is_empty())
-        .map(|(id, session)| serde_json::json!({"session": id, "apps": session.apps}))
+        .map(|(id, session)| {
+            let apps: Vec<Use> = session
+                .apps
+                .iter()
+                .map(|used| {
+                    let noted = used.pid.filter(|&pid| u32::try_from(pid).is_ok_and(alive));
+                    Use {
+                        pid: noted.or_else(|| used.bundle_id.as_deref().and_then(running_pid)),
+                        ..used.clone()
+                    }
+                })
+                .collect();
+            serde_json::json!({"session": id, "apps": apps})
+        })
         .collect();
     serde_json::json!({"sessions": sessions})
 }
@@ -308,7 +324,7 @@ mod tests {
             ),
             None
         );
-        let listed = list();
+        let listed = list(&|_| None);
         let mine: Vec<_> = listed["sessions"]
             .as_array()
             .unwrap()
@@ -319,7 +335,31 @@ mod tests {
         assert_eq!(mine[0]["apps"].as_array().unwrap().len(), 1);
         assert_eq!(mine[0]["apps"][0]["last_used_ms"], 20);
         shim_gone(Some(7001));
-        assert!(!list().to_string().contains(s));
+        assert!(!list(&|_| None).to_string().contains(s));
+    }
+
+    #[test]
+    fn a_launched_app_is_listed_with_the_pid_it_runs_as() {
+        let all_alive = |_: u32| true;
+        let s = "brigadier-launched-pid-test";
+        let launched = App {
+            pid: None,
+            ..app("TextEdit", "com.apple.TextEdit")
+        };
+        assert_eq!(
+            note_call_with(s, Some(7201), Some(launched), &all_alive, 10),
+            None
+        );
+        let running = |bundle_id: &str| (bundle_id == "com.apple.TextEdit").then_some(4321);
+        let listed = list(&running);
+        let mine = listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["session"] == s)
+            .unwrap();
+        assert_eq!(mine["apps"][0]["pid"], 4321);
+        shim_gone(Some(7201));
     }
 
     #[test]
@@ -331,14 +371,14 @@ mod tests {
             note_call_with(s, Some(7101), textedit(), &all_alive, 10),
             None
         );
-        assert!(list().to_string().contains(s));
+        assert!(list(&|_| None).to_string().contains(s));
         session_ended(s);
-        assert!(!list().to_string().contains(s));
+        assert!(!list(&|_| None).to_string().contains(s));
         assert_eq!(
             note_call_with(s, Some(7101), textedit(), &all_alive, 20),
             None
         );
-        assert!(list().to_string().contains(s));
+        assert!(list(&|_| None).to_string().contains(s));
         shim_gone(Some(7101));
     }
 

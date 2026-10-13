@@ -2164,7 +2164,16 @@ pub async fn run_serve_with_owner(
                                 ).await;
                             }
                             "agent_sessions" => {
-                                let resp = DaemonResponse::ok(crate::agent_apps::list());
+                                #[cfg(target_os = "macos")]
+                                let running_pid = |bundle_id: &str| {
+                                    platform_macos::apps::list_running_apps()
+                                        .into_iter()
+                                        .find(|app| app.bundle_id.as_deref() == Some(bundle_id))
+                                        .map(|app| i64::from(app.pid))
+                                };
+                                #[cfg(not(target_os = "macos"))]
+                                let running_pid = |_: &str| None;
+                                let resp = DaemonResponse::ok(crate::agent_apps::list(&running_pid));
                                 let _ = writer.write_all(
                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                 ).await;
