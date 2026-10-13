@@ -24,9 +24,13 @@ export function BackgroundInbox({
   className,
   children,
   actions,
+  title = "Running elsewhere",
+  summary,
   ...props
-}: Omit<ComponentProps<"div">, "children" | "runs" | "onCollect"> & {
+}: Omit<ComponentProps<"div">, "children" | "runs" | "onCollect" | "title"> & {
   runs: readonly BackgroundRun[];
+  title?: ReactNode;
+  summary?: ReactNode;
   children?: ReactNode;
   actions?: ReactNode;
   onCollect?: (id: string) => void;
@@ -45,17 +49,17 @@ export function BackgroundInbox({
       {...props}
     >
       <div className="flex items-baseline justify-between px-1 pb-1">
-        <span className="text-label font-medium">Running elsewhere</span>
+        <span className="text-label font-medium">{title}</span>
         <span
           className={cn(
             mono,
             "tabular-nums",
-            ready > 0
+            summary === undefined && ready > 0
               ? "text-link"
               : "text-muted-foreground",
           )}
         >
-          {ready > 0 ? `${ready} ready` : `${running} in flight`}
+          {summary ?? (ready > 0 ? `${ready} ready` : `${running} in flight`)}
         </span>
       </div>
 

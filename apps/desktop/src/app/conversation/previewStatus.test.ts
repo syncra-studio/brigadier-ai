@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { latestLine, previewChip, previewIndicator, previewActions, previewActive, previewStateLabel } from "@/app/conversation/previewStatus";
+import { latestLine, previewChip, previewIndicator, previewActions, previewActive, previewStateLabel, previewSummary } from "@/app/conversation/previewStatus";
 import type { EventEnvelope, Preview, PreviewState } from "@/ipc/generated";
 import { applyToBoard, emptyBoard } from "@/state/board";
 
@@ -58,4 +58,15 @@ test("preview states map onto the standalone agent-status states", () => {
     { type: "exited", code: 0, status: "exit 0" }, { type: "stopped", reason: "session closed" },
     { type: "exited", code: 1, status: "exit 1" },
   ].map((state) => previewIndicator(state as PreviewState)), ["working", "working", "waiting", "done", "done", "failed"]);
+});
+
+test("the inbox counts every preview state without calling finished work ready", () => {
+  assert.equal(previewSummary([]), "");
+  assert.equal(previewSummary([
+    preview("a", { type: "starting" }), preview("b", { type: "running" }),
+    preview("c", { type: "paused" }), preview("d", { type: "exited", code: 0, status: "exit 0" }),
+    preview("e", { type: "exited", code: 1, status: "exit 1" }),
+    preview("f", { type: "exited", code: null, status: "signal 9" }),
+    preview("g", { type: "stopped", reason: "session closed" }),
+  ]), "1 starting · 1 running · 1 paused · 1 finished · 2 failed · 1 stopped");
 });

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { latestLine, previewActions, previewActive, previewIndicator, previewStateLabel } from "@/app/conversation/previewStatus";
+import { latestLine, previewActions, previewActive, previewIndicator, previewStateLabel, previewSummary } from "@/app/conversation/previewStatus";
 import { useAction } from "@/app/conversation/useAction";
 import { Button } from "@/components/ui/button";
 import type { Preview } from "@/ipc/generated";
@@ -17,7 +17,7 @@ export function PreviewList({ conversationId, onOpenLink }: { conversationId: st
   const rows = Object.values(previews ?? {}).toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   const active = rows.filter((preview) => previewActive(preview.state)).length;
   return (
-    <BackgroundInbox aria-label="Session previews" runs={rows.map((preview) => ({ id: preview.id, title: preview.name, state: inboxState(preview), elapsed: "" }))} actions={<>
+    <BackgroundInbox title="Previews" summary={previewSummary(rows)} aria-label="Session previews" runs={rows.map((preview) => ({ id: preview.id, title: preview.name, state: inboxState(preview), elapsed: "" }))} actions={<>
       <Button variant="ghost" size="xs" disabled={busy || !active} onClick={() => run(() => stopPreview(conversationId, null))}>Stop all</Button>
       <Button variant="ghost" size="xs" disabled={busy || rows.length === active} onClick={() => run(() => clearPreviews(conversationId))}>Clear finished</Button>
     </>}>

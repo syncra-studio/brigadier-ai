@@ -31,7 +31,7 @@ export function PreviewChip({ conversationId }: { conversationId: string }) {
   if (!chip && open) setOpen(false);
   if (!chip) return null;
   return (
-    <SummarySection data-activities foldKey="activities" title="Activities" count={Object.keys(previews ?? {}).length}>
+    <SummarySection data-activities foldKey="activities" title="Activities" count={Object.keys(previews ?? {}).length} unfoldOnIncrease={Object.keys(previews ?? {}).length}>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button

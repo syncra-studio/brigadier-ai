@@ -56,3 +56,14 @@ export function previewIndicator(state: PreviewState): AgentState {
   if (state.type === "stopped") return "done";
   return state.type === "paused" ? "waiting" : "working";
 }
+
+/** Every preview contributes to the inbox summary, including paused and ended processes. */
+export function previewSummary(previews: readonly Preview[]): string {
+  const counts = { starting: 0, running: 0, paused: 0, finished: 0, failed: 0, stopped: 0 };
+  for (const { state } of previews) {
+    const label = state.type === "exited" ? (state.code === 0 ? "finished" : "failed") : state.type;
+    counts[label]++;
+  }
+  return Object.entries(counts).filter(([, count]) => count > 0)
+    .map(([label, count]) => `${count} ${label}`).join(" · ");
+}

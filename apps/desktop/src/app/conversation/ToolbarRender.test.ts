@@ -49,7 +49,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.closedShown, "");
   assert.equal(seen.planTab, "plan");
   for (const field of ["preferenceKept", "besideOpened", "returnClosed", "loadingClosed", "composerKeptFocus", "loadedClosed", "updateClosed", "backgroundClosed", "autoOpened", "nestedOpened", "nestedDismissed"]) assert.equal(seen[field], true, field);
-  for (const field of ["fileTabClosed", "browserTabClosed", "autoEscapeClosed", "activitiesUnfolded"]) assert.equal(seen[field], true, field);
+  for (const field of ["fileTabClosed", "browserTabClosed", "autoEscapeClosed", "activitiesUnfolded", "activitiesFoldKept"]) assert.equal(seen[field], true, field);
   assert.equal(seen.autoEscapeFocus, "Fixture composer", "Escape after an automatic open leaves the composer focused");
   assert.equal(seen.enteredEscapeFocus, "Context", "entering the auto-opened card restores normal focus return");
   assert.equal(seen.manualOpenFocus, "Context");

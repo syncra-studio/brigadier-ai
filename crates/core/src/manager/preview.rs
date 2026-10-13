@@ -1277,9 +1277,12 @@ impl SessionManager {
         id: &ConversationId,
         stopped: Vec<Preview>,
     ) -> Result<()> {
-        let stopped: Vec<_> = stopped.into_iter().filter(|preview|
-            matches!(&preview.state, PreviewState::Stopped { reason } if reason == USER_STOP)
-        ).collect();
+        let stopped: Vec<_> = stopped
+            .into_iter()
+            .filter(|preview| {
+                matches!(&preview.state, PreviewState::Stopped { reason } if reason == USER_STOP)
+            })
+            .collect();
         let removed = self.remove_stopped_previews(id, &stopped).await;
         if let Ok(conv) = self.conv(id) {
             for preview in stopped {
@@ -1342,7 +1345,31 @@ impl SessionManager {
             None => self.previews.of(id),
         };
         stop_all(&live, reason).await;
-        let board = self.core.board(id).await?;
+        let board = self.core.board(id).await;
+        // A failed final record must not silence a user stop. Use the requests we sent,
+        // not just the persisted state; successfully recorded stops are noted after removal.
+        if reason == USER_STOP
+            && let Ok(conv) = self.conv(id)
+        {
+            for preview in &live {
+                let recorded = board
+                    .as_ref()
+                    .ok()
+                    .and_then(|board| board.previews.get(&preview.id));
+                if preview.reason() == USER_STOP
+                        && !recorded.is_some_and(|preview| {
+                            matches!(&preview.state, PreviewState::Stopped { reason } if reason == USER_STOP)
+                        })
+                    {
+                        conv.note(format!(
+                            "[preview] The user requested a stop of {} and its process has ended. Its removal could not be confirmed; do not treat it as running.",
+                            preview.id
+                        ))
+                        .await;
+                    }
+            }
+        }
+        let board = board?;
         Ok(live
             .iter()
             .filter_map(|live| board.previews.get(&live.id).cloned())

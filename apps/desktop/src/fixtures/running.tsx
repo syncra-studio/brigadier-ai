@@ -84,6 +84,7 @@ function Fixture() {
     at(1000, () => {
       press("Show log", row("Web app")!);
       if (!params.has("drive")) return;
+      seen.inboxHeader = document.querySelector('[data-slot="background-inbox"] > div')?.textContent;
       seen.initial = rows.map((preview) => ({ name: preview.name, text: row(preview.name)?.textContent, actions: labels(preview.name), indicator: row(preview.name)?.querySelector('[data-slot="background-inbox-indicator"]')?.getAttribute("data-state") }));
       press("Pause", row("Web app")!);
     });

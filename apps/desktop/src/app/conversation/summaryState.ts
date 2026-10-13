@@ -74,9 +74,4 @@ export function revealNewPreviews(events: readonly EventEnvelope[]): void {
     if (sessionTabs(board.conversationId).active !== CHAT_TAB) return;
     if (!useSummary.getState().floating) useSummary.setState({ floating: true, automatic: true });
   } else useApp.setState({ pinnedSummary: true });
-  // The section may have been folded in this or another session. Wait for the arrival to render.
-  requestAnimationFrame(() => {
-    document.querySelectorAll<HTMLElement>('[data-activities][data-folded] > header > button[aria-expanded="false"]')
-      .forEach((button) => button.click());
-  });
 }

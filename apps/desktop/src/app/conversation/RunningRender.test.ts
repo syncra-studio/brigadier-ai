@@ -4,12 +4,13 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 test("Running renders all states and controls pause, resume, stop, clear and the session browser", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "running.html?drive=1", "running-result", 30000)) as {
-    chip: string; section: string; reactivated: string; sectionRemoved: boolean; focusAfterStop: string; lastStopFocus: string; lastStopRemoved: boolean; linkClosed: boolean;
+    inboxHeader: string; chip: string; section: string; reactivated: string; sectionRemoved: boolean; focusAfterStop: string; lastStopFocus: string; lastStopRemoved: boolean; linkClosed: boolean;
     initial: { name: string; text: string; actions: string[]; indicator: string }[];
     paused: string[]; resumed: string[]; windows: string[]; error: string; browser: string;
     cleared: string[]; stopped: boolean; allStopped: boolean; empty: string; calls: string[];
   };
   assert.match(seen.chip, /workingBrigadier dev app.*1m/);
+  assert.equal(seen.inboxHeader, "Previews1 starting · 1 running · 1 paused · 1 finished · 1 failed");
   assert.equal(seen.initial.length, 5);
   assert.deepEqual(seen.initial.map((row) => row.indicator), ["running", "running", "waiting", "failed", "ready"]);
   assert.match(seen.initial[0]!.text, /Starting/);

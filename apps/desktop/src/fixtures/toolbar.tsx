@@ -16,6 +16,7 @@ import { useSidePanel } from "@/app/conversation/SidePanel";
 import { WorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
 import { fixtureInput } from "@/fixtures/input";
 import { MENU_KEYS } from "@/app/paneShortcuts";
+import { SummarySection } from "@/components/assistant-ui/elements/summary-section";
 import { TitlebarTips } from "@/components/titlebar-button";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import type { Conversation, EventEnvelope, Request } from "@/ipc/generated";
@@ -64,6 +65,7 @@ const previews = useBoard.getState().board!.previews;
 function Fixture() {
   const [kind, setKind] = useState<"session" | "draft" | "chat">("session");
   const [result, setResult] = useState("");
+  const [foldProbe, setFoldProbe] = useState(true);
   const { panel, agents, workspace } = useSidePanel(kind === "draft" ? null : id, kind !== "chat", false, "project");
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const [seen] = useState<Record<string, unknown>>({});
@@ -175,6 +177,9 @@ function Fixture() {
       applyBoardEvents(events);
     };
     at(4320, () => {
+      // Seed the shared preference even when the floating card is currently unmounted.
+      document.querySelector<HTMLButtonElement>('[data-fold-probe] > header button[aria-expanded="true"]')!.click();
+      setFoldProbe(false);
       document.querySelector<HTMLButtonElement>('[data-activities] > header button[aria-expanded="true"]')?.click();
     });
     at(4350, () => {
@@ -211,10 +216,12 @@ function Fixture() {
       arrival("new-preview");
     });
     at(4500, () => {
+      setFoldProbe(true);
       seen.activitiesUnfolded = !!document.querySelector('[data-activities]:not([data-folded])');
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     at(4750, () => {
+      seen.activitiesFoldKept = !!document.querySelector('[data-fold-probe][data-folded]');
       seen.autoEscapeClosed = !useSummary.getState().floating;
       seen.autoEscapeFocus = document.activeElement?.getAttribute("aria-label");
       arrival("focus-preview");
@@ -321,6 +328,7 @@ function Fixture() {
         </div>
       </div>
       </SummaryFloat>
+      {foldProbe && <div hidden><SummarySection data-fold-probe foldKey="activities" title="Activities" /></div>}
       {result && <pre id="toolbar-result">{result}</pre>}
     </RightSidebarContext.Provider></WorkspacePaneContext.Provider>
   </ComposerTargetContext.Provider></AssistantRuntimeProvider>;
