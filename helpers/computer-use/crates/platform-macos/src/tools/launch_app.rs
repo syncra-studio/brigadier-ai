@@ -103,7 +103,7 @@ impl Tool for LaunchAppTool {
         use cu_core::tool_args::ArgsExt;
         let bundle_id = args.opt_str("bundle_id");
         let name = args.opt_str("name");
-        let urls: Vec<String> = args.str_array("urls");
+        let mut urls: Vec<String> = args.str_array("urls");
         let cdp_debugging_port = args.opt_u64("cdp_debugging_port").map(|v| v as u16);
         let webkit_inspector_port = args.opt_u64("webkit_inspector_port").map(|v| v as u16);
         let creates_new_instance = args.bool_or("creates_new_application_instance", false);
@@ -151,6 +151,24 @@ impl Tool for LaunchAppTool {
                     format!("No installed macOS app found for name '{n}'."),
                     serde_json::json!({ "name": n }),
                 );
+            }
+        }
+        // A running app keeps the arguments it started with, so a file or link
+        // given among them would be dropped without a word: open it as a url.
+        let mut moved_targets = Vec::new();
+        if !creates_new_instance && !additional_arguments.is_empty() {
+            let running =
+                crate::apps::list_running_apps()
+                    .into_iter()
+                    .any(|a| match bundle_id.as_deref() {
+                        Some(bid) => a.bundle_id.as_deref() == Some(bid),
+                        None => name.as_deref() == Some(a.name.as_str()),
+                    });
+            if running {
+                let (targets, rest) = split_open_targets(additional_arguments);
+                additional_arguments = rest;
+                urls.extend(targets.iter().cloned());
+                moved_targets = targets;
             }
         }
         if let Some(err) = preflight_file_urls(&urls) {
@@ -624,6 +642,14 @@ impl Tool for LaunchAppTool {
                     }
                     structured["placement"] = p;
                 }
+                if !moved_targets.is_empty() {
+                    summary.push_str(&format!(
+                        "\nThe app was already running, so {} from additional_arguments \
+                         opened as urls.",
+                        moved_targets.join(", ")
+                    ));
+                    structured["opened_from_arguments"] = serde_json::json!(moved_targets);
+                }
                 ToolResult::text(summary).with_structured(structured)
             }
             Ok(Err(e)) => ToolResult::error(format!("Launch failed: {e}")),
@@ -719,6 +745,15 @@ fn structured_launch_error(code: &str, message: String, details: serde_json::Val
     ToolResult::error(message).with_structured(payload)
 }
 
+/// Splits launch arguments into files and links to open (a link, or an absolute or `~` path)
+/// and the rest (flags and their values).
+fn split_open_targets(arguments: Vec<String>) -> (Vec<String>, Vec<String>) {
+    arguments.into_iter().partition(|argument| {
+        !argument.starts_with('-')
+            && (argument.contains("://") || argument.starts_with('/') || argument.starts_with('~'))
+    })
+}
+
 fn preflight_file_urls(urls: &[String]) -> Option<ToolResult> {
     for raw in urls {
         let Some(path) = local_file_target(raw) else {
@@ -804,7 +839,40 @@ fn hex_value(byte: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{local_file_target, preflight_file_urls, suppresses_activation, watchdog_ticks};
+
+    #[test]
+    fn files_and_links_among_launch_arguments_are_told_apart_from_flags() {
+        let (targets, rest) = split_open_targets(
+            [
+                "--user-data-dir=/tmp/profile",
+                "--no-first-run",
+                "file:///tmp/page.html",
+                "/tmp/doc.txt",
+                "~/notes.txt",
+                "https://example.com",
+                "plain",
+            ]
+            .map(String::from)
+            .to_vec(),
+        );
+        assert_eq!(
+            targets,
+            [
+                "file:///tmp/page.html",
+                "/tmp/doc.txt",
+                "~/notes.txt",
+                "https://example.com"
+            ]
+        );
+        assert_eq!(
+            rest,
+            ["--user-data-dir=/tmp/profile", "--no-first-run", "plain"]
+        );
+    }
+    use super::{
+        local_file_target, preflight_file_urls, split_open_targets, suppresses_activation,
+        watchdog_ticks,
+    };
     use std::path::PathBuf;
 
     #[test]
