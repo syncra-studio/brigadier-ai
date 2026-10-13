@@ -33,11 +33,23 @@ impl AXPageReader {
     pub fn extract_text(tree_markdown: &str) -> String {
         let mut lines_out: Vec<String> = Vec::new();
         let mut last: Option<String> = None;
+        // The indent of the menu bar being skipped: its items are the app's
+        // commands, not the page's text.
+        let mut menu_indent: Option<usize> = None;
 
         for line in tree_markdown.lines() {
+            let indent = line.len() - line.trim_start().len();
+            if menu_indent.is_some_and(|menu| indent > menu) {
+                continue;
+            }
+            menu_indent = None;
             let Some(el) = parse_ax_line(line) else {
                 continue;
             };
+            if el.role == "AXMenuBar" {
+                menu_indent = Some(indent);
+                continue;
+            }
 
             let is_text_role = TEXT_ROLES.contains(&el.role.as_str());
             let is_skipped = SKIP_ROLES.contains(&el.role.as_str());
@@ -218,5 +230,19 @@ fn css_selector_to_ax_roles(selector: &str) -> Vec<&'static str> {
         "li" => vec!["AXStaticText"],
         "*" | "" => vec![],
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AXPageReader;
+
+    #[test]
+    fn page_text_leaves_out_the_menu_bar() {
+        let tree = "- [0] AXMenuBar [actions=[cancel]]\n  - [1] AXMenuBarItem \"Apple\"\n    - [2] AXMenu\n      - [3] AXMenuItem \"About This Mac\"\n- [4] AXWindow \"Fixture\"\n  - [5] AXHeading \"Fixture heading\"\n  - AXStaticText = \"Some text.\"";
+        assert_eq!(
+            AXPageReader::extract_text(tree),
+            "Fixture heading\nSome text."
+        );
     }
 }

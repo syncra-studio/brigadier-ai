@@ -287,7 +287,18 @@ async fn ax_text_fallback(pid: i32, window_id: u32) -> anyhow::Result<String> {
         tokio::task::spawn_blocking(move || crate::ax::tree::walk_tree(pid, Some(window_id), None))
             .await
             .map_err(|e| anyhow::anyhow!("AX walk task failed: {e}"))?;
-    Ok(AXPageReader::extract_text(&result.tree_markdown))
+    let text = AXPageReader::extract_text(&result.tree_markdown);
+    if result.tree_markdown.contains("AXWebArea") {
+        Ok(text)
+    } else {
+        // No page in the tree: a page shows its content to accessibility only
+        // once its window has been on screen.
+        Ok(format!(
+            "No page content is readable in this window through accessibility (the page has \
+             not been shown on screen yet, and the browser's scripting isn't available). The \
+             window's other text:\n{text}"
+        ))
+    }
 }
 
 /// Query AX tree by CSS selector.
