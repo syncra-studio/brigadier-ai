@@ -65,7 +65,8 @@ const TICK: Duration = Duration::from_millis(250);
 const LEASE_RENEWAL: Duration = Duration::from_secs(4);
 
 /// How long the call itself waits for an activation before answering; the
-/// watchdog holds on after it.
+/// watchdog holds on after it. Links a browser opened over its debugging
+/// port bring no activation, so that answer doesn't wait.
 const IN_CALL_WAIT: Duration = Duration::from_millis(60);
 
 pub struct LaunchAppTool;
@@ -191,9 +192,9 @@ impl Tool for LaunchAppTool {
                 );
             }
         }
-        let windows_before: HashSet<u32> = platform_macos::windows::all_windows()
+        let windows_before: HashSet<u32> = crate::window_list::windows(None)
             .into_iter()
-            .map(|w| w.window_id)
+            .map(|w| w.id)
             .collect();
         let running_before = apps::running_apps();
         let pids_before: HashSet<i32> = running_before.iter().map(|a| a.pid).collect();
@@ -280,6 +281,13 @@ impl Tool for LaunchAppTool {
                 || !env.is_empty()
                 || creates_new_instance);
 
+        let quiet_open = matches!(
+            opened_in_background,
+            Some(open_link::OpenedLinks {
+                by: OpenedBy::DevTools(_),
+                ..
+            })
+        );
         let windows_seen = windows_before.clone();
         let launch_result = tokio::task::spawn_blocking(move || {
             if let Some(opened) = opened_in_background {
@@ -290,7 +298,7 @@ impl Tool for LaunchAppTool {
                     put_window_first(&mut windows, apps::main_window_id(pid));
                 }
                 crate::offspace::remember_front_windows(pid);
-                let app = apps::running_apps().into_iter().find(|a| a.pid == pid);
+                let app = apps::running_app(pid);
                 return Ok(Launched { pid, app, windows });
             }
             let named = |app: &apps::RunningApp| {
@@ -351,7 +359,7 @@ impl Tool for LaunchAppTool {
                 windows
             };
             crate::offspace::remember_front_windows(pid);
-            let app = apps::running_apps().into_iter().find(|a| a.pid == pid);
+            let app = apps::running_app(pid);
             Ok::<_, anyhow::Error>(Launched { pid, app, windows })
         })
         .await;
@@ -369,7 +377,9 @@ impl Tool for LaunchAppTool {
                 let lease = begin_suppression(Some(pid), prior, "LaunchAppTool.post");
                 // Now safe to drop the wildcard: the targeted lease is armed.
                 drop(wildcard_lease);
-                tokio::time::sleep(IN_CALL_WAIT).await;
+                if !quiet_open {
+                    tokio::time::sleep(IN_CALL_WAIT).await;
+                }
 
                 let send_back = SendBack {
                     pid,

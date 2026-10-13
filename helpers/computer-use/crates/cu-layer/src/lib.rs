@@ -32,6 +32,8 @@ pub mod scroll;
 pub mod target_policy;
 pub mod text;
 pub mod tokens;
+#[cfg(target_os = "macos")]
+pub mod window_list;
 
 use std::path::Path;
 

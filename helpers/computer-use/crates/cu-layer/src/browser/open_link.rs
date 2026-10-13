@@ -18,6 +18,13 @@ use platform_macos::windows::WindowInfo;
 /// How long to wait for the new window to show up in the window list.
 const NEW_WINDOW_WAIT: Duration = Duration::from_millis(1500);
 
+/// How often the window list is looked at while waiting.
+const NEW_WINDOW_POLL: Duration = Duration::from_millis(20);
+
+/// The smallest side of a window that shows a page, unlike the browser's
+/// thin toolbar, address-bar popup and placeholder windows.
+const MIN_PAGE_SIDE: f64 = 200.0;
+
 /// The browser families whose Apple Event dictionaries differ.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BrowserKind {
@@ -120,26 +127,37 @@ pub fn new_windows_first(windows: &mut [WindowInfo], before: &HashSet<u32>) -> u
 /// A window big enough to show a page, unlike the browser's thin toolbar,
 /// address-bar popup and placeholder windows.
 fn shows_a_page(window: &WindowInfo) -> bool {
-    const MIN_SIDE: f64 = 200.0;
-    window.bounds.width >= MIN_SIDE && window.bounds.height >= MIN_SIDE
+    window.bounds.width >= MIN_PAGE_SIDE && window.bounds.height >= MIN_PAGE_SIDE
 }
 
 /// The pid's windows with the ones opened since `before` first, waiting a
 /// little for `expected` new windows to appear. Returns how many are new.
+/// The wait watches the quick window list, so the answer comes within a
+/// few tens of milliseconds of the window showing up.
 pub fn wait_for_new_windows(
     pid: i32,
     before: &HashSet<u32>,
     expected: usize,
 ) -> (Vec<WindowInfo>, usize) {
     let deadline = Instant::now() + NEW_WINDOW_WAIT;
-    loop {
-        let mut windows = current_windows_for_pid(pid);
-        let new = new_windows_first(&mut windows, before);
-        if new >= expected || Instant::now() >= deadline {
-            return (windows, new);
-        }
-        std::thread::sleep(Duration::from_millis(100));
+    while count_new_page_windows(&crate::window_list::windows(Some(pid)), before) < expected
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(NEW_WINDOW_POLL);
     }
+    let mut windows = current_windows_for_pid(pid);
+    let new = new_windows_first(&mut windows, before);
+    (windows, new)
+}
+
+/// How many of `windows` are not in `before` and big enough to show a page.
+fn count_new_page_windows(windows: &[crate::window_list::Window], before: &HashSet<u32>) -> usize {
+    windows
+        .iter()
+        .filter(|w| {
+            !before.contains(&w.id) && w.width >= MIN_PAGE_SIDE && w.height >= MIN_PAGE_SIDE
+        })
+        .count()
 }
 
 /// Layer-0 windows of `pid` with a real size.
@@ -164,12 +182,7 @@ pub async fn open_in_running_browser(
     if urls.is_empty() || !urls.iter().all(|u| is_web_link(u)) {
         return None;
     }
-    let app = platform_macos::apps::list_running_apps()
-        .into_iter()
-        .find(|a| match bundle_id {
-            Some(bid) => a.bundle_id.as_deref() == Some(bid),
-            None => name == Some(a.name.as_str()),
-        })?;
+    let app = crate::launch::apps::running_app_named(bundle_id, name)?;
     let app_bundle = app.bundle_id.clone()?;
     let kind = browser_kind(&app_bundle)?;
     let pid = app.pid;
@@ -366,5 +379,24 @@ mod tests {
         assert_eq!(new_windows_first(&mut windows, &before), 0);
         let ids: Vec<u32> = windows.iter().map(|w| w.window_id).collect();
         assert_eq!(ids, [20, 10]);
+    }
+
+    #[test]
+    fn the_wait_counts_only_new_windows_that_show_a_page() {
+        use crate::window_list::Window;
+        let window = |id, width, height| Window {
+            id,
+            pid: 7,
+            width,
+            height,
+        };
+        let before: HashSet<u32> = [1].into();
+        let windows = [
+            window(1, 900.0, 700.0),
+            window(2, 900.0, 700.0),
+            window(3, 900.0, 40.0),
+            window(4, 200.0, 200.0),
+        ];
+        assert_eq!(count_new_page_windows(&windows, &before), 2);
     }
 }

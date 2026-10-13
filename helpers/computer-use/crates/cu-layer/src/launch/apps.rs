@@ -35,28 +35,57 @@ pub fn running_apps() -> Vec<RunningApp> {
         let applications = NSWorkspace::sharedWorkspace().runningApplications();
         (0..applications.len())
             .filter_map(|index| applications.get(index))
-            .filter(|app| {
-                !app.isTerminated()
-                    && app.activationPolicy() == NSApplicationActivationPolicy::Regular
-            })
-            .filter_map(|app| {
-                let pid = app.processIdentifier();
-                if pid <= 0 {
-                    return None;
-                }
-                let bundle_id = app.bundleIdentifier().map(|value| value.to_string());
-                let name = app
-                    .localizedName()
-                    .map(|value| value.to_string())
-                    .or_else(|| bundle_id.clone())
-                    .unwrap_or_else(|| format!("pid {pid}"));
-                Some(RunningApp {
-                    pid,
-                    name,
-                    bundle_id,
-                })
-            })
+            .filter_map(|app| describe(app))
             .collect()
+    }
+}
+
+/// The running regular app with this pid, looked up directly.
+pub fn running_app(pid: i32) -> Option<RunningApp> {
+    unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(pid) }
+        .and_then(|app| describe(&app))
+}
+
+/// The first running regular app with this bundle id (looked up directly,
+/// without listing every app), else with this name.
+pub fn running_app_named(bundle_id: Option<&str>, name: Option<&str>) -> Option<RunningApp> {
+    match bundle_id {
+        Some(bundle_id) => unsafe {
+            let applications = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+                &NSString::from_str(bundle_id),
+            );
+            (0..applications.len())
+                .filter_map(|index| applications.get(index))
+                .find_map(|app| describe(app))
+        },
+        None => running_apps()
+            .into_iter()
+            .find(|app| name == Some(app.name.as_str())),
+    }
+}
+
+/// A running regular app as [`RunningApp`]; `None` for one that has quit
+/// or isn't a Dock app.
+fn describe(app: &NSRunningApplication) -> Option<RunningApp> {
+    unsafe {
+        if app.isTerminated() || app.activationPolicy() != NSApplicationActivationPolicy::Regular {
+            return None;
+        }
+        let pid = app.processIdentifier();
+        if pid <= 0 {
+            return None;
+        }
+        let bundle_id = app.bundleIdentifier().map(|value| value.to_string());
+        let name = app
+            .localizedName()
+            .map(|value| value.to_string())
+            .or_else(|| bundle_id.clone())
+            .unwrap_or_else(|| format!("pid {pid}"));
+        Some(RunningApp {
+            pid,
+            name,
+            bundle_id,
+        })
     }
 }
 
