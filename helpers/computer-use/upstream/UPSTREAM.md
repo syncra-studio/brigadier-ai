@@ -50,6 +50,7 @@ Patches applied, in order:
 - `patches/0003-restore-policy.diff`: a host restore policy (focus_steal::set_restore_policy) asked before every restore the driver makes, so an embedding app can leave the user's own switches and system prompts in front.
 - `patches/0004-host-authorized-wrap.diff`: ToolRegistry::wrap_host_authorized lets an embedding app that replaces a tool with its own implementation authorize the calls the driver admits only in unrestricted mode, with its own check, so unrestricted mode can stay off.
 - `patches/0005-off-space-window-resolver.diff`: a host off-Space window resolver (ax::bindings::set_off_space_window_resolver) used in place of the built-in remote-token probe, so an embedding app can reach windows on another Space with element ids it remembers and a scan that resumes where it stopped.
+- `patches/0006-window-change-report.diff`: a host setting (CUA_DRIVER_WINDOW_CHANGE_REPORT_MS) for how long an action's result waits for a window change, so an embedding app whose agents read the window again after each action gets results back sooner while the focus-steal protection keeps its whole timeout.
 <!-- sync:end -->
 
 ## Where the driver keeps state

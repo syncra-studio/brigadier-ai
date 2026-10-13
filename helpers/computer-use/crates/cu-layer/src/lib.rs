@@ -47,6 +47,11 @@ const FIXED: &[(&str, &str)] = &[
     // Standard permissions, and the unrestricted mode can't be switched on.
     ("CUA_DRIVER_PERMISSION_MODE", "standard"),
     ("CUA_DRIVER_DISABLE_UNRESTRICTED", "1"),
+    // An action's result looks for a new window once instead of waiting for
+    // one: agents read the window again anyway, a late window is reported on
+    // the next result, and the protection against an app coming to the front
+    // still runs its whole time (patch 0006).
+    ("CUA_DRIVER_WINDOW_CHANGE_REPORT_MS", "0"),
 ];
 
 /// Variables that would widen what the driver does; always removed.

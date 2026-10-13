@@ -207,6 +207,26 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// action that opened nothing paid the whole deadline.
 const REPORT_WINDOW: Duration = Duration::from_millis(300);
 
+/// Daemon-launch override of [`REPORT_WINDOW`], in milliseconds. A host that
+/// reads the window again after each action can set it lower (even `0`, one
+/// read) so results return sooner; the focus-steal protection still runs for
+/// the whole observation timeout, and a late window is still reported on the
+/// next action's result.
+pub const WINDOW_CHANGE_REPORT_ENV: &str = "CUA_DRIVER_WINDOW_CHANGE_REPORT_MS";
+
+/// [`REPORT_WINDOW`], or the host's [`WINDOW_CHANGE_REPORT_ENV`] when it is a
+/// whole number of milliseconds below it. Read once per process.
+fn report_window() -> Duration {
+    static REPORT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *REPORT.get_or_init(|| {
+        std::env::var(WINDOW_CHANGE_REPORT_ENV)
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .map_or(REPORT_WINDOW, |report| report.min(REPORT_WINDOW))
+    })
+}
+
 /// A late change older than this is not reported on a later result.
 const LATE_REPORT_MAX_AGE: Duration = Duration::from_secs(10);
 
@@ -402,7 +422,8 @@ impl Snapshot {
     /// Unset or unparsable values keep the defaults, so public callers see
     /// no behavior change.
     ///
-    /// The result waits at most [`REPORT_WINDOW`] when nothing changes; the
+    /// The result waits at most [`REPORT_WINDOW`] (or the host's
+    /// [`WINDOW_CHANGE_REPORT_ENV`]) when nothing changes; the
     /// rest of the deadline runs detached with the wildcard suppression lease
     /// still held, until the driver's next action or intentional activation
     /// ends it ([`end_tail`]). A window that shows during that remainder is
@@ -433,7 +454,7 @@ impl Snapshot {
             return Changes::not_polled().with_earlier(earlier);
         }
         let started = Instant::now();
-        let report = REPORT_WINDOW.min(bounds.timeout);
+        let report = report_window().min(bounds.timeout);
         let mut observe = observe;
         let changes = match self.poll_until(started + report, bounds.poll, &mut observe) {
             Ok(changes) => changes,
