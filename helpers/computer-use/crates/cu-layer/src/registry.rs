@@ -50,6 +50,7 @@ pub fn build(options: Options) -> Result<Arc<ToolRegistry>, String> {
         crate::page::install(&mut registry);
         crate::scroll::install(&mut registry);
         crate::hotkey::install(&mut registry);
+        crate::web_typing::install(&mut registry);
         crate::launch::install(&mut registry);
         stop_recording_when_session_ends(&mut registry);
         crate::guard::install(&mut registry);

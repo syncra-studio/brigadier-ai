@@ -16,6 +16,7 @@ pub mod cursor_motion;
 pub mod focus_policy;
 pub mod guard;
 pub mod hotkey;
+pub mod key_window;
 #[cfg(target_os = "macos")]
 pub mod launch;
 pub mod lookup;
@@ -32,6 +33,7 @@ pub mod scroll;
 pub mod target_policy;
 pub mod text;
 pub mod tokens;
+pub mod web_typing;
 #[cfg(target_os = "macos")]
 pub mod window_list;
 
