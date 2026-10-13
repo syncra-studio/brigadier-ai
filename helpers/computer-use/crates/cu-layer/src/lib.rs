@@ -10,6 +10,7 @@
 #![allow(clippy::result_large_err)]
 
 pub mod catalog;
+pub mod focus_policy;
 pub mod guard;
 pub mod lookup;
 pub mod never_front;
