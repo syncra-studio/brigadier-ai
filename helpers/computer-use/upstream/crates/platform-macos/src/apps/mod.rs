@@ -133,21 +133,57 @@ fn bundle_root_of_executable(path: &str) -> Option<&str> {
 fn is_background_bundle(app_path: &str) -> bool {
     let plist = format!("{app_path}/Contents/Info.plist");
     for key in ["LSUIElement", "LSBackgroundOnly"] {
-        let out = Command::new("/usr/bin/plutil")
-            .args(["-extract", key, "raw", "-o", "-", &plist])
-            .output();
-        if let Ok(out) = out {
-            if out.status.success() {
-                let raw = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
-                // The key is written as both a boolean and a "1"/"0" string in
-                // the wild; plutil renders the boolean as true/false.
-                if raw == "1" || raw == "true" {
-                    return true;
-                }
+        if let Some(raw) = info_plist_value(std::path::Path::new(&plist), key) {
+            let raw = raw.trim().to_lowercase();
+            // The key is written as both a boolean and a "1"/"0" string in
+            // the wild; booleans render as true/false.
+            if raw == "1" || raw == "true" {
+                return true;
             }
         }
     }
     false
+}
+
+/// One value of a bundle's `Info.plist`, rendered as `plutil -extract <key>
+/// raw` prints it: a string as is, a boolean as `true`/`false`, a number as
+/// its digits. `None` when the file, the key or a scalar value is missing.
+///
+/// Read in process: listing apps reads a few keys from every running and
+/// installed bundle, and a `plutil` process per key made one `list_apps`
+/// (and the running-app snapshot before each `launch_app`) take most of a
+/// second.
+fn info_plist_value(plist_path: &std::path::Path, key: &str) -> Option<String> {
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::data::CFData;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::propertylist::{
+        create_with_data, kCFPropertyListImmutable, CFPropertyList,
+    };
+    use core_foundation::string::CFString;
+
+    let bytes = std::fs::read(plist_path).ok()?;
+    let (list, _) = create_with_data(CFData::from_buffer(&bytes), kCFPropertyListImmutable).ok()?;
+    // SAFETY: a property list just created for us; the create rule owns it.
+    let list = unsafe { CFPropertyList::wrap_under_create_rule(list) };
+    let dict: CFDictionary = list.downcast_into()?;
+    let key = CFString::new(key);
+    let value = dict.find(key.as_CFTypeRef())?;
+    // SAFETY: a value of a live dictionary; the get rule retains it.
+    let value = unsafe { CFType::wrap_under_get_rule(*value) };
+    if let Some(text) = value.downcast::<CFString>() {
+        return Some(text.to_string());
+    }
+    if let Some(flag) = value.downcast::<CFBoolean>() {
+        return Some(bool::from(flag).to_string());
+    }
+    let number = value.downcast::<CFNumber>()?;
+    number
+        .to_i64()
+        .map(|n| n.to_string())
+        .or_else(|| number.to_f64().map(|n| n.to_string()))
 }
 
 /// Where a user-launchable application lives. Mirrors the roots
@@ -686,18 +722,11 @@ pub(crate) fn locate_by_name(name: &str) -> Option<AppLocator> {
 }
 
 /// Read `CFBundleIdentifier` from an `.app` bundle's `Info.plist`.
-/// Falls back to shelling out to `plutil` (already used elsewhere in
-/// this file) to avoid pulling in a plist crate just for this.
 fn bundle_id_for_app_path(app_path: &str) -> Option<String> {
     let plist = format!("{app_path}/Contents/Info.plist");
-    let out = Command::new("/usr/bin/plutil")
-        .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-", &plist])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let bid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let bid = info_plist_value(std::path::Path::new(&plist), "CFBundleIdentifier")?
+        .trim()
+        .to_string();
     if bid.is_empty() {
         None
     } else {
@@ -874,67 +903,24 @@ fn fs_last_used(path: &std::path::Path) -> Option<String> {
 }
 
 fn read_app_plist(plist_path: &std::path::Path) -> Option<AppInfo> {
-    let bundle_id_out = Command::new("plutil")
-        .args([
-            "-extract",
-            "CFBundleIdentifier",
-            "raw",
-            "-o",
-            "-",
-            plist_path.to_str()?,
-        ])
-        .output()
-        .ok()?;
-    if !bundle_id_out.status.success() {
-        return None;
-    }
-    let bundle_id = String::from_utf8_lossy(&bundle_id_out.stdout)
-        .trim()
-        .to_string();
-    if bundle_id.is_empty() {
-        return None;
-    }
+    let read = |key: &str| {
+        info_plist_value(plist_path, key)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let bundle_id = read("CFBundleIdentifier")?;
 
-    let name_out = Command::new("plutil")
-        .args([
-            "-extract",
-            "CFBundleDisplayName",
-            "raw",
-            "-o",
-            "-",
-            plist_path.to_str()?,
-        ])
-        .output()
-        .ok();
-    let name = name_out
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
+    let name = read("CFBundleDisplayName")
+        // Fallback: CFBundleName.
+        .or_else(|| read("CFBundleName"))
         .unwrap_or_else(|| {
-            // Fallback: CFBundleName.
-            Command::new("plutil")
-                .args([
-                    "-extract",
-                    "CFBundleName",
-                    "raw",
-                    "-o",
-                    "-",
-                    plist_path.to_str().unwrap_or(""),
-                ])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| {
-                    plist_path
-                        .parent()
-                        .and_then(|p| p.parent())
-                        .and_then(|p| p.file_stem())
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_string()
-                })
+            plist_path
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.file_stem())
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string()
         });
 
     if name.is_empty() {
@@ -1049,9 +1035,50 @@ pub fn format_app_list(apps: &[AppInfo]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        all_pids, bundle_root_of_executable, finder_folder_handoff, merge_app_lists, path_of_pid,
-        running_apps_from_processes, AppInfo,
+        all_pids, bundle_root_of_executable, finder_folder_handoff, info_plist_value,
+        merge_app_lists, path_of_pid, running_apps_from_processes, AppInfo,
     };
+
+    #[test]
+    fn info_plist_values_read_like_plutil_raw() {
+        let dir = std::env::temp_dir().join(format!("info-plist-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plist = dir.join("Info.plist");
+        std::fs::write(
+            &plist,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.example.app</string>
+<key>LSUIElement</key><true/>
+<key>LSBackgroundOnly</key><integer>0</integer>
+<key>CFBundleDocumentTypes</key><array/>
+</dict></plist>"#,
+        )
+        .unwrap();
+        let value = |key| info_plist_value(&plist, key);
+        assert_eq!(
+            value("CFBundleIdentifier").as_deref(),
+            Some("com.example.app")
+        );
+        assert_eq!(value("LSUIElement").as_deref(), Some("true"));
+        assert_eq!(value("LSBackgroundOnly").as_deref(), Some("0"));
+        assert_eq!(value("CFBundleDocumentTypes"), None);
+        assert_eq!(value("CFBundleName"), None);
+        assert_eq!(
+            info_plist_value(&dir.join("none.plist"), "CFBundleIdentifier"),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        // A real, binary Info.plist.
+        let calculator =
+            std::path::Path::new("/System/Applications/Calculator.app/Contents/Info.plist");
+        if calculator.exists() {
+            assert_eq!(
+                info_plist_value(calculator, "CFBundleIdentifier").as_deref(),
+                Some("com.apple.calculator")
+            );
+        }
+    }
     use std::collections::HashSet;
 
     fn app(name: &str, pid: i32, bundle: Option<&str>, running: bool) -> AppInfo {
