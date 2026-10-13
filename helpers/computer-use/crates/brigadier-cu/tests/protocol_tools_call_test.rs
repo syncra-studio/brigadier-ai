@@ -291,9 +291,16 @@ fn get_window_state_returns_both_with_opt_out() {
     }));
     let resp = d.recv();
     let windows = resp["result"]["structuredContent"]["windows"].as_array();
+    // The helper refuses to read its own windows (such as an agent cursor
+    // overlay a running helper shows), so skip those.
     let first_win = windows.and_then(|a| {
-        a.iter()
-            .find(|w| w["pid"].as_i64().is_some() && w["window_id"].as_u64().is_some())
+        a.iter().find(|w| {
+            w["pid"].as_i64().is_some()
+                && w["window_id"].as_u64().is_some()
+                && !w["app_name"]
+                    .as_str()
+                    .is_some_and(|n| n.contains("Computer Use"))
+        })
     });
 
     let Some(win) = first_win else {
