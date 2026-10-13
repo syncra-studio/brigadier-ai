@@ -16,6 +16,7 @@ pub mod browser;
 pub mod catalog;
 pub mod focus_policy;
 pub mod guard;
+pub mod hotkey;
 pub mod lookup;
 pub mod never_front;
 #[cfg(target_os = "macos")]
