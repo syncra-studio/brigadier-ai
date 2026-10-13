@@ -227,6 +227,7 @@ fn walk_tree_bounded_with_mode(
     // Set to true only when walk_element actually stops early due to the cap —
     // avoids a false-positive when the tree naturally ends on exactly the cap.
     let mut truncated = false;
+    WEB_AREA_REFRESHED.with(|f| f.set(false));
 
     unsafe {
         let app_elem = AXUIElementCreateApplication(pid);
@@ -428,6 +429,26 @@ fn should_index_node(role: &str, is_actionable: bool, has_content: bool, mode: W
     }
 }
 
+thread_local! {
+    static WEB_AREA_REFRESHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A web view whose window isn't painting (in the background or on another
+/// Space) holds back its accessibility changes until it next handles an
+/// event, so without this the tree shows the page as it was one action ago:
+/// text just typed or a dialog just opened is missing. Asking the page to
+/// scroll itself into view changes nothing on screen but makes the renderer
+/// send what it held back. Done once per walk, before reading the page.
+unsafe fn refresh_web_area(element: AXUIElementRef) {
+    if WEB_AREA_REFRESHED.with(|f| f.replace(true)) {
+        return;
+    }
+    let _ = crate::ax::bindings::perform_action(element, "AXScrollToVisible");
+    // The renderer answers within a few ms; a short wait keeps the first
+    // nodes read from racing it.
+    std::thread::sleep(std::time::Duration::from_millis(15));
+}
+
 #[allow(clippy::too_many_arguments)]
 unsafe fn walk_element(
     element: AXUIElementRef,
@@ -457,6 +478,9 @@ unsafe fn walk_element(
     *visited_count += 1;
 
     let role = copy_string_attr(element, "AXRole").unwrap_or_else(|| "AXUnknown".into());
+    if role == "AXWebArea" {
+        refresh_web_area(element);
+    }
 
     // Skip pure layout containers that have no interesting content.
     if should_collapse_layout_container(&role, mode) {
