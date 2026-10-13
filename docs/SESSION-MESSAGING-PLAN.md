@@ -144,8 +144,9 @@ Rules:
   - approve an outline;
   - count as the "human message" that resets the hop rule (§5.5).
 - **The envelope** the receiving CLI sees:
-  - one header line: `[message from session "‹title›" in ‹project› · id ‹message_id›]`, plus `· reply to ‹id›` for a
-    reply;
+  - one header line: `[message from session "‹title›" in ‹project› · session ‹session_id› · id ‹message_id›]`, plus
+    `· reply to ‹id›` for a reply. The session id is what a reply's `to` names, so the receiver needn't look it up
+    (as built: a live receiver without it guessed the message id as `to` and was refused);
   - then the text.
 
   The thread's instructions say what that header means (§3).

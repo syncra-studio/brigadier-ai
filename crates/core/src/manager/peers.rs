@@ -218,11 +218,19 @@ impl Delivery {
 }
 
 /// The header line of a message as the receiving CLI reads it.
-fn header(title: &str, project: &str, message_id: &str, reply_to: Option<&str>) -> String {
+fn header(
+    title: &str,
+    project: &str,
+    from: &ConversationId,
+    message_id: &str,
+    reply_to: Option<&str>,
+) -> String {
     let reply = reply_to
         .map(|original| format!(" · reply to {original}"))
         .unwrap_or_default();
-    format!("[message from session \"{title}\" in {project} · id {message_id}{reply}]")
+    format!(
+        "[message from session \"{title}\" in {project} · session {from} · id {message_id}{reply}]"
+    )
 }
 
 impl SessionManager {
@@ -623,7 +631,13 @@ impl SessionManager {
             task_id: None,
             text: format!(
                 "{}\n{text}",
-                header(&title, &project, message_id, record.reply_to.as_deref())
+                header(
+                    &title,
+                    &project,
+                    &record.peer,
+                    message_id,
+                    record.reply_to.as_deref()
+                )
             ),
         };
         let chain = TurnChain {

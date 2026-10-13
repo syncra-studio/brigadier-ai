@@ -708,7 +708,8 @@ pub struct ListSessions {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MessageSession {
-    /// The session's id, from list_sessions.
+    /// The session's id, from list_sessions, or for a reply the `session ‹id›` of the
+    /// message's header (never the message's own id).
     pub to: String,
     /// Self-contained plain prose: the other session doesn't share your context.
     pub text: String,

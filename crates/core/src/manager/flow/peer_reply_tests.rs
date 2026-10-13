@@ -79,7 +79,7 @@ async fn a_reply_is_steered_into_the_turn_that_asked() {
     let input = read.lock().unwrap().clone().unwrap();
     assert!(
         input.contains(&format!(
-            "[message from session \"API work\" in Flow · id {answer} · reply to {question}]\nIt's `name`."
+            "[message from session \"API work\" in Flow · session {api} · id {answer} · reply to {question}]\nIt's `name`."
         )),
         "{input}"
     );

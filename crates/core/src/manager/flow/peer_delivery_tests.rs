@@ -74,7 +74,8 @@ async fn a_message_starts_a_turn_of_an_idle_session_in_another_project() {
     assert_eq!(inputs.len(), 1, "{inputs:?}");
     assert!(
         inputs[0].contains(&format!(
-            "[message from session \"Flow\" in Flow · id {id}]\n{text}"
+            "[message from session \"Flow\" in Flow · session {} · id {id}]\n{text}",
+            flow.conversation
         )),
         "{}",
         inputs[0]
