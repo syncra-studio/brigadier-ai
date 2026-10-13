@@ -37,6 +37,15 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 platform-macos = { path = "../platform-macos" }
 core-foundation = "0.10"
+# The permissions panel and the AppKit main loop.
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = [
+    "NSArray", "NSBundle", "NSString", "NSDictionary", "NSRunLoop",
+    "NSThread", "NSObject", "NSValue", "NSGeometry", "NSDate", "NSNotification",
+] }
+# The live screen-capture readiness probe; the same version the old driver
+# crate uses until the switch.
+screencapturekit = { version = "6", features = ["macos_15_0"] }
 
 
 [dev-dependencies]

@@ -16,7 +16,7 @@
 //! envelope, same tool semantics.
 //!
 //! Why this lives in `brigadier-cu` and not `mcp-server`:
-//!   `cu_core::server::run` already speaks JSON-RPC over stdio
+//!   `crate::mcp::run` already speaks JSON-RPC over stdio
 //!   against an in-process `ToolRegistry`. The proxy speaks the same
 //!   protocol on the client side but the server side is the daemon's
 //!   line-delimited JSON UDS protocol, owned by `crate::serve`.
@@ -25,7 +25,8 @@
 
 use std::sync::Arc;
 
-use cu_core::protocol::{initialize_result, Request, Response};
+use crate::mcp::initialize_result;
+use cu_core::protocol::{Request, Response};
 #[cfg(target_os = "macos")]
 use cu_core::protocol::{ToolCall, ToolResult};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -127,7 +128,7 @@ fn with_proxy_tools(mut tools_list: serde_json::Value) -> serde_json::Value {
 /// `socket_path`, and writes the daemon's response back as a proper
 /// JSON-RPC envelope.
 ///
-/// Mirrors `cu_core::server::run`'s control flow exactly — same
+/// Mirrors `crate::mcp::run`'s control flow exactly — same
 /// EOF + parse-error + notification handling — only the per-method
 /// branches change.
 ///
@@ -1026,7 +1027,7 @@ fn admit_bootstrap_tool_call(
         idempotent: false,
         open_world: false,
     };
-    if let Err(result) = cu_core::tool::validate_dispatch_args(&def, &call.args) {
+    if let Err(result) = crate::mcp::validate_dispatch_args(&def, &call.args) {
         return BootstrapToolCallAdmission::Rejected(result);
     }
 
@@ -1305,7 +1306,7 @@ fn extract_permission_readiness(v: &serde_json::Value) -> Option<(bool, bool, Op
 }
 
 /// JSON-RPC method dispatcher for the proxy. Mirrors
-/// `cu_core::server::handle_request`:
+/// `crate::mcp::handle_request`:
 ///   - `initialize`     → static `initialize_result()` (same envelope
 ///                        the in-process path returns; the daemon's
 ///                        identity is hidden from the MCP client).
@@ -1371,7 +1372,7 @@ fn response_from_tool_result(id: serde_json::Value, result: ToolResult) -> Respo
 /// Error mapping:
 ///   - Tool ran and reported failure (`!resp.ok`, including unknown
 ///     tool / bad params) → JSON-RPC success with `result.isError =
-///     true`. Mirrors the in-process `cu_core::server` path so
+///     true`. Mirrors the in-process `crate::mcp` path so
 ///     MCP clients see identical envelopes either way.
 ///   - Transport failure (UDS unreachable, decode error, blocking
 ///     task panic) → JSON-RPC error (`-32603`), because the MCP
@@ -1714,7 +1715,7 @@ fn daemon_response_to_mcp(
         // A non-`ok` daemon response means the tool call reached the
         // daemon and the daemon decided the tool returned an error
         // (or rejected the call). That's tool-level, not transport-
-        // level, so the in-process `cu_core::server` would surface
+        // level, so the in-process `crate::mcp` would surface
         // it as `Response::ok` with `isError: true`. Mirror that
         // shape here so MCP clients see identical envelopes either
         // way — CodeRabbit #2.

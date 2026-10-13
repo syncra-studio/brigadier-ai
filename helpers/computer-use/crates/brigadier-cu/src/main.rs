@@ -30,7 +30,14 @@
 mod activity;
 mod activity_daemon;
 mod agent_apps;
+#[cfg(target_os = "macos")]
+mod appkit;
 mod bundle;
+// Moved whole from the old driver crate; a few of its items have no caller
+// here yet.
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+mod capture_probe;
 mod cli;
 mod doctor;
 mod env;
@@ -38,7 +45,13 @@ mod home;
 mod host;
 mod journal;
 mod lifecycle;
+mod mcp;
 mod owner_watch;
+// Moved whole from the old driver crate; a few of its items have no caller
+// here yet.
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+mod permissions;
 mod proxy;
 mod responsibility;
 mod scope_args;
@@ -79,7 +92,7 @@ fn init_logging() {
 fn maybe_init_pip() {
     // The preview captures the screen.
     #[cfg(target_os = "macos")]
-    if platform_macos::permissions::tcc_off_for_tests() {
+    if permissions::tcc_off_for_tests() {
         return;
     }
     let cfg = match pip_preview::default_config_path() {
@@ -157,26 +170,6 @@ fn finish_appkit_worker(handle: std::thread::JoinHandle<i32>) {
     let exit_code = handle.join().unwrap_or(101);
     if exit_code != 0 {
         std::process::exit(exit_code);
-    }
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod appkit_worker_tests {
-    use super::run_guarded_appkit_worker;
-
-    #[test]
-    fn worker_panic_becomes_failure_status_instead_of_stranding_main_loop() {
-        assert_eq!(run_guarded_appkit_worker("test", || {}), 0);
-        platform_macos::pip::prepare_appkit_main_loop();
-        platform_macos::pip::mark_appkit_main_loop_available();
-        let worker = std::thread::spawn(|| {
-            let status = run_guarded_appkit_worker("test", || panic!("worker failed"));
-            platform_macos::pip::request_appkit_main_loop_stop();
-            status
-        });
-        assert_eq!(worker.join().unwrap(), 101);
-        assert!(platform_macos::pip::appkit_main_loop_stop_requested());
-        assert!(!platform_macos::pip::appkit_main_loop_available());
     }
 }
 
@@ -283,19 +276,19 @@ fn main() {
                 // Browser automation dispatches NSAppleScript to the AppKit
                 // main queue. Run the one-shot tool on a worker while main
                 // pumps that queue, then terminate with the tool's exit code.
-                platform_macos::pip::prepare_appkit_main_loop();
-                platform_macos::pip::mark_appkit_main_loop_available();
+                appkit::prepare_appkit_main_loop();
+                appkit::mark_appkit_main_loop_available();
                 let call_handle = std::thread::Builder::new()
                     .name("cu-call".into())
                     .spawn(move || {
                         let exit_code = run_guarded_appkit_worker("call", || {
                             cli::run_call(reg, &tool, json_args, screenshot_out_file, socket);
                         });
-                        platform_macos::pip::request_appkit_main_loop_stop();
+                        appkit::request_appkit_main_loop_stop();
                         exit_code
                     })
                     .expect("spawn call thread");
-                platform_macos::pip::run_appkit_main_loop();
+                appkit::run_appkit_main_loop();
                 finish_appkit_worker(call_handle);
             } else {
                 // Headless calls cannot target GUI browsers and must avoid
@@ -311,8 +304,7 @@ fn main() {
             owner_pid,
         } => {
             responsibility::reexec_disclaimed_if_needed();
-            let gate_opts =
-                platform_macos::permissions::GateOpts::from_env_and_flag(no_permissions_gate);
+            let gate_opts = permissions::GateOpts::from_env_and_flag(no_permissions_gate);
             cu_core::recording::set_screenshot_fn(|window_id, pid| {
                 if let Some(wid) = window_id {
                     platform_macos::capture::screenshot_window_bytes(wid as u32).ok()
@@ -362,7 +354,7 @@ fn main() {
             let pid_path = cli::daemon_pid_file_path(socket.as_deref());
             let sp = cli::daemon_socket_path(socket);
             let has_graphic_access = platform_macos::session::has_graphic_access();
-            platform_macos::pip::prepare_appkit_main_loop();
+            appkit::prepare_appkit_main_loop();
 
             // Bind the Unix socket FIRST, on a background thread, BEFORE
             // running the (blocking) permissions gate (#1761).
@@ -397,7 +389,7 @@ fn main() {
                             owner_pid,
                         );
                     });
-                    platform_macos::pip::request_appkit_main_loop_stop();
+                    appkit::request_appkit_main_loop_stop();
                     exit_code
                 })
                 .expect("spawn serve thread");
@@ -413,7 +405,7 @@ fn main() {
             // and the daemon continues to serve — individual tool calls
             // will then fail with the underlying TCC error, mirroring
             // Swift's "user closed the panel" fallback.
-            if let Err(e) = platform_macos::permissions::run_if_needed(gate_opts) {
+            if let Err(e) = permissions::run_if_needed(gate_opts) {
                 eprintln!("[brigadier-cu] permissions gate: {e}");
                 eprintln!(
                     "[brigadier-cu] continuing — tool calls touching AX or \
@@ -429,7 +421,7 @@ fn main() {
             // whenever a Window Server is available. Headless daemons retain
             // the old join behavior and never touch NSApplication.
             if has_graphic_access {
-                platform_macos::pip::mark_appkit_main_loop_available();
+                appkit::mark_appkit_main_loop_available();
                 lifecycle::start_main_loop_heartbeat();
             }
             if cursor_cfg.enabled && has_graphic_access {
@@ -441,7 +433,7 @@ fn main() {
                 // on its background thread regardless.
                 platform_macos::cursor::overlay::run_on_main_thread();
             } else if has_graphic_access {
-                platform_macos::pip::run_appkit_main_loop();
+                appkit::run_appkit_main_loop();
             }
             finish_appkit_worker(serve_handle);
             return;
@@ -572,9 +564,9 @@ fn main() {
     maybe_init_pip();
 
     let has_graphic_access = platform_macos::session::has_graphic_access();
-    platform_macos::pip::prepare_appkit_main_loop();
+    appkit::prepare_appkit_main_loop();
     if has_graphic_access {
-        platform_macos::pip::mark_appkit_main_loop_available();
+        appkit::mark_appkit_main_loop_available();
     }
     let mcp_handle = std::thread::Builder::new()
         .name("cu-mcp".into())
@@ -590,14 +582,14 @@ fn main() {
                     let registry = Arc::new(build_macos_registry_with_compat(compat));
                     // Wire up replay tool's back-reference to the registry.
                     registry.init_self_weak();
-                    let result = cu_core::server::run(registry.clone()).await;
+                    let result = crate::mcp::run(registry.clone()).await;
                     if let Err(e) = result {
                         tracing::error!("MCP server error: {e}");
                     }
                     registry.remove_state_file();
                 });
             });
-            platform_macos::pip::request_appkit_main_loop_stop();
+            appkit::request_appkit_main_loop_stop();
             exit_code
         })
         .expect("spawn mcp thread");
@@ -607,7 +599,7 @@ fn main() {
     if enabled && has_graphic_access {
         platform_macos::cursor::overlay::run_on_main_thread();
     } else if has_graphic_access {
-        platform_macos::pip::run_appkit_main_loop();
+        appkit::run_appkit_main_loop();
     }
     finish_appkit_worker(mcp_handle);
 }

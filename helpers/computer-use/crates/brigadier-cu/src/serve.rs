@@ -1336,10 +1336,10 @@ fn screen_capture_verification_response(probe: Result<bool, serde_json::Value>) 
 fn request_validated_system_permission(permission: &str) {
     match permission {
         "accessibility" => {
-            let _ = platform_macos::permissions::request_accessibility();
+            let _ = crate::permissions::request_accessibility();
         }
         "screen_recording" => {
-            let _ = platform_macos::permissions::request_screen_recording();
+            let _ = crate::permissions::request_screen_recording();
         }
         _ => unreachable!("permission was validated before prompting"),
     }
@@ -1407,9 +1407,9 @@ fn daemon_permission_attribution() -> &'static str {
 
 #[cfg(target_os = "macos")]
 /// Daemon requests that never reach accessibility or screen capture. A test
-/// daemon (see `platform_macos::permissions::NO_TCC_FOR_TESTS_ENV`) answers
+/// daemon (see `crate::permissions::NO_TCC_FOR_TESTS_ENV`) answers
 /// only these; `call` itself runs only the tools in
-/// `platform_macos::permissions::TCC_FREE_TOOLS`.
+/// `crate::permissions::TCC_FREE_TOOLS`.
 #[cfg(target_os = "macos")]
 const TCC_FREE_METHODS: &[&str] = &[
     "shutdown",
@@ -1427,36 +1427,34 @@ const TCC_FREE_METHODS: &[&str] = &[
 
 #[cfg(target_os = "macos")]
 fn tcc_free_test_refusal(req: &DaemonRequest) -> Option<DaemonResponse> {
-    (platform_macos::permissions::tcc_off_for_tests()
-        && !TCC_FREE_METHODS.contains(&req.method.as_str()))
-    .then(|| {
-        DaemonResponse::err(
-            format!(
+    (crate::permissions::tcc_off_for_tests() && !TCC_FREE_METHODS.contains(&req.method.as_str()))
+        .then(|| {
+            DaemonResponse::err(
+                format!(
                 "{} may need accessibility or screen capture, which this test daemon never uses",
                 req.method
             ),
-            1,
-        )
-    })
+                1,
+            )
+        })
 }
 
 fn daemon_permission_status(
     profile: DaemonProfile,
     external_permission_ready: bool,
 ) -> serde_json::Value {
-    // This crate's unit tests serve in-process, where the switch in
-    // platform_macos is off at compile time.
+    // This crate's unit tests serve in-process and never ask macOS.
     let status = if cfg!(test) {
-        platform_macos::permissions::PermissionsStatus {
+        crate::permissions::PermissionsStatus {
             accessibility: false,
             screen_recording: false,
         }
     } else {
-        platform_macos::permissions::current_status()
+        crate::permissions::current_status()
     };
     crate::lifecycle::record_permissions(status.accessibility, status.screen_recording);
-    let panel = platform_macos::permissions::panel::lifecycle();
-    let recovery = platform_macos::permissions::gate::recovery_lifecycle();
+    let panel = crate::permissions::panel::lifecycle();
+    let recovery = crate::permissions::gate::recovery_lifecycle();
     serde_json::json!({
         "accessibility": status.accessibility,
         "screen_recording": status.screen_recording,
@@ -1467,7 +1465,7 @@ fn daemon_permission_status(
             "visible": panel.visible,
             "completion": panel.completion,
             "last_outcome": panel.last_outcome.map(
-                platform_macos::permissions::panel::outcome_name
+                crate::permissions::panel::outcome_name
             ),
         },
         "recovery": {
@@ -1937,7 +1935,7 @@ pub async fn run_serve_with_owner(
                                 #[cfg(target_os = "macos")]
                                 {
                                     let prepared =
-                                        platform_macos::permissions::gate::prepare_interactive_recovery();
+                                        crate::permissions::gate::prepare_interactive_recovery();
                                     match prepared {
                                         Ok(request) => {
                                             let resp = DaemonResponse::ok(serde_json::json!({
@@ -1949,7 +1947,7 @@ pub async fn run_serve_with_owner(
                                                 (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                             ).await;
                                             let _ = writer.flush().await;
-                                            platform_macos::permissions::gate::dispatch_prepared_interactive_recovery(
+                                            crate::permissions::gate::dispatch_prepared_interactive_recovery(
                                                 request,
                                             );
                                         }
@@ -1966,7 +1964,7 @@ pub async fn run_serve_with_owner(
                                 #[cfg(target_os = "macos")]
                                 {
                                     let available =
-                                        platform_macos::permissions::gate::ensure_process_refresh_available();
+                                        crate::permissions::gate::ensure_process_refresh_available();
                                     match available {
                                         Ok(()) => {
                                             let resp = DaemonResponse::ok(serde_json::json!({
@@ -1978,7 +1976,7 @@ pub async fn run_serve_with_owner(
                                                 (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                             ).await;
                                             let _ = writer.flush().await;
-                                            platform_macos::permissions::gate::dispatch_process_refresh();
+                                            crate::permissions::gate::dispatch_process_refresh();
                                         }
                                         Err(error) => {
                                             let resp = DaemonResponse::err(error.to_string(), 1);
@@ -2191,7 +2189,7 @@ pub async fn run_serve_with_owner(
                                 #[cfg(target_os = "macos")]
                                 let resp = {
                                     let probe = tokio::task::spawn_blocking(
-                                        platform_macos::tools::verify_screen_capture_ready,
+                                        crate::capture_probe::verify_screen_capture_ready,
                                     )
                                     .await
                                     .unwrap_or(Ok(false))
