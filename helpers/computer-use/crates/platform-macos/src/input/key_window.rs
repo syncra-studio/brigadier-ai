@@ -14,11 +14,14 @@ use std::collections::HashSet;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
-use core_foundation::base::{CFRelease, CFTypeRef};
+use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
+use core_foundation::string::CFString;
 
 use crate::ax::bindings::{
-    ax_get_window_id, copy_ax_windows, copy_element_attr, copy_string_attr, focused_element_of_pid,
-    set_bool_attr_true, AXUIElementCreateApplication, AXUIElementRef,
+    ax_get_window_id, copy_ax_windows, copy_element_attr, copy_string_attr,
+    kAXErrorAttributeUnsupported, kAXErrorNoValue, kAXErrorSuccess, set_bool_attr_true, AXError,
+    AXUIElementCopyAttributeValue, AXUIElementCreateApplication, AXUIElementGetTypeID,
+    AXUIElementRef, AXUIElementSetMessagingTimeout,
 };
 
 /// How many times the named window is made main before giving up.
@@ -89,30 +92,71 @@ unsafe fn windows_holding(element: AXUIElementRef) -> Vec<u32> {
     ids
 }
 
+/// How long the app gets to say where its focus is.
+const ANSWER_SECS: f32 = 1.0;
+
+/// The element `attr` of `element`: `Ok(None)` when the app has none,
+/// `Err` when it didn't answer.
+///
+/// # Safety
+/// `element` must be a valid AX element.
+unsafe fn copy_focus_attr(
+    element: AXUIElementRef,
+    attr: &str,
+) -> Result<Option<AXUIElementRef>, AXError> {
+    let name = CFString::new(attr);
+    let mut value: CFTypeRef = std::ptr::null();
+    let error = AXUIElementCopyAttributeValue(element, name.as_concrete_TypeRef(), &mut value);
+    if error == kAXErrorSuccess && !value.is_null() {
+        if core_foundation::base::CFGetTypeID(value) == AXUIElementGetTypeID() {
+            return Ok(Some(value as AXUIElementRef));
+        }
+        CFRelease(value);
+        return Ok(None);
+    }
+    if [
+        kAXErrorSuccess,
+        kAXErrorNoValue,
+        kAXErrorAttributeUnsupported,
+    ]
+    .contains(&error)
+    {
+        Ok(None)
+    } else {
+        Err(error)
+    }
+}
+
 /// Where keystrokes posted to `pid` land now: the windows holding its
 /// focused element, else its focused window. Empty when the app reports
-/// neither.
-fn focus_windows(pid: i32) -> Vec<u32> {
+/// neither; `Err` when it didn't answer, so where they land is unknown.
+fn focus_windows(pid: i32) -> Result<Vec<u32>, AXError> {
     unsafe {
-        if let Some(focused) = focused_element_of_pid(pid) {
-            let ids = windows_holding(focused);
-            CFRelease(focused as CFTypeRef);
-            if !ids.is_empty() {
-                return ids;
-            }
-        }
         let app = AXUIElementCreateApplication(pid);
         if app.is_null() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let window = copy_element_attr(app, "AXFocusedWindow");
+        AXUIElementSetMessagingTimeout(app, ANSWER_SECS);
+        let found = (|| {
+            if let Some(focused) = copy_focus_attr(app, "AXFocusedUIElement")? {
+                AXUIElementSetMessagingTimeout(focused, ANSWER_SECS);
+                let ids = windows_holding(focused);
+                CFRelease(focused as CFTypeRef);
+                if !ids.is_empty() {
+                    return Ok(ids);
+                }
+            }
+            Ok(match copy_focus_attr(app, "AXFocusedWindow")? {
+                Some(window) => {
+                    let ids = ax_get_window_id(window).into_iter().collect();
+                    CFRelease(window as CFTypeRef);
+                    ids
+                }
+                None => Vec::new(),
+            })
+        })();
         CFRelease(app as CFTypeRef);
-        let Some(window) = window else {
-            return Vec::new();
-        };
-        let ids = ax_get_window_id(window).into_iter().collect();
-        CFRelease(window as CFTypeRef);
-        ids
+        found
     }
 }
 
@@ -148,14 +192,21 @@ fn focus_is_in(focus: &[u32], window_id: u32) -> bool {
 /// Makes sure keystrokes posted to `pid` reach `window_id` (and `element` in
 /// it, when given), or fails without typing anything.
 pub(crate) fn ensure_in(pid: i32, window_id: u32, element: Option<usize>) -> anyhow::Result<()> {
-    let mut focus = focus_windows(pid);
+    let unanswered = |error: AXError| {
+        anyhow::anyhow!(
+            "the app did not answer when asked which of its windows has the keyboard focus \
+             (error {error}), so the keys could land in another window. Nothing was sent. \
+             Take a fresh get_window_state, then try again."
+        )
+    };
+    let mut focus = focus_windows(pid).map_err(unanswered)?;
     if focus_is_in(&focus, window_id) {
         return Ok(());
     }
     for _ in 0..ATTEMPTS {
         make_main(pid, window_id, element);
         std::thread::sleep(SETTLE);
-        focus = focus_windows(pid);
+        focus = focus_windows(pid).map_err(unanswered)?;
         if focus_is_in(&focus, window_id) {
             return Ok(());
         }
