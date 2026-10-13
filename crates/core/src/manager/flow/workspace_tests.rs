@@ -301,12 +301,14 @@ async fn the_watch_says_a_change_at_once_and_a_burst_a_few_times() {
     });
     let started = std::time::Instant::now();
     let mut writes = 0;
+    // When the last write began: on a loaded machine the sleep after it can outlast its say.
+    let mut last_write = started;
     while started.elapsed() < Duration::from_millis(1500) {
+        last_write = std::time::Instant::now();
         std::fs::write(repo.join(format!("generated/out-{writes}.txt")), "out\n").unwrap();
         writes += 1;
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let ended = std::time::Instant::now();
     tokio::time::sleep(Duration::from_millis(800)).await;
     listening.abort();
     let mut times = Vec::new();
@@ -320,8 +322,8 @@ async fn the_watch_says_a_change_at_once_and_a_burst_a_few_times() {
         times.len()
     );
     assert!(
-        times.last().is_some_and(|last| *last >= ended),
-        "said after the burst ended"
+        times.last().is_some_and(|last| *last >= last_write),
+        "said after the burst's last write"
     );
     flow.stop().await;
 }
