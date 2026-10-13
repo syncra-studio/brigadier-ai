@@ -1,0 +1,35 @@
+Why: ToolRegistry::wrap lets an embedding app put its own checks around a tool in place, so direct calls, run_steps steps and the registry's own re-routes all pass them.
+
+register() with an existing name drops the old tool and lists the name twice,
+and nothing hands the old tool back, so a host could only add checks in front
+of the registry, where run_steps and the click-to-menu re-route never pass.
+wrap(name, f) swaps the tool for f(previous) in place, after the registry's
+argument normalization and authorization. Upstreamable as is.
+
+diff --git a/crates/cua-driver-core/src/tool.rs b/crates/cua-driver-core/src/tool.rs
+index 7bf3a58a..effc1973 100644
+--- a/crates/cua-driver-core/src/tool.rs
++++ b/crates/cua-driver-core/src/tool.rs
+@@ -1280,6 +1280,22 @@ impl ToolRegistry {
+         self.tools.insert(name, tool);
+     }
+ 
++    /// Replace the tool registered as `name` with `wrap(previous)`, keeping
++    /// its place in `tools/list`. Every caller that reaches the registry
++    /// (transports, `run_steps`, re-routes inside the registry) then gets the
++    /// wrapper, after argument normalization and authorization. The wrapper
++    /// keeps the name it replaces. Returns `false`, and leaves the registry
++    /// unchanged, when no tool has that name.
++    pub fn wrap(&mut self, name: &str, wrap: impl FnOnce(Box<dyn Tool>) -> Box<dyn Tool>) -> bool {
++        let Some(previous) = self.tools.remove(name) else {
++            return false;
++        };
++        let wrapper = wrap(previous);
++        debug_assert_eq!(wrapper.def().name, name, "a wrapper keeps the tool's name");
++        self.tools.insert(name.to_owned(), wrapper);
++        true
++    }
++
+     pub fn retain_session_end_hook(
+         &mut self,
+         registration: crate::session::SessionEndHookRegistration,

@@ -1280,6 +1280,22 @@ impl ToolRegistry {
         self.tools.insert(name, tool);
     }
 
+    /// Replace the tool registered as `name` with `wrap(previous)`, keeping
+    /// its place in `tools/list`. Every caller that reaches the registry
+    /// (transports, `run_steps`, re-routes inside the registry) then gets the
+    /// wrapper, after argument normalization and authorization. The wrapper
+    /// keeps the name it replaces. Returns `false`, and leaves the registry
+    /// unchanged, when no tool has that name.
+    pub fn wrap(&mut self, name: &str, wrap: impl FnOnce(Box<dyn Tool>) -> Box<dyn Tool>) -> bool {
+        let Some(previous) = self.tools.remove(name) else {
+            return false;
+        };
+        let wrapper = wrap(previous);
+        debug_assert_eq!(wrapper.def().name, name, "a wrapper keeps the tool's name");
+        self.tools.insert(name.to_owned(), wrapper);
+        true
+    }
+
     pub fn retain_session_end_hook(
         &mut self,
         registration: crate::session::SessionEndHookRegistration,
