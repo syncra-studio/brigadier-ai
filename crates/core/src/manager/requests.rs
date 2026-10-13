@@ -132,6 +132,18 @@ impl SessionManager {
         None
     }
 
+    /// The sessions request `request` waits for a reply from ([`Board::awaited_peers`]),
+    /// leaving out one deleted meanwhile: it never replies.
+    fn awaited_peers(&self, board: &Board, request: &str) -> Vec<ConversationId> {
+        let mut awaited = board.awaited_peers(request);
+        awaited.retain(|peer| {
+            self.core
+                .conversation(peer)
+                .is_ok_and(|peer| !peer.deleting)
+        });
+        awaited
+    }
+
     /// Brings every request of the conversation up to date with what runs and waits.
     pub(crate) async fn settle_requests(&self, conversation_id: &ConversationId) {
         let Ok(mut board) = self.core.board(conversation_id).await else {
@@ -179,7 +191,7 @@ impl SessionManager {
                 RequestState::Stopped | RequestState::Failed { .. }
             ) {
                 request.state.clone()
-            } else if let awaited = board.awaited_peers(id)
+            } else if let awaited = self.awaited_peers(&board, id)
                 && !awaited.is_empty()
             {
                 // A message it sent waits for its reply, which wakes the thread when it comes
@@ -240,7 +252,7 @@ impl SessionManager {
         // So does one that only waits for other sessions' replies.
         if latest.state == RequestState::Waiting
             && Self::waiting_on(&board, &latest.id).is_none()
-            && !board.awaited_peers(&latest.id).is_empty()
+            && !self.awaited_peers(&board, &latest.id).is_empty()
         {
             let activity = conv.request_activity().await;
             let idle = activity.running.is_none() && !activity.carried.contains(&latest.id);

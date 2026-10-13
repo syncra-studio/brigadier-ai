@@ -462,7 +462,7 @@ impl SessionManager {
             }
         };
         // What other sessions sent it and it hasn't taken never goes (SESSION-MESSAGING-PLAN.md §4).
-        self.drop_due_peer_messages(&id).await;
+        self.drop_due_peer_messages(&id, "archived").await;
         let manager = self.arc();
         self.start_cleanup(id.clone(), async move {
             manager.finish_archive(&id, runs).await;
@@ -974,6 +974,10 @@ impl SessionManager {
         let id = conversation.id.clone();
         let private_logs = conversation.tab_chat.is_some();
         let drained = self.drain(&id).await;
+        // What other sessions sent it and it hasn't taken never goes; once it is gone, what
+        // they wait for from it is over (SESSION-MESSAGING-PLAN.md §4).
+        let peers = self.peers_of(&id).await;
+        self.drop_due_peer_messages(&id, "deleted").await;
         self.delete_side_chats(&id).await;
         let runs = self.fence_runs(&id).await?;
         self.wind_down(&conversation).await;
@@ -1054,6 +1058,9 @@ impl SessionManager {
         let (removed, own) = store.delete_streams_and_blobs(purge).await?;
         self.core.forget_conversation(id.clone()).await?;
         self.convs_lock().remove(&id);
+        for peer in &peers {
+            self.settle_requests(peer).await;
+        }
         match store.gc_blobs().await {
             Ok(stats) => {
                 crate::logging::private_trace!(private_logs, info, "conversation deleted"; conversation = %id, removed, ?own, ?stats)

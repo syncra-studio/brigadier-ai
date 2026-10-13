@@ -706,19 +706,21 @@ impl SessionManager {
         }
     }
 
-    /// Archiving session `id`: the messages it received and hasn't taken are dropped, on
-    /// both sides.
-    pub(super) async fn drop_due_peer_messages(&self, id: &ConversationId) {
+    /// Archiving or deleting session `id` (`reason`): the messages it received and hasn't
+    /// taken are dropped, on both sides (a side being deleted keeps no record), and a request
+    /// of their senders' that waited for them waits no more.
+    pub(super) async fn drop_due_peer_messages(&self, id: &ConversationId, reason: &str) {
         let Ok(board) = self.core.board(id).await else {
             return;
         };
+        let mut senders: Vec<&ConversationId> = Vec::new();
         for record in board
             .peer_messages
             .values()
             .filter(|record| !record.outgoing && record.state.due())
         {
             let dropped = PeerState::Dropped {
-                reason: "archived".into(),
+                reason: reason.into(),
             };
             if let Err(err) = self
                 .core
@@ -727,7 +729,27 @@ impl SessionManager {
             {
                 tracing::warn!(conversation = %id, error = %err, "could not drop a message from another session");
             }
+            if !senders.contains(&&record.peer) {
+                senders.push(&record.peer);
+            }
         }
+        for sender in senders {
+            self.settle_requests(sender).await;
+        }
+    }
+
+    /// The sessions session `id` messaged or heard from.
+    pub(super) async fn peers_of(&self, id: &ConversationId) -> Vec<ConversationId> {
+        let Ok(board) = self.core.board(id).await else {
+            return Vec::new();
+        };
+        let mut peers: Vec<ConversationId> = Vec::new();
+        for record in board.peer_messages.values() {
+            if !peers.contains(&record.peer) {
+                peers.push(record.peer.clone());
+            }
+        }
+        peers
     }
 
     /// The receiver `to`'s CLI took message `message_id`: it is seen, on both sides.

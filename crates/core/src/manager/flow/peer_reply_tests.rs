@@ -510,3 +510,159 @@ async fn a_reply_after_an_overnight_run_ended_waits_for_the_morning() {
     flow.settled_in(&api).await;
     flow.stop().await;
 }
+
+/// A session deleted before it replies never will: what it hadn't taken is dropped as
+/// deleted on the sender's side, and the request that waited for it waits for the others
+/// only, then ends.
+#[tokio::test]
+async fn a_request_stops_waiting_for_a_session_deleted_before_it_replied() {
+    use super::FakeBehavior;
+    let peers = Peers::new();
+    let options = Options {
+        behavior: Arc::new(FakeBehavior {
+            refuse_steers: true,
+            ..Default::default()
+        }),
+        ..Options::default()
+    };
+    let flow = Flow::start("peer-deleted", options, peers.script()).await;
+    // API work takes the message in a turn and doesn't reply; Docs is busy, so it waits.
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    let docs = flow.add_session("Docs", None, ProviderKind::Codex).await;
+    let hold = Arc::new(Notify::new());
+    let held = hold.clone();
+    peers.on(&docs, move |turn| {
+        let held = held.clone();
+        async move {
+            if header_id(&turn.input).is_none() {
+                held.notified().await;
+            }
+            Reply::text("Done.")
+        }
+    });
+    flow.say_to(&docs, "Refactor the docs.").await;
+    while peers.inputs_of(&docs).is_empty() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let asked = Sent::default();
+    let (kept, targets) = (asked.clone(), [api.clone(), docs.clone()]);
+    peers.on(&flow.conversation, move |turn| {
+        let (kept, targets) = (kept.clone(), targets.clone());
+        async move {
+            for to in &targets {
+                let reply = send(&turn, to, "Which column holds names?", None).await;
+                kept.lock().unwrap().push(reply);
+            }
+            Reply::text("Asked them both.")
+        }
+    });
+    flow.say("Ask both sessions where names live.").await;
+    let board = flow
+        .until("the request waiting for both", |board| {
+            board.requests.values().any(|request| {
+                request.state == RequestState::Waiting
+                    && request.waiting_for == [api.clone(), docs.clone()]
+            })
+        })
+        .await;
+    let request = first_request(&board);
+    let (to_api, to_docs) = {
+        let asked = asked.lock().unwrap();
+        (message_id(&asked[0].0), message_id(&asked[1].0))
+    };
+    flow.until("API work took it", |board| {
+        stands(board, &to_api, &PeerState::Seen)
+    })
+    .await;
+    assert!(stands(&board, &to_docs, &PeerState::Delivered));
+    flow.manager.delete(docs.clone()).await.unwrap();
+    hold.notify_one();
+    let board = flow
+        .until("waiting for API work alone", |board| {
+            board.requests[&request].waiting_for == [api.clone()]
+        })
+        .await;
+    assert_eq!(board.requests[&request].state, RequestState::Waiting);
+    assert!(stands(
+        &board,
+        &to_docs,
+        &PeerState::Dropped {
+            reason: "deleted".into()
+        }
+    ));
+    flow.settled_in(&api).await;
+    flow.manager.delete(api.clone()).await.unwrap();
+    let board = flow
+        .until("the request done", |board| {
+            board.requests[&request].state == RequestState::Done
+        })
+        .await;
+    assert!(board.requests[&request].waiting_for.is_empty());
+    assert!(stands(&board, &to_api, &PeerState::Seen));
+    assert_eq!(
+        peers.inputs_of(&flow.conversation).len(),
+        1,
+        "no turn starts"
+    );
+    flow.stop().await;
+}
+
+/// A session archived with the message still in its inbox: it is dropped on both sides,
+/// and the request that waited for its reply ends at once.
+#[tokio::test]
+async fn a_request_stops_waiting_for_a_session_archived_before_it_took_the_message() {
+    use super::FakeBehavior;
+    let peers = Peers::new();
+    let options = Options {
+        behavior: Arc::new(FakeBehavior {
+            refuse_steers: true,
+            ..Default::default()
+        }),
+        ..Options::default()
+    };
+    let flow = Flow::start("peer-archived", options, peers.script()).await;
+    let docs = flow.add_session("Docs", None, ProviderKind::Codex).await;
+    let hold = Arc::new(Notify::new());
+    let held = hold.clone();
+    peers.on(&docs, move |turn| {
+        let held = held.clone();
+        async move {
+            if header_id(&turn.input).is_none() {
+                held.notified().await;
+            }
+            Reply::text("Done.")
+        }
+    });
+    flow.say_to(&docs, "Refactor the docs.").await;
+    while peers.inputs_of(&docs).is_empty() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let asked = peers.sends(&flow.conversation, &docs, "Which column holds names?");
+    flow.say("Ask the docs session where names live.").await;
+    let board = flow
+        .until("the request waiting for Docs", |board| {
+            board.requests.values().any(|request| {
+                request.state == RequestState::Waiting && request.waiting_for == [docs.clone()]
+            })
+        })
+        .await;
+    let request = first_request(&board);
+    let id = message_id(&only(&asked).0);
+    assert!(stands(&board, &id, &PeerState::Delivered));
+    flow.manager.archive(docs.clone()).await.unwrap();
+    hold.notify_one();
+    let board = flow
+        .until("the request done", |board| {
+            board.requests[&request].state == RequestState::Done
+        })
+        .await;
+    let dropped = PeerState::Dropped {
+        reason: "archived".into(),
+    };
+    assert!(stands(&board, &id, &dropped));
+    assert!(stands(&flow.board_of(&docs).await, &id, &dropped));
+    assert_eq!(peers.count_in(&docs, &format!("· id {id}]")), 0);
+    flow.stop().await;
+}
