@@ -350,9 +350,9 @@ fn set_value_blocking(
                 anyhow::bail!(
                     "[{element_index}] {role} took the name {value:?}, but the file on disk is still \
                      {}: writing a name directly only changes what is shown, so nothing was \
-                     renamed and the old name is shown again. Rename the file another way: a shell \
-                     command if you have one, or the app's own Rename command, which may need the \
-                     app in front.",
+                     renamed and the old name is shown again. Rename the file another way, such as \
+                     a shell command if you have one, or tell the user it couldn't be renamed \
+                     from here.",
                     old.display()
                 );
             }
