@@ -171,6 +171,15 @@ fn get_front_process_fn() -> Option<GetFrontProcessFn> {
     *SYM.get_or_init(|| find_sym(b"_SLPSGetFrontProcess\0").map(|p| unsafe { as_fn(p) }))
 }
 
+/// `OSStatus GetProcessPID(const void *psn, pid_t *pid)`
+/// Deprecated but still resolves. The inverse of `GetProcessForPID`.
+type GetProcessPIDFn = unsafe extern "C" fn(*const c_void, *mut pid_t) -> i32;
+
+fn get_process_pid_fn() -> Option<GetProcessPIDFn> {
+    static SYM: OnceLock<Option<GetProcessPIDFn>> = OnceLock::new();
+    *SYM.get_or_init(|| find_sym(b"GetProcessPID ").map(|p| unsafe { as_fn(p) }))
+}
+
 fn get_process_for_pid_fn() -> Option<GetProcessForPIDFn> {
     static SYM: OnceLock<Option<GetProcessForPIDFn>> = OnceLock::new();
     *SYM.get_or_init(|| find_sym(b"GetProcessForPID\0").map(|p| unsafe { as_fn(p) }))
@@ -435,6 +444,24 @@ pub fn get_process_psn_for_window(window_id: u32, pid: libc::pid_t, out_psn: &mu
         return unsafe { get_pid_psn(pid, out_psn.as_mut_ptr() as *mut c_void) } == 0;
     }
     false
+}
+
+/// The frontmost process as the WindowServer has it right now. AppKit's
+/// own answer is updated from notifications and can lag behind a switch
+/// that just happened. `None` when the private calls aren't available.
+pub fn front_pid() -> Option<libc::pid_t> {
+    let (Some(get_front), Some(get_pid)) = (get_front_process_fn(), get_process_pid_fn()) else {
+        return None;
+    };
+    let mut psn = [0u8; 8];
+    if unsafe { get_front(psn.as_mut_ptr() as *mut c_void) } != 0 {
+        return None;
+    }
+    let mut pid: libc::pid_t = 0;
+    if unsafe { get_pid(psn.as_ptr() as *const c_void, &mut pid) } != 0 || pid <= 0 {
+        return None;
+    }
+    Some(pid)
 }
 
 /// Make `pid` the frontmost process again at once, the same WindowServer call

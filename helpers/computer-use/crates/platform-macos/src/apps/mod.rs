@@ -575,10 +575,14 @@ fn nonempty_string(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-/// Return the pid of the current frontmost application via
-/// `NSWorkspace.shared.frontmostApplication`. `None` if there isn't one
-/// (rare — e.g. screensaver).
+/// Return the pid of the current frontmost application, as the WindowServer
+/// has it (AppKit's `frontmostApplication` is updated from notifications and
+/// can lag behind a switch that just happened), else as AppKit has it.
+/// `None` if there isn't one (rare — e.g. screensaver).
 pub fn frontmost_pid() -> Option<i32> {
+    if let Some(pid) = crate::input::skylight::front_pid() {
+        return Some(pid);
+    }
     use objc2_app_kit::NSWorkspace;
     unsafe {
         let ws = NSWorkspace::sharedWorkspace();
