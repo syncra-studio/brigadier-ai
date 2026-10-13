@@ -168,6 +168,10 @@ function Fixture() {
       await until(() => starts().length === 3);
       await until(() => summary() === "1 result in 1 file");
       seen.refreshDismissed = !inPanel("session").querySelector('[title="src/app.ts"]');
+      button("session", "Dismiss")!.click();
+      await sleep(80);
+      seen.emptySummary = summary();
+      seen.emptyFocus = document.activeElement?.getAttribute("aria-label");
       // The connection drops mid-search, which the new one doesn't carry on: it is asked again.
       silent = true;
       button("session", "Match case")!.click();
@@ -207,6 +211,7 @@ function Fixture() {
       seen.collapsedRows = drawn("many").every((row) => row.dataset.row === "file");
       seen.collapsedSummary = summary("many");
       drawn("many")[0]!.querySelector<HTMLElement>("[data-row-button]")!.focus();
+      await sleep(50);
       seen.deleteFocus = await key("Delete");
       seen.deleteSummary = summary("many");
       await key("End");

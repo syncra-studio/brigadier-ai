@@ -83,7 +83,7 @@ export function setSearchForm(target: WorkspaceTarget, change: Partial<SearchFor
   patch(searchId(target), (entry) => ({ form: { ...entry.form, ...change } }));
 }
 
-/** Hides a file for this run only, including any later streamed matches for it. */
+/** Hides a file until the query changes or Enter resets it, including during automatic refreshes. */
 export function dismissSearchFile(target: WorkspaceTarget, path: string): void {
   patch(searchId(target), ({ results, dismissed }) => {
     if (!results) return {};
@@ -112,7 +112,7 @@ export function runSearch(target: WorkspaceTarget, query: SearchQuery, resetDism
   early.clear();
   running = { token, id: null, owner, fresh: true };
   patch(owner, (entry) => ({
-    dismissed: !resetDismissed && entry.results?.checkout === checkout && sameQuery(entry.results.query, query) ? entry.dismissed : [],
+    dismissed: !resetDismissed && entry.results?.checkout === checkout && sameQuery(entry.results.query, query) ? entry.dismissed ?? [] : [],
     results: entry.results?.checkout === checkout
       ? { ...entry.results, query, done: null, error: null }
       : { checkout, query, files: [], done: null, error: null },

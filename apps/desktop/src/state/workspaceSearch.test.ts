@@ -9,6 +9,7 @@ const target = { type: "project", projectId: "search-unit" } as const;
 const query = { text: "hit", matchCase: false, wholeWord: false, regex: false, include: "", exclude: "" };
 const results = (size: number) => ({ checkout: "x", query, files: [{ path: "a.txt", hash: "h", matches: 1,
   lines: [{ line: 1, preview: "x".repeat(size), ranges: [] }] }], done: { files: 1, matches: 1, capped: false }, error: null });
+const current = () => useWorkspaceSearch.getState().entries["project:search-unit"]!.results!;
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 beforeEach(() => {
   Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
@@ -69,7 +70,6 @@ test("dismissals filter late batches and replacements, survive refresh, and rese
   });
   const a = results(1).files[0]!;
   const b = { ...a, path: "b.txt", hash: "b-hash" };
-  const current = () => useWorkspaceSearch.getState().entries["project:search-unit"]!.results!;
   const start = async (reset = false, next = query) => {
     runSearch(target, next, reset);
     await new Promise((resolve) => setImmediate(resolve));
@@ -87,8 +87,8 @@ test("dismissals filter late batches and replacements, survive refresh, and rese
   emitSearchUpdate(id, { type: "files", files: [a, b] });
   finish();
   await replaceResults(target, current(), "new");
-  for (const req of asked.filter((req) => req.method === "replaceInFiles")) {
-    assert.deepEqual(req.files, [{ path: b.path, hash: b.hash, matches: b.matches }]);
+  for (const replacement of asked.filter((req) => req.method === "replaceInFiles")) {
+    assert.deepEqual(replacement.files, [{ path: b.path, hash: b.hash, matches: b.matches }]);
   }
   await start(true);
   emitSearchUpdate(id, { type: "files", files: [a, b] });

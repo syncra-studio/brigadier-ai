@@ -59,6 +59,8 @@ export function SearchPanel({ target, onOpen, readOnly }: {
   const id = searchId(target);
   const checkout = useCheckoutKey(target);
   const form = useWorkspaceSearch((s) => s.entries[id]?.form ?? EMPTY_FORM);
+  const dismissed = useWorkspaceSearch((s) => s.entries[id]?.dismissed?.length ?? 0);
+  const dismissFile = useCallback((path: string) => dismissSearchFile(target, path), [target]);
   const stored = useWorkspaceSearch((s) => s.entries[id]?.results ?? null);
   // Results for another checkout of the same session (its copy made since) don't show.
   const results = stored?.checkout === checkout ? stored : null;
@@ -176,7 +178,7 @@ export function SearchPanel({ target, onOpen, readOnly }: {
             <div className="flex h-control-sm items-center gap-1 px-1">
               <p data-slot="search-summary" className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
                 {results.files.length === 0
-                  ? results.done ? "No results" : "Searching…"
+                  ? dismissed ? "All results dismissed. Press Enter in Search to show them again." : results.done ? "No results" : "Searching…"
                   : `${plural(matches, "result")} in ${plural(results.files.length, "file")}${searching ? "…" : ""}`}
               </p>
               {results.files.length > 0 && (
@@ -194,7 +196,7 @@ export function SearchPanel({ target, onOpen, readOnly }: {
             )}
           </div>
           <ResultList files={results.files} collapsed={collapsed} onToggle={toggle} onOpen={onOpen}
-            onDismiss={(path) => dismissSearchFile(target, path)} onReplace={canReplace ? (path) => setConfirming({ file: path }) : null} />
+            onDismiss={dismissFile} onReplace={canReplace ? (path) => setConfirming({ file: path }) : null} />
         </>
       )}
       <Dialog open={confirming !== null} onOpenChange={(open) => { if (!open) setConfirming(null); }}>
@@ -339,12 +341,15 @@ function ResultList({ files, collapsed, onToggle, onOpen, onReplace, onDismiss }
     setActive(next);
     virtualizer.scrollToIndex(next);
   };
-  const dismiss = (path: string) => {
-    const index = rows.findIndex((row) => row.type === "file" && row.file.path === path);
+  const latestRows = useRef(rows);
+  useLayoutEffect(() => { latestRows.current = rows; }, [rows]);
+  const dismiss = useCallback((path: string) => {
+    const visible = latestRows.current;
+    const index = visible.findIndex((row) => row.type === "file" && row.file.path === path);
     focusing.current = true;
-    setActive(Math.max(0, Math.min(index, rows.filter((row) => row.file.path !== path).length - 1)));
+    setActive(Math.max(0, Math.min(index, visible.filter((row) => row.file.path !== path).length - 1)));
     onDismiss(path);
-  };
+  }, [onDismiss]);
   const onKeyDown = (event: KeyboardEvent) => {
     const row = rows[current];
     if (!row || event.altKey || event.ctrlKey) return;
