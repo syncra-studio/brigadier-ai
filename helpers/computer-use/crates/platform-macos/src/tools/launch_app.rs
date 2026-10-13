@@ -54,7 +54,7 @@ fn def() -> &'static ToolDef {
                 },
                 "name": {
                     "type": "string",
-                    "description": "App display name. Used only when bundle_id is absent."
+                    "description": "App display name, or the full path to its .app bundle. Used only when bundle_id is absent."
                 },
                 "urls": {
                     "type": "array",

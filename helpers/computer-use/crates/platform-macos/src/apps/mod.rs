@@ -279,6 +279,10 @@ pub(crate) fn resolve_bundle_id_to_locator(bundle_id: &str) -> Option<AppLocator
 ///    integration tests; can be added if we hit a non-English-name app
 ///    in the wild.
 pub(crate) fn locate_by_name(name: &str) -> Option<AppLocator> {
+    // A full path to an app bundle, wherever it lives.
+    if name.starts_with('/') && name.ends_with(".app") && std::path::Path::new(name).is_dir() {
+        return Some(AppLocator::Path(name.to_owned()));
+    }
     let app_name = if name.ends_with(".app") {
         name.to_owned()
     } else {
@@ -660,6 +664,17 @@ mod tests {
             locate_by_name("Finder"),
             Some(AppLocator::Path(path)) if path == "/System/Library/CoreServices/Finder.app"
         ));
+    }
+
+    #[test]
+    fn an_app_is_found_by_its_full_path_wherever_it_lives() {
+        let dir = std::env::temp_dir().join(format!("locate-{}", std::process::id()));
+        let app = dir.join("Some Tool.app");
+        std::fs::create_dir_all(&app).unwrap();
+        let path = app.to_string_lossy().into_owned();
+        assert!(matches!(locate_by_name(&path), Some(AppLocator::Path(found)) if found == path));
+        assert!(locate_by_name(&format!("{path}-missing.app")).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
