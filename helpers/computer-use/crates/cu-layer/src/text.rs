@@ -197,11 +197,36 @@ fn withheld_mentions() -> Vec<&'static str> {
         .collect()
 }
 
+/// Why writing a file's name in Finder renamed nothing, and the way that
+/// does rename it while Finder stays behind the user's work. The driver's
+/// own text has the agent bring Finder forward.
+const FILE_NAME_ROUTE: &str = "Writing a file's name in Finder changes only what Finder shows, \
+    never the file, so nothing was written. To rename the file with Finder staying in the \
+    background: click the file's row in the folder's window to select it, invoke_menu \
+    [\"File\", \"Rename\"] on that window, type_text the full new name with only pid and \
+    window_id (no element), then press_key return. Then check the new name in a fresh \
+    get_window_state.";
+
 /// Rewrite one tool result for agents.
 pub fn result(
     mut result: cua_driver_core::protocol::ToolResult,
 ) -> cua_driver_core::protocol::ToolResult {
     use cua_driver_core::protocol::Content;
+    let code = result
+        .structured_content
+        .as_ref()
+        .and_then(|structured| structured.get("code"))
+        .and_then(Value::as_str);
+    if code == Some("file_name_needs_rename") {
+        for item in &mut result.content {
+            if let Content::Text { text, .. } = item {
+                *text = format!("set_value refused (file_name_needs_rename): {FILE_NAME_ROUTE}");
+            }
+        }
+        if let Some(Value::Object(structured)) = result.structured_content.as_mut() {
+            structured.insert("reason".into(), FILE_NAME_ROUTE.into());
+        }
+    }
     for item in &mut result.content {
         if let Content::Text { text, .. } = item {
             *text = prose(text);
@@ -368,6 +393,35 @@ mod tests {
     use super::*;
     use cua_driver_core::protocol::{Content, ToolResult};
     use serde_json::json;
+
+    #[test]
+    fn a_file_name_refusal_gives_the_background_rename_route() {
+        let driver = ToolResult::error(
+            "set_value refused (file_name_needs_rename): This is a file's name as the list \
+             shows it. Writing its AXValue changes only what the list shows, never the file, \
+             so nothing was written. To rename the file: click this element to select the \
+             item, then with Finder frontmost send press_key return, hotkey cmd+a, type_text \
+             the full new name, and press_key return, each with scope:\"desktop\".",
+        )
+        .with_structured(json!({
+            "code": "file_name_needs_rename",
+            "effect": "refused",
+            "reason": "… with Finder frontmost send press_key return …",
+        }));
+        let out = result(driver);
+        let Content::Text { text, .. } = &out.content[0] else {
+            panic!("text first");
+        };
+        assert!(text.starts_with("set_value refused (file_name_needs_rename): "));
+        assert!(text.contains("invoke_menu [\"File\", \"Rename\"]"));
+        let structured = out.structured_content.unwrap();
+        assert_eq!(structured["code"], "file_name_needs_rename");
+        for said in [text.as_str(), structured["reason"].as_str().unwrap()] {
+            for front in ["frontmost", "desktop", "foreground", "front"] {
+                assert!(!said.contains(front), "{front:?} in {said:?}");
+            }
+        }
+    }
 
     #[test]
     fn foreground_suggestions_are_removed_and_the_rest_kept() {
