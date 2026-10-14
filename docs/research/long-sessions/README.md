@@ -16,4 +16,7 @@ Read in this order:
    "Next" items.
 5. `PROBES.md`: the CLI probes run for this research (cache lifetime of `-p` sessions; cache across effort
    changes on Claude and Codex), and the questions the second pass answered from the docs and the usage store.
-6. `sources/`: the full source notes behind the digest (`vendor.md`, `papers.md`, `practice.md`).
+6. `SESSION-FORENSICS.md` (2026-10-15): one real session in the installed app taken apart: what the user hit and
+   why, whether the thread deletes its own worktree (it doesn't; the merge card does, on the user's click, without
+   saying so), and what the thread's fixed start is made of against the benchmark's token gap.
+7. `sources/`: the full source notes behind the digest (`vendor.md`, `papers.md`, `practice.md`).

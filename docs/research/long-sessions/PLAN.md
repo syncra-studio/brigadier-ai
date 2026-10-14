@@ -9,6 +9,10 @@ completed task. Every item also keeps the settled decisions that superseded part
 Q5 (every decision body whole in a rebirth briefing), §11 (integrated checks) and THREAD-PLAN (reviews can be turned
 off, and then nothing waits for one). No item needs the Agent SDK, an API key, `--bare` or a request-rewriting proxy.
 
+A third pass (2026-10-15, `SESSION-FORENSICS.md`) took apart one real session in the installed app. It added §3b
+(F1–F5, the fixes for what the user hit, now first in §4), B8 (a smaller fixed thread start, with its numbers) and
+§6 items 7–9.
+
 Nothing here is built. Each item is a proposal with how to prove it. Items that would change a settled decision are
 listed separately in §6, "Needs your decision".
 
@@ -211,6 +215,26 @@ the weak spots it addresses and the evidence for it.
 | B5 | **Load only what applies. R.** Repository instructions: root and ancestor rules always, subtree rules when files there are touched, and a list of the rules left out. Context pack: reads relevant to this task (named files and symbols), not the whole conversation's, plus the ledger decisions that name the task's files or symbols (actions carry implicit decisions); the user's standing constraints (A1) always | S3, S4 | Vendor (keep instruction files short, load detail on demand); practice (a small always-present index beat on-demand skills); DIGEST 1 | Smaller worker starts, fewer unrelated files | V1 on a task in a sub-package of a monorepo, measuring first-call context and completed-task usage; R | Med: a rule loaded too late is a missed constraint, so ancestor rules stay pinned | M |
 | B6 | **Prewarm only when a writing task is likely**: the thread called `delegate_task` once in the request, or the request names a change | S5 | Audit | Less I/O on question-only sessions | V3 timing on a busy machine | Low | S |
 | B7 | **A verified scout brief. R.** When a scout comes before an implementer, its report includes ranked files with line ranges, a reproduction command and the dead ends it tried. Brigadier runs the reproduction with `run_check` before the brief goes out, and drops claims that fail | — | DIGEST 10 (Scrouting: a verified hand-off at about 1/5 the cost per solve) | Cheaper implementers, fewer repeated explorations | V1 on two bug-fix tasks, with and without | Low | M |
+| B8 | **A smaller fixed thread start.** Brigadier adds ≈18k tokens to **every** thread call: its MCP catalog ≈13k (46.7 kB; `delegate_task` 6 kB) and its instructions ≈5k (20 kB), on top of Claude Code's own ≈13k (SESSION-FORENSICS §4, measured at `d669bca0`: first call 31.4k). Without changing a rule:<br>(a) trim `delegate_task`'s schema to one line per field, with the detail for rare fields (operate `target`/`end_state`, `mockup`/`matches_mockup`, `phase`/`role`, `image_generation`, `quality`) moved into the brief rules that use them: ≈1k per call;<br>(b) send the peers, previews, mockups and overnight sections as `[settings]`-style notes when they first apply, as the browser and reviews sections already are: ≈1–2k per call;<br>(c) shorten tool descriptions that repeat the instructions (19 kB of descriptions): ≈1–2k per call.<br>Loading rare tool groups lazily behind tool search (≈6–7k more per call) reverses `533bac83` and is in §6 item 9. **R** for (b) | S2 | Bench T1 on `launch`: 429k against plain Claude Code's 131k, ~10 thread calls at an average ~38k each (SESSION-FORENSICS §4.1); orch seq 161118, 161136 | ≈3–5k per thread call, ≈30–50k on a 10-call small task (≈7–12% of T1); more with §6 item 9 | V3 on the bench's T1 and T2 (first-call context, calls, tokens, pass rate) with (a)–(c) on and off; a flow test per moved section that its note arrives before the first use; R | Low: a missing field doc leads to a wrong call, so V3 counts invalid tool calls | S |
+
+## 3b. User-facing fixes from one real session (SESSION-FORENSICS, 2026-10-15)
+
+These are confirmed in the installed app's data (`brigadier.db` rows in SESSION-FORENSICS §1–§3) and come before
+everything else in §4. They are small and each one cost the user something real: a lost deliverable, a false claim,
+a request they had to repeat, or a workspace that seemed to vanish. None needs a decision except where §6 says so.
+
+| # | Item | Weak spots | Expected effect | Validate | launch | Size |
+|---|---|---|---|---|---|---|
+| F1 | **Deliverables open from where they're kept.** (a) Brigadier rewrites any link into a task's scratch or `outputs/` (in worker text, addenda and thread messages) to that task's stored output, which opens and saves from the blob as the task card does (`M/outputs.rs:668`, `:681`). (b) An addendum whose task's scratch is gone says so. (c) Thread rule: "a worker's outputs are opened and saved from its task card; never give a scratch path; never point the user at a file you haven't just seen exist". (d) Thread rule: hand over a file with the card's Save or ask where it goes; no Desktop or clipboard writes the user didn't ask for. **R** for (c), (d) | U1, U2, U4 | No dead links; no false "also saved at"; no invented locations | Flow test: a read task writes `outputs/x.md` and links it, reports, is disposed; the link in the worker's text, the addendum and the thread's answer opens the stored copy. R | Partial: `3755744e` folds an addendum into an unread report; the dead link stays | S |
+| F2 | **Fix known defects before answering.** `M/prompts.rs:129`'s "To check" becomes "only for what nobody here can check or fix; a known defect in a deliverable you fix yourself, or send back, before you answer". Under Full access the thread may edit a stored output's saved copy. **R** | U3 | The user never has to say "fix it yourself" | V3 case: a scout's deliverable with one planted factual error the thread can see; pass if the answer has no "To check" for it and the delivered file is right. R | No | S |
+| F3 | **The merge card says what it does, and comes at the right time.** (a) The card's text: "Merges into `main` and closes this workspace; your next message starts fresh from `main`." (b) Thread rule (`M/prompts.rs:293`, `:112`): offer `propose_merge` once the whole request's work has landed, or when the user raises merging; never after each task. **R** for (b). A "Merge and keep working" option is §6 item 8 | U9 | No surprise when the worktree goes; fewer early merge cards | Flow test: card text; a two-task request offers the merge once, after the second landing. R | No | S |
+| F4 | **No leaked pre-warms.** Drop pre-warm slots when the app quits; at launch, sweep `task-next-*` owners with no task. Then B6 (pre-warm only when a writing task is likely) | U6, S5 | No orphaned worktrees after a quit | Flow test: pre-warm, quit before the 10-minute timer, relaunch: the worktree is gone | No | S |
+| F5 | **Small honest-UI fixes.** (a) A task stopped without landing shows "stopped", not "done" (U5). (b) `~/` is expanded before a read path is joined onto the workspace (`M/reads.rs:358-363`) (U8). (c) One look at the weekly-quota projection that sent the mockup to Codex at "459%" with 23% used (SESSION-FORENSICS §2, observation) | U5, U8 | The workers row and the read log say what happened | Unit tests for (a) and (b); (c) is a read of the projection code | No | S |
+
+What `launch` already covers from this pass: `3755744e` (addendum folding, partial for U2), `cab67d97` (the thread
+makes a small change itself, so fewer thread calls; B8's multiplier) and the long-report "Outputs … the user saves
+them from the task card" line (already on main at `M/prompts.rs:1600`). Nothing in `launch` touches the merge card,
+the timer, links to scratch paths, pre-warm cleanup or the "To check" rule.
 
 ## 4. Order
 
@@ -218,6 +242,9 @@ Rebuilt on 2026-10-15 from the current order, w04's (Fable) and w05's (Mythos). 
 confirmed and costs something on every long session today; then what makes the rest provable; then the continuity
 fixes in the order that never makes a seam worse; then safety; then the usage savers that need measurement.
 
+0. **F1–F5** (§3b), F1, F2 and F3 first. All S, all confirmed in one real session, and they are what the user sees:
+   a lost deliverable, a false claim, a request repeated, a workspace that seemed to vanish. F1 (c), F2 and F3 (b)
+   are one prompt revision.
 1. **A11** (fork shares the prefix; drop the false refresh). S, confirmed in the code and in the store, and
    validated by one `handoff` row. Today every checkpoint costs more than the cold resume it was meant to avoid
    (about 294k against about 252k on the measured one).
@@ -230,7 +257,9 @@ fixes in the order that never makes a seam worse; then safety; then the usage sa
 5. **A3** (persist the checkpoint, recover waiting workers and landings) and **A9** (thread watchdog first, then a
    shorter worker stall deadline).
 6. **B1** and **A14**, measured together on V3 and V1 thread turns: both cut full-context thread turns for small
-   things.
+   things. **B8** (a)–(c) goes with them, on the same V3 runs: B1 and A14 cut the number of thread calls and B8 the
+   size of each, and the bench gap is the product of the two (SESSION-FORENSICS §4). `launch`'s self-edit
+   (`cab67d97`) already starts on the call count.
 7. **P0.3** (`PostToolBatch` capture on Claude; Codex after its hooks probe; honest export), **then A6** (workers
    off CLI compaction, repeated steer and a forced hand-off, `PreCompact` on Claude), then **A2** (crash, restart,
    cross-provider), **A15**, **A4**, **A5**. A6 comes after A12, or a compaction becomes a thin successor on another
@@ -296,6 +325,23 @@ experiments. They are **not** part of the compliant plan above.
    recommendation:** keep the limit until V3's scout questions and V2 show whether findings are being lost into
    artifacts the thread doesn't open; then decide with the numbers.
 6. **Which items to build, and in what order.** §4 is my recommendation.
+7. **"Worked for" counting the user's time on question cards (changes THREAD-PARITY-PLAN's card-wait rule,
+   `docs/THREAD-PARITY-PLAN.md:197-202`).** In the forensics session the timer showed 28 m 56 s for about 11 minutes
+   of work: 17.5 minutes were the user reading two cards (WEAK-SPOTS U7). Either stop the clock on question cards,
+   as the merge card already does, or show both ("Worked 11m · waited for you 18m"). **My recommendation:** show
+   both: the wall time stays visible and nobody reads their own reading time as slowness.
+8. **"Merge and keep working" (changes THREAD-PLAN Q9: after a merge the worktree and branch are removed).** Every
+   worktree removal found followed the user's own merge click, but the user reads it as the thread deleting its
+   workspace. F3 makes the card say so. A second option would keep the worktree after the merge, its branch moved to
+   the new base tip, with closing as a separate step. **My recommendation:** yes, as the card's second option, after
+   F3 ships; the fresh-start path stays for "Merge and close".
+9. **Lazy tool groups behind tool search (reverses `533bac83`, which took tool search out of the thread so nothing
+   waits behind a search).** Rare groups (overnight, CI, previews, pages, peers, the planning and approval tools
+   beyond `ask_user`/`note_for_user`, `suggest_full_access`, `record_findings`) are about 20–25 kB, ≈6–7k tokens on
+   every thread call, ≈60–70k on the bench's small task (≈15% of 429k). The cost is one extra search hop when a rare
+   tool is needed, and the tool set must stay fixed at session start for the cache. **My recommendation:** a bounded
+   probe first (cached prefix stable with deferred schemas; how often V3 and V1 runs pay the hop), after B8 (a)–(c),
+   then decide with the numbers.
 
 ## 7. Not proposed, and why
 
