@@ -152,10 +152,12 @@ const listed = (folder: string | null): StepWords =>
     ? { kind: "code", doing: `Listing files in ${folder}`, done: `Listed files in ${folder}`, object: folder }
     : { kind: "code", doing: "Listing files", done: "Listed files" };
 
-const searchedCode = (pattern: string | null): StepWords => {
-  if (!pattern) return { kind: "code", doing: "Searching code", done: "Searched code" };
+/** "Searched for “add” in src" / "Searching for “add”". */
+const searchedCode = (pattern: string | null, path: string | null = null): StepWords => {
+  if (!pattern) return { kind: "code", doing: "Searching files", done: "Searched files" };
   const object = `“${pattern}”`;
-  return { kind: "code", doing: `Searching code for ${object}`, done: `Searched code for ${object}`, object };
+  const where = path ? ` in ${path}` : "";
+  return { kind: "code", doing: `Searching for ${object}${where}`, done: `Searched for ${object}${where}`, object };
 };
 
 /** A command, told as what it does: a read, a listing, a search, or a run of its first line. */
@@ -175,7 +177,10 @@ function commandWords(raw: string, kind: "run" | "checks" = "run"): StepWords {
     return file ? read(file) : ran;
   }
   if (LISTERS.has(program)) return listed(lastPath(words));
-  if (SEARCHERS.has(program)) return searchedCode(words.slice(1).find((word) => !word.startsWith("-")) ?? null);
+  if (SEARCHERS.has(program)) {
+    const [pattern = null, path = null] = words.slice(1).filter((word) => !word.startsWith("-"));
+    return searchedCode(pattern, path && basename(path));
+  }
   return ran;
 }
 
@@ -424,12 +429,11 @@ export function toolStepWords(kind: ToolStep, tasks: Readonly<Record<string, Tas
   return stepWords({ ...kind, detail: worker ? workerName(tasks, worker) : kind.detail }, tasks);
 }
 
-/** How a kind leads a summary, for one step and for several. */
-const LEADING: Record<Exclude<WorkKind, "other">, [one: string, many: string]> = {
-  read: ["Read a file", "Read files"],
+/** How a kind leads a summary, for one step and for several. Reading, searching and listing all read as "Read files". */
+const LEADING: Record<Exclude<WorkKind, "other" | "code">, [one: string, many: string]> = {
+  read: ["Read files", "Read files"],
   edit: ["Edited a file", "Edited files"],
   run: ["Ran a command", "Ran commands"],
-  code: ["Searched code", "Searched code"],
   web: ["Searched the web", "Searched the web"],
   memory: ["Checked project memory", "Checked project memory"],
   checks: ["Ran checks", "Ran checks"],
@@ -443,22 +447,32 @@ export function joinWords(parts: readonly string[]): string {
   return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
 }
 
+/** The kinds a summary names first, in this order; the rest follow in the order they first came. */
+const SUMMARY_ORDER: readonly string[] = ["edit", "read", "run", "web"];
+
+function summaryRank(key: string): number {
+  const at = SUMMARY_ORDER.indexOf(key);
+  return at < 0 ? SUMMARY_ORDER.length : at;
+}
+
 /**
- * A run of steps in one sentence, its kinds in the order they first came: "Read files, ran
- * commands and searched code". Each `other` tool counts as a kind of its own.
+ * A run of steps in one sentence, comma-joined: edits, then what it read, searched or listed,
+ * then commands and the web, then the rest in the order they first came ("Edited a file, read
+ * files, ran commands"). Each `other` tool counts as a kind of its own.
  */
 export function summarize(steps: readonly StepWords[]): string {
   const counts = new Map<string, { words: StepWords; count: number }>();
   for (const words of steps) {
-    const key = words.kind === "other" ? `other:${words.phrase ?? words.done}` : words.kind;
+    const key = words.kind === "other" ? `other:${words.phrase ?? words.done}` : words.kind === "code" ? "read" : words.kind;
     const known = counts.get(key);
     counts.set(key, { words, count: (known?.count ?? 0) + 1 });
   }
-  const parts = [...counts.values()].map(({ words, count }) =>
-    words.kind === "other" ? (words.phrase ?? words.done) : LEADING[words.kind][count === 1 ? 0 : 1],
-  );
-  const following = parts.map((part, index) => (index === 0 ? part : part.charAt(0).toLowerCase() + part.slice(1)));
-  return joinWords(following);
+  const parts = [...counts.entries()]
+    .toSorted(([a], [b]) => summaryRank(a) - summaryRank(b))
+    .map(([key, { words, count }]) =>
+      words.kind === "other" ? (words.phrase ?? words.done) : LEADING[key as keyof typeof LEADING][count === 1 ? 0 : 1],
+    );
+  return parts.map((part, index) => (index === 0 ? part : part.charAt(0).toLowerCase() + part.slice(1))).join(", ");
 }
 
 /** A worker's action, as its transcript keeps it. */

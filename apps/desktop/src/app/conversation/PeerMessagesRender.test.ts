@@ -54,7 +54,7 @@ test("Messages between sessions read in every state, on both sides", { timeout: 
     { state: "waiting", label: "Waiting for Docs to reply", links: ["Docs"], chevron: false },
   ]);
   // A turn whose only work is its message folds no group of its own: the row stands alone.
-  assert.deepEqual(seen.groups, ["Read files and messaged a session"]);
+  assert.deepEqual(seen.groups, ["Read files, messaged a session"]);
   // A reply a wait took isn't in the sender's thread: the turn's answer says it. A late reply, and
   // a message that opened a turn, stand as the turn's input, as the user's own would.
   assert.deepEqual(seen.replyInSender, [

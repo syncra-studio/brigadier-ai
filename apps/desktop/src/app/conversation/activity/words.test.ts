@@ -72,13 +72,14 @@ test("a step names what it acts on, by the file's name", () => {
   assert.equal(lead("Bash", "completed", "cd '/tmp/a b' && cat notes.py"), "Read notes.py");
   assert.equal(lead("Read", "inProgress", "/repo/src/main.rs"), "Reading main.rs");
   assert.equal(lead("apply_patch", "completed", "src/a.rs and 2 more"), "Edited a.rs and 2 more");
-  assert.equal(lead("Grep", "completed", "sidebar"), "Searched code for “sidebar”");
+  assert.equal(lead("Grep", "completed", "sidebar"), "Searched for “sidebar”");
   assert.equal(lead("query_brain", "completed", "sidebar modes"), "Checked project memory for “sidebar modes”");
   assert.equal(lead("WebFetch", "completed", "https://tauri.app/start/"), "Read tauri.app");
   assert.equal(lead("mcp__brigadier__preview_log"), "Read the preview’s output");
   // A command that reads, lists or searches is told as that.
   assert.equal(lead("Bash", "completed", "sed -n 1,80p src/app/Sidebar.tsx"), "Read Sidebar.tsx");
-  assert.equal(lead("Bash", "completed", "rg -n sidebar src"), "Searched code for “sidebar”");
+  assert.equal(lead("Bash", "completed", "rg -n sidebar src"), "Searched for “sidebar” in src");
+  assert.equal(lead("Bash", "inProgress", "grep -rn add ."), "Searching for “add” in .");
   assert.equal(lead("Bash", "completed", "ls apps/desktop"), "Listed files in desktop");
 });
 
@@ -102,16 +103,19 @@ test("the main thread and a worker's thread say the same step the same way", () 
   const mainRun = pairs.map(([main]) => toolStepWords(main));
   const workerRun = pairs.map(([, other]) => stepWords(itemCall(other)));
   assert.equal(summarize(mainRun), summarize(workerRun));
-  assert.equal(summarize(mainRun), "Read a file, ran a command, searched code, edited a file, checked project memory and searched the web");
+  assert.equal(summarize(mainRun), "Edited a file, read files, ran a command, searched the web, checked project memory");
 });
 
 const words = (name: string, detail: string | null = null) => toolStepWords(call(name, "completed", detail));
 
-test("a run sums up its kinds in the order they came, one plural each", () => {
-  assert.equal(summarize([words("Read", "a.ts"), words("Read", "b.ts"), words("Bash", "pnpm test")]), "Read files and ran a command");
-  assert.equal(summarize([words("Bash", "git status"), words("Read", "a.ts"), words("Bash", "pnpm test")]), "Ran commands and read a file");
-  assert.equal(summarize([words("review_code"), words("Read", "a.ts")]), "Asked for a review and read a file");
-  assert.equal(summarize([words("run_check", "pnpm test"), words("start_preview", "web")]), "Ran checks and started a preview");
+test("a run sums up its kinds comma-joined, edits, reading, commands and the web first, one plural each", () => {
+  assert.equal(summarize([words("Read", "a.ts"), words("Read", "b.ts"), words("Bash", "pnpm test")]), "Read files, ran a command");
+  assert.equal(summarize([words("Bash", "git status"), words("Read", "a.ts"), words("Bash", "pnpm test")]), "Read files, ran commands");
+  // Searching and listing are reading too.
+  assert.equal(summarize([words("Read", "a.ts"), words("Bash", "ls src"), words("Grep", "add"), words("Bash", "sleep 4")]), "Read files, ran a command");
+  assert.equal(summarize([words("Bash", "node math.js"), words("apply_patch", "math.js")]), "Edited a file, ran a command");
+  assert.equal(summarize([words("review_code"), words("Read", "a.ts")]), "Read files, asked for a review");
+  assert.equal(summarize([words("run_check", "pnpm test"), words("start_preview", "web")]), "Ran checks, started a preview");
 });
 
 test("deduplication needs the matching authored result in this call's window", () => {
@@ -171,7 +175,7 @@ test("a row's words split into its verb and, a step fainter, what it acts on", (
   const ran = stepWords({ name: "Bash", detail: "pnpm test", status: "failed" });
   assert.deepEqual(labelParts(ran, stepLabel(ran, "completed", 1)), { verb: "Ran ", object: "pnpm test", rest: " — failed (exit 1)" });
   const searched = stepWords({ name: "Grep", detail: "sidebar", status: "completed" });
-  assert.deepEqual(labelParts(searched, stepLabel(searched, "completed")), { verb: "Searched code for ", object: "“sidebar”", rest: "" });
+  assert.deepEqual(labelParts(searched, stepLabel(searched, "completed")), { verb: "Searched for ", object: "“sidebar”", rest: "" });
   // Words with nothing to act on are all verb.
   const listed = stepWords({ name: "Glob", detail: null, status: "completed" });
   assert.deepEqual(labelParts(listed, stepLabel(listed, "completed")), { verb: "Listed files", object: "", rest: "" });
