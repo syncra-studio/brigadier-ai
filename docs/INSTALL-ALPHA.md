@@ -2,8 +2,9 @@
 
 The `v0.1.0-alpha` release requires macOS 14 or later. Download the DMG that
 matches your Mac from the [alpha release](https://github.com/syncra-studio/brigadier-ai/releases/tag/v0.1.0-alpha):
-`Brigadier_0.1.0_aarch64.dmg` for Apple Silicon. Intel availability is listed on
-the release; the installer refuses to install an architecture missing from its checksums.
+`Brigadier_0.1.0_aarch64.dmg` for Apple Silicon or `Brigadier_0.1.0_x64.dmg` for
+Intel. The Intel bundle is cross-built; an Intel launch has not been verified.
+The installer refuses to install an architecture missing from the release checksums.
 
 ## One-line install
 
