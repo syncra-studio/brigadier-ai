@@ -119,7 +119,10 @@ impl SessionManager {
             })
             .unwrap_or_default();
         if full {
-            let mut own = vec![scratch.to_owned()];
+            let mut own = vec![
+                scratch.to_owned(),
+                super::workers::session_temp_dir(id, super::workers::SessionTemp::Thread),
+            ];
             own.extend(workspace.map(|workspace| workspace.path.clone()));
             add_full_access(&mut protection, &self.data_dir, &own);
         }

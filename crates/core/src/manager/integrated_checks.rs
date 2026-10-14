@@ -35,6 +35,7 @@ use brigadier_providers::Access;
 use tokio_util::sync::CancellationToken;
 
 use super::conversation::Envelope;
+use super::workers::{SessionTemp, session_temp_dir};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, DomainEvent};
 use crate::work::{
@@ -596,12 +597,17 @@ impl SessionManager {
             Err(err) => return interrupted(format!("its checkout couldn't be made: {err}")),
         };
         let scratch = self.owned_dir("checks", &id.0).join("scratch");
-        let access = self.full_check_access(&id, &checkout, &scratch);
+        let tmp = session_temp_dir(&id, SessionTemp::Checks);
+        if let Err(err) = self.prepare_owned_dir(&checks_owner(&id), &tmp).await {
+            return interrupted(format!("its temporary folder couldn't be made: {err}"));
+        }
+        let access = self.full_check_access(&id, &checkout, &[scratch.clone(), tmp.clone()]);
         let caller = self
             .full_check_caller(
                 &id,
                 checkout.clone(),
                 scratch.clone(),
+                tmp,
                 access,
                 checks_owner(&id),
                 cancel.clone(),
@@ -698,13 +704,14 @@ impl SessionManager {
     }
 
     /// The full checks' access: the session's permission level, as the thread's, writing only
-    /// the check checkout and its scratch folder.
-    fn full_check_access(&self, id: &ConversationId, checkout: &Path, scratch: &Path) -> Access {
+    /// the check checkout and its `own` folders (its scratch and temporary folders).
+    fn full_check_access(&self, id: &ConversationId, checkout: &Path, own: &[PathBuf]) -> Access {
         let level = super::workers::access_for(TaskKind::Implement, self.permission(id));
         if level.unsandboxed {
             return Access::Full;
         }
-        let mut roots = vec![checkout.to_owned(), scratch.to_owned()];
+        let mut roots = vec![checkout.to_owned()];
+        roots.extend(own.iter().cloned());
         if let Ok(worktree) = self.git.open(checkout) {
             for root in super::workers::commit_roots(&worktree, None, true) {
                 if !roots.contains(&root) {

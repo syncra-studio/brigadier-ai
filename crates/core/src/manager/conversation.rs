@@ -2168,6 +2168,11 @@ impl SessionManager {
         let mut tab_checkout = None;
         let dir = self.owned_dir(area, &conv.id.0);
         self.prepare_owned_dir(&owner, &dir).await?;
+        let tmp = if conv.kind == ConversationKind::Session {
+            Some(self.thread_temp(&conv.id).await?)
+        } else {
+            None
+        };
 
         // A stand-in while the chosen model is at its limit (the saved choice is untouched).
         let fallback = conversation
@@ -2363,10 +2368,10 @@ impl SessionManager {
                 .map(|workspace| vec![workspace.path.clone()])
                 .or_else(|| tab_checkout.clone().map(|checkout| vec![checkout]))
                 .unwrap_or_default(),
-            env: match conv.kind {
-                ConversationKind::Session => SessionManager::thread_env(&dir, choice.provider),
-                ConversationKind::Chat => Vec::new(),
-            },
+            env: tmp
+                .as_deref()
+                .map(|tmp| SessionManager::thread_env(tmp, choice.provider))
+                .unwrap_or_default(),
             unset_env: Vec::new(),
             low_priority: false,
             record_to: None,

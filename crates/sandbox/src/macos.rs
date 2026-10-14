@@ -667,6 +667,31 @@ impl Seatbelt {
     }
 }
 
+/// The longest path a Unix socket can have on macOS (`sun_path`, its NUL included).
+const SOCKET_PATH_MAX: usize = 104;
+
+/// A command (not a preview) may use Unix sockets inside its writable roots, as tests and
+/// tools do between their own processes, even without the network: the socket itself, binding
+/// and accepting there, connecting there. Nothing outside those roots, and no IP socket. A
+/// root too long to hold a socket is left out: Seatbelt then refuses every socket of the rule.
+fn local_sockets(policy: &SandboxPolicy) -> String {
+    let roots: String = policy
+        .writable_roots
+        .iter()
+        .enumerate()
+        .filter(|(_, root)| resolved_path(root).as_os_str().len() + 2 < SOCKET_PATH_MAX)
+        .map(|(index, _)| format!(" (subpath (param \"WRITABLE_ROOT_{index}\"))"))
+        .collect();
+    if roots.is_empty() {
+        return String::new();
+    }
+    format!(
+        "(allow system-socket (socket-domain AF_UNIX))\n\
+         (allow network-bind network-inbound (local unix-socket{roots}))\n\
+         (allow network-outbound (remote unix-socket{roots}))\n"
+    )
+}
+
 impl Seatbelt {
     fn wrap(
         spec: SpawnSpec,
@@ -677,6 +702,8 @@ impl Seatbelt {
         let mut profile = Self::profile(policy);
         if preview_temp.is_some() {
             profile.push_str(SEATBELT_GUI);
+        } else {
+            profile.push_str(&local_sockets(policy));
         }
         for index in 0..unix_sockets.len() {
             profile.push_str(&format!(
@@ -1016,6 +1043,64 @@ mod tests {
             "echo a > .git/refs/heads/brigadier/aa/task-1.lock && mv .git/refs/heads/brigadier/aa/task-1.lock .git/refs/heads/brigadier/aa/task-1"
         ));
         assert!(sh("echo c > notes.txt && rm notes.txt"));
+    }
+
+    #[test]
+    fn a_command_without_the_network_uses_unix_sockets_only_in_its_writable_roots() {
+        use std::net::TcpListener;
+        use std::os::unix::net::{UnixListener, UnixStream};
+
+        // Re-executed inside the profile: binds the socket, connects to it, then tries TCP.
+        const PROBE: &str = "BRIGADIER_COMMAND_SOCKET_PROBE";
+        const TCP: &str = "BRIGADIER_COMMAND_SOCKET_TCP";
+        if let Some(path) = std::env::var_os(PROBE) {
+            let listener = UnixListener::bind(&path).unwrap();
+            UnixStream::connect(&path).unwrap();
+            listener.accept().unwrap();
+            let port: u16 = std::env::var(TCP).unwrap().parse().unwrap();
+            assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+            return;
+        }
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brig-cmd-socket-{}", std::process::id())));
+        let writable = dir.join("writable");
+        std::fs::create_dir_all(&writable).unwrap();
+        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+        // A root too long for a socket path (a data folder's) doesn't take the others' away.
+        let long = dir.join("l".repeat(120));
+        std::fs::create_dir_all(&long).unwrap();
+        let policy = SandboxPolicy {
+            writable_roots: vec![long, writable.clone()],
+            deny_read: Vec::new(),
+            network: false,
+        };
+        let probe = |path: PathBuf| {
+            let spec = Seatbelt
+                .confine(
+                    SpawnSpec {
+                        program: std::env::current_exe().unwrap(),
+                        args: vec![
+                            "--exact".into(),
+                            "macos::tests::a_command_without_the_network_uses_unix_sockets_only_in_its_writable_roots".into(),
+                        ],
+                        ..SpawnSpec::default()
+                    },
+                    &policy,
+                )
+                .unwrap();
+            Command::new(&spec.program)
+                .args(&spec.args)
+                .env(PROBE, path)
+                .env(TCP, tcp.local_addr().unwrap().port().to_string())
+                .output()
+                .unwrap()
+        };
+        let inside = probe(writable.join("s.sock"));
+        assert!(inside.status.success(), "{inside:?}");
+        // Outside its writable roots, no socket binds.
+        let outside = probe(dir.join("s.sock"));
+        assert!(!outside.status.success(), "{outside:?}");
+        assert!(!dir.join("s.sock").exists());
     }
 
     #[test]

@@ -210,7 +210,7 @@ impl SessionManager {
         }
         brigadier_providers::cli::apply_session_env(
             &mut spec,
-            &SessionManager::thread_env(&scratch, cli.provider),
+            &SessionManager::thread_env(&self.thread_temp(id).await?, cli.provider),
             &[],
         );
         let ran = run_command(

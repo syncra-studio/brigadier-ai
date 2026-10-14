@@ -82,10 +82,13 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
         assert_eq!(spec.add_dirs, vec![worktree.clone()]);
         assert!(spec.cwd.ends_with(format!("orch/{}", flow.conversation.0)));
         let env: std::collections::HashMap<_, _> = spec.env.iter().cloned().collect();
-        assert_eq!(
-            env.get("TMPDIR").map(String::as_str),
-            Some(spec.cwd.to_str().unwrap())
+        // Its temporary files go to its short folder under /tmp, never the data folder's.
+        let tmp = crate::manager::workers::session_temp_dir(
+            &flow.conversation,
+            crate::manager::workers::SessionTemp::Thread,
         );
+        assert_eq!(env.get("TMPDIR").map(String::as_str), tmp.to_str());
+        assert!(tmp.is_dir());
         assert_eq!(
             env.get("BASH_MAX_OUTPUT_LENGTH").map(String::as_str),
             (thread == ProviderKind::Claude).then_some("150000")
@@ -108,6 +111,7 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
                 assert!(write_cwd);
                 assert!(writable_roots.contains(&worktree));
                 assert!(writable_roots.contains(&spec.cwd));
+                assert!(writable_roots.contains(&tmp));
                 // It commits its tiny edits into the repository's git folder.
                 let common = std::path::PathBuf::from(git(
                     &worktree,

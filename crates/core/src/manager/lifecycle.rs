@@ -636,6 +636,7 @@ impl SessionManager {
         let mut owners = vec![
             owner,
             super::workers::worker_home_owner(id),
+            super::workers::thread_temp_owner(id),
             super::preview::preview_data_owner(id),
             super::integrated_checks::checks_owner(id),
         ];

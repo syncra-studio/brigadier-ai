@@ -30,6 +30,7 @@ use brigadier_providers::{
 
 use super::conversation::{Cli, ConvLive};
 use super::escalation::Settled;
+use super::workers::{SessionTemp, session_temp_dir, thread_temp_owner};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
     ConversationId, ConversationKind, DomainEvent, Environment, PermissionLevel, Setup,
@@ -197,6 +198,7 @@ impl SessionManager {
     /// sandbox (`true`); under Ask for approval it reaches the user as a card.
     pub(crate) fn thread_access(
         &self,
+        id: &ConversationId,
         workspace: Option<&ThreadWorkspace>,
         scratch: &Path,
         permission: PermissionLevel,
@@ -205,7 +207,10 @@ impl SessionManager {
         if level.unsandboxed {
             return (Access::Full, false);
         }
-        let mut writable_roots = vec![scratch.to_owned()];
+        let mut writable_roots = vec![
+            scratch.to_owned(),
+            session_temp_dir(id, SessionTemp::Thread),
+        ];
         if let Some(workspace) = workspace {
             writable_roots.push(workspace.path.clone());
             if let Ok(repo) = self.git.open(&workspace.path) {
@@ -236,7 +241,7 @@ impl SessionManager {
             self.planned_workspace(id)
         };
         let permission = self.permission(id);
-        let (access, auto_review) = self.thread_access(workspace.as_ref(), scratch, permission);
+        let (access, auto_review) = self.thread_access(id, workspace.as_ref(), scratch, permission);
         let protection =
             self.thread_protection(id, workspace.as_ref(), scratch, access == Access::Full);
         Ok((
@@ -324,10 +329,19 @@ impl SessionManager {
         prompt
     }
 
-    /// The thread's environment: its temporary files in its scratch folder, as a worker's
-    /// are; a Claude thread reads back up to [`BASH_MAX_OUTPUT_LENGTH`] of a command's output.
-    pub(crate) fn thread_env(scratch: &Path, provider: ProviderKind) -> Vec<(String, String)> {
-        let mut env = super::workers::worker_env(scratch);
+    /// The thread's short temporary folder ([`session_temp_dir`]), made and recorded under
+    /// its own owner, which goes with the session.
+    pub(crate) async fn thread_temp(&self, id: &ConversationId) -> Result<PathBuf> {
+        let dir = session_temp_dir(id, SessionTemp::Thread);
+        self.prepare_owned_dir(&thread_temp_owner(id), &dir).await?;
+        Ok(dir)
+    }
+
+    /// The thread's environment: its temporary files in its short temporary folder `tmp`, as
+    /// a worker's are in its own; a Claude thread reads back up to [`BASH_MAX_OUTPUT_LENGTH`]
+    /// of a command's output.
+    pub(crate) fn thread_env(tmp: &Path, provider: ProviderKind) -> Vec<(String, String)> {
+        let mut env = super::workers::worker_env(tmp);
         if provider == ProviderKind::Claude {
             // `BASH_MAX_OUTPUT_LENGTH` (code.claude.com/docs/en/env-vars).
             env.push((

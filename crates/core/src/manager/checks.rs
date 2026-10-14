@@ -108,7 +108,9 @@ const TOOLCHAINS: &[(&str, &str, &[&str])] = &[
 /// The `package.json` scripts offered as checks.
 const SCRIPTS: &[&str] = &["test", "lint", "typecheck", "check", "build", "fmt"];
 /// A version of the key's recipe: results kept under another recipe are never found.
-const KEY_RECIPE: &str = "brigadier-check-1";
+/// Recipe 2: a thread's and the full checks' `TMPDIR` moved out of the data folder, so a socket
+/// bind that failed there never answers from the cache.
+const KEY_RECIPE: &str = "brigadier-check-2";
 
 /// Who calls `run_check`, and where its commands run.
 struct Caller {
@@ -123,6 +125,10 @@ struct Caller {
     /// The checkout: a worker's worktree, the thread's workspace.
     tree: Option<PathBuf>,
     scratch: PathBuf,
+    /// Its commands' `TMPDIR`: a task's test data folder, the thread's or the full checks'
+    /// short temporary folder ([`super::workers::session_temp_dir`]), never a folder in the
+    /// app's data folder, whose long path with spaces breaks a test that binds a socket there.
+    tmp: PathBuf,
     /// The folder its access's writable working directory is, when that isn't its checkout
     /// (a read-only Codex worker works from its scratch folder): its checks run from there
     /// too, so they can't write a checkout its own shell can't.
@@ -252,6 +258,7 @@ impl SessionManager {
         id: &ConversationId,
         checkout: PathBuf,
         scratch: PathBuf,
+        tmp: PathBuf,
         access: Access,
         owner: String,
         ended: CancellationToken,
@@ -277,6 +284,7 @@ impl SessionManager {
             owner,
             tree: Some(checkout),
             scratch,
+            tmp,
             cwd_grant: None,
             redactor,
             base: Base::Head,
@@ -387,6 +395,7 @@ impl SessionManager {
                 owner,
                 tree,
                 scratch,
+                tmp: super::workers::test_data_dir(task_id),
                 cwd_grant,
                 redactor,
                 base: workspace.base.map_or(Base::Head, Base::Commit),
@@ -421,6 +430,7 @@ impl SessionManager {
             owner: cli.owner.clone(),
             tree: launch.workspace.map(|workspace| workspace.path),
             scratch: self.owned_dir("orch", &id.0),
+            tmp: self.thread_temp(id).await?,
             cwd_grant: None,
             redactor,
             base,
@@ -962,13 +972,9 @@ impl SessionManager {
 /// Where a check of a caller with checkout `tree` runs, for `workdir`: the folder its access
 /// grants as its working directory when that isn't its checkout (`cwd_grant`), else the
 /// checkout's root when `workdir` is in it, else `workdir` itself.
-/// The temporary folder a check runs with: a task's test data folder, the thread's scratch
-/// folder.
+/// The temporary folder a check runs with ([`Caller::tmp`]).
 fn check_tmpdir(caller: &Caller) -> PathBuf {
-    caller
-        .task_id
-        .as_ref()
-        .map_or_else(|| caller.scratch.clone(), super::workers::test_data_dir)
+    caller.tmp.clone()
 }
 
 /// `command` without the leading prefixes proven to change nothing about how it runs (bug 8):
