@@ -140,6 +140,8 @@ pub(crate) struct Board {
     pub(crate) reviews: HashMap<String, ReviewRun>,
     /// Its runs of the full checks on the integrated tree, by id.
     pub(crate) integrated_checks: HashMap<String, crate::work::IntegratedCheck>,
+    /// The thread's commands that went to the background, by id.
+    pub(crate) background_runs: HashMap<String, crate::work::BackgroundRun>,
     /// Per branch: the tip up to which the thread's commits were looked at.
     pub(crate) thread_tips: HashMap<String, String>,
     /// Per branch: where the thread's commits were first looked for, which its self-edit
@@ -260,6 +262,9 @@ impl Board {
             DomainEvent::IntegratedCheckUpdated { check } => {
                 self.integrated_checks
                     .insert(check.id.clone(), check.clone());
+            }
+            DomainEvent::BackgroundRunUpdated { run } => {
+                self.background_runs.insert(run.id.clone(), run.clone());
             }
             DomainEvent::ThreadCommitsSeen { branch, tip, .. } => {
                 self.thread_starts
@@ -672,6 +677,13 @@ impl Board {
         let mut checks: Vec<_> = self.integrated_checks.values().cloned().collect();
         checks.sort_by_key(|check| crate::manager::integrated_check_number(&check.id));
         checks
+    }
+
+    /// The thread's background runs, oldest first (by number).
+    pub(crate) fn sorted_background_runs(&self) -> Vec<crate::work::BackgroundRun> {
+        let mut runs: Vec<_> = self.background_runs.values().cloned().collect();
+        runs.sort_by_key(|run| crate::manager::background_run_number(&run.id));
+        runs
     }
 
     /// Its previews, oldest first.

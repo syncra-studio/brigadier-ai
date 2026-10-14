@@ -213,27 +213,36 @@ impl SessionManager {
             &SessionManager::thread_env(&self.thread_temp(id).await?, cli.provider),
             &[],
         );
-        let ran = run_command(
-            self.runtime.platform().clone(),
-            &spec,
-            timeout,
-            cli.ended.clone(),
-            &cli.owner,
-            self.runtime.ledger(),
-        )
-        .await?;
-        if ran.output.len() <= TRIM_ABOVE {
-            let output = self.hide_secrets(id, ran.output).await;
-            return Ok(format!(
-                "[{}]\n{}",
-                ran.status,
-                String::from_utf8_lossy(&output)
-            ));
-        }
-        let (_, digest) = self
-            .store_output(id, OutputSource::Run, &ran.status, ran.output, true)
+        // Recorded under the session's background owner, not the CLI's: a command that goes
+        // to the background outlives the CLI.
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let manager = self.arc();
+        let (owner, id_owned) = (super::background_runs::background_owner(id), id.clone());
+        let work_cancel = cancel.clone();
+        let work = async move {
+            let ran = run_command(
+                manager.runtime.platform().clone(),
+                &spec,
+                timeout,
+                work_cancel,
+                &owner,
+                manager.runtime.ledger(),
+            )
             .await?;
-        Ok(digest)
+            let reply = if ran.output.len() <= TRIM_ABOVE {
+                let output = manager.hide_secrets(&id_owned, ran.output).await;
+                format!("[{}]\n{}", ran.status, String::from_utf8_lossy(&output))
+            } else {
+                manager
+                    .store_output(&id_owned, OutputSource::Run, &ran.status, ran.output, true)
+                    .await?
+                    .1
+            };
+            Ok((ran.status, reply))
+        };
+        let tool = if unsandboxed { RUN_UNSANDBOXED } else { "run" };
+        self.in_foreground(id, tool, command, cli.ended.clone(), cancel, work)
+            .await
     }
 
     /// What runs `command` in `workdir` held to `access`: the shell itself at full access,

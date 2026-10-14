@@ -1455,6 +1455,7 @@ impl SessionManager {
             None => Ok(()),
         };
         self.stop_previews(&id, super::preview::USER_STOP).await;
+        self.stop_background_runs(&id);
         self.drop_prewarm(&id, "stopped by the user");
         // What Brigadier still owed the stopped answers ends with them, so nothing wakes the
         // thread for them later or merges on its own: the CI watches, and the held merge

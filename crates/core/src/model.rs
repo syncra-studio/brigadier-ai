@@ -1249,6 +1249,9 @@ pub struct ConversationView {
     /// Its runs of the full checks on the integrated tree, oldest first.
     #[serde(default)]
     pub integrated_checks: Vec<crate::work::IntegratedCheck>,
+    /// The thread's commands that went to the background, oldest first.
+    #[serde(default)]
+    pub background_runs: Vec<crate::work::BackgroundRun>,
     /// Its messages to and from other sessions, in the order they were recorded.
     #[serde(default)]
     pub peer_messages: Vec<PeerMessage>,
@@ -2086,6 +2089,10 @@ pub enum DomainEvent {
     IntegratedCheckUpdated {
         check: crate::work::IntegratedCheck,
     },
+    /// A command of the thread's went to the background, or ended there (full snapshot).
+    BackgroundRunUpdated {
+        run: crate::work::BackgroundRun,
+    },
     /// The thread's commits on `branch` were looked at up to `tip`: what follows it is new
     /// (THREAD-PLAN.md Q4, Q12).
     ThreadCommitsSeen {
@@ -2329,6 +2336,7 @@ impl DomainEvent {
             Self::PlanUpdated { .. } => "plan.updated",
             Self::ReviewUpdated { .. } => "review.updated",
             Self::IntegratedCheckUpdated { .. } => "integrated_check.updated",
+            Self::BackgroundRunUpdated { .. } => "background_run.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::OutputStored { .. } => "output.stored",
             Self::ComputerActed { .. } => "computer.acted",

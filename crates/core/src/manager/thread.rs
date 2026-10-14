@@ -43,6 +43,10 @@ use crate::{Error, Result};
 /// (docs/evidence/2026-10-07-thread-phase2-contracts.md §3).
 const BASH_MAX_OUTPUT_LENGTH: &str = "150000";
 
+/// The longest a Claude thread's own shell command may run (2 minutes): longer ones go through
+/// `run` or `run_check`, which go to the background rather than hold the thread.
+const BASH_TIMEOUT_MS: &str = "120000";
+
 /// `run_unsandboxed` as a Claude thread's CLI names it in its permission prompt.
 const CLAUDE_RUN_UNSANDBOXED: &str = "mcp__brigadier__run_unsandboxed";
 
@@ -338,16 +342,26 @@ impl SessionManager {
     }
 
     /// The thread's environment: its temporary files in its short temporary folder `tmp`, as
-    /// a worker's are in its own; a Claude thread reads back up to [`BASH_MAX_OUTPUT_LENGTH`]
-    /// of a command's output.
+    /// a worker's are in its own. A Claude thread reads back up to [`BASH_MAX_OUTPUT_LENGTH`]
+    /// of a command's output, has no background jobs of its own, and its shell holds it at
+    /// most [`BASH_TIMEOUT_MS`]: a job of the CLI's dies with it, unseen (a closed or replaced
+    /// CLI, a restart), and a long command holds the thread from the user. Its long commands
+    /// go through `run` and `run_check`, which go to the background on their own
+    /// ([`super::background_runs`]).
     pub(crate) fn thread_env(tmp: &Path, provider: ProviderKind) -> Vec<(String, String)> {
         let mut env = super::workers::worker_env(tmp);
         if provider == ProviderKind::Claude {
-            // `BASH_MAX_OUTPUT_LENGTH` (code.claude.com/docs/en/env-vars).
-            env.push((
-                "BASH_MAX_OUTPUT_LENGTH".into(),
-                BASH_MAX_OUTPUT_LENGTH.into(),
-            ));
+            // code.claude.com/docs/en/env-vars. The ceiling holds whatever timeout a call asks
+            // for, and a command past it is stopped, not moved to the background (checked on
+            // Claude Code 2.1.299).
+            for (name, value) in [
+                ("BASH_MAX_OUTPUT_LENGTH", BASH_MAX_OUTPUT_LENGTH),
+                ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1"),
+                ("BASH_DEFAULT_TIMEOUT_MS", BASH_TIMEOUT_MS),
+                ("BASH_MAX_TIMEOUT_MS", BASH_TIMEOUT_MS),
+            ] {
+                env.push((name.into(), value.into()));
+            }
         }
         env
     }

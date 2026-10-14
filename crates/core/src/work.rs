@@ -1498,6 +1498,49 @@ impl IntegratedCheckState {
     }
 }
 
+/// A command of the thread's (`run`, `run_check`) still going after the time a tool call may
+/// hold the thread ([`crate::manager`]'s background runs): it goes on in the background, owned
+/// by the session rather than the thread's CLI, and its result comes to the thread as a
+/// message. Recorded from the moment it goes there, so a restart that cuts it off says so.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundRun {
+    /// `run-<n>`, its place among the conversation's.
+    pub id: String,
+    pub conversation_id: ConversationId,
+    /// The request whose turn started it: it works until the result is read.
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// The tool that started it: `run` or `run_check`.
+    pub tool: String,
+    pub command: String,
+    pub started_at_ms: i64,
+    #[serde(default)]
+    pub ended_at_ms: Option<i64>,
+    pub state: BackgroundRunState,
+}
+
+/// Where a background run stands.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum BackgroundRunState {
+    Running,
+    /// It ended (its exit status, or what stopped it: a timeout); the thread was told.
+    Finished {
+        status: String,
+    },
+    /// The user stopped its request, or the session closed.
+    Stopped,
+    /// A restart cut it off: no result came.
+    Interrupted {
+        reason: String,
+    },
+}
+
 /// What the user's consent to the session's merge waits for (SESSION-FIXES-PLAN.md Q3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2561,6 +2604,8 @@ pub enum InjectionKind {
     Run,
     /// Another session's message (its label is `peer <message id>`).
     PeerMessage,
+    /// A background run's result, or what became of it.
+    BackgroundRun,
 }
 
 /// An injection's kind as stored, older names included: an earlier run's per-phase `phase`
@@ -2584,6 +2629,7 @@ enum StoredInjectionKind {
     Run,
     Phase,
     PeerMessage,
+    BackgroundRun,
 }
 
 impl<'de> Deserialize<'de> for InjectionKind {
@@ -2604,6 +2650,7 @@ impl<'de> Deserialize<'de> for InjectionKind {
             StoredInjectionKind::Reminder => Self::Reminder,
             StoredInjectionKind::Run | StoredInjectionKind::Phase => Self::Run,
             StoredInjectionKind::PeerMessage => Self::PeerMessage,
+            StoredInjectionKind::BackgroundRun => Self::BackgroundRun,
         })
     }
 }

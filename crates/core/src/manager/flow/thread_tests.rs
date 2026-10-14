@@ -93,6 +93,19 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
             env.get("BASH_MAX_OUTPUT_LENGTH").map(String::as_str),
             (thread == ProviderKind::Claude).then_some("150000")
         );
+        // A Claude thread has no background jobs of its own, and its shell holds it at most
+        // two minutes: long commands go through run and run_check.
+        for (name, value) in [
+            ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1"),
+            ("BASH_DEFAULT_TIMEOUT_MS", "120000"),
+            ("BASH_MAX_TIMEOUT_MS", "120000"),
+        ] {
+            assert_eq!(
+                env.get(name).map(String::as_str),
+                (thread == ProviderKind::Claude).then_some(value),
+                "{name}"
+            );
+        }
         match permission {
             PermissionLevel::FullAccess => {
                 assert_eq!(spec.access, Access::Full);

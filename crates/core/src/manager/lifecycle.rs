@@ -103,6 +103,8 @@ impl SessionManager {
             if conversation.lifecycle != Lifecycle::Archived {
                 self.recover_integrated_checks(&conversation.id).await;
             }
+            // Its thread's background runs the restart cut off are told as such.
+            self.recover_background_runs(&conversation.id).await;
             let Ok(tasks) = self.core.tasks(&conversation.id).await else {
                 continue;
             };
@@ -631,12 +633,15 @@ impl SessionManager {
         self.settle_all_holds(id).await;
         // Its full checks stop, and their checkout goes with the rest below.
         self.end_integrated_checks(id).await;
+        // So do its thread's commands in the background.
+        self.stop_background_runs(id);
         let (owner, _) = conversation_owner(conversation);
         self.grants.revoke_owner(&owner);
         let mut owners = vec![
             owner,
             super::workers::worker_home_owner(id),
             super::workers::thread_temp_owner(id),
+            super::background_runs::background_owner(id),
             super::preview::preview_data_owner(id),
             super::integrated_checks::checks_owner(id),
         ];

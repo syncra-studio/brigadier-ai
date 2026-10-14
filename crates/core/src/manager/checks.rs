@@ -203,14 +203,16 @@ struct Kept {
 }
 
 impl SessionManager {
-    /// `run_check` for the thread of `id` (`task`: none) or the worker of `task`.
+    /// `run_check` for the thread of `id` (`task`: none) or the worker of `task`. The
+    /// thread's goes to the background when it holds the call too long, its waits for the
+    /// same check and for the build lease included ([`super::background_runs`]).
     pub(crate) async fn run_check_tool(
         &self,
         id: &ConversationId,
         task: Option<&TaskId>,
         args: RunCheck,
     ) -> Result<String> {
-        let caller = self.check_caller(id, task).await?;
+        let mut caller = self.check_caller(id, task).await?;
         let command = args
             .command
             .as_deref()
@@ -224,7 +226,8 @@ impl SessionManager {
             command,
             &check_tmpdir(&caller),
             brigadier_sandbox::limits::open_files(),
-        );
+        )
+        .to_owned();
         let workdir = run_workdir(
             args.workdir.as_deref(),
             caller.tree.as_deref(),
@@ -234,21 +237,52 @@ impl SessionManager {
             .timeout_secs
             .map_or(RUN_TIMEOUT_DEFAULT, Duration::from_secs)
             .clamp(Duration::from_secs(1), RUN_TIMEOUT_MAX);
-        let key = self.check_key(&caller, &workdir, command).await;
+        if task.is_some() {
+            return self
+                .check_now(&caller, &workdir, &command, timeout, args.rerun)
+                .await
+                .map(|(_, reply)| reply);
+        }
+        // The thread's check is the session's, not its CLI's: a check gone to the background
+        // outlives the CLI.
+        let cli_ended = std::mem::replace(&mut caller.ended, CancellationToken::new());
+        caller.owner = super::background_runs::background_owner(id);
+        let cancel = caller.ended.clone();
+        let (manager, words) = (self.arc(), command.clone());
+        let work = async move {
+            manager
+                .check_now(&caller, &workdir, &words, timeout, args.rerun)
+                .await
+        };
+        self.in_foreground(id, "run_check", &command, cli_ended, cancel, work)
+            .await
+    }
+
+    /// Runs `command` for `caller` once no run of the same check is under way, unless it
+    /// already ran on the same files (and `rerun` is off): its status and reply.
+    async fn check_now(
+        &self,
+        caller: &Caller,
+        workdir: &Path,
+        command: &str,
+        timeout: Duration,
+        rerun: bool,
+    ) -> Result<(String, String)> {
+        let key = self.check_key(caller, workdir, command).await;
         // One run of a key at a time: a caller that waited answers from what the other kept.
         let _running = match &key {
             Ok(key) => check_lock(&key.hash, timeout).await,
             Err(_) => None,
         };
-        if let (Ok(key), false) = (&key, args.rerun)
-            && let Some(done) = self.cached_check(&caller, key, command).await
+        if let (Ok(key), false) = (&key, rerun)
+            && let Some(done) = self.cached_check(caller, key, command).await
         {
-            return Ok(done.reply);
+            return Ok((done.status, done.reply));
         }
         let heavy = crate::machine::heavy::line_is_heavy(command);
-        self.run_check_command(&caller, &workdir, command, timeout, key, heavy)
+        self.run_check_command(caller, workdir, command, timeout, key, heavy)
             .await
-            .map(|done| done.reply)
+            .map(|done| (done.status, done.reply))
     }
 
     /// The caller that runs the full checks of conversation `id` in `checkout`.
