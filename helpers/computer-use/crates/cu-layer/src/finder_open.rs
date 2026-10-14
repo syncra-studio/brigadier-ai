@@ -16,7 +16,12 @@
 //! - an element gesture reads the file from the element's row (`AXURL`);
 //! - a key or menu gesture reads the items selected in the Finder window;
 //! - a pixel double-click first clicks once with the driver's own `click`,
-//!   which selects the item under it, then reads the selection.
+//!   which should select the item under it, then reads the selection. A
+//!   background click on a Finder row isn't reliably read back this way
+//!   (live-verified: the selection stayed empty), so when nothing comes back
+//!   selected this gesture is refused with a plain answer pointing at
+//!   `element_token` addressing, rather than falling through to a raw
+//!   double-click that would silently open nothing.
 //!
 //! [`install`] wraps the driver's tools; call it before
 //! [`crate::guard::install`], so the guard checks the target first. The
@@ -344,7 +349,17 @@ impl Tool for FinderOpen {
                 if selected.is_error == Some(true) {
                     return selected;
                 }
-                (self.finder.selected_files(pid, window_id), None)
+                let items = self.finder.selected_files(pid, window_id);
+                if items.is_empty() {
+                    // The selecting click landed without selecting a file row
+                    // we can read back (a miss, or a non-file target). Say so
+                    // plainly rather than falling through to a raw
+                    // double-click: that posts a background CGEvent Finder
+                    // may not act on at all, silently opening nothing while
+                    // still answering ok.
+                    return pixel_double_click_unresolved();
+                }
+                (items, None)
             }
         };
         let files: Vec<PathBuf> = items
@@ -451,6 +466,21 @@ fn text_of(result: &ToolResult) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A pixel double-click in Finder whose selecting click didn't land on a
+/// file row we can read back.
+fn pixel_double_click_unresolved() -> ToolResult {
+    let message = "double_click was not done: the point didn't land on a file row Brigadier \
+         could read back. Call get_window_state for the window, then double_click (or click \
+         action:\"open\") the row by its element_token instead — that opens the file behind \
+         the user's work."
+        .to_owned();
+    ToolResult::error(message.clone()).with_structured(json!({
+        "status": "refused",
+        "code": "pixel_open_unresolved",
+        "refusal": { "code": "pixel_open_unresolved", "message": message },
+    }))
 }
 
 /// The registry [`registry::build`](crate::registry) made last, for the

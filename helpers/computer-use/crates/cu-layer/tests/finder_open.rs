@@ -255,6 +255,74 @@ async fn a_pixel_double_click_selects_then_opens_behind() {
     assert_eq!(tools, ["launch_app"]);
 }
 
+/// A `selected_files` that never reports anything selected, as the real
+/// driver didn't after a background pixel click in a live probe.
+struct NothingSelectedFinder;
+
+impl Finder for NothingSelectedFinder {
+    fn is_finder(&self, pid: i32) -> bool {
+        pid == FINDER
+    }
+    fn element_files(&self, _pid: i32, _args: &Value) -> Vec<PathBuf> {
+        vec![]
+    }
+    fn selected_files(&self, _pid: i32, _window_id: Option<u32>) -> Vec<PathBuf> {
+        vec![]
+    }
+    fn is_folder(&self, path: &Path) -> bool {
+        path.extension().is_none()
+    }
+    fn default_app(&self, _path: &Path) -> Option<String> {
+        Some("com.apple.TextEdit".to_owned())
+    }
+}
+
+#[tokio::test]
+async fn a_pixel_double_click_that_selects_nothing_is_refused_not_silently_dropped() {
+    let seen = Shared::default();
+    let mut registry = ToolRegistry::new();
+    for name in cu_layer::finder_open::TOOLS {
+        registry.register(Box::new(FakeTool {
+            def: ToolDef {
+                name: (*name).into(),
+                description: "fake".into(),
+                input_schema: json!({"type": "object", "additionalProperties": true}),
+                read_only: false,
+                destructive: false,
+                idempotent: false,
+                open_world: false,
+            },
+            seen: seen.clone(),
+        }));
+    }
+    cu_layer::finder_open::install_with(
+        &mut registry,
+        Arc::new(NothingSelectedFinder),
+        Arc::new(FakeCalls {
+            seen: seen.clone(),
+            launch_fails: false,
+        }),
+    );
+    let result = registry
+        .invoke(
+            "double_click",
+            json!({"pid": FINDER, "window_id": 5, "x": 40, "y": 60}),
+        )
+        .await;
+    assert_eq!(result.is_error, Some(true));
+    let text = text_of(&result);
+    assert!(text.contains("element_token"), "{text}");
+    assert!(launches(&seen).is_empty());
+    assert_eq!(
+        seen.lock().unwrap().driver,
+        ["click"],
+        "the real double_click tool must never run: posting it as a raw background \
+         CGEvent can silently open nothing"
+    );
+    let structured = result.structured_content.unwrap();
+    assert_eq!(structured["code"], "pixel_open_unresolved", "{structured}");
+}
+
 #[tokio::test]
 async fn a_failed_open_says_so() {
     let (registry, _) = build(true);
