@@ -99,8 +99,8 @@ app's `routing.sqlite`.
   the next block and ends the turn", reset when Claude calls a tool; `stop_hook_active` marks a continuation.
 - **P4 is explained by OpenAI's caching guide:** cache entries live on individual machines, "traffic above 15
   requests per minute can lead to overflow routing", and `reasoning.effort` is part of the cached prefix unless a
-  `configuration_update` item changes it (GPT-6 and later). On GPT-5.6 and later the only lifetime is 30 minutes,
-  refreshed by reuse; writes cost 1.25× input and reads 0.05× on GPT-6.1 Sol. Whether Codex sends
+  `configuration_update` item changes it (GPT-6 and later). On GPT-5.6 and later the only `ttl` value is `30m`, a
+  **minimum** retention ("at least 30 minutes", possibly longer), refreshed by reuse; writes cost 1.25× input and reads 0.05× on GPT-6.1 Sol. Whether Codex sends
   `configuration_update` is still unknown (the string appears 19 times in the 0.162.1 binary).
 - **P3's scope holds for Claude workers in one conversation, more than the second pass feared.** A Claude worker's
   system prompt is the generic worker rules plus the repository's instructions; its task text is its first user
@@ -108,5 +108,6 @@ app's `routing.sqlite`.
   `:1743-1750`). The one open question is whether the per-worker `--add-dir` path is written into the dynamic
   system-prompt sections (PLAN §5, B4 probe).
 - **The checkpoint fork rewrites the thread (store, read-only):** the only `handoff` row (2026-10-14 03:46:29) read
-  544 and wrote 216,616 after the thread's last turn at 252,313 (WEAK-SPOTS C11). Codex cache writes: 0 in all 725
-  Codex rows, so Codex usage comparisons use the cached share of input, not writes.
+  544 and wrote 216,616 after the thread's last turn at 252,313 (WEAK-SPOTS C11). Codex cache writes: reported as 0 in all
+  725 Codex rows. The field is optional with a default of 0 in the app-server schema, so Codex comparisons lean on the
+  cached share of input, keep recording the write counter, and treat Codex write charges as unknown.

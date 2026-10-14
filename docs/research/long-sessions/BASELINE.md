@@ -40,8 +40,10 @@ completed task.
 - Orchestrator/thread rebirth with a briefing (handoff 3k, state 2k, Brain 5k tokens; decisions whole), cold-cache
   rebirth from a warm-time checkpoint above 150k (`M/cold.rs`), **Claude threads only**: a Codex thread has no cache
   lifetime in Brigadier (`crates/core/src/knowledge.rs:198`), so it is never checkpointed (WEAK-SPOTS N5).
-- **The note-writing fork (checkpoint and rebirth hand-off) runs with no tools and no MCP servers**
-  (`M/rebirth.rs:337-366`), unlike the thread, so it shares no cached prefix with it and rewrites the whole thread;
+- **On Claude, the note-writing fork (checkpoint and rebirth hand-off) runs with no built-in tools and no MCP
+  servers** (`M/rebirth.rs:337-366`, `--tools ""`), unlike the thread, so it shares no cached prefix with it and
+  rewrites the whole thread. (On Codex the same spec only disables web search and MCP servers; Codex's shell and
+  patch tools stay, `P/codex/mod.rs:1187-1194`.)
   `M/cold.rs:159-172` then counts the fork as a refresh of the thread's cache (WEAK-SPOTS C11, measured once:
   216,616 written for a 252k thread).
 - Worker hand-off at 200k / 70% with note, last messages, `<scratch>/handoff/` and `checks.md`. The wrap-up steer is
@@ -94,8 +96,10 @@ completed task.
   - 2026-10-14: 75 thread turns, average context 169k, 32.9M cache reads, 300k cache writes; 26 turns with under 400
     output tokens read 9.1M of it (WEAK-SPOTS S6).
   - The one `handoff` (checkpoint fork) row wrote 216,616 and read 544 (C11).
-  - 14 days: Brain enrichment wrote 1.31M at Haiku, more than the thread (0.50M), Claude workers (0.79M) or reviews
-    (0.58M) (S8). Codex: 725 rows, cache writes 0 in every one.
+  - 14 days: Brain enrichment wrote about 2.98M at Haiku (1.31M in the 14 rows tagged `brain`, 1.66M in 23 older
+    untagged Haiku rows of 10-04/05 that match enrichment jobs), more than the thread (0.50M), Claude workers (0.79M)
+    or reviews (0.58M) (S8). Codex: 725 rows, cache writes reported as 0 in every one (an optional field defaulting to
+    0; what it means for billing is unknown).
 - **REA for study tasks:** dropped (1.12× the tokens, slower, further from the findings).
 - **Rejected or not integrated:** budgets/caps, early compaction and context caps, quality settings, a fresh
   `claude -p` per message as default (≈ 2.5× worse for the orchestrator), RTK, headroom, Graft, graphify, cognee,

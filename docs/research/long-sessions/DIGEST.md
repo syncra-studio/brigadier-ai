@@ -116,7 +116,7 @@ Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-
 | SessionStart hook input on resume/fork carries `prompt_cache_likely_expired`, `context_tokens`, `seconds_since_last_response`, `estimated_cache_write_usd` | code.claude.com/docs/en/hooks | V | CLI? (`--include-hook-events` in help). A ready-made signal for cache-write causes (§7 next item 1) |
 | "Never change tools mid-session; don't switch models mid-session (late in a session it costs more than it saves; hand off to a subagent instead); put updates in messages, not system-prompt edits" | claude.dev blog, "prompt caching is everything" (2026-04-30) | V/M | Pattern. Brigadier's notes-instead-of-restarts (§7 item 5) already follow it |
 | OpenAI: the whole rendered prefix must match, including tools, effort and verbosity; on GPT-6 a `configuration_update` item changes effort without breaking the cache | developers.openai.com prompt-caching guide | V | API. `configuration_update` is in the codex binary; whether Codex uses it is unknown. **Probe P4 was inconclusive**: Codex cache hits swung 13k ↔ 25k from turn to turn with or without an effort change |
-| OpenAI cache lifetime on GPT-5.6 and later: one value, 30 minutes, "reusing the prefix refreshes its lifetime without another cache-write charge"; writes 1.25× input, reads 0.1× (0.05× on GPT-6.1 Sol); entries live on single machines and "traffic above 15 requests per minute can lead to overflow routing" | developers.openai.com/api/docs/guides/prompt-caching (re-fetched 2026-10-15) | V | API doc for the cache Codex's requests hit; no model list, so gpt-6.1-sol is unverified. Explains P4. Brigadier gives Codex no lifetime (WEAK-SPOTS N5) |
+| OpenAI cache retention on GPT-5.6 and later: one `ttl` value, `30m`, a **minimum** ("at least 30 minutes after its latest write or reuse", OpenAI may keep it longer), and "reusing the prefix refreshes its lifetime without another cache-write charge"; writes 1.25× input, reads 0.1× (0.05× on GPT-6.1 Sol); entries live on single machines and "traffic above 15 requests per minute can lead to overflow routing" | developers.openai.com/api/docs/guides/prompt-caching (re-fetched 2026-10-15) | V | API doc for the cache Codex's requests hit; no model list, so gpt-6.1-sol is unverified. Explains P4. Brigadier gives Codex no lifetime (WEAK-SPOTS N5) |
 | Anthropic: the prefix is `tools`, `system`, then `messages`; "Modifying tool definitions (names, descriptions, parameters) invalidates the entire cache" | platform.claude.com prompt-caching (re-fetched) | V | Applies to every Claude session. Why the checkpoint fork, launched with no tools, rewrites the whole thread (WEAK-SPOTS C11) |
 
 ### 2.3 Grounding and speed
@@ -254,7 +254,7 @@ read-only on the installed app's store.
 **What w04 (Fable) found.** Codex 0.162.1 has a stable hooks engine (PostToolUse, PreCompact, Stop and more) that
 Brigadier switches off; Claude's `Stop`, `PostToolBatch` and `PreCompact` hooks give a done gate, exact capture of
 every tool result and a way to refuse compaction; Claude's Bash output limits are documented, which answers PLAN
-probe 2; OpenAI documents a 30-minute cache lifetime and explains P4; Brigadier gives Codex no cache lifetime; fast
+probe 2; OpenAI documents a 30-minute minimum cache retention and explains P4; Brigadier gives Codex no cache lifetime; fast
 mode in `-p`; judges with tools are reliable where transcript readers aren't; Symphony's 5-minute stall deadline;
 twelve PLAN changes and seven probes.
 
@@ -271,15 +271,18 @@ first-pass errors; a new build order.
 - Same-session resume for limits, account switches and sign-in errors, and "prompt is too long" through the size
   hand-off (C1 widened; PLAN A12), and w05's ordering argument: A6 waits for A12, because with compaction off a worker
   that ignores the steer hits "prompt is too long" and today that becomes a thin successor on a bigger-window model.
-- `learned` shown to the thread and provenance on Brain lines (G6, G7; PLAN A13); wake-up coalescing (S6; PLAN A14);
+- `learned` shown to the thread, stored as an unverified claim when taken, and provenance on Brain lines (G6, G7;
+  PLAN A13); wake-up coalescing (S6; PLAN A14);
   `search_transcript` over the thread's own tool output (C12; PLAN A15).
-- P0.1 measured by arithmetic (`cache_write − Δcontext`) instead of cause tags only; Codex writes dropped (always 0).
+- P0.1 measured at the cache boundary (the previous prompt that didn't come back as cache read) instead of cause tags
+  only; w05's `cache_write − Δcontext` form was corrected in review, since Brigadier's context figure includes output.
+  Codex keeps its write counter, though every observed value is 0.
 - The first-pass corrections: L2's steer is mid-turn, once per turn (not at turn end); C7 is the lesser problem
   next to C11; V1 must count `handoff` and Brain rows; V2 gains an account-switch seam, a context-window seam, a
   planted false `learned` line and an item that lives only in the thread's own tool output.
 - Codex hooks as a lever (N4), Claude hooks for exact capture (P0.3), refusing compaction (A6(d)) and a narrow done
-  gate (A5(e)); Bash output limits (probe 2 dropped); Codex's 30-minute lifetime for a Codex checkpoint (A3, behind
-  a probe); W1 raised to High and the thread watchdog moved earlier (A9); a reviewer that runs things, not one that
+  gate (A5(e)); Bash output limits (probe 2 dropped); a Codex checkpoint only once repeated observations show
+  when Codex's cache really goes cold (A3; OpenAI's 30 minutes is a minimum, not an expiry); W1 raised to High and the thread watchdog moved earlier (A9); a reviewer that runs things, not one that
   reads (A5(b)); verifying the first report of a long phase hardest (A5(a), from LongCLI-Bench).
 
 **Rejected or narrowed, and why:**
@@ -302,3 +305,15 @@ first-pass errors; a new build order.
 - **Settled rules are untouched.** Claude fast mode (paid usage credits) and Codex's `tokenBudget` are listed in
   PLAN §6 for the user, both recommended against for now; nothing here changes Q5 or the no-caps rule. The report
   cap is kept; showing `learned` costs nothing extra, and raising the cap is a §6 question to decide after V3.
+
+**Codex review of this second pass (9 findings, all accepted after checking).** The missed-prefix measure replaces
+`cache_write − Δcontext`, because Brigadier's context figure counts output tokens (`P/claude/parse.rs:1009-1014`);
+A6 now waits for P0.3 as well as A12, since its forced hand-off would pass on output clipped at 8 KiB, and A12(b) is
+labelled not lossless until then; the cloned note fork gets a deny-all `PreToolUse` hook, because refusing MCP calls
+doesn't stop a writable thread's native `Bash`, `Edit` and `Write`; A13 stores worker items as unverified claims,
+because a read-only task's report reaches the Brain before the thread reads it (`M/workers.rs:3668-3670`); the
+`Stop` hook lets rightly waiting turns end (outline, review, background job, question; `M/workers.rs:3077-3112`);
+OpenAI's 30 minutes is a minimum retention, not an expiry, so a Codex lifetime needs repeated observations first;
+Codex's zero write counts are an optional field's default, so write charges are unknown; the Brain enrichment totals
+include 23 older untagged Haiku rows (about 2.98M writes, not 1.31M); and the fork's missing tools are a Claude fact,
+since on Codex `ToolSet::None` only turns off web search (`P/codex/mod.rs:1187-1194`).
