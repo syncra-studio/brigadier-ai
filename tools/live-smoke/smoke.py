@@ -672,12 +672,23 @@ def main():
             skipped = f"SKIPPED: {' and '.join(missing)} not signed in (sign in, then run it again)"
         else:
             log("phase 1: a long command with a follow-up and a steer (C1), a background job (C2)")
-            threads = [threading.Thread(target=f, daemon=True) for f in (smoke.scenario_long_command, smoke.scenario_background_job)]
+            # A scenario that raises breaks the run, as it would on the main thread.
+            raised = []
+
+            def scenario(f):
+                try:
+                    f()
+                except Exception as err:
+                    raised.append(err)
+            threads = [threading.Thread(target=scenario, args=(f,), daemon=True)
+                       for f in (smoke.scenario_long_command, smoke.scenario_background_job)]
             for t in threads:
                 t.start()
             for t in threads:
                 while t.is_alive():
                     t.join(1)
+            if raised:
+                raise raised[0]
             smoke.note_native()
             log("phase 2: messages with a wait, both ways")
             smoke.scenario_messages()
