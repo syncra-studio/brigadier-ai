@@ -442,6 +442,12 @@ impl SessionManager {
                     "a turn is running; interrupt it first".into(),
                 ));
             }
+            // Closing the CLI would end them with it, and their results with them.
+            if conv.has_cli_jobs().await {
+                return Err(Error::Invalid(
+                    "a command the thread left running in its CLI hasn't ended; it can rest once that ends".into(),
+                ));
+            }
             conv.close_cli().await;
         }
         // Reported workers wait idle; they stop too and resume when sent back to work.

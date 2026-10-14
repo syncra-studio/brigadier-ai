@@ -30,6 +30,7 @@ pub(crate) const KINDS: &[&str] = &[
     "plan.updated",
     "review.updated",
     "integrated_check.updated",
+    "background_run.updated",
     "thread.seen",
     "output.stored",
     "thread.looked",

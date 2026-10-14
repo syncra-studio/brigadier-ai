@@ -1770,6 +1770,8 @@ mod accounts_tests;
 #[cfg(test)]
 mod answer_tests;
 #[cfg(test)]
+mod background_tests;
+#[cfg(test)]
 mod base_merge_tests;
 #[cfg(test)]
 mod brain_first_tests;
