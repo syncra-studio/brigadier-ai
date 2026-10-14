@@ -32,7 +32,7 @@ if (params.has("drive")) {
 useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
-  settings: { ...state.settings, defaultOrchestrator: null, defaultChatModel: null, defaultPermission: "askForApproval" },
+  settings: { ...state.settings, defaultOrchestrator: null, defaultChatModel: null },
   providers: { ...state.providers, view: { providers: OVERVIEWS, sessions: [], fixtures: [] } },
 }));
 

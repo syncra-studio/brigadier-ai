@@ -72,7 +72,7 @@ test("Configuration shows its defaults in one card and explains the choices in i
   assert.deepEqual(seen.memories, { setting: "Memories", row: "Memories · 2 saved" });
   assert.deepEqual(seen.buttons, [], "no Use automatic button");
   assert.equal(seen.levelRow, false, "no read-only row for the chosen level");
-  assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Ask for approval"]);
+  assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Approve for me"]);
   assert.deepEqual(seen.sessionsMenu, [["Automatic (Opus 5.5)", "The first signed-in agent’s default model."]]);
   assert.deepEqual(seen.chatsMenu, [["Automatic (Opus 5.5)", "The same model as new sessions."]]);
   assert.deepEqual(

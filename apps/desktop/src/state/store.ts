@@ -196,7 +196,7 @@ export const useApp = create<AppState>()(() => ({
   conversations: {},
   settings: {
     density: cachedDensity(),
-    defaultPermission: "fullAccess",
+    defaultPermission: "approveForMe",
     defaultOrchestrator: null,
     defaultChatModel: null,
     hibernateAfterMinutes: 30,

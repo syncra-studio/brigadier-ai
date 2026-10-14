@@ -19,7 +19,8 @@ import type { SendShortcut } from "./SendShortcut";
  */
 export type Settings = { density: Density, 
 /**
- * Permission level for projects that have not remembered one.
+ * Permission level for new sessions without an explicit choice.
+ * Older saved records without this field keep their former default.
  */
 defaultPermission: PermissionLevel, 
 /**

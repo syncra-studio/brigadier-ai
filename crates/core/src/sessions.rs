@@ -541,13 +541,12 @@ impl Core {
 
     /// Starts `engine`'s first start, in one durable write: the conversations it deletes, each
     /// marked as being deleted (gone for the user from now on, see [`Self::mark_deleting`]),
-    /// and the default permission back to Full access.
+    /// while keeping the user's settings.
     pub(crate) async fn begin_engine_switch(
         &self,
         engine: &str,
         conversations: Vec<ConversationId>,
     ) -> Result<()> {
-        let _writes = self.settings_writes.lock().await;
         let marks: Vec<(String, DomainEvent)> = {
             let projection = self.projection();
             conversations
@@ -574,14 +573,6 @@ impl Core {
             },
         )];
         events.extend(marks);
-        let mut settings = self.settings();
-        if settings.default_permission != crate::model::PermissionLevel::FullAccess {
-            settings.default_permission = crate::model::PermissionLevel::FullAccess;
-            events.push((
-                streams::SETTINGS.into(),
-                DomainEvent::SettingsChanged { settings },
-            ));
-        }
         self.record(events).await?;
         Ok(())
     }

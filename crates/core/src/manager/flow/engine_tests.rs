@@ -128,7 +128,7 @@ async fn catalog_kinds(flow: &Flow) -> Vec<String> {
 }
 
 /// The first start deletes every conversation there was (sessions and Chats, an archived one
-/// too) through the normal delete, puts the default permission back to Full access, keeps the
+/// too) through the normal delete, keeps the saved default permission, keeps the
 /// projects and their remembered choices, and resumes nothing of what it deletes.
 #[tokio::test]
 async fn the_first_start_deletes_every_old_conversation() {
@@ -159,7 +159,7 @@ async fn the_first_start_deletes_every_old_conversation() {
     assert_eq!(visible[0].id, flow.conversation);
     gone(&flow, &OLD).await;
     let settings = flow.core.settings();
-    assert_eq!(settings.default_permission, PermissionLevel::FullAccess);
+    assert_eq!(settings.default_permission, PermissionLevel::AskForApproval);
     assert!(settings.onboarded, "the other settings stay");
     let project = flow
         .core
@@ -250,6 +250,10 @@ async fn the_earlier_engines_own_records_still_read() {
 async fn later_starts_keep_what_was_made_after_the_first() {
     let heard: Heard = Arc::default();
     let mut flow = Flow::start("engine-later", Options::default(), listening(&heard)).await;
+    assert_eq!(
+        flow.core.settings().default_permission,
+        PermissionLevel::ApproveForMe
+    );
     assert_eq!(
         flow.core.engine().as_deref(),
         Some(super::super::engine::ENGINE)

@@ -55,9 +55,9 @@ review needs both. Windows and Linux builds: see [docs/DEVELOPMENT.md](docs/DEVE
    start their install or sign-in for you.
 2. **Add a project** in the sidebar: a folder with a git repository (Brigadier can create one for
    a folder that has none, or clone one).
-3. Pick a permission level in the composer and say what you want, in plain words. New projects
-   start in Full access, where workers run like your own terminal; read
-   [Permission levels](#permission-levels) first.
+3. Say what you want in the composer, in plain words. Fresh installs start in Approve for me,
+   where Brigadier reviews approvals for you and keeps the CLI sandbox enabled. You can change
+   the level in the composer; read [Permission levels](#permission-levels) first.
 4. Watch the thread plan it and start workers. Each worker's progress shows in the thread. Work
    lands on your branch, or on a session branch that merges into its base when you ask.
 
@@ -150,8 +150,9 @@ couldn't be removed is retried at the next launch.
 
 ### Permission levels
 
-A session's permission level is picked in the composer, and a project remembers the last one
-used. **A new project starts in Full access**; Settings › Configuration changes that default.
+A session's permission level is picked in the composer. **Fresh installs start in Approve for me**;
+Settings › Configuration changes the default for new sessions. Existing installs keep their saved
+default, and existing sessions keep their chosen level.
 
 - **Ask for approval**: you approve every plan and every change before it lands. Workers run
   in the OS sandbox without network. Each step outside it (another folder, a host to reach)
@@ -162,12 +163,17 @@ used. **A new project starts in Full access**; Settings › Configuration change
   `.vscode`, `.mcp.json`) still ask. These grants live in memory only.
 - **Approve for me**: Brigadier approves plans and changes for you (a risky plan gets an
   independent review first) and asks you only what only you can answer. Workers run in the OS
-  sandbox with network. When a command needs more, the CLI's own reviewer decides (Claude's auto
-  mode, Codex's auto-review) and declines what it judges unsafe.
+  sandbox with network. When a command needs more, Claude's auto mode or Brigadier's reviewer
+  for Codex decides and declines what it judges unsafe.
 - **Full access**: as Approve for me, but workers run like your own terminal (Claude in
   `bypassPermissions`, Codex with no sandbox and no approvals). They can read, change and delete
   any file your account can, run any command and use the internet, without asking. The composer
   shows a notice while a conversation is in Full access.
+
+These sandbox descriptions apply to macOS. On Linux and Windows, the level still requests the
+CLI's sandbox and approval review, but support depends on the installed CLI and OS. Brigadier's
+own worker sandbox is macOS-only; Windows and Linux remain incomplete
+(see [Status and roadmap](#status-and-roadmap)).
 
 In the sandbox a worker can write to its own worktree and scratch folder, its worktree's git
 folder (so it can commit) and the toolchains' caches (`~/.cargo`, `~/.rustup`, the npm, pnpm,

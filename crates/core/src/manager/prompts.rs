@@ -79,9 +79,15 @@ pub(crate) fn thread(
     let (environment, permission) = setting_texts(conversation, trusted, run);
     let project = project.map_or("(no project)", |p| p.name.as_str());
     let workspace = workspace.map_or_else(|| "(none yet)".to_owned(), workspace_text);
-    let commands = match provider {
-        ProviderKind::Codex => CODEX_COMMANDS,
-        ProviderKind::Claude => CLAUDE_COMMANDS,
+    let level = match &conversation.setup {
+        Some(Setup::Session { permission, .. }) if trusted => *permission,
+        _ => PermissionLevel::AskForApproval,
+    };
+    let commands = match (provider, super::run::run_tools(provider, level)) {
+        (ProviderKind::Claude, crate::tools::RunTools::None) => CLAUDE_NATIVE_COMMANDS,
+        (ProviderKind::Codex, crate::tools::RunTools::None) => NATIVE_COMMANDS,
+        (ProviderKind::Codex, _) => CODEX_COMMANDS,
+        (ProviderKind::Claude, _) => CLAUDE_COMMANDS,
     };
     let computer = if cfg!(target_os = "macos") {
         COMPUTER_ROUTING
@@ -213,6 +219,10 @@ const CODEX_COMMANDS: &str = "\n- Use @run for builds, tests, logs and long list
 /// folder, so a workspace change can resume the same session) and what that shell's long
 /// output looks like (its output hook trims it).
 const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix: the name without it doesn't exist.\n- Use @run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it, a failure's too. Below Full access, when the sandbox blocks a command, run_unsandboxed runs it outside once it is approved for you.\n- Your own shell starts in a scratch folder, not in your workspace: run a command there as `cd <your workspace> && …`. Its output over 8 KB comes back as a digest too; a failing command's output comes as the CLI's own excerpt.";
+
+/// Command tools supplied by the CLI when Brigadier has no supported sandbox wrapper.
+const NATIVE_COMMANDS: &str = "\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
+const CLAUDE_NATIVE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix: the name without it doesn't exist.\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
 
 /// How the thread shows the user something running (THREAD-PLAN.md Q6): its previews outlive
 /// its CLI, and in Brigadier's own repository they never touch the installed app's data.
@@ -2226,10 +2236,16 @@ mod environment_tests {
                     "with their mcp__brigadier__ prefix: the name without it doesn't exist"
                 ));
                 assert!(claude.contains("mcp__brigadier__delegate_task calls in one message"));
-                assert!(claude.contains("Use mcp__brigadier__run for builds"));
+                let claude_run =
+                    !cfg!(windows) && (cfg!(target_os = "macos") || permission == "fullAccess");
+                assert_eq!(
+                    claude.contains("Use mcp__brigadier__run for builds"),
+                    claude_run
+                );
+                assert_eq!(claude.contains("Use your own CLI shell"), !claude_run);
                 assert!(claude.contains("keep it with mcp__brigadier__remember ("));
                 assert!(codex.contains("several delegate_task calls in one message"));
-                assert!(codex.contains("Use run for builds"));
+                assert_eq!(codex.contains("Use run for builds"), !cfg!(windows));
                 assert!(!codex.contains("mcp__brigadier__"));
                 assert!(!claude.contains("@run") && !claude.contains("@remember"));
                 // No tool with an underscore is named bare in Claude's.
@@ -2373,8 +2389,11 @@ mod environment_tests {
             ProviderKind::Codex,
             true,
         );
-        assert!(codex.contains("Use run for builds, tests, logs and long listings"));
-        assert!(codex.contains("run_unsandboxed"));
+        assert_eq!(
+            codex.contains("Use run for builds, tests, logs and long listings"),
+            !cfg!(windows)
+        );
+        assert_eq!(codex.contains("run_unsandboxed"), !cfg!(windows));
         let claude = thread(
             &session("askForApproval"),
             None,
@@ -2384,11 +2403,18 @@ mod environment_tests {
             ProviderKind::Claude,
             true,
         );
-        assert!(
-            claude.contains("Use mcp__brigadier__run for builds, tests, logs and long listings")
+        assert_eq!(
+            claude.contains("Use mcp__brigadier__run for builds, tests, logs and long listings"),
+            cfg!(target_os = "macos")
         );
-        assert!(claude.contains("run_unsandboxed"));
-        assert!(claude.contains("a failing command's output comes as the CLI's own excerpt"));
+        assert_eq!(
+            claude.contains("run_unsandboxed"),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            claude.contains("a failing command's output comes as the CLI's own excerpt"),
+            cfg!(target_os = "macos")
+        );
         assert!(claude.contains("Your workspace: (none yet)"));
         // The short ending, with its folded Details, updated rather than repeated; nothing
         // is listed for the user outside a run (THREAD-PARITY-PLAN §5 Q6, Q9).

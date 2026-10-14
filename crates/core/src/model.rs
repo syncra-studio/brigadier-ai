@@ -806,7 +806,9 @@ pub enum LinkTarget {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub density: Density,
-    /// Permission level for projects that have not remembered one.
+    /// Permission level for new sessions without an explicit choice.
+    /// Older saved records without this field keep their former default.
+    #[serde(default = "saved_default_permission")]
     pub default_permission: PermissionLevel,
     /// Orchestrator model for projects that have not remembered one. Absent: the first
     /// logged-in provider's default model.
@@ -1000,6 +1002,12 @@ fn default_true() -> bool {
     true
 }
 
+/// Preserve the default of saved settings that predate an explicit permission field.
+/// Fresh stores use [`Settings::default`] instead.
+fn saved_default_permission() -> PermissionLevel {
+    PermissionLevel::FullAccess
+}
+
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
 pub const SETTINGS_VERSION: u32 = 2;
@@ -1016,7 +1024,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             density: Density::default(),
-            default_permission: PermissionLevel::FullAccess,
+            default_permission: PermissionLevel::ApproveForMe,
             default_orchestrator: None,
             default_chat_model: None,
             hibernate_after_minutes: 30,
@@ -2424,6 +2432,28 @@ pub mod streams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_settings_use_approve_for_me_and_saved_permissions_stay() {
+        let fresh = Settings::default();
+        assert_eq!(fresh.default_permission, PermissionLevel::ApproveForMe);
+        let restored: Settings =
+            serde_json::from_value(serde_json::to_value(&fresh).unwrap()).unwrap();
+        assert_eq!(restored.default_permission, PermissionLevel::ApproveForMe);
+        for permission in [
+            PermissionLevel::AskForApproval,
+            PermissionLevel::ApproveForMe,
+            PermissionLevel::FullAccess,
+        ] {
+            let saved: Settings = serde_json::from_value(serde_json::json!({
+                "defaultPermission": permission
+            }))
+            .unwrap();
+            assert_eq!(saved.default_permission, permission);
+        }
+        let legacy: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.default_permission, PermissionLevel::FullAccess);
+    }
 
     #[test]
     fn old_machine_events_default_to_heat_and_memory_round_trips() {

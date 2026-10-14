@@ -4,6 +4,11 @@
 > It is built by a new `/delegator` run (§4), after Codex review and the user's approval.
 > File:line references are to `7cff0db9`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`.
 
+> **Default revised 2026-10-14:** fresh installs start in Approve for me. Saved settings stay
+> unchanged, including through the first engine switch. Existing thread-engine sessions keep
+> their chosen levels. This supersedes the Full access default in Q6 and the 2026-10-07 decision below. Dated test evidence
+> still records the level used at the time.
+
 ## 1. Target and success test
 
 Today the main session is a pure orchestrator. It is a CLI session with no tools of its own, run by a fixed pipeline: lead → outline → automatic reviewer → verifier → review worker → land.
@@ -33,7 +38,7 @@ The baseline today: T1 took 16 m 33 s in Brigadier. An estimated 6–9 min in `/
 - §2:
   - principle 1, "The orchestrator only talks";
   - principle 4, an automatic verifier per outlined phase.
-- §5 "Permission level": the default becomes Full access (Q6).
+- §5 "Permission level": the original Q6 default was Full access; fresh installs now use Approve for me (2026-10-14).
 - §6:
   - Phase 3 deliverable "Orchestrator runtime… no built-in tools", its MCP tool list, and "A phase lands once, after its verifier";
   - Phase 6 "One verifier per phase".
@@ -148,8 +153,8 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
 - Retention: the task's worktree and CLI session files are kept while it is taken over. `dispose_task` (`M/workers.rs:3387-3434`) waits for the terminal. Stop or archive closes the PTY first.
 - **A feasibility spike ends phase 2** (correction 8). It checks both vendors: resume a stream-json / app-server session interactively; no concurrent writers; supervision is handed back; the resumed headless session sees the terminal turns.
 
-**Q6: Full access default; sandbox fixed for the other levels; previews; only a worker's own leftovers killed.**
-- **Change** `Settings.default_permission` (`model.rs:527`, default at `:597`) to `FullAccess`. It is remembered per project as before (`sessions.rs:1848`).
+**Q6: Approve for me default (revised 2026-10-14); sandbox fixes; previews; only a worker's own leftovers killed.**
+- **Fresh installs:** `Settings.default_permission` is `ApproveForMe` (2026-10-14). Existing saved settings keep their level. Settings → Configuration chooses the default for new sessions; the composer can override it for one session.
 - **Thread and workers both follow the conversation's level** (correction 5). The thread gets the same mapping as workers (`M/workers.rs:1416-1458`, `P/claude/mod.rs:421-442`, `P/codex/mod.rs:1056-1116`):
   - Full → `bypassPermissions` / `never` + `danger-full-access`;
   - Approve for me → `auto` / `on-request` with the auto-reviewer, writable roots = session checkout + scratch + `toolchain_roots` (`M/workers.rs:3678-3719`);
@@ -279,7 +284,7 @@ Shared work comes first, so parallel streams don't edit the same contracts (corr
    - the overnight conductor's "land the verifier" texts (`M/overnight/conductor.rs:279, 494, 631-673, 769, 1214-1218`);
    - `land_phase`'s verifier refusal (`M/landing.rs:91-96`) now applies only to a verifier the orchestrator started.
 4. Q7 role floors and effort.
-5. Q6 Full access default and the sandbox fixes (Chromium, git commit).
+5. Q6 permission default (now Approve for me for fresh installs) and the sandbox fixes (Chromium, git commit).
 
 **Done when:**
 - T1 in Brigadier lands verified in ≤ 8 min, down from 16.5. Tokens ≤ 0.6× the Brigadier baseline. Measured with `tools/ab`.
@@ -363,7 +368,7 @@ Shared work comes first, so parallel streams don't edit the same contracts (corr
 **Scope:** T1 and T2, both arms:
 - fresh clones at the frozen base, warmed the same way;
 - run one after the other, `/delegator` first, each on a fresh Claude 5-hour window;
-- Brigadier on its normal defaults (Full access, router floors);
+- Brigadier on the defaults used for this dated A/B (Full access, router floors; fresh installs changed to Approve for me on 2026-10-14);
 - `/delegator` with its usual Opus 5.5 high.
 
 An independent evaluator runs every done-when command on both arms' results. Write `docs/evidence/<date>-thread-ab.md`.
@@ -412,7 +417,7 @@ If a task is inconclusive, rerun it once with the arm order swapped. Missing evi
 8. **T1's exact request text** is in §1 (copied from the app); its image is in the run's evidence folder.
 
 **The user decided (2026-10-07):**
-1. Full access is the default for every project the user adds, remembered per project. Yes.
+1. Full access was chosen as the default then. Superseded 2026-10-14: fresh installs use Approve for me; existing saved choices stay.
 2. Q14: delete everything from the old engine, sessions and plain Chats alike. No migration.
 3. T2 (the thread-indicator request, base `53c5cd32`) is the second A/B task. Yes.
 4. The "deciding" follow-up routing (PLAN §9 Q30) stays as it is; the user likes it. Revisit only if phase 2 shows a reason.

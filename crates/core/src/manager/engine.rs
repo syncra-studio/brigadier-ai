@@ -4,7 +4,7 @@
 //! - **Once**: a store marked as the thread engine's (`EngineSwitched`) skips all of it, so a
 //!   conversation made after the first start is never touched.
 //! - **Exactly the old ones**: the ids are recorded first (`EngineSwitching`), in one write with
-//!   each one's mark as being deleted and the default permission going back to Full access; a
+//!   each one's mark as being deleted, keeping the user's settings; a
 //!   restart that cut the first start off goes on with that list, never with what exists by then.
 //! - **The normal delete**: each one is then deleted as the user's Delete does: gone from the
 //!   app at once, its cleanup in the background, and one a quit cuts off finished at the next
@@ -13,7 +13,7 @@
 
 use super::SessionManager;
 use crate::Result;
-use crate::model::{ConversationId, PermissionLevel};
+use crate::model::ConversationId;
 
 /// The engine a store's conversations belong to once its first start is over.
 pub(crate) const ENGINE: &str = "thread-1";
@@ -38,8 +38,7 @@ impl SessionManager {
                     .into_iter()
                     .map(|conversation| conversation.id)
                     .collect();
-                let reset = self.core.settings().default_permission != PermissionLevel::FullAccess;
-                if !old.is_empty() || reset {
+                if !old.is_empty() {
                     self.core.begin_engine_switch(ENGINE, old.clone()).await?;
                 }
                 old

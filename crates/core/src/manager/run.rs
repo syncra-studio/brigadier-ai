@@ -65,10 +65,30 @@ const PASS_TTL: Duration = Duration::from_secs(120);
 /// Codex's auto-reviewer); a Claude thread has it at both sandboxed levels: Claude's auto mode
 /// declines every command that leaves its sandbox, so under Approve for me Brigadier's
 /// reviewer decides (`super::escalation`). Full access has no sandbox to leave. Not on
-/// Windows, which has no `/bin/sh` and no sandbox `run` can keep.
+/// Windows, which has no `/bin/sh` and no sandbox `run` can keep. Sandboxed Claude threads
+/// outside macOS use their native CLI shell: Brigadier's Seatbelt wrapper is macOS-only.
 pub(crate) fn run_tools(provider: ProviderKind, permission: PermissionLevel) -> RunTools {
+    run_tools_for_platform(
+        provider,
+        permission,
+        cfg!(windows),
+        cfg!(target_os = "macos"),
+    )
+}
+
+fn run_tools_for_platform(
+    provider: ProviderKind,
+    permission: PermissionLevel,
+    windows: bool,
+    seatbelt: bool,
+) -> RunTools {
     match (provider, permission) {
-        _ if cfg!(windows) => RunTools::None,
+        _ if windows => RunTools::None,
+        (ProviderKind::Claude, permission)
+            if !seatbelt && permission != PermissionLevel::FullAccess =>
+        {
+            RunTools::None
+        }
         (_, PermissionLevel::FullAccess) => RunTools::Run,
         (_, PermissionLevel::AskForApproval) => RunTools::WithEscalation,
         (ProviderKind::Claude, PermissionLevel::ApproveForMe) => RunTools::WithEscalation,
@@ -574,35 +594,37 @@ mod tests {
 
     #[test]
     fn every_thread_runs_and_leaves_its_sandbox_where_something_decides() {
-        if cfg!(windows) {
-            return;
+        use RunTools::{None, Run, WithEscalation};
+        // Full access, Approve for me, Ask for approval, in that order.
+        for (windows, seatbelt, claude, codex) in [
+            (true, false, [None, None, None], [None, None, None]),
+            (false, false, [Run, None, None], [Run, Run, WithEscalation]),
+            (
+                false,
+                true,
+                [Run, WithEscalation, WithEscalation],
+                [Run, Run, WithEscalation],
+            ),
+        ] {
+            for (provider, expected) in
+                [(ProviderKind::Claude, claude), (ProviderKind::Codex, codex)]
+            {
+                for (permission, expected) in [
+                    PermissionLevel::FullAccess,
+                    PermissionLevel::ApproveForMe,
+                    PermissionLevel::AskForApproval,
+                ]
+                .into_iter()
+                .zip(expected)
+                {
+                    assert_eq!(
+                        run_tools_for_platform(provider, permission, windows, seatbelt),
+                        expected,
+                        "{provider:?} {permission:?}, windows={windows}, seatbelt={seatbelt}"
+                    );
+                }
+            }
         }
-        assert_eq!(
-            run_tools(ProviderKind::Claude, PermissionLevel::FullAccess),
-            RunTools::Run
-        );
-        // Brigadier's reviewer decides at Approve for me, the user at Ask.
-        assert_eq!(
-            run_tools(ProviderKind::Claude, PermissionLevel::ApproveForMe),
-            RunTools::WithEscalation
-        );
-        assert_eq!(
-            run_tools(ProviderKind::Claude, PermissionLevel::AskForApproval),
-            RunTools::WithEscalation
-        );
-        assert_eq!(
-            run_tools(ProviderKind::Codex, PermissionLevel::FullAccess),
-            RunTools::Run
-        );
-        // Approve for me leaves the sandbox with its own shell (see the module docs).
-        assert_eq!(
-            run_tools(ProviderKind::Codex, PermissionLevel::ApproveForMe),
-            RunTools::Run
-        );
-        assert_eq!(
-            run_tools(ProviderKind::Codex, PermissionLevel::AskForApproval),
-            RunTools::WithEscalation
-        );
     }
 
     #[test]
