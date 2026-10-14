@@ -1,0 +1,48 @@
+name: Proposal
+description: A change in behaviour or a new feature. Agree on the problem before any code.
+title: "[Proposal]: "
+labels: [proposal]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem, not an implementation. Pull requests for proposals that aren't
+        accepted are closed automatically: see [Approval before code](https://github.com/syncra-studio/brigadier-ai/blob/main/CONTRIBUTING.md#approval-before-code).
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched open and closed issues and found no duplicate.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you're trying to do, and where Brigadier gets in the way. Be concrete.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today
+      description: Your current workaround, if any.
+    validations:
+      required: true
+  - type: textarea
+    id: wanted
+    attributes:
+      label: What should happen instead
+      description: The behaviour you'd expect, in plain words.
+    validations:
+      required: true
+  - type: dropdown
+    id: build
+    attributes:
+      label: Would you build it?
+      description: If yes, comment "I'd like to take this" once it's filed, and wait for the issue to be accepted and assigned to you.
+      options:
+        - "No"
+        - "Yes, once accepted"
+    validations:
+      required: true
