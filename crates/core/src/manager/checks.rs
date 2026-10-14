@@ -135,7 +135,21 @@ struct Caller {
     project: Option<ProjectId>,
     /// The project's secret files, repository-relative.
     secret_files: Vec<String>,
+    /// Its commands run at low OS priority: a worker's, and the full checks.
+    low_priority: bool,
 }
+
+/// How one check ended: the reply the model gets, its status ("exit 0", "timed out after …")
+/// and its whole output's alias.
+pub(super) struct CheckDone {
+    pub reply: String,
+    pub status: String,
+    pub alias: String,
+}
+
+/// What runs the session's full checks (SESSION-FIXES-PLAN.md §11): its check checkout, at the
+/// session's access, in the background under the checks' own cleanup owner.
+pub(super) struct FullCheckCaller(Caller);
 
 /// What a checkout's changes are counted from.
 #[derive(Debug, Clone)]
@@ -221,11 +235,116 @@ impl SessionManager {
             Err(_) => None,
         };
         if let (Ok(key), false) = (&key, args.rerun)
-            && let Some(reply) = self.cached_check(&caller, key, command).await
+            && let Some(done) = self.cached_check(&caller, key, command).await
         {
-            return Ok(reply);
+            return Ok(done.reply);
         }
-        self.run_check_command(&caller, &workdir, command, timeout, key)
+        let heavy = crate::machine::heavy::line_is_heavy(command);
+        self.run_check_command(&caller, &workdir, command, timeout, key, heavy)
+            .await
+            .map(|done| done.reply)
+    }
+
+    /// The caller that runs the full checks of conversation `id` in `checkout`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn full_check_caller(
+        &self,
+        id: &ConversationId,
+        checkout: PathBuf,
+        scratch: PathBuf,
+        access: Access,
+        owner: String,
+        ended: CancellationToken,
+    ) -> FullCheckCaller {
+        let project = self
+            .core
+            .conversation(id)
+            .ok()
+            .and_then(|conversation| conversation.project_id);
+        let secret_files = project
+            .as_ref()
+            .and_then(|project| self.core.project(project).ok())
+            .map(|project| project.prefs.secret_files)
+            .unwrap_or_default();
+        let redactor = super::secrets::redactor(self.session_secret_values(id).await);
+        FullCheckCaller(Caller {
+            conversation_id: id.clone(),
+            task_id: None,
+            // Brigadier's own sandbox, below Full access: no CLI of a vendor needed.
+            provider: ProviderKind::Claude,
+            access,
+            ended,
+            owner,
+            tree: Some(checkout),
+            scratch,
+            cwd_grant: None,
+            redactor,
+            base: Base::Head,
+            project,
+            secret_files,
+            low_priority: true,
+        })
+    }
+
+    /// The project's full checks in `caller`'s checkout, as it documents them.
+    pub(super) async fn full_check_commands(
+        &self,
+        caller: &FullCheckCaller,
+    ) -> Result<Vec<(String, String)>> {
+        let caller = &caller.0;
+        let tree = caller
+            .tree
+            .clone()
+            .ok_or_else(|| Error::Invalid("the full checks have no checkout".into()))?;
+        let (packages, manager) = {
+            let root = tree.clone();
+            blocking(move || {
+                let files = listed_files(&root)?;
+                Ok((read_packages(&root, &files), PackageManager::of(&root)))
+            })
+            .await?
+        };
+        let learned = self.learned_checks(caller, &packages).await;
+        Ok(full_checks(&tree, &packages, manager, &learned))
+    }
+
+    /// Runs one command of the full checks, from the cache when it already ran on the same
+    /// files under the same inputs (unless `rerun`). Always takes the build lease. `cache`:
+    /// its result is kept (an install's is not: it changes the checkout).
+    pub(super) async fn run_full_check(
+        &self,
+        caller: &FullCheckCaller,
+        command: &str,
+        workdir: &str,
+        timeout: Duration,
+        rerun: bool,
+        cache: bool,
+    ) -> Result<CheckDone> {
+        let caller = &caller.0;
+        let root = caller
+            .tree
+            .clone()
+            .ok_or_else(|| Error::Invalid("the full checks have no checkout".into()))?;
+        let workdir = if workdir.is_empty() {
+            root
+        } else {
+            root.join(workdir)
+        };
+        let key = if cache {
+            self.check_key(caller, &workdir, command).await
+        } else {
+            Err("an install isn't kept".to_owned())
+        };
+        let _running = match &key {
+            Ok(key) => check_lock(&key.hash, timeout).await,
+            Err(_) => None,
+        };
+        if let (Ok(key), false) = (&key, rerun)
+            && let Some(done) = self.cached_check(caller, key, command).await
+        {
+            return Ok(done);
+        }
+        self.run_check_command(caller, &workdir, command, timeout, key, true)
             .await
     }
 
@@ -273,6 +392,7 @@ impl SessionManager {
                 base: workspace.base.map_or(Base::Head, Base::Commit),
                 project,
                 secret_files,
+                low_priority: true,
             });
         }
         let cli = self
@@ -306,6 +426,7 @@ impl SessionManager {
             base,
             project,
             secret_files,
+            low_priority: false,
         })
     }
 
@@ -406,7 +527,7 @@ impl SessionManager {
 
     /// The kept result of `key`, as the reply to `caller`; `None` when there is none, or its
     /// output is gone.
-    async fn cached_check(&self, caller: &Caller, key: &Key, command: &str) -> Option<String> {
+    async fn cached_check(&self, caller: &Caller, key: &Key, command: &str) -> Option<CheckDone> {
         let (body, _) = match self.core.store().check_result(key.hash.clone()).await {
             Ok(found) => found?,
             Err(err) => {
@@ -441,15 +562,19 @@ impl SessionManager {
             None,
         )
         .await;
-        Some(format!(
-            "[cached: this command already ran on these same files {} ago; its result is below. \
-             Pass rerun: true to run it again.]\n{reply}",
-            ago(now_ms() - kept.ran_at_ms)
-        ))
+        Some(CheckDone {
+            reply: format!(
+                "[cached: this command already ran on these same files {} ago; its result is below. \
+                 Pass rerun: true to run it again.]\n{reply}",
+                ago(now_ms() - kept.ran_at_ms)
+            ),
+            status: kept.status,
+            alias,
+        })
     }
 
     /// Runs `command` in `workdir` for `caller`, keeps its result under `key` (when there is
-    /// one and the command ran to its end) and returns the reply.
+    /// one and the command ran to its end) and returns how it ended.
     async fn run_check_command(
         &self,
         caller: &Caller,
@@ -457,11 +582,12 @@ impl SessionManager {
         command: &str,
         timeout: Duration,
         key: std::result::Result<Key, String>,
-    ) -> Result<String> {
+        heavy: bool,
+    ) -> Result<CheckDone> {
         let spec = self.check_spec(caller, workdir, command)?;
         // A heavy check waits for the build lease before it starts, and is never stopped or
         // paused once running (a test stopped mid-run fails its timing assertions).
-        let lease = if crate::machine::heavy::line_is_heavy(command) {
+        let lease = if heavy {
             let (ticket, now, rows) = self.machine.ask_check(&caller.owner, command);
             let lease = CheckLease {
                 machine: self.machine.clone(),
@@ -524,10 +650,16 @@ impl SessionManager {
             bypassed.as_deref(),
         )
         .await;
-        if ran.status == "exit 0" {
+        // The full checks' commands are the project's, not a package's to learn.
+        let full_checks = caller.task_id.is_none() && caller.low_priority;
+        if ran.status == "exit 0" && !full_checks {
             self.learn_check(caller, workdir, command).await;
         }
-        Ok(reply)
+        Ok(CheckDone {
+            reply,
+            status: ran.status,
+            alias,
+        })
     }
 
     /// What runs `command` in `workdir` for `caller`: in its checkout's root (the sandbox's
@@ -563,8 +695,8 @@ impl SessionManager {
             }
         }
         brigadier_providers::cli::apply_session_env(&mut spec, &env, &[]);
-        // Workers run at low priority, and so do their checks.
-        spec.low_priority = caller.task_id.is_some();
+        // Workers run at low priority, and so do their checks and the full checks.
+        spec.low_priority = caller.low_priority;
         Ok(spec)
     }
 
@@ -1573,14 +1705,17 @@ fn workspace_wide(path: &str) -> bool {
         || (path.starts_with("tsconfig") && path.ends_with(".json"))
 }
 
-/// The checks a set of changes calls for.
+/// The checks a set of changes calls for while its work is under way: those of the packages
+/// it changed, never more (SESSION-FIXES-PLAN.md §11). What a change reaches beyond them (the
+/// packages that depend on it, the workspace's own files, a path no package holds) is the
+/// session's full checks' to cover, once, after the work lands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Plan {
-    /// Why everything is checked, when it is.
-    everything: Option<String>,
-    /// Each package checked, why, and its checks: `(command, workdir)`, the workdir
+    /// Each changed package checked, and its checks: `(command, workdir)`, the workdir
     /// repository-relative ("" for the root).
     groups: Vec<Group>,
+    /// What the full checks cover instead, each with why.
+    left: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1598,9 +1733,10 @@ impl Plan {
             "{changed} changed file{} since your base. ",
             if changed == 1 { "" } else { "s" }
         );
-        match &self.everything {
-            Some(why) => text.push_str(&format!("Check everything: {why}.")),
-            None => text.push_str("The affected checks, by package:"),
+        if self.groups.is_empty() {
+            text.push_str("None of the changes has checks of its own.");
+        } else {
+            text.push_str("The checks of the packages you changed:");
         }
         for group in &self.groups {
             text.push_str(&format!("\n{}:", group.label));
@@ -1612,16 +1748,27 @@ impl Plan {
                 }
             }
         }
-        text.push_str(
-            "\nRun each with run_check (`command`, and `workdir` where one is given). A check \
-             that already ran on the same files answers from the cache.",
-        );
+        if !self.left.is_empty() {
+            text.push_str(&format!(
+                "\nNot listed: {}. The session's full checks cover those once the work lands, \
+                 one run for everyone's work: don't run the whole suite, a workspace-wide \
+                 check or an app build yourself.",
+                self.left.join("; ")
+            ));
+        }
+        if !self.groups.is_empty() {
+            text.push_str(
+                "\nRun each with run_check (`command`, and `workdir` where one is given). A \
+                 check that already ran on the same files answers from the cache.",
+            );
+        }
         text
     }
 }
 
 /// The checks `changed` calls for, given the workspace's `packages`, its package manager and
-/// the checks learned per package folder.
+/// the checks learned per package folder: each changed package's own, and what is left to the
+/// full checks.
 fn affected(
     changed: &[String],
     packages: &[Package],
@@ -1639,11 +1786,11 @@ fn affected(
             .max_by_key(|(_, package)| package.dir.len())
             .map(|(index, _)| index)
     };
-    let mut everything = None;
+    let mut left = Vec::new();
     let mut touched = BTreeSet::new();
     for path in changed {
         if workspace_wide(path) {
-            everything.get_or_insert_with(|| format!("{path} is the workspace's own"));
+            left.push(format!("{path} (the workspace's own)"));
             continue;
         }
         // A folder can hold a crate and a Node package: both are touched.
@@ -1658,64 +1805,43 @@ fn affected(
                         .map(|(index, _)| index),
                 );
             }
-            None => {
-                everything.get_or_insert_with(|| format!("{path} belongs to no package"));
-            }
+            None => left.push(format!("{path} (no package holds it)")),
         }
     }
-    // A changed package with no checks of its own (no check scripts, nothing learned) is
-    // checked with everything rather than not at all.
-    if everything.is_none()
-        && let Some(index) = touched
-            .iter()
-            .find(|index| package_checks(&packages[**index], manager, learned).is_empty())
-    {
-        everything = Some(format!(
-            "{} has no checks of its own",
-            packages[*index].folder()
+    // The packages that depend on a touched one.
+    let dependents: BTreeSet<String> = (0..packages.len())
+        .filter(|index| !touched.contains(index))
+        .filter(|index| {
+            touched
+                .iter()
+                .any(|used| packages[*used].used_by(&packages[*index]))
+        })
+        .map(|index| packages[index].folder())
+        .collect();
+    if !dependents.is_empty() {
+        left.push(format!(
+            "the packages that depend on yours ({})",
+            dependents.into_iter().collect::<Vec<_>>().join(", ")
         ));
-    }
-    if let Some(why) = everything {
-        return Plan {
-            everything: Some(why),
-            groups: vec![everything_group(packages, manager, learned)],
-        };
-    }
-    // The packages that depend on a touched one, until none is added.
-    let mut dependents = BTreeSet::new();
-    loop {
-        let reached: BTreeSet<usize> = touched.iter().chain(&dependents).copied().collect();
-        let more: Vec<usize> = (0..packages.len())
-            .filter(|index| !reached.contains(index))
-            .filter(|index| {
-                reached
-                    .iter()
-                    .any(|used| packages[*used].used_by(&packages[*index]))
-            })
-            .collect();
-        if more.is_empty() {
-            break;
-        }
-        dependents.extend(more);
     }
     let mut seen = BTreeSet::new();
     let mut groups = Vec::new();
-    for (index, why) in touched.iter().map(|index| (*index, "changed")).chain(
-        dependents
-            .iter()
-            .map(|index| (*index, "depends on a changed package")),
-    ) {
+    for index in touched {
         let package = &packages[index];
-        let checks: Vec<(String, String)> = package_checks(package, manager, learned)
+        let checks: Vec<(String, String)> = package_checks(package, manager, learned, false)
             .into_iter()
             .filter(|check| seen.insert(check.clone()))
             .collect();
         if checks.is_empty() {
+            left.push(format!(
+                "{} (it has no checks of its own)",
+                package.folder()
+            ));
             continue;
         }
         groups.push(Group {
             label: format!(
-                "{} ({}{why})",
+                "{} ({}changed)",
                 package.folder(),
                 package
                     .name
@@ -1726,10 +1852,7 @@ fn affected(
             checks,
         });
     }
-    Plan {
-        everything: None,
-        groups,
-    }
+    Plan { groups, left }
 }
 
 /// A package's checks: those learned for its folder, its check scripts, and a crate's tests,
@@ -1738,6 +1861,7 @@ fn package_checks(
     package: &Package,
     manager: PackageManager,
     learned: &BTreeMap<String, Vec<String>>,
+    builds: bool,
 ) -> Vec<(String, String)> {
     let mut checks: Vec<(String, String)> = learned
         .get(&package.folder())
@@ -1755,7 +1879,8 @@ fn package_checks(
             checks.push(("cargo fmt --check".into(), String::new()));
         }
         (PackageKind::Node { scripts, .. }, name) => {
-            for script in scripts {
+            // A build is the full checks' (§11), not a package's own check.
+            for script in scripts.iter().filter(|script| builds || *script != "build") {
                 checks.push(match (manager, name) {
                     (PackageManager::Pnpm, Some(name)) => {
                         (format!("pnpm --filter {name} {script}"), String::new())
@@ -1817,7 +1942,7 @@ fn everything_group(
                 },
                 ..package.clone()
             };
-            checks.extend(package_checks(&child, manager, &BTreeMap::new()));
+            checks.extend(package_checks(&child, manager, &BTreeMap::new(), true));
         }
     }
     if packages
@@ -1837,6 +1962,62 @@ fn everything_group(
         label: "the whole workspace".into(),
         checks,
     }
+}
+
+/// Scripts a project keeps its full checks in, repository-relative.
+const FULL_CHECK_SCRIPTS: &[&str] = &[
+    "tools/full-checks.sh",
+    "scripts/full-checks.sh",
+    "scripts/full-checks",
+    "bin/full-checks",
+];
+/// Root scripts that run a project's whole verification.
+const FULL_CHECK_RUNS: &[&str] = &["verify", "ci"];
+
+/// The project's full checks, as it documents them (SESSION-FIXES-PLAN.md §11): its own
+/// full-checks script, which knows its prerequisites, generated files and known exclusions;
+/// else a root `verify` or `ci` script; else every package's checks and the workspace-wide
+/// Cargo commands. Each is `(command, workdir)`, run from the repository's root.
+fn full_checks(
+    root: &Path,
+    packages: &[Package],
+    manager: PackageManager,
+    learned: &BTreeMap<String, Vec<String>>,
+) -> Vec<(String, String)> {
+    for script in FULL_CHECK_SCRIPTS {
+        let path = root.join(script);
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        #[cfg(unix)]
+        let runs_itself = {
+            use std::os::unix::fs::PermissionsExt;
+            meta.permissions().mode() & 0o111 != 0
+        };
+        #[cfg(not(unix))]
+        let runs_itself = false;
+        let command = if runs_itself {
+            (*script).to_owned()
+        } else {
+            format!("bash {script}")
+        };
+        return vec![(command, String::new())];
+    }
+    let root_scripts = std::fs::read_to_string(root.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|manifest| manifest.get("scripts").cloned());
+    if let Some(run) = FULL_CHECK_RUNS.iter().find(|run| {
+        root_scripts
+            .as_ref()
+            .is_some_and(|scripts| scripts.get(**run).is_some())
+    }) {
+        return vec![(manager.run(run), String::new())];
+    }
+    everything_group(packages, manager, learned).checks
 }
 
 #[cfg(test)]
@@ -2263,13 +2444,12 @@ mod tests {
             PackageManager::Npm,
             &BTreeMap::new(),
         );
-        let commands = commands(&plan);
-        for crate_name in ["brigadier-index", "brigadier-core", "brigadierd"] {
-            assert!(
-                commands.contains(&format!("cargo test -p {crate_name}")),
-                "{crate_name}: {commands:?}"
-            );
-        }
+        // The crate that uses it through the workspace's table is its dependent.
+        assert!(commands(&plan).contains(&"cargo test -p brigadier-index".to_owned()));
+        assert_eq!(
+            plan.left,
+            ["the packages that depend on yours (crates/core)"]
+        );
     }
 
     #[test]
@@ -2281,7 +2461,7 @@ mod tests {
     }
 
     #[test]
-    fn a_leaf_crate_change_checks_it_and_what_depends_on_it() {
+    fn a_change_lists_only_its_own_packages_checks() {
         let learned = BTreeMap::from([(
             "crates/core".to_owned(),
             vec!["cargo test -p brigadier-core --features slow".to_owned()],
@@ -2292,63 +2472,67 @@ mod tests {
             PackageManager::Pnpm,
             &learned,
         );
-        assert_eq!(plan.everything, None);
         assert_eq!(
             commands(&plan),
             [
                 "cargo test -p brigadier-index",
                 "cargo clippy -p brigadier-index --all-targets -- -D warnings",
                 "cargo fmt --check",
-                "cargo test -p brigadier-core --features slow @ crates/core",
-                "cargo test -p brigadier-core",
-                "cargo clippy -p brigadier-core --all-targets -- -D warnings",
-                "cargo test -p brigadierd",
-                "cargo clippy -p brigadierd --all-targets -- -D warnings",
             ]
         );
-        assert!(
-            plan.groups[1]
-                .label
-                .contains("depends on a changed package")
+        // What depends on it is the full checks', named but not listed.
+        assert_eq!(
+            plan.left,
+            ["the packages that depend on yours (crates/core)"]
         );
         let text = plan.text(1);
-        assert!(text.contains("`cargo test -p brigadierd`"), "{text}");
-        assert!(!text.contains("other"), "{text}");
-        // A Node package's dependents through `workspace:`, by pnpm filter.
+        assert!(text.contains("`cargo test -p brigadier-index`"), "{text}");
+        assert!(!text.contains("brigadier-core"), "{text}");
+        assert!(text.contains("don't run the whole suite"), "{text}");
+        // A Node package's dependents through `workspace:` aren't listed either.
         let plan = affected(
             &["packages/ui/src/button.tsx".into()],
             &workspace(),
             PackageManager::Pnpm,
             &BTreeMap::new(),
         );
+        assert_eq!(commands(&plan), ["pnpm --filter @b/ui test"]);
         assert_eq!(
-            commands(&plan),
-            [
-                "pnpm --filter @b/ui test",
-                "pnpm --filter desktop typecheck",
-                "pnpm --filter desktop build",
-            ]
+            plan.left,
+            ["the packages that depend on yours (apps/desktop)"]
         );
-        // Without pnpm, the script runs in its folder.
+        // Without pnpm, the script runs in its folder; a build is never a package's check.
         let plan = affected(
             &["apps/desktop/src/main.ts".into()],
             &workspace(),
             PackageManager::Npm,
             &BTreeMap::new(),
         );
+        assert_eq!(commands(&plan), ["npm run typecheck @ apps/desktop"]);
+        assert!(plan.left.is_empty());
+        // Two changed packages that share a check list it once.
+        let plan = affected(
+            &[
+                "crates/index/src/lib.rs".into(),
+                "crates/other/src/lib.rs".into(),
+            ],
+            &workspace(),
+            PackageManager::Pnpm,
+            &BTreeMap::new(),
+        );
+        let listed = commands(&plan);
         assert_eq!(
-            commands(&plan),
-            [
-                "npm run typecheck @ apps/desktop",
-                "npm run build @ apps/desktop"
-            ]
+            listed.iter().filter(|c| *c == "cargo fmt --check").count(),
+            1,
+            "{listed:?}"
         );
     }
 
     #[test]
-    fn a_root_lockfile_or_config_change_checks_everything() {
+    fn a_root_lockfile_or_config_change_is_left_to_the_full_checks() {
         for path in [
             "Cargo.lock",
+            "Cargo.toml",
             "pnpm-lock.yaml",
             "tsconfig.base.json",
             ".cargo/config.toml",
@@ -2360,63 +2544,50 @@ mod tests {
                 PackageManager::Pnpm,
                 &BTreeMap::from([(".".to_owned(), vec!["make check".to_owned()])]),
             );
-            assert!(plan.everything.as_deref().unwrap().contains(path), "{path}");
             assert_eq!(
                 commands(&plan),
                 [
-                    "make check",
-                    "pnpm run lint",
-                    "pnpm --filter @b/ui test",
-                    "pnpm --filter desktop typecheck",
-                    "pnpm --filter desktop build",
-                    "cargo test --workspace",
-                    "cargo clippy --workspace --all-targets -- -D warnings",
+                    "cargo test -p brigadier-index",
+                    "cargo clippy -p brigadier-index --all-targets -- -D warnings",
                     "cargo fmt --check",
                 ],
                 "{path}"
             );
+            assert!(
+                plan.left.iter().any(|left| left.contains(path)),
+                "{path}: {:?}",
+                plan.left
+            );
+            let text = plan.text(2);
+            assert!(!text.contains("--workspace"), "{text}");
+            assert!(!text.contains("make check"), "{text}");
         }
-        // A root script of the same name is taken to run its packages' (the root's `lint`
-        // here), and a package's learned checks run too.
-        let mut packages = workspace();
-        packages.push(
-            node_package(
-                "packages/lint",
-                r#"{"name": "@b/lint", "scripts": {"lint": "x"}}"#,
-            )
-            .unwrap(),
-        );
+        // Alone, it lists nothing at all.
         let plan = affected(
             &["pnpm-lock.yaml".into()],
-            &packages,
+            &workspace(),
             PackageManager::Pnpm,
-            &BTreeMap::from([(
-                "crates/core".to_owned(),
-                vec!["cargo test -p brigadier-core --features slow".to_owned()],
-            )]),
+            &BTreeMap::new(),
         );
-        let commands = commands(&plan);
+        assert!(plan.groups.is_empty());
+        let text = plan.text(1);
         assert!(
-            !commands.contains(&"pnpm --filter @b/lint lint".to_owned()),
-            "{commands:?}"
+            text.contains("None of the changes has checks of its own"),
+            "{text}"
         );
-        assert!(
-            commands
-                .contains(&"cargo test -p brigadier-core --features slow @ crates/core".to_owned()),
-            "{commands:?}"
-        );
-        // A nested lockfile is its package's.
+        assert!(!text.contains("run_check"), "{text}");
+        // A nested manifest is its package's.
         let plan = affected(
             &["packages/ui/package.json".into()],
             &workspace(),
             PackageManager::Pnpm,
             &BTreeMap::new(),
         );
-        assert_eq!(plan.everything, None);
+        assert_eq!(commands(&plan), ["pnpm --filter @b/ui test"]);
     }
 
     #[test]
-    fn a_changed_package_with_no_checks_of_its_own_checks_everything() {
+    fn a_changed_package_with_no_checks_of_its_own_is_left_to_the_full_checks() {
         let mut packages = workspace();
         packages.push(node_package("packages/icons", r#"{"name": "@b/icons"}"#).unwrap());
         let plan = affected(
@@ -2425,14 +2596,9 @@ mod tests {
             PackageManager::Pnpm,
             &BTreeMap::new(),
         );
-        assert!(
-            plan.everything
-                .as_deref()
-                .unwrap()
-                .contains("packages/icons has no checks of its own")
-        );
-        assert!(commands(&plan).contains(&"cargo test --workspace".to_owned()));
-        // Once a check is learned for it, its own checks are enough.
+        assert!(plan.groups.is_empty());
+        assert_eq!(plan.left, ["packages/icons (it has no checks of its own)"]);
+        // Once a check is learned for it, that is its check.
         let plan = affected(
             &["packages/icons/index.ts".into()],
             &packages,
@@ -2442,28 +2608,68 @@ mod tests {
                 vec!["pnpm run svgo".to_owned()],
             )]),
         );
-        assert_eq!(plan.everything, None);
+        assert!(plan.left.is_empty());
         assert_eq!(commands(&plan), ["pnpm run svgo @ packages/icons"]);
     }
 
     #[test]
-    fn a_path_no_package_holds_checks_everything() {
+    fn a_path_no_package_holds_is_left_to_the_full_checks() {
         let plan = affected(
             &["docs/THREAD-PLAN.md".into()],
             &workspace(),
             PackageManager::Pnpm,
             &BTreeMap::new(),
         );
-        assert!(
-            plan.everything
-                .as_deref()
-                .unwrap()
-                .contains("docs/THREAD-PLAN.md")
-        );
-        assert!(commands(&plan).contains(&"cargo test --workspace".to_owned()));
+        assert!(plan.groups.is_empty());
+        assert_eq!(plan.left, ["docs/THREAD-PLAN.md (no package holds it)"]);
+        assert!(!plan.text(1).contains("--workspace"));
         assert_eq!(
             affected(&[], &workspace(), PackageManager::Pnpm, &BTreeMap::new()).text(0),
             "Nothing changed since your base: there are no affected checks."
         );
+    }
+
+    #[test]
+    fn the_full_checks_are_the_projects_own_script_else_its_verify_else_everything() {
+        let root = std::env::temp_dir().join(format!(
+            "brigadier-full-checks-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(root.join("tools")).unwrap();
+        let full = |root: &Path| {
+            full_checks(root, &workspace(), PackageManager::Pnpm, &BTreeMap::new())
+                .into_iter()
+                .map(|(command, _)| command)
+                .collect::<Vec<_>>()
+        };
+        // Nothing documented: every package's checks and the workspace-wide ones.
+        let everything = full(&root);
+        assert!(
+            everything.contains(&"cargo test --workspace".to_owned()),
+            "{everything:?}"
+        );
+        assert!(
+            everything.contains(&"pnpm --filter desktop build".to_owned()),
+            "{everything:?}"
+        );
+        // A root `verify` (or `ci`) script runs the whole verification.
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"scripts": {"ci": "x", "verify": "y"}}"#,
+        )
+        .unwrap();
+        assert_eq!(full(&root), ["pnpm run verify"]);
+        // The project's full-checks script wins, run by bash unless it runs itself.
+        let script = root.join("tools/full-checks.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        assert_eq!(full(&root), ["bash tools/full-checks.sh"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(full(&root), ["tools/full-checks.sh"]);
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -223,8 +223,8 @@ pub enum TaskState {
     /// The user continues the worker's own session in a terminal ("Open in terminal"): no
     /// headless CLI runs it until the terminal ends, then it reports what was done there.
     TakenOver,
-    /// Its commits are being moved onto the target branch (`land_phase`), or it runs a
-    /// quick self-check after they were rebased onto a target that moved.
+    /// Its commits are being moved onto the target branch (`land_phase`), or its merge worker
+    /// was sent back to finish its merge first.
     Landing,
     /// Accepted, but it cannot land safely right now (see `blockedReason`). Nothing changed.
     ReadyToLand,
@@ -805,7 +805,7 @@ pub struct Task {
     /// A reviewer or verifier of an overnight phase's checks: the round it belongs to.
     #[serde(default)]
     pub gate_link: Option<GateLink>,
-    /// Set while its work is being landed, or rebased and waiting for its quick self-check:
+    /// Set while its work is being landed, or its merge worker was sent back to finish it:
     /// its next report lands on its own (fast-forward only, never reviewed again). Older
     /// tasks: the commit message it was accepted with.
     #[serde(default)]
@@ -862,6 +862,15 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub review_hold: Option<String>,
+    /// Its review's part of the hold has settled; the hold lasts until a passing integrated
+    /// check covers its landing too (SESSION-FIXES-PLAN.md §11).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub review_settled: bool,
+    /// It looks at the integrated tree's own dev build, live, for the visible changes that
+    /// landed: the one live check of the app, instead of one per worker (§11).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live_look: bool,
     /// What it took from and gave to the project's Brain (SESSION-FIXES-PLAN.md Q6.6).
     #[serde(default)]
     pub brain: BrainUse,
@@ -1419,6 +1428,74 @@ pub struct Finding {
     /// The thread marked it high severity: its fix gets one targeted re-check.
     #[serde(default)]
     pub high: bool,
+}
+
+/// One run of the project's full checks on the integrated tree: a branch the session's work
+/// lands on, at its tip after landings (SESSION-FIXES-PLAN.md §11). Workers run only the checks
+/// of their own change; this runs once per tip, after landings settle, in a checkout of its
+/// own. Recorded from when it is due, so a restart neither loses nor repeats it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegratedCheck {
+    /// `check-<n>`, its place among the conversation's.
+    pub id: String,
+    pub conversation_id: ConversationId,
+    /// The repository and branch checked: the session branch, or an overnight run's.
+    pub repo: String,
+    pub branch: String,
+    /// The commit checked; while due, the newest tip so far.
+    pub tip: String,
+    pub state: IntegratedCheckState,
+    /// When it became due, or the last landing moved its tip: it starts once landings settle.
+    pub due_at_ms: i64,
+    #[serde(default)]
+    pub started_at_ms: Option<i64>,
+    #[serde(default)]
+    pub ended_at_ms: Option<i64>,
+    /// The requests whose work it checks: one whose thread deferred its answer hears the verdict.
+    #[serde(default)]
+    pub requests: Vec<String>,
+    /// The landed tasks it covers that no passing check covered before, set when it starts:
+    /// a failure goes back to one of them.
+    #[serde(default)]
+    pub tasks: Vec<TaskId>,
+    /// Asked for again by the thread: kept results don't answer it.
+    #[serde(default)]
+    pub rerun: bool,
+}
+
+/// Where an integrated check stands.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum IntegratedCheckState {
+    /// Waiting for landings to settle, or for the run before it.
+    Due,
+    Running {
+        /// The command running now.
+        command: Option<String>,
+    },
+    /// Every command passed.
+    Passed { commands: Vec<String> },
+    /// `command` failed: the code's problem until shown otherwise.
+    Failed {
+        command: String,
+        status: String,
+        /// Its whole output, for `read_artifact`.
+        output: Option<String>,
+    },
+    /// It couldn't run to its end (a restart, its checkout couldn't be made): no verdict on
+    /// the code, so its tip still counts as unchecked.
+    Interrupted { reason: String },
+}
+
+impl IntegratedCheckState {
+    pub fn is_final(&self) -> bool {
+        !matches!(self, Self::Due | Self::Running { .. })
+    }
 }
 
 /// What the user's consent to the session's merge waits for (SESSION-FIXES-PLAN.md Q3).

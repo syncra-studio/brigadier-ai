@@ -161,6 +161,13 @@ impl SessionManager {
                 };
                 let (mockup, mockup_images) =
                     mockup_part(args.mockup, built.as_ref(), args.kind, role)?;
+                if args.live_look && (args.kind != TaskKind::Implement || mockup.is_some()) {
+                    return Err(Error::Invalid(
+                        "`live_look` is for an implement task that only looks at the \
+                         integrated tree's dev build: no mockup, no other kind"
+                            .into(),
+                    ));
+                }
                 if args.kind == TaskKind::Operate {
                     if target.is_none() || end_state.is_none() {
                         return Err(Error::Invalid(
@@ -288,6 +295,7 @@ impl SessionManager {
                             target,
                             end_state,
                             mockup,
+                            live_look: args.live_look,
                             ..Default::default()
                         },
                     )
@@ -592,6 +600,7 @@ impl SessionManager {
             }
             OrchestratorCall::ProjectMap => crate::heap(|| self.project_map_tool(id)).await,
             OrchestratorCall::CleanUp => crate::heap(|| self.clean_up(id)).await,
+            OrchestratorCall::RerunChecks => crate::heap(|| self.rerun_checks(id)).await,
             OrchestratorCall::ReviewPlan(args) => {
                 crate::heap(|| self.review_thread_plan(id, args)).await
             }

@@ -144,7 +144,7 @@ async fn held(name: &str, plan: Plan) -> Held {
                         "B.md"
                     };
                     turn.write(file, "note\n");
-                    // A later turn (the self-check after a rebase) finds its file in already.
+                    // A later turn (a fix sent back after landing) finds its file in already.
                     if !turn.git(&["status", "--porcelain"]).is_empty() {
                         turn.git(&["add", file]);
                         turn.git(&["commit", "-qm", &format!("Write {file}")]);

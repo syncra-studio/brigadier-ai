@@ -140,6 +140,7 @@ impl Projection {
             | DomainEvent::QuestionUpdated { .. }
             | DomainEvent::PlanUpdated { .. }
             | DomainEvent::ReviewUpdated { .. }
+            | DomainEvent::IntegratedCheckUpdated { .. }
             | DomainEvent::ThreadCommitsSeen { .. }
             | DomainEvent::OutputStored { .. }
             | DomainEvent::ComputerActed { .. }

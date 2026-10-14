@@ -44,6 +44,7 @@ mod flow;
 mod fork;
 mod git_actions;
 mod instructions;
+mod integrated_checks;
 mod landing;
 mod lifecycle;
 mod machine;
@@ -116,6 +117,7 @@ use crate::{Core, Error, Result};
 pub use brains::{BrainCounters, IndexRunStats};
 pub use closing::Turn;
 pub use conversation::SendOutcome;
+pub(crate) use integrated_checks::integrated_check_number;
 pub use side_chat::BrowserPage;
 pub use takeover::{HostedTerminal, TerminalHost, WorkerTerminal};
 pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES};
@@ -165,6 +167,8 @@ pub struct SessionManager {
     ref_records: Arc<refcheck::RefRecords>,
     /// Each session's pre-warmed next worktree (THREAD-PLAN.md Q8 lever 6).
     prewarms: prewarm::Prewarms,
+    /// The sessions' full checks on the integrated tree ([`integrated_checks`]).
+    integrated: integrated_checks::IntegratedChecks,
     /// The previews running now ([`preview`]).
     previews: preview::Previews,
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
@@ -282,6 +286,7 @@ impl SessionManager {
             run_passes: run::RunPasses::default(),
             ref_records: Arc::default(),
             prewarms: prewarm::Prewarms::default(),
+            integrated: integrated_checks::IntegratedChecks::default(),
             previews: preview::Previews::default(),
             running_reviews: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),

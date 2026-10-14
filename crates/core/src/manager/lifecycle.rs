@@ -97,13 +97,17 @@ impl SessionManager {
             if conversation.quota_wait.is_some() && conversation.lifecycle != Lifecycle::Archived {
                 self.keep_conversation_wait(&conversation).await;
             }
+            // Its full checks the restart cut off, or that were due, run (§11).
+            if conversation.lifecycle != Lifecycle::Archived {
+                self.recover_integrated_checks(&conversation.id).await;
+            }
             let Ok(tasks) = self.core.tasks(&conversation.id).await else {
                 continue;
             };
             for task in tasks.into_iter().filter(|task| !task.state.is_final()) {
                 match task.state {
-                    // A self-check after a rebase, or its report Brigadier was to land on its
-                    // own: the restart ended that, so the orchestrator decides.
+                    // A merge worker sent back during its landing, or its report Brigadier was
+                    // to land on its own: the restart ended that, so the orchestrator decides.
                     _ if interrupted_fix(&task) => {
                         self.recover_fix(&task).await;
                         continue;
@@ -253,9 +257,9 @@ impl SessionManager {
         });
     }
 
-    /// A write task whose commits were rebased during its landing, cut off by the restart
-    /// while its worker ran the quick self-check (or before its report landed): its worktree
-    /// stays and it waits as reported; the orchestrator gets its report, and decides.
+    /// A merge task sent back to its worker during its landing, cut off by the restart while
+    /// the worker merged again (or before its report landed): its worktree stays and it waits
+    /// as reported; the orchestrator gets its report, and decides.
     async fn recover_fix(&self, task: &Task) {
         let checking = task.state != TaskState::Reported;
         let Ok(task) = self
@@ -275,11 +279,11 @@ impl SessionManager {
         let n = task.number;
         text.push_str(&if checking {
             format!(
-                "\n[not landed task-{n}] Its commits were rebased onto the session's branch, which had moved, and Brigadier restarted while the worker ran its quick self-check; nothing landed. Send it back to finish the self-check (message_worker), then call land_phase for task-{n}."
+                "\n[not landed task-{n}] Its worker was sent back to finish its merge, and Brigadier restarted while it worked; nothing landed. Send it back to finish (message_worker), then call land_phase for task-{n}."
             )
         } else {
             format!(
-                "\n[not landed task-{n}] This is the report after its self-check; Brigadier restarted before landing it, so nothing landed. Call land_phase for task-{n}."
+                "\n[not landed task-{n}] This is the report after its worker was sent back; Brigadier restarted before landing it, so nothing landed. Call land_phase for task-{n}."
             )
         });
         self.deliver(
@@ -585,12 +589,15 @@ impl SessionManager {
         }
         // What landed workers kept for their reviews' findings goes too.
         self.settle_all_holds(id).await;
+        // Its full checks stop, and their checkout goes with the rest below.
+        self.end_integrated_checks(id).await;
         let (owner, _) = conversation_owner(conversation);
         self.grants.revoke_owner(&owner);
         let mut owners = vec![
             owner,
             super::workers::worker_home_owner(id),
             super::preview::preview_data_owner(id),
+            super::integrated_checks::checks_owner(id),
         ];
         // Its previews' log folder.
         let previews = super::preview::preview_owner(id);

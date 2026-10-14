@@ -176,9 +176,11 @@ session's branch: the lead's task once its report is in, or a verifier you start
 risky work (its commits hold the lead's). Call it after reading the report. Brigadier commits \
 what was left uncommitted, leaves litter out, and fast-forwards the branch; no card, no further \
 checks. Each landing gets one background review by the other vendor, unless the same commits \
-were reviewed already; its findings arrive later as a [review …] message. If the branch moved meanwhile, the commits are rebased and the worker runs a \
-quick self-check first; then they land on their own and you hear when. Conflicts come back to \
-you: delegate a merge task.";
+were reviewed already; its findings arrive later as a [review …] message. If the branch moved meanwhile, the commits are rebased onto it and \
+land at once. Each landing also makes the session's full checks due: they run once, in the \
+background, on the branch as it is then, for every landing close together; a failure comes as \
+a [checks failed …] message for you to send back. Conflicts come back to you: delegate a merge \
+task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
 base branch, once the user consented: they chose \"Merge\" on your propose_merge card (leave \
@@ -220,6 +222,11 @@ finished work left that nothing uses any more (finished tasks' worktrees, folder
 branches, ended reviews' checkouts), by Brigadier's own records, and says what went and what \
 stayed and why. Brigadier already cleans up after you; never delete branches, worktrees or temp \
 folders by hand.";
+
+const RERUN_CHECKS: &str = "Runs the session's full checks again at its branch's tip, now and \
+without kept results. They already run on their own once after each landing (and after your \
+own commits), so call this only after [checks couldn't run …] once what stopped them is fixed, \
+or when a failure wasn't the code's (a flaky test, the machine). Their result comes as a message.";
 
 const RECORD_FINDINGS: &str = "Record what became of a code review's findings, every one, in \
 one call, after its [review …] message: by the id the message lists (R3.2), fixed (with the task \
@@ -511,6 +518,7 @@ fn orchestrator_tools() -> Vec<Tool> {
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
         tool("clean_up", CLEAN_UP, no_arguments()),
+        tool("rerun_checks", RERUN_CHECKS, no_arguments()),
         tool("review_plan", REVIEW_PLAN, input_schema::<ReviewPlan>()),
         tool("read_page", READ_PAGE, input_schema::<ReadPage>()),
         tool("write_page", WRITE_PAGE, input_schema::<WritePage>()),
@@ -658,6 +666,7 @@ pub fn parse_call(
                 "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
                 "project_map" => OrchestratorCall::ProjectMap,
                 "clean_up" => OrchestratorCall::CleanUp,
+                "rerun_checks" => OrchestratorCall::RerunChecks,
                 "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
                 "read_page" => OrchestratorCall::ReadPage(args(name, arguments)?),
                 "write_page" => OrchestratorCall::WritePage(args(name, arguments)?),

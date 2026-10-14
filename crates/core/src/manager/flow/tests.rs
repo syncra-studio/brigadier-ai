@@ -575,7 +575,7 @@ async fn an_outline_gets_its_go_ahead_at_once_and_a_plan_review_in_the_backgroun
     flow.stop().await;
 }
 
-/// [`reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebase`] in 1.25 MiB of
+/// [`reported_work_lands_with_its_own_commits_and_at_once_after_a_rebase`] in 1.25 MiB of
 /// stack, of the 2 MiB a runtime thread has: a debug build keeps every future a function
 /// awaits in its stack frame at once, so a big unboxed await grows each frame on the way (the
 /// thread's tool call, its land_phase, the landing). Before the tool dispatch's awaits went
@@ -585,7 +585,7 @@ fn a_landing_flow_fits_well_inside_a_runtime_threads_stack() {
     std::thread::Builder::new()
         .name("landing flow in 1.25 MiB".into())
         .stack_size(1280 << 10)
-        .spawn(reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebase)
+        .spawn(reported_work_lands_with_its_own_commits_and_at_once_after_a_rebase)
         .unwrap()
         .join()
         .unwrap();
@@ -593,10 +593,11 @@ fn a_landing_flow_fits_well_inside_a_runtime_threads_stack() {
 
 /// Two workers on disjoint files commit their own steps (one also commits a stray log). The
 /// orchestrator lands each report with land_phase: the first fast-forwards; the second finds
-/// the branch moved, is rebased, runs a quick self-check and lands on its own. No cards, no
+/// the branch moved, is rebased and lands at once, with no self-check round trip (the
+/// session's full checks run once on the landed work, SESSION-FIXES-PLAN.md §11). No cards, no
 /// reviews, and the log never lands.
 #[tokio::test]
-async fn reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebase() {
+async fn reported_work_lands_with_its_own_commits_and_at_once_after_a_rebase() {
     let heard: Heard = Arc::default();
     let log = heard.clone();
     let flow = Flow::start(
@@ -621,7 +622,7 @@ async fn reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebas
                     if !landed.is_empty() {
                         return Reply::text(format!("[quiet] {}", landed.join(" | ")));
                     }
-                    if turn.input.contains("[landed task-") {
+                    if turn.input.contains("[checks passed") {
                         return Reply::text("Both files are in.");
                     }
                     for (title, file) in [("Add a", "a.txt"), ("Add b", "b.txt")] {
@@ -638,19 +639,6 @@ async fn reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebas
                 }
                 let n = turn.task_number().unwrap();
                 let file = if n == 1 { "a.txt" } else { "b.txt" };
-                if turn.input.contains("Run a quick self-check") {
-                    assert!(turn.git(&["status", "--porcelain"]).trim().is_empty());
-                    assert!(turn.cwd.join("a.txt").exists() && turn.cwd.join("b.txt").exists());
-                    let reply = turn
-                        .call(
-                            "submit_report",
-                            json!({"summary": "Builds and passes after the rebase.",
-                                   "changes": [file]}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Checked.");
-                }
                 turn.write(file, &format!("{file}\n"));
                 turn.git(&["add", file]);
                 turn.git(&["commit", "-q", "-m", &format!("Add {file}")]);
@@ -681,6 +669,8 @@ async fn reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebas
                     .all(|task| task.state == TaskState::Landed)
         })
         .await;
+    // The second land_phase reply is heard once its turn ends.
+    flow.settled().await;
     let first = Flow::task(&board, 1);
     let target = first
         .workspace
@@ -704,7 +694,8 @@ async fn reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebas
         "no reviewers or verifiers"
     );
     let said = heard.lock().unwrap().join("\n");
-    assert!(said.contains("Run a quick self-check"), "one was rebased");
+    assert!(!said.contains("self-check"), "a rebased one lands at once");
+    assert_eq!(said.matches("Landed ").count(), 2, "{said}");
     assert!(
         said.contains("Left out as litter") && said.contains("debug.log"),
         "the orchestrator hears what stayed out"
@@ -722,7 +713,6 @@ async fn reported_work_lands_with_its_own_commits_and_a_self_check_after_a_rebas
         })
         .count();
     assert_eq!(landings, 2);
-    flow.settled().await;
     flow.stop().await;
 }
 

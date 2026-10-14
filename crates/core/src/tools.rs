@@ -207,6 +207,12 @@ pub struct DelegateTask {
     /// e.g. "task-2". It gets the mockup's images and compares the live app with them.
     #[serde(default)]
     pub matches_mockup: Option<String>,
+    /// True for the one implement task that looks at the visible changes live, once the
+    /// session's full checks pass: it builds the integrated tree's own dev app in its worktree
+    /// (the session's tip), launches it itself with a scratch data folder and checks each
+    /// change it is told of; it changes nothing. Other workers never build the app.
+    #[serde(default)]
+    pub live_look: bool,
 }
 
 /// `message_worker`: answer a worker's blocking question, or steer a running worker.
@@ -928,6 +934,7 @@ pub enum OrchestratorCall {
     CodeRefs(CodeRefs),
     ProjectMap,
     CleanUp,
+    RerunChecks,
     ReviewPlan(ReviewPlan),
     ReadPage(ReadPage),
     WritePage(WritePage),
@@ -978,6 +985,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "code_refs",
     "project_map",
     "clean_up",
+    "rerun_checks",
     "review_plan",
     "read_page",
     "write_page",
@@ -1029,6 +1037,7 @@ impl OrchestratorCall {
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::CleanUp => "clean_up",
+            Self::RerunChecks => "rerun_checks",
             Self::ReviewPlan(_) => "review_plan",
             Self::ReadPage(_) => "read_page",
             Self::WritePage(_) => "write_page",

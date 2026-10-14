@@ -1293,6 +1293,8 @@ impl SessionManager {
             told_revision,
             deaths: Vec::new(),
             review_hold: None,
+            review_settled: false,
+            live_look: extra.live_look,
             brain: Default::default(),
             resuming: false,
             takeover: None,
@@ -1689,14 +1691,17 @@ impl SessionManager {
             (TaskKind::Merge, None) => self.base_merge_brief(task, &workspace).await,
             _ => String::new(),
         };
-        // A change that shows in an app is checked live with the computer tools
-        // (SESSION-FIXES-PLAN.md "Computer use").
+        // The one live look at the integrated tree, and a change matched to its mockup, are
+        // checked live with the computer tools; other UI work with the project's scripted UI
+        // checks (SESSION-FIXES-PLAN.md "Computer use", §11).
         if cfg!(target_os = "macos") && prompts::checks_live(task) {
             let dev_app = workspace
                 .worktree
                 .as_deref()
                 .and_then(super::context_pack::dev_app_command);
             extra.push_str(&prompts::worker_computer(dev_app.as_deref()));
+        } else if cfg!(target_os = "macos") && prompts::scripted_ui(task) {
+            extra.push_str(prompts::SCRIPTED_UI);
         }
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
         if omit_ai_coauthors && provider == ProviderKind::Codex && task.kind.writes() {
@@ -3577,8 +3582,8 @@ impl SessionManager {
         let outputs = files.outputs;
         // A gate member's report goes to its gate, not to the orchestrator.
         let reviewing = task.gate_link.is_some();
-        // The report after a self-check Brigadier asked for (its commits were rebased during
-        // their landing) lands on its own, unless the worker says only the user can unblock
+        // The report of a merge worker Brigadier sent back during its landing (its merge was
+        // refused, or the target moved under it) lands on its own, unless the worker says only the user can unblock
         // it: then the orchestrator reads the report.
         let relanding = task.kind.writes()
             && task.landing.is_some()
@@ -3699,7 +3704,7 @@ impl SessionManager {
                 if !relanding_pending(&now) || !same_report(&now, &task) {
                     return;
                 }
-                manager.land_after_self_check(&now).await;
+                manager.land_after_rework(&now).await;
             });
         } else if let Some(conv) = queued {
             self.settle_requests(conversation_id).await;
@@ -4899,6 +4904,8 @@ pub(crate) struct TaskExtra {
     pub end_state: Option<String>,
     /// Its part in a mockup first.
     pub mockup: Option<crate::work::MockupPart>,
+    /// The live look at the integrated tree's dev build (`delegate_task`'s `live_look`).
+    pub live_look: bool,
 }
 
 pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {

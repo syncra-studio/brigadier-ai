@@ -315,9 +315,6 @@ impl Thread {
 async fn build(turn: &Turn) -> Reply {
     let n = phase_of_lead(turn).expect("a phase lead");
     let file = format!("p{n}.txt");
-    if turn.input.contains("Run a quick self-check") {
-        return checked(turn, &file).await;
-    }
     turn.write(&file, &format!("{n}\n"));
     turn.git(&["add", &file]);
     turn.git(&["commit", "-q", "-m", &format!("Add {file}")]);
@@ -331,18 +328,6 @@ async fn build(turn: &Turn) -> Reply {
         .await;
     assert!(!reply.is_error, "{}", reply.text);
     Reply::text("Reported.")
-}
-
-/// A lead's report after its work was rebased onto a moved run branch.
-async fn checked(turn: &Turn, file: &str) -> Reply {
-    let reply = turn
-        .call(
-            "submit_report",
-            json!({"summary": "Still right after the rebase.", "changes": [file]}),
-        )
-        .await;
-    assert!(!reply.is_error, "{}", reply.text);
-    Reply::text("Checked.")
 }
 
 /// A flow whose thread works as `thread` says and whose leads build their phase.
@@ -1240,7 +1225,7 @@ async fn a_mid_run_skip_and_stop_after_bind_in_code() {
                 }
                 match phase_of_lead(&turn) {
                     // Works until the user has steered the run.
-                    Some(1) if !turn.input.contains("Run a quick self-check") => {
+                    Some(1) => {
                         first.store(true, Ordering::SeqCst);
                         held.notified().await;
                         build(&turn).await
@@ -1249,9 +1234,6 @@ async fn a_mid_run_skip_and_stop_after_bind_in_code() {
                     // finished and hands off.
                     Some(n @ (2 | 4)) => {
                         let file = format!("p{n}.txt");
-                        if turn.input.contains("Run a quick self-check") {
-                            return checked(&turn, &file).await;
-                        }
                         if !heard.lock().unwrap().is_empty() {
                             // Its report is in: a later word (the run ending) needs nothing.
                             return Reply::text("Handed off already.");

@@ -7,15 +7,17 @@
 //! 2. **Litter guard over the whole range** (phase start..HEAD): logs, scratch files and new
 //!    files no report of the phase names are dropped from every commit and listed.
 //! 3. **Rebase** onto the target's tip when it moved (each commit replayed, authors and
-//!    messages kept). After a real rebase the worker runs a quick self-check (build and the
-//!    tests it touched) before anything lands; its next report then lands on its own,
-//!    fast-forward only, never reviewed again. Conflicts go to a merge worker.
+//!    messages kept), and land at once: no worker checks it again first. Conflicts go to a
+//!    merge worker.
 //! 4. **Fast-forward** the target, never over uncommitted, untracked or ignored files, and
 //!    only if the target is still where it was (the git engine checks it right before
 //!    mutating). Anything unsafe leaves the task "ready to land" with nothing changed.
 //!
 //! Every landing then gets one read-only review by the other vendor in the background
-//! ([`super::review_runs`]); nothing waits for it.
+//! ([`super::review_runs`]); nothing waits for it. It also makes the session's full checks due
+//! at the new tip: they run once for the landings close together, in the background, on the
+//! integrated branch ([`super::integrated_checks`], SESSION-FIXES-PLAN.md §11), and a failure
+//! goes back to the worker that broke it. A merge of the session needs them passed at its tip.
 //!
 //! Finishing a new-worktree session merges the session branch into its base the same way, when
 //! the user's latest message asks for it in words (`merge_consent`): no card.
@@ -54,13 +56,6 @@ enum Moved {
     },
     /// Nothing was left to land once litter was left out.
     Nothing {
-        excluded: Vec<ExcludedFile>,
-    },
-    /// The target moved: the commits were rebased onto `onto` and wait for the worker's
-    /// self-check.
-    Rebased {
-        onto: Oid,
-        commits: u32,
         excluded: Vec<ExcludedFile>,
     },
     Conflicts {
@@ -137,10 +132,10 @@ impl SessionManager {
         }
     }
 
-    /// A worker rebased during its landing reported after its self-check: its commits land
-    /// now, on their own (fast-forward, or another rebase and self-check if the target moved
-    /// again). The orchestrator hears the outcome.
-    pub(crate) async fn land_after_self_check(&self, task: &Task) {
+    /// A merge worker sent back during its landing (its merge was refused, or the target moved
+    /// under it) reported again: its work lands now, on its own. The orchestrator hears the
+    /// outcome.
+    pub(crate) async fn land_after_rework(&self, task: &Task) {
         let Ok(_fence) = self.enter(&task.conversation_id) else {
             return;
         };
@@ -271,7 +266,6 @@ impl SessionManager {
         reported: Vec<String>,
         workspace: &crate::work::TaskWorkspace,
     ) -> Result<Moved> {
-        let on_snapshot = workspace.on_snapshot;
         let leftovers = self.commit_message(format!(
             "{}\n\nWhat task-{} left uncommitted, committed as it landed.",
             task.title, task.number
@@ -291,7 +285,7 @@ impl SessionManager {
                     .branch_tip(&target)
                     .map_err(git_error)?
                     .ok_or_else(|| Error::Invalid(format!("branch {target} does not exist")))?;
-                let (tip, commits, rebased) = {
+                let (tip, commits) = {
                     // 1. What it left uncommitted.
                     let head = worktree.head().map_err(git_error)?;
                     let left = worktree.changes(&head).map_err(git_error)?;
@@ -361,7 +355,7 @@ impl SessionManager {
                     // found merged once they have landed. The engine's own rewrite, under the
                     // ref lock and recorded there: no check takes it for damage, whether or
                     // not the worker still runs.
-                    let rewrite = || -> Result<std::result::Result<(Oid, u32, bool), Moved>> {
+                    let rewrite = || -> Result<std::result::Result<(Oid, u32), Moved>> {
                         let (tip, commits) = match worktree
                             .replay_series(&base, &onto, &drop)
                             .map_err(git_error)?
@@ -374,15 +368,7 @@ impl SessionManager {
                             }
                             SeriesOutcome::Replayed { tip, commits, .. } => (tip, commits),
                         };
-                        // Work started on a snapshot of the user's uncommitted files sits on
-                        // the commit the snapshot was taken on.
-                        let started = if on_snapshot {
-                            repo.resolve(&format!("{}^", base.0)).map_err(git_error)?
-                        } else {
-                            base.clone()
-                        };
-                        let rebased = started != onto;
-                        let tip = if omit_ai_coauthors && commits > 0 && !rebased {
+                        let tip = if omit_ai_coauthors && commits > 0 {
                             match worktree.clean_ai_coauthors(&onto, &tip) {
                                 Ok(cleaned) => cleaned.unwrap_or(tip),
                                 Err(err) => {
@@ -393,7 +379,7 @@ impl SessionManager {
                         } else {
                             tip
                         };
-                        Ok(Ok((tip, commits, rebased)))
+                        Ok(Ok((tip, commits)))
                     };
                     let rewritten_now = match &branch {
                         Some(branch) => super::refcheck::engine_rewrite(&repo, &records, branch, rewrite),
@@ -411,14 +397,8 @@ impl SessionManager {
                 if commits == 0 {
                     return Ok(Moved::Nothing { excluded });
                 }
-                if rebased {
-                    return Ok(Moved::Rebased {
-                        onto,
-                        commits,
-                        excluded,
-                    });
-                }
-                // 4. Fast-forward.
+                // 4. Fast-forward, rebased or not: the session's full checks run on what
+                // lands (§11).
                 let request = LandRequest {
                     branch: target.clone(),
                     expected_tip: onto.clone(),
@@ -442,7 +422,7 @@ impl SessionManager {
     }
 
     /// Acts on what moving the commits came to; returns the outcome for the orchestrator.
-    /// `on_its_own`: Brigadier lands it after a self-check, so a problem reaches the
+    /// `on_its_own`: Brigadier lands it after its worker was sent back, so a problem reaches the
     /// orchestrator as a message (the caller announces a landing). Whether it landed comes
     /// with it.
     async fn settle_landing(&self, task: &Task, moved: Moved, on_its_own: bool) -> (bool, String) {
@@ -493,47 +473,6 @@ impl SessionManager {
                     task.number,
                     litter_note(&excluded)
                 )
-            }
-            Moved::Rebased {
-                onto,
-                commits,
-                excluded,
-            } => {
-                let updated = self
-                    .update_task(&task.conversation_id, &task.id, |t| {
-                        if let Some(w) = t.workspace.as_mut() {
-                            w.base = Some(onto.0.clone());
-                            w.on_snapshot = false;
-                        }
-                    })
-                    .await;
-                let text = format!(
-                    "`{target}` moved since you started, so Brigadier rebased your {} onto its tip ({}).{} Run a quick self-check now: build, and run the tests of the crates or packages you touched. Fix and commit anything that broke, then call submit_report again. Your work lands on its own once your report is in; it is not reviewed again.",
-                    commits_word(commits),
-                    short(&onto),
-                    litter_note(&excluded)
-                );
-                let sent = match updated {
-                    Ok(task) => self
-                        .message_worker(&task.conversation_id, &task, text, "Brigadier")
-                        .await
-                        .map(|_| ()),
-                    Err(err) => Err(err),
-                };
-                match sent {
-                    Ok(()) => format!(
-                        "`{target}` moved, so task-{}'s {} were rebased onto it. It runs a quick self-check, and its work lands on its own after its report; you hear when it has landed.",
-                        task.number,
-                        commits_word(commits)
-                    ),
-                    Err(err) => {
-                        problem(
-                            format!("Its commits were rebased onto `{target}`, which moved, but its worker could not be asked to check them: {err}"),
-                            TaskState::Reported,
-                        )
-                        .await
-                    }
-                }
             }
             Moved::Conflicts { onto, paths } => {
                 problem(
@@ -621,7 +560,7 @@ impl SessionManager {
 
     /// Sends a merge task's worker back to its merge with `text` (Q2), the target's new tip
     /// recorded as where its merge starts when the target `moved`. Its task stays landing, so
-    /// its next report lands on its own (`land_after_self_check`).
+    /// its next report lands on its own (`land_after_rework`).
     async fn merge_again(&self, task: &Task, text: String, moved: Option<Oid>) -> Result<()> {
         let task = self
             .update_task(&task.conversation_id, &task.id, |t| {
@@ -785,14 +724,14 @@ impl SessionManager {
                 .filter(|subject| subject.landed.is_some()),
             _ => None,
         };
-        // Otherwise the landed workers stay resumable for their review's findings, kept
-        // before the review starts so that its end always finds them.
+        // The landed workers stay resumable for their review's findings, kept before the
+        // review starts so that its end always finds them, and for the session's full checks
+        // (§11): a fix's landing for those alone, so a fix that breaks them again is sent back
+        // to the same session.
         let mut held = std::collections::HashSet::new();
-        if fixed.is_none() {
-            for landed in &tasks {
-                if self.hold_for_review(landed, target).await {
-                    held.insert(landed.id.clone());
-                }
+        for landed in &tasks {
+            if self.hold_for_review(landed, target, fixed.is_some()).await {
+                held.insert(landed.id.clone());
             }
         }
         for landed in &tasks {
@@ -835,6 +774,15 @@ impl SessionManager {
         .await;
         for landed in &tasks {
             self.set_phase_stage(landed, PhaseStage::Done).await;
+        }
+        // The session's full checks are due at the new tip: once, in the background, for
+        // every landing close to it (SESSION-FIXES-PLAN.md §11).
+        if let Ok(repo) = self.task_repo(task) {
+            let request = self
+                .request_for(&task.conversation_id, Some(&task.id))
+                .await;
+            self.checks_due(&task.conversation_id, &repo, target, new_tip, request)
+                .await;
         }
         // The task branches are fully on the target now; they were Brigadier's, so they go
         // too. A merge's conflicting task whose work was rebuilt without its litter landed
@@ -1184,6 +1132,14 @@ impl SessionManager {
             .ok_or_else(|| Error::Invalid("This run has no branch to merge.".into()))?;
         if verified_commit == workspace.base_commit {
             return Err(Error::Invalid("Nothing new is verified to merge.".into()));
+        }
+        // Verified means its full checks passed there too (SESSION-FIXES-PLAN.md §11).
+        if super::integrated_checks::tip_checked(&board, &workspace.branch, &verified_commit)
+            != super::integrated_checks::TipChecked::Passed
+        {
+            return Err(Error::Invalid(
+                "The run's full checks haven't passed at its verified tip; nothing merged.".into(),
+            ));
         }
         let lineage: Vec<_> = board
             .runs
@@ -1569,6 +1525,59 @@ impl SessionManager {
                 unrecorded.join(", ")
             )));
         }
+        // The session's full checks passed at the exact tip it merges (SESSION-FIXES-PLAN.md
+        // §11): until then the merge is held on the user's consent.
+        let checked = match self
+            .checks_gate(
+                id,
+                Path::new(&repo),
+                &branch,
+                super::integrated_checks::MERGE_WAIT,
+            )
+            .await?
+        {
+            super::integrated_checks::ChecksGate::Passed(tip) => tip,
+            gate => {
+                if pending.is_none() {
+                    let (git, repo_path, branch_name) =
+                        (self.git.clone(), PathBuf::from(&repo), branch.clone());
+                    let tip = blocking(move || {
+                        git.open(&repo_path)
+                            .map_err(git_error)?
+                            .branch_tip(&branch_name)
+                            .map_err(git_error)?
+                            .ok_or_else(|| Error::Invalid("the session branch is gone".into()))
+                    })
+                    .await?;
+                    self.orchestrator_step(
+                        id,
+                        OrchestratorStepKind::MergeHeld {
+                            branch: branch.clone(),
+                            base: base.clone(),
+                            asked_in: consent.asked_in.clone(),
+                            consented_at_ms: consent.at_ms,
+                            condition: consent.condition,
+                            waiting: Vec::new(),
+                            tip: tip.0,
+                        },
+                    )
+                    .await;
+                }
+                return Err(Error::Invalid(match gate {
+                    super::integrated_checks::ChecksGate::Failed(why) => {
+                        *conv.merge_told.lock().unwrap() = Some((consent.asked_in, "checks"));
+                        format!(
+                            "[not merged] The session's full checks {why}. Nothing was merged, and the user's consent holds: have the failure fixed (send it back to the task that broke it), and Brigadier tells you [merge due] once they pass."
+                        )
+                    }
+                    super::integrated_checks::ChecksGate::Waiting(why) => format!(
+                        "[not merged] The session's full checks {why}, and nothing merges before they pass at the tip it merges. Nothing was merged, and the user's consent holds: Brigadier tells you [merge due] once they pass. Reply {} meanwhile.",
+                        super::prompts::QUIET
+                    ),
+                    super::integrated_checks::ChecksGate::Passed(_) => unreachable!(),
+                }));
+            }
+        };
         let message = self.commit_message(
             message
                 .filter(|m| !m.trim().is_empty())
@@ -1579,6 +1588,8 @@ impl SessionManager {
             Conflicts(Vec<String>, Oid),
             /// Other work landed on the branch since the held consent.
             Moved,
+            /// Work landed on the branch since its checks passed.
+            Unchecked,
         }
         let (git, repo_path, base_name, branch_name, covered) = (
             self.git.clone(),
@@ -1597,6 +1608,9 @@ impl SessionManager {
                 .ok_or_else(|| Error::Invalid("the session branch is gone".into()))?;
             if covered.is_some_and(|covered| covered != tip.0) {
                 return Ok(Prepared::Moved);
+            }
+            if tip != checked {
+                return Ok(Prepared::Unchecked);
             }
             let outcome = repo
                 .prepare_merge_commit(&base_name, &tip, &message)
@@ -1625,6 +1639,11 @@ impl SessionManager {
             Prepared::Moved => {
                 return Err(Error::Invalid(format!(
                     "[not merged] Other work landed on `{branch}` since the user consented, and their consent doesn't cover it. Nothing was merged. Ask with propose_merge."
+                )));
+            }
+            Prepared::Unchecked => {
+                return Err(Error::Invalid(format!(
+                    "[not merged] `{branch}` moved while the merge was being prepared, past where its full checks passed. Nothing was merged; call finish_session again."
                 )));
             }
             Prepared::Conflicts(paths, tip) => {
@@ -1743,8 +1762,10 @@ impl SessionManager {
         // The session's work is merged: what showed it stops, and its worktree and branch go
         // (THREAD-PLAN.md Q9).
         self.stop_previews(id, "the session was merged").await;
-        // The landed workers kept for their reviews' findings are done with too.
+        // The landed workers kept for their reviews' findings are done with too, and the
+        // checkout its full checks ran in.
         self.settle_all_holds(id).await;
+        self.drop_check_checkout(id).await;
         let released = self.release_merged_session(id).await;
         Ok(format!(
             "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{reviews}{released}",
@@ -1817,10 +1838,37 @@ impl SessionManager {
                         self.stop_held_merge(id, &conv, &held, &reason).await;
                         stopped_text(&reason)
                     } else {
-                        if told("due") {
-                            return;
+                        // The session's full checks pass at its tip first (§11): a pass, or
+                        // a check's end, looks again.
+                        let gate = match self.recorded_workspace(id) {
+                            Some(workspace) => self
+                                .checks_gate(
+                                    id,
+                                    &workspace.repo,
+                                    &held.branch,
+                                    std::time::Duration::ZERO,
+                                )
+                                .await
+                                .ok(),
+                            None => None,
+                        };
+                        match gate {
+                            Some(super::integrated_checks::ChecksGate::Waiting(_)) => return,
+                            Some(super::integrated_checks::ChecksGate::Failed(why)) => {
+                                if told("checks") {
+                                    return;
+                                }
+                                format!(
+                                    "[merge waiting] The workers have finished, but the session's full checks {why}: the user's merge waits until they pass. Have the failure fixed (send it back to the task that broke it); Brigadier tells you [merge due] once they pass."
+                                )
+                            }
+                            _ => {
+                                if told("due") {
+                                    return;
+                                }
+                                "[merge due] The workers have finished and nothing stops it: the user's merge is due. Call finish_session now; their held consent covers it, so don't ask them again.".to_owned()
+                            }
                         }
-                        "[merge due] The workers have finished and nothing stops it: the user's merge is due. Call finish_session now; their held consent covers it, so don't ask them again.".to_owned()
                     }
                 }
             }

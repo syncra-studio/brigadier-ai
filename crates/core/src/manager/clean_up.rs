@@ -37,7 +37,7 @@ impl SessionManager {
             if task.review_hold.is_some() {
                 if holds {
                     kept.push(format!(
-                        "{name}'s worktree and session: kept until its review's findings settle"
+                        "{name}'s worktree and session: kept until its review's findings and the session's full checks settle"
                     ));
                 }
                 continue;

@@ -3,10 +3,13 @@
 //! branch is kept, though merged; its worktree and scratch folder go as always. The findings the
 //! thread records as open go back as one fix task (`role` fix, `subject` the landed task), which
 //! resumes that same session, model and account in a worktree made again at the old path, on
-//! the old branch moved up to the session's tip. The batch settles when its review is clean or
-//! couldn't run, when the thread records none of its findings open, when the fix task ends, or
-//! when the session is merged, archived or deleted: then the files go, and the branch with them
-//! while it is still merged.
+//! the old branch moved up to the session's tip. The batch's review part settles when its review
+//! is clean or couldn't run, when the thread records none of its findings open, or when the fix
+//! task ends. The session's full checks hold it too (SESSION-FIXES-PLAN.md §11): a failure is
+//! sent back to the worker that broke it the same way, so the hold lasts until a passing check
+//! covers its landing as well (a fix's own landing is held for that alone). Merging, archiving
+//! or deleting the session ends every hold. Then the files go, and the branch with them while
+//! it is still merged.
 
 use std::path::{Path, PathBuf};
 
@@ -45,6 +48,22 @@ pub(crate) fn fixes_held(fix: &Task, subject: &Task) -> bool {
         && subject.review_hold.is_some()
 }
 
+/// The held tasks `which` picks, but for one a fix still resumes.
+pub(crate) fn batch(board: &crate::board::Board, which: impl Fn(&Task) -> bool) -> Vec<Task> {
+    board
+        .tasks
+        .values()
+        .filter(|task| task.review_hold.is_some() && which(task))
+        .filter(|task| {
+            !board
+                .tasks
+                .values()
+                .any(|fix| !fix.state.is_final() && fixes_held(fix, task))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Why a fix of landed work's findings can't ask for a review: it gets none of its own, only
 /// the targeted re-check of a finding the thread marked high, after it lands (Q6.1).
 pub(crate) const NO_FIX_REVIEW: &str = "A fix of landed work's review findings gets no review of its own: once it lands, the orchestrator has each finding it marked high re-checked. Don't call review_code; run the checks your fix affects and call submit_report.";
@@ -69,8 +88,14 @@ pub(crate) fn workspace_line(
 
 impl SessionManager {
     /// At landing: keeps `task`'s CLI session files and its branch for the findings of the
-    /// review that starts now. False when it has no session files to keep.
-    pub(crate) async fn hold_for_review(&self, task: &Task, target: &str) -> bool {
+    /// review that starts now and of the session's full checks (`review_settled`: no review's
+    /// findings come back for it, only the checks'). False when it has no session files to keep.
+    pub(crate) async fn hold_for_review(
+        &self,
+        task: &Task,
+        target: &str,
+        review_settled: bool,
+    ) -> bool {
         if task.kind != TaskKind::Implement {
             return false;
         }
@@ -96,32 +121,28 @@ impl SessionManager {
         }
         let target = target.to_owned();
         self.update_task(&task.conversation_id, &task.id, |t| {
-            t.review_hold = Some(target)
+            t.review_hold = Some(target);
+            t.review_settled = review_settled;
         })
         .await
         .is_ok()
     }
 
-    /// The batch of the landing at `tip` settles: each task it holds lets go of its session
-    /// and branch, except one a fix still resumes (that one settles when its fix ends).
+    /// The review part of the batch of the landing at `tip` settles: each task it holds lets
+    /// go of its session and branch once a passing full check covers its landing too, except
+    /// one a fix still resumes (that one settles when its fix ends).
     pub(crate) async fn settle_review_batch(&self, conversation_id: &ConversationId, tip: &str) {
         let Ok(board) = self.core.board(conversation_id).await else {
             return;
         };
-        let held: Vec<Task> = board
-            .tasks
-            .values()
-            .filter(|task| task.review_hold.is_some() && task.landed.as_deref() == Some(tip))
-            .filter(|task| {
-                !board
-                    .tasks
-                    .values()
-                    .any(|fix| !fix.state.is_final() && fixes_held(fix, task))
-            })
-            .cloned()
-            .collect();
-        for task in held {
-            self.release_hold(&task).await;
+        for task in batch(&board, |task| task.landed.as_deref() == Some(tip)) {
+            if self.landing_checked(&task).await {
+                self.release_hold(&task).await;
+            } else if !task.review_settled {
+                let _ = self
+                    .update_task(&task.conversation_id, &task.id, |t| t.review_settled = true)
+                    .await;
+            }
         }
     }
 
@@ -140,27 +161,20 @@ impl SessionManager {
         }
     }
 
-    /// The session is merged, archived or deleted: every batch it still holds settles.
+    /// The session is merged, archived or deleted: every batch it still holds lets go, its
+    /// checks or not.
     pub(crate) async fn settle_all_holds(&self, conversation_id: &ConversationId) {
         let Ok(board) = self.core.board(conversation_id).await else {
             return;
         };
-        let mut tips: Vec<String> = board
-            .tasks
-            .values()
-            .filter(|task| task.review_hold.is_some())
-            .filter_map(|task| task.landed.clone())
-            .collect();
-        tips.sort();
-        tips.dedup();
-        for tip in tips {
-            self.settle_review_batch(conversation_id, &tip).await;
+        for task in batch(&board, |_| true) {
+            self.release_hold(&task).await;
         }
     }
 
     /// Removes what `task`'s hold kept: its session files, and its branch while that is still
     /// merged into where it landed (a fix that stopped with work on it keeps it).
-    async fn release_hold(&self, task: &Task) {
+    pub(crate) async fn release_hold(&self, task: &Task) {
         let leftovers = self.runtime.ledger().dispose(&hold_owner(&task.id)).await;
         if !leftovers.is_clean() {
             tracing::warn!(task = %task.id, ?leftovers, "some of a landed worker's session files will be retried at the next launch");

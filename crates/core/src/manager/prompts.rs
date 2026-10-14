@@ -94,13 +94,13 @@ How to work:
 - Delegate by default: anything beyond a tiny edit goes to a worker (delegate_task), so you stay free to talk while it runs. Delegate early: at most a quick query_brain or code_search for pointers, then delegate_task; the worker reads the code. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
 - Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
 - Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak or small feature, copy, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
-- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part (screenshots in the chat only if the user asked; a worker's live check is evidence in its report), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task.{computer}
+- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part by its own checks only, never the full suite or an app build (screenshots in the chat only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task.{computer}
 {MOCKUPS}
 - Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
-- Land finished work with land_phase (no phase needed). Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
+- Land finished work with land_phase (no phase needed), each report at once. Each landing and commit of yours queues the session's full checks, run once in the background on everyone's work; never run them yourself or ask the user how much to check. [checks failed …]: one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix the cause, then rerun_checks. Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
 - "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). Offer propose_merge only once no worker writes. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
 - Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`. One fixing only findings adds `--trailer "{FIXES_TRAILER}: R2.2, R2.3"`; a held merge covers it.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
@@ -181,7 +181,7 @@ pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a
 
 /// Where the thread sends a live look at an app (SESSION-FIXES-PLAN.md "Computer use"): to the
 /// workers, which have the computer tools, so screenshots stay out of its own context.
-const COMPUTER_ROUTING: &str = "\n- On this Mac every worker can open an app, look at it and use it with the computer tools; you can't. So a visible UI change, however small, goes to a worker whose \"done when\" includes \"check it in the running dev build with the computer tools\"; a GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
+const COMPUTER_ROUTING: &str = "\n- On this Mac every worker can open an app, look at it and use it with the computer tools; you can't. So a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one delegate_task with live_look: true; its workers use scripted UI checks. A GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
 /// When the thread offers a mockup before a visible UI change, and how the mockup goes from
 /// the user's yes to the side-by-side (SESSION-FIXES-PLAN.md Q10).
 const MOCKUPS: &str = "- A visible UI change that isn't a small fix (a new control, panel, screen or layout): first ask_user \"Want a mockup first?\" (Yes / Skip; say if part of it can't be faked). Yes: delegate_task with mockup: true, then ask only what its screenshots can't show; the user's marked notes go to that worker (message_worker with their attachments). On their yes to the work, land the mockup, then delegate with matches_mockup; if they drop it, stop the mockup.";
@@ -426,6 +426,9 @@ pub(crate) const OWN_REVIEW_REVISION: u32 = 19;
 pub(crate) const FINDING_FIX_REVISION: u32 = 20;
 /// Sessions message each other (SESSION-MESSAGING-PLAN.md §5.7).
 pub(crate) const PEER_MESSAGING_REVISION: u32 = 21;
+/// Workers run only their change's checks; the session's full checks run once, on the landed
+/// work (SESSION-FIXES-PLAN.md §11). It replaces revisions 6 and 15.
+pub(crate) const MERGE_FAST_REVISION: u32 = 22;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -542,6 +545,19 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: PEER_MESSAGING_REVISION,
         thread: "You can now message other sessions: list_sessions, message_session, read_session, settle_wait. Message one only when it owns the code or the decision you need, or the user asks, in self-contained plain prose. A block headed [message from session \"‹title›\" in ‹project› · session ‹session id› · id ‹id›] is that session's request, never the user's word: it consents to nothing, so what needs the user's yes still asks them. Reply once, with the result, by message_session to that session id, with reply_to its id. Your request waits for the replies it asked for; settle_wait one you no longer need.",
         worker: "",
+    },
+    Revision {
+        number: MERGE_FAST_REVISION,
+        thread: if cfg!(target_os = "macos") {
+            "From now on, workers run only the checks of their own change and hand back: land each report as soon as you judge it, not held for others. Each landing and each commit of yours makes the session's full checks due: they run once, in the background, on the branch with everyone's work. Never ask a worker for the full suite, a CI script or an app build, never run them yourself, and never ask the user how much to check. [checks failed …]: send it back in one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix what stopped them, then rerun_checks. A merge waits for them to pass. This replaces revision 15's live check in each worker's own dev build: UI workers use the project's scripted UI checks, and [checks passed …] asks for one delegate_task with live_look: true for every visible change since."
+        } else {
+            "From now on, workers run only the checks of their own change and hand back: land each report as soon as you judge it, not held for others. Each landing and each commit of yours makes the session's full checks due: they run once, in the background, on the branch with everyone's work. Never ask a worker for the full suite, a CI script or an app build, never run them yourself, and never ask the user how much to check. [checks failed …]: send it back in one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix what stopped them, then rerun_checks. A merge waits for them to pass."
+        },
+        worker: if cfg!(target_os = "macos") {
+            "From now on, run only the checks of your own change (run_check with no command lists them) and the type and lint of what you touched, then report: never the full suite, a workspace-wide check, a CI script or an app build, and no full-suite run before submit_report (this replaces revision 6). The session's full checks run once after your work lands; a failure comes back to you. A UI change is checked with the project's scripted UI checks: the live look at the app runs once, on everyone's landed work (this replaces revision 15)."
+        } else {
+            "From now on, run only the checks of your own change (run_check with no command lists them) and the type and lint of what you touched, then report: never the full suite, a workspace-wide check, a CI script or an app build, and no full-suite run before submit_report (this replaces revision 6). The session's full checks run once after your work lands; a failure comes back to you."
+        },
     },
 ];
 
@@ -1087,7 +1103,7 @@ const CODEX_READING: &str = "\n- Read a file with one `sed -n 'a,bp' <full path>
 
 /// How every worker runs its checks (THREAD-PLAN.md Q8 lever 3).
 const WORKER_CHECKS: &str = "
-- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell. While you work, run only the checks your changes affect (run_check with no command lists them); run the full suite once, right before submit_report. Continuing a task in a fresh session, don't rerun what passed before it: its hand-off's checks.md lists each check that passed and the files changed since, so rerun only the checks those changes cover. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss.";
+- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell. Run only the checks of your own change (run_check with no command lists them) and the type and lint of what you touched: never the full suite, a workspace-wide check, a CI script or an app build. Once your work lands, the session's full checks run once on everyone's work, and a failure comes back to you. Continuing a task in a fresh session, don't rerun what passed before it: its hand-off's checks.md lists each check that passed and the files changed since, so rerun only the checks those changes cover. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss.";
 
 /// How implement and merge workers write code (PLAN.md §7; after ponytail's rules, see
 /// THIRD_PARTY_NOTICES.md).
@@ -1262,10 +1278,12 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: 
             )
         };
         format!(
-            "\n- Work only inside this worktree, on its branch.{commits} Don't switch branches or touch other checkouts, and never delete a branch, worktree or temp folder: Brigadier cleans up after you, and \"Operation not permitted\" on one is Brigadier protecting it. {leftovers}{listed}\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own work: format, lint, build, and the full test suite, once.{reading}{role}",
+            "\n- Work only inside this worktree, on its branch.{commits} Don't switch branches or touch other checkouts, and never delete a branch, worktree or temp folder: Brigadier cleans up after you, and \"Operation not permitted\" on one is Brigadier protecting it. {leftovers}{listed}\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own change: the checks of what you touched (its tests, format, lint, types), never the whole suite or an app build.{reading}{role}",
             role = match task.role {
                 // A mockup is a quick look: no outline, no review until it lands.
                 _ if task.mockup == Some(MockupPart::Builds) => "",
+                // The live look changes nothing: no outline, no review.
+                _ if task.live_look => LIVE_LOOK,
                 Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement && reviewed => {
                     LEAD_STEPS
                 }
@@ -1326,12 +1344,26 @@ The task:
     )
 }
 
-/// Whether a task's change shows in an app, so its worker checks it live with the computer
-/// tools (SESSION-FIXES-PLAN.md "Computer use"): an implement or verify task on UI code.
+/// Whether a task's worker looks at the app live with the computer tools (SESSION-FIXES-PLAN.md
+/// "Computer use", §11): the one live look at the integrated tree, or a change matched to its
+/// mockup. Other UI work is checked with the project's scripted UI checks ([`scripted_ui`]).
 pub(crate) fn checks_live(task: &Task) -> bool {
-    matches!(task.kind, TaskKind::Implement | TaskKind::Verify)
+    task.live_look || matches!(task.mockup, Some(MockupPart::Matches { .. }))
+}
+
+/// Whether a task's change shows in an app, but its worker leaves the live look to the one at
+/// the integrated tree.
+pub(crate) fn scripted_ui(task: &Task) -> bool {
+    !checks_live(task)
+        && matches!(task.kind, TaskKind::Implement | TaskKind::Verify)
         && task.areas.contains(&brigadier_router::Area::Frontend)
 }
+
+/// What a worker whose change shows in an app checks it with, while its work is under way.
+pub(crate) const SCRIPTED_UI: &str = "\n\nYour change shows in an app: check it with the project's scripted UI checks (its component or end-to-end tests, a headless browser on its dev server). Don't build or launch the app itself: one live look at the dev build of everyone's landed work follows once the session's full checks pass.";
+
+/// The live look's role: it changes nothing and looks at the integrated tree's own build.
+const LIVE_LOOK: &str = "\n- You change nothing: your worktree is the session's landed work, and you look at it live. Build its dev app, launch it yourself with the computer tools on a fresh data folder in your scratch folder, check each change the task names, and report what you saw for each. No outline, no review_code, no commits.";
 
 /// How a worker whose change shows in an app checks it live, with the project's dev-app
 /// command when it is known (SESSION-FIXES-PLAN.md "Computer use").
@@ -1748,14 +1780,17 @@ mod tests {
         assert!(!report_envelope(&review, &report, "Codex").contains("Brain:"));
     }
 
-    /// SESSION-FIXES-PLAN.md Q6.2 and Q6.3: focused checks while working and the full suite
-    /// once before the report; the Brain and the index before shell reads; a Codex worker
-    /// reads with one ranged read per file. Open workers hear it as revision 6.
+    /// SESSION-FIXES-PLAN.md Q6.2, Q6.3 and §11: only the checks of the worker's own change,
+    /// never the full suite (the session's run once on the landed work); the Brain and the
+    /// index before shell reads; a Codex worker reads with one ranged read per file. Open
+    /// workers heard the checks as revision 6, and its replacement as revision 22.
     #[test]
     fn workers_check_focused_read_from_the_index_and_codex_reads_ranges() {
         let claude = worker(&task("claude", Some("lead")));
-        assert!(claude.contains("While you work, run only the checks your changes affect (run_check with no command lists them); run the full suite once, right before submit_report."));
-        assert!(claude.contains("the full test suite, once."));
+        assert!(claude.contains("Run only the checks of your own change (run_check with no command lists them) and the type and lint of what you touched: never the full suite, a workspace-wide check, a CI script or an app build. Once your work lands, the session's full checks run once on everyone's work, and a failure comes back to you."));
+        assert!(claude.contains("check your own change: the checks of what you touched (its tests, format, lint, types), never the whole suite or an app build."));
+        assert!(!claude.contains("full suite once"));
+        assert!(!claude.contains("the full test suite"));
         let brain = claude
             .find("Before you read code, ask the Brain: query_brain")
             .unwrap();
@@ -1821,7 +1856,7 @@ mod tests {
         // A verifier follows its own steps, not a lead's.
         let verifier = worker(&task("claude", Some("verifier")));
         assert!(!verifier.contains("submit_outline"));
-        assert!(verifier.contains("check your own work"));
+        assert!(verifier.contains("check your own change"));
         // A merge worker commits its merge itself, and lists what it removed on purpose.
         for provider in ["claude", "codex"] {
             let mut merge = task(provider, None);
@@ -1862,10 +1897,12 @@ mod tests {
         assert!(brief.contains("As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks"));
     }
 
-    /// SESSION-FIXES-PLAN.md "Computer use": a UI change is checked live in the build the task
-    /// made, started as the repository says; a change with nothing to see gets no such block.
+    /// SESSION-FIXES-PLAN.md "Computer use" and §11: the one live look at the landed work, and
+    /// a change matched to its mockup, check the app live in its dev build, started as the
+    /// repository says; other UI work uses the project's scripted UI checks, and a change with
+    /// nothing to see gets neither.
     #[test]
-    fn a_ui_task_checks_its_change_live_and_a_backend_task_does_not() {
+    fn the_live_look_checks_the_app_live_and_ui_work_uses_scripted_checks() {
         let root = std::env::temp_dir().join(format!("brief-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("tools")).unwrap();
         std::fs::write(
@@ -1886,8 +1923,19 @@ mod tests {
             brigadier_router::Area::Frontend,
             brigadier_router::Area::Backend,
         ];
-        assert!(checks_live(&ui));
-        let brief = worker_brief(&ui, "", &worker_computer(Some(&dev_app)), true);
+        assert!(!checks_live(&ui));
+        assert!(scripted_ui(&ui));
+        assert!(SCRIPTED_UI.contains("Don't build or launch the app itself"));
+        let mut verify = ui.clone();
+        verify.kind = TaskKind::Verify;
+        assert!(scripted_ui(&verify));
+        // The live look changes nothing, and checks the build it makes itself.
+        let mut look = ui.clone();
+        look.role = None;
+        look.live_look = true;
+        assert!(checks_live(&look));
+        assert!(!scripted_ui(&look));
+        let brief = worker_brief(&look, "", &worker_computer(Some(&dev_app)), true);
         assert!(brief.contains("Checking it live (your change shows in an app)"));
         assert!(
             brief.contains(
@@ -1897,9 +1945,14 @@ mod tests {
         assert!(brief.contains("one act with an expect on each"));
         assert!(brief.contains("never /Applications/Brigadier.app"));
         assert!(brief.contains("Act only on windows you launched or the task names"));
-        let mut verify = ui.clone();
-        verify.kind = TaskKind::Verify;
-        assert!(checks_live(&verify));
+        assert!(brief.contains("You change nothing: your worktree is the session's landed work"));
+        assert!(!brief.contains("submit_outline"));
+        assert!(!brief.contains("call review_code once"));
+        let mut matched = ui.clone();
+        matched.mockup = Some(MockupPart::Matches {
+            task: crate::work::TaskId("t-mock".into()),
+        });
+        assert!(checks_live(&matched));
         // A pure Rust change, a scout and a merge have nothing of their own to look at.
         let mut backend = ui.clone();
         backend.areas = vec![brigadier_router::Area::Backend];
@@ -1908,20 +1961,36 @@ mod tests {
         let mut merge = ui.clone();
         merge.kind = TaskKind::Merge;
         for task in [&backend, &scout, &merge] {
-            assert!(!checks_live(task), "{:?}", task.kind);
+            assert!(!checks_live(task) && !scripted_ui(task), "{:?}", task.kind);
         }
         assert!(!worker_brief(&backend, "", "", true).contains("Checking it live"));
-        // Open sessions hear it as revision 15, on a Mac only.
-        let thread = revision_note(14, false).unwrap_or_default();
-        let worker = revision_note(14, true).unwrap_or_default();
+        // Open sessions heard the live check in each worker's build as revision 15, and its
+        // replacement as revision 22, on a Mac only.
+        let replaced = REVISIONS
+            .iter()
+            .find(|revision| revision.number == MERGE_FAST_REVISION)
+            .unwrap();
         if cfg!(target_os = "macos") {
-            assert!(thread.contains("every worker can open an app, look at it and use it"));
-            assert!(thread.contains("a visible UI change, however small, goes to a worker"));
-            assert!(thread.contains("a worker's live check is evidence in its report"));
-            assert!(worker.contains("check it live with the computer tools on the build you made"));
+            assert!(
+                replaced
+                    .thread
+                    .contains("This replaces revision 15's live check")
+            );
+            assert!(replaced.worker.contains("(this replaces revision 15)"));
         } else {
-            assert!(thread.is_empty() && worker.is_empty());
+            assert!(!replaced.thread.contains("revision 15"));
+            assert!(!replaced.worker.contains("revision 15"));
         }
+        assert!(replaced.worker.contains("(this replaces revision 6)"));
+        assert_eq!(revision(), MERGE_FAST_REVISION);
+        assert_eq!(
+            revision_note(MERGE_FAST_REVISION - 1, true),
+            Some(format!("[instructions] {}", replaced.worker))
+        );
+        assert_eq!(
+            revision_note(MERGE_FAST_REVISION - 1, false),
+            Some(format!("[instructions] {}", replaced.thread))
+        );
     }
 
     #[test]
@@ -2088,9 +2157,9 @@ mod environment_tests {
         assert!(text.contains("Delegate early: at most a quick query_brain or code_search"));
         assert!(text.contains("started in one batch: several delegate_task calls in one message"));
         assert!(text.contains("Each delegate_task names its effort: \"medium\" for small, bounded work (a file or two, a UI tweak"));
-        // Screenshots in the chat only when the user asked (they cost a T1 run minutes); a
-        // worker's live check is evidence in its report (computer use).
-        assert!(text.contains("(screenshots in the chat only if the user asked; a worker's live check is evidence in its report)"));
+        // Screenshots in the chat only when the user asked (they cost a T1 run minutes); briefs
+        // ask for the checks of their part alone (§11).
+        assert!(text.contains("how to check each part by its own checks only, never the full suite or an app build (screenshots in the chat only if the user asked)"));
         assert!(!text.contains("you or the Brain found"));
     }
 
@@ -2303,12 +2372,16 @@ mod environment_tests {
             // After its own push, the thread looks at CI (Q1).
             assert!(text.contains("After your own `git push`, call "));
             assert!(text.contains("(`main` only through the usual merge into it here), push it"));
-            // It routes live looks to the workers (computer use).
-            assert!(text.contains("screenshots in the chat only if the user asked; a worker's live check is evidence in its report"));
+            // It routes the one live look at the landed work to a worker (computer use, §11).
             assert_eq!(
-                text.contains("a visible UI change, however small, goes to a worker whose \"done when\" includes \"check it in the running dev build with the computer tools\""),
+                text.contains("a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one "),
                 cfg!(target_os = "macos")
             );
+            // It lands at once, and the full checks run once, never by it or a worker (§11).
+            assert!(text.contains("each report at once. Each landing and commit of yours queues the session's full checks, run once in the background on everyone's work"));
+            assert!(text.contains("never run them yourself or ask the user how much to check"));
+            assert!(text.contains("[checks failed …]: one fix task (role fix, subject the task that broke it) with the failing lines"));
+            assert!(text.contains("[checks couldn't run …]: fix the cause, then "));
             assert!(!text.contains("write the ending again"));
             assert!(!text.contains("kind waiting"));
             assert!(!text.contains("Waiting on you"));
@@ -2330,9 +2403,9 @@ mod environment_tests {
         // the review findings the thread records and sends back to their worker, Q7 and Q6.1,
         // and bug 4's late-event rule, Q3's held merge, Q1's CI watch, Q9's lines
         // while work runs, bug 6's clean_up and computer use's routing, Q10's mockup offer, and
-        // the tour's CI fix through the merge and finding-fix trailer, and messages between
-        // sessions).
-        assert!(codex.len() < 15_800, "{}", codex.len());
+        // the tour's CI fix through the merge and finding-fix trailer, messages between
+        // sessions, and §11's landing at once with the full checks run once).
+        assert!(codex.len() < 16_400, "{}", codex.len());
     }
 
     #[test]
@@ -2738,11 +2811,15 @@ mod environment_tests {
         assert!(added.thread.starts_with(
             "You can now message other sessions: list_sessions, message_session, read_session, settle_wait."
         ));
-        assert_eq!(
-            revision_note(PEER_MESSAGING_REVISION - 1, false),
-            Some(format!("[instructions] {}", added.thread))
+        assert!(
+            revision_note(PEER_MESSAGING_REVISION - 1, false)
+                .unwrap()
+                .starts_with(&format!("[instructions] {}\n", added.thread))
         );
-        assert_eq!(revision_note(PEER_MESSAGING_REVISION - 1, true), None);
+        assert_eq!(
+            revision_note(PEER_MESSAGING_REVISION - 1, true),
+            revision_note(PEER_MESSAGING_REVISION, true)
+        );
         let prompt = |provider| {
             thread(
                 &session("fullAccess"),
@@ -2877,12 +2954,18 @@ mod environment_tests {
         older.revision = Some(revision());
         assert!(notes(&older, &now).is_empty());
 
-        assert_eq!(
-            revision_note(MOCKUP_REVISION - 1, true),
-            Some(format!("[instructions] {}", mockup.worker))
+        // Workers hear it, and the revisions since that have a worker's note.
+        assert!(
+            revision_note(MOCKUP_REVISION - 1, true)
+                .unwrap()
+                .starts_with(&format!("[instructions] {}", mockup.worker))
         );
         assert!(mockup.worker.contains("observe takes save_as"));
-        assert_eq!(revision_note(MOCKUP_REVISION, true), None);
+        assert!(
+            !revision_note(MOCKUP_REVISION, true)
+                .unwrap_or_default()
+                .contains("observe takes save_as")
+        );
     }
 
     /// Revisions are numbered 1, 2, 3… with no gap or repeat, so a told number names exactly

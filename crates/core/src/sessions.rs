@@ -1414,6 +1414,7 @@ impl Core {
             overnight: board.sorted_runs(),
             reviews: board.sorted_reviews(),
             previews: board.sorted_previews(),
+            integrated_checks: board.sorted_integrated_checks(),
             peer_messages: board.sorted_peer_messages(),
         })
     }
