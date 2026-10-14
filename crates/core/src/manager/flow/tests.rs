@@ -758,6 +758,10 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
         },
         script(|turn| async move {
             if turn.is_orchestrator() {
+                // Checks that pass before the landing's turn ends are told after it.
+                if turn.input.contains("[checks passed") {
+                    return Reply::text("Noted.");
+                }
                 if let Some(n) = reports_in(&turn.input).first() {
                     let reply = turn
                         .call("land_phase", json!({"task": format!("task-{n}")}))
