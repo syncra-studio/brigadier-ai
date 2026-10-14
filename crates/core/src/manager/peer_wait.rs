@@ -167,8 +167,23 @@ impl SessionManager {
                 ),
             });
         }
+        // Never sent, never delivered, or its wait settled: no reply comes, said at once.
+        let none_comes = |record: &PeerRecord| match &record.state {
+            PeerState::Declined => Some("the user didn't send it".to_owned()),
+            PeerState::Refused { reason } => Some(format!("it was never sent: {reason}")),
+            PeerState::Dropped { reason } => Some(format!("it won't be delivered: {reason}")),
+            PeerState::Replied => None,
+            _ if record.settled => Some("you settled its wait".to_owned()),
+            _ => None,
+        };
+        for record in &asked {
+            if let Some(why) = none_comes(record) {
+                lines.push(format!("[no reply comes to {}: {why}]", record.message_id));
+            }
+        }
         let due: Vec<&PeerRecord> = asked
             .iter()
+            .filter(|record| none_comes(record).is_none())
             .filter(|record| record.state != PeerState::Replied || held_for(record))
             .collect();
         if due.is_empty() {

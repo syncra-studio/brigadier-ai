@@ -5,8 +5,9 @@
 use std::time::Duration;
 
 use brigadier_providers::{ApprovalDecision, ProviderKind};
+use serde_json::json;
 
-use super::peer_kit::{Peers, Sent, message_id, only, send};
+use super::peer_kit::{Peers, Sent, message_id, only, send, wait};
 use super::{Flow, Options, Reply};
 use crate::board::Board;
 use crate::model::{ConversationId, PeerState, PermissionLevel};
@@ -157,6 +158,59 @@ async fn dont_send_on_the_card_declines_the_message() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(flow.board_of(&api).await.peer_messages.is_empty());
     assert!(peers.inputs_of(&api).is_empty());
+    flow.stop().await;
+}
+
+/// A wait naming a declined message ends at once: no reply comes to it, so none is waited
+/// for and its session isn't named as still to reply.
+#[tokio::test]
+async fn a_wait_for_a_declined_message_ends_at_once() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-ask-deny-wait", ask(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    let (card, id) = sent_for_ok(&flow, &peers, &api).await;
+    flow.manager
+        .answer_card(
+            flow.conversation.clone(),
+            card,
+            ApprovalDecision::Deny {
+                message: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+    flow.settled().await;
+    let waited = Sent::default();
+    let (kept, asked) = (waited.clone(), id.clone());
+    peers.on(&flow.conversation, move |turn| {
+        let (kept, asked) = (kept.clone(), asked.clone());
+        async move {
+            let result = wait(&turn, json!({"message_ids": [asked], "timeout_s": 60})).await;
+            kept.lock().unwrap().push(result);
+            Reply::text("Noted.")
+        }
+    });
+    let started = std::time::Instant::now();
+    flow.say("Did they answer?").await;
+    flow.until("the wait's result", |_| !waited.lock().unwrap().is_empty())
+        .await;
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "{:?}",
+        started.elapsed()
+    );
+    let (result, failed) = only(&waited);
+    assert!(!failed, "{result}");
+    assert!(
+        result.contains(&format!(
+            "[no reply comes to {id}: the user didn't send it]"
+        )),
+        "{result}"
+    );
+    assert!(!result.contains("Still to reply"), "{result}");
+    flow.settled().await;
     flow.stop().await;
 }
 
