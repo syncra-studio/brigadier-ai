@@ -68,3 +68,45 @@ read from 7 turns. Two things follow:
 - Codex usage comparisons need many turns per arm: one session's cache luck can move uncached input by about 45% per turn.
 - The effort question needs a probe of n ≥ 10 alternating turns per condition over the app-server, the path
   Brigadier uses.
+
+## Second pass (2026-10-15): questions answered without a live call
+
+No live CLI probe was run in the second pass. These were settled from the vendor docs (re-fetched 2026-10-14/15),
+the installed binaries and help (Claude Code 2.1.300, codex-cli 0.162.1) and a read-only query of the installed
+app's `routing.sqlite`.
+
+- **PLAN probe "Claude Bash output of 200 KB: full text or preview?" is answered by the docs** (tools-reference,
+  "Timeout and output limits"). A *valid* result is inline up to roughly 30,000 characters; past that the model gets
+  the path of a file saved in the session directory (cut past 64 MiB) plus a preview of the first 2,000 characters.
+  A *failing* result is inline up to roughly 10,000 characters; past that it gets "a head-and-tail excerpt of that
+  size cut from the read-back window, with no file path". `BASH_MAX_OUTPUT_LENGTH` sets the read-back window (30,000
+  by default, hard ceiling 150,000) and doesn't raise the inline ceilings; `bashOutputMaxChars` (2.1.261+, up to
+  128,000) sizes both. All three names are in the 2.1.300 binary.
+- **What a hook gets for a failing command:** `PostToolUseFailure.error` "is generally the same text Claude receives
+  as the failed tool's result", middle-truncated around a `... [N characters truncated] ...` marker (hooks page). So
+  for a failing command a hook can store no more than the model saw. Still open, and cheap: which part of a long
+  output the 30,000-character read-back window takes (start, end, or both), since that decides whether raising it
+  helps a failing test log (PLAN §5).
+- **`PostToolBatch` gets exactly what the model saw:** its `tool_response` "contains the same content the model
+  receives in the corresponding `tool_result` block… For `Read`, that means line-number-prefixed text" (hooks page;
+  `PostToolBatch` is in the 2.1.300 binary). Whether it fires in Brigadier's `-p` stream-json mode is a 1-call check.
+- **Compaction can be refused on Claude:** a `PreCompact` hook exiting 2 (or `decision: "block"`) skips a compaction
+  "triggered proactively before the context limit"; one "triggered to recover from a context-limit error already
+  returned by the API" instead fails the current request. `PostCompact` receives `compact_summary` (hooks page). On
+  Codex, `PreCompact` returning `continue: false` "stops before compacting" (Codex hooks page), but Brigadier
+  switches Codex hooks off.
+- **Stop hooks are bounded:** "after stop hooks have continued the turn eight times in a row, Claude Code overrides
+  the next block and ends the turn", reset when Claude calls a tool; `stop_hook_active` marks a continuation.
+- **P4 is explained by OpenAI's caching guide:** cache entries live on individual machines, "traffic above 15
+  requests per minute can lead to overflow routing", and `reasoning.effort` is part of the cached prefix unless a
+  `configuration_update` item changes it (GPT-6 and later). On GPT-5.6 and later the only lifetime is 30 minutes,
+  refreshed by reuse; writes cost 1.25× input and reads 0.05× on GPT-6.1 Sol. Whether Codex sends
+  `configuration_update` is still unknown (the string appears 19 times in the 0.162.1 binary).
+- **P3's scope holds for Claude workers in one conversation, more than the second pass feared.** A Claude worker's
+  system prompt is the generic worker rules plus the repository's instructions; its task text is its first user
+  message; it starts in the conversation's shared worker folder with its worktree added (`M/workers.rs:1601-1616`,
+  `:1743-1750`). The one open question is whether the per-worker `--add-dir` path is written into the dynamic
+  system-prompt sections (PLAN §5, B4 probe).
+- **The checkpoint fork rewrites the thread (store, read-only):** the only `handoff` row (2026-10-14 03:46:29) read
+  544 and wrote 216,616 after the thread's last turn at 252,313 (WEAK-SPOTS C11). Codex cache writes: 0 in all 725
+  Codex rows, so Codex usage comparisons use the cached share of input, not writes.

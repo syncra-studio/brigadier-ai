@@ -2,7 +2,8 @@
 
 Taken from `docs/PLAN.md` §7, `docs/THREAD-PLAN.md`, `docs/SESSION-FIXES-PLAN.md` (Q5, Q6, §11) and the code at
 `d669bca0`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`. Installed CLIs on this machine:
-Claude Code 2.1.299, codex-cli 0.162.1, both on subscription sign-in.
+Claude Code 2.1.299 (2.1.300 since 2026-10-14; the second pass checked 2.1.300), codex-cli 0.162.1, both on
+subscription sign-in.
 
 ## 1. Which decisions supersede §7
 
@@ -37,13 +38,30 @@ completed task.
   to be handed off at 200k / 70% before the CLI compacts, but nothing stops the CLI compacting first (WEAK-SPOTS L2).
 - `idleCompaction: false` is set in every Brigadier Claude session's settings (`P/claude/mod.rs:725`).
 - Orchestrator/thread rebirth with a briefing (handoff 3k, state 2k, Brain 5k tokens; decisions whole), cold-cache
-  rebirth from a warm-time checkpoint above 150k (`M/cold.rs`).
-- Worker hand-off at 200k / 70% with note, last messages, `<scratch>/handoff/` and `checks.md`.
+  rebirth from a warm-time checkpoint above 150k (`M/cold.rs`), **Claude threads only**: a Codex thread has no cache
+  lifetime in Brigadier (`crates/core/src/knowledge.rs:198`), so it is never checkpointed (WEAK-SPOTS N5).
+- **The note-writing fork (checkpoint and rebirth hand-off) runs with no tools and no MCP servers**
+  (`M/rebirth.rs:337-366`), unlike the thread, so it shares no cached prefix with it and rewrites the whole thread;
+  `M/cold.rs:159-172` then counts the fork as a refresh of the thread's cache (WEAK-SPOTS C11, measured once:
+  216,616 written for a 252k thread).
+- Worker hand-off at 200k / 70% with note, last messages, `<scratch>/handoff/` and `checks.md`. The wrap-up steer is
+  sent mid-turn on the first context report past the threshold, once per turn (`M/workers.rs:421-432`).
+- **Every reroute starts a fresh session** (`Origin::New`, `M/fallback.rs:285`) from the thin successor of WEAK-SPOTS
+  C1, including a move to another account of the same model, a continue after the task's own quota wait, a sign-in
+  error and "prompt is too long". No path resumes the session that was running.
+- Worker reports are structured (`submit_report`, typed lists) and capped at 3,600 bytes over all lists together
+  (`M/workers.rs:94`, `:3522-3540`). The thread sees every list except `learned`, which it sees as a count only
+  (`M/prompts.rs:1571`).
+- The thread is woken per arriving message; envelopes that queue while it is busy go in one turn
+  (`M/conversation.rs:6194`).
 - Lossless output store for the **thread's** commands: Claude through a `PostToolUse` hook, Codex through
   Brigadier's `run` tool; the model gets a digest plus `read_artifact` (`M/tool_output.rs`). Every `run_check` call,
   the thread's and the workers', is stored whole too, and a worker gets a copy of a long output in its scratch `checks/` folder
   (`M/checks.rs:763-807`). Workers' own Bash and tool output has no store: workers have no output
-  hook (`only_a_thread_gets_the_output_hook`, `P/claude/mod.rs:2335`; `M/workers.rs:1874`).
+  hook (`only_a_thread_gets_the_output_hook`, `P/claude/mod.rs:2335`; `M/workers.rs:1874`). The Claude hook is passed
+  in the session's `--settings` JSON (`P/claude/mod.rs:758-759`, `:791-811`), a route any other Claude hook can use.
+  **Codex hooks are switched off** for every Codex session (`DISABLED_FEATURES`, `P/codex/mod.rs:116-123`), to keep
+  the user's own hooks out; Codex 0.162.1 has them stable and on by default.
 - Code index tools `code_search`, `code_refs`, `project_map` (TypeScript definitions fixed 10-02). No outline or
   single-symbol read tool; ranged reads use Claude's `Read` offset/limit or `sed -n` on Codex, as the worker prompt
   asks (`M/prompts.rs:1140-1144`).
@@ -72,6 +90,12 @@ completed task.
   passed the frozen checks. Found in the runs: workers ending a turn while waiting on a background subagent were
   failed as "stopped without a report" (4 of 6 runs); the Brain skeleton job adds 17–25 nodes that differ per run.
   Phase 3's gates stand as missed; what to do is the user's call.
+- **The installed app's usage store, re-read for the second pass (read-only, 2026-10-15):**
+  - 2026-10-14: 75 thread turns, average context 169k, 32.9M cache reads, 300k cache writes; 26 turns with under 400
+    output tokens read 9.1M of it (WEAK-SPOTS S6).
+  - The one `handoff` (checkpoint fork) row wrote 216,616 and read 544 (C11).
+  - 14 days: Brain enrichment wrote 1.31M at Haiku, more than the thread (0.50M), Claude workers (0.79M) or reviews
+    (0.58M) (S8). Codex: 725 rows, cache writes 0 in every one.
 - **REA for study tasks:** dropped (1.12× the tokens, slower, further from the findings).
 - **Rejected or not integrated:** budgets/caps, early compaction and context caps, quality settings, a fresh
   `claude -p` per message as default (≈ 2.5× worse for the orchestrator), RTK, headroom, Graft, graphify, cognee,

@@ -12,7 +12,7 @@ verified here, **API** API-only (no use to Brigadier), **Prompt** works through 
 
 Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-in. (Claude Code auto-updated to
 2.1.300 on 2026-10-14 after the research; the CLI✓ flags were re-checked in 2.1.300's help and the binary strings in
-2.1.299 and 2.1.300.) Adapters:
+2.1.299 and 2.1.300; the second pass, §7, worked on 2.1.300.) Adapters:
 `crates/providers/src/claude/mod.rs` (stream-json `claude -p`) and `crates/providers/src/codex/mod.rs`
 (`codex app-server`).
 
@@ -38,8 +38,11 @@ Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-
    money to cache invalidation (Complexity Trap, NeurIPS 2025 workshop, SWE-bench Verified 500, 5 configurations).
    Trajectory reduction saved 21–36% of cost at equal success (AgentDiet, FSE 2026). Goal-directed trimming of tool
    output saved 23–54% (SWE-Pruner 2026). Grade C. **For Brigadier:** it can't edit a CLI's history, so masking
-   isn't available as such. The two levers it has are trimming at the source (a PostToolUse hook on Claude, its own
-   `run` tool on Codex), which is lossless with a stored copy, and an earlier fresh session.
+   *old* results isn't available. Trimming at the source is: a Claude `PostToolUse` hook's `updatedToolOutput`
+   replaces what the model sees, a `PostToolBatch` hook receives exactly what the model saw for every tool (so it can
+   store it whole), and on Codex Brigadier's own `run` tool or, if Brigadier delivers its own Codex hooks, a
+   `PostToolUse` hook (corrected in the second pass, §7). With a stored copy this is lossless. The other lever is an
+   earlier fresh session.
 5. **Caching is worth 41–80% of cost, and dynamic content or tool-set changes in the prefix break it** (Don't Break
    the Cache 2026, 500+ sessions). Input tokens, not output, drive most agent cost, and the same task varies up to 30×
    in tokens between runs (Bai et al. 2026). Grade C. **For Brigadier:** single runs can't show a saving. This
@@ -49,8 +52,10 @@ Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-
    APIs). LLM judges reading the transcript scored AUROC ≤
    0.65 (Advani 2026). Self-correction without outside feedback often makes answers worse; a sound external
    verifier helps (Huang, ICLR 2024; Stechly, ICLR 2025). Capable models game contradictory tests (ImpossibleBench,
-   ICLR 2026). Grade C. **For Brigadier:** integrated checks on the real tree and the "[not checked], never [met]"
-   rule are right. Turning worker claims into Brain facts (G1) and accepting an overnight phase on a summary (G2) go
+   ICLR 2026). Grade C. The unreliable judges are the ones that **read a transcript**: a judge that has the tree and a
+   shell and runs things agreed with human evaluators far better ("as reliable as our human evaluation baseline",
+   Agent-as-a-Judge, arXiv 2410.10934; second pass, §7). **For Brigadier:** integrated checks on the real tree and the "[not checked], never [met]"
+   rule are right, and a review is worth most when it inspects and runs, not when it reads a diff and a report. Turning worker claims into Brain facts (G1) and accepting an overnight phase on a summary (G2) go
    against this evidence.
 7. **Storing an agent's own claims as memory spreads its errors** (Xiong 2025, arXiv preprint: adding only
    evaluator-approved memories gained 15–26 points absolute over adding everything, across four agents; HaluMem 2025). Grade C. This bears directly on G1.
@@ -90,6 +95,12 @@ Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-
 | Codex app-server: `thread/compact/start`, `thread/fork` (`lastTurnId`, `excludeTurns`, `ephemeral`), `thread/resume` (`excludeTurns`), `thread/inject_items` (append model-visible items without a turn), `turn/start` with `model`/`effort`, `thread/goal/set` with `tokenBudget`, `thread/tokenUsage/updated` with cached and cache-write counts | developers.openai.com/codex/app-server (current) | V | CLI✓ (in the schema from `codex app-server generate-json-schema`, 0.162.1) |
 | Codex compaction keys: `model_auto_compact_token_limit`, `compact_prompt`, `experimental_compact_prompt_file`, `tool_output_token_limit` | Codex config reference | V | CLI✓ (binary strings; set with `-c`). Brigadier sets the first (`P/codex/mod.rs:1180`) |
 | Codex 0.157–0.162: resume from the latest compaction boundary; "install full context in compaction replacement history"; partial-history subagent forks removed; tool declaration mode kept across resumed windows | Codex release notes (2026-09-25..10-08) | V | CLI✓ (installed 0.162.1) |
+| **Claude hooks Brigadier can use** (second pass): `Stop` with `decision: "block"` and a `reason` keeps the model working, `stop_hook_active` marks a continuation, at most 8 continuations in a row (`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`); `PostToolBatch` once per batch before the next model call, with `tool_response` = "the same content the model receives"; `PostToolUse` `updatedToolOutput` replaces what the model sees; `PostToolUseFailure.error` ≈ the failed result the model got, middle-truncated; `PreCompact` exit 2 skips a proactive compaction, and fails the request for a recovery one; `PostCompact` gets `compact_summary`; hook-injected context is capped at 10,000 characters (a file path and a 2,000-character preview past that) | code.claude.com/docs/en/hooks (re-fetched 2026-10-15) | V | CLI✓ for presence (all names in the 2.1.300 binary) and for delivery (Brigadier passes its thread's hook in `--settings`, `P/claude/mod.rs:758`). Behaviour in `-p` stream-json: CLI? |
+| **Claude Bash output limits**: valid output inline to ~30,000 characters, then a session-folder file path plus a 2,000-character preview; failing output inline to ~10,000, then a head-and-tail excerpt from the read-back window and **no file**; `BASH_MAX_OUTPUT_LENGTH` = read-back window, 30,000 default, ceiling 150,000; `bashOutputMaxChars` up to 128,000 (2.1.261+) | code.claude.com/docs/en/tools-reference (re-fetched) | V | CLI✓ (names in the 2.1.300 binary). Settles PLAN probe 2 (PROBES, second pass) |
+| **Codex hooks**: stable, on by default; `PostToolUse` (`decision: "block"` replaces the tool result with the hook's feedback), `PreCompact` (`continue: false` stops compaction), `Stop` (block = continue with `reason` as a new prompt), `SessionStart`, `UserPromptSubmit`, and more; configured in `hooks.json` or `[hooks]` tables of `config.toml` beside an active config layer (`~/.codex`, or a trusted `<repo>/.codex`); non-managed hooks must be trusted, or run with `--dangerously-bypass-hook-trust` | developers.openai.com/codex/hooks (redirects to OpenAI's docs site; re-fetched) | V | CLI✓ for presence (`codex features list`: `hooks stable true`; the flag in `codex --help`; `hook/started`, `hook/completed`, `hooks/list` in the app-server schema). **Brigadier turns them off** (`P/codex/mod.rs:116-123`). Delivering Brigadier's own hooks without the user's: unverified, the page doesn't say whether `-c` can set them |
+| Codex structured output: `turn/start` takes an `outputSchema` for that turn. Claude: `--json-schema` returns `structured_output` in print mode | app-server doc; CLI reference | V | CLI✓ (schema; `claude --help`). Little use: worker reports are already typed `submit_report` calls |
+| Claude `--resume` accepts "the absolute path to a session's `.jsonl` transcript file" in place of an id | code.claude.com/docs/en/cli-reference (re-fetched) | V | CLI? Whether a transcript resumes under another account's config folder is unverified (PLAN §5) |
+| `-p` cost on resume: `total_cost_usd` covers the conversation's earlier runs too; on SIGTERM the turn in progress is left unfinished, and `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1` continues it on resume; `--bare` "will become the default for `-p` in a future release" | headless docs (w04, not re-fetched here) | V | CLI? The env name is in the 2.1.300 binary. Watch item: when `--bare` becomes the `-p` default, Brigadier must opt out to keep subscription sign-in |
 | Codex memories off by default; "a recall layer, not the only source for rules that must always apply" | Codex memories docs | V | CLI✓ (`codex features list`). Same lesson as finding 7 |
 | ExecPlans / long-horizon runs: a living PLANS.md (progress, decision log, "done when", validation commands) carried a ~25 h, ~13M-token run | developers.openai.com blog and cookbook (undated) | A | Prompt + files |
 
@@ -105,6 +116,8 @@ Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-
 | SessionStart hook input on resume/fork carries `prompt_cache_likely_expired`, `context_tokens`, `seconds_since_last_response`, `estimated_cache_write_usd` | code.claude.com/docs/en/hooks | V | CLI? (`--include-hook-events` in help). A ready-made signal for cache-write causes (§7 next item 1) |
 | "Never change tools mid-session; don't switch models mid-session (late in a session it costs more than it saves; hand off to a subagent instead); put updates in messages, not system-prompt edits" | claude.dev blog, "prompt caching is everything" (2026-04-30) | V/M | Pattern. Brigadier's notes-instead-of-restarts (§7 item 5) already follow it |
 | OpenAI: the whole rendered prefix must match, including tools, effort and verbosity; on GPT-6 a `configuration_update` item changes effort without breaking the cache | developers.openai.com prompt-caching guide | V | API. `configuration_update` is in the codex binary; whether Codex uses it is unknown. **Probe P4 was inconclusive**: Codex cache hits swung 13k ↔ 25k from turn to turn with or without an effort change |
+| OpenAI cache lifetime on GPT-5.6 and later: one value, 30 minutes, "reusing the prefix refreshes its lifetime without another cache-write charge"; writes 1.25× input, reads 0.1× (0.05× on GPT-6.1 Sol); entries live on single machines and "traffic above 15 requests per minute can lead to overflow routing" | developers.openai.com/api/docs/guides/prompt-caching (re-fetched 2026-10-15) | V | API doc for the cache Codex's requests hit; no model list, so gpt-6.1-sol is unverified. Explains P4. Brigadier gives Codex no lifetime (WEAK-SPOTS N5) |
+| Anthropic: the prefix is `tools`, `system`, then `messages`; "Modifying tool definitions (names, descriptions, parameters) invalidates the entire cache" | platform.claude.com prompt-caching (re-fetched) | V | Applies to every Claude session. Why the checkpoint fork, launched with no tools, rewrites the whole thread (WEAK-SPOTS C11) |
 
 ### 2.3 Grounding and speed
 
@@ -116,6 +129,7 @@ Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-
 | Hallucination comes from grading that rewards guessing; abstaining should beat a wrong answer | openai.com/index/why-language-models-hallucinate (2025-09-05) | M | Prompt (reward "unknown") |
 | Output tokens dominate latency: halving output can halve latency; halving input gives 1–5% | OpenAI latency guide | V | Prompt (short answers), routing |
 | Opus 5.5 at medium ≥ Opus 5 at high; removing "think carefully" lines makes replies start sooner; "treat earlier answers as settled" cuts follow-up thinking; time budgets make teams finish sooner | prompting Claude Opus 5.5 | V | CLI✓ (`--effort`) + Prompt |
+| Fast mode: Opus "up to 2.5x faster", same quality, $8/$40 per MTok on Opus 5.5; on subscriptions "available via usage credits only and not included in the subscription rate limits"; in `-p` only with `--settings '{"fastMode": true}'`; enabling it later in a conversation pays the whole context once at the uncached fast price | code.claude.com/docs/en/fast-mode (re-fetched) | V | CLI? Paid outside the subscription: a user decision (PLAN §6) |
 | Agent teams use about 7× the tokens of a standard session when teammates run in plan mode; keep CLAUDE.md under 200 lines, move detail to on-demand skills | code.claude.com/docs/en/costs | V/M | Prompt, layout |
 
 ## 3. Research literature
@@ -144,6 +158,15 @@ Grouped findings with the strongest sources (full list with dates, sizes and URL
   2605.29442 (20,574 real sessions: 91.5% of resolutions needed user correction; false self-reports a growing
   share); ImpossibleBench arXiv 2510.20270; Kalai et al. arXiv 2509.04664; memory: Xiong arXiv 2505.16067, HaluMem
   arXiv 2511.03506.
+- **Second pass additions.** Agent-as-a-Judge arXiv 2410.10934 (a judge agent with tools "dramatically outperforms
+  LLM-as-a-Judge and is as reliable as our human evaluation baseline" on DevAI, 55 tasks; w04's ~90% against ~70%
+  agreement is from search, not re-confirmed). LongCLI-Bench arXiv 2602.14337 (Feb 2026, 20 tasks: pass rates below
+  20%, most tasks stall below 30% completion, self-correction gives marginal gains, plan injection and interactive
+  guidance give much larger ones). Recursive Language Models arXiv 2512.24601 (v3 2026-05-11: the long prompt held as
+  an external store the model inspects and recurses over, inputs "two orders of magnitude beyond" the window, at
+  comparable cost; w04's +26% against compaction is not re-confirmed). AbstentionBench arXiv 2506.09038 (reasoning
+  tuning lowers abstention; reported by w04, not re-fetched). AgentRewind arXiv 2608.14380 (rewind memory of what
+  failed; no numbers in the abstract; reported by w04).
 - **Effort.** Weinberger & Hozez arXiv 2608.01347; Cuadron arXiv 2502.08235 (overthinking); Gema arXiv 2507.14417
   (inverse scaling, contested).
 - **Fast paths.** RouteLLM arXiv 2406.18665 (chat); Scrouting arXiv 2608.04804; SWE-Router arXiv 2607.00053;
@@ -173,6 +196,9 @@ are marked **M**.
 | KV-cache hit rate is "the most important metric"; keep the prefix stable and context append-only; never add or remove tools mid-task; keep failures in context; recite the goal by rewriting a todo file | Manus context engineering (2025-07-18) | A | Partly |
 | The Claude Code team alerts on cache hit rate and declares incidents when it drops. One heavy user measured ~35 cache reads per write and found a subagent silently on the wrong model | simonwillison.net quoting the team (2026-02); spin.atomicobject.com (2026-03) | A / M (one user) | Yes (PLAN P0.1) |
 | False success: in a public incident an agent deleted a production database during a code freeze and misreported its tests. 63% of one model's successful benchmark solutions fetched the fix; strict isolation cut scores by 14–21 points; "keep working without stopping" prompts raised cheating | incident database #6113 (2025-07); cursor.com/blog/reward-hacking-coding-benchmarks (2026-06-25) | A; M | Supports harness-run checks (PLAN A5) |
+| OpenAI's reference orchestrator over `codex app-server`: one thread per worker run, continuation turns send only guidance, `agent.max_turns` 20, a run with no agent event for `stall_timeout_ms` = 300,000 (5 min) is killed and retried, no retry timers restored after a restart (re-poll and re-dispatch), token totals from absolute `thread/tokenUsage/updated` with deltas | github.com/openai/symphony `SPEC.md` (re-fetched) | V/A (a spec, no measurements) | Yes. Supports a shorter stall deadline (W1) and restart-from-durable-state (A3) |
+| "Share full traces, not just the task"; "actions carry implicit decisions", and agents acting on conflicting decisions produce bad results | cognition.com/blog/dont-build-multi-agents (2025-06-12; w04) | A | Supports B1, and a context pack that carries the decisions bearing on a task |
+| AGENTS.md as "a table of contents, not an encyclopedia" pointing into `docs/`; linters whose messages teach; recurring drift clean-up | OpenAI "Harness engineering" (2026-02-11), **primary not readable** (403); secondary summaries only | A, unverified | Supports B5's small always-present index |
 | Memory files are an attack surface: an npm `postinstall` rewrote memory files and added a hook, and the agent then advised hard-coding keys | blogs.cisco.com (2026-04-01) | M (demo, patched) | Supports provenance on Brain entries (PLAN A4) |
 
 ## 5. Items §7 rejected: is there new evidence?
@@ -214,3 +240,65 @@ Sixteen citations the plan leans on most were fetched again and compared with th
   - the plan-mode condition on the 7× agent-team figure;
   - which model missed references with grep.
 - **Not confirmed:** whether Wang's extractor keeps the constraints word for word.
+
+## 7. Second pass (Fable 5.1 + Mythos 5.1)
+
+At the user's request two more workers looked at the first pass: **w04 (Fable 5.1)** searched the internet and the
+installed CLIs for what it missed, and **w05 (Mythos 5.1)** read the code for weak spots and red-teamed `PLAN.md`.
+Their full texts are in the run's `msgs/w04-fable-research.md` and `msgs/w05-mythos-investigation.md`. **w06 (Opus
+5.5)** adjudicated every claim before anything was adopted: code claims by reopening the cited lines at `d669bca0`,
+CLI claims against `claude --help` 2.1.300, `codex --help`, `codex features list`, the app-server schema and both
+binaries, web claims by re-fetching the pages the plan relies on, and usage numbers by re-running w05's queries
+read-only on the installed app's store.
+
+**What w04 (Fable) found.** Codex 0.162.1 has a stable hooks engine (PostToolUse, PreCompact, Stop and more) that
+Brigadier switches off; Claude's `Stop`, `PostToolBatch` and `PreCompact` hooks give a done gate, exact capture of
+every tool result and a way to refuse compaction; Claude's Bash output limits are documented, which answers PLAN
+probe 2; OpenAI documents a 30-minute cache lifetime and explains P4; Brigadier gives Codex no cache lifetime; fast
+mode in `-p`; judges with tools are reliable where transcript readers aren't; Symphony's 5-minute stall deadline;
+twelve PLAN changes and seven probes.
+
+**What w05 (Mythos) found.** The checkpoint and hand-off fork shares no cache prefix with the thread (216k written,
+measured) and is then counted as a cache refresh; the thread never sees `learned` and judges workers on 3,600 bytes;
+every limit, account switch, sign-in error and "prompt is too long" takes the thin reroute path, which same-session
+resume would avoid, and building A6 before that pushes more workers down it; the thread wakes per message at full
+context (measured); `search_transcript` misses the thread's own tool output; Brain lines carry no provenance; four
+first-pass errors; a new build order.
+
+**Adopted** (each now in WEAK-SPOTS or PLAN, with its evidence):
+- The fork's missing prefix and the false refresh (C11; PLAN A11), confirmed in the code and re-measured: 544 read,
+  216,616 written for a 252k thread, then 77k for the briefing, about 294k where a plain cold resume writes ~252k.
+- Same-session resume for limits, account switches and sign-in errors, and "prompt is too long" through the size
+  hand-off (C1 widened; PLAN A12), and w05's ordering argument: A6 waits for A12, because with compaction off a worker
+  that ignores the steer hits "prompt is too long" and today that becomes a thin successor on a bigger-window model.
+- `learned` shown to the thread and provenance on Brain lines (G6, G7; PLAN A13); wake-up coalescing (S6; PLAN A14);
+  `search_transcript` over the thread's own tool output (C12; PLAN A15).
+- P0.1 measured by arithmetic (`cache_write − Δcontext`) instead of cause tags only; Codex writes dropped (always 0).
+- The first-pass corrections: L2's steer is mid-turn, once per turn (not at turn end); C7 is the lesser problem
+  next to C11; V1 must count `handoff` and Brain rows; V2 gains an account-switch seam, a context-window seam, a
+  planted false `learned` line and an item that lives only in the thread's own tool output.
+- Codex hooks as a lever (N4), Claude hooks for exact capture (P0.3), refusing compaction (A6(d)) and a narrow done
+  gate (A5(e)); Bash output limits (probe 2 dropped); Codex's 30-minute lifetime for a Codex checkpoint (A3, behind
+  a probe); W1 raised to High and the thread watchdog moved earlier (A9); a reviewer that runs things, not one that
+  reads (A5(b)); verifying the first report of a long phase hardest (A5(a), from LongCLI-Bench).
+
+**Rejected or narrowed, and why:**
+- **w05: worker task text sits in `--append-system-prompt`, and each worker's cwd is its own worktree, so B4 will
+  show nothing.** Wrong for Claude workers: the task is the first user message and the start folder is shared
+  (WEAK-SPOTS §7). B4 stays, with one narrower open question (`--add-dir` in the dynamic sections).
+- **w04: a JSON-schema report turn makes report acceptance a parse.** Reports are already typed `submit_report`
+  calls validated inside the worker's turn. Not proposed. The cheap evidence check goes into that validation (A5(e)).
+- **w04: a `Stop` hook as the main done gate.** Narrowed: `submit_report` already refuses a bad report inside the
+  turn, so a `Stop` hook adds value only for a turn that ends with no report or with a hand-off note missing its
+  parts (C8). Kept for those.
+- **w04: move A9 up because Symphony stalls at 5 minutes.** Agreed on moving it up, not on the number: Symphony
+  counts any agent event as activity, Brigadier deliberately doesn't, so the deadline is set by fault injection.
+- **w04: set `BASH_MAX_OUTPUT_LENGTH=150000` for workers now.** Deferred to a probe: the docs say it widens the
+  window a failing excerpt is cut from, but not whether that window is the start or the end of the output, and a
+  failing test log's useful part is usually the end.
+- **w04: P0.1 adds the OpenTelemetry cache split as a cross-check.** Not needed: stream-json carries the split.
+- **Usage figures w05 gave and w06 couldn't recompute** don't appear; every number in the docs was re-queried (two
+  moved slightly as the store grew: 73 → 75 thread turns on 10-14, 700 → 725 Codex rows).
+- **Settled rules are untouched.** Claude fast mode (paid usage credits) and Codex's `tokenBudget` are listed in
+  PLAN §6 for the user, both recommended against for now; nothing here changes Q5 or the no-caps rule. The report
+  cap is kept; showing `learned` costs nothing extra, and raising the cap is a §6 question to decide after V3.
