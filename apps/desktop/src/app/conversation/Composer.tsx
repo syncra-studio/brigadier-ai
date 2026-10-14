@@ -85,7 +85,7 @@ const ComposerEditor = lazy(() =>
 );
 
 /**
- * The composer (assistant-ui composer elements, BB parity): attachments, @-mentions of
+ * The composer (assistant-ui composer elements): attachments, @-mentions of
  * workers, files and conversations, `/` commands, and the setup pickers. A draft picks its
  * project (or none, for a Chat), environment, branch, permission level and model; a started
  * session can still change its model, effort and permission level, a Chat its model.

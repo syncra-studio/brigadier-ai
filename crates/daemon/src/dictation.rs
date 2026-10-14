@@ -1,5 +1,5 @@
 //! Dictation (the composer's Dictate button): speech to text on this computer, with
-//! whisper.cpp. The approach follows OpenWhispr's local mode; no code is taken from it.
+//! whisper.cpp.
 //!
 //! The speech model is downloaded once, on first use, into the data folder and checked
 //! against its published SHA-256. Each dictation then runs in its own short-lived

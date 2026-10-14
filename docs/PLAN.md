@@ -5,25 +5,25 @@
 
 ## 1. What Brigadier is
 
-Brigadier is a free, open-source (MIT), local-first desktop app for long-running AI coding sessions. It plays the same role as [bb](https://github.com/get-bb/bb), but is designed to be faster, lighter, and smarter about context, routing, and quality.
+Brigadier is a free, open-source (MIT), local-first desktop app for long-running AI coding sessions. It is designed to be fast, light, and smart about context, routing, and quality.
 
 The user talks to exactly one **orchestrator**. The orchestrator never does work itself. It plans, delegates to **workers**, talks to them, reviews their results, and reports back. Workers are models from any CLI installed on the machine (Claude Code and Codex first; opencode, Cursor, Qwen and local models later), chosen by skill rather than vendor. To the orchestrator, workers feel like its own subagents. The user can watch workers but never talks to them directly.
 
-### Where Brigadier beats bb (by design)
+### Design goals
 
-| Area | bb today | Brigadier |
-|---|---|---|
-| Context | Delegates compaction to each CLI; child results truncated to 4k chars | Project Brain (knowledge graph) + invisible orchestrator rebirth; no compaction, ever |
-| Routing | None; model comes from flags, parent, or project defaults | Layered capability registry + outcome learning + user overrides |
-| Fallback | Retries the same provider; no cross-provider failover | Proactive quota balancing + mid-task cross-provider handoff with a quality floor |
-| Review | One fixed "review with agent" prompt | Risk-tiered, always cross-vendor; fusion panel + analyst for risky work |
-| Freshness | None | Mandatory freshness check against current official docs, cached in the Brain |
-| MCP / skills | Each CLI uses its own config | One registry, injected into any vendor per task |
-| Runtime | Node server + daemon, sync SQLite stalls, memory leaks | Rust core, single-writer async store, bounded memory |
-| Security | Unauthenticated local HTTP API | Authenticated local IPC only; OS sandbox for workers |
-| Cleanup | Leaked worktrees and processes; teardown can retry forever | Cleanup ledger per session; everything Brigadier creates is removed; crash sweep on launch |
-| Claude integration | Agent SDK (conflicts with Anthropic subscription terms) | The user's own unmodified `claude` binary |
-| Platforms | macOS arm64, Linux alpha, no Windows | Universal macOS, then Windows and Linux |
+| Area | Brigadier |
+|---|---|
+| Context | Project Brain (knowledge graph) + invisible orchestrator rebirth; no compaction, ever |
+| Routing | Layered capability registry + outcome learning + user overrides |
+| Fallback | Proactive quota balancing + mid-task cross-provider handoff with a quality floor |
+| Review | Risk-tiered, always cross-vendor; fusion panel + analyst for risky work |
+| Freshness | Mandatory freshness check against current official docs, cached in the Brain |
+| MCP / skills | One registry, injected into any vendor per task |
+| Runtime | Rust core, single-writer async store, bounded memory |
+| Security | Authenticated local IPC only; OS sandbox for workers |
+| Cleanup | Cleanup ledger per session; everything Brigadier creates is removed; crash sweep on launch |
+| Claude integration | The user's own unmodified `claude` binary |
+| Platforms | Universal macOS, then Windows and Linux |
 
 ## 2. Core principles
 
@@ -209,7 +209,7 @@ Each phase lists its **goal**, **deliverables**, **key design**, and **done when
   - A worker never pushes, publishes, deploys, or opens a PR; those stay user-started actions (a button, or telling the orchestrator), and a worker lists a blocked one under "Needs the user".
 - **Permission levels** (built, on main): **Full access** is genuinely unsandboxed with no cards at all (Claude `bypassPermissions`, Codex `never` + `danger-full-access`). **Approve for me** (default) keeps the OS sandbox, widened to the toolchain's own caches and the worktree's git dir, and only an unsafe escalation reaches the user as a card (Claude `auto` mode, Codex's auto-review reviewer). **Ask for approval** asks on every escalation, one compact card at a time, with "Allow similar commands" scoped to that conversation. `request_approval` is narrowed to money, credentials, and destroying things outside the worker's own work.
 - **Secrets:** a per-project list of gitignored env files copied into worktrees, with values redacted in the UI, logs, and Brain.
-- **Composer** (BB parity), built from assistant-ui composer elements:
+- **Composer**, built from assistant-ui composer elements:
   - project picker, including "no project", which makes it a Chat;
   - local checkout vs new worktree;
   - branch picker, with "New branch…";
@@ -409,7 +409,7 @@ Each phase lists its **goal**, **deliverables**, **key design**, and **done when
   - Credential storage and paths.
   - A signed MSI or NSIS installer.
 - **Linux:** AppImage and .deb, with a WebKitGTK compatibility pass.
-- **Performance hardening:** benchmark report against bb (memory, CPU, latency, and context per feature).
+- **Performance hardening:** benchmark report against comparable tools (memory, CPU, latency, and context per feature).
 - **Docs:** install, first project, concepts (orchestrator, Brain, routing), privacy.
 - Optional crash reporting (opt-in).
 - MIT license and contribution guide.
@@ -542,7 +542,7 @@ Each phase lists its **goal**, **deliverables**, **key design**, and **done when
 | Q25 | Archive (hidden, cleaned up, restorable) / Delete (permanent, Brain knowledge kept by default); idle sessions hibernate |
 | Q26 | One permission picker combining autonomy and sandbox; outward actions always ask (levels finalized in Q27) |
 | Q27 | Levels: Ask for approval / Approve for me (default; stricter fusion review approves big plans on your behalf; stops only for questions only you can answer) / Full access (no sandbox, orange pill) |
-| — | Additions (2026-09-24): leave-no-litter cleanup ledger and litter guard; BB-parity composer; message queue (steer, edit, reorder, pause/resume); a sidebar with Projects and Chats; assistant-ui design system + elements as the full UI kit; dark-only theme with Compact / Normal density, everything token-driven |
+| — | Additions (2026-09-24): leave-no-litter cleanup ledger and litter guard; full-featured composer; message queue (steer, edit, reorder, pause/resume); a sidebar with Projects and Chats; assistant-ui design system + elements as the full UI kit; dark-only theme with Compact / Normal density, everything token-driven |
 | — | Token economy (2026-09-28, revised 2026-09-30; superseded by the next row): no budgets and no shortening sessions; lossless reductions judged per completed task on quality plus observed quota-window use; in order: measure first, precise and batched reads, a lean stable fixed start, thinking (effort per step where the cache survives), cache-aware idle with rebirth instead of resume when the cache is cold, a terse orchestrator voice (caveman), a command-output store (own filters, a Brigadier `run` tool for Codex), cheap-model digests; no fresh session per user message (§7) |
 | — | Token economy rewritten from measurements (2026-09-30, §7; its switches and defaults superseded by the next row): context size is the lever (58% of usage at 200–500k); none of headroom, Graft, RTK, ponytail, caveman or graphify is integrated (techniques borrowed); the Brain stays; built behind settings, off until completed tasks show equal quality: worker hand-off to a fresh session at a size (default 160k), orchestrator rebirth when its cache has expired (Claude only), lean Claude worker tools, code-tool pointers, build rules, a plain-English concise voice (readability, no measured saving). On by default after the A/B (the user, 2026-09-30): rebirth when the cache has expired, lean worker tools, code pointers; the worker hand-off after one long real task confirms its saving; concise replies and build rules off. Proposal for the user: no fresh session per user message as the default |
 | — | No session settings; best behaviour built in (2026-10-01, §7): no user setting for any usage behaviour. The worker hand-off at 160k, rebirth when the cache has expired, lean worker tools, code pointers, the code rules, the Brain's caps and code-name routing, and one brief, plain, lossless voice always run; nothing tells the user to turn anything on |
