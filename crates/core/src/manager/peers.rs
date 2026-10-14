@@ -372,6 +372,8 @@ impl SessionManager {
             return Err(recorded(Error::Invalid("the daemon died".into())));
         }
         let delivery = self.deliver_peer(&target.id, &send.message_id).await;
+        // The sender may stream its answer before this turn ends: publish its peer wait now.
+        self.settle_requests(caller).await;
         Ok(serde_json::json!({
             "message_id": send.message_id,
             "state": delivery.word(),

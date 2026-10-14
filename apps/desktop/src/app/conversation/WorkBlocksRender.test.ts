@@ -44,6 +44,12 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
     assert.deepEqual([state.fold, state.answerInWork, state.header], ["gone", false, header]);
     assert.notEqual(state.answer, null);
   }
+  for (const state of [seen.answering, seen.answeringLater, seen.stored]) {
+    assert.deepEqual(
+      [state.status, state.statusAfterAnswer, state.statusInWork],
+      ["Waiting for Billing to reply", true, false],
+    );
+  }
   assert.equal(seen.stored.answer, "Fixed the rounding: round now rounds half-up, and the tests pass.");
   // Answered but waiting for another session's reply: that line stays, under the answer, outside the work.
   assert.deepEqual(

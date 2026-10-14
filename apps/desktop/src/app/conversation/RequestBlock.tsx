@@ -707,7 +707,9 @@ export const RequestBlock: FC = () => {
               </div>
             )}
             {/* Answered, it may still wait for another session's reply: that line stays under the answer. */}
-            {answering !== null && meta.state === "waiting" && <ThreadStatus {...status} />}
+            {answering !== null && (waitingFor.length > 0
+              ? <StatusLine head={{ text: waitingWords(waitingFor), tone: "still" }} />
+              : meta.state === "waiting" && <ThreadStatus {...status} />)}
             {/* A late event's "Update: …" line: small, under the answer, never a new answer. */}
             {updates.map((index) => (
               <div

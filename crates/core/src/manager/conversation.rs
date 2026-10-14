@@ -108,6 +108,12 @@ pub(crate) struct Envelope {
 }
 
 impl Envelope {
+    /// An ordinary check pass only wakes a request that still defers its answer.
+    /// Passes that require more work use the ordinary decision label instead.
+    fn optional_check_pass(&self) -> bool {
+        self.kind == InjectionKind::Decision && self.label.starts_with("checks passed ")
+    }
+
     /// The message of another session's it carries.
     pub(crate) fn peer_message(&self) -> Option<&str> {
         (self.kind == InjectionKind::PeerMessage)
@@ -1684,6 +1690,15 @@ impl SessionManager {
                 .task_id
                 .as_ref()
                 .is_some_and(|task| state.withdrawn.contains(task))
+        {
+            return None;
+        }
+        // Recheck under the same lock as turn completion: a later turn may have answered
+        // since the checks runner chose the request that was deferred then.
+        if envelope.optional_check_pass()
+            && request
+                .as_ref()
+                .is_none_or(|request| !state.deferred.contains(request))
         {
             return None;
         }
@@ -3762,6 +3777,11 @@ impl SessionManager {
                     state.deferred.remove(request);
                     if status == TurnStatus::Completed {
                         state.answered.insert(request.clone());
+                        // A pass arriving during this turn was queued against its previous
+                        // [quiet]. This answer settles it without another turn.
+                        state.inbox.retain(|(envelope, queued)| {
+                            queued.as_ref() != Some(request) || !envelope.optional_check_pass()
+                        });
                     }
                 }
             }

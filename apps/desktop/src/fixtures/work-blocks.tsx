@@ -240,6 +240,8 @@ async function driveTurn(): Promise<object> {
   change(() => ({ streaming: { messageId: "line", text: "I’ll fix the rounding next.\n\nThen run the tests again.", requestId: "r1", phase: "commentary", startedAtMs: Date.now() } }));
   await settle();
   out.commentary = seen();
+  // A peer reply stays outstanding while the final answer streams.
+  request("r1", { waitingFor: [PEER] });
   // The final answer starts: the work folds at once, the time stops there.
   const answerAtMs = Date.now() - 1000;
   const answerText = "Fixed the rounding: `round` now rounds half-up, and the tests pass.";
