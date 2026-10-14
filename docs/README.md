@@ -2,13 +2,14 @@
 
 User guides:
 
-- [COMPUTER-USE.md](COMPUTER-USE.md): computer use on macOS: turning it on, what workers can and
-  can't do, safety.
+- [INSTALL-ALPHA.md](INSTALL-ALPHA.md): installing the unsigned alpha build on macOS.
 - [ACCOUNTS.md](ACCOUNTS.md): several Claude Code or Codex accounts per agent.
 
 For contributors:
 
 - [DEVELOPMENT.md](DEVELOPMENT.md): building from source, the checks, the layout, dependency notes.
+- [helpers/computer-use/README.md](../helpers/computer-use/README.md): the computer-use helper,
+  its vendored upstream driver and what Brigadier changed.
 
 Design plans and evidence. These are the working documents Brigadier was built from. They record
 decisions as they were made, so later plans supersede parts of earlier ones; each says so where
@@ -20,7 +21,7 @@ it does. Code comments cite them by section.
 - [THREAD-UX-PLAN.md](THREAD-UX-PLAN.md), [THREAD-PARITY-PLAN.md](THREAD-PARITY-PLAN.md): how the
   thread shows its work.
 - [SESSION-FIXES-PLAN.md](SESSION-FIXES-PLAN.md): fixes from real sessions, token savings.
-- [COMPUTER-USE-PLAN.md](COMPUTER-USE-PLAN.md): computer use's design, benchmark and measurements.
-- [research/](research/): background research.
+- [SESSION-MESSAGING-PLAN.md](SESSION-MESSAGING-PLAN.md): sessions sending each other messages and
+  requests.
 - [evidence/](evidence/): dated measurements and acceptance runs (A/B comparisons, phase
   verifications). Raw artifacts named there were kept outside the repository.

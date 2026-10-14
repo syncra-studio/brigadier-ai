@@ -15,11 +15,10 @@ vendor's model reviews every change after it lands.
   review from the other vendor (Codex reviews Claude's work, Claude reviews Codex's) in the background.
   The findings go back to the thread, which fixes them or says why not.
 - **Computer use in the background (macOS).** Workers can open and use the apps they build, and
-  any other app a task needs, without moving your cursor or bringing the app to the front. In
-  its benchmark, element actions hit their target 1,600 times out of 1,600, and reading a
-  window's controls takes about 6 ms (median). Across three runs of its 29-task suite, Claude
-  workers completed 85 of 87 runs. Method and numbers:
-  [docs/COMPUTER-USE-PLAN.md](docs/COMPUTER-USE-PLAN.md).
+  any other app a task needs, without moving your cursor or bringing the app to the front: a
+  step that would interrupt you is refused. System Settings is read-only to them. The
+  helper builds on a vendored open-source driver:
+  [helpers/computer-use/README.md](helpers/computer-use/README.md).
 - **Long sessions without compaction.** The thread never compacts its context. Before it fills, a
   fresh session takes over from a handoff note, every decision so far and the latest messages.
   Workers start with what the thread already read, search a local code index before reading
@@ -30,7 +29,9 @@ your own logins. It holds no API keys and never reads your credentials.
 
 ## Install
 
-There is no prebuilt release yet. Build it from source on macOS 14 or later:
+Once the `v0.1.0-alpha` release is published, install it with one command; see
+[docs/INSTALL-ALPHA.md](docs/INSTALL-ALPHA.md), which also covers the manual install of the
+unsigned build. Until then, build it from source on macOS 14 or later:
 
 1. Install [Rust](https://rustup.rs) (the pinned toolchain installs itself), Node 24+, pnpm 12,
    CMake, and the Xcode Command Line Tools (`xcode-select --install`).
@@ -83,11 +84,18 @@ rough edges.
 - **Overnight runs.** Type `/overnight` with a plan and when it should be ready. The session works
   through the plan phase by phase until it's done or the deadline comes, then leaves a morning
   report and a notification.
+- **Sessions that message each other.** A session's thread can send a message to another
+  session, in the same project or another one, and the reply comes back to it on its own. Both
+  sides show the exchange. Under Ask for approval, each message waits for your Send.
+- **Long commands in the background.** A command the thread runs that is still going after a
+  minute moves to the background with a live line, and its result comes back to the thread when
+  it ends. A turn's steps fold under "Worked for …" once the answer starts. A sidebar dot marks a
+  conversation whose request finished since you last opened it.
 - **Chats and side chats.** A Chat is a plain conversation with one model and web search. A side
   chat asks a question about a session without adding it to the session's thread.
 - **Several accounts per agent.** Sign in to more than one Claude Code or Codex account and pick
-  which one new conversations use. When one runs out, Brigadier switches to another (a setting,
-  on by default).
+  which one new conversations use (Settings › Providers). When one runs out, Brigadier switches
+  to another (a setting, on by default).
 - **Usage and fallback.** The Usage page shows each agent's usage windows and where they are
   heading. A worker whose provider hits its limit hands its task to the best other model, in the
   same worktree. A conversation continues on the other vendor and goes back after the reset.
@@ -135,6 +143,9 @@ A worker reports when it's done. Its commits then **land**:
   `brigadier/<session>/session` (new worktree). Landing into your checkout never overwrites
   uncommitted, untracked or ignored files. If it would, or if the branch moved unexpectedly, the
   task waits as "ready to land" and nothing changes.
+- **Checked** once on the combined work. Workers run only the checks of their own change; the
+  project's full checks run in the background on the branch the work landed on, and a failure
+  goes back to the worker that caused it. A merge of a session's work waits for a pass at its tip.
 - **Reviewed** afterwards. Every landing gets one read-only review by the other vendor, in its
   own checkout, in the background. Nothing waits for it. Its findings go to the thread as a
   message, even after a merge, and the thread fixes them or says why not. Settings ›
@@ -160,7 +171,8 @@ default, and existing sessions keep their chosen level.
   words (such as `git push` or `curl`), connections to the same host, or file changes inside
   the asker's own checkout or worktree for the rest of the conversation. File changes outside
   that folder, in Git metadata, or in the CLIs' own config (`.claude`, `.codex`, `.agents`,
-  `.vscode`, `.mcp.json`) still ask. These grants live in memory only.
+  `.vscode`, `.mcp.json`) still ask. These grants live in memory only. A message to another
+  session waits on a card for your Send.
 - **Approve for me**: Brigadier approves plans and changes for you (a risky plan gets an
   independent review first) and asks you only what only you can answer. Workers run in the OS
   sandbox with network. When a command needs more, Claude's auto mode or Brigadier's reviewer
@@ -195,6 +207,9 @@ uses credentials or the keychain, or destroys something outside the session's ow
   On macOS it still can't act as the UI: the daemon refuses the token from any sandboxed process.
   On Linux and Windows, which have no worker sandbox yet, nothing refuses it.
 - A process that detaches and moves out of Brigadier's folders escapes the cleanup.
+- A thread can message sessions in other projects. The receiver hears it as coming from another
+  session, not from you; a chain of messages stops at the ninth hop until you write again, and
+  one session takes at most twenty messages a minute.
 - Codex writes a trust entry into `~/.codex/config.toml` when a thread starts with a writable
   sandbox in a folder you never trusted. Brigadier starts every thread without a sandbox of its
   own and sets it per turn, so Codex writes none. If one ever appears for a folder Brigadier
@@ -239,16 +254,17 @@ Brigadier picks each worker's model and says why on the worker's card.
 - **Quota.** Brigadier reads Claude's and Codex's usage windows, projects each one to its reset,
   and shifts new work away from a provider that's running hot.
 - **Fewer tokens, built in.** Nothing to turn on. A thread idle past its prompt cache restarts
-  from a checkpoint briefing instead of resending its whole history. A worker past 160k tokens
-  hands over to a fresh session of the same model. Workers start without the built-in tools they
-  never use. Brain answers return a few results of each kind and page the rest.
+  from a checkpoint briefing instead of resending its whole history. A worker at 70% of its
+  model's context window (200k tokens at most) hands over to a fresh session of the same model.
+  Workers start without the built-in tools they never use. Brain answers return a few results of each kind and page the rest.
 
 ### Settings
 
 Settings is grouped into Personal (General, Voice, Configuration, Keyboard shortcuts), Agents
 (Providers, Usage, Git, Computer use), Browser & Data (Browser, Import Browser Data) and System
-(Storage, Inspector), with Archived chats at the end. Computer use has its own guide:
-[docs/COMPUTER-USE.md](docs/COMPUTER-USE.md). Accounts: [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
+(Storage, Inspector), with Archived chats at the end. Settings › Computer use (macOS) turns it
+on or off and walks through its Accessibility and Screen Recording permissions. Accounts:
+[docs/ACCOUNTS.md](docs/ACCOUNTS.md).
 
 ## Uninstall
 
@@ -262,6 +278,9 @@ processes. If the app is already deleted, run the script from this repository (i
 scripts/uninstall.sh --dry-run --app-id ai.brigadier.app
 scripts/uninstall.sh --app-id ai.brigadier.app
 ```
+
+Neither removes the computer-use helper's Accessibility and Screen Recording entries: remove
+"Brigadier Computer Use" from System Settings › Privacy & Security yourself.
 
 ## Contributing, security, license
 

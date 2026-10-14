@@ -19,13 +19,13 @@ crates/        Rust workspace
   brain/         the Project Brain: graph, full-text and embedding search
   index/         the code index (tree-sitter symbols and references)
   registry/      the MCP, plugin and skill registry
-  computer/      computer use: the native helper and its engine (macOS)
   browser-data/  importing cookies and history into the built-in browser (macOS)
   daemon/        brigadierd
 apps/desktop/  Tauri 2 shell (src-tauri/) and the React UI (src/)
+helpers/computer-use/  the computer-use helper app, its own Cargo workspace (macOS; see its README)
 registry/      the curated model registry, published from this repository
-scripts/       uninstall.sh
-tools/         full-checks.sh, dev-app helpers, the A/B harness
+scripts/       install.sh (the alpha installer), uninstall.sh
+tools/         full-checks.sh, the live smoke, dev-app helpers, the A/B harness
 docs/          design plans and evidence (see docs/README.md)
 ```
 
@@ -62,7 +62,8 @@ Run all of them before you ask for a review:
 
 ```sh
 tools/full-checks.sh            # fmt, generated types, build, clippy, Rust tests, typecheck, lint, app tests
-tools/full-checks.sh --cross    # also Linux and Windows clippy of the cross-buildable crates
+tools/full-checks.sh --cross    # also Linux and Windows clippy of the cross-buildable crates and the desktop shell
+tools/full-checks.sh --live     # then the live smoke with the real Claude and Codex CLIs (spends tokens)
 ```
 
 Or one by one:
@@ -77,9 +78,14 @@ TMPDIR=/tmp cargo test --locked --workspace --lib --bins --tests
 pnpm typecheck && pnpm lint && pnpm test
 ```
 
+On macOS the computer-use helper is checked in its own workspace too (`cd helpers/computer-use`,
+then fmt, clippy and `cargo test --locked --workspace`, with
+`CARGO_TARGET_DIR=<checkout>/target/computer-use`). The live smoke (`tools/live-smoke/`) drives
+the thread with the real CLIs; see its README.
+
 CI runs formatting, the bindings check, typecheck, lint and the app tests, then builds, clippies
-and smoke-launches the app on macOS, Windows and Linux. It does not run the Rust tests: run
-them yourself.
+and smoke-launches the app on macOS, Windows and Linux. It runs the computer-use helper's tests
+on macOS, but not the main workspace's Rust tests: run them yourself.
 
 `pnpm lint` includes `brigadier/no-raw-design-values`: component code may only use theme tokens
 (no raw colors, arbitrary Tailwind values or numeric inline styles). Raw values live only in
@@ -259,7 +265,7 @@ notarization are configured only through environment variables and are skipped w
 
 CI reads the same names from repository secrets. An unsigned or ad-hoc-signed build runs, but
 computer use needs a signed build to keep its macOS permissions across rebuilds
-([COMPUTER-USE.md](COMPUTER-USE.md)).
+([helpers/computer-use/README.md](../helpers/computer-use/README.md)).
 
 ## The uninstall script
 
