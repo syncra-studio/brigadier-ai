@@ -1215,12 +1215,38 @@ impl SessionManager {
         self.note_steered(conv, message.request_id.as_deref(), into)
             .await;
         if let (Some(held), Some(request)) = (held, &message.request_id) {
-            self.mark_held(conv, std::slice::from_ref(request), &[], Some(held))
+            self.hold(conv, std::slice::from_ref(request), &[], held)
                 .await;
         }
         self.settle_requests(&conv.id).await;
         if !steered {
             self.kick(conv);
+        }
+    }
+
+    /// Marks steered requests and queued follow-ups, already listed as held in the live state,
+    /// as waiting behind the thread's command `held`. A command that ended while this was
+    /// written released them first, and its release is written again after it, so no message
+    /// keeps waiting behind a command that is over.
+    async fn hold(&self, conv: &ConvLive, requests: &[String], items: &[String], held: HeldBy) {
+        self.mark_held(conv, requests, items, Some(held)).await;
+        let (requests, items): (Vec<String>, Vec<String>) = {
+            let state = conv.state.lock().await;
+            (
+                requests
+                    .iter()
+                    .filter(|request| !state.held_requests.contains(request))
+                    .cloned()
+                    .collect(),
+                items
+                    .iter()
+                    .filter(|item| !state.held_items.contains(item))
+                    .cloned()
+                    .collect(),
+            )
+        };
+        if !requests.is_empty() || !items.is_empty() {
+            self.mark_held(conv, &requests, &items, None).await;
         }
     }
 
@@ -1309,8 +1335,8 @@ impl SessionManager {
                 state.held_items.push(item.id.clone());
             }
             drop(state);
-            if held.is_some() {
-                self.mark_held(conv, &[], std::slice::from_ref(&item.id), held)
+            if let Some(held) = held {
+                self.hold(conv, &[], std::slice::from_ref(&item.id), held)
                     .await;
             }
             self.log_injection(
