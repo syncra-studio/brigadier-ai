@@ -718,3 +718,62 @@ async fn a_wait_holds_through_the_send_card() {
     flow.settled_in(&api).await;
     flow.stop().await;
 }
+
+/// A peer wait is visible while the sender's final answer is still streaming.
+#[tokio::test]
+async fn an_outstanding_peer_wait_stays_on_a_running_answer() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-wait-streaming", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Codex)
+        .await;
+    let peer_gate = Arc::new(Notify::new());
+    answers(&peers, &api, "It's `name`.", Some(peer_gate.clone()));
+    let answer_gate = Arc::new(Notify::new());
+    let (to, gate) = (api.clone(), answer_gate.clone());
+    peers.on(&flow.conversation, move |turn| {
+        let (to, gate) = (to.clone(), gate.clone());
+        async move {
+            if is_reply(&turn.input) {
+                return Reply::text("Noted.");
+            }
+            let (_, failed) = send(&turn, &to, "Which column holds names?", None).await;
+            assert!(!failed);
+            turn.emit(brigadier_providers::ProviderEvent::MessageDelta {
+                item_id: "answer".into(),
+                text: "The work is ready; awaiting the column name. ".repeat(12),
+                phase: Some(brigadier_providers::TextPhase::Answer),
+            })
+            .await;
+            gate.notified().await;
+            Reply::text("The work is ready; awaiting the column name.")
+        }
+    });
+    flow.say("Ask about the column and answer meanwhile.").await;
+    let board = flow
+        .until("the final answer streaming", |board| {
+            board
+                .streaming
+                .as_ref()
+                .is_some_and(|text| text.phase == Some(brigadier_providers::TextPhase::Answer))
+        })
+        .await;
+    let request = board.latest_request().unwrap();
+    assert_eq!(request.state, RequestState::Working);
+    assert_eq!(request.waiting_for, vec![api.clone()]);
+    answer_gate.notify_one();
+    let board = flow
+        .until("the turn resting on its peer", |board| {
+            board.latest_request().unwrap().state == RequestState::Waiting
+        })
+        .await;
+    assert_eq!(board.latest_request().unwrap().waiting_for, vec![api]);
+    peer_gate.notify_one();
+    let board = flow
+        .until("the reply settling its wait", |board| {
+            board.latest_request().unwrap().state == RequestState::Done
+        })
+        .await;
+    assert!(board.latest_request().unwrap().waiting_for.is_empty());
+    flow.stop().await;
+}
