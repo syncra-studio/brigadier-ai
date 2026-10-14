@@ -1111,6 +1111,9 @@ async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
         },
         script(|turn| async move {
             if turn.is_orchestrator() {
+                if turn.input.contains("[checks passed") {
+                    return Reply::text("Noted.");
+                }
                 match reports_in(&turn.input).last().copied() {
                     Some(1) => {
                         let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
@@ -1375,6 +1378,9 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
             log.lock().unwrap().push(turn.input.clone());
             async move {
                 if turn.is_orchestrator() {
+                    if turn.input.contains("[checks passed") {
+                        return Reply::text("Noted.");
+                    }
                     if turn.input.contains("[outline task-1") {
                         let reply = turn
                             .call(
@@ -3156,6 +3162,9 @@ async fn a_check_right_after_a_landing_rewrites_the_task_branch_keeps_the_rewrit
         Options::default(),
         script(|turn| async move {
             if turn.is_orchestrator() {
+                if turn.input.contains("[checks passed") {
+                    return Reply::text("Noted.");
+                }
                 if turn.input.contains("[report task-1 ") {
                     let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
                     assert!(!reply.is_error, "{}", reply.text);
