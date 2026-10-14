@@ -173,6 +173,16 @@ function makeTab(id: string, opener: string | null, kind: NewTabKind, cwd: strin
     : { ...base, kind, pageId: null, title: "" };
 }
 
+/** A new Side chat tab on the side chat `sideChatId` the daemon already made, after the tab in front. */
+export function openSideChatTab(conversationId: string, sideChatId: string): string {
+  const id = `sideChat:${crypto.randomUUID()}`;
+  update(conversationId, (current) => {
+    const tab: SideChatTabState = { kind: "sideChat", id, opener: current.active, conversationId: sideChatId, title: "", opened: Date.now() };
+    return { tabs: insertAfterActive(current, tab), active: id };
+  });
+  return id;
+}
+
 /** A side chat's title from its first message: the first line with text, on one line, at most 60 characters. */
 export function sideChatTitle(message: string): string {
   const line = (message.split("\n").find((each) => each.trim()) ?? message).split(/\s+/).filter(Boolean).join(" ");

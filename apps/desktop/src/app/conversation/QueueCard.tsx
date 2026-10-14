@@ -3,15 +3,18 @@ import { namedImages } from "@/app/conversation/inlineImages";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import {
   ArrowCurvedRight,
+  ChatCompose,
   DotsHorizontal,
   Pencil,
   Play,
+  Stack,
   Trash,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { useCallback, useContext } from "react";
 
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
+import { ViewContext } from "@/app/conversation/viewContext";
 import { useAction } from "@/app/conversation/useAction";
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import {
@@ -31,8 +34,10 @@ import {
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { AttachmentRef, QueuedMessage } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { deleteQueued, resumeQueue } from "@/state/actions";
+import { deleteQueued, openQueuedInSideChat, resumeQueue } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { setSetting } from "@/state/settings";
+import { useApp } from "@/state/store";
 
 const NO_ITEMS: QueuedMessage[] = [];
 
@@ -86,7 +91,9 @@ function attachmentLabel(attachments: readonly AttachmentRef[]): string | null {
 
 /**
  * The queue card on the composer rail: what waits for the running turn, one row each (glyph,
- * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover.
+ * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. Its ⋯ edits
+ * the message, opens it in a new Side chat tab instead (in a session), or turns queueing off,
+ * so follow-ups steer into the turn.
  * Steering, moving and deleting go through assistant-ui's queue (the view's adapter talks to
  * the daemon). After an interrupt the queue pauses until resumed.
  */
@@ -109,6 +116,10 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
   // Pulling a message fills the composer, so only into an empty one.
   const composerEmpty = useAuiState((s) => s.composer.isEmpty);
   const action = useAction();
+  const queueing = useApp((s) => s.settings.followUp === "queue");
+  // A session's own view has Side chat tabs; a side chat has none of its own.
+  const view = useContext(ViewContext);
+  const sideChats = !view.embedded && view.conversation?.kind === "session" && !view.conversation.sideOf;
   if (items.length === 0) return null;
 
   return (
@@ -204,6 +215,16 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                   >
                     <Pencil />
                     Edit message
+                  </DropdownMenuItem>
+                  {sideChats && (
+                    <DropdownMenuItem onSelect={() => action.run(() => openQueuedInSideChat(conversationId, item))}>
+                      <ChatCompose />
+                      Open in side chat
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem onSelect={() => action.run(() => setSetting("followUp", queueing ? "steer" : "queue"))}>
+                    <Stack />
+                    {queueing ? "Turn off queueing" : "Turn on queueing"}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

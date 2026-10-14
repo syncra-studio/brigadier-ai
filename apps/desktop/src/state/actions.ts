@@ -34,7 +34,7 @@ import type {
 import { savePinnedSummary } from "@/lib/pinnedSummary";
 import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
-import { CHAT_TAB, selectTab } from "@/state/sessionTabs";
+import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
 import { setSetting } from "@/state/settings";
 import {
   boardFromView,
@@ -758,6 +758,33 @@ export async function restoreQueued(
       items.splice(index, 0, outcome.item);
       return { ...board, queue: { ...board.queue, items } };
     });
+  }
+}
+
+/**
+ * Moves a queued message to a new Side chat tab: it leaves the queue first, so the turn can't
+ * also take it; one the queue already sent or dropped goes nowhere (`false`). The side chat is
+ * made, the message sent there and its tab opened; if that fails, the message goes back in its
+ * slot and the error is thrown.
+ */
+export async function openQueuedInSideChat(conversationId: string, item: QueuedMessage): Promise<boolean> {
+  const index = Math.max(0, boardOf(conversationId)?.queue.items.findIndex((entry) => entry.id === item.id) ?? 0);
+  try {
+    await deleteQueued(conversationId, item.id);
+  } catch {
+    // Already gone: the turn took it, or it was deleted meanwhile.
+    await loadConversation(conversationId).catch(() => {});
+    return false;
+  }
+  try {
+    const { conversation } = await request({ method: "openSideChat", conversationId, sideChatId: crypto.randomUUID() });
+    storeConversation(conversation);
+    await send({ text: item.text, attachments: item.attachments, mentions: item.mentions }, undefined, { to: conversation.id });
+    openSideChatTab(conversationId, conversation.id);
+    return true;
+  } catch (error) {
+    await restoreQueued(conversationId, item, index);
+    throw error;
   }
 }
 
