@@ -664,10 +664,16 @@ impl SessionManager {
             }
             OrchestratorCall::ListTasks => {
                 let tasks = crate::heap(|| self.core.tasks(id)).await?;
+                let standing = match self.core.board(id).await {
+                    Ok(board) => {
+                        super::integrated_checks::standing_lines(&board, crate::now_ms()).join("\n")
+                    }
+                    Err(_) => String::new(),
+                };
                 if tasks.is_empty() {
-                    return Ok("No tasks yet.".into());
+                    return Ok(format!("No tasks yet.\n{standing}").trim_end().to_owned());
                 }
-                Ok(tasks
+                let listed = tasks
                     .iter()
                     .map(|task| {
                         format!(
@@ -684,7 +690,8 @@ impl SessionManager {
                         )
                     })
                     .collect::<Vec<_>>()
-                    .join("\n"))
+                    .join("\n");
+                Ok(format!("{listed}\n{standing}").trim_end().to_owned())
             }
         }
     }

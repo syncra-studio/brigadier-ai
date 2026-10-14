@@ -173,6 +173,66 @@ pub(crate) fn checking_line(board: &crate::board::Board, request: &str) -> Optio
     ))
 }
 
+/// Where the session's newest full checks and the thread's background runs stand, in plain
+/// lines for the thread at `now_ms` (`list_tasks`): what it needs to say whether the work is
+/// ready, and how long what runs has run.
+pub(crate) fn standing_lines(board: &crate::board::Board, now_ms: i64) -> Vec<String> {
+    let minutes = |from: Option<i64>| {
+        let mins = (now_ms - from.unwrap_or(now_ms)).max(0) / 60_000;
+        if mins == 0 {
+            "under a minute".to_owned()
+        } else {
+            format!("{mins} min")
+        }
+    };
+    let mut lines = Vec::new();
+    let newest = board
+        .integrated_checks
+        .values()
+        .max_by_key(|check| integrated_check_number(&check.id));
+    lines.push(match newest {
+        None => "Full checks: none ran in this session yet.".to_owned(),
+        Some(check) => {
+            let at = format!("`{}` at {}", check.branch, short(&check.tip));
+            match &check.state {
+                IntegratedCheckState::Due => {
+                    format!("Full checks: due on {at}; they start once landings settle.")
+                }
+                IntegratedCheckState::Running { .. } => format!(
+                    "Full checks: running on {at} for {}, in the background; their result comes as a message.",
+                    minutes(check.started_at_ms)
+                ),
+                IntegratedCheckState::Passed { .. } => format!(
+                    "Full checks: passed on {at}, {} ago. A newer commit makes them due again.",
+                    minutes(check.ended_at_ms)
+                ),
+                IntegratedCheckState::Failed {
+                    command, status, ..
+                } => format!("Full checks: failed on {at}: `{command}` ({status})."),
+                IntegratedCheckState::Interrupted { reason } => {
+                    format!("Full checks: couldn't finish on {at} ({reason}); rerun_checks runs them again.")
+                }
+            }
+        }
+    });
+    let mut runs: Vec<&crate::work::BackgroundRun> = board
+        .background_runs
+        .values()
+        .filter(|run| run.state == crate::work::BackgroundRunState::Running)
+        .collect();
+    runs.sort_by_key(|run| super::background_runs::background_run_number(&run.id));
+    for run in runs {
+        lines.push(format!(
+            "{} running in the background for {}: {} `{}`.",
+            run.id,
+            minutes(Some(run.started_at_ms)),
+            run.tool,
+            run.command
+        ));
+    }
+    lines
+}
+
 /// Whether `branch` may merge at its tip: a merge needs the session's full checks passed at
 /// the exact tip it merges.
 pub(crate) enum ChecksGate {
@@ -1301,6 +1361,57 @@ mod tests {
                 .map(|check| check.id.as_str())
                 .collect::<Vec<_>>(),
             ["check-1", "check-2", "check-10"]
+        );
+    }
+
+    #[test]
+    fn the_thread_reads_where_the_full_checks_and_its_background_runs_stand() {
+        let mut board = crate::board::Board::default();
+        assert_eq!(
+            standing_lines(&board, 0),
+            ["Full checks: none ran in this session yet."]
+        );
+        let mut passed = check(
+            "check-1",
+            "a1",
+            IntegratedCheckState::Passed {
+                commands: Vec::new(),
+            },
+        );
+        passed.ended_at_ms = Some(0);
+        board.integrated_checks.insert(passed.id.clone(), passed);
+        assert_eq!(
+            standing_lines(&board, 5 * 60_000),
+            [
+                "Full checks: passed on `work` at a1, 5 min ago. A newer commit makes them due again."
+            ]
+        );
+        let mut running = check(
+            "check-2",
+            "b2",
+            IntegratedCheckState::Running { command: None },
+        );
+        running.started_at_ms = Some(60_000);
+        board.integrated_checks.insert(running.id.clone(), running);
+        board.background_runs.insert(
+            "run-1".into(),
+            crate::work::BackgroundRun {
+                id: "run-1".into(),
+                conversation_id: ConversationId("c".into()),
+                request_id: None,
+                tool: "run_check".into(),
+                command: "cargo test".into(),
+                started_at_ms: 0,
+                ended_at_ms: None,
+                state: crate::work::BackgroundRunState::Running,
+            },
+        );
+        assert_eq!(
+            standing_lines(&board, 7 * 60_000),
+            [
+                "Full checks: running on `work` at b2 for 6 min, in the background; their result comes as a message.",
+                "run-1 running in the background for 7 min: run_check `cargo test`."
+            ]
         );
     }
 
