@@ -1691,17 +1691,25 @@ impl SessionManager {
             (TaskKind::Merge, None) => self.base_merge_brief(task, &workspace).await,
             _ => String::new(),
         };
+        // Computer use (a GUI job, and the live look, have its tools loaded from the start).
+        let computer = self
+            .computer_use_kit(
+                &task.id.to_string(),
+                task.kind == TaskKind::Operate || prompts::checks_live(task),
+            )
+            .await;
         // The one live look at the integrated tree, and a change matched to its mockup, are
         // checked live with the computer tools; other UI work with the project's scripted UI
         // checks (SESSION-FIXES-PLAN.md "Computer use", §11).
-        if cfg!(target_os = "macos") && prompts::checks_live(task) {
+        let scripted = cfg!(target_os = "macos") && prompts::scripted_ui(task);
+        if computer.is_some() && prompts::checks_live(task) {
             let dev_app = workspace
                 .worktree
                 .as_deref()
                 .and_then(super::context_pack::dev_app_command);
             extra.push_str(&prompts::worker_computer(dev_app.as_deref()));
-        } else if cfg!(target_os = "macos") && prompts::scripted_ui(task) {
-            extra.push_str(prompts::SCRIPTED_UI);
+        } else if scripted {
+            extra.push_str(&prompts::scripted_ui_note(computer.is_some()));
         }
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
         if omit_ai_coauthors && provider == ProviderKind::Codex && task.kind.writes() {
@@ -1721,13 +1729,12 @@ impl SessionManager {
             extra.push_str("\n\n");
             extra.push_str(prompts::BROWSER_OFF);
         }
-        // Computer use (a GUI job has its tools loaded from the start).
-        let computer = self
-            .computer_use_kit(&task.id.to_string(), task.kind == TaskKind::Operate)
-            .await;
         if computer.is_some() {
             extra.push_str("\n\n");
             extra.push_str(prompts::COMPUTER_USE);
+            if scripted {
+                extra.push_str(prompts::SCRIPTED_UI_COMPUTER);
+            }
         }
         if self.held_by_plan_mode(task).await {
             extra.push_str("\n\n");

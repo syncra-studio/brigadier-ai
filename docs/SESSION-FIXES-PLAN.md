@@ -1779,7 +1779,9 @@ the project's scripted UI checks. Instruction changes: `WORKER_CHECKS`, the writ
 a rebase is gone; a merge worker sent back still lands on its own after its next report). Briefs ask for the checks of
 each part only. `[checks failed …]` goes back as one fix task (role fix, subject the task that broke it), which resumes
 that worker's session; `[checks couldn't run …]` is fixed, then `rerun_checks`. Open sessions hear it as revision 23,
-which replaces revisions 6 (the full suite before the report) and 15 (each UI worker's own live check).
+which replaces revisions 6 (the full suite before the report), 15 (each UI worker's own live check) and, on a Mac,
+21 (a code change checked in the app by its own worker). Without computer use (its setting off) nothing is routed to
+a live look, and UI workers use the scripted checks alone.
 
 **Engine** (`M/integrated_checks.rs`, plumbing only; the thread judges who broke what):
 - **Due.** A landing, and the thread's own commits, make the branch's new tip due, recorded as an `IntegratedCheck`

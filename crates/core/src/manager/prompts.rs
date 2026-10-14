@@ -191,7 +191,7 @@ pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a
 
 /// Where the thread sends a live look at an app (SESSION-FIXES-PLAN.md "Computer use"): to the
 /// workers, so screenshots stay out of its own context.
-const COMPUTER_ROUTING: &str = "\n- On this Mac you and every worker can open an app, look at it and use it with the computer tools, yours for a quick look only. So a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one delegate_task with live_look: true; its workers use scripted UI checks. A GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
+pub(crate) const COMPUTER_ROUTING: &str = "\n- On this Mac you and every worker can open an app, look at it and use it with the computer tools, yours for a quick look only. So a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one delegate_task with live_look: true; its workers use scripted UI checks. A GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
 /// When the thread offers a mockup before a visible UI change, and how the mockup goes from
 /// the user's yes to the side-by-side (SESSION-FIXES-PLAN.md Q10).
 const MOCKUPS: &str = "- A visible UI change that isn't a small fix (a new control, panel, screen or layout): first ask_user \"Want a mockup first?\" (Yes / Skip; say if part of it can't be faked). Yes: delegate_task with mockup: true, then ask only what its screenshots can't show; the user's marked notes go to that worker (message_worker with their attachments). On their yes to the work, land the mockup, then delegate with matches_mockup; if they drop it, stop the mockup.";
@@ -1389,7 +1389,21 @@ pub(crate) fn scripted_ui(task: &Task) -> bool {
 }
 
 /// What a worker whose change shows in an app checks it with, while its work is under way.
-pub(crate) const SCRIPTED_UI: &str = "\n\nYour change shows in an app: check it with the project's scripted UI checks (its component or end-to-end tests, a headless browser on its dev server). Don't build or launch the app itself: one live look at the dev build of everyone's landed work follows once the session's full checks pass.";
+const SCRIPTED_UI: &str = "\n\nYour change shows in an app: check it with the project's scripted UI checks (its component or end-to-end tests, a headless browser on its dev server). Don't build or launch the app itself";
+
+/// [`SCRIPTED_UI`], and the live look that follows when computer use is on.
+pub(crate) fn scripted_ui_note(live_look: bool) -> String {
+    let after = if live_look {
+        ": one live look at the dev build of everyone's landed work follows once the session's full checks pass."
+    } else {
+        "."
+    };
+    format!("{SCRIPTED_UI}{after}")
+}
+
+/// After [`COMPUTER_USE`] for a worker whose UI change uses the scripted checks.
+pub(crate) const SCRIPTED_UI_COMPUTER: &str =
+    " Not for checking your own change: that is the scripted UI checks above.";
 
 /// The live look's role: it changes nothing and looks at the integrated tree's own build.
 const LIVE_LOOK: &str = "\n- You change nothing: your worktree is the session's landed work, and you look at it live. Build its dev app, launch it yourself with the computer tools on a fresh data folder in your scratch folder, check each change the task names, and report what you saw for each. No outline, no review_code, no commits.";
@@ -1399,7 +1413,7 @@ const LIVE_LOOK: &str = "\n- You change nothing: your worktree is the session's 
 pub(crate) fn worker_computer(dev_app: Option<&str>) -> String {
     let start = dev_app.map_or_else(String::new, |command| format!(" ({command})"));
     format!(
-        "\n\nChecking it live (your change shows in an app):\n- Start the build this task made, the way the project starts it{start}. Then check each change in its window with the computer tools, as their skill says: read the window's structure before pixels, and check each step's effect in the next read.\n- Put what you saw, or a screenshot artifact, under verification.\n- Never use the user's installed copy of the app or its data: use your own build, with a fresh data folder in your scratch folder when the app takes one. For Brigadier itself that is Brigadier Dev.app, never /Applications/Brigadier.app or ~/Library/Application Support/Brigadier.\n- Act only on windows you launched or the task names."
+        "\n\nChecking it live (your change shows in an app):\n- Start the build this task made, the way the project starts it{start}. Then check each change in its window with the computer tools, as their skill says: read the window's structure before pixels, and check each step's effect in the next read.\n- Put what you saw, or a screenshot artifact, under verification.\n- Never use the user's installed copy of the app or its data: use your own build, with a fresh data folder in your scratch folder when the app takes one. For Brigadier itself that is Brigadier Dev.app, never /Applications/Brigadier.app or ~/Library/Application Support/Brigadier.\n- Act only on windows you launched or the task names.\n- Screenshots the task asks to save (live-1.png, …) are made as it says."
     )
 }
 
@@ -1945,7 +1959,11 @@ mod tests {
         ];
         assert!(!checks_live(&ui));
         assert!(scripted_ui(&ui));
-        assert!(SCRIPTED_UI.contains("Don't build or launch the app itself"));
+        assert!(scripted_ui_note(true).contains(
+            "Don't build or launch the app itself: one live look at the dev build of everyone's landed work follows"
+        ));
+        // Without computer use nothing looks at it live afterwards.
+        assert!(scripted_ui_note(false).ends_with("Don't build or launch the app itself."));
         let mut verify = ui.clone();
         verify.kind = TaskKind::Verify;
         assert!(scripted_ui(&verify));
@@ -1996,6 +2014,9 @@ mod tests {
                     .thread
                     .contains("This replaces revision 15's live check")
             );
+            assert!(replaced.thread.contains(&format!(
+                "revision {OPERATE_REVISION}'s check of a code change in the app by its own worker"
+            )));
             assert!(replaced.worker.contains("(this replaces revision 15)"));
         } else {
             assert!(!replaced.thread.contains("revision 15"));

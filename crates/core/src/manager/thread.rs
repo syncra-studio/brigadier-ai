@@ -315,6 +315,10 @@ impl SessionManager {
             provider,
             self.core.settings().short_replies,
         );
+        // Without computer use nothing can look at an app live, so nothing is routed there.
+        if !self.core.settings().computer_use {
+            prompt = prompt.replacen(super::prompts::COMPUTER_ROUTING, "", 1);
+        }
         if !self.reviews_on() {
             prompt.push_str(&super::prompts::reviews_off_section());
         }

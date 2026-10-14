@@ -996,7 +996,8 @@ impl SessionManager {
         match &check.state {
             IntegratedCheckState::Passed { commands } => {
                 // Told when the thread left a request's answer to it ([quiet]).
-                let look = if include_live_look {
+                // Only computer use's tools can look at it live.
+                let look = if include_live_look && self.core.settings().computer_use {
                     live_look_line(&tasks)
                 } else {
                     String::new()
