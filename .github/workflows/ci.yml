@@ -58,7 +58,6 @@ jobs:
 
   build:
     name: Build, clippy, smoke (${{ matrix.name }})
-    needs: checks
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -87,6 +86,14 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+
+      - name: Faster release builds outside release tags
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        # Keep release optimizations, but avoid LTO and let code generation run in parallel.
+        # Cargo passes these settings to the app and its sidecar builds alike.
+        run: |
+          echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16" >> "$GITHUB_ENV"
 
       - name: Linux system dependencies
         if: runner.os == 'Linux'
