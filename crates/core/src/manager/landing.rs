@@ -591,7 +591,7 @@ impl SessionManager {
             return Ok(());
         };
         let mut reported = self.phase_reported(task).await;
-        reported.extend(extra.iter().map(|p| normalize(p)));
+        reported.extend(extra.iter().flat_map(|p| reported_paths(p)));
         let (git, message) = (self.git.clone(), self.commit_message(message.to_owned()));
         blocking(move || {
             let worktree = git.open_worktree(Path::new(&worktree)).map_err(git_error)?;
@@ -635,7 +635,7 @@ impl SessionManager {
             return Ok(Vec::new());
         };
         let mut reported = self.phase_reported(task).await;
-        reported.extend(extra.iter().map(|p| normalize(p)));
+        reported.extend(extra.iter().flat_map(|p| reported_paths(p)));
         let git = self.git.clone();
         blocking(move || {
             let worktree = git.open_worktree(Path::new(&worktree)).map_err(git_error)?;
@@ -662,7 +662,7 @@ impl SessionManager {
         let mut reported: Vec<String> = Vec::new();
         let mut add = |t: &Task| {
             if let Some(report) = &t.report {
-                reported.extend(report.changes.iter().map(|p| normalize(p)));
+                reported.extend(report.changes.iter().flat_map(|p| reported_paths(p)));
             }
         };
         add(task);
@@ -1011,7 +1011,7 @@ impl SessionManager {
         let reported: Vec<String> = subject
             .report
             .as_ref()
-            .map(|r| r.changes.iter().map(|p| normalize(p)).collect())
+            .map(|r| r.changes.iter().flat_map(|p| reported_paths(p)).collect())
             .unwrap_or_default();
         let (git, target) = (self.git.clone(), target.to_owned());
         let wip = format!("WIP: task-{} before merging", subject.number);
@@ -2800,17 +2800,44 @@ pub(super) fn diff_stat_of(stat: &brigadier_git::DiffStat) -> DiffStat {
 
 /// A repo-relative path as reported (`./a/b`, `a/b/`, `a/b: what it is`) → `a/b`.
 fn normalize(path: &str) -> String {
-    // What a line says about its file follows the path ("- `src/a.ts` (new)").
-    let mut path = path.trim();
-    path = path
-        .strip_prefix("- ")
-        .or_else(|| path.strip_prefix("* "))
-        .unwrap_or(path);
+    let mut path = unbulleted(path);
+    // A path in backticks is the whole name, whatever follows it ("- `src/a.ts` (new)").
+    if let Some(quoted) = backticked(path) {
+        return bare(quoted);
+    }
+    // What a line says about its file follows the path ("src/a.ts: the parser").
     for note in [": ", " (", " \u{2014} ", " \u{2013} "] {
         if let Some((head, _)) = path.split_once(note) {
             path = head;
         }
     }
+    bare(path)
+}
+
+/// The paths a reported line can name: the line read as a path whole (`docs/Design (draft).md`)
+/// and without what it says about its file, so neither a note nor a name with one in it is lost.
+fn reported_paths(path: &str) -> Vec<String> {
+    let (whole, short) = (bare(unbulleted(path)), normalize(path));
+    if whole == short || backticked(unbulleted(path)).is_some() {
+        vec![short]
+    } else {
+        vec![whole, short]
+    }
+}
+
+fn unbulleted(path: &str) -> &str {
+    let path = path.trim();
+    path.strip_prefix("- ")
+        .or_else(|| path.strip_prefix("* "))
+        .unwrap_or(path)
+}
+
+fn backticked(path: &str) -> Option<&str> {
+    let (quoted, _) = path.strip_prefix('`')?.split_once('`')?;
+    Some(quoted)
+}
+
+fn bare(path: &str) -> String {
     let path = path
         .trim()
         .trim_end_matches(':')
@@ -2996,6 +3023,15 @@ mod tests {
         }
         assert_eq!(normalize("docs/my notes.md"), "docs/my notes.md");
         assert_eq!(normalize("src/"), "src");
+        assert_eq!(reported_paths("- `src/a.ts` (new)"), ["src/a.ts"]);
+        assert_eq!(
+            reported_paths("docs/Design (draft).md"),
+            ["docs/Design (draft).md", "docs/Design"]
+        );
+        assert_eq!(
+            reported_paths("- `docs/Design (draft).md` (new)"),
+            ["docs/Design (draft).md"]
+        );
     }
 
     #[test]
