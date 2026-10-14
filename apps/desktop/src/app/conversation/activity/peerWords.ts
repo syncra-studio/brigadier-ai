@@ -35,6 +35,11 @@ export type Exchange = {
   waits: readonly ItemStatus[];
   received: readonly PeerRef[];
   waitingOn: readonly PeerRef[];
+  /**
+   * Just sent, with nothing after it yet in the running turn: it still reads as sending, so the
+   * wait for the reply that usually comes next takes the row over without a line in between.
+   */
+  going?: boolean;
 };
 
 /** "A", "A and B", "A, B and C": each session once. */
@@ -52,17 +57,20 @@ function messages(sends: readonly unknown[]): string {
 }
 
 /** Whether a message went (or goes now) to its receiver. */
-function went(state: PeerState): boolean {
+export function went(state: PeerState): boolean {
   return state.type === "pending" || state.type === "delivered" || state.type === "seen" || state.type === "replied";
 }
 
 /** The words of a row of messages and waits, and how it stands: "Sent message to Docs, waited for its reply". */
-export function exchangeWords({ sends, waits, received, waitingOn }: Exchange): { parts: WordPart[]; status: ItemStatus; waiting: boolean } {
+export function exchangeWords({ sends, waits, received, waitingOn, going = false }: Exchange): { parts: WordPart[]; status: ItemStatus; waiting: boolean } {
   const asking = sends.filter((send) => send.state.type === "waitingForOk");
   if (asking.length > 0) return { parts: ["Waiting for your OK to message ", ...named(asking)], status: "completed", waiting: false };
   const sending = sends.filter((send) => send.state.type === "pending");
   if (sending.length > 0) return { parts: [`Sending ${messages(sending)} to `, ...named(sending)], status: "inProgress", waiting: false };
   const sent = sends.filter((send) => went(send.state));
+  if (going && waits.length === 0 && sent.length > 0 && sent.length === sends.length) {
+    return { parts: [`Sending ${messages(sent)} to `, ...named(sent)], status: "inProgress", waiting: false };
+  }
   if (waits.includes("inProgress")) {
     const on = waitingOn.length > 0 ? waitingOn : sent;
     return { parts: on.length > 0 ? ["Waiting for ", ...named(on), " to reply"] : ["Waiting for replies"], status: "inProgress", waiting: true };

@@ -27,7 +27,7 @@ import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { type Activity, type LeadStep, thoughtTopic, turnActivity } from "@/app/conversation/activity/group";
 import { deniedCall } from "@/app/conversation/activity/words";
-import { waitingWords } from "@/app/conversation/activity/peerWords";
+import { waitingWords, went } from "@/app/conversation/activity/peerWords";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
 import { describePeerStep, peerStepRow, usePeerLookup } from "@/app/conversation/activity/PeerRow";
 import { PeerMessageBlock } from "@/app/conversation/PeerMessageBlock";
@@ -473,12 +473,26 @@ const ActivityItems: FC<{
   const newest = activity.at(-1);
   const lastStep = newest?.type === "group" ? newest.items.findLast((item) => item.type === "step") : undefined;
   const inGroup = lastStep?.type === "step" && lastStep.step.kind.type !== "peerSent" && lastStep.step.kind.type !== "messageRefused";
+  // A message the running lead just sent, with nothing after it yet: its row still reads as
+  // sending and no line goes under it, so the wait that usually follows takes the row over and
+  // the turn never shrinks under the user's message.
+  const leadRunning = useBoard((s) => {
+    const board = s.board;
+    return !!live && !!board?.runRequest && live.requestIds.includes(board.runRequest) && (board.run === "running" || board.run === "starting");
+  });
   const tasks = useBoard((s) => s.board?.tasks);
   const approvals = useBoard((s) => s.board?.approvals);
   const revealing = useRevealing(useViewConversation()?.id ?? null);
   const peers = usePeerLookup(
     activity.flatMap((item) => (item.type === "group" ? item.items.flatMap((step) => (step.type === "step" ? [step.step] : [])) : [])),
   );
+  const sentStep = newest?.type === "group" && lastStep !== undefined && newest.items.at(-1) === lastStep
+    && lastStep.type === "step" && lastStep.step.kind.type === "peerSent" ? lastStep.step : null;
+  const going = leadRunning && thought === null && !live?.thinkingLive && sentStep?.kind.type === "peerSent"
+    && sentStep.kind.waits.length === 0 && sentStep.kind.messageIds.length > 0
+    && sentStep.kind.messageIds.every((id) => { const record = peers.records[id]; return !!record && went(record.state); })
+    ? sentStep : null;
+  const shownLine = going && line?.tone !== "needsYou" ? null : line;
   // A call the user's Deny stopped reads as declined, not failed.
   const shown = (step: LeadStep): LeadStep =>
     approvals && step.kind.type === "tool" && deniedCall(step.kind, step.atMs, requestIds, Object.values(approvals))
@@ -494,15 +508,15 @@ const ActivityItems: FC<{
             live={!!live && index === activity.length - 1}
             liveLabel={inGroup && index === activity.length - 1 ? line : null}
             summary={summary}
-            describe={(step) => describePeerStep(step, peers) ?? describeLeadStep(shown(step), tasks)}
-            renderStep={(step, key) => <Fragment key={key}>{peerStepRow(step) ?? <LeadStepRow step={shown(step)} />}</Fragment>}
+            describe={(step) => describePeerStep(step, peers, step === going) ?? describeLeadStep(shown(step), tasks)}
+            renderStep={(step, key) => <Fragment key={key}>{peerStepRow(step, step === going) ?? <LeadStepRow step={shown(step)} />}</Fragment>}
             reveal={revealing ? (step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing) : undefined}
           />
         ) : (
           <SequenceEntry key={entryKey(item.entry)} entry={item.entry} streaming={streaming(item.entry)} commentary={commentary(item.entry)} />
         ),
       )}
-      {!inGroup && line && (line.thought && thought !== null ? <ThinkingRow text={thought} live /> : <StatusLine head={line} />)}
+      {!inGroup && shownLine && (shownLine.thought && thought !== null ? <ThinkingRow text={thought} live /> : <StatusLine head={shownLine} />)}
     </>
   );
 };

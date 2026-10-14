@@ -30,6 +30,8 @@ const send = (ref: PeerRef, type: PeerState["type"]): PeerSend => ({ ...ref, sta
 const exchange = (sends: PeerSend[], waits: ItemStatus[] = [], received: PeerRef[] = [], waitingOn: PeerRef[] = []): Exchange => ({
   sends, waits, received, waitingOn,
 });
+/** Just sent, with nothing after it yet in a running turn. */
+const going = (value: Exchange): Exchange => ({ ...value, going: true });
 const line = (value: Exchange) => {
   const words = exchangeWords(value);
   return [plainWords(words.parts), words.status, words.waiting];
@@ -51,6 +53,16 @@ test("a row of one message reads how it stands, from sending to waiting to the f
   assert.deepEqual(line(exchange([send(docs, "replied")], ["completed"], [docs])), ["Sent message to Docs, waited for its reply", "completed", false]);
   assert.deepEqual(line(exchange([send(docs, "seen")], ["completed"])), ["Sent message to Docs, waited; no reply yet", "completed", false]);
   assert.deepEqual(line(exchange([send(docs, "seen")], ["failed"])), ["Sent message to Docs, couldn’t wait for a reply", "completed", false]);
+});
+
+test("a message just sent, with nothing after it yet in a running turn, still reads as sending", () => {
+  assert.deepEqual(line(going(exchange([send(docs, "delivered")]))), ["Sending message to Docs", "inProgress", false]);
+  assert.deepEqual(line(going(exchange([send(docs, "seen"), send(notes, "seen")]))), ["Sending messages to Docs and Release notes", "inProgress", false]);
+  // Its wait takes the row over.
+  assert.deepEqual(line(going(exchange([send(docs, "delivered")], ["inProgress"]))), ["Waiting for Docs to reply", "inProgress", true]);
+  // One that waits for the user's OK, or didn't go, says so.
+  assert.deepEqual(line(going(exchange([send(docs, "waitingForOk")]))), ["Waiting for your OK to message Docs", "completed", false]);
+  assert.deepEqual(line(going(exchange([send(docs, "seen"), send(notes, "refused")]))), ["Sent message to Docs, couldn’t send message to Release notes", "completed", false]);
 });
 
 test("a row of several messages names each session once, and only the replies that came", () => {

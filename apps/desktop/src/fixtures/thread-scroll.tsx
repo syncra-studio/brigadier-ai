@@ -8,7 +8,8 @@
  * - `other`: a Chat of 8 turns. `working`: a Chat whose one turn still runs, never opened.
  *
  * `?drive=1` runs the checks the scroll tests read and writes them to
- * `<pre id="thread-scroll-result">`; `window.threadScroll` holds the steps for a browser probe.
+ * `<pre id="thread-scroll-result">` (`&only=<step>` runs one of them); `window.threadScroll`
+ * holds the steps for a browser probe.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
@@ -640,6 +641,68 @@ const steps = {
     await settle(200);
     return { atBottom, button: above };
   },
+  /**
+   * A sent turn that messages another session and waits for its reply, its events in the order
+   * the daemon sends them: the user's message holds still while the live rows change.
+   */
+  async peerExchange() {
+    await open("other");
+    await userScroll(max());
+    await send({ text: "Ask the other chat what 6 + 7 is and tell me.", attachments: [], mentions: [] });
+    await settle(600);
+    const conversationId = "other";
+    const requestId = stored[conversationId]!.at(-1)!.requestId!;
+    const user = rows().findLast((row) => row.dataset["role"] === "user")!;
+    const userTop = () => round(user.getBoundingClientRect().top - viewTop());
+    const tops: number[] = [];
+    let on = true;
+    const tick = () => {
+      tops.push(userTop());
+      if (on) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    const stages: { stage: string; userTop: number; status: string | null; rows: string[] }[] = [];
+    let seq = 0;
+    const emit = async (stage: string, ...events: object[]) => {
+      for (const event of events) {
+        const envelope = { seq: sequence++, stream: conversationId, streamSeq: 5000 + seq++, atMs: Date.now(), event } as unknown as EventEnvelope;
+        useBoard.setState(({ board }) => (board ? { board: applyToBoard(board, envelope) } : {}));
+      }
+      await frame();
+      await frame();
+      stages.push({
+        stage,
+        userTop: userTop(),
+        status: $('[data-slot="thread-status"]')?.textContent ?? null,
+        rows: [...document.querySelectorAll("[data-slot=peer-words]")].map((row) => row.textContent ?? ""),
+      });
+    };
+    const logged = (name: string, itemId: string, status: string) => ({
+      type: "orchestratorLogged", conversationId,
+      entry: { type: "provider", provider: "claude", event: { type: "toolCall", itemId, name, input: null, status, output: null } },
+    });
+    const stepped = (name: string, itemId: string, status: string) => ({
+      type: "orchestratorStepped",
+      step: { requestId, atMs: Date.now(), position: 0, kind: { type: "tool", itemId, name, detail: null, status, throughPosition: 0 } },
+    });
+    const asked = { id: requestId, conversationId, preview: "", state: { type: "working" }, startedAtMs: Date.now(), endedAtMs: null,
+      steeredInto: null, steeredAfter: null, undo: null, worked: [{ fromMs: Date.now(), toMs: null }], quotaWait: false };
+    await emit("starting", { type: "requestUpdated", request: asked }, { type: "runStateChanged", conversationId, state: "starting", error: null, requestId });
+    await emit("running", { type: "runStateChanged", conversationId, state: "running", error: null, requestId });
+    await emit("call", logged("mcp__brigadier__message_session", "send-1", "inProgress"), stepped("mcp__brigadier__message_session", "send-1", "inProgress"));
+    await emit("recorded", {
+      type: "peerMessageSent", messageId: "peer-1", to: "long", text: "What is 6 + 7?", blob: null, replyTo: null, chainId: "chain-1", hop: 1,
+      requestId, turnInputId: null, state: { type: "pending" }, sentAtMs: Date.now(), automatic: false, answerId: null,
+    });
+    await emit("delivered", { type: "peerMessageState", messageId: "peer-1", state: { type: "delivered" }, sentAtMs: null });
+    await emit("sent", logged("mcp__brigadier__message_session", "send-1", "completed"), stepped("mcp__brigadier__message_session", "send-1", "completed"));
+    await emit("waiting", logged("mcp__brigadier__wait_for_replies", "wait-1", "inProgress"), stepped("mcp__brigadier__wait_for_replies", "wait-1", "inProgress"));
+    await emit("waited", logged("mcp__brigadier__wait_for_replies", "wait-1", "completed"), stepped("mcp__brigadier__wait_for_replies", "wait-1", "completed"));
+    on = false;
+    stopStreaming(conversationId, "other-peer-answer", "6 + 7 is 13.", requestId);
+    await settle(200);
+    return { stages, tops: [...new Set(tops)] };
+  },
   /** An existing conversation never opened, whose one turn still runs: the bottom. */
   async working() {
     await open("working");
@@ -650,7 +713,9 @@ const steps = {
 async function drive(): Promise<void> {
   const result: Record<string, unknown> = {};
   try {
+    const only = new URLSearchParams(location.search).get("only");
     for (const [name, step] of Object.entries(steps)) {
+      if (only !== null && name !== only) continue;
       // Where a run that ran out of time stopped.
       document.body.dataset["scrollStep"] = name;
       result[name] = await step();

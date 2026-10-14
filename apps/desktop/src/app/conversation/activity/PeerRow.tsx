@@ -96,7 +96,7 @@ export function usePeerLookup(steps: readonly BlockOrchestratorStep[]): PeerLook
  * its waits took (each naming the message it answers, which the other session has), and whom a
  * running wait still waits for.
  */
-export function exchangeOf(kind: PeerSentStep, peers: PeerLookup): Exchange {
+export function exchangeOf(kind: PeerSentStep, peers: PeerLookup, going = false): Exchange {
   const { records } = peers;
   const ref = (record: PeerMessage, message?: string): PeerRef => {
     const name = peers.name(record.peer);
@@ -122,13 +122,14 @@ export function exchangeOf(kind: PeerSentStep, peers: PeerLookup): Exchange {
     waits: kind.waits.map((wait) => wait.status),
     received,
     waitingOn: due.map((record) => ref(record, record.messageId)),
+    going,
   };
 }
 
-/** A message row's words and how it stands; null for a step that isn't one. */
-export function describePeerStep(step: BlockOrchestratorStep, peers: PeerLookup): Described | null {
+/** A message row's words and how it stands (`going`: see `Exchange`); null for a step that isn't one. */
+export function describePeerStep(step: BlockOrchestratorStep, peers: PeerLookup, going = false): Described | null {
   const { kind } = step;
-  if (kind.type === "peerSent") return exchangeDescribed(exchangeOf(kind, peers));
+  if (kind.type === "peerSent") return exchangeDescribed(exchangeOf(kind, peers, going));
   if (kind.type === "messageRefused") {
     return refusedDescribed(peers.name(kind.to) ?? (kind.title ? { title: kind.title, project: null } : UNKNOWN_SESSION));
   }
@@ -166,9 +167,9 @@ function rowState(exchange: Exchange, status: string, waiting: boolean): string 
 }
 
 /** One row of messages and waits, from their records. */
-export const PeerSentRow: FC<{ step: BlockOrchestratorStep; kind: PeerSentStep }> = ({ step, kind }) => {
+export const PeerSentRow: FC<{ step: BlockOrchestratorStep; kind: PeerSentStep; going: boolean }> = ({ step, kind, going }) => {
   const peers = usePeerLookup([step]);
-  const exchange = exchangeOf(kind, peers);
+  const exchange = exchangeOf(kind, peers, going);
   const { parts, status, waiting } = exchangeWords(exchange);
   if (kind.messageIds.length > 0 && exchange.sends.length === 0) return null;
   const running = status === "inProgress";
@@ -214,10 +215,10 @@ export const PeerRefusedRow: FC<{ kind: Refused }> = ({ kind }) => {
   );
 };
 
-/** A lead's step that is a message row, rendered; null for any other step. */
-export function peerStepRow(step: BlockOrchestratorStep): ReactNode {
+/** A lead's step that is a message row, rendered (`going`: see `Exchange`); null for any other step. */
+export function peerStepRow(step: BlockOrchestratorStep, going = false): ReactNode {
   const { kind } = step;
-  if (kind.type === "peerSent") return <PeerSentRow step={step} kind={kind} />;
+  if (kind.type === "peerSent") return <PeerSentRow step={step} kind={kind} going={going} />;
   if (kind.type === "messageRefused") return <PeerRefusedRow kind={kind} />;
   return null;
 }
