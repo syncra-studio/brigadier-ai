@@ -80,12 +80,18 @@ pub fn json_len(text: &str) -> usize {
         .sum()
 }
 
-/// Whether a tool call runs a shell command (`Bash`, `run`, `run_unsandboxed`), by its name
-/// with or without its MCP server's prefix (`mcp__brigadier__run`, `brigadier.run`).
-pub(crate) fn is_shell_tool(name: &str) -> bool {
+/// A tool's own name, without its MCP server's prefix as each CLI writes it:
+/// `mcp__brigadier__run` (Claude), `brigadier/run` (Codex) and `brigadier.run` are all `run`.
+pub(crate) fn bare_tool_name(name: &str) -> &str {
     let name = name.rsplit("__").next().unwrap_or(name);
-    let name = name.rsplit('.').next().unwrap_or(name);
-    matches!(name, "Bash" | "run" | "run_unsandboxed")
+    let name = name.rsplit('/').next().unwrap_or(name);
+    name.rsplit('.').next().unwrap_or(name)
+}
+
+/// Whether a tool call runs a shell command (`Bash`, `run`, `run_unsandboxed`), by its name
+/// with or without its MCP server's prefix.
+pub(crate) fn is_shell_tool(name: &str) -> bool {
+    matches!(bare_tool_name(name), "Bash" | "run" | "run_unsandboxed")
 }
 
 /// The exit code a shell tool's result names on its first line: `[exit N]` (a short `run`

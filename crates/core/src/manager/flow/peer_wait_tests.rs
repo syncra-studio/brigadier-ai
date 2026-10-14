@@ -10,7 +10,7 @@ use brigadier_providers::ProviderKind;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
-use super::peer_kit::{Peers, Sent, header_id, is_reply, message_id, only, send, wait};
+use super::peer_kit::{Peers, Sent, header_id, is_reply, message_id, only, send, wait, wait_as};
 use super::{Flow, Options, Reply};
 use crate::board::{Board, PeerRecord};
 use crate::manager::prompts::QUIET;
@@ -164,6 +164,54 @@ async fn the_reply_comes_back_inside_the_turn_that_waits() {
         .find(|message| message.role == MessageRole::Assistant && message.text == "It's `name`.")
         .expect("the receiver's answer");
     assert_eq!(back[0].answer_id.as_deref(), Some(said.id.as_str()));
+    flow.stop().await;
+}
+
+/// A wait the CLI shows under its server's prefix (Codex's `brigadier/wait_for_replies`)
+/// takes its reply as Claude's does: the reply is taken and seen, and no turn of its own
+/// brings it a second time.
+#[tokio::test]
+async fn a_wait_named_with_its_servers_prefix_takes_the_reply() {
+    let peers = Peers::new();
+    let flow = Flow::start("peer-wait-prefixed", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Claude)
+        .await;
+    let (asked, waited) = (Sent::default(), Sent::default());
+    let (kept, results, to) = (asked.clone(), waited.clone(), api.clone());
+    peers.on(&flow.conversation, move |turn| {
+        let (kept, results, to) = (kept.clone(), results.clone(), to.clone());
+        async move {
+            if is_reply(&turn.input) {
+                return Reply::text("Noted.");
+            }
+            let sent = send(&turn, &to, "Which column holds names?", None).await;
+            kept.lock().unwrap().push(sent);
+            let result = wait_as(&turn, json!({}), "brigadier/wait_for_replies").await;
+            results.lock().unwrap().push(result);
+            Reply::text("Names are in `name`.")
+        }
+    });
+    answers(&peers, &api, "It's `name`.", None);
+    flow.say("Ask the API session where names live.").await;
+    flow.until("the wait's result", |_| !waited.lock().unwrap().is_empty())
+        .await;
+    let board = flow.settled().await;
+    let (result, failed) = only(&waited);
+    assert!(!failed && result.ends_with("\nIt's `name`."), "{result}");
+    let question = message_id(&only(&asked).0);
+    let answer = reply_to(&board, &question).expect("the reply");
+    assert!(
+        matches!(answer.hold, Some(ReplyHold::Taken { .. })),
+        "{:?}",
+        answer.hold
+    );
+    assert_eq!(answer.state, PeerState::Seen);
+    assert_eq!(
+        peers.inputs_of(&flow.conversation).len(),
+        1,
+        "no turn of its own"
+    );
     flow.stop().await;
 }
 

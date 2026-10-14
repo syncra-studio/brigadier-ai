@@ -175,11 +175,17 @@ pub(super) async fn send(
 /// that starts and then finishes with its result, as a CLI shows it; the result's text, and
 /// whether it failed.
 pub(super) async fn wait(turn: &Turn, args: Value) -> (String, bool) {
+    wait_as(turn, args, "mcp__brigadier__wait_for_replies").await
+}
+
+/// [`wait`], with the call shown under `name`, as the CLI names the tool (Claude:
+/// `mcp__brigadier__wait_for_replies`, Codex: `brigadier/wait_for_replies`).
+pub(super) async fn wait_as(turn: &Turn, args: Value, name: &str) -> (String, bool) {
     use brigadier_providers::{ItemStatus, ProviderEvent};
     let item_id = format!("wait-{}", uuid::Uuid::now_v7());
     let event = |status, output| ProviderEvent::ToolCall {
         item_id: item_id.clone(),
-        name: "mcp__brigadier__wait_for_replies".into(),
+        name: name.into(),
         input: Some(args.to_string()),
         status,
         output,

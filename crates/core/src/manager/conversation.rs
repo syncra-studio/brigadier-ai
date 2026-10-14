@@ -3373,8 +3373,7 @@ impl SessionManager {
                 status,
                 output,
             } => {
-                let name = name.rsplit("__").next().unwrap_or(name);
-                let name = name.rsplit('.').next().unwrap_or(name);
+                let name = crate::digest::bare_tool_name(name);
                 // The CLI has the wait's result: the replies handed to it are taken.
                 if name == "wait_for_replies" && *status == ItemStatus::Completed {
                     self.replies_taken(conv, item_id).await;
@@ -5314,9 +5313,7 @@ struct Narration {
 fn narration(event: &ProviderEvent) -> Option<bool> {
     match event {
         ProviderEvent::ToolCall { name, .. } => {
-            let tool = name.rsplit("__").next().unwrap_or(name);
-            let tool = tool.rsplit('.').next().unwrap_or(tool);
-            Some(ANNOUNCED_TOOLS.contains(&tool))
+            Some(ANNOUNCED_TOOLS.contains(&crate::digest::bare_tool_name(name)))
         }
         ProviderEvent::TurnCompleted { .. }
         | ProviderEvent::Exited { .. }
