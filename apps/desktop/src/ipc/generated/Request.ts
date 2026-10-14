@@ -31,6 +31,7 @@ import type { Setup } from "./Setup";
 import type { SetupRequest } from "./SetupRequest";
 import type { SourceChange } from "./SourceChange";
 import type { SourceScope } from "./SourceScope";
+import type { TabTarget } from "./TabTarget";
 import type { TaskId } from "./TaskId";
 import type { UninstallApp } from "./UninstallApp";
 import type { UpdateTarget } from "./UpdateTarget";
@@ -68,7 +69,7 @@ cwd?: string,
 /**
  * A main tab's first open after app startup replaces any previous process.
  */
-fresh?: boolean, cols: number, rows: number, } | { "method": "openSideChat", conversationId: ConversationId, sideChatId?: ConversationId, } | { "method": "openSetupTerminal", provider: ProviderKind, install: boolean, cols: number, rows: number, } | { "method": "openWorkerTerminal", taskId: TaskId, cols: number, rows: number, } | { "method": "writeTerminal", terminalId: string, data: string, } | { "method": "resizeTerminal", terminalId: string, cols: number, rows: number, } | { "method": "clearTerminal", terminalId: string, } | { "method": "closeTerminal", terminalId: string, } | { "method": "getComputerUse" } | { "method": "grantComputerPermission", permission: ComputerPermission, } | { "method": "checkComputerUse" } | { "method": "confirmComputerCapture" } | { "method": "stopComputerSession", session: string, bundleId: string | null, app: string, } | { "method": "getDictation" } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation" } | { "method": "appendDictation", dictationId: string, 
+fresh?: boolean, cols: number, rows: number, } | { "method": "openSideChat", conversationId: ConversationId, sideChatId?: ConversationId, } | { "method": "openTabChat", conversationId: ConversationId, tabId: string, target: TabTarget, chatId: ConversationId, } | { "method": "keepTabChats", chatIds: Array<ConversationId>, } | { "method": "setTabPage", chatId: ConversationId, url: string, title: string, text: string, selection: string, } | { "method": "openSetupTerminal", provider: ProviderKind, install: boolean, cols: number, rows: number, } | { "method": "openWorkerTerminal", taskId: TaskId, cols: number, rows: number, } | { "method": "writeTerminal", terminalId: string, data: string, } | { "method": "resizeTerminal", terminalId: string, cols: number, rows: number, } | { "method": "clearTerminal", terminalId: string, } | { "method": "closeTerminal", terminalId: string, } | { "method": "getComputerUse" } | { "method": "grantComputerPermission", permission: ComputerPermission, } | { "method": "checkComputerUse" } | { "method": "confirmComputerCapture" } | { "method": "stopComputerSession", session: string, bundleId: string | null, app: string, } | { "method": "getDictation" } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation" } | { "method": "appendDictation", dictationId: string, 
 /**
  * 16 kHz mono 16-bit little-endian PCM, base64-encoded.
  */

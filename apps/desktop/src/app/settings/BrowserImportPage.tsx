@@ -17,7 +17,9 @@ import {
   importBrowser,
   importedBadge,
   importSources,
+  lastImportSources,
   openFullDiskAccess,
+  openingImportSources,
   opensDialog,
   progressText,
   reasonText,
@@ -62,12 +64,16 @@ type Flow =
  */
 export function BrowserImportPage() {
   const on = useApp((s) => s.settings.browserEnabled);
-  const [list, setList] = useState<List>({ status: "loading" });
+  // The browsers as last listed show at once; the page lists them again as it opens.
+  const [list, setList] = useState<List>(() => {
+    const last = lastImportSources();
+    return last ? { status: "ready", ...last } : { status: "loading" };
+  });
   const [flow, setFlow] = useState<Flow | null>(null);
 
   const fetchList = useCallback(
-    () =>
-      importSources().then(
+    (read: () => Promise<ImportSource[]> = importSources) =>
+      read().then(
         (sources) => {
           setList({ status: "ready", sources, atMs: Date.now() });
           return sources;
@@ -80,7 +86,8 @@ export function BrowserImportPage() {
     [],
   );
   useEffect(() => {
-    void fetchList();
+    // A list on its way since the pointer came to the page's row answers for the opening.
+    void fetchList(openingImportSources);
   }, [fetchList]);
   const load = () => {
     setList((current) => (current.status === "ready" ? current : { status: "loading" }));
@@ -168,7 +175,7 @@ export function BrowserImportPage() {
       >
         <div data-setting={BROWSER_IMPORT_ROWS.import.label}>
           {list.status === "loading" ? (
-            <p className="text-foreground/65 px-1 text-sm">Loading…</p>
+            <ListingRows />
           ) : list.status === "error" ? (
             <p className="text-destructive px-1 text-sm">{list.message}</p>
           ) : list.sources.length === 0 ? (
@@ -204,6 +211,33 @@ export function BrowserImportPage() {
         onRecheck={recheck}
       />
     </SettingsPage>
+  );
+}
+
+/**
+ * While the browsers are first listed: rows the size of a browser's, empty, so the list fills
+ * in where they stand rather than pushing the page down.
+ */
+function ListingRows() {
+  return (
+    <SettingsCard>
+      <div role="status" aria-label="Looking for browsers" data-slot="import-listing">
+        {[0, 1, 2].map((row) => (
+          <div key={row} aria-hidden className="flex items-center gap-3 px-4 py-3">
+            <span className="bg-foreground/5 size-8 shrink-0 rounded-lg" />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              {/* Lines of a row's sizes, their words hidden. */}
+              <span className="text-label w-fit rounded-sm bg-foreground/5 text-transparent select-none">
+                A browser&apos;s name
+              </span>
+              <span className="w-fit rounded-sm bg-foreground/5 text-xs text-transparent select-none">
+                Where it stands, and its profiles
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </SettingsCard>
   );
 }
 

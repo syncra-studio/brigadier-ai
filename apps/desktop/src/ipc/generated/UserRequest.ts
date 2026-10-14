@@ -45,4 +45,9 @@ worked: Array<WorkSpan>,
  * It is `Waiting` only for quota (a worker paused until a model is free), not for the
  * user.
  */
-quotaWait: boolean, };
+quotaWait: boolean, 
+/**
+ * While it works: how many of the orchestrator's own background jobs (a command it runs
+ * in the background) still run for it. Their end starts the turn that answers.
+ */
+backgroundJobs?: number, };

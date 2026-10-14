@@ -109,6 +109,13 @@ pub enum Action {
     External(String),
 }
 
+impl Action {
+    /// The aggregate cleanup can carry a tab's paths inside errors as well as its item path.
+    pub fn private_logs(&self) -> bool {
+        matches!(self, Self::Dispose { owners } if owners.iter().any(|(owner, _)| owner.starts_with(crate::ledger::TAB_CHAT_OWNER)))
+    }
+}
+
 /// A listed item and what removing it does.
 pub struct ScanItem {
     pub item: CleanItem,

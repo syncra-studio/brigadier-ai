@@ -79,6 +79,15 @@ export function loadUsage(): Promise<void> {
   return inFlight;
 }
 
+/**
+ * Reads the view ahead of a page that shows it, when there is none yet: not while a read is on
+ * its way, or without the daemon.
+ */
+export function prefetchUsage(): void {
+  if (useUsage.getState().view || inFlight || useApp.getState().connection.status !== "connected") return;
+  void loadUsage();
+}
+
 /** Reads Activity over the days chosen; a range chosen meanwhile is kept only when it applies. */
 export async function loadActivity(): Promise<void> {
   const days = useUsage.getState().days;
@@ -182,7 +191,8 @@ export function useUsageRefresh(): void {
   useEffect(() => {
     if (!connected) return;
     setUsageShown(true);
-    void loadUsage();
+    // A read already on its way (a prefetch) answers for the page.
+    if (!inFlight) void loadUsage();
     const timer = window.setInterval(() => {
       if (!useApp.getState().windowVisible) return;
       void loadUsage();

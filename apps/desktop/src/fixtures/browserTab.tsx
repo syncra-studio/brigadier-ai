@@ -2,8 +2,8 @@
  * The Browser tab's toolbar over a faked shell: its measurements, the address idle and focused,
  * the site information button and popover, Reload while loading, the ⋯ menu, and where each of
  * the menu's Settings rows leads (Settings › Browser and Import Browser Data render beside it as
- * they do in the app's main area). Then the page's native actions: the zoom stepper, Print and
- * the screenshot, the find bar (typed, stepped, kept per tab, closed) and the tab's keys.
+ * they do in the app's main area). Then the page's native actions: the zoom stepper, Print, the
+ * toolbar's screenshot, the find bar (typed, stepped, kept per tab, closed) and the tab's keys.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -90,6 +90,10 @@ mockIPC(async (command, payload) => {
     case "open_url":
       asked.push({ open: args.url });
       return null;
+    case "browser_open":
+    case "browser_navigate":
+      asked.push({ navigate: args.url });
+      return null;
     case "browser_site_count":
       return 0;
     case "browser_history":
@@ -169,6 +173,14 @@ const typeFind = (value: string) => {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 };
 
+/** Types into the address field as React hears it. */
+const typeField = (value: string) => {
+  const input = field();
+  if (!input) return;
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+};
+
 /** What the ⋯ menu's zoom stepper shows, the menu opened and closed again. */
 const menuZoom = async () => {
   openMenu();
@@ -211,6 +223,7 @@ function Fixture() {
         addressRing: getComputedStyle(one('[data-slot="browser-address"]') ?? document.body).boxShadow,
         external: box(button("Open in external browser")),
         options: box(button("Browser options")),
+        screenshot: box(button("Take a screenshot")),
         font: field() ? parseFloat(getComputedStyle(field()!).fontSize) : null,
         fade: field() ? getComputedStyle(field()!).maskImage : null,
       };
@@ -257,6 +270,21 @@ function Fixture() {
       button("Open in external browser")?.click();
       await wait(50);
       seen.asked = asked.slice();
+
+      // Enter in the address: the form's default button (its first submit button) is clicked, as
+      // a browser does, then the form submits. Only the tab goes there; nothing opens outside.
+      const entered = asked.length;
+      field()?.focus();
+      typeField("example.org/next");
+      await wait(50);
+      const form = field()?.form;
+      const submitters = [...(form?.elements ?? [])].filter((element) => (element as HTMLButtonElement).type === "submit");
+      (submitters[0] as HTMLButtonElement | undefined)?.click();
+      form?.requestSubmit();
+      await wait(100);
+      seen.addressEnter = { submitters: submitters.length, asked: asked.slice(entered) };
+      setPage(PAGE);
+      await wait(100);
 
       openMenu();
       await until(() => menu() !== null);
@@ -311,7 +339,9 @@ function Fixture() {
       button("Reset zoom", menu() ?? document)?.click();
       await until(() => zoomShown() === "100%");
       seen.zoomReset = zoomShown();
-      pickMenu("Take a screenshot");
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await until(() => menu() === null);
+      button("Take a screenshot")?.click();
       await until(() => useToasts.getState().toasts.length > 0);
       seen.screenshotToast = useToasts.getState().toasts.map((toast) => toast.text);
       openMenu();
@@ -422,7 +452,8 @@ function Fixture() {
       // Its ⋯ menu: nothing to find, print, zoom or picture; ⌘F does nothing.
       openMenu();
       await until(() => menu() !== null);
-      seen.newTabMenu = menuRows().filter((row) => row !== "|").slice(0, 4);
+      seen.newTabMenu = menuRows().filter((row) => row !== "|").slice(0, 3);
+      seen.newTabScreenshot = button("Take a screenshot")?.disabled;
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await until(() => menu() === null);
       press("KeyF");

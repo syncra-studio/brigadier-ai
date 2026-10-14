@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
+  CameraPhoto,
   ChevronDown,
   ChevronUp,
   DotsHorizontal,
@@ -17,8 +18,12 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, type RefObject, useEffect, useEffectEvent, useRef, useState } from "react";
 
+import { AddressSuggestions, useAddressSuggestions } from "./AddressSuggestions";
+import { type Suggestion, stepSuggestion } from "./browserSuggestions";
 import { browserAddress, shownAddress, siteSecurity, webAddress } from "./browserAddress";
+import { showPage } from "./browserLayer";
 import { type BrowserKey, browserKey, stepZoom, ZOOM_LEAST, ZOOM_MOST, zoomLabel } from "./browserKeys";
+import { DownloadsButton, PermissionPrompt } from "./BrowserToolbarPopovers";
 
 import { Spinner } from "@/components/glyphs/spinner";
 import {
@@ -42,9 +47,11 @@ import {
 import { openSettings } from "@/state/actions";
 import { openBrowserSettings } from "@/state/browserSettings";
 import { useBrowserOn } from "@/state/links";
+import { selectTab, sessionWith } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { cn } from "@/lib/utils";
 import { toast } from "@/state/toasts";
+import { TabChatToolbarButton } from "./TabChat";
 
 /**
  * A browser main tab (⌘⇧B): one page, such as the app a worker is
@@ -196,9 +203,8 @@ function SiteInfo({ url }: { url: string }) {
 const NATIVE_ITEM = "data-[disabled]:opacity-40";
 
 /**
- * The ⋯ menu: the page's own actions (Find in page, Print, Zoom and a screenshot, which the
- * page does natively on macOS and only once there is one), then where the browser's data lives
- * in Settings.
+ * The ⋯ menu: the page's own actions (Find in page, Print and Zoom, which the page does natively
+ * on macOS and only once there is one), then where the browser's data lives in Settings.
  */
 function BrowserOptions({
   native,
@@ -206,7 +212,6 @@ function BrowserOptions({
   onFind,
   onPrint,
   onZoom,
-  onScreenshot,
 }: {
   /** A page is open and does them natively. */
   native: boolean;
@@ -214,7 +219,6 @@ function BrowserOptions({
   onFind: () => void;
   onPrint: () => void;
   onZoom: (zoom: number) => void;
-  onScreenshot: () => void;
 }) {
   const mac = useApp((s) => s.info?.platform === "macos");
   // Find in page puts the keyboard in its field: the menu doesn't take it back to its button.
@@ -283,8 +287,6 @@ function BrowserOptions({
             <Reload className="size-icon-sm" />
           </button>
         </div>
-        <DropdownMenuSeparator className="mx-2" />
-        <DropdownMenuItem disabled={!native} className={NATIVE_ITEM} onSelect={onScreenshot}>Take a screenshot</DropdownMenuItem>
         <DropdownMenuSeparator className="mx-2" />
         {mac && <DropdownMenuItem onSelect={() => openSettings("browserImport")}>Import Browser Data…</DropdownMenuItem>}
         <DropdownMenuItem onSelect={() => openBrowserSettings("downloads")}>Downloads</DropdownMenuItem>
@@ -383,6 +385,8 @@ export function BrowserTab({
   const page = useBrowsers((s) => s.pages[conversationId]);
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
+  /** The page lies beneath the app, which draws above it (see `browserLayer`). */
+  const beneath = mac;
   const area = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const findInput = useRef<HTMLInputElement>(null);
@@ -391,6 +395,10 @@ export function BrowserTab({
   const finding = useBrowserFind((s) => s.tabs[conversationId]?.open ?? false);
   const [typed, setTyped] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
+  const address = useRef<HTMLDivElement>(null);
+  /** The suggestion the arrow keys are on; -1: the field itself. */
+  const [highlight, setHighlight] = useState(-1);
+  const [suggesting, setSuggesting] = useState(true);
   const fullUrl = useApp((s) => s.settings.browserFullUrl);
   const made = page !== undefined;
   const browserOn = useBrowserOn();
@@ -428,17 +436,20 @@ export function BrowserTab({
         placedBounds.width,
         placedBounds.height,
       );
+      // Beneath the app (macOS) the page stays live under what the app opens over it; over the
+      // app it hides while anything of the app's overlaps it.
       const bounds: BrowserBounds | null =
         !element.closest("[inert]") &&
         placedBounds.width > 0 &&
         placedBounds.height > 0 &&
-        !covered(rendered, layers)
+        (beneath || !covered(rendered, layers))
           ? placedBounds
           : null;
       const key = JSON.stringify(bounds);
       if (key !== placed) {
         placed = key;
         browserPlace(conversationId, bounds).catch(() => {});
+        if (beneath) showPage(conversationId, bounds);
       }
       shown.current = bounds !== null;
       next = requestAnimationFrame(place);
@@ -449,8 +460,9 @@ export function BrowserTab({
       observer.disconnect();
       shown.current = false;
       browserPlace(conversationId, null).catch(() => {});
+      if (beneath) showPage(conversationId, null);
     };
-  }, [conversationId, page?.ready, active]);
+  }, [conversationId, page?.ready, active, beneath]);
 
   const url = page?.url ?? "";
   const loading = page?.loading === true;
@@ -586,6 +598,19 @@ export function BrowserTab({
     openPage(conversationId, to, pageBounds(area.current), agent).catch(failed);
   };
   const editing = focused || typed !== null;
+  const suggestions = useAddressSuggestions(conversationId, focused ? typed : null);
+  const suggestionsOpen = focused && suggesting && typed !== null && suggestions.rows.length > 0;
+  const pick = (row: Suggestion) => {
+    setHighlight(-1);
+    if (row.kind === "tab") {
+      setTyped(null);
+      field.current?.blur();
+      const session = sessionWith(row.id);
+      if (session) selectTab(session, row.id);
+      return;
+    }
+    go(row.kind === "go" ? row.text : row.url);
+  };
   // What Open in external browser opens: what is being typed, else the page.
   const outside = (typed !== null ? browserAddress(typed) : null) ?? (url || null);
 
@@ -620,6 +645,7 @@ export function BrowserTab({
           }}
         >
           <div
+            ref={address}
             data-slot="browser-address"
             title={page?.title || undefined}
             className="group/address bg-muted/60 ring-border flex h-control-md w-full max-w-browser-address min-w-0 items-center rounded-full p-0.5 ring-1 ring-inset"
@@ -633,18 +659,48 @@ export function BrowserTab({
               value={typed ?? (focused ? url : shownAddress(url, fullUrl))}
               placeholder="Search or enter a URL"
               aria-label="Address"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={suggestionsOpen}
+              aria-controls={suggestionsOpen ? "browser-suggestions" : undefined}
+              aria-activedescendant={suggestionsOpen && highlight >= 0 ? `browser-suggestion-${highlight}` : undefined}
               spellCheck={false}
               autoCapitalize="off"
               autoCorrect="off"
-              onChange={(event) => setTyped(event.target.value)}
+              onChange={(event) => {
+                setTyped(event.target.value);
+                setHighlight(-1);
+                setSuggesting(true);
+              }}
               onFocus={(event) => {
                 setFocused(true);
                 // The whole URL replaces the site first, then is selected.
                 const input = event.target;
                 requestAnimationFrame(() => input.select());
               }}
-              onBlur={() => setFocused(false)}
+              onBlur={() => {
+                setFocused(false);
+                setHighlight(-1);
+              }}
               onKeyDown={(event) => {
+                if (suggestionsOpen && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+                  event.preventDefault();
+                  setHighlight((at) => stepSuggestion(at, event.key === "ArrowDown" ? 1 : -1, suggestions.rows.length));
+                  return;
+                }
+                const row = suggestionsOpen && highlight >= 0 ? suggestions.rows[highlight] : undefined;
+                if (event.key === "Enter" && row) {
+                  event.preventDefault();
+                  pick(row);
+                  return;
+                }
+                if (event.key === "Escape" && suggestionsOpen) {
+                  // The first Esc closes the suggestions; the next puts the page's address back.
+                  event.stopPropagation();
+                  setSuggesting(false);
+                  setHighlight(-1);
+                  return;
+                }
                 if (event.key === "Escape" && typed !== null) {
                   event.stopPropagation();
                   setTyped(null);
@@ -658,6 +714,7 @@ export function BrowserTab({
             />
             {outside && (url || typed !== null) && (
               <TooltipIconButton
+                type="button"
                 tooltip="Open in external browser"
                 size="icon-md"
                 className="shrink-0 rounded-full @max-lg/browser-toolbar:hidden"
@@ -669,15 +726,40 @@ export function BrowserTab({
               </TooltipIconButton>
             )}
           </div>
+          <AddressSuggestions
+            anchor={address}
+            field={field}
+            rows={suggestions.rows}
+            open={suggestionsOpen}
+            highlight={highlight}
+            onPick={pick}
+            onHighlight={setHighlight}
+            onRemove={suggestions.remove}
+            onClose={() => setSuggesting(false)}
+          />
+          {/* Only over its own tab: a question waits, unanswered, while another tab is in front. */}
+          {embedded && <PermissionPrompt id={conversationId} asking={active ? page?.asking : null} anchor={address} />}
         </form>
+        {embedded && <DownloadsButton />}
+        {mac && (
+          <TooltipIconButton
+            tooltip="Take a screenshot"
+            size="icon-lg"
+            className="shrink-0 rounded-full @max-md/browser-toolbar:hidden"
+            disabled={!native}
+            onClick={screenshot}
+          >
+            <CameraPhoto />
+          </TooltipIconButton>
+        )}
         <BrowserOptions
           native={native}
           zoom={zoom}
           onFind={showFind}
           onPrint={print}
           onZoom={zoomTo}
-          onScreenshot={screenshot}
         />
+        <TabChatToolbarButton />
       </div>
       {finding && native && <FindBar id={conversationId} input={findInput} onClose={hideFind} />}
       {page?.blocked && (

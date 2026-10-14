@@ -10,7 +10,7 @@ use brigadier_ipc::app::{
     BrowserDownload, BrowserSite, BrowserVisit, DownloadState, HistoryFilter, ImportRecord,
     SitePermission,
 };
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 /// The schema, by `PRAGMA user_version`.
 const SCHEMA: &[&str] = &[
@@ -85,7 +85,6 @@ fn permission(text: &str) -> SitePermission {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn state_text(state: DownloadState) -> &'static str {
     match state {
         DownloadState::Running => "running",
@@ -156,8 +155,6 @@ impl Store {
         agent: bool,
         at_ms: i64,
     ) -> rusqlite::Result<i64> {
-        use rusqlite::OptionalExtension;
-
         if let Some(id) = last {
             let same = self
                 .db
@@ -317,6 +314,18 @@ impl Store {
                 })
             })?
             .collect()
+    }
+
+    /// Where finished download `id` was saved; none while it runs, after it failed, or once
+    /// it is forgotten.
+    pub fn finished_download(&self, id: i64) -> rusqlite::Result<Option<String>> {
+        self.db
+            .query_row(
+                "SELECT path FROM downloads WHERE id = ?1 AND state = ?2",
+                params![id, state_text(DownloadState::Done)],
+                |row| row.get(0),
+            )
+            .optional()
     }
 
     /// Forgets downloads (the files stay): `ids`, or with none every finished one since
@@ -719,6 +728,15 @@ mod tests {
         assert_eq!(listed[0].id, running);
         assert_eq!(listed[1].state, DownloadState::Done);
         assert_eq!(store.downloads("f.zip").unwrap().len(), 1);
+        assert_eq!(
+            store.finished_download(done).unwrap().as_deref(),
+            Some("/d/f.zip")
+        );
+        assert_eq!(
+            store.finished_download(running).unwrap(),
+            None,
+            "still running"
+        );
         // Clearing keeps one still running.
         store.remove_downloads(None, None).unwrap();
         assert_eq!(store.downloads("").unwrap().len(), 1);

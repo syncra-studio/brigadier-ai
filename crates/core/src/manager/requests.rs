@@ -154,6 +154,12 @@ impl SessionManager {
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
+            // The CLI's background jobs it started, until the turn their end starts is over.
+            let jobs = activity
+                .background
+                .as_ref()
+                .filter(|(of, _)| of == id)
+                .map(|(_, running)| *running);
             let mut wait = None;
             let state = if let Some(state) = ended_run_state(&board, request) {
                 // An overnight run's request is over with the run: its report is the answer,
@@ -162,6 +168,7 @@ impl SessionManager {
             } else if activity.running.as_deref() == Some(id)
                 || (activity.carried.contains(id) && outcome.is_none())
                 || runs_in(&board, id)
+                || (jobs.is_some() && outcome.is_none())
             {
                 // A fix Brigadier checks and lands once its worker's turn is over still works.
                 RequestState::Working
@@ -192,6 +199,7 @@ impl SessionManager {
             };
             let over = !matches!(state, RequestState::Working | RequestState::Waiting);
             let done = state == RequestState::Done;
+            let jobs = jobs.filter(|running| *running > 0 && state == RequestState::Working);
             if let Err(err) = self
                 .core
                 .update_request(
@@ -200,6 +208,7 @@ impl SessionManager {
                     state,
                     wait == Some(Wait::Quota),
                     wait == Some(Wait::Card),
+                    jobs,
                 )
                 .await
             {
@@ -580,6 +589,7 @@ mod tests {
             undo: None,
             worked: Vec::new(),
             quota_wait: false,
+            background_jobs: None,
         }
     }
 
@@ -887,6 +897,45 @@ mod tests {
             number: 1,
             items: Vec::new(),
         }
+    }
+
+    /// The same push watched again from a later request: its row moves to that request, so the
+    /// later request works while the watch runs and the earlier one is done. An update of the
+    /// earlier watch still on its way doesn't take the row back.
+    #[test]
+    fn a_ci_watch_restarted_in_a_later_request_belongs_to_it() {
+        let mut board = Board::default();
+        for (id, at) in [("r1", 10), ("r2", 20)] {
+            let mut stored = request(id, RequestState::Working);
+            stored.started_at_ms = at;
+            board.apply(
+                &crate::model::DomainEvent::RequestUpdated { request: stored },
+                0,
+            );
+        }
+        let stepped = |board: &mut Board, request: &str, result: Option<&str>| {
+            board.apply(
+                &crate::model::DomainEvent::OrchestratorStepped {
+                    step: step_of(request, watch(result)),
+                },
+                0,
+            );
+        };
+        stepped(&mut board, "r1", None);
+        stepped(&mut board, "r1", Some("stopped"));
+        stepped(&mut board, "r2", None);
+        assert_eq!(board.orchestrator_steps.len(), 1, "one row per push");
+        assert!(
+            owed_a_turn(&board, "r2", false, false),
+            "the restart's watch"
+        );
+        assert!(!owed_a_turn(&board, "r1", false, false), "the old request");
+        stepped(&mut board, "r1", None);
+        assert_eq!(
+            board.orchestrator_steps[0].request_id.as_deref(),
+            Some("r2"),
+            "a late update of the earlier watch"
+        );
     }
 
     /// What wakes the thread later keeps its request working between turns (w43 bug 2): a CI

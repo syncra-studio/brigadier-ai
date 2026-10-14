@@ -95,6 +95,12 @@ async fn the_tree_lists_ignored_entries_and_every_kind_of_change() {
         .project_source_state(&project_id)
         .await
         .unwrap();
+    let branch = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(
+        state.branch.as_deref(),
+        Some(branch.trim()),
+        "the branch checked out"
+    );
     let staged = statuses(&state.staged);
     let changes = statuses(&state.changes);
     assert!(
@@ -260,5 +266,62 @@ async fn the_watch_hears_files_and_staging_but_not_ignored_folders() {
         "the switched-to branch moved"
     );
     drop(watch);
+    flow.stop().await;
+}
+
+/// A single change is said at once, not after a burst's settling time; a burst of writes (a
+/// build's, a checkout's) is said a few times while it goes on, the last after its end.
+#[tokio::test]
+async fn the_watch_says_a_change_at_once_and_a_burst_a_few_times() {
+    let (flow, target) = flow("workspace-watch-quick").await;
+    let repo = flow.repo.clone();
+    let mut watch = flow.manager.watch_workspace(&target).await.unwrap();
+    while hears(&mut watch, Duration::from_millis(800)).await {}
+
+    let mut quickest = Duration::MAX;
+    for round in 0..3 {
+        let wrote = std::time::Instant::now();
+        std::fs::write(repo.join(format!("quick-{round}.txt")), "new\n").unwrap();
+        assert!(hears(&mut watch, Duration::from_secs(3)).await, "a write");
+        quickest = quickest.min(wrote.elapsed());
+        while hears(&mut watch, Duration::from_millis(600)).await {}
+    }
+    // The old watch waited 200 ms after a change's first event before saying it.
+    assert!(quickest < Duration::from_millis(150), "{quickest:?}");
+
+    std::fs::create_dir_all(repo.join("generated")).unwrap();
+    while hears(&mut watch, Duration::from_millis(600)).await {}
+    let (tx, mut said) = tokio::sync::mpsc::unbounded_channel();
+    let listening = tokio::spawn(async move {
+        while watch.changed().await.is_some() {
+            if tx.send(std::time::Instant::now()).is_err() {
+                return;
+            }
+        }
+    });
+    let started = std::time::Instant::now();
+    let mut writes = 0;
+    while started.elapsed() < Duration::from_millis(1500) {
+        std::fs::write(repo.join(format!("generated/out-{writes}.txt")), "out\n").unwrap();
+        writes += 1;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let ended = std::time::Instant::now();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    listening.abort();
+    let mut times = Vec::new();
+    while let Ok(at) = said.try_recv() {
+        times.push(at);
+    }
+    assert!(
+        (2..=10).contains(&times.len()),
+        "{} writes said {} times",
+        writes,
+        times.len()
+    );
+    assert!(
+        times.last().is_some_and(|last| *last >= ended),
+        "said after the burst ended"
+    );
     flow.stop().await;
 }

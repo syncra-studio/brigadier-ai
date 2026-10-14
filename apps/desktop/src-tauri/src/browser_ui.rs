@@ -3,52 +3,62 @@
 //!
 //! wry's own delegate grants every camera and microphone request a page makes. That is right
 //! for the app's page, but a web page in the Browser tab may listen or watch only as the user
-//! chose for its site, so the tab's webview gets this delegate instead: it answers media
-//! capture from the site's choices (Allow, Block, or Ask: WebKit's own question), sends popups
-//! (`window.open`, `target=_blank`) to the system browser, and leaves the file picker to wry's
-//! delegate as before. It also reaches the browser's saved WebKit data store (clearing it,
-//! counting its sites, adding imported cookies) and asks where to save a download. A tab's page
-//! also zooms, finds text, prints, copies a screenshot and reloads past the cache here. Talking
-//! to WebKit through objc2 needs `unsafe`; every use says why it holds.
+//! chose for its site, so the tab's webview gets this delegate instead: it hands media capture
+//! requests to the tab (the site's choices answer, or the tab asks; see `browser_grants`), and
+//! leaves popups (`window.open`, `target=_blank`; new tabs, see `browser::popup`) and the file
+//! picker to wry's delegate as before. It also puts each page beneath the app's own web view
+//! (`Layer`), names the page's right-click menu's link items for tabs (`link_items`), reaches
+//! the browser's saved WebKit data store (clearing it, counting its sites, adding imported
+//! cookies) and asks where to save a download. A tab's page also zooms, finds text, prints,
+//! copies a screenshot and reloads past the cache here. Talking to WebKit through objc2 needs
+//! `unsafe`; every use says why it holds.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::ffi::CStr;
 use std::ptr::NonNull;
+use std::time::{Duration, Instant};
 
 use block2::{DynBlock, RcBlock};
-use brigadier_ipc::app::SitePermission;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
+use objc2::runtime::{AnyObject, NSObject, ProtocolObject, Sel};
+use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSModalResponseOK, NSPasteboard,
-    NSPasteboardTypePNG, NSPrintInfo, NSSavePanel,
+    NSApplication, NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventMask, NSEventPhase,
+    NSImage, NSMenu, NSMenuItem, NSModalResponseOK, NSPasteboard, NSPasteboardTypePNG, NSPrintInfo,
+    NSSavePanel, NSUserInterfaceItemIdentification, NSView, NSWindowOrderingMode,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain,
     NSHTTPCookieExpires, NSHTTPCookieName, NSHTTPCookiePath, NSHTTPCookiePropertyKey,
     NSHTTPCookieSameSiteLax, NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteStrict,
-    NSHTTPCookieSecure, NSHTTPCookieValue, NSMutableDictionary, NSObjectProtocol, NSSet, NSString,
-    NSURL, NSUUID, ns_string,
+    NSHTTPCookieSecure, NSHTTPCookieValue, NSMutableDictionary, NSNumber, NSObjectNSKeyValueCoding,
+    NSObjectProtocol, NSPoint, NSSet, NSString, NSURL, NSUUID, ns_string,
 };
 use objc2_web_kit::{
     WKFindConfiguration, WKFindResult, WKFrameInfo, WKMediaCaptureType, WKNavigationAction,
-    WKOpenPanelParameters, WKPermissionDecision, WKSecurityOrigin, WKUIDelegate, WKWebView,
-    WKWebViewConfiguration, WKWebsiteDataRecord, WKWebsiteDataStore, WKWebsiteDataTypeCookies,
-    WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeFetchCache, WKWebsiteDataTypeFileSystem,
-    WKWebsiteDataTypeHashSalt, WKWebsiteDataTypeIndexedDBDatabases, WKWebsiteDataTypeLocalStorage,
-    WKWebsiteDataTypeMediaKeys, WKWebsiteDataTypeMemoryCache,
-    WKWebsiteDataTypeSearchFieldRecentSearches, WKWebsiteDataTypeServiceWorkerRegistrations,
-    WKWebsiteDataTypeSessionStorage, WKWebsiteDataTypeWebSQLDatabases, WKWindowFeatures,
+    WKOpenPanelParameters, WKPermissionDecision, WKSecurityOrigin, WKUIDelegate,
+    WKUserContentController, WKWebView, WKWebViewConfiguration, WKWebsiteDataRecord,
+    WKWebsiteDataStore, WKWebsiteDataTypeCookies, WKWebsiteDataTypeDiskCache,
+    WKWebsiteDataTypeFetchCache, WKWebsiteDataTypeFileSystem, WKWebsiteDataTypeHashSalt,
+    WKWebsiteDataTypeIndexedDBDatabases, WKWebsiteDataTypeLocalStorage, WKWebsiteDataTypeMediaKeys,
+    WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeSearchFieldRecentSearches,
+    WKWebsiteDataTypeServiceWorkerRegistrations, WKWebsiteDataTypeSessionStorage,
+    WKWebsiteDataTypeWebSQLDatabases, WKWindowFeatures,
 };
 use wry::WebViewExtMacOS;
 
-use crate::browser_store::{self, Device};
+use crate::browser_store::Device;
+
+/// Answers a page's request for devices: `true` grants it.
+pub type MediaAnswer = Box<dyn FnOnce(bool)>;
 
 struct Ivars {
     /// wry's delegate, which still shows the file picker.
     wry: Option<Retained<ProtocolObject<dyn WKUIDelegate>>>,
-    /// Opens a popup's address outside the tab.
-    on_popup: Box<dyn Fn(String)>,
+    /// The page closed itself.
+    on_close: Box<dyn Fn()>,
+    /// The page asked for devices: the site's choices, or the tab, answer (`true` grants).
+    on_media: Box<dyn Fn(String, Vec<Device>, MediaAnswer)>,
 }
 
 define_class!(
@@ -87,37 +97,52 @@ define_class!(
                 WKMediaCaptureType::CameraAndMicrophone => &[Device::Camera, Device::Microphone],
                 _ => &[],
             };
-            // Every site that asks is listed in Site settings, with the user's choices.
-            let now = browser_store::now_ms();
-            let choices: Option<Vec<SitePermission>> = devices
-                .iter()
-                .map(|device| browser_store::with(|store| store.site_asked(&origin, *device, now)))
-                .collect();
-            let answer = match choices.map(|choices| browser_store::combined(&choices)) {
-                Some(SitePermission::Allow) => WKPermissionDecision::Grant,
-                // WebKit's own question, naming the site.
-                Some(SitePermission::Ask) => WKPermissionDecision::Prompt,
-                _ => WKPermissionDecision::Deny,
-            };
-            tracing::info!(%origin, ?devices, ?answer, "Browser tab: camera or microphone asked for");
-            decision.call((answer,));
+            if devices.is_empty() {
+                decision.call((WKPermissionDecision::Deny,));
+                return;
+            }
+            let decision = decision.copy();
+            (self.ivars().on_media)(
+                origin,
+                devices.to_vec(),
+                Box::new(move |grant| {
+                    decision.call((if grant {
+                        WKPermissionDecision::Grant
+                    } else {
+                        WKPermissionDecision::Deny
+                    },));
+                }),
+            );
         }
 
         #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
         fn create_web_view(
             &self,
-            _web_view: &WKWebView,
-            _configuration: &WKWebViewConfiguration,
+            web_view: &WKWebView,
+            configuration: &WKWebViewConfiguration,
             action: &WKNavigationAction,
-            _features: &WKWindowFeatures,
+            features: &WKWindowFeatures,
         ) -> Option<Retained<WKWebView>> {
-            // SAFETY: a property read on the action WebKit passed in.
-            let request = unsafe { action.request() };
-            if let Some(url) = request.URL().and_then(|url| url.absoluteString()) {
-                (self.ivars().on_popup)(url.to_string());
+            let create =
+                sel!(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:);
+            match &self.ivars().wry {
+                // wry's delegate makes the popup's page, in a tab of its own (`browser::popup`).
+                Some(wry) if wry.respondsToSelector(create) => {
+                    // SAFETY: wry's delegate implements this method (checked just above), and
+                    // it gets WebKit's own arguments unchanged.
+                    unsafe {
+                        wry.webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures(
+                            web_view, configuration, action, features,
+                        )
+                    }
+                }
+                _ => None,
             }
-            // No new web view: WebKit opens nothing itself.
-            None
+        }
+
+        #[unsafe(method(webViewDidClose:))]
+        fn did_close(&self, _web_view: &WKWebView) {
+            (self.ivars().on_close)();
         }
 
         #[unsafe(method(webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:))]
@@ -159,12 +184,563 @@ impl Delegate {
 /// live as long as the webview.
 pub struct BrowserUi {
     _delegate: Retained<Delegate>,
+    /// The page, beneath the app's own web view until it goes.
+    page: Retained<NSView>,
 }
 
-/// Makes `webview` deny camera and microphone requests and hand popups' addresses to
-/// `on_popup` rather than open them. Call it on the main thread, right after building the
-/// webview.
-pub fn install(webview: &wry::WebView, on_popup: impl Fn(String) + 'static) -> BrowserUi {
+impl Drop for BrowserUi {
+    fn drop(&mut self) {
+        LAYER.with_borrow_mut(|layer| {
+            layer.pages.retain(|page| *page != self.page);
+            for held in [&mut layer.pressed, &mut layer.scrolling] {
+                if held.as_ref() == Some(&self.page) {
+                    *held = None;
+                }
+            }
+        });
+    }
+}
+
+/// A rectangle in the app's page, in CSS pixels from its top left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Area {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Area {
+    fn holds(&self, x: f64, y: f64) -> bool {
+        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+    }
+}
+
+/// How the tabs' pages and the app's own web view share the window. Each page lies beneath the
+/// app's web view, which leaves a clear hole where a page shows (the app cuts its page there), so
+/// the app's menus, tooltips and dialogs draw above the website while it stays live. The app's
+/// web view still gets the window's clicks, scrolls and drags, and hands those in a hole to the
+/// page there, unless the app has something there: one of its `above` areas (a floating
+/// control), or anything `modal` (a menu, popover or dialog), which takes every click in the
+/// hole, as a click beside a menu closes it.
+#[derive(Default)]
+struct Layer {
+    /// The app's own web view, once a page has found it.
+    app: Option<Retained<NSView>>,
+    pages: Vec<Retained<NSView>>,
+    above: Vec<Area>,
+    modal: bool,
+    /// The page a press began on, which has its drags and its release.
+    pressed: Option<Retained<NSView>>,
+    /// The page a scroll gesture began on, which has the rest of it and its momentum.
+    scrolling: Option<Retained<NSView>>,
+    /// The pointer was over a page when it last moved.
+    over_page: bool,
+}
+
+/// Where an event the app's web view got goes.
+enum Route {
+    /// The app's own.
+    App,
+    /// The page beneath.
+    Page(Retained<NSView>),
+    /// Nowhere: a page beneath has it already (the pointer moving over it).
+    Drop,
+}
+
+impl Layer {
+    /// The page beneath where `event` happened, if it takes it there.
+    fn page_at(&self, app: &NSView, event: &NSEvent) -> Option<Retained<NSView>> {
+        // SAFETY: a property read on a live view, on the main thread (events arrive there).
+        let parent = unsafe { app.superview() }?;
+        self.page_under(
+            app,
+            parent.convertPoint_fromView(event.locationInWindow(), None),
+        )
+    }
+
+    /// Whether a page beneath takes events at `point` (in the app web view's superview).
+    fn takes(&self, app: &NSView, point: NSPoint) -> bool {
+        self.page_under(app, point).is_some()
+    }
+
+    /// The page beneath at `point` (in the app web view's superview), if it takes events there.
+    fn page_under(&self, app: &NSView, point: NSPoint) -> Option<Retained<NSView>> {
+        if self.modal {
+            return None;
+        }
+        // SAFETY: a property read on a live view, on the main thread.
+        let parent = unsafe { app.superview() }?;
+        let page = self.pages.iter().find(|page| {
+            let frame = page.frame();
+            !page.isHidden()
+                && point.x >= frame.origin.x
+                && point.x < frame.origin.x + frame.size.width
+                && point.y >= frame.origin.y
+                && point.y < frame.origin.y + frame.size.height
+        })?;
+        // The web view is flipped: its points run from the top left, as CSS pixels do.
+        let local = app.convertPoint_fromView(point, Some(&parent));
+        (!self.above.iter().any(|area| area.holds(local.x, local.y))).then(|| page.clone())
+    }
+
+    /// Where `event`, sent to `view` as `cmd`, goes.
+    fn route(&mut self, view: &NSView, cmd: Sel, event: &NSEvent) -> Route {
+        let Some(app) = self.app.clone() else {
+            return Route::App;
+        };
+        if !std::ptr::eq(&*app, view) {
+            return Route::App;
+        }
+        let to = |page: Option<Retained<NSView>>| page.map_or(Route::App, Route::Page);
+        match cmd.name().to_bytes() {
+            b"mouseDown:" | b"rightMouseDown:" | b"otherMouseDown:" => {
+                self.pressed = self.page_at(&app, event);
+                to(self.pressed.clone())
+            }
+            b"mouseDragged:" | b"rightMouseDragged:" | b"otherMouseDragged:" => {
+                to(self.pressed.clone())
+            }
+            b"mouseUp:" | b"rightMouseUp:" | b"otherMouseUp:" => to(self.pressed.take()),
+            b"scrollWheel:" => {
+                let phase = event.phase();
+                let fresh = phase.contains(NSEventPhase::Began)
+                    || phase.contains(NSEventPhase::MayBegin)
+                    || (phase.is_empty() && event.momentumPhase().is_empty());
+                if fresh {
+                    self.scrolling = self.page_at(&app, event);
+                }
+                to(self.scrolling.clone())
+            }
+            // The page tracks the pointer over it itself; the app hears the move into its hole
+            // (so what it showed hovered there lets go), then nothing until it leaves.
+            b"mouseMoved:" => {
+                let over = self.page_at(&app, event).is_some();
+                let entering = over && !self.over_page;
+                self.over_page = over;
+                if over && !entering {
+                    Route::Drop
+                } else {
+                    Route::App
+                }
+            }
+            _ => to(self.page_at(&app, event)),
+        }
+    }
+}
+
+thread_local! {
+    /// The window's pages and what the app has over them. Views live on the main thread.
+    static LAYER: RefCell<Layer> = RefCell::default();
+    /// The web view class's own methods for the events a page beneath takes, by selector.
+    static ORIGINAL: RefCell<Vec<(Sel, objc2::runtime::Imp)>> = const { RefCell::new(Vec::new()) };
+    /// The web view class's own `hitTest:`.
+    static HIT_TEST: Cell<Option<objc2::runtime::Imp>> = const { Cell::new(None) };
+    /// The web view class's own `willOpenMenu:withEvent:`.
+    static WILL_OPEN_MENU: Cell<Option<objc2::runtime::Imp>> = const { Cell::new(None) };
+    /// The right-click menu's target for "Open Link in External Browser".
+    static MENU_TARGET: RefCell<Option<Retained<MenuTarget>>> = const { RefCell::new(None) };
+    /// When "Open Link in External Browser" was picked: the popup it makes opens outside.
+    static OUTSIDE: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements, and the class adds no `Drop`.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "BrigadierBrowserMenuTarget"]
+    struct MenuTarget;
+
+    // SAFETY: NSObjectProtocol has no requirements.
+    unsafe impl NSObjectProtocol for MenuTarget {}
+
+    impl MenuTarget {
+        /// "Open Link in External Browser": WebKit's "Open Link in New Window" item, its
+        /// represented object, acts, and the popup it makes opens in the system's browser.
+        #[unsafe(method(openLinkOutside:))]
+        fn open_link_outside(&self, sender: &NSMenuItem) {
+            let Some(item) = sender
+                .representedObject()
+                .and_then(|object| object.downcast::<NSMenuItem>().ok())
+            else {
+                return;
+            };
+            let Some(action) = item.action() else {
+                return;
+            };
+            OUTSIDE.set(Some(Instant::now()));
+            let target = item.target();
+            // SAFETY: WebKit's own item's action, sent to its own target from that item, as
+            // AppKit sends it when the item is picked.
+            unsafe {
+                NSApplication::sharedApplication(self.mtm()).sendAction_to_from(
+                    action,
+                    target.as_deref(),
+                    Some(&item),
+                )
+            };
+        }
+    }
+);
+
+/// Whether the popup a page makes now came from "Open Link in External Browser" (picked in the
+/// last few seconds), so it opens in the system's browser instead of a tab.
+pub fn popup_goes_outside() -> bool {
+    OUTSIDE
+        .take()
+        .is_some_and(|at| at.elapsed() < Duration::from_secs(3))
+}
+
+/// WebKit names its right-click menu's items with these identifiers.
+const OPEN_LINK_IN_NEW_WINDOW: &str = "WKMenuItemIdentifierOpenLinkInNewWindow";
+
+/// A page's right-click menu, as WebKit made it: "Open Link in New Window" makes a tab here
+/// (`browser::popup`), so it says so, and "Open Link in External Browser" follows it.
+fn link_items(menu: &NSMenu) {
+    let mtm = menu.mtm();
+    let items = menu.itemArray();
+    let Some(index) = items.iter().position(|item| {
+        item.identifier()
+            .is_some_and(|id| id.to_string() == OPEN_LINK_IN_NEW_WINDOW)
+    }) else {
+        return;
+    };
+    let new_window = items.objectAtIndex(index);
+    new_window.setTitle(ns_string!("Open Link in New Tab"));
+    let target = MENU_TARGET.with_borrow_mut(|target| {
+        target
+            .get_or_insert_with(|| {
+                // SAFETY: NSObject's plain `init` on a fresh allocation of a class without ivars.
+                unsafe { msg_send![MenuTarget::alloc(mtm), init] }
+            })
+            .clone()
+    });
+    // SAFETY: a fresh item with a title, an action the target answers and no key equivalent.
+    let outside = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            ns_string!("Open Link in External Browser"),
+            Some(sel!(openLinkOutside:)),
+            ns_string!(""),
+        )
+    };
+    // SAFETY: the target outlives the menu (`MENU_TARGET` keeps it), and answers the action.
+    unsafe {
+        outside.setTarget(Some(&target));
+        outside.setRepresentedObject(Some(&new_window));
+    }
+    menu.insertItem_atIndex(&outside, index as isize + 1);
+}
+
+/// The web view class's `willOpenMenu:withEvent:`: a page's right-click menu gets its link
+/// items (`link_items`); every other menu opens as before.
+unsafe extern "C-unwind" fn will_open_menu(
+    this: &NSView,
+    cmd: Sel,
+    menu: &NSMenu,
+    event: &NSEvent,
+) {
+    if let Some(original) = WILL_OPEN_MENU.get() {
+        // SAFETY: `original` is the class's own method for `cmd`, taking a menu and an event.
+        unsafe {
+            std::mem::transmute::<
+                objc2::runtime::Imp,
+                unsafe extern "C-unwind" fn(&NSView, Sel, &NSMenu, &NSEvent),
+            >(original)(this, cmd, menu, event);
+        }
+    }
+    let page = LAYER.with(|layer| {
+        layer
+            .try_borrow()
+            .is_ok_and(|layer| layer.pages.iter().any(|page| std::ptr::eq(&**page, this)))
+    });
+    if page {
+        link_items(menu);
+    }
+}
+
+/// The events the app's web view hands to a page beneath.
+const HANDED: [&CStr; 13] = [
+    c"mouseDown:",
+    c"mouseDragged:",
+    c"mouseUp:",
+    c"rightMouseDown:",
+    c"rightMouseDragged:",
+    c"rightMouseUp:",
+    c"otherMouseDown:",
+    c"otherMouseDragged:",
+    c"otherMouseUp:",
+    c"mouseMoved:",
+    c"magnifyWithEvent:",
+    c"smartMagnifyWithEvent:",
+    c"pressureChangeWithEvent:",
+];
+
+/// What the app has over its pages now: its floating controls' areas, and whether a menu,
+/// popover or dialog is open.
+pub fn set_layer(above: Vec<Area>, modal: bool) {
+    LAYER.with_borrow_mut(|layer| {
+        layer.above = above;
+        layer.modal = modal;
+    });
+}
+
+/// The web view class's handler for each of the `HANDED` events: the app's web view hands one
+/// in a hole to the page there; every other web view (and the app's, elsewhere) handles it as
+/// before.
+unsafe extern "C-unwind" fn on_event(this: &NSView, cmd: Sel, event: &NSEvent) {
+    // Not while the layer is being changed.
+    let route = LAYER.with(|layer| {
+        layer
+            .try_borrow_mut()
+            .map_or(Route::App, |mut layer| layer.route(this, cmd, event))
+    });
+    let receiver: Retained<NSView> = match route {
+        Route::App => Retained::from(this),
+        Route::Page(page) => {
+            if matches!(
+                cmd.name().to_bytes(),
+                b"mouseDown:" | b"rightMouseDown:" | b"otherMouseDown:"
+            ) {
+                // Typing goes to the page clicked, as a click on a page anywhere does.
+                if let Some(window) = page.window() {
+                    window.makeFirstResponder(Some(&page));
+                }
+            }
+            page
+        }
+        Route::Drop => return,
+    };
+    let Some(original) = ORIGINAL.with_borrow(|original| {
+        original
+            .iter()
+            .find(|(selector, _)| *selector == cmd)
+            .map(|(_, imp)| *imp)
+    }) else {
+        return;
+    };
+    // SAFETY: `original` is the class's own method for `cmd`, an event method taking one
+    // NSEvent, and `receiver` is a web view of that class (pages and the app's web view share
+    // wry's class).
+    unsafe {
+        let original = std::mem::transmute::<
+            objc2::runtime::Imp,
+            unsafe extern "C-unwind" fn(&NSView, Sel, &NSEvent),
+        >(original);
+        original(&receiver, cmd, event);
+    }
+}
+
+/// The web view class's `hitTest:`: over a page beneath that takes events there, the app's web
+/// view itself (not one of WebKit's views inside it, which would take a scroll itself), so
+/// `on_event` hands them on; everywhere else WebKit's own answer.
+unsafe extern "C-unwind" fn hit_test(this: &NSView, cmd: Sel, point: NSPoint) -> *mut NSView {
+    let Some(original) = HIT_TEST.get() else {
+        return std::ptr::null_mut();
+    };
+    // SAFETY: `original` is the class's own `hitTest:`, which takes the same receiver and point.
+    let hit = unsafe {
+        std::mem::transmute::<
+            objc2::runtime::Imp,
+            unsafe extern "C-unwind" fn(&NSView, Sel, NSPoint) -> *mut NSView,
+        >(original)(this, cmd, point)
+    };
+    if hit.is_null() {
+        return hit;
+    }
+    let over_page = LAYER.with(|layer| {
+        layer.try_borrow().is_ok_and(|layer| {
+            layer
+                .app
+                .as_deref()
+                .is_some_and(|app| std::ptr::eq(app, this))
+                && layer.takes(this, point)
+        })
+    });
+    if over_page {
+        std::ptr::from_ref(this).cast_mut()
+    } else {
+        hit
+    }
+}
+
+/// Scrolls over a page beneath go to it: the app sees each before any view does, and hands one
+/// that begins over a page to it, with the rest of its gesture and its momentum, wherever AppKit
+/// would send it.
+fn hand_scrolls() {
+    let block = RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: AppKit passes a live event for the call's duration.
+        let scroll = unsafe { event.as_ref() };
+        let page = LAYER.with(|layer| {
+            let mut layer = layer.try_borrow_mut().ok()?;
+            let app = layer.app.clone()?;
+            if scroll.window(app.mtm()) != app.window() {
+                return None;
+            }
+            match layer.route(&app, sel!(scrollWheel:), scroll) {
+                Route::Page(page) => Some(page),
+                Route::App | Route::Drop => None,
+            }
+        });
+        match page {
+            Some(page) => {
+                page.scrollWheel(scroll);
+                std::ptr::null_mut()
+            }
+            None => event.as_ptr(),
+        }
+    });
+    // SAFETY: a block of the signature AppKit calls, which it copies; on the main thread.
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::ScrollWheel, &block)
+    };
+    // The monitor lasts as long as the app.
+    std::mem::forget(monitor);
+}
+
+/// Puts `page` beneath the app's own web view in their window, and on the first page makes the
+/// app's web view clear where its page is clear, and hand events in a page's hole to the page.
+fn beneath_app(page: &WKWebView) {
+    // SAFETY: a property read on a live view, on the main thread.
+    let Some(parent) = (unsafe { page.superview() }) else {
+        return;
+    };
+    let page: &NSView = page;
+    let page = Retained::from(page);
+    LAYER.with_borrow_mut(|layer| {
+        if layer.app.is_none() {
+            // The window's first web view that is no page: the app's own.
+            let web_view = WKWebView::class();
+            let app = parent.subviews().iter().find(|view| {
+                *view != page && view.isKindOfClass(web_view) && !layer.pages.contains(view)
+            });
+            let Some(app) = app else {
+                tracing::warn!("Browser tab: the app's web view isn't in the window");
+                return;
+            };
+            if !clear_app(&app) {
+                return;
+            }
+            layer.app = Some(app);
+        }
+        let Some(app) = layer.app.as_deref() else {
+            return;
+        };
+        parent.addSubview_positioned_relativeTo(&page, NSWindowOrderingMode::Below, Some(app));
+        layer.pages.push(page);
+    });
+}
+
+/// Makes the app's web view draw nothing where its page is clear, and gives its class the
+/// `HANDED` events' handler. `false` when the class takes no handler.
+fn clear_app(app: &NSView) -> bool {
+    // NOTE: `drawsBackground` is WebKit's private key, as wry and Tauri use it for a clear page.
+    // SAFETY: a key-value write the web view accepts (wry writes the same key), main thread.
+    unsafe {
+        app.setValue_forKey(
+            Some(&NSNumber::new_bool(false)),
+            ns_string!("drawsBackground"),
+        )
+    };
+    // The web view's own class (not a key-value observing subclass, which is made later and
+    // inherits what this one has): the first in its chain WebKit didn't define.
+    let mut class = app.class();
+    while let Some(superclass) = class.superclass() {
+        if std::ptr::eq(superclass, WKWebView::class()) {
+            break;
+        }
+        class = superclass;
+    }
+    let mut original = Vec::new();
+    for name in HANDED {
+        let selector = Sel::register(name);
+        // SAFETY: NSResponder declares every `HANDED` event method, taking one NSEvent and
+        // returning nothing, so the class answers each with that signature and its type
+        // encoding; the handler has that signature and calls the method it replaces.
+        unsafe {
+            let method = objc2::ffi::class_getInstanceMethod(class, selector);
+            if method.is_null() {
+                return false;
+            }
+            let imp = objc2::ffi::method_getImplementation(method);
+            let Some(imp) = imp else {
+                return false;
+            };
+            original.push((selector, imp));
+            let types = objc2::ffi::method_getTypeEncoding(method);
+            let replacement = std::mem::transmute::<
+                unsafe extern "C-unwind" fn(&NSView, Sel, &NSEvent),
+                objc2::runtime::Imp,
+            >(on_event);
+            objc2::ffi::class_replaceMethod(
+                std::ptr::from_ref(class).cast_mut(),
+                selector,
+                replacement,
+                types,
+            );
+        }
+    }
+    ORIGINAL.with_borrow_mut(|o| *o = original);
+    hand_scrolls();
+    let selector = sel!(hitTest:);
+    // SAFETY: NSView declares `hitTest:`, taking a point and returning a view; `hit_test` has
+    // that signature and calls the method it replaces.
+    unsafe {
+        let method = objc2::ffi::class_getInstanceMethod(class, selector);
+        let Some(imp) = (!method.is_null())
+            .then(|| objc2::ffi::method_getImplementation(method))
+            .flatten()
+        else {
+            return false;
+        };
+        HIT_TEST.set(Some(imp));
+        let types = objc2::ffi::method_getTypeEncoding(method);
+        let replacement = std::mem::transmute::<
+            unsafe extern "C-unwind" fn(&NSView, Sel, NSPoint) -> *mut NSView,
+            objc2::runtime::Imp,
+        >(hit_test);
+        objc2::ffi::class_replaceMethod(
+            std::ptr::from_ref(class).cast_mut(),
+            selector,
+            replacement,
+            types,
+        );
+    }
+    let selector = sel!(willOpenMenu:withEvent:);
+    // SAFETY: NSView declares `willOpenMenu:withEvent:`, taking a menu and an event and
+    // returning nothing; `will_open_menu` has that signature and calls the method it replaces.
+    // Without it the menu stays WebKit's own.
+    unsafe {
+        let method = objc2::ffi::class_getInstanceMethod(class, selector);
+        if let Some(imp) = (!method.is_null())
+            .then(|| objc2::ffi::method_getImplementation(method))
+            .flatten()
+        {
+            WILL_OPEN_MENU.set(Some(imp));
+            let types = objc2::ffi::method_getTypeEncoding(method);
+            let replacement = std::mem::transmute::<
+                unsafe extern "C-unwind" fn(&NSView, Sel, &NSMenu, &NSEvent),
+                objc2::runtime::Imp,
+            >(will_open_menu);
+            objc2::ffi::class_replaceMethod(
+                std::ptr::from_ref(class).cast_mut(),
+                selector,
+                replacement,
+                types,
+            );
+        }
+    }
+    true
+}
+
+/// Makes `webview` hand camera and microphone requests to `on_media`, tell `on_close` when its
+/// page closes itself, and lie beneath the app's web view. Call it on the
+/// main thread, right after building the webview.
+pub fn install(
+    webview: &wry::WebView,
+    on_close: impl Fn() + 'static,
+    on_media: impl Fn(String, Vec<Device>, MediaAnswer) + 'static,
+) -> BrowserUi {
     let view = webview.webview();
     // SAFETY: a property read on a live web view, on the main thread (it is MainThreadOnly).
     let wry = unsafe { view.UIDelegate() };
@@ -172,14 +748,28 @@ pub fn install(webview: &wry::WebView, on_popup: impl Fn(String) + 'static) -> B
         view.mtm(),
         Ivars {
             wry,
-            on_popup: Box::new(on_popup),
+            on_close: Box::new(on_close),
+            on_media: Box::new(on_media),
         },
     );
     // SAFETY: the delegate implements WKUIDelegate; WebKit keeps it weakly, and the returned
     // `BrowserUi` keeps it alive beside the webview.
     unsafe { view.setUIDelegate(Some(ProtocolObject::from_ref(&*delegate))) };
+    beneath_app(&view);
+    let page: &NSView = &view;
     BrowserUi {
         _delegate: delegate,
+        page: Retained::from(page),
+    }
+}
+
+/// Gives a popup's `configuration` (a copy of its opener's) scripts and messages of its own:
+/// shared, wry would add the page's own to the opener's, where they'd run twice and clash.
+pub fn own_scripts(configuration: &WKWebViewConfiguration) {
+    // SAFETY: a fresh controller set on the configuration before any web view is made with it,
+    // on the main thread (the configuration is MainThreadOnly).
+    unsafe {
+        configuration.setUserContentController(&WKUserContentController::new(configuration.mtm()));
     }
 }
 

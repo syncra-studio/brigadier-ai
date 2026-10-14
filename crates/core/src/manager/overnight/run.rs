@@ -216,6 +216,7 @@ impl SessionManager {
                             to_ms: None,
                         }],
                         quota_wait: false,
+                        background_jobs: None,
                     },
                 }],
             )

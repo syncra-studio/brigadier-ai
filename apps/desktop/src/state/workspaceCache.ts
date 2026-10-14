@@ -105,15 +105,28 @@ export function useCachedEntry(key: string): WorkspaceEntry | undefined {
   return useWorkspaceCache((s) => s.entries[key]);
 }
 
-/** Reads already on their way, so a prefetch and a view opening share one. */
-const reading = new Map<string, Promise<unknown>>();
+/** How many times a watched checkout was said to change: a read begun before the last is stale. */
+let changes = 0;
+/** Reads already on their way, so a prefetch and a view opening share one, with when each began. */
+const reading = new Map<string, { promise: Promise<unknown>; seen: number | undefined }>();
 
+/**
+ * A read begun before a change gets one follow-up, shared by everything that asks until it
+ * starts. Record its generation when it starts, so all changes while it waited are covered.
+ */
 function once<T>(id: string, read: () => Promise<T>): Promise<T> {
-  const pending = reading.get(id) as Promise<T> | undefined;
-  if (pending) return pending;
-  const next = read().finally(() => reading.delete(id));
-  reading.set(id, next);
-  return next;
+  const pending = reading.get(id);
+  if (pending && (pending.seen === undefined || pending.seen === changes)) return pending.promise as Promise<T>;
+  const begun = pending ? pending.promise.catch(() => undefined).then(() => {
+    entry.seen = changes;
+    return read();
+  }) : read();
+  const promise = begun.finally(() => {
+    if (reading.get(id) === entry) reading.delete(id);
+  });
+  const entry = { promise, seen: pending ? undefined : changes };
+  reading.set(id, entry);
+  return promise;
 }
 
 function sameList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
@@ -195,6 +208,7 @@ export function onWorkspaceChanged(target: WorkspaceTarget, listener: () => void
 
 /** Passes a change from the bridge to every listener. */
 export function emitWorkspaceChanged(target: WorkspaceTarget): void {
+  changes++;
   for (const listener of changeListeners) listener(target);
 }
 

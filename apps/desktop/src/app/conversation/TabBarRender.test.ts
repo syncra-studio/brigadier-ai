@@ -1,18 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive } from "@/fixtures/headless";
 
 for (const compact of [false, true]) {
-  test(`a session's title turns into tabs and back, measured, with widths kept after a close and Delete on a tab${compact ? " (compact)" : ""}`, { timeout: 60000 }, async (t) => {
-    const seen = JSON.parse(await renderFixturePage(t, `tabbar.html${compact ? "?compact=1" : ""}`, "tabbar-result", 4000)) as Record<string, unknown>;
+  test(`a session's chat is a tab alone and among others, measured, with widths kept after a close and Delete on a tab${compact ? " (compact)" : ""}`, { timeout: 60000 }, async (t) => {
+    // Live, so frames run between the steps: the rule before the toolbar follows a resize
+    // observer, which a frame delivers, and a busy machine's virtual time can skip them all.
+    const seen = JSON.parse(await renderFixtureLive(t, `tabbar.html${compact ? "?compact=1" : ""}`, "tabbar-result", 30000)) as Record<string, unknown>;
     if (process.env.TABBAR_SEEN) console.log(JSON.stringify(seen, null, 2));
-    assert.equal(seen.plain, true);
-    assert.equal(seen.plainTabs, 0);
-    assert.match(String(seen.plainTitle), /Tidy the release notes/);
-    const plain = seen.plainControls as string[];
-    assert.deepEqual(plain.slice(-2), ["|", "New tab"], `+ is last, past a divider: ${plain}`);
-    assert.ok(plain.indexOf("Chat actions") < plain.indexOf("Context"), `⋯ comes before the toolbar: ${plain}`);
-    assert.equal(seen.opened, false);
+    // Alone, the chat is a tab with its ⋯ inside, "+" right after it, then the toolbar.
+    assert.equal(seen.plain, false);
+    assert.deepEqual(seen.aloneLabels, ["Tidy the release notes"]);
+    assert.equal(seen.aloneChatActions, true, "the chat's ⋯ sits inside its tab");
+    const alone = seen.aloneControls as string[];
+    assert.deepEqual(alone.filter((label) => label === "New tab" || label === "Context"), ["New tab", "Context"], `+ comes before the toolbar: ${alone}`);
+    assert.equal(seen.alonePlusAfterChat, compact ? 5 : 6, "+ comes right after the chat's tab");
     assert.deepEqual(seen.openedLabels, ["Tidy the release notes", "New tab"], "the chat's tab carries its title");
     const opened = seen.openedControls as string[];
     assert.deepEqual(opened.slice(opened.indexOf("New tab"), opened.indexOf("Context") + 1).filter((label) => label === "|" || label === "New tab" || label === "Context"), ["New tab", "|", "Context"], `+ follows the tabs, a divider leads the toolbar: ${opened}`);
@@ -43,7 +45,7 @@ for (const compact of [false, true]) {
     assert.equal(seen.deleted, Number(seen.fieldBefore) - 1, "Delete on a tab closes it");
     assert.equal(seen.focusAfterDelete, true, "the keyboard goes to the tab in front");
     assert.equal(seen.chatKept, seen.deleted, "Chat is never closed");
-    assert.equal(seen.back, true, "closing every tab brings the title back");
+    assert.deepEqual(seen.back, { plain: false, labels: ["Tidy the release notes"] }, "closing every tab leaves the chat's tab");
   });
 }
 
@@ -60,7 +62,7 @@ for (const reduced of [false, true]) {
       assert.equal(seen.closingInert, true);
     }
     assert.equal(seen.closingRetained, !reduced);
-    for (const key of ["previous", "next", "number", "cycle", "cycleBack", "bracket", "bracketBack", "lastReturnsPlain", "reopened"]) assert.equal(seen[key], true, key);
+    for (const key of ["previous", "next", "number", "cycle", "cycleBack", "bracket", "bracketBack", "lastLeavesChat", "reopened"]) assert.equal(seen[key], true, key);
     assert.deepEqual(seen.kept, [seen.expectedKept]);
     assert.equal(seen.closed, 0);
     assert.ok((seen.forwarded as string[]).includes("ArrowLeft"));

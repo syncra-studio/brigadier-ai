@@ -35,6 +35,7 @@ for (const full of [false, true]) {
     assert.equal((measure.address as Box).width, 770, "the address stops at 770 in a wide tab");
     assert.match(String(measure.addressRing), /0px 0px 0px 1px inset/, "a one pixel inset ring");
     assert.deepEqual(measure.options, { width: 32, height: 32 });
+    assert.deepEqual(measure.screenshot, { width: 32, height: 32 }, "the screenshot sits in the toolbar, round like ⋯");
     assert.equal(measure.font, 13);
     assert.match(String(measure.fade), /calc\(100% - 16px\)/);
 
@@ -63,8 +64,6 @@ for (const full of [false, true]) {
       "|",
       zoom("100%", ["Reset zoom"]),
       "|",
-      item("Take a screenshot"),
-      "|",
       item("Import Browser Data…"),
       item("Downloads"),
       item("History"),
@@ -90,6 +89,9 @@ for (const full of [false, true]) {
     assert.deepEqual(seen.newTabBack, { disabled: true, opacity: "0.4" });
 
     assert.deepEqual(seen.asked, [{ go: "stop" }, { open: PAGE }]);
+    // Enter in the address goes there in the tab only: the form has no default button that would
+    // also open the address in the system browser.
+    assert.deepEqual(seen.addressEnter, { submitters: 0, asked: [{ navigate: "https://example.org/next" }] });
 
     // Zoom steps 10% and resets to 100%; the screenshot says where it went; each asks the shell.
     assert.deepEqual(seen.zoomStepped, { shows: "110%", group: zoom("110%", []) });
@@ -155,8 +157,8 @@ for (const full of [false, true]) {
       item("Find in page", true),
       item("Print", true),
       zoom("100%", ["Zoom out", "Zoom in", "Reset zoom"]),
-      item("Take a screenshot", true),
     ]);
+    assert.equal(seen.newTabScreenshot, true);
     assert.equal(seen.newTabFind, false);
   });
 }

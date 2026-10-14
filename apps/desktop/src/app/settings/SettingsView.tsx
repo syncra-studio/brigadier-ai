@@ -1,6 +1,7 @@
 import { Suspense, useEffect } from "react";
 
-import { settingsPage } from "@/app/settings/pages";
+import { prefetchSettingsPages, settingsPage } from "@/app/settings/pages";
+import { whenIdle } from "@/lib/preloadable";
 import { closeSettings } from "@/state/actions";
 import type { SettingsPageId } from "@/state/store";
 
@@ -21,6 +22,8 @@ export function SettingsView({ page }: { page: SettingsPageId }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+  // Once it shows and the app is idle, the other pages get ready to show at once too.
+  useEffect(() => whenIdle(prefetchSettingsPages, 300), []);
 
   return (
     <Suspense fallback={null}>

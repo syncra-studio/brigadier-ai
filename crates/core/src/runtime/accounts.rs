@@ -596,7 +596,7 @@ impl Runtime {
             if !inside.is_empty() {
                 let left = self.ledger.release(&owner, inside).await;
                 if !left.is_clean() {
-                    tracing::warn!(owner, failures = ?left.failures, "folder trust in a removed account left in place");
+                    crate::logging::private_trace!(owner.starts_with(crate::ledger::TAB_CHAT_OWNER), warn, "folder trust in a removed account left in place"; owner, failures = ?left.failures);
                 }
             }
         }

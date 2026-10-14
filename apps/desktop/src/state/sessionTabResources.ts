@@ -1,9 +1,11 @@
 import { request } from "@/ipc/client";
 import type { Conversation, TerminalInfo } from "@/ipc/generated";
 import { closePage, useBrowsers } from "@/state/browsers";
-import { changeSessionTab, discardTab, dropBrowserTabs, onDiscardTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
+import { forgetDraft } from "@/state/drafts";
+import { changeSessionTab, discardTab, dropBrowserTabs, onDiscardTab, sessionTabs, useSessionTabs, withoutChat } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { abandonedSideChats } from "@/state/sideChats";
+import { canChat, followTabChats, goneTabChats } from "@/state/tabChats";
 
 // Lives across ConversationView remounts, but not a real app reload. The stable tab ID is
 // the daemon session ID; its first attachment in this app lifetime replaces the old shell.
@@ -56,6 +58,9 @@ function closeShell(id: string): void {
   void entry.terminal.then((terminal) => request({ method: "closeTerminal", terminalId: terminal.id })).catch(console.error);
 }
 
+useSessionTabs.subscribe(followTabChats);
+// A gone tab chat's unsent text goes with it.
+useSessionTabs.subscribe((state, before) => { for (const id of goneTabChats(state, before)) forgetDraft(id); });
 useSessionTabs.subscribe((state, before) => {
   for (const [id, previous] of Object.entries(before.sessions)) {
     const kept = state.sessions[id]?.tabs ?? [];
@@ -108,8 +113,10 @@ export function pruneSideChats(conversations: Conversation[]): void {
 useApp.subscribe(({ conversations }) => {
   for (const [id, session] of Object.entries(useSessionTabs.getState().sessions)) {
     if (conversations[id]?.lifecycle === "archived") {
-      const tabs = session.tabs.filter((tab) => tab.kind !== "terminal" && tab.kind !== "sideChat");
-      if (tabs.length !== session.tabs.length) {
+      // Its tabs' chats went with it.
+      const tabs = session.tabs.filter((tab) => tab.kind !== "terminal" && tab.kind !== "sideChat")
+        .map((tab) => canChat(tab) && tab.chat ? withoutChat(tab) : tab);
+      if (tabs.length !== session.tabs.length || tabs.some((tab, at) => tab !== session.tabs[at])) {
         useSessionTabs.setState((state) => ({ sessions: { ...state.sessions, [id]: {
           tabs, active: tabs.some((tab) => tab.id === session.active) ? session.active : "chat",
         } } }));

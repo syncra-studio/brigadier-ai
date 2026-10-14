@@ -450,6 +450,8 @@ dependencies = [
  "memchr",
  "nix 0.31.3",
  "notify",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "regex",
  "rusqlite",
  "rusqlite_migration",
@@ -461,6 +463,7 @@ dependencies = [
  "tokio-util",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
+ "tracing-subscriber",
  "ts-rs",
  "uuid",
 ]

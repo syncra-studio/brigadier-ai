@@ -204,6 +204,7 @@ impl Storage {
         let entries = self.take(scan_id, &picked)?;
         let mut report = CleanReport::default();
         for entry in entries {
+            let private_logs = entry.action.private_logs();
             let outcome = match (&entry.action, entry.own) {
                 (
                     Action::External(_),
@@ -243,10 +244,10 @@ impl Storage {
                     report.codex_threads_deleted += cleaned.codex_threads;
                     if cleaned.failures.is_empty() {
                         report.removed += 1;
-                        tracing::info!(item = %entry.item.label, "cleaned");
+                        crate::logging::private_trace!(private_logs, info, "cleaned"; item = %entry.item.label);
                     } else {
                         let error = cleaned.failures.join("; ");
-                        tracing::warn!(item = %entry.item.label, %error, "cleaned only in part");
+                        crate::logging::private_trace!(private_logs, warn, "cleaned only in part"; item = %entry.item.label, %error);
                         report.failures.push(CleanFailure {
                             label: entry.item.label,
                             path: entry.item.path,
@@ -255,7 +256,7 @@ impl Storage {
                     }
                 }
                 Err(error) => {
-                    tracing::warn!(item = %entry.item.label, %error, "could not clean");
+                    crate::logging::private_trace!(private_logs, warn, "could not clean"; item = %entry.item.label, %error);
                     report.failures.push(CleanFailure {
                         label: entry.item.label,
                         path: entry.item.path,
@@ -368,17 +369,18 @@ impl Storage {
         for ScanItem { item, action, .. } in
             items.into_iter().chain(sockets).filter(|item| item.routine)
         {
+            let private_logs = action.private_logs();
             match daemon.sessions.clean_storage(action, context(daemon)).await {
                 Ok(cleaned) if !cleaned.failures.is_empty() => {
                     let error = cleaned.failures.join("; ");
-                    tracing::debug!(item = %item.label, %error, "housekeeping left part of an item");
+                    crate::logging::private_trace!(private_logs, debug, "housekeeping left part of an item"; item = %item.label, %error);
                 }
                 Ok(_) => {
                     removed += 1;
-                    tracing::info!(item = %item.label, path = item.path.as_deref().unwrap_or(""), "housekeeping removed a leftover");
+                    crate::logging::private_trace!(private_logs, info, "housekeeping removed a leftover"; item = %item.label, path = item.path.as_deref().unwrap_or(""));
                 }
                 Err(error) => {
-                    tracing::debug!(item = %item.label, %error, "housekeeping left an item");
+                    crate::logging::private_trace!(private_logs, debug, "housekeeping left an item"; item = %item.label, %error);
                 }
             }
         }

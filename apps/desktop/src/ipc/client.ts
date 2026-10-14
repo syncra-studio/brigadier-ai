@@ -7,6 +7,7 @@ import type {
   BrowserBounds,
   BrowserEvent,
   BrowserFound,
+  BrowserText,
   BrowserOptions,
   ConventionsExport,
   IpcError,
@@ -240,6 +241,15 @@ export function browserPlace(id: string, bounds: BrowserBounds | null): Promise<
 }
 
 /**
+ * What the app has over the Browser tabs' pages (macOS, where a page lies beneath the app): its
+ * floating controls' areas, which take clicks there, and whether a menu, popover or dialog is open,
+ * which takes every click over a page.
+ */
+export function browserLayer(above: BrowserBounds[], modal: boolean): Promise<void> {
+  return invoke("browser_layer", { above, modal });
+}
+
+/**
  * Back, forward, reload, reload past the cache (macOS) or stop in the Browser tab's page. The
  * `-unless-typing` ones are ⌘← and ⌘→ while the page has the keyboard: in a text field they move
  * the caret to the line's start or end instead.
@@ -265,6 +275,11 @@ export function browserFind(id: string, query: string, step: "type" | "next" | "
   return invoke<BrowserFound>("browser_find", { id, query, step });
 }
 
+/** What the Browser tab's page shows (macOS): its address, title, text and selection. */
+export function browserRead(id: string): Promise<BrowserText> {
+  return invoke<BrowserText>("browser_read", { id });
+}
+
 /** Opens the print panel for the Browser tab's page (macOS). */
 export function browserPrint(id: string): Promise<void> {
   return invoke("browser_print", { id });
@@ -283,6 +298,15 @@ export function browserFocus(id: string | null): Promise<void> {
 /** Tells the shell the user's Settings › Browser choices it acts on itself. */
 export function browserConfigure(options: BrowserOptions): Promise<void> {
   return invoke("browser_configure", { options });
+}
+
+/**
+ * Answers a Browser tab page's question `question` for the camera or microphone (macOS): `once`
+ * for this request, `visiting` while the tab stays on the site, `never` saved for the site;
+ * `dismiss` refuses this request only.
+ */
+export function browserPermission(question: number, answer: "once" | "visiting" | "never" | "dismiss"): Promise<void> {
+  return invoke("browser_permission", { request: question, answer });
 }
 
 /** Drops the Browser tab's page (what it saved stays in the browser's store). */

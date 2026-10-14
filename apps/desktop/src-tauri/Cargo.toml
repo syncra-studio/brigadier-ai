@@ -41,10 +41,10 @@ wry = { version = "0.55.1", default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = "0.6.4"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSHTTPCookie", "NSSet", "NSString", "NSURL", "NSURLRequest", "NSUUID"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-quartz-core", "NSAnimation", "NSAnimationContext", "NSApplication", "NSBitmapImageRep", "NSButton", "NSColor", "NSControl", "NSGraphics", "NSImage", "NSImageRep", "NSPanel", "NSPasteboard", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSSavePanel", "NSScreen", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSHTTPCookie", "NSKeyValueCoding", "NSSet", "NSString", "NSURL", "NSURLRequest", "NSUUID", "NSValue"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-quartz-core", "NSAnimation", "NSAnimationContext", "NSApplication", "NSBitmapImageRep", "NSButton", "NSColor", "NSControl", "NSEvent", "NSGraphics", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSPanel", "NSPasteboard", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSSavePanel", "NSScreen", "NSUserInterfaceItemIdentification", "NSView", "NSWindow", "NSWorkspace"] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CAMediaTimingFunction"] }
-objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKFindConfiguration", "WKFindResult", "WKFrameInfo", "WKNavigation", "WKNavigationAction", "WKOpenPanelParameters", "WKSecurityOrigin", "WKSnapshotConfiguration", "WKUIDelegate", "WKWebView", "WKWebViewConfiguration", "WKHTTPCookieStore", "WKWebsiteDataRecord", "WKWebsiteDataStore", "WKWindowFeatures"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKFindConfiguration", "WKFindResult", "WKFrameInfo", "WKNavigation", "WKNavigationAction", "WKOpenPanelParameters", "WKSecurityOrigin", "WKSnapshotConfiguration", "WKUIDelegate", "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKHTTPCookieStore", "WKWebsiteDataRecord", "WKWebsiteDataStore", "WKWindowFeatures"] }
 # Clears the startup blur, which Tauri's `set_effects(None)` leaves on macOS (the release Tauri
 # applies it with).
 window-vibrancy = "0.6.0"

@@ -40,5 +40,13 @@ uuid.workspace = true
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
 
+# Previews: whether a starting desktop app opened its window yet.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFDictionary", "CFNumber", "CFString"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow"] }
+
 [lints]
 workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

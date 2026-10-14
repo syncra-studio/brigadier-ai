@@ -172,11 +172,21 @@ struct ConvState {
     hand_over: Option<HandOver>,
     /// The request the running turn serves.
     request: Option<String>,
+    /// What the CLI still runs in the background for a request (a command run in the
+    /// background): its end starts a turn of the CLI's own, and until that turn is over the
+    /// request still works.
+    background: Option<Background>,
+    /// Counts what the CLI said of its background jobs: a later word makes moot the wait
+    /// armed for an earlier one's turn.
+    background_timer: u64,
     /// How the last turn for a request ended, when it was stopped or failed.
     outcomes: HashMap<String, RequestState>,
     /// Requests whose last turn ended on [`prompts::QUIET`], or said nothing: the thread left
     /// its answer to what wakes it next (see `requests::owed_a_turn`).
     deferred: HashSet<String>,
+    /// Requests a turn has answered (it ended with something said, not [quiet]). A later turn
+    /// for a late event that ends quietly leaves that answer standing: it doesn't defer them.
+    answered: HashSet<String>,
     /// The last error the running turn reported.
     turn_error: Option<String>,
     /// That error, not yet said anywhere: the running turn's request shows it when it fails,
@@ -252,6 +262,31 @@ struct ConvState {
     checkpoint: Option<Arc<RebirthPrep>>,
 }
 
+/// The background jobs of a conversation's CLI (see `ConvState::background`).
+struct Background {
+    /// The request whose turn started them; the turn their end starts serves it too. None once
+    /// the user stopped it, or for jobs no turn of ours was seen starting: still counted, so
+    /// their end revives no request.
+    request: Option<String>,
+    /// How many still run, as the CLI last said.
+    running: u32,
+    /// The CLI that runs them: they end with it.
+    cli: std::sync::Weak<Cli>,
+}
+
+impl Background {
+    fn of(&self, cli: &Arc<Cli>) -> bool {
+        std::ptr::eq(self.cli.as_ptr(), Arc::as_ptr(cli))
+    }
+}
+
+/// How long a request waits, once its background jobs have ended, for the turn their end
+/// starts: the CLI starts it at once, so one that doesn't come won't.
+#[cfg(not(test))]
+const BACKGROUND_TURN_GRACE: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const BACKGROUND_TURN_GRACE: Duration = Duration::from_millis(500);
+
 /// Where a request the orchestrator sent a worker back in stands, while the user has seen no
 /// reply since.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +310,7 @@ pub(super) type ReviewPause =
 
 /// A conversation's live state.
 pub(crate) struct ConvLive {
+    pub(super) private_logs: bool,
     pub id: ConversationId,
     pub kind: ConversationKind,
     state: tokio::sync::Mutex<ConvState>,
@@ -329,8 +365,9 @@ impl ConvLive {
         self.state.lock().await.cli.clone()
     }
 
-    pub fn new(id: ConversationId, kind: ConversationKind) -> Self {
+    pub fn new(id: ConversationId, kind: ConversationKind, private_logs: bool) -> Self {
         Self {
+            private_logs,
             id,
             kind,
             state: tokio::sync::Mutex::new(ConvState {
@@ -514,7 +551,7 @@ impl ConvLive {
         if let Some(cli) = cli
             && let Err(err) = cli.session.interrupt().await
         {
-            tracing::warn!(conversation = %self.id, error = %err, "could not stop the turn");
+            crate::logging::private_trace!(self.private_logs, warn, "could not stop the turn"; conversation = %self.id, error = %err);
         }
     }
 
@@ -557,6 +594,10 @@ impl ConvLive {
     /// lets turns start again.
     pub(super) async fn carry(&self, message: Option<Message>, note: Option<String>) {
         let mut state = self.state.lock().await;
+        if let Some(message) = &message {
+            // Rework reuses the request id. Its old answer is moot after the old turn stops.
+            state.answered.remove(&message.id);
+        }
         state.pending.extend(message);
         state.notes.extend(note);
         state.held = false;
@@ -647,6 +688,10 @@ impl ConvLive {
                 .collect(),
             outcomes: state.outcomes.clone(),
             deferred: state.deferred.clone(),
+            background: state
+                .background
+                .as_ref()
+                .and_then(|jobs| Some((jobs.request.clone()?, jobs.running))),
             reviews_due: self.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0,
         }
     }
@@ -670,6 +715,9 @@ pub(super) struct RequestActivity {
     pub outcomes: HashMap<String, RequestState>,
     /// Requests whose last turn left the answer to what wakes the thread next.
     pub deferred: HashSet<String>,
+    /// The request the CLI's background jobs run for, and how many still run (none: their
+    /// end's turn is still to come).
+    pub background: Option<(String, u32)>,
     /// A landing's review isn't stored yet.
     pub reviews_due: bool,
 }
@@ -838,9 +886,7 @@ impl SessionManager {
         let message = conv
             .user_write(async {
                 let item = self.core.take_queued(&id, &item_id).await?;
-                self.core
-                    .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
-                    .await
+                self.core.append_queued(id.clone(), item).await
             })
             .await?;
         self.join_working(&conv, message, working).await;
@@ -919,14 +965,24 @@ impl SessionManager {
         working: Option<String>,
     ) {
         let mut state = conv.state.lock().await;
-        let steered = match (&state.cli, state.busy && !state.compacting) {
-            (Some(cli), true) => {
+        let cli = state
+            .cli
+            .clone()
+            .filter(|_| state.busy && !state.compacting);
+        let steered = match cli {
+            Some(cli) => {
+                // What waits for the next user message (a card's decision) goes with it.
+                let notes = std::mem::take(&mut state.notes);
                 let input = self
-                    .turn_input(conv, std::slice::from_ref(&message), &[])
+                    .turn_input(conv, std::slice::from_ref(&message), &notes)
                     .await;
-                cli.session.steer(input).await.is_ok()
+                let steered = cli.session.steer(input).await.is_ok();
+                if !steered {
+                    state.notes.splice(0..0, notes);
+                }
+                steered
             }
-            _ => false,
+            None => false,
         };
         let into = if steered {
             self.log_user_injection(conv, &message).await;
@@ -1048,9 +1104,7 @@ impl SessionManager {
         let message = conv
             .user_write(async {
                 let item = self.core.take_queued(id, item_id).await?;
-                self.core
-                    .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
-                    .await
+                self.core.append_queued(id.clone(), item).await
             })
             .await?;
         self.join_working(&conv, message, working).await;
@@ -1085,16 +1139,7 @@ impl SessionManager {
                 let Some(item) = self.core.pop_queued(&conv.id).await? else {
                     return Ok(None);
                 };
-                Ok(Some(
-                    self.core
-                        .append_user_message(
-                            conv.id.clone(),
-                            item.text,
-                            item.attachments,
-                            item.mentions,
-                        )
-                        .await,
-                ))
+                Ok(Some(self.core.append_queued(conv.id.clone(), item).await))
             })
             .await;
         match popped {
@@ -1103,12 +1148,12 @@ impl SessionManager {
                 true
             }
             Ok(Some(Err(err))) => {
-                tracing::warn!(conversation = %conv.id, error = %err, "could not send a queued message");
+                crate::logging::private_trace!(conv.private_logs, warn, "could not send a queued message"; conversation = %conv.id, error = %err);
                 false
             }
             Ok(None) => false,
             Err(err) => {
-                tracing::warn!(conversation = %conv.id, error = %err, "could not read the queue");
+                crate::logging::private_trace!(conv.private_logs, warn, "could not read the queue"; conversation = %conv.id, error = %err);
                 false
             }
         }
@@ -1137,7 +1182,7 @@ impl SessionManager {
             .mark_steered(&conv.id, request, &into, streaming)
             .await
         {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not mark a steered request");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not mark a steered request"; conversation = %conv.id, error = %err);
         }
     }
 
@@ -1158,10 +1203,24 @@ impl SessionManager {
         // The newest answer that works only for what Brigadier owes it (a CI watch, a held
         // merge, a review it left its answer to) has no turn to interrupt: it ends Stopped.
         let owed = self.owed_only(&conv).await;
-        let (stopped, handed_over) = {
+        let (stopped, handed_over, waits_on_jobs) = {
             let mut state = conv.state.lock().await;
             if let Some(request) = owed {
                 state.outcomes.insert(request, RequestState::Stopped);
+            }
+            // A request that waits only for the CLI's background jobs ends Stopped; the turn
+            // their end starts is the CLI's own again.
+            let running = state.busy.then(|| state.request.clone()).flatten();
+            let waits_on_jobs = match &mut state.background {
+                Some(jobs) if jobs.request.is_some() && jobs.request != running => {
+                    jobs.request.take()
+                }
+                _ => None,
+            };
+            if let Some(request) = &waits_on_jobs {
+                state
+                    .outcomes
+                    .insert(request.clone(), RequestState::Stopped);
             }
             // A limited turn being handed over: it ends Stopped, and its messages don't go again.
             let mut handed_over = false;
@@ -1189,12 +1248,12 @@ impl SessionManager {
             } else {
                 false
             };
-            (stopped, handed_over)
+            (stopped, handed_over, waits_on_jobs.is_some())
         };
         if stopped {
             self.stop_waiting(&conv).await;
         }
-        if stopped || handed_over {
+        if stopped || handed_over || waits_on_jobs {
             self.settle_requests(&id).await;
         }
         drop(retrying);
@@ -1229,7 +1288,13 @@ impl SessionManager {
                 .map_err(|err| Error::Provider(err.to_string())),
             None => Ok(()),
         };
-        self.stop_previews(&id, super::preview::USER_STOP).await;
+        let stopped = match self.stop_previews(&id, super::preview::USER_STOP).await {
+            Ok(stopped) => self.remove_user_stopped_previews(&id, stopped).await,
+            Err(err) => Err(err),
+        };
+        if let Err(err) = stopped {
+            tracing::warn!(conversation = %id, error = %err, "could not remove user-stopped previews");
+        }
         self.drop_prewarm(&id, "stopped by the user");
         // What Brigadier still owed the stopped answers ends with them, so nothing wakes the
         // thread for them later or merges on its own: the CI watches, and the held merge
@@ -1444,7 +1509,7 @@ impl SessionManager {
                 .await
                 .is_ok_and(|board| super::requests::ended_run_request(&board, request))
         {
-            tracing::info!(conversation = %id, request, label = %envelope.label, "dropped a message for an overnight run that has ended");
+            crate::logging::private_trace!(self.tab_chat_logs(id), info, "dropped a message for an overnight run that has ended"; conversation = %id, request, label = %envelope.label);
             return None;
         }
         let mut state = conv.state.lock().await;
@@ -1600,24 +1665,15 @@ impl SessionManager {
             }
             if users.is_empty() && envelopes.is_empty() && !session {
                 match self.core.pop_queued(&conv.id).await {
-                    Ok(Some(item)) => match self
-                        .core
-                        .append_user_message(
-                            conv.id.clone(),
-                            item.text,
-                            item.attachments,
-                            item.mentions,
-                        )
-                        .await
-                    {
+                    Ok(Some(item)) => match self.core.append_queued(conv.id.clone(), item).await {
                         Ok(message) => users.push(message),
                         Err(err) => {
-                            tracing::warn!(conversation = %conv.id, error = %err, "could not send a queued message");
+                            crate::logging::private_trace!(conv.private_logs, warn, "could not send a queued message"; conversation = %conv.id, error = %err);
                         }
                     },
                     Ok(None) => {}
                     Err(err) => {
-                        tracing::warn!(conversation = %conv.id, error = %err, "could not read the queue");
+                        crate::logging::private_trace!(conv.private_logs, warn, "could not read the queue"; conversation = %conv.id, error = %err);
                     }
                 }
             }
@@ -1666,7 +1722,7 @@ impl SessionManager {
             // The user's message brings back the session's worktree a merge removed
             // (THREAD-PLAN.md Q9), from the base's tip now.
             if let Err(err) = self.effective_workspace(&conv.id).await {
-                tracing::warn!(conversation = %conv.id, error = %err, "could not make the session's worktree");
+                crate::logging::private_trace!(conv.private_logs, warn, "could not make the session's worktree"; conversation = %conv.id, error = %err);
             }
             // Its `[workspace]` note reaches this turn.
             user_notes.append(&mut conv.state.lock().await.notes);
@@ -1793,7 +1849,7 @@ impl SessionManager {
         }
         self.told_notes(&conv, instruction_notes).await;
         if let Some((_, record)) = reborn {
-            tracing::info!(conversation = %conv.id, generation = record.generation, tokens = record.briefing_tokens, trigger = ?record.trigger, "orchestrator reborn");
+            crate::logging::private_trace!(conv.private_logs, info, "orchestrator reborn"; conversation = %conv.id, generation = record.generation, tokens = record.briefing_tokens, trigger = ?record.trigger);
             self.log_orchestrator(
                 &conv.id,
                 OrchestratorEntry::Rebirth {
@@ -1835,7 +1891,7 @@ impl SessionManager {
         };
         // Its follow-ups wait in the queue; the carried envelopes ask again.
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not settle follow-ups");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);
         }
         // Said once: by the failed request when there is one, else as a notice. The run names
         // the request, so the app shows no second line for it.
@@ -1878,10 +1934,11 @@ impl SessionManager {
         }
         let fence = self.enter(&conv.id)?;
         let conversation = self.core.conversation(&conv.id)?;
-        let (owner, area) = match conv.kind {
-            ConversationKind::Session => (format!("orch:{}", conv.id), "orch"),
-            ConversationKind::Chat => (format!("chat:{}", conv.id), "chat"),
-        };
+        self.tab_chat_may_run(&conversation)?;
+        let (owner, area) = super::lifecycle::conversation_owner(&conversation);
+        // A tab chat reads its session's checkout, which is never its own: it runs in a
+        // scratch folder of its own, and only that goes with it.
+        let mut tab_checkout = None;
         let dir = self.owned_dir(area, &conv.id.0);
         self.prepare_owned_dir(&owner, &dir).await?;
 
@@ -1964,6 +2021,39 @@ impl SessionManager {
                 }
                 (choice, prompt, vec![server], current)
             }
+            (Some(Setup::Chat { model }), ConversationKind::Chat)
+                if let (Some(tab), Some(session)) =
+                    (&conversation.tab_chat, &conversation.side_of) =>
+            {
+                let checkout = self.checkout_dir(session)?;
+                let prompt = prompts::tab_chat(&tab.target, &checkout);
+                tab_checkout = Some(std::path::PathBuf::from(checkout));
+                let tools = match tab.target {
+                    crate::model::TabTarget::Page { .. } => Some(crate::tools::TabTools::Page),
+                    crate::model::TabTarget::File { .. } => Some(crate::tools::TabTools::File),
+                    crate::model::TabTarget::Browser => None,
+                };
+                let servers = match tools {
+                    Some(tools) => {
+                        let grant = self.grants.issue(
+                            &owner,
+                            Role::TabChat {
+                                conversation_id: conv.id.clone(),
+                                tools,
+                            },
+                        );
+                        grant_values.push(grant.clone());
+                        vec![self.brigadier_server(grant, CHAT_TOOL_TIMEOUT_SECS, false)]
+                    }
+                    None => Vec::new(),
+                };
+                (
+                    fallback.unwrap_or_else(|| model.clone()),
+                    prompt,
+                    servers,
+                    prompts::Current::chat(Vec::new()),
+                )
+            }
             (Some(Setup::Chat { .. }) | None, ConversationKind::Chat) => {
                 let model = match &conversation.setup {
                     Some(Setup::Chat { model }) => model.clone(),
@@ -2022,7 +2112,7 @@ impl SessionManager {
             && conv.kind == ConversationKind::Session
             && prompts::role_outdated(&self.told_from_log(&conv.id).await)
         {
-            tracing::info!(conversation = %conv.id, "the thread's CLI started on older instructions; starting over from the transcript");
+            crate::logging::private_trace!(conv.private_logs, info, "the thread's CLI started on older instructions; starting over from the transcript"; conversation = %conv.id);
             resume = None;
         }
         let reseed_needed = !fresh && resume.is_none() && self.has_history(&conv.id).await;
@@ -2047,15 +2137,18 @@ impl SessionManager {
             mcp_servers: mcp,
             tools: match conv.kind {
                 ConversationKind::Session => ToolSet::Thread,
+                // A tab chat reads its session's files.
+                ConversationKind::Chat if tab_checkout.is_some() => ToolSet::Review,
                 ConversationKind::Chat => ToolSet::Web,
             },
-            // The workspace is the thread's to work in, never its own to clean up: it is not
-            // recorded under the thread's owner.
             skill_plugins,
+            // The workspace is the thread's to work in, never its own to clean up: it is not
+            // recorded under the thread's owner. A tab chat's checkout is read the same way.
             add_dirs: launch
                 .as_ref()
                 .and_then(|launch| launch.workspace.as_ref())
                 .map(|workspace| vec![workspace.path.clone()])
+                .or_else(|| tab_checkout.clone().map(|checkout| vec![checkout]))
                 .unwrap_or_default(),
             env: match conv.kind {
                 ConversationKind::Session => SessionManager::thread_env(&dir, choice.provider),
@@ -2089,7 +2182,7 @@ impl SessionManager {
         {
             Ok(started) => started,
             Err(err) if resume.is_some() => {
-                tracing::info!(conversation = %conv.id, error = %err, "resume failed; starting over from the transcript");
+                crate::logging::private_trace!(conv.private_logs, info, "resume failed; starting over from the transcript"; conversation = %conv.id, error = %err);
                 spec.origin = Origin::New;
                 resumed = false;
                 conv.state.lock().await.reseed = true;
@@ -2177,11 +2270,8 @@ impl SessionManager {
             .collect();
         let leftovers = self.runtime.ledger().release(owner, made).await;
         if !leftovers.is_clean() {
-            tracing::warn!(
-                owner,
-                ?leftovers,
-                "some leftovers of a cut-off start will be retried at the next launch"
-            );
+            crate::logging::private_trace!(owner.starts_with(crate::ledger::TAB_CHAT_OWNER), warn, "some leftovers of a cut-off start will be retried at the next launch"; owner,
+                ?leftovers);
         }
     }
 
@@ -2343,12 +2433,16 @@ impl SessionManager {
                 parts.push(format!("[overnight proposal {} revision {}] This is preparation only. Read the user's brief and referenced plan with read-only scouts if necessary. Use propose_overnight to put its actual phases/criteria/Rules on this same proposal, keeping original phase numbers. Include every phase the user's words select (\"phases 1-3\"), also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. Do not invent scope or start implementation. For a bare goal keep phases empty (Phase 0 plans after Start). Only the user's Start begins the run. Reply with exactly [quiet] once the proposal is ready. The user's full agreement and latest corrections, verbatim:\n{}", run.id, run.revision, run.words));
             }
         }
-        // A side chat answers about the conversation beside it, as it stands now.
-        if let Ok(record) = self.core.conversation(&conv.id)
-            && let Some(parent) = &record.side_of
-            && let Ok(beside) = self.core.conversation(parent)
-        {
-            parts.push(self.side_chat_context(parent, &beside.title).await);
+        // A tab's chat answers about its tab; a side chat about the conversation beside it,
+        // as it stands now.
+        if let Ok(record) = self.core.conversation(&conv.id) {
+            if let Some(tab) = &record.tab_chat {
+                parts.push(self.tab_chat_context(&conv.id, tab));
+            } else if let Some(parent) = &record.side_of
+                && let Ok(beside) = self.core.conversation(parent)
+            {
+                parts.push(self.side_chat_context(parent, &beside.title).await);
+            }
         }
         if conv.kind == ConversationKind::Session && self.plan_mode(&conv.id) {
             parts.push(PLAN_MODE_NOTE.into());
@@ -2486,9 +2580,10 @@ impl SessionManager {
         conv: &Arc<ConvLive>,
         attachment: &AttachmentRef,
     ) -> Option<InputFile> {
-        let area = match conv.kind {
-            ConversationKind::Session => "orch",
-            ConversationKind::Chat => "chat",
+        let area = match self.core.conversation(&conv.id) {
+            Ok(record) => super::lifecycle::conversation_owner(&record).1,
+            Err(_) if conv.kind == ConversationKind::Session => "orch",
+            Err(_) => "chat",
         };
         let dir = self.owned_dir(area, &conv.id.0).join("attachments");
         let path = dir.join(format!(
@@ -2517,6 +2612,51 @@ impl SessionManager {
         })
     }
 
+    /// The conversation CLI's background jobs changed: the request whose turn started them
+    /// works on until the turn their end starts is over.
+    async fn background_jobs(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, running: u32) {
+        let armed = {
+            let mut state = conv.state.lock().await;
+            let known = state.background.as_ref().filter(|jobs| jobs.of(cli));
+            let before = known.map_or(0, |jobs| jobs.running);
+            if running == before {
+                return;
+            }
+            // A job started now is the running turn's; one ending is still theirs.
+            let request = match known {
+                Some(jobs) if !(state.busy && running > before) => jobs.request.clone(),
+                _ if state.busy => state.request.clone(),
+                _ => None,
+            };
+            let waits = request.is_some();
+            state.background = Some(Background {
+                request,
+                running,
+                cli: Arc::downgrade(cli),
+            });
+            state.background_timer += 1;
+            (running == 0 && !state.busy && waits).then_some(state.background_timer)
+        };
+        self.settle_requests(&conv.id).await;
+        if let Some(timer) = armed {
+            let (manager, conv) = (self.arc(), conv.clone());
+            self.spawn(async move {
+                tokio::time::sleep(BACKGROUND_TURN_GRACE).await;
+                let gone = {
+                    let mut state = conv.state.lock().await;
+                    let gone = !state.busy && state.background_timer == timer;
+                    if gone {
+                        state.background = None;
+                    }
+                    gone
+                };
+                if gone {
+                    manager.settle_requests(&conv.id).await;
+                }
+            });
+        }
+    }
+
     /// Stores the conversation CLI's text, reasoning and tool calls in the thread,
     /// and keeps the complete provider events in `orch:<id>` for the Inspector.
     async fn pump_conversation(
@@ -2540,7 +2680,10 @@ impl SessionManager {
             tokio::select! {
                 event = events.recv() => match event {
                     // Never stored.
-                    Some(ProviderEvent::Progress { .. } | ProviderEvent::BackgroundJobs { .. }) => {}
+                    Some(ProviderEvent::Progress { .. }) => {}
+                    Some(ProviderEvent::BackgroundJobs { running }) => {
+                        self.background_jobs(&conv, &cli, running).await;
+                    }
                     // Only a session's thread keeps what it read (a Chat only searches the web).
                     Some(event @ ProviderEvent::Looked { .. }) => {
                         if conv.kind == ConversationKind::Session {
@@ -2627,6 +2770,10 @@ impl SessionManager {
             {
                 state.cli = None;
             }
+            // Its background jobs ended with it: nothing starts their turn now.
+            if state.background.as_ref().is_some_and(|jobs| jobs.of(&cli)) {
+                state.background = None;
+            }
             let was_busy = state.busy;
             state.busy = false;
             state.compacting = false;
@@ -2690,7 +2837,7 @@ impl SessionManager {
             return;
         }
         if let Err(err) = self.core.record_conversation(id, events).await {
-            tracing::debug!(conversation = %id, error = %err, "could not store streamed text");
+            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store streamed text"; conversation = %id, error = %err);
         }
     }
 
@@ -2795,7 +2942,7 @@ impl SessionManager {
             )
             .await
         {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not store a reply");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
         }
     }
 
@@ -2888,7 +3035,7 @@ impl SessionManager {
                     )
                     .await
                 {
-                    tracing::debug!(conversation = %conv.id, error = %err, "could not store reasoning summary");
+                    crate::logging::private_trace!(conv.private_logs, debug, "could not store reasoning summary"; conversation = %conv.id, error = %err);
                 }
             }
             ProviderEvent::Message {
@@ -2927,7 +3074,7 @@ impl SessionManager {
                         )
                         .await
                     {
-                        tracing::warn!(conversation = %conv.id, error = %err, "could not store a reply");
+                        crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
                     }
                 }
             }
@@ -2951,7 +3098,7 @@ impl SessionManager {
                     .answer(request.id.clone(), decision.clone())
                     .await
                 {
-                    tracing::warn!(conversation = %conv.id, error = %err, "could not answer an approval");
+                    crate::logging::private_trace!(conv.private_logs, warn, "could not answer an approval"; conversation = %conv.id, error = %err);
                 }
                 self.log_provider(
                     &conv.id,
@@ -3121,7 +3268,25 @@ impl SessionManager {
                 let started = {
                     let mut state = conv.state.lock().await;
                     state.landed = true;
-                    std::mem::take(&mut state.awaiting_start).then(|| state.request.clone())
+                    let adopted = match &state.background {
+                        Some(jobs) if !state.busy && jobs.of(cli) => jobs.request.clone(),
+                        _ => None,
+                    };
+                    if let Some(request) = adopted {
+                        // The CLI began a turn of its own, for its background jobs' end: it
+                        // answers the request that started them.
+                        state.busy = true;
+                        state.limit_hit = None;
+                        state.turn_error = None;
+                        state.unshown_error = None;
+                        state.last_reply = None;
+                        state.in_turn.clear();
+                        state.outcomes.remove(&request);
+                        state.request = Some(request.clone());
+                        Some(Some(request))
+                    } else {
+                        std::mem::take(&mut state.awaiting_start).then(|| state.request.clone())
+                    }
                 };
                 if let Some(request) = started {
                     self.set_run_for(&conv.id, RunState::Running, None, request)
@@ -3254,7 +3419,7 @@ impl SessionManager {
             .record_conversation(id, vec![DomainEvent::CompactionUpdated { compaction }])
             .await
         {
-            tracing::warn!(conversation = %id, error = %err, "could not store a compaction");
+            crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not store a compaction"; conversation = %id, error = %err);
         }
     }
 
@@ -3357,6 +3522,16 @@ impl SessionManager {
                 _ => None,
             };
             let served = state.request.take();
+            // The turn the background jobs' end started is over, or a stop or failure ended
+            // their request: it no longer waits for them.
+            if let Some(jobs) = state.background.as_mut().filter(|jobs| jobs.of(cli)) {
+                if ended.is_some() && served.is_some() && jobs.request == served {
+                    jobs.request = None;
+                }
+                if jobs.running == 0 {
+                    state.background = None;
+                }
+            }
             // An error the request won't show after all (its turn didn't fail) is a notice.
             let unshown = state.unshown_error.take().filter(|_| {
                 served.is_none() || !matches!(ended, Some(RequestState::Failed { .. }))
@@ -3383,15 +3558,22 @@ impl SessionManager {
             // pushes the orchestrator past it before the user answers (see `asked_user`).
             let reply = state.last_reply.take();
             // A turn that ended on [quiet], or said nothing, left the request's answer to what
-            // wakes the thread next: a review of its work still running keeps it working.
+            // wakes the thread next: a review of its work still running keeps it working. A
+            // request answered by an earlier turn keeps that answer: a quiet turn for a late
+            // report or addendum doesn't reopen it.
             if let Some(request) = &served {
                 let quiet = reply
                     .as_deref()
                     .is_none_or(|reply| reply.trim_end().ends_with(prompts::QUIET));
                 if status == TurnStatus::Completed && quiet {
-                    state.deferred.insert(request.clone());
+                    if !state.answered.contains(request) {
+                        state.deferred.insert(request.clone());
+                    }
                 } else {
                     state.deferred.remove(request);
+                    if status == TurnStatus::Completed {
+                        state.answered.insert(request.clone());
+                    }
                 }
             }
             if conv.kind == ConversationKind::Session
@@ -3432,7 +3614,7 @@ impl SessionManager {
         }
         // Follow-ups the turn left undecided wait in the queue for their own turn.
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not settle follow-ups");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);
         }
         if let Some(limit) = limit_hit {
             self.runtime.note_limit(&cli.account, limit.clone()).await;
@@ -3586,7 +3768,7 @@ impl SessionManager {
                     (used, window),
                     rebirth::HandoffPurpose::Threshold,
                 );
-                tracing::info!(conversation = %conv.id, used, "preparing the orchestrator's rebirth");
+                crate::logging::private_trace!(conv.private_logs, info, "preparing the orchestrator's rebirth"; conversation = %conv.id, used);
                 conv.state.lock().await.rebirth = Some(prep.clone());
                 prep
             }
@@ -3782,7 +3964,7 @@ impl SessionManager {
             until_ms,
         };
         if let Err(err) = self.core.set_fallback(&conv.id, Some(fallback)).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not record the stand-in model");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the stand-in model"; conversation = %conv.id, error = %err);
         }
         let stopped = {
             let mut state = conv.state.lock().await;
@@ -3832,7 +4014,7 @@ impl SessionManager {
         .await;
         conv.close_cli().await;
         if let Err(err) = self.run_on_account(&conv.id, &cli.model, &next).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not record the account it moved to");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the account it moved to"; conversation = %conv.id, error = %err);
         }
         let stopped = {
             let mut state = conv.state.lock().await;
@@ -3909,7 +4091,7 @@ impl SessionManager {
             !std::mem::replace(&mut state.waiting, true)
         };
         if first {
-            tracing::info!(conversation = %conv.id, reason = %waiting.reason, "messages wait for quota");
+            crate::logging::private_trace!(conv.private_logs, info, "messages wait for quota"; conversation = %conv.id, reason = %waiting.reason);
             self.notice(
                 &conv.id,
                 brigadier_providers::NoticeLevel::Info,
@@ -3959,7 +4141,7 @@ impl SessionManager {
                 .set_conversation_wait(&conv.id, Some(wait.clone()))
                 .await
         {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not record the wait");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the wait"; conversation = %conv.id, error = %err);
         }
         let timer = {
             let mut state = conv.state.lock().await;
@@ -4087,7 +4269,7 @@ impl SessionManager {
             .conversation(&conv.id)
             .is_ok_and(|conversation| conversation.quota_wait.is_some());
         if recorded && let Err(err) = self.core.set_conversation_wait(&conv.id, None).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not end the wait");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not end the wait"; conversation = %conv.id, error = %err);
         }
     }
 
@@ -4187,7 +4369,7 @@ impl SessionManager {
             cli.ended.cancelled().await;
         }
         if let Err(err) = self.core.set_fallback(&conv.id, None).await {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not end the stand-in model");
+            crate::logging::private_trace!(conv.private_logs, warn, "could not end the stand-in model"; conversation = %conv.id, error = %err);
         }
         {
             let mut state = conv.state.lock().await;
@@ -4499,7 +4681,7 @@ impl SessionManager {
             )
             .await
         {
-            tracing::debug!(conversation = %id, error = %err, "could not store the run state");
+            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store the run state"; conversation = %id, error = %err);
         }
     }
 
@@ -4518,7 +4700,7 @@ impl SessionManager {
             },
         };
         if let Err(err) = self.core.record_conversation(id, vec![event]).await {
-            tracing::debug!(conversation = %id, error = %err, "could not store a notice");
+            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store a notice"; conversation = %id, error = %err);
         }
     }
 
@@ -4612,7 +4794,7 @@ impl SessionManager {
             .record(vec![(streams::orchestrator(id), event)])
             .await
         {
-            tracing::debug!(conversation = %id, error = %err, "could not log the orchestrator");
+            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not log the orchestrator"; conversation = %id, error = %err);
             return;
         }
         if let Some((provider, event)) = start

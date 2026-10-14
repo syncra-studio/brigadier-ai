@@ -485,11 +485,7 @@ const TreeRow = memo(function TreeRow({
         {folder ? (
           row.open ? <ChevronDown className="size-icon-xs shrink-0" /> : <ChevronRight className="size-icon-xs shrink-0" />
         ) : (
-          <>
-            {/* Where a folder's chevron is, so names line up. */}
-            <span aria-hidden className="size-icon-xs shrink-0" />
-            <FileIcon name={row.path} />
-          </>
+          <FileIcon name={row.path} className="size-icon-xs" />
         )}
         <span className={cn("min-w-0 flex-1 truncate", !folder && row.status === "deleted" && "line-through")}>{row.name}</span>
         {mark && (folder ? (

@@ -244,11 +244,18 @@ function PermissionRow({ value }: { value: PermissionLevel }) {
   );
 }
 
+/** The memories as last read, kept while the app runs. */
+let lastMemories: Node[] | null = null;
+
 /** How many memories Brigadier keeps, and the way to see and forget them. */
 function MemoriesRow() {
-  const [memories, setMemories] = useState<Node[] | null>(null);
+  // As last read, at once; read again as the page opens.
+  const [memories, setMemories] = useState<Node[] | null>(() => lastMemories);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    lastMemories = memories;
+  }, [memories]);
 
   useEffect(() => {
     let current = true;

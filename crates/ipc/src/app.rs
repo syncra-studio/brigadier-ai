@@ -113,6 +113,31 @@ pub enum BrowserEvent {
     Escape,
     /// The shifted + key zooms the sender's page in, like the = menu accelerator.
     ZoomIn,
+    /// The page opened a popup (`window.open`, `target=_blank`): its page waits, as tab `id`,
+    /// for a tab to the right of this one; `url` is where it goes ("" or `about:blank` when the
+    /// page writes it itself).
+    Popup { id: String, url: String },
+    /// The page closed itself (`window.close()` in a popup): its tab closes.
+    Closed,
+    /// The page asked for the camera or microphone, which its site's choices leave to the user:
+    /// the tab asks, and answers `request` (`browser_permission`).
+    Permission {
+        request: u32,
+        origin: String,
+        camera: bool,
+        microphone: bool,
+    },
+}
+
+/// What a Browser tab's page shows, for the chat beside it: its address, its title, its text
+/// and what the user selected (each cut to a length a chat can take).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BrowserText {
+    pub url: String,
+    pub title: String,
+    pub text: String,
+    pub selection: String,
 }
 
 /// What finding text in a Browser tab's page came to.

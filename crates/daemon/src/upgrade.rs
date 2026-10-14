@@ -6,6 +6,8 @@
 //! hook sends one command output, which is stored for the thread, and gets one answer. Grants
 //! are never logged.
 
+use tracing::Instrument;
+
 use std::sync::Arc;
 
 use std::time::Duration;
@@ -24,6 +26,7 @@ fn role_name(role: &Role) -> &'static str {
         Role::Worker { .. } => "worker",
         Role::BrainJob { .. } => "brain job",
         Role::Chat { .. } => "chat",
+        Role::TabChat { .. } => "tab chat",
         Role::OutputHook { .. } => "output hook",
     }
 }
@@ -37,7 +40,8 @@ pub async fn serve_mcp(daemon: Arc<Daemon>, grant: String, stream: RawStream) {
             role @ (Role::Orchestrator { .. }
             | Role::Worker { .. }
             | Role::BrainJob { .. }
-            | Role::Chat { .. }),
+            | Role::Chat { .. }
+            | Role::TabChat { .. }),
         ) => role,
         other => {
             let role = other.as_ref().map_or("unknown", role_name);
@@ -45,10 +49,20 @@ pub async fn serve_mcp(daemon: Arc<Daemon>, grant: String, stream: RawStream) {
             return;
         }
     };
+    let private_logs = matches!(role, Role::TabChat { .. });
     let role = role_name(&role);
     tracing::debug!(role, "MCP connection opened");
-    match brigadier_mcp_server::serve(host, grant, stream, daemon.closing.child_token()).await {
+    let span = if private_logs {
+        tracing::info_span!("tab_chat_private")
+    } else {
+        tracing::Span::none()
+    };
+    match brigadier_mcp_server::serve(host, grant, stream, daemon.closing.child_token())
+        .instrument(span)
+        .await
+    {
         Ok(()) => tracing::debug!(role, "MCP connection closed"),
+        Err(_) if private_logs => tracing::warn!(role = "tab chat", "MCP connection failed"),
         Err(err) => tracing::warn!(role, error = %err, "MCP connection failed"),
     }
 }

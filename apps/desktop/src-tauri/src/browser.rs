@@ -7,8 +7,8 @@
 //! capture and speech recognition away (and on Windows the camera and microphone). Every tab keeps its cookies and site data in one
 //! saved store of its own, apart from the app's own webview and kept per Brigadier data folder
 //! (macOS: a WebKit data store named from the folder; Windows: a WebView2 folder in it), so
-//! sign-ins last like in any browser. It opens only web pages, sends popups to the system
-//! browser, and on macOS gives a page the camera or microphone only as the user chose for its
+//! sign-ins last like in any browser. It opens only web pages, opens a page's popups as new
+//! tabs beside its own (the system browser only on "Open in external browser"), and on macOS gives a page the camera or microphone only as the user chose for its
 //! site (Settings › Browser › Site settings; wry's own delegate would grant them; see
 //! `browser_ui`). It is made when the tab first loads a page and dropped when
 //! the tab closes. Linux has no embedded page (Tauri's window there is a GTK box a child can't
@@ -466,8 +466,6 @@ mod embedded {
     use brigadier_ipc::protocol::IpcError;
     use tauri::ipc::Channel;
     use tauri::{AppHandle, Manager};
-    use tauri_plugin_opener::OpenerExt;
-    #[cfg(target_os = "windows")]
     use wry::NewWindowResponse;
     use wry::dpi::{LogicalPosition, LogicalSize};
     use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder};
@@ -484,6 +482,8 @@ mod embedded {
     /// A tab's page.
     struct Tab {
         webview: WebView,
+        /// Where its page events go.
+        events: Events,
         /// The page's own WebKit UI delegate, which WebKit holds only weakly.
         #[cfg(target_os = "macos")]
         _ui: crate::browser_ui::BrowserUi,
@@ -495,13 +495,131 @@ mod embedded {
         static BROWSERS: RefCell<HashMap<String, Tab>> = RefCell::new(HashMap::new());
     }
 
-    /// A page's popup (`window.open`, `target=_blank`): a web page opens in the system
-    /// browser, anything else nowhere.
-    fn popup(app: &AppHandle, url: String) {
-        if web_page(&url) {
-            tracing::info!(%url, "Browser tab: popup sent to the system browser");
-            let _ = app.opener().open_url(url, None::<&str>);
+    /// Where a tab's page events go: its tab's channel, or, for a popup no tab has taken yet,
+    /// a list kept for the tab that will.
+    #[derive(Clone)]
+    struct Events(Arc<Mutex<Sink>>);
+
+    enum Sink {
+        Waiting(Vec<BrowserEvent>),
+        Tab(Channel<BrowserEvent>),
+    }
+
+    impl Events {
+        fn new(sink: Sink) -> Self {
+            Self(Arc::new(Mutex::new(sink)))
         }
+
+        fn send(&self, event: BrowserEvent) {
+            match &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+            {
+                Sink::Waiting(kept) => kept.push(event),
+                Sink::Tab(channel) => {
+                    let _ = channel.send(event);
+                }
+            }
+        }
+
+        fn waiting(&self) -> bool {
+            matches!(
+                *self
+                    .0
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                Sink::Waiting(_)
+            )
+        }
+
+        /// The tab takes its page's events: those so far, then each as it comes.
+        fn attach(&self, channel: Channel<BrowserEvent>) {
+            let mut sink = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Sink::Waiting(kept) = &mut *sink {
+                for event in kept.drain(..) {
+                    let _ = channel.send(event);
+                }
+            }
+            *sink = Sink::Tab(channel);
+        }
+    }
+
+    /// What a new page starts from: an address, or a page's popup, which WebKit (WebView2 on
+    /// Windows) loads itself into the web view made for it.
+    enum Start {
+        Url(String),
+        Popup(wry::NewWindowFeatures),
+    }
+
+    /// Popups made so far, which number the next one's tab.
+    static POPUPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// A page's popup (`window.open`, `target=_blank`): a new page in a new tab to the right
+    /// of its opener's, which the opener's script keeps reaching as its window. Only web pages
+    /// and blank ones (a script writes or sends them on) open.
+    fn popup(
+        app: &AppHandle,
+        opener: &Events,
+        bounds: BrowserBounds,
+        agent: bool,
+        url: String,
+        features: wry::NewWindowFeatures,
+    ) -> NewWindowResponse {
+        // The page's right-click menu's "Open Link in External Browser".
+        #[cfg(target_os = "macos")]
+        if crate::browser_ui::popup_goes_outside() {
+            use tauri_plugin_opener::OpenerExt;
+
+            if web_page(&url)
+                && let Err(err) = app.opener().open_url(url, None::<&str>)
+            {
+                tracing::warn!(error = %err, "Browser tab: a link couldn't open outside");
+            }
+            return NewWindowResponse::Deny;
+        }
+        if !(web_page(&url) || url.is_empty() || url == "about:blank") {
+            return NewWindowResponse::Deny;
+        }
+        let id = format!(
+            "browser:popup-{}-{}",
+            crate::browser_store::now_ms(),
+            POPUPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let events = Events::new(Sink::Waiting(Vec::new()));
+        let tab = match build(app, &id, Start::Popup(features), bounds, agent, events) {
+            Ok(tab) => tab,
+            Err(err) => {
+                tracing::warn!(error = %err.message, "Browser tab: a popup's page couldn't be made");
+                return NewWindowResponse::Deny;
+            }
+        };
+        #[cfg(target_os = "macos")]
+        let webview = {
+            use wry::WebViewExtMacOS;
+            objc2::rc::Retained::into_super(tab.webview.webview())
+        };
+        #[cfg(target_os = "windows")]
+        let webview = {
+            use wry::WebViewExtWindows;
+            tab.webview.webview()
+        };
+        // A page's script runs outside any command, but a popup asked for mid-command waits
+        // for nothing: it doesn't open.
+        let kept = BROWSERS.with(|browsers| {
+            browsers
+                .try_borrow_mut()
+                .map(|mut browsers| browsers.insert(id.clone(), tab))
+                .is_ok()
+        });
+        if !kept {
+            return NewWindowResponse::Deny;
+        }
+        opener.send(BrowserEvent::Popup { id, url });
+        NewWindowResponse::Create { webview }
     }
 
     fn rect(bounds: BrowserBounds) -> Rect {
@@ -519,20 +637,59 @@ mod embedded {
         agent: bool,
         events: Channel<BrowserEvent>,
     ) -> Result<(), IpcError> {
-        if BROWSERS.with_borrow(|browsers| browsers.contains_key(&id)) {
-            return navigate(&id, &url, bounds);
+        // A popup's page waits for its tab: the tab takes its events and places it, and the
+        // page goes on with what it shows.
+        let adopted = BROWSERS.with_borrow(|browsers| {
+            browsers.get(&id).map(|tab| {
+                let waiting = tab.events.waiting();
+                if waiting {
+                    tab.events.attach(events.clone());
+                }
+                waiting
+            })
+        });
+        match adopted {
+            Some(true) => return with_webview(&id, |webview| webview.set_bounds(rect(bounds))),
+            Some(false) => return navigate(&id, &url, bounds),
+            None => {}
         }
+        let tab = build(
+            app,
+            &id,
+            Start::Url(url),
+            bounds,
+            agent,
+            Events::new(Sink::Tab(events)),
+        )?;
+        BROWSERS.with_borrow_mut(|browsers| browsers.insert(id, tab));
+        Ok(())
+    }
+
+    /// Whether the tab's page is a popup no tab has taken yet.
+    pub fn waiting(id: &str) -> bool {
+        BROWSERS.with_borrow(|browsers| browsers.get(id).is_some_and(|tab| tab.events.waiting()))
+    }
+
+    /// Makes tab `id`'s page.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    fn build(
+        app: &AppHandle,
+        id: &str,
+        start: Start,
+        bounds: BrowserBounds,
+        agent: bool,
+        events: Events,
+    ) -> Result<Tab, IpcError> {
         let window = app
             .get_webview_window(MAIN_WINDOW)
             .ok_or_else(|| failed("the window is gone"))?;
-        let opener = app.clone();
         let (on_load, on_title, on_blocked, on_download, on_key, on_favicon) = (
             events.clone(),
             events.clone(),
             events.clone(),
             events.clone(),
             events.clone(),
-            events,
+            events.clone(),
         );
         let downloads: Rc<RefCell<Downloads>> = Rc::default();
         let finished = downloads.clone();
@@ -540,6 +697,8 @@ mod embedded {
         let visit = Arc::new(Mutex::new(Visit::default()));
         let title_visit = visit.clone();
         let load_limit = limit.clone();
+        #[cfg(target_os = "macos")]
+        let load_tab = id.to_owned();
         let saved = super::data_dir();
         // Windows: the browser's folder in Brigadier's data folder, apart from the app's webview.
         #[cfg(target_os = "windows")]
@@ -548,16 +707,38 @@ mod embedded {
         let builder = WebViewBuilder::new_with_web_context(&mut context);
         #[cfg(not(target_os = "windows"))]
         let builder = WebViewBuilder::new();
-        #[cfg(target_os = "macos")]
-        let builder = match saved {
-            Some(dir) => {
-                use wry::WebViewBuilderExtDarwin;
-                builder.with_data_store_identifier(super::store_identifier(dir))
+        // A popup's page shares its opener's store, which the configuration (the environment
+        // on Windows) WebKit gives it carries.
+        let (builder, url) = match start {
+            Start::Url(url) => {
+                #[cfg(target_os = "macos")]
+                let builder = match saved {
+                    Some(dir) => {
+                        use wry::WebViewBuilderExtDarwin;
+                        builder.with_data_store_identifier(super::store_identifier(dir))
+                    }
+                    None => builder,
+                };
+                (builder, Some(url))
             }
+            #[cfg(target_os = "macos")]
+            Start::Popup(features) => {
+                use wry::WebViewBuilderExtMacos;
+                let configuration = features.opener.target_configuration;
+                crate::browser_ui::own_scripts(&configuration);
+                (builder.with_webview_configuration(configuration), None)
+            }
+            #[cfg(target_os = "windows")]
+            Start::Popup(features) => {
+                use wry::WebViewBuilderExtWindows;
+                (builder.with_environment(features.opener.environment), None)
+            }
+        };
+        let builder = match &url {
+            Some(url) => builder.with_url(url),
             None => builder,
         };
         let builder = builder
-            .with_url(&url)
             .with_bounds(rect(bounds))
             .with_visible(false)
             // Without a data folder (never in the app) nothing is kept.
@@ -569,11 +750,11 @@ mod embedded {
                 let url = request.uri().to_string();
                 let data_url = request.into_body();
                 if data_url == "browser:escape" {
-                    let _ = on_key.send(BrowserEvent::Escape);
+                    on_key.send(BrowserEvent::Escape);
                     return;
                 }
                 if data_url == "browser:zoom-in" {
-                    let _ = on_key.send(BrowserEvent::ZoomIn);
+                    on_key.send(BrowserEvent::ZoomIn);
                     return;
                 }
                 if !web_page(&url) || !favicon_data(&data_url) {
@@ -584,7 +765,7 @@ mod embedded {
                 let mut held = limit.lock().expect("favicon lock");
                 match held.offer(url, data_url, Instant::now()) {
                     FaviconStep::Send { url, data_url } => {
-                        let _ = on_favicon.send(BrowserEvent::Favicon { url, data_url });
+                        on_favicon.send(BrowserEvent::Favicon { url, data_url });
                     }
                     FaviconStep::Later(mut wait) => {
                         let (limit, on_favicon) = (limit.clone(), on_favicon.clone());
@@ -595,8 +776,7 @@ mod embedded {
                                 match held.flush(Instant::now()) {
                                     FaviconStep::Later(remaining) => wait = remaining,
                                     FaviconStep::Send { url, data_url } => {
-                                        let _ = on_favicon
-                                            .send(BrowserEvent::Favicon { url, data_url });
+                                        on_favicon.send(BrowserEvent::Favicon { url, data_url });
                                         break;
                                     }
                                     FaviconStep::Skip => break,
@@ -611,7 +791,7 @@ mod embedded {
             .with_navigation_handler(move |url| {
                 let ok = allowed(&url);
                 if !ok {
-                    let _ = on_blocked.send(BrowserEvent::Blocked { url });
+                    on_blocked.send(BrowserEvent::Blocked { url });
                 }
                 ok
             })
@@ -643,13 +823,17 @@ mod embedded {
                 if let Some(id) = id {
                     crate::browser_store::with(|store| store.download_finished(id, ok));
                 }
-                let _ = on_download.send(BrowserEvent::Downloaded {
+                on_download.send(BrowserEvent::Downloaded {
                     path: path.to_string_lossy().into_owned(),
                     ok,
                 });
             })
             .with_on_page_load_handler(move |event, url| {
                 let loading = matches!(event, PageLoadEvent::Started);
+                #[cfg(target_os = "macos")]
+                if loading {
+                    media::navigated(&load_tab, &url);
+                }
                 let mut held = load_limit.lock().expect("favicon lock");
                 if loading {
                     held.reset();
@@ -662,7 +846,7 @@ mod embedded {
                         .expect("visit lock")
                         .load(store, &url, loading, agent, now)
                 });
-                let _ = on_load.send(BrowserEvent::Load { url, loading });
+                on_load.send(BrowserEvent::Load { url, loading });
             })
             .with_document_title_changed_handler(move |title| {
                 crate::browser_store::with(|store| {
@@ -671,24 +855,27 @@ mod embedded {
                         .expect("visit lock")
                         .titled(store, &title)
                 });
-                let _ = on_title.send(BrowserEvent::Title { title });
+                on_title.send(BrowserEvent::Title { title });
             });
-        // macOS: `browser_ui`'s delegate takes the popups instead.
-        #[cfg(target_os = "windows")]
-        let builder = builder.with_new_window_req_handler(move |url, _features| {
-            popup(&opener, url);
-            NewWindowResponse::Deny
+        let (opener, opener_events) = (app.clone(), events.clone());
+        let builder = builder.with_new_window_req_handler(move |url, features| {
+            popup(&opener, &opener_events, bounds, agent, url, features)
         });
         let webview = builder
             .build_as_child(&window)
             .map_err(|err| failed(format!("could not make the browser: {err}")))?;
-        let tab = Tab {
+        #[cfg(target_os = "macos")]
+        let (closed, asking, tab) = (events.clone(), events.clone(), id.to_owned());
+        Ok(Tab {
             #[cfg(target_os = "macos")]
-            _ui: crate::browser_ui::install(&webview, move |url| popup(&opener, url)),
+            _ui: crate::browser_ui::install(
+                &webview,
+                move || closed.send(BrowserEvent::Closed),
+                move |origin, devices, answer| media::asked(&tab, &asking, origin, devices, answer),
+            ),
             webview,
-        };
-        BROWSERS.with_borrow_mut(|browsers| browsers.insert(id, tab));
-        Ok(())
+            events,
+        })
     }
 
     fn with_webview(
@@ -769,6 +956,144 @@ mod embedded {
 
     pub fn close(id: &str) {
         BROWSERS.with_borrow_mut(|browsers| browsers.remove(id));
+        #[cfg(target_os = "macos")]
+        media::closed(id);
+    }
+
+    /// A tab's camera and microphone requests (macOS): the site's saved choices answer, then
+    /// what the tab allows while visiting (`browser_grants`), else the tab asks.
+    #[cfg(target_os = "macos")]
+    pub mod media {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+
+        use brigadier_ipc::app::{BrowserEvent, SitePermission};
+
+        use super::Events;
+        use crate::browser_grants::{self, Answer, Visiting};
+        use crate::browser_store::{self, Device};
+
+        /// A question the tab shows, waiting for its answer.
+        struct Asking {
+            tab: String,
+            origin: String,
+            devices: Vec<Device>,
+            answer: crate::browser_ui::MediaAnswer,
+        }
+
+        thread_local! {
+            static VISITING: RefCell<Visiting> = RefCell::default();
+            static ASKING: RefCell<HashMap<u32, Asking>> = RefCell::default();
+        }
+
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+        /// Tab `tab`'s page, on `origin`, asked for `devices`.
+        pub(super) fn asked(
+            tab: &str,
+            events: &Events,
+            origin: String,
+            devices: Vec<Device>,
+            answer: crate::browser_ui::MediaAnswer,
+        ) {
+            // Every site that asks is listed in Site settings, with the user's choices.
+            let now = browser_store::now_ms();
+            let saved = devices
+                .iter()
+                .map(|device| browser_store::with(|store| store.site_asked(&origin, *device, now)))
+                .collect::<Option<Vec<SitePermission>>>()
+                .map_or(SitePermission::Block, |choices| {
+                    browser_store::combined(&choices)
+                });
+            let visiting = VISITING.with_borrow(|visiting| visiting.allows(tab, &origin, &devices));
+            let decided = browser_grants::answer(saved, visiting);
+            tracing::info!(%origin, ?devices, ?decided, "Browser tab: camera or microphone asked for");
+            match decided {
+                Answer::Grant => answer(true),
+                Answer::Deny => answer(false),
+                Answer::Ask => {
+                    let request = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // The newest question takes the place of one the tab still shows.
+                    drop_asking(|asking| asking.tab == tab);
+                    let (camera, microphone) = (
+                        devices.contains(&Device::Camera),
+                        devices.contains(&Device::Microphone),
+                    );
+                    ASKING.with_borrow_mut(|asks| {
+                        asks.insert(
+                            request,
+                            Asking {
+                                tab: tab.to_owned(),
+                                origin: origin.clone(),
+                                devices,
+                                answer,
+                            },
+                        )
+                    });
+                    events.send(BrowserEvent::Permission {
+                        request,
+                        origin,
+                        camera,
+                        microphone,
+                    });
+                }
+            }
+        }
+
+        /// The tab's answer to question `request`: `once` (this request), `visiting` (while the
+        /// tab shows the site) or `never` (saved as the site's choice); anything else denies it.
+        pub fn answered(request: u32, choice: &str) {
+            let Some(asking) = ASKING.with_borrow_mut(|asks| asks.remove(&request)) else {
+                return;
+            };
+            match choice {
+                "once" => (asking.answer)(true),
+                "visiting" => {
+                    VISITING.with_borrow_mut(|visiting| {
+                        visiting.grant(&asking.tab, &asking.origin, &asking.devices);
+                    });
+                    (asking.answer)(true);
+                }
+                "never" => {
+                    for device in &asking.devices {
+                        browser_store::with(|store| {
+                            store.set_site(&asking.origin, *device, SitePermission::Block)
+                        });
+                    }
+                    (asking.answer)(false);
+                }
+                _ => (asking.answer)(false),
+            }
+        }
+
+        /// Denies and forgets the questions `matching` picks.
+        fn drop_asking(matching: impl Fn(&Asking) -> bool) {
+            let gone: Vec<Asking> = ASKING.with_borrow_mut(|asks| {
+                let ids: Vec<u32> = asks
+                    .iter()
+                    .filter(|(_, asking)| matching(asking))
+                    .map(|(id, _)| *id)
+                    .collect();
+                ids.iter().filter_map(|id| asks.remove(id)).collect()
+            });
+            for asking in gone {
+                (asking.answer)(false);
+            }
+        }
+
+        /// Tab `tab` started loading `url`: on another site, what it allowed while visiting
+        /// ends, and a question from the site it left goes unanswered.
+        pub fn navigated(tab: &str, url: &str) {
+            VISITING.with_borrow_mut(|visiting| visiting.navigated(tab, url));
+            let site = browser_grants::origin_of(url);
+            drop_asking(|asking| asking.tab == tab && site.as_deref() != Some(&asking.origin));
+        }
+
+        /// Tab `tab` closed: what it allowed ends, and its question goes unanswered.
+        pub fn closed(tab: &str) {
+            VISITING.with_borrow_mut(|visiting| visiting.closed(tab));
+            drop_asking(|asking| asking.tab == tab);
+        }
     }
 
     pub fn close_all() {
@@ -815,6 +1140,10 @@ mod embedded {
     pub fn close(_id: &str) {}
 
     pub fn close_all() {}
+
+    pub fn waiting(_id: &str) -> bool {
+        false
+    }
 }
 
 /// The built-in browser's own folder in Brigadier's data folder, set once at start: its saved
@@ -904,7 +1233,10 @@ pub fn browser_open(
     events: Channel<BrowserEvent>,
 ) -> Result<(), IpcError> {
     check_enabled()?;
-    web_page_only(&url)?;
+    // A popup's page, waiting for this tab, may be blank or written by its opener.
+    if !embedded::waiting(&id) {
+        web_page_only(&url)?;
+    }
     embedded::open(&app, id, url, bounds, agent.unwrap_or(false), events)
 }
 
@@ -920,6 +1252,28 @@ pub fn browser_navigate(id: String, url: String, bounds: BrowserBounds) -> Resul
 #[tauri::command]
 pub fn browser_place(id: String, bounds: Option<BrowserBounds>) -> Result<(), IpcError> {
     embedded::place(&id, bounds)
+}
+
+/// What the app has over the tabs' pages (macOS, where each page lies beneath the app's own web
+/// view): its floating controls' areas, which take clicks there, and whether a menu, popover or
+/// dialog is open, which takes every click over a page. Elsewhere a page lies over the app and
+/// hides while something covers it, so this does nothing.
+#[tauri::command]
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+pub fn browser_layer(above: Vec<BrowserBounds>, modal: bool) {
+    #[cfg(target_os = "macos")]
+    crate::browser_ui::set_layer(
+        above
+            .into_iter()
+            .map(|area| crate::browser_ui::Area {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: area.height,
+            })
+            .collect(),
+        modal,
+    );
 }
 
 /// Back, forward, reload, reload past the cache (`force-reload`, macOS) or stop in the tab's
@@ -1037,6 +1391,44 @@ pub async fn browser_find(
     }
 }
 
+/// What the page reads to the chat beside it: its address, title, text and selection.
+const READ_PAGE: &str = r#"({
+  url: location.href,
+  title: document.title,
+  text: (document.body ? document.body.innerText : "").slice(0, 200000),
+  selection: String(getSelection() || "").slice(0, 20000)
+})"#;
+
+/// What the tab's page shows, for the chat beside it.
+#[tauri::command]
+pub async fn browser_read(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<brigadier_ipc::app::BrowserText, IpcError> {
+    #[cfg(target_os = "macos")]
+    {
+        let json = on_page(&app, id, move |webview, sent| {
+            let sent = Mutex::new(Some(sent));
+            let _ = webview.evaluate_script_with_callback(READ_PAGE, move |json| {
+                if let Some(sent) = sent
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    let _ = sent.send(json);
+                }
+            });
+        })
+        .await?;
+        serde_json::from_str(&json).map_err(|err| failed(format!("the page didn't read: {err}")))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, id, READ_PAGE);
+        Err(unsupported())
+    }
+}
+
 /// Opens the print panel for the tab's page.
 #[tauri::command]
 pub fn browser_print(id: String) -> Result<(), IpcError> {
@@ -1119,6 +1511,19 @@ pub fn browser_history_remove(ids: Vec<i64>) -> Result<(), IpcError> {
 #[tauri::command]
 pub fn browser_downloads(query: String) -> Vec<BrowserDownload> {
     browser_store::with(|store| store.downloads(&query)).unwrap_or_default()
+}
+
+/// Opens finished download `id` with the system's app for its type.
+#[tauri::command]
+pub fn browser_download_open(app: tauri::AppHandle, id: i64) -> Result<(), IpcError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let path = browser_store::with(|store| store.finished_download(id))
+        .flatten()
+        .ok_or_else(|| failed("that download isn't there any more"))?;
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|err| failed(format!("could not open it: {err}")))
 }
 
 /// Forgets downloads (the files stay): `ids`, or every finished one with none.
@@ -1232,6 +1637,15 @@ pub async fn browser_site_count(app: tauri::AppHandle) -> Result<Option<u32>, Ip
 /// Drops every tab's page (on the main thread): the app's own page started again.
 pub fn close_all() {
     embedded::close_all();
+}
+
+/// The answer to a Browser tab's camera or microphone question `request` (macOS): `once`,
+/// `visiting` or `never`; anything else denies it.
+#[tauri::command]
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+pub fn browser_permission(request: u32, answer: String) {
+    #[cfg(target_os = "macos")]
+    embedded::media::answered(request, &answer);
 }
 
 /// The tab closed: its page goes (what it saved stays in the browser's store).

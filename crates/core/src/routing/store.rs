@@ -317,6 +317,9 @@ impl RoutingStore {
             .map_err(db)?;
         conn.pragma_update(None, "journal_size_limit", 4 * 1024 * 1024)
             .map_err(db)?;
+        // Deleted rows are overwritten, not left in free pages (see [`Self::scrub`]).
+        conn.pragma_update(None, "secure_delete", "ON")
+            .map_err(db)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(db)?;
         migrations().to_latest(&mut conn).map_err(db)?;
@@ -700,6 +703,15 @@ impl RoutingStore {
             }
             tx.commit()?;
             Ok((turns, outcomes))
+        })
+        .await
+    }
+
+    /// Empties the WAL after a tab's chat was forgotten, so no copy of its rows stays behind.
+    pub async fn scrub(self: &Arc<Self>) -> Result<()> {
+        self.run(|conn| {
+            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+            Ok(())
         })
         .await
     }

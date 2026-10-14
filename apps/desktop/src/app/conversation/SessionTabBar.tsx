@@ -1,4 +1,4 @@
-import { Archive, Chat, ChatCompose, Dock, Globe, Plus, SquarePlus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, ChatCompose, Dock, Globe, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -14,13 +14,12 @@ import {
 
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
-import { ThreadTitle, UNTITLED } from "@/app/TopBar";
+import { UNTITLED } from "@/app/TopBar";
 import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { takePaneClose } from "@/state/closedPanes";
 import { undoTabClose } from "@/state/terminalPlaces";
 import { ChatActions } from "@/app/conversation/ChatActions";
-import { PreviewChip } from "@/app/conversation/PreviewChip";
 import { MockupTabIcon, MockupTabStatus, useMockupTab } from "@/app/conversation/MockupTabIcon";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
@@ -184,10 +183,9 @@ function BarDivider({ hidden = false }: { hidden?: boolean }) {
 }
 
 /**
- * A session's top bar. With nothing open it is a title, as a chat's is, with its ⋯ and the toolbar
- * at the end and "+" last. Once something is open it turns into tabs: the chat first, under its
- * title with its ⋯ (never closed or moved), then the tabs it opened, which shrink to their least
- * and then scroll, and "+" right after them.
+ * A session's top bar: always tabs, the chat first under its title with its ⋯ (never closed or
+ * moved), even when it is the only one, then the tabs it opened, which shrink to their least and
+ * then scroll, and "+" right after them.
  * Click to show, drag to reorder, middle-click or Delete to close; a preview tab is in italic
  * until double-clicked. After a close the tabs keep their widths, so the next × lands under the
  * pointer, until it leaves them. While the thread keeps something running for the user, its chip
@@ -219,8 +217,7 @@ export function SessionTabBar({
   }, [id, archived, cwd, browserOn]);
   useTabKeys(id, archived, create);
   const presence = useTabPresence(tabs);
-  const plain = presence.tabs.length === 0;
-  const lock = useCloseLock(plain);
+  const lock = useCloseLock(presence.tabs.length === 0);
   const { listRef, shown, dragging, grip } = useDragReorder<SessionTab, HTMLDivElement>({
     items: presence.tabs,
     idOf: (tab) => tab.id,
@@ -269,36 +266,15 @@ export function SessionTabBar({
     closeTab(id, tab);
   };
   const newTab = (
-    <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className={plain ? undefined : "ms-0.5"}
-      onClick={() => { lock.release(); create("newTab"); }}>{plain ? <SquarePlus /> : <Plus />}</TitlebarButton>
+    <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className="ms-0.5"
+      onClick={() => { lock.release(); create("newTab"); }}><Plus /></TitlebarButton>
   );
   const connecting = connection !== "connected" && (
     <Badge variant="warning" role="status" className="shrink-0">
       {connection === "connecting" ? "Connecting to core…" : "Reconnecting to core…"}
     </Badge>
   );
-  const project = useApp((s) => conversation.projectId ? s.projects[conversation.projectId]?.name ?? null : null);
   const chatTitle = UNTITLED.has(conversation.title) ? "Chat" : conversation.title;
-
-  if (plain) {
-    return (
-      <header
-        data-tauri-drag-region
-        data-slot="session-tabs"
-        data-plain
-        className="h-titlebar ease-sidebar ps-clear-3 flex shrink-0 items-center gap-1 pe-1 transition-[padding] duration-300 motion-reduce:transition-none"
-      >
-        <ThreadTitle project={project} title={UNTITLED.has(conversation.title) ? "" : conversation.title}
-          session archived={archived} onRename={archived ? undefined : onRename} />
-        {connecting}
-        <PreviewChip conversationId={id} />
-        <ChatActions conversation={conversation} onRename={onRename} />
-        {children}
-        <BarDivider />
-        {newTab}
-      </header>
-    );
-  }
 
   return (
     <header
@@ -480,7 +456,6 @@ export function SessionTabBar({
       </div>
       {newTab}
       {connecting}
-      <PreviewChip conversationId={id} />
       <div ref={setGap} data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />
       <BarDivider hidden={!full} />
       {children}
@@ -541,7 +516,7 @@ function AnimatedTab({ closing, ref: triggerRef, ...props }: React.ComponentProp
  * the pointer. Let go once the pointer has been away from the tabs a moment, on a key or a
  * scroll, when the window loses focus, or when no tab is left.
  */
-function useCloseLock(plain: boolean) {
+function useCloseLock(alone: boolean) {
   const [count, setCount] = useState<number | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const release = useCallback(() => {
@@ -561,7 +536,7 @@ function useCloseLock(plain: boolean) {
     };
   }, [locked, release]);
   useEffect(() => () => clearTimeout(timer.current), []);
-  if (plain && locked) setCount(null);
+  if (alone && locked) setCount(null);
   return {
     count,
     release,
@@ -587,6 +562,7 @@ const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ defau
 const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
 const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default: module.MockupView })));
 const PageTabView = lazy(() => import("./pages/PageTabView").then((module) => ({ default: module.PageTabView })));
+const TabWithChat = lazy(() => import("./TabChat").then((module) => ({ default: module.TabWithChat })));
 
 /**
  * The session's open tabs over its conversation, which stays as it was (scrolled, its draft
@@ -610,7 +586,9 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
           >
             <Suspense fallback={null}>
               {tab.kind === "file" ? (
-                <FileTabView conversationId={conversationId} tab={tab} active={shown} />
+                <TabWithChat conversationId={conversationId} tab={tab}>
+                  <FileTabView conversationId={conversationId} tab={tab} active={shown} />
+                </TabWithChat>
               ) : tab.kind === "review" ? (
                 <ReviewTab conversationId={conversationId} target={tab.target} active={shown} />
               ) : tab.kind === "newTab" && !browserOn ? (
@@ -618,17 +596,25 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <div className="@container/new-tab flex min-h-0 flex-1 flex-col">
                   <NewTabTools conversationId={conversationId} tabId={tab.id} />
                 </div>
-              ) : tab.kind === "newTab" || tab.kind === "browser" ? (
-                <BrowserTab conversationId={tab.id} initialUrl={tab.kind === "browser" ? tab.url : undefined} agent={tab.kind === "browser" && tab.agent} active={shown}
-                  onNavigate={tab.kind === "newTab" ? (url) => replaceNewTab(conversationId, tab.id, "browser", null, url) : undefined}>
-                  {tab.kind === "newTab" ? <NewTabTools conversationId={conversationId} tabId={tab.id} /> : null}
+              ) : tab.kind === "newTab" ? (
+                <BrowserTab conversationId={tab.id} active={shown}
+                  onNavigate={(url) => replaceNewTab(conversationId, tab.id, "browser", null, url)}>
+                  <NewTabTools conversationId={conversationId} tabId={tab.id} />
                 </BrowserTab>
+              ) : tab.kind === "browser" ? (
+                <TabWithChat conversationId={conversationId} tab={tab}>
+                  <BrowserTab conversationId={tab.id} initialUrl={tab.url} agent={tab.agent} active={shown} />
+                </TabWithChat>
               ) : tab.kind === "sideChat" ? (
                 <SideChatTab conversationId={conversationId} tab={tab} />
               ) : tab.kind === "terminal" ? (
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
-                : <PageTabView conversationId={conversationId} tab={tab} active={shown} />}
+                : (
+                  <TabWithChat conversationId={conversationId} tab={tab}>
+                    <PageTabView conversationId={conversationId} tab={tab} active={shown} />
+                  </TabWithChat>
+                )}
             </Suspense>
           </div>
         );

@@ -86,6 +86,8 @@ pub(crate) fn configure_writer(conn: &Connection) -> rusqlite::Result<()> {
     // Required: `blob_refs` rows are removed with their event by `ON DELETE CASCADE`.
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
+    // Deleted rows are overwritten, not left in free pages: a tab's chat leaves no trace.
+    conn.pragma_update(None, "secure_delete", "ON")?;
     // Checkpoint policy: SQLite auto-checkpoints every ~4 MB of WAL (1000 pages), the daemon
     // asks for a PASSIVE checkpoint every CHECKPOINT_INTERVAL, shutdown TRUNCATEs, and a
     // checkpointed WAL is trimmed back to this size.

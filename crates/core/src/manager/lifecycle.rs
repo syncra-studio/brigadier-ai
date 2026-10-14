@@ -86,6 +86,8 @@ impl SessionManager {
     pub(super) async fn recover(&self) {
         self.runtime.ledger().sweep().await;
         self.reconcile_trust().await;
+        // Tab chats whose session went go now; those whose tab closed, once the app says.
+        self.sweep_tab_chats().await;
         for conversation in self.core.catalog().conversations {
             // One still being deleted (a delete that failed at launch) gets nothing new.
             if conversation.deleting {
@@ -323,7 +325,7 @@ impl SessionManager {
                 continue;
             }
             if let Err(err) = self.hibernate(conv.id.clone()).await {
-                tracing::debug!(conversation = %conv.id, error = %err, "could not hibernate");
+                crate::logging::private_trace!(conv.private_logs, debug, "could not hibernate"; conversation = %conv.id, error = %err);
             }
         }
     }
@@ -481,14 +483,14 @@ impl SessionManager {
         if !drained {
             // What that work makes after this is removed once it has finished: the mark stays
             // until then.
-            tracing::warn!(conversation = %id, "work of an archived session is still going; cleaning up again once it ends");
+            crate::logging::private_trace!(self.tab_chat_logs(id), warn, "work of an archived session is still going; cleaning up again once it ends"; conversation = %id);
             self.again_after_late_work(id, |manager| async move {
                 manager.finish_cleanup_of(&conversation.id).await;
             });
             return;
         }
         if let Err(err) = self.core.finish_cleanup(id.clone()).await {
-            tracing::warn!(conversation = %id, error = %err, "could not record the end of an archive's cleanup; the next launch looks again");
+            crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not record the end of an archive's cleanup; the next launch looks again"; conversation = %id, error = %err);
         }
     }
 
@@ -510,7 +512,7 @@ impl SessionManager {
                 return;
             };
             if conversation.deleting {
-                tracing::info!(conversation = %id, "finishing a delete");
+                crate::logging::private_trace!(self.tab_chat_logs(id), info, "finishing a delete"; conversation = %id);
                 self.close_fence(id);
                 self.finish_delete(id).await;
                 return;
@@ -523,12 +525,12 @@ impl SessionManager {
                 let _ = self.core.finish_cleanup(id.clone()).await;
                 return;
             }
-            tracing::info!(conversation = %id, "finishing an archive's cleanup");
+            crate::logging::private_trace!(self.tab_chat_logs(id), info, "finishing an archive's cleanup"; conversation = %id);
             self.close_fence(id);
             let runs = match self.fence_runs(id).await {
                 Ok(runs) => runs,
                 Err(err) => {
-                    tracing::warn!(conversation = %id, error = %err, "could not fence the archived session's runs");
+                    crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not fence the archived session's runs"; conversation = %id, error = %err);
                     Vec::new()
                 }
             };
@@ -540,7 +542,7 @@ impl SessionManager {
     pub(super) async fn wind_down(&self, conversation: &Conversation) {
         let id = &conversation.id;
         // Its previews run in the workspace that goes next: they stop first.
-        self.stop_previews(id, "the session closed").await;
+        let _ = self.stop_previews(id, "the session closed").await;
         self.drop_prewarm(id, "the session closed");
         let conv = self.convs_lock().remove(id);
         if let Some(conv) = conv {
@@ -593,11 +595,8 @@ impl SessionManager {
         for owner in owners {
             let leftovers = self.runtime.ledger().dispose(&owner).await;
             if !leftovers.is_clean() {
-                tracing::warn!(
-                    owner,
-                    ?leftovers,
-                    "some leftovers will be retried at the next launch"
-                );
+                crate::logging::private_trace!(owner.starts_with(crate::ledger::TAB_CHAT_OWNER), warn, "some leftovers will be retried at the next launch"; owner,
+                    ?leftovers);
             }
         }
         // Its CLI session files are gone: the next CLI session starts from the transcript.
@@ -648,7 +647,7 @@ impl SessionManager {
                 );
             }
             Err(err) => {
-                tracing::warn!(conversation = %id, error = %err, "could not look at the merged session's worktree; it stays");
+                crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not look at the merged session's worktree; it stays"; conversation = %id, error = %err);
                 return String::new();
             }
         }
@@ -658,11 +657,8 @@ impl SessionManager {
         let leftovers = self.runtime.ledger().dispose(&owner).await;
         let removed = leftovers.is_clean();
         if !removed {
-            tracing::warn!(
-                owner,
-                ?leftovers,
-                "the merged session's worktree couldn't be removed; the next message retries"
-            );
+            crate::logging::private_trace!(owner.starts_with(crate::ledger::TAB_CHAT_OWNER), warn, "the merged session's worktree couldn't be removed; the next message retries"; owner,
+                ?leftovers);
         }
         let deleted = self.forget_session_worktree(&conversation).await;
         if !removed {
@@ -734,7 +730,7 @@ impl SessionManager {
                 }
                 Ok(false) => {}
                 Err(err) => {
-                    tracing::warn!(conversation = %id, error = %err, "could not delete the merged session branch");
+                    crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not delete the merged session branch"; conversation = %id, error = %err);
                 }
             }
         }
@@ -787,12 +783,12 @@ impl SessionManager {
         .await;
         match kept {
             Ok(Some(commit)) => {
-                tracing::info!(conversation = %conversation.id, commit = %commit.0, "kept the session worktree's changes as a WIP commit");
+                crate::logging::private_trace!(self.tab_chat_logs(&conversation.id), info, "kept the session worktree's changes as a WIP commit"; conversation = %conversation.id, commit = %commit.0);
                 true
             }
             Ok(None) => true,
             Err(err) => {
-                tracing::error!(conversation = %conversation.id, error = %err, "could not keep the session worktree's changes; the worktree stays");
+                crate::logging::private_trace!(self.tab_chat_logs(&conversation.id), error, "could not keep the session worktree's changes; the worktree stays"; conversation = %conversation.id, error = %err);
                 false
             }
         }
@@ -888,7 +884,7 @@ impl SessionManager {
                 });
             }
             Err(err) => {
-                tracing::warn!(conversation = %id, error = %err, "could not finish deleting a conversation; the next launch tries again")
+                crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not finish deleting a conversation; the next launch tries again"; conversation = %id, error = %err)
             }
         }
     }
@@ -935,13 +931,13 @@ impl SessionManager {
                 // would take its branches whatever was asked (a project removal stops instead,
                 // and can be done again).
                 if !has_branches && let Err(err) = self.core.mark_deleting(id.clone()).await {
-                    tracing::warn!(conversation = %id, error = %err, "could not mark a delete that waits for late work");
+                    crate::logging::private_trace!(self.tab_chat_logs(&id), warn, "could not mark a delete that waits for late work"; conversation = %id, error = %err);
                 }
                 // Its fence stays closed until it is done.
                 let again = id.clone();
                 self.again_after_late_work(&id, move |manager| async move {
                     if let Err(err) = manager.delete_now(again.clone(), delete_branches, record_kept).await {
-                        tracing::warn!(conversation = %again, error = %err, "could not finish deleting a conversation");
+                        crate::logging::private_trace!(manager.tab_chat_logs(&again), warn, "could not finish deleting a conversation"; conversation = %again, error = %err);
                     }
                 });
                 return Err(Error::Invalid(
@@ -972,12 +968,13 @@ impl SessionManager {
         record_kept: bool,
     ) -> Result<bool> {
         let id = conversation.id.clone();
+        let private_logs = conversation.tab_chat.is_some();
         let drained = self.drain(&id).await;
         self.delete_side_chats(&id).await;
         let runs = self.fence_runs(&id).await?;
         self.wind_down(&conversation).await;
         if !drained {
-            tracing::warn!(conversation = %id, "work of a deleted conversation is still going; deleting it once that ends");
+            crate::logging::private_trace!(self.tab_chat_logs(&id), warn, "work of a deleted conversation is still going; deleting it once that ends"; conversation = %id);
             return Ok(false);
         }
         self.close_runs(runs, false).await;
@@ -1055,9 +1052,14 @@ impl SessionManager {
         self.convs_lock().remove(&id);
         match store.gc_blobs().await {
             Ok(stats) => {
-                tracing::info!(conversation = %id, removed, ?own, ?stats, "conversation deleted")
+                crate::logging::private_trace!(private_logs, info, "conversation deleted"; conversation = %id, removed, ?own, ?stats)
             }
-            Err(err) => tracing::warn!(conversation = %id, error = %err, "could not collect blobs"),
+            Err(err) => {
+                crate::logging::private_trace!(private_logs, warn, "could not collect blobs"; conversation = %id, error = %err)
+            }
+        }
+        if conversation.tab_chat.is_some() {
+            self.scrub_databases().await;
         }
         Ok(true)
     }
@@ -1086,11 +1088,26 @@ impl SessionManager {
         let task_ids = tasks.iter().map(|task| task.id.0.clone()).collect();
         match store.forget_conversation(id.0.clone(), task_ids).await {
             Ok((turns, outcomes)) => {
-                tracing::info!(conversation = %id, turns, outcomes, "routing forgot a deleted conversation")
+                crate::logging::private_trace!(self.tab_chat_logs(id), info, "routing forgot a deleted conversation"; conversation = %id, turns, outcomes)
             }
             Err(err) => {
-                tracing::warn!(conversation = %id, error = %err, "could not forget a deleted conversation's routing records")
+                crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not forget a deleted conversation's routing records"; conversation = %id, error = %err)
             }
+        }
+    }
+}
+
+impl SessionManager {
+    /// A tab's chat leaves nothing, not even in the database files: their WAL is emptied, and
+    /// with `secure_delete` on, the deleted rows' pages hold no copy either.
+    pub(crate) async fn scrub_databases(&self) {
+        if self.core.store().scrub().await.is_err() {
+            tracing::warn!("could not empty the store's write-ahead log after a tab chat");
+        }
+        if let Some(routing) = self.runtime.routing_store()
+            && routing.scrub().await.is_err()
+        {
+            tracing::warn!("could not empty the routing write-ahead log after a tab chat");
         }
     }
 }
@@ -1100,7 +1117,13 @@ fn being_deleted() -> Error {
 }
 
 /// The cleanup-ledger owner and data-dir area of a conversation's CLI session.
-fn conversation_owner(conversation: &Conversation) -> (String, &'static str) {
+pub(super) fn conversation_owner(conversation: &Conversation) -> (String, &'static str) {
+    if conversation.tab_chat.is_some() {
+        return (
+            format!("{}{}", crate::ledger::TAB_CHAT_OWNER, conversation.id),
+            "tabchat",
+        );
+    }
     match conversation.kind {
         ConversationKind::Session => (format!("orch:{}", conversation.id), "orch"),
         ConversationKind::Chat => (format!("chat:{}", conversation.id), "chat"),

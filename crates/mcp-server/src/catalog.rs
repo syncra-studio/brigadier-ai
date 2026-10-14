@@ -10,8 +10,8 @@ use brigadier_core::tools::{
     QueryBrain, ReadArtifact, ReadPage, RecordFindings, RecordNodes, Remember, ReportRef,
     RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools,
     RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, StartPreview, StopPreview,
-    StopWorker, SubmitOutline, SubmitReport, SuggestFullAccess, TaskRef, ToolCall, WorkerCall,
-    WritePage,
+    StopWorker, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools, TaskRef,
+    ToolCall, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -157,6 +157,20 @@ const WRITE_PAGE: &str = "Change the page the user's latest message was sent fro
 text in Markdown, and a new title only if asked. Pass the revision read_page returned: if the page \
 changed since, nothing is written and you read it again. The user's open tab shows the change.";
 
+const READ_TAB_PAGE: &str = "Read the page beside this chat: its title, its text in Markdown \
+and its revision. Only that page.";
+
+const WRITE_TAB_PAGE: &str = "Change the page beside this chat: its whole new text in Markdown, \
+and a new title only if asked. Pass the revision read_page returned: if the page changed since, \
+nothing is written and you read it again. The user sees the change beside the chat.";
+
+const READ_TAB_FILE: &str = "Read the file beside this chat: its path, its text and its \
+revision.";
+
+const WRITE_TAB_FILE: &str = "Change the file beside this chat: its whole new text. Pass the \
+revision read_tab_file returned: if the file changed since, nothing is written and you read it \
+again. This is the only file you may change.";
+
 const LAND_PHASE: &str = "Land a finished `implement` or `merge` task's commits on the \
 session's branch: the lead's task once its report is in, or a verifier you started for big or \
 risky work (its commits hold the lead's). Call it after reading the report. Brigadier commits \
@@ -249,16 +263,20 @@ const START_PREVIEW: &str = "Start something the user wants to see running (a de
 the app, a docs site) and keep it running: it lives across your turns until you stop it, and \
 answers at once with its first output. Run the command in the foreground (no trailing `&`). It \
 runs in the workspace (or `workdir` inside it) with this session's access, in its own process \
-group. Tell the user where to look (the URL and port). It stops when you call stop_preview, \
-when the user presses Stop, and when the session is merged, archived or deleted; for one-off \
-commands use your shell instead.";
+group. It starts as Starting and reads running only once it is ready (a web preview's URL or \
+port answers, or an app's window opens): until preview_log says it is running, tell the user \
+it is starting, not that it runs. `kind` \"app\" (inferred for `tauri dev` and Electron) is a \
+desktop app with its own window and no URL; for \"web\" tell the user where to look (the URL \
+and port). It stops when you call stop_preview, when the user presses Stop, and when the \
+session is merged, archived or deleted; for one-off commands use your shell instead.";
 
 const STOP_PREVIEW: &str = "Stop a preview (`id`, e.g. \"preview-1\") or, without an id, \
-every running one: SIGTERM, then a kill after a few seconds. Returns how each ended.";
+every running one: SIGTERM, then a kill after a few seconds. It is removed from the user's \
+list; its log stays readable with read_artifact. Returns how each ended.";
 
 const PREVIEW_LOG: &str = "The last lines of a preview's output (stdout and stderr together; \
-the latest preview's by default), with its state and an out-… id to page through its whole log \
-with read_artifact.";
+the latest preview's by default), with its state (starting, running, paused or ended) and an \
+out-… id to page through its whole log with read_artifact.";
 
 const LIST_TASKS: &str = "List this session's tasks: id, title, kind, status and model.";
 
@@ -322,6 +340,8 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
     static CHECKER: OnceLock<Vec<Tool>> = OnceLock::new();
     static JOB: OnceLock<Vec<Tool>> = OnceLock::new();
     static CHAT: OnceLock<Vec<Tool>> = OnceLock::new();
+    static TAB_PAGE: OnceLock<Vec<Tool>> = OnceLock::new();
+    static TAB_FILE: OnceLock<Vec<Tool>> = OnceLock::new();
     match role {
         Role::Orchestrator { run, .. } => match run {
             RunTools::None => ORCHESTRATOR.get_or_init(orchestrator_tools),
@@ -355,6 +375,28 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
         }),
         Role::BrainJob { .. } => JOB.get_or_init(job_tools),
         Role::Chat { .. } => CHAT.get_or_init(chat_tools),
+        Role::TabChat {
+            tools: TabTools::Page,
+            ..
+        } => TAB_PAGE.get_or_init(|| {
+            vec![
+                tool("read_page", READ_TAB_PAGE, input_schema::<ReadPage>()),
+                tool("write_page", WRITE_TAB_PAGE, input_schema::<WritePage>()),
+            ]
+        }),
+        Role::TabChat {
+            tools: TabTools::File,
+            ..
+        } => TAB_FILE.get_or_init(|| {
+            vec![
+                tool("read_tab_file", READ_TAB_FILE, no_arguments()),
+                tool(
+                    "write_tab_file",
+                    WRITE_TAB_FILE,
+                    input_schema::<WriteTabFile>(),
+                ),
+            ]
+        }),
         Role::OutputHook { .. } => &[],
     }
 }
@@ -634,6 +676,18 @@ pub fn parse_call(
             )?))),
             _ => Err(unknown()),
         },
+        Role::TabChat { tools, .. } => {
+            let call = match (tools, name) {
+                (TabTools::Page, "read_page") => TabChatCall::ReadPage(args(name, arguments)?),
+                (TabTools::Page, "write_page") => TabChatCall::WritePage(args(name, arguments)?),
+                (TabTools::File, "read_tab_file") => TabChatCall::ReadFile,
+                (TabTools::File, "write_tab_file") => {
+                    TabChatCall::WriteFile(args(name, arguments)?)
+                }
+                _ => return Err(unknown()),
+            };
+            Ok(ToolCall::TabChat(call))
+        }
         Role::OutputHook { .. } => Err(unknown()),
     }
 }

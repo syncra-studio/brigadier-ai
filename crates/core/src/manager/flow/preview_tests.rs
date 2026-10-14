@@ -50,6 +50,14 @@ fn thread(replies: Replies) -> Script {
                         "start_preview",
                         json!({ "command": command, "name": "site" }),
                     )
+                } else if let Some(command) = input
+                    .lines()
+                    .find_map(|line| line.strip_prefix("start-app "))
+                {
+                    (
+                        "start_preview",
+                        json!({ "command": command, "name": "app", "kind": "app" }),
+                    )
                 } else if input.contains("Please stop it.") {
                     ("stop_preview", json!({}))
                 } else if input.contains("Please merge.") {
@@ -161,7 +169,7 @@ async fn a_preview_runs_in_the_workspace_and_outlives_the_threads_cli() {
     );
     let started = replies.lock().unwrap()[0].1.clone();
     assert!(
-        started.contains("preview-1 \"site\" is running"),
+        started.contains("preview-1 \"site\" is starting, not ready yet"),
         "{started}"
     );
     assert!(started.contains("listening on 8123"), "{started}");
@@ -207,7 +215,7 @@ async fn a_preview_runs_in_the_workspace_and_outlives_the_threads_cli() {
         .await;
     let log = replies.lock().unwrap()[1].1.clone();
     assert!(
-        log.starts_with("[preview-1 \"site\" running, pid "),
+        log.starts_with("[preview-1 \"site\" starting, not ready yet ("),
         "{log}"
     );
     assert!(log.contains("full log: read_artifact out-"), "{log}");
@@ -234,21 +242,17 @@ async fn a_preview_runs_in_the_workspace_and_outlives_the_threads_cli() {
     flow.until("the stop", |_| replies.lock().unwrap().len() == 3)
         .await;
     let stopped = replies.lock().unwrap()[2].1.clone();
-    assert_eq!(
-        stopped,
-        "preview-1 \"site\": stopped (stopped by the thread)"
+    assert!(
+        stopped.starts_with(
+            "preview-1 \"site\": stopped (stopped by the thread); removed from the user's \
+             list, its log: read_artifact out-"
+        ),
+        "{stopped}"
     );
     gone(&flow, pid).await;
     gone(&flow, child).await;
-    let board = flow.board().await;
-    let ended = &board.previews["preview-1"];
-    assert_eq!(
-        ended.state,
-        PreviewState::Stopped {
-            reason: "stopped by the thread".into()
-        }
-    );
-    assert!(ended.ended_at_ms.is_some() && ended.log.is_some());
+    // The thread's stop clears it, as the user's Clear finished would.
+    assert!(flow.board().await.previews.is_empty());
     assert!(
         !ledger
             .artifacts(&owner)
@@ -313,6 +317,7 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
         .await
         .unwrap();
     gone(&flow, child).await;
+    assert!(!flow.board().await.previews.contains_key(&preview.id));
     flow.say("Is the site up?").await;
     flow.settled().await;
     let last = inputs.lock().unwrap().last().cloned().unwrap();
@@ -324,6 +329,12 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
         )),
         "{last}"
     );
+
+    assert!(
+        last.contains("removed; its ID is no longer available"),
+        "{last}"
+    );
+    assert!(last.contains("read_artifact"), "{last}");
 
     // An end on its own, after the start answered.
     flow.say("start sleep 2; echo 'Error: port 3000 is taken' >&2; exit 4")
@@ -407,12 +418,7 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
         .unwrap();
     gone(&flow, preview.pid.unwrap()).await;
     gone(&flow, child).await;
-    assert_eq!(
-        flow.board().await.previews[&preview.id].state,
-        PreviewState::Stopped {
-            reason: "stopped by the user".into()
-        }
-    );
+    assert!(!flow.board().await.previews.contains_key(&preview.id));
     flow.manager
         .resume_queue(flow.conversation.clone())
         .await
@@ -522,6 +528,7 @@ async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end(
             name: None,
             env: None,
             workdir: None,
+            kind: None,
         };
         manager.start_preview(&id, args).await
     });
@@ -532,7 +539,12 @@ async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end(
     .await;
     let stops = flow.manager.previews.stops_of(&flow.conversation);
     let (manager, id) = (flow.manager.clone(), flow.conversation.clone());
-    let stop = tokio::spawn(async move { manager.stop_previews(&id, "stopped by the user").await });
+    let stop = tokio::spawn(async move {
+        manager
+            .stop_previews(&id, "stopped by the user")
+            .await
+            .unwrap()
+    });
     super::eventually("the stop to be counted", || {
         flow.manager.previews.stops_of(&flow.conversation) != stops
     })
@@ -562,7 +574,8 @@ async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end(
         .unwrap();
     flow.manager
         .stop_previews(&flow.conversation, "stopped by the user")
-        .await;
+        .await
+        .unwrap();
     gone(&flow, child).await;
     let ended = flow.board().await.previews[&preview.id].clone();
     assert!(!ended.state.is_running());
@@ -1044,9 +1057,10 @@ heartbeat('parent')
         .resume_preview(flow.conversation.clone(), preview.id.clone())
         .await
         .unwrap();
+    // It never got ready (nothing answers, no window), so it starts again.
     assert_eq!(
         flow.board().await.previews[&preview.id].state,
-        PreviewState::Running
+        PreviewState::Starting
     );
     super::eventually("all heartbeats to continue", || {
         names
@@ -1063,10 +1077,7 @@ heartbeat('parent')
         .stop_preview(flow.conversation.clone(), Some(preview.id.clone()))
         .await
         .unwrap();
-    assert!(matches!(
-        flow.board().await.previews[&preview.id].state,
-        PreviewState::Stopped { .. }
-    ));
+    assert!(!flow.board().await.previews.contains_key(&preview.id));
     super::eventually(
         "all processes to handle SIGTERM, including the paused grandchild",
         || {
@@ -1212,5 +1223,238 @@ async fn clear_keeps_live_previews_and_artifacts_and_reloads_without_reusing_ids
     assert!(flow.board().await.previews.is_empty());
     let (next, _) = start(&flow, &tmp.join("next.pid")).await;
     assert_eq!(next.id, "preview-4");
+    flow.stop().await;
+}
+
+fn state_of(board: &Board, id: &str) -> PreviewState {
+    board.previews[id].state.clone()
+}
+
+/// A web preview reads Starting until the local URL it printed answers an HTTP request (a
+/// server that accepts but doesn't answer yet is not enough), then Running with that URL; the
+/// thread hears it is starting, not running, and `preview_log` gives its state.
+#[tokio::test]
+async fn a_web_preview_runs_once_its_url_answers() {
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt as _;
+
+    let replies: Replies = Arc::default();
+    let flow = Flow::start("preview-url", Options::default(), thread(replies.clone())).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://127.0.0.1:{}/",
+        listener.local_addr().unwrap().port()
+    );
+    let (answer, mut answering) = tokio::sync::watch::channel(false);
+    let server = tokio::spawn(async move {
+        let mut held = Vec::new();
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            if *answering.borrow_and_update() {
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            } else {
+                held.push(stream);
+            }
+        }
+    });
+    flow.say(&format!("start echo '  Local: {url}'; sleep 600"))
+        .await;
+    flow.settled().await;
+    let started = replies.lock().unwrap()[0].1.clone();
+    assert!(
+        started.contains("preview-1 \"site\" is starting, not ready yet"),
+        "{started}"
+    );
+    assert!(started.contains("Don't tell the user it runs"), "{started}");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        state_of(&flow.board().await, "preview-1"),
+        PreviewState::Starting
+    );
+    let log = flow
+        .manager
+        .preview_log(&flow.conversation, None, None)
+        .await
+        .unwrap();
+    assert!(log.contains("starting, not ready yet"), "{log}");
+
+    answer.send(true).unwrap();
+    let board = flow
+        .until("the preview to be ready", |board| {
+            state_of(board, "preview-1") == PreviewState::Running
+        })
+        .await;
+    assert_eq!(
+        board.previews["preview-1"].url.as_deref(),
+        Some(url.as_str())
+    );
+    let log = flow
+        .manager
+        .preview_log(&flow.conversation, None, None)
+        .await
+        .unwrap();
+    assert!(
+        log.starts_with("[preview-1 \"site\" running, pid "),
+        "{log}"
+    );
+    server.abort();
+    flow.stop().await;
+}
+
+/// A web preview that prints no URL is ready once a port a process of its group listens on
+/// answers, even when the launcher that started that process has exited (it is reparented,
+/// no longer the preview's descendant, but still in its process group).
+#[tokio::test]
+async fn a_web_preview_runs_once_a_port_its_group_listens_on_answers() {
+    let replies: Replies = Arc::default();
+    let flow = Flow::start("preview-port", Options::default(), thread(replies.clone())).await;
+    let tmp = scratch("port");
+    let pids = tmp.join("server.pid");
+    flow.say(&format!(
+        "start sh -c 'python3 -m http.server 0 --bind 127.0.0.1 >/dev/null 2>&1 & echo $! > {}'; \
+         echo launched; sleep 600",
+        pids.display()
+    ))
+    .await;
+    let board = flow
+        .until("the preview to be ready", |board| {
+            board
+                .previews
+                .get("preview-1")
+                .is_some_and(|preview| preview.state == PreviewState::Running)
+        })
+        .await;
+    let preview = &board.previews["preview-1"];
+    assert_eq!(preview.url, None, "it printed none");
+    let server = child_pid(&pids);
+    let processes = flow.manager.runtime.platform().processes();
+    let leader = preview.pid.unwrap();
+    assert_eq!(processes.group_of(server), Some(leader));
+    assert!(
+        !processes.descendants(leader).unwrap().contains(&server),
+        "its launcher exited, so it was reparented"
+    );
+    flow.say("Please stop it.").await;
+    flow.until("the stop", |_| replies.lock().unwrap().len() == 2)
+        .await;
+    gone(&flow, server).await;
+    flow.stop().await;
+}
+
+/// A desktop app preview never gets the frontend address it prints, and without a window of
+/// its own it stays Starting (where windows can be seen). The user's Stop removes it from the list.
+#[tokio::test]
+async fn an_app_preview_has_no_url_and_waits_for_its_window() {
+    use std::time::Duration;
+
+    let replies: Replies = Arc::default();
+    let flow = Flow::start("preview-app", Options::default(), thread(replies.clone())).await;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "http://localhost:{}/",
+        listener.local_addr().unwrap().port()
+    );
+    flow.say(&format!("start-app echo '  Local: {url}'; sleep 600"))
+        .await;
+    flow.settled().await;
+    let started = replies.lock().unwrap()[0].1.clone();
+    assert!(started.contains("It is a desktop app"), "{started}");
+    // Where windows can't be seen, an app reads as running once started.
+    let sees = crate::manager::preview_ready::SEES_WINDOWS;
+    if sees {
+        assert!(
+            started.contains(
+                "preview-1 \"app\" is starting, not ready yet: it reads Starting until it \
+                 opens its window"
+            ),
+            "{started}"
+        );
+    }
+    // Something listens on the address it printed: that isn't the app.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (_, url_seen) = flow
+        .manager
+        .preview_log_tail(flow.conversation.clone(), "preview-1".into(), 10)
+        .await
+        .unwrap();
+    assert_eq!(url_seen, None);
+    let board = flow.board().await;
+    assert_eq!(
+        board.previews["preview-1"].kind,
+        crate::work::PreviewKind::App
+    );
+    let expected = if sees {
+        PreviewState::Starting
+    } else {
+        PreviewState::Running
+    };
+    assert_eq!(state_of(&board, "preview-1"), expected);
+    flow.manager
+        .stop_preview(flow.conversation.clone(), Some("preview-1".into()))
+        .await
+        .unwrap();
+    assert!(!flow.board().await.previews.contains_key("preview-1"));
+
+    drop(listener);
+    flow.stop().await;
+}
+
+// Row Stop, Stop all and the composer's Stop remove only user-stopped work.
+// Natural exits remain inspectable, even if Stop arrives after the process ended.
+#[tokio::test]
+async fn user_stops_remove_previews_but_keep_natural_exits() {
+    let flow = Flow::start(
+        "preview-user-removal",
+        Options::default(),
+        thread(Arc::default()),
+    )
+    .await;
+    let tmp = scratch("user-removal");
+    flow.say("start echo failed >&2; exit 3").await;
+    flow.settled().await;
+    let ended = flow.board().await.sorted_previews().pop().unwrap();
+    assert!(matches!(
+        ended.state,
+        PreviewState::Exited { code: Some(3), .. }
+    ));
+    flow.manager
+        .stop_preview(flow.conversation.clone(), Some(ended.id.clone()))
+        .await
+        .unwrap();
+    assert_eq!(flow.board().await.previews[&ended.id].state, ended.state);
+
+    for mode in ["row", "all", "composer"] {
+        let (preview, child) = start(&flow, &tmp.join(format!("{mode}.pid"))).await;
+        flow.settled().await;
+        match mode {
+            "row" => flow
+                .manager
+                .stop_preview(flow.conversation.clone(), Some(preview.id.clone()))
+                .await
+                .unwrap(),
+            "all" => flow
+                .manager
+                .stop_preview(flow.conversation.clone(), None)
+                .await
+                .unwrap(),
+            _ => flow
+                .manager
+                .interrupt(flow.conversation.clone())
+                .await
+                .unwrap(),
+        }
+        gone(&flow, child).await;
+        let board = flow.board().await;
+        assert!(
+            !board.previews.contains_key(&preview.id),
+            "{mode} kept its stopped preview"
+        );
+        assert_eq!(
+            board.previews[&ended.id].state, ended.state,
+            "{mode} removed a natural exit"
+        );
+    }
     flow.stop().await;
 }

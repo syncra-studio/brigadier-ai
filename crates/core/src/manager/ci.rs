@@ -1416,6 +1416,7 @@ mod tests {
                 answers: Vec::new(),
                 created_at_ms: 5,
                 answered_at_ms: answered,
+                words_id: None,
             },
         );
         for (seq, (sha, result, consented)) in watches.iter().enumerate() {

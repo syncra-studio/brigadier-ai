@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive } from "@/fixtures/headless";
 
 test("toolbar order, right sidebar, its keys, Files search, draft project folder and worker/plan-only right panel routes", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "toolbar.html", "toolbar-result", 9500)) as Record<string, unknown>;
+  const seen = JSON.parse(await renderFixtureLive(t, "toolbar.html?live=1", "toolbar-result", 30000)) as Record<string, unknown>;
   assert.deepEqual(seen.sessionControls, ["Context", "Terminal", "Right sidebar"]);
   assert.deepEqual(seen.draftControls, ["Context", "Terminal", "Right sidebar"]);
   assert.deepEqual(seen.views, ["Files", "Search", "Source"]);
@@ -12,7 +12,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.closedFiles, null);
   assert.equal(seen.source, "source");
   assert.equal(seen.switchedFiles, "files");
-  assert.equal(seen.atEdge, true, "the right sidebar runs the window's full height at its right edge");
+  assert.equal(seen.atEdge, true, "the right sidebar runs from the titlebar's bottom to the window's at its right edge, its views at its top");
   assert.equal(seen.keyClosed, null, "⌥⌘B hides the right sidebar");
   assert.deepEqual(seen.menuKey, { code: "KeyB", alt: true });
   assert.equal(seen.reopened, "files", "⌘P shows the closed right sidebar on Files");
@@ -48,8 +48,15 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.closingShown, "", "closing gives the room back at once");
   assert.equal(seen.closedShown, "");
   assert.equal(seen.planTab, "plan");
-  assert.equal(seen.previewPopover, true);
-  assert.equal(seen.previewReopened, false, "a chip cleared while open comes back closed");
+  for (const field of ["preferenceKept", "besideOpened", "returnClosed", "loadingClosed", "composerKeptFocus", "loadedClosed", "updateClosed", "backgroundClosed", "autoOpened", "nestedOpened", "nestedDismissed"]) assert.equal(seen[field], true, field);
+  for (const field of ["fileTabClosed", "browserTabClosed", "autoEscapeClosed", "activitiesUnfolded", "activitiesFoldKept"]) assert.equal(seen[field], true, field);
+  assert.equal(seen.autoEscapeFocus, "Fixture composer", "Escape after an automatic open leaves the composer focused");
+  assert.equal(seen.enteredEscapeFocus, "Context", "entering the auto-opened card restores normal focus return");
+  assert.equal(seen.manualOpenFocus, "Context");
+  assert.equal(seen.manualEscapeFocus, "Context");
+  assert.equal(seen.previewSection, true);
+  assert.equal(seen.previewCleared, true, "the pill disappears when previews are cleared");
+  assert.equal(seen.previewReturned, true, "the context pill returns when previews arrive");
   assert.equal(seen.draftFiles, "files");
   assert.match(String(seen.draftTree), /src.*package\.json/);
   assert.equal(seen.draftComposer, "@package.json ");

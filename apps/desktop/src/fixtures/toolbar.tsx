@@ -10,16 +10,19 @@ import { updateDraft } from "@/app/conversation/draftSetup";
 import { MentionMemory } from "@/app/conversation/Mentions";
 import { NewTabTools } from "@/app/conversation/NewTabTools";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
-import { PreviewChip } from "@/app/conversation/PreviewChip";
+import { revealNewPreviews, useSummary } from "@/app/conversation/summaryState";
 import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { useSidePanel } from "@/app/conversation/SidePanel";
 import { WorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
+import { fixtureInput } from "@/fixtures/input";
 import { MENU_KEYS } from "@/app/paneShortcuts";
+import { SummarySection } from "@/components/assistant-ui/elements/summary-section";
 import { TitlebarTips } from "@/components/titlebar-button";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import type { Conversation, Request } from "@/ipc/generated";
-import { emptyBoard, useBoard } from "@/state/board";
+import type { Conversation, EventEnvelope, Request } from "@/ipc/generated";
+import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { showPlanDoc } from "@/state/planDoc";
+import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { emitWorkspaceChanged } from "@/state/workspaceCache";
 
@@ -32,7 +35,7 @@ useApp.setState({ conversations: { [id]: { ...conversation, kind: "session" } },
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: { preview: {
   id: "preview", conversationId: id, name: "Web", command: "pnpm dev",
   workdir: "/fixture", workspace: "/fixture", pid: null, log: null,
-  state: { type: "running" }, startedAtMs: 0, endedAtMs: null,
+  state: { type: "running" }, startedAtMs: Date.now() - 90000, endedAtMs: null, kind: "web",
 } } } });
 let keyboardReturns = 0;
 let projectChanged = false;
@@ -56,11 +59,13 @@ mockIPC((command, args) => {
 const mentions = new MentionMemory();
 // Only the mention memory is read by the panes.
 const target = { mentions } as unknown as ComposerTarget;
+const session: Conversation = { ...conversation, kind: "session", setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "fixture" }, permission: "askForApproval", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } };
 const previews = useBoard.getState().board!.previews;
 
 function Fixture() {
   const [kind, setKind] = useState<"session" | "draft" | "chat">("session");
   const [result, setResult] = useState("");
+  const [foldProbe, setFoldProbe] = useState(true);
   const { panel, agents, workspace } = useSidePanel(kind === "draft" ? null : id, kind !== "chat", false, "project");
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const [seen] = useState<Record<string, unknown>>({});
@@ -94,9 +99,11 @@ function Fixture() {
     });
     at(1300, () => {
       seen.files = pane(); seen.dockOpenSlide = slide("workspace-pane");
-      // A full-height column at the window's right edge, its views' icons in the titlebar strip.
+      // A column at the window's right edge below the titlebar, its views' icons in a row at its top.
       const dock = document.querySelector('[data-slot="workspace-pane"]')!.getBoundingClientRect();
-      seen.atEdge = dock.top === 0 && Math.abs(dock.right - window.innerWidth) < 1 && Math.abs(dock.bottom - window.innerHeight) < 1;
+      const bar = document.querySelector('header[data-slot="test-toolbar"]')!.getBoundingClientRect();
+      const views = document.querySelector('[data-slot="workspace-pane"] [role="tablist"]')!.getBoundingClientRect();
+      seen.atEdge = dock.top === bar.bottom && views.top === dock.top && Math.abs(dock.right - window.innerWidth) < 1 && Math.abs(dock.bottom - window.innerHeight) < 1;
       seen.views = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => tab.getAttribute("aria-label"));
       click("Right sidebar");
       // Through the closing slide the contents stay; once it is over they go.
@@ -162,22 +169,100 @@ function Fixture() {
       click("Context worker");
     });
     at(4000, () => { seen.contextWorkerRight = right(); click("Open plan"); });
-    at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click(); });
-    at(4700, () => { seen.previewPopover = !!document.querySelector('[aria-label="Previews"]'); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } }); });
-    at(4850, () => { useBoard.setState({ board: { ...useBoard.getState().board!, previews } }); });
-    at(5000, () => { seen.previewReopened = !!document.querySelector('[aria-label="Previews"]'); setKind("draft"); });
+    at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); });
+    const chip = () => document.querySelector<HTMLButtonElement>('[data-slot="summary-card"] [data-slot="preview-chip"]');
+    const arrival = (previewId: string, conversationId = id) => {
+      const events = [{ stream: `conversation:${conversationId}`, event: { type: "previewUpdated", preview: { ...previews.preview!, id: previewId, conversationId } } }] as EventEnvelope[];
+      revealNewPreviews(events);
+      applyBoardEvents(events);
+    };
+    at(4320, () => {
+      // Seed the shared preference even when the floating card is currently unmounted.
+      document.querySelector<HTMLButtonElement>('[data-fold-probe] > header button[aria-expanded="true"]')!.click();
+      setFoldProbe(false);
+      document.querySelector<HTMLButtonElement>('[data-activities] > header button[aria-expanded="true"]')?.click();
+    });
+    at(4350, () => {
+      useSummary.setState({ floating: false });
+      useApp.setState({ pinnedSummary: false });
+      document.querySelector<HTMLTextAreaElement>('[aria-label="Fixture composer"]')?.focus();
+      const board = useBoard.getState().board!;
+      useBoard.setState({ board: { ...board, loaded: false, previews: {} } });
+      arrival("loading");
+      seen.loadingClosed = !useSummary.getState().floating && !useApp.getState().pinnedSummary;
+      useBoard.setState({ board });
+      seen.loadedClosed = !useSummary.getState().floating;
+      arrival("preview");
+      seen.updateClosed = !useSummary.getState().floating && !useApp.getState().pinnedSummary;
+      arrival("background", "other");
+      seen.backgroundClosed = !useSummary.getState().floating && !useApp.getState().pinnedSummary;
+      const layout = useSummary.getState().layout;
+      useSummary.setState({ layout: "beside" });
+      localStorage.setItem("brigadier.pinnedSummary", "false");
+      arrival("beside-preview");
+      seen.besideOpened = useApp.getState().pinnedSummary;
+      seen.preferenceKept = localStorage.getItem("brigadier.pinnedSummary") === "false";
+      useApp.setState({ pinnedSummary: false, selection: { type: "conversation", id: "other" } });
+      arrival("offscreen-preview");
+      useApp.setState({ selection: { type: "conversation", id } });
+      seen.returnClosed = !useApp.getState().pinnedSummary && !useSummary.getState().floating;
+      useSummary.setState({ layout });
+      for (const tab of ["file:README.md", "browser:fixture"]) {
+        useSessionTabs.setState({ sessions: { [id]: { tabs: [], active: tab } } });
+        arrival(tab);
+        seen[tab.startsWith("file") ? "fileTabClosed" : "browserTabClosed"] = !useSummary.getState().floating;
+      }
+      useSessionTabs.setState({ sessions: { [id]: { tabs: [], active: CHAT_TAB } } });
+      arrival("new-preview");
+    });
+    at(4500, () => {
+      setFoldProbe(true);
+      seen.activitiesUnfolded = !!document.querySelector('[data-activities]:not([data-folded])');
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    at(4750, () => {
+      seen.activitiesFoldKept = !!document.querySelector('[data-fold-probe][data-folded]');
+      seen.autoEscapeClosed = !useSummary.getState().floating;
+      seen.autoEscapeFocus = document.activeElement?.getAttribute("aria-label");
+      arrival("focus-preview");
+    });
+    at(4950, () => {
+      chip()?.focus();
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    at(5200, () => {
+      seen.enteredEscapeFocus = document.activeElement?.getAttribute("aria-label");
+      click("Context");
+    });
+    at(5450, () => {
+      seen.manualOpenFocus = document.activeElement?.getAttribute("aria-label");
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    at(5700, () => {
+      seen.manualEscapeFocus = document.activeElement?.getAttribute("aria-label");
+      document.querySelector<HTMLTextAreaElement>('[aria-label="Fixture composer"]')?.focus();
+      arrival("nested-preview");
+    });
+    at(6500, () => { seen.autoOpened = useSummary.getState().floating && !!chip(); seen.composerKeptFocus = document.activeElement?.getAttribute("aria-label") === "Fixture composer"; chip()?.click(); });
+    at(6600, () => {
+      seen.nestedOpened = !!document.querySelector('[role="dialog"][aria-label="Previews"][data-state="open"]') && !!chip();
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    at(6700, () => { seen.previewSection = chip()?.closest("[data-activities]")?.querySelector("header")?.textContent === "Activities"; seen.nestedDismissed = !document.querySelector('[role="dialog"][aria-label="Previews"][data-state="open"]') && !!chip(); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } }); });
+    at(6850, () => { seen.previewCleared = !chip() && !document.querySelector("[data-activities]"); useBoard.setState({ board: { ...useBoard.getState().board!, previews } }); });
+    at(7000, () => { seen.previewReturned = !!chip(); setKind("draft"); });
     const buttons = (scope: string) => [...document.querySelectorAll(`${scope} button`)].map((button) => button.textContent?.trim());
-    at(5200, () => { seen.draftControls = controls(); seen.draftRight = right();
+    at(7200, () => { seen.draftControls = controls(); seen.draftRight = right();
       // ⇧⌘E shows Files, whether the sidebar is open or not.
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyE", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
     });
-    at(5600, () => {
+    at(7600, () => {
       seen.draftSourceCount = document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent ?? null;
       seen.draftFiles = pane(); seen.draftTree = document.querySelector('[data-slot="workspace-pane"] [role="tree"]')?.textContent;
       document.querySelector<HTMLButtonElement>('[data-slot="workspace-pane"] button[title="package.json"]')?.click();
     });
-    at(5900, () => { seen.draftComposer = runtime.thread.composer.getState().text; seen.draftMention = [...mentions.known()]; click("Source"); });
-    at(6200, () => {
+    at(7900, () => { seen.draftComposer = runtime.thread.composer.getState().text; seen.draftMention = [...mentions.known()]; click("Source"); });
+    at(8200, () => {
       seen.draftSource = buttons('[data-slot="source-panel"]'); seen.draftCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.draftNote = !!document.querySelector('[data-slot="own-copy-note"]');
       const box = document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')!;
@@ -185,23 +270,23 @@ function Fixture() {
       box.dispatchEvent(new Event("input", { bubbles: true }));
       click("Right sidebar");
     });
-    at(6400, () => { seen.closedSource = pane(); click("Right sidebar"); });
-    at(6600, () => {
+    at(8400, () => { seen.closedSource = pane(); click("Right sidebar"); });
+    at(8600, () => {
       seen.keptMessage = document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')?.value;
       updateDraft("project", { environment: "newWorktree" });
     });
-    at(6900, () => {
+    at(8900, () => {
       seen.worktreeSource = buttons('[data-slot="source-panel"]'); seen.worktreeCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent;
       // ⇧⌘F shows Search with its field taking the keyboard; a draft making its own copy has no Replace.
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
       useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
     });
-    at(6850, () => {
+    at(8850, () => {
       projectChanged = true;
       emitWorkspaceChanged({ type: "project", projectId: "project" });
     });
-    at(7000, () => {
+    at(9000, () => {
       seen.draftSearch = pane();
       seen.sourceCountInSearch = document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent;
       seen.selectedTabs = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => [tab.getAttribute("aria-label"), tab.getAttribute("aria-selected"), getComputedStyle(tab).backgroundColor]);
@@ -209,39 +294,44 @@ function Fixture() {
       seen.draftSearchReplace = !!document.querySelector('[data-slot="workspace-pane"] input[aria-label="Replace"]');
       setKind("chat");
     });
-    at(7100, () => { click("Context"); });
-    at(7300, () => { seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context"); });
-    at(7700, () => { seen.contextClosed = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed"); click("Context"); });
-    at(8100, () => { seen.contextOpened = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") ?? "false"; const board = useBoard.getState().board!; useBoard.setState({ board: { ...board, context: { usedTokens: 1200, windowTokens: 10000 } } }); });
-    at(8500, () => { seen.chatUsage = document.querySelector('[data-slot="summary-card"]')?.textContent; setResult(JSON.stringify(seen)); });
+    at(9100, () => { if (document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") !== "true") click("Context"); });
+    at(9300, () => { seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context"); });
+    at(9700, () => { seen.contextClosed = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed"); click("Context"); });
+    at(10100, () => { seen.contextOpened = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") ?? "false"; const board = useBoard.getState().board!; useBoard.setState({ board: { ...board, context: { usedTokens: 1200, windowTokens: 10000 } } }); });
+    at(10500, () => { seen.chatUsage = document.querySelector('[data-slot="summary-card"]')?.textContent; setResult(JSON.stringify(seen)); });
     return () => timers.forEach(clearTimeout);
   }, [seen, runtime]);
   return <AssistantRuntimeProvider runtime={runtime}><ComposerTargetContext.Provider value={target}>
     <WorkspacePaneContext.Provider value={workspace}><RightSidebarContext.Provider value={panel}>
-      <div className="bg-background text-foreground flex h-screen min-w-0 flex-1">
+      <SummaryFloat>
+      {/* As ConversationView lays it out: the top bar across the window, the panels below it. */}
+      <div className="bg-background text-foreground flex h-screen min-w-0 flex-1 flex-col">
+        <header data-slot="test-toolbar" className="h-titlebar flex shrink-0 items-center justify-end">
+          <TitlebarTips><ConversationToolbar kind={kind === "chat" ? "chat" : "session"} /></TitlebarTips>
+        </header>
+        <div className="flex min-h-0 min-w-0 flex-1">
         <main className="flex min-w-0 flex-1 flex-col">
-          <SummaryFloat>
-            <header data-slot="test-toolbar" className="h-titlebar flex shrink-0 items-center justify-end">
-              <TitlebarTips><ConversationToolbar kind={kind === "chat" ? "chat" : "session"} /></TitlebarTips>
-            </header>
             <div className="flex min-h-0 flex-1">
               <SummaryPane summary>
-                {kind === "chat" && <PinnedSummary conversation={conversation} />}
+                {kind !== "draft" && <PinnedSummary conversation={kind === "session" ? session : conversation} />}
+                <textarea aria-label="Fixture composer" />
                 <NewTabTools conversationId={id} tabId="new" />
                 <button aria-label="Thread worker" onClick={() => agents.setPanel("worker")}>Thread worker</button>
                 <button aria-label="Composer worker" onClick={() => agents.setPanel("worker")}>Composer worker</button>
                 <button aria-label="Context worker" onClick={() => agents.setPanel(null)}>Context worker</button>
                 <button aria-label="Open plan" onClick={() => { showPlanDoc(id, { type: "plan", id: "plan" }); panel.openTab("plan"); }}>Open plan</button>
-                <PreviewChip conversationId={id} />
               </SummaryPane>
             </div>
-          </SummaryFloat>
         </main>
         {kind !== "draft" && <RightSidebar conversationId={id} />}
         <WorkspacePane />
+        </div>
       </div>
+      </SummaryFloat>
+      {foldProbe && <div hidden><SummarySection data-fold-probe foldKey="activities" title="Activities" /></div>}
       {result && <pre id="toolbar-result">{result}</pre>}
     </RightSidebarContext.Provider></WorkspacePaneContext.Provider>
   </ComposerTargetContext.Provider></AssistantRuntimeProvider>;
 }
+if (new URLSearchParams(location.search).has("live")) await fixtureInput({ type: "viewport", width: 800, height: 600 });
 createRoot(document.getElementById("root")!).render(<SidebarProvider defaultOpen={false}><Fixture /></SidebarProvider>);

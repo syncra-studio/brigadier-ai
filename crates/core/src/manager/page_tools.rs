@@ -9,9 +9,9 @@
 //! refused, never overwritten.
 
 use super::SessionManager;
-use crate::model::{ConversationId, Mention, MessageRole};
+use crate::model::{ConversationId, Mention, MessageRole, TabChat, TabTarget};
 use crate::pages::{PageContent, PageWriteOutcome, Pages};
-use crate::tools::{ReadPage, WritePage};
+use crate::tools::{ReadPage, TabChatCall, ToolReply, WritePage, WriteTabFile};
 use crate::{Error, Result};
 use std::sync::Arc;
 
@@ -56,18 +56,38 @@ impl SessionManager {
 
     /// The pages folder, if `page_id` is the page the user's latest message came from.
     async fn page_access(&self, id: &ConversationId, page_id: &str) -> Result<Arc<Pages>> {
-        match self.granted_page(id).await? {
-            Some(granted) if granted == page_id => {}
-            Some(granted) => {
+        match self.core.conversation(id)?.tab_chat {
+            // A tab's chat has its tab's page, always, and no other.
+            Some(TabChat {
+                target: TabTarget::Page { page_id: granted },
+                ..
+            }) if granted == page_id => {}
+            Some(TabChat {
+                target: TabTarget::Page { .. },
+                ..
+            }) => {
                 return Err(Error::Invalid(format!(
-                    "page {page_id} isn't the page the user is writing from (that is page {granted}): only that page may be read or changed"
+                    "page {page_id} isn't the page beside this chat: only that page may be read or changed"
                 )));
             }
-            None => {
+            Some(_) => {
                 return Err(Error::Invalid(
-                    "the user's latest message wasn't sent from a page: no page may be read or changed".into(),
+                    "this chat isn't beside a page: no page may be read or changed".into(),
                 ));
             }
+            None => match self.granted_page(id).await? {
+                Some(granted) if granted == page_id => {}
+                Some(granted) => {
+                    return Err(Error::Invalid(format!(
+                        "page {page_id} isn't the page the user is writing from (that is page {granted}): only that page may be read or changed"
+                    )));
+                }
+                None => {
+                    return Err(Error::Invalid(
+                        "the user's latest message wasn't sent from a page: no page may be read or changed".into(),
+                    ));
+                }
+            },
         }
         self.pages
             .get()
@@ -124,5 +144,162 @@ impl SessionManager {
                 base, current.revision
             ))),
         }
+    }
+}
+
+impl SessionManager {
+    /// A tab chat's tool call: its tab's page or file, and nothing else.
+    pub(super) async fn tab_chat_call(&self, id: ConversationId, call: TabChatCall) -> ToolReply {
+        let result = match call {
+            TabChatCall::ReadPage(args) => self.read_page(&id, args).await,
+            TabChatCall::WritePage(args) => self.write_page(&id, args).await,
+            TabChatCall::ReadFile => self.read_tab_file(&id).await,
+            TabChatCall::WriteFile(args) => self.write_tab_file(&id, args).await,
+        };
+        match result {
+            Ok(text) => ToolReply::ok(text),
+            Err(err) => ToolReply::error(err.to_string()),
+        }
+    }
+
+    /// The tab chat's file: its checkout and its path inside it.
+    fn tab_file(&self, id: &ConversationId) -> Result<(std::path::PathBuf, String)> {
+        let chat = self.core.conversation(id)?;
+        let (
+            Some(TabChat {
+                target: TabTarget::File { path },
+                ..
+            }),
+            Some(session),
+        ) = (chat.tab_chat, chat.side_of)
+        else {
+            return Err(Error::Invalid(
+                "this chat isn't beside a file: no file may be read or changed".into(),
+            ));
+        };
+        Ok((self.checkout_dir(&session)?.into(), path))
+    }
+
+    async fn read_tab_file(&self, id: &ConversationId) -> Result<String> {
+        let (root, path) = self.tab_file(id)?;
+        super::blocking(move || {
+            let full = tab_file_in(&root, &path)?;
+            let text = std::fs::read_to_string(&full)
+                .map_err(|err| Error::Invalid(format!("couldn't read {path}: {err}")))?;
+            Ok(format!(
+                "{path} at revision {}:\n{text}",
+                file_revision(text.as_bytes())
+            ))
+        })
+        .await
+    }
+
+    async fn write_tab_file(&self, id: &ConversationId, args: WriteTabFile) -> Result<String> {
+        let (root, path) = self.tab_file(id)?;
+        super::blocking(move || {
+            let full = tab_file_in(&root, &path)?;
+            save_checked(&full, &path, &args.base_revision, args.text.as_bytes())
+        })
+        .await
+    }
+}
+
+/// Saves `text` as `full` (the checkout's `path`) if it is still at `base_revision`. Saves are
+/// one at a time, so of two chats saving on the same revision, one gets a conflict.
+fn save_checked(
+    full: &std::path::Path,
+    path: &str,
+    base_revision: &str,
+    text: &[u8],
+) -> Result<String> {
+    // Few and quick: one lock for every tab chat's file saves.
+    static SAVES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = SAVES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = std::fs::read(full)
+        .map_err(|err| Error::Invalid(format!("couldn't read {path}: {err}")))?;
+    let current = file_revision(&now);
+    if current != base_revision {
+        return Err(Error::Invalid(format!(
+            "not saved: {path} changed since revision {base_revision} (it is at revision {current} now). Read it again with read_tab_file and redo your change on what it holds now."
+        )));
+    }
+    write_beside(full, text)
+        .map_err(|err| Error::Invalid(format!("couldn't save {path}: {err}")))?;
+    Ok(format!(
+        "Saved: {path} is at revision {}. It shows in the user's open tab.",
+        file_revision(text)
+    ))
+}
+
+/// A file's revision: a hash of its bytes.
+fn file_revision(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex()[..16].to_owned()
+}
+
+/// The real path of the checkout's file `path`, which must stay inside it.
+fn tab_file_in(root: &std::path::Path, path: &str) -> Result<std::path::PathBuf> {
+    let relative = super::side_chat::tab_file_path(path)?;
+    let unreadable = |err: std::io::Error| Error::Invalid(format!("couldn't read {path}: {err}"));
+    let root = root.canonicalize().map_err(unreadable)?;
+    // Resolved, so a symlink can't lead out of the checkout.
+    let full = root.join(relative).canonicalize().map_err(unreadable)?;
+    if !full.starts_with(&root) || !full.is_file() {
+        return Err(Error::Invalid(format!(
+            "{path} is not a file inside the checkout"
+        )));
+    }
+    Ok(full)
+}
+
+/// Replaces `path`'s bytes through a file beside it, so a reader never sees half of them. The
+/// file keeps its permissions.
+fn write_beside(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let temp = path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
+    let written = std::fs::write(&temp, bytes).and_then(|()| {
+        if let Ok(metadata) = std::fs::metadata(path) {
+            std::fs::set_permissions(&temp, metadata.permissions())?;
+        }
+        std::fs::rename(&temp, path)
+    });
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn of_saves_on_the_same_revision_only_one_goes_in() {
+        let dir = std::env::temp_dir().join(format!("brigadier-tab-save-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.md");
+        std::fs::write(&file, "first").unwrap();
+        let base = file_revision(b"first");
+        let racers = 16;
+        let start = std::sync::Arc::new(std::sync::Barrier::new(racers));
+        let saved = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..racers)
+                .map(|n| {
+                    let (file, base, start) = (&file, &base, start.clone());
+                    scope.spawn(move || {
+                        start.wait();
+                        save_checked(file, "notes.md", base, format!("edit {n}").as_bytes()).is_ok()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .filter(|ok| *ok)
+                .count()
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(saved, 1, "every save but one must get a conflict");
     }
 }

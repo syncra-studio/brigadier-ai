@@ -117,11 +117,11 @@ function EntryView({ entry }: { entry: ThreadEntry }) {
       return null;
     case "message":
       return item.role === "user" ? (
-        <div className="bg-secondary rounded-thread ms-8 self-end px-3 py-2 text-sm whitespace-pre-wrap">
+        <div className="bg-secondary rounded-thread min-w-0 max-w-full self-end px-3 py-2 text-sm whitespace-pre-wrap">
           {item.text}
         </div>
       ) : (
-        <div className="text-foreground leading-relaxed wrap-break-word">
+        <div className="text-foreground min-w-0 leading-relaxed wrap-anywhere">
           <WorkerMarkdown text={item.text} streaming={item.streaming} />
         </div>
       );
@@ -172,11 +172,16 @@ function Brief({ text }: { text: string }) {
   const body = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = body.current;
-    if (element && !open) setLong(element.scrollHeight > element.clientHeight + 1);
-  }, [open]);
+    if (!element || open) return;
+    const measure = () => setLong(text.length > 0 && element.scrollHeight > element.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [open, text]);
   return (
-    <div data-slot="worker-brief" className="bg-secondary rounded-thread ms-8 flex flex-col gap-1 self-end px-3 py-2 text-sm">
-      <div ref={body} data-slot="worker-instructions" className={cn("leading-relaxed wrap-break-word", !open && "line-clamp-3")}>
+    <div data-slot="worker-brief" className="bg-secondary rounded-thread min-w-0 max-w-full flex flex-col gap-1 self-end px-3 py-2 text-sm">
+      <div ref={body} data-slot="worker-instructions" className={cn("min-w-0 leading-relaxed wrap-anywhere", !open && "line-clamp-3")}>
         <WorkerMarkdown text={text} />
       </div>
       {(long || open) && (
@@ -216,7 +221,7 @@ function Answer({ task, text }: { task: Task; text?: string | undefined }) {
     action.run(() => rateMessage(task.conversationId, subject, rating));
   return (
     <div data-slot="worker-report" className="group/answer flex scroll-mt-4 flex-col gap-2">
-      <div className="text-foreground leading-relaxed wrap-break-word">
+      <div className="text-foreground min-w-0 leading-relaxed wrap-anywhere">
         <MarkdownBlock text={summary} />
       </div>
       {files.length > 0 && <FileList artifacts={files} onView={setArtifact} />}
@@ -320,14 +325,14 @@ export function WorkerThread({ task }: { task: Task }) {
       ref={scrollRef}
       data-slot="worker-thread"
       data-selectable
-      className="min-h-0 flex-1 overflow-y-auto px-8 pb-6"
+      className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 pb-6 wrap-anywhere"
       onScroll={(event) => {
         const element = event.currentTarget;
         pinned.current =
           element.scrollHeight - element.scrollTop - element.clientHeight < tokenPx("--spacing-row");
       }}
     >
-      <div className="max-w-thread mx-auto gap-activity flex flex-col pt-5">
+      <div className="max-w-thread mx-auto min-w-0 gap-activity flex flex-col pt-5">
         <Brief text={task.spec} />
         <WorkHeader task={task} />
         {(previousCount > 0 || transcript?.hasMore) && <Collapsible open={open} onOpenChange={setOpen}>

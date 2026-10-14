@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
-test("Search streams grouped results, opens a line, asks again on its options, replaces after a confirm and clears", { timeout: 60000 }, async (t) => {
+test("Search streams grouped results, opens a line, asks again on its options, replaces after a confirm and clears; many results are drawn only in view and move by keyboard", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "search.html", "search-result", 8000)) as Record<string, unknown>;
   assert.equal(seen.error, undefined, JSON.stringify(seen));
   assert.equal(seen.starts, 1, "one search once typing pauses");
@@ -16,15 +16,46 @@ test("Search streams grouped results, opens a line, asks again on its options, r
   assert.equal(seen.replaceTypingSearched, false, "typing a replacement doesn't search");
   assert.equal(seen.fileConfirm, "Replace 2 matches in 1 file?");
   assert.equal(seen.noReplaceBeforeConfirm, true);
-  assert.equal(seen.confirm, "Replace 3 matches in 2 files?");
+  assert.equal(seen.dismissTabIndex, 0);
+  assert.equal(seen.dismissedSummary, "1 result in 1 file");
+  assert.equal(seen.dismissedFocus, "README.md");
+  assert.deepEqual(seen.dismissedRows, ["README.md", "README.md:1"]);
+  assert.equal(seen.refreshDismissed, true);
+  assert.match(String(seen.emptySummary), /^All results dismissed/);
+  assert.equal(seen.emptyFocus, "Search results");
+  assert.equal(seen.dismissedStreaming, "Searching…");
+  assert.equal(seen.filteredStreaming, "Searching…");
+  assert.match(String(seen.filteredDone), /^All results dismissed/);
+  assert.equal(seen.emptyRefresh, "No results");
+  assert.equal(seen.confirm, "Replace 1 match in 1 file?");
   assert.deepEqual(seen.replace, {
     replacement: "bar", matchCase: true,
-    files: [{ path: "src/app.ts", hash: "h-app", matches: 2 }, { path: "README.md", hash: "h-readme", matches: 1 }],
+    files: [{ path: "README.md", hash: "h-readme", matches: 1 }],
   }, "the files go with the search's hashes and counts");
-  assert.match(String(seen.outcome), /Replaced 2 matches in 1 file\..*README\.md \(it changed since the search\)/);
+  assert.equal(seen.outcome, "Replaced 1 match in 1 file.");
   assert.equal(seen.reconnected, false, "after reconnecting, the search shown is asked again");
   assert.match(String(seen.patternError), /valid regular expression/);
   assert.equal(seen.cleared, true, "a cleared query clears the results");
   assert.equal(seen.waitingReplace, false, "no Replace before the session's own copy exists");
   assert.match(String(seen.waitingNote), /own copy/);
+  assert.ok(Number(seen.manyDrawn) < 100, `only the rows in view are drawn, not 1,800: ${String(seen.manyDrawn)}`);
+  assert.equal(seen.tabStops, 1, "one row takes Tab");
+  assert.equal(seen.down, "src/many-0.ts:1", "down goes to the file's first line");
+  assert.equal(seen.end, "src/many-299.ts:5", "End reaches the last row, drawn once there");
+  assert.ok(Number(seen.endDrawn) < 100, String(seen.endDrawn));
+  assert.equal(seen.left, "src/many-299.ts", "left on a line goes up to its file");
+  assert.equal(seen.home, "src/many-0.ts");
+  assert.equal(seen.collapse, "false", "left on an open file closes it");
+  assert.equal(seen.expand, "true", "right on a closed file opens it");
+  assert.equal(seen.intoLines, "src/many-0.ts:1", "right on an open file goes to its first line");
+  assert.equal(seen.collapsedRows, true, "Collapse all leaves the files");
+  assert.match(String(seen.manyOutcome), /^Nothing was replaced: many-7\.ts \(it changed while the files were being replaced\)\. Search again, then replace\./);
+  assert.match(String(seen.manyOutcome), /Couldn’t put back: many-3\.ts \(.*its text from before is in src\/\.many-3\.ts\.replaced-1\)/);
+  assert.equal(seen.collapsedSummary, "1,500 results in 300 files");
+  assert.equal(seen.deleteFocus, "src/many-1.ts");
+  assert.equal(seen.deleteSummary, "1,495 results in 299 files");
+  assert.equal(seen.backspaceFocus, "src/many-298.ts");
+  assert.equal(seen.metaBackspaceFocus, "src/many-297.ts");
+  assert.equal(seen.manyConfirm, "Replace 1,485 matches in 297 files?");
+  assert.equal(seen.manyReplaced, 297, "Replace all takes every file, drawn or not");
 });

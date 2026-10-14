@@ -1,4 +1,6 @@
 import { request } from "@/ipc/client";
+import { tabChatIds } from "@/state/tabChats";
+import { useSessionTabs } from "@/state/sessionTabs";
 import type { AttachmentRef, Mention } from "@/ipc/generated";
 
 /**
@@ -42,10 +44,15 @@ function writeAll(drafts: Record<string, Draft>): void {
 }
 
 function pin(scope: string, attachments: AttachmentRef[]): void {
-  request({ method: "pinDraftAttachments", scope, attachments }).catch((error: unknown) =>
-    console.warn("could not keep the draft's attachments", error),
-  );
+  const privateLogs = tabChatIds(useSessionTabs.getState().sessions).has(scope);
+  request({ method: "pinDraftAttachments", scope, attachments }).catch((error: unknown) => {
+    if (privateLogs) console.warn("could not keep a tab chat's attachments");
+    else console.warn("could not keep the draft's attachments", error);
+  });
 }
+
+/** Scopes whose conversation went: a composer closing after that doesn't keep its draft. */
+const gone = new Set<string>();
 
 const sameAttachments = (a: readonly AttachmentRef[], b: readonly AttachmentRef[]) =>
   a.length === b.length && a.every((ref, index) => ref.id === b[index]?.id);
@@ -61,6 +68,7 @@ export function saveDraft(
   attachments: AttachmentRef[],
   mentions: DraftMention[],
 ): void {
+  if (gone.has(scope)) return;
   // Retained undo/history refs must not keep a sent or cleared draft (and its pins) alive.
   if (text.trim() === "") attachments = attachments.filter((ref) => ref.inline == null);
   const drafts = readAll();
@@ -82,8 +90,12 @@ export function saveDraft(
   if (!sameAttachments(before?.attachments ?? [], attachments)) pin(scope, attachments);
 }
 
-/** Drops a deleted conversation's draft (the daemon drops its pin with the conversation). */
+/**
+ * Drops a deleted conversation's draft (the daemon drops its pin with the conversation), for
+ * good: its composer closing later keeps nothing.
+ */
 export function forgetDraft(scope: string): void {
+  gone.add(scope);
   const drafts = readAll();
   if (!(scope in drafts)) return;
   delete drafts[scope];

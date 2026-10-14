@@ -20,6 +20,19 @@ export type ReviewTarget =
   | { type: "all" }
   | { type: "file"; path: string; staged: boolean };
 
+/**
+ * A page, file or browser tab's own chat, beside it in a split: `share` is the chat's part of
+ * the tab's width. Shown, folded to a strip at the tab's edge, or hidden behind its button; it
+ * goes with its tab. `seenAt` is the chat's last activity when it was last in view, so its
+ * button can show what came since.
+ */
+export type TabChatState = {
+  id: string;
+  view: "split" | "minimized" | "hidden";
+  share: number;
+  seenAt?: number;
+};
+
 export type FileTab = {
   kind: "file";
   id: string;
@@ -32,6 +45,7 @@ export type FileTab = {
   preview: boolean;
   /** The tab it was opened from, where closing it returns. */
   opener: string | null;
+  chat?: TabChatState;
 };
 
 export type ReviewTabState = {
@@ -45,6 +59,7 @@ export type BrowserTabState = {
   kind: "browser"; id: string; opener: string | null; url: string; title: string;
   /** Opened from something an agent gave (a link in its reply, a preview's address). */
   agent?: boolean;
+  chat?: TabChatState;
 };
 export type NewTabState = {
   kind: "newTab"; id: string; opener: string | null;
@@ -65,6 +80,7 @@ export type PageTabState = {
   title: string;
   /** An old "New file" draft (its key in local storage) whose text becomes this page. */
   draft?: string;
+  chat?: TabChatState;
 };
 /** A tab of the old plain-text "New file", only ever read back from storage to be migrated. */
 export type LegacyDocumentTab = {
@@ -184,6 +200,36 @@ export function openBrowserTab(conversationId: string, url: string, agent = fals
     return { tabs: insertAfterActive(current, tab), active: id };
   });
   return id;
+}
+
+/** The session that has tab `id`. */
+export function sessionWith(id: string): string | null {
+  const sessions = useSessionTabs.getState().sessions;
+  return Object.keys(sessions).find((conversationId) => sessions[conversationId]?.tabs.some((tab) => tab.id === id)) ?? null;
+}
+
+/**
+ * A Browser tab's page opened a popup: a Browser tab `id` showing it (its page already made)
+ * goes right after the opener's tab, in front. `false` when the opener's tab is gone.
+ */
+export function openPopupTab(opener: string, id: string, url: string): boolean {
+  const conversationId = sessionWith(opener);
+  if (!conversationId) return false;
+  update(conversationId, (current) => {
+    const from = current.tabs.find((tab) => tab.id === opener);
+    const agent = from?.kind === "browser" && from.agent === true;
+    const tab: BrowserTabState = { kind: "browser", id, opener, url: url || "about:blank", title: "", ...(agent ? { agent } : {}) };
+    const tabs = [...current.tabs];
+    tabs.splice(tabs.findIndex((entry) => entry.id === opener) + 1, 0, tab);
+    return { tabs, active: id };
+  });
+  return true;
+}
+
+/** Tab `id` closes, in whichever session has it. */
+export function closeTabAnywhere(id: string): void {
+  const conversationId = sessionWith(id);
+  if (conversationId) closeTab(conversationId, id);
 }
 
 /**
@@ -421,11 +467,18 @@ export function afterClose(current: SessionTabs, tabs: SessionTab[], tab: Sessio
   return tabs[at]?.id ?? tabs[at - 1]?.id ?? CHAT_TAB;
 }
 
+/** A tab without its chat: a tab opened again starts with none, as its chat went when it closed. */
+export function withoutChat(tab: SessionTab): SessionTab {
+  if (!("chat" in tab)) return tab;
+  const { chat: _gone, ...rest } = tab;
+  return rest as SessionTab;
+}
+
 function remember(conversationId: string, gone: SessionTab[]): void {
   if (!gone.length) return;
   const list = closed.get(conversationId) ?? [];
   for (const tab of gone) {
-    list.push({ tab, index: sessionTabs(conversationId).tabs.findIndex((entry) => entry.id === tab.id) });
+    list.push({ tab: withoutChat(tab), index: sessionTabs(conversationId).tabs.findIndex((entry) => entry.id === tab.id) });
     if (list.length > 20) { const expired = list.shift()!; for (const listener of discarded) listener(expired.tab); }
     notePaneClose(conversationId, "tab");
   }
@@ -535,6 +588,8 @@ export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSave
     const remapped = new Map<string, string>();
     const tabs = (session.tabs as (SessionTab | LegacyDocumentTab)[]).flatMap((tab): SessionTab[] => {
       if (tab.kind === "terminal") return [{ ...tab, title: "" }];
+      // A popup its opener wrote (about:blank) is gone with its page: its tab starts empty.
+      if (tab.kind === "browser" && !/^https?:/i.test(tab.url)) return [{ ...tab, url: "" }];
       if (tab.kind !== "document") return [tab];
       if (tab.savedPath && tab.relativePath && isSaved(tab.id, tab.savedPath)) {
         const file = { kind: "file" as const, id: fileId(tab.relativePath), path: tab.relativePath, preview: false, line: null, reveal: 0, opener: tab.opener };

@@ -64,6 +64,7 @@ import {
 } from "@/state/store";
 import { migrateDrafts } from "@/state/pageTabs";
 import { pruneSideChats } from "@/state/sessionTabResources";
+import { keepTabChats, prepareTabChatSend } from "@/state/tabChats";
 import { forgetDraft } from "@/state/drafts";
 import { forgetRightSidebarTabs, pruneRightSidebarTabs } from "@/state/rightSidebar";
 import { dismissToast, toast, useToasts } from "@/state/toasts";
@@ -85,6 +86,7 @@ export async function loadCatalog(): Promise<void> {
   replaceCatalog(catalog.projects, catalog.conversations, catalog.settings);
   pruneRightSidebarTabs(catalog.conversations.map((conversation) => conversation.id));
   pruneSideChats(catalog.conversations);
+  void keepTabChats().catch(console.error);
   void migrateDrafts();
 }
 
@@ -467,6 +469,8 @@ export async function send(
     return;
   }
 
+  const prepared = prepareTabChatSend(conversationId);
+  if (prepared) await prepared;
   const board = boardOf(conversationId);
   const running = board !== null && (board.run === "running" || board.run === "starting");
   const session = useApp.getState().conversations[conversationId]?.kind === "session";

@@ -45,6 +45,7 @@ pub struct Exit {
 }
 
 pub struct CliProcess {
+    private_logs: bool,
     pid: u32,
     started_at_ms: Option<f64>,
     platform: Arc<dyn Platform>,
@@ -58,6 +59,8 @@ pub struct CliProcess {
 /// What else a spawned CLI process is wired to.
 #[derive(Default)]
 pub struct Options {
+    /// A cleanup control connection can be private without recording more artifacts.
+    pub private_logs: bool,
     /// Records the stdio exchange.
     pub recorder: Option<Arc<Recorder>>,
     /// Redacts stderr lines before they are logged or kept.
@@ -73,6 +76,7 @@ pub struct Options {
 
 /// The processes seen below the CLI, by pid, with their start times.
 struct Tree {
+    private_logs: bool,
     root: u32,
     platform: Arc<dyn Platform>,
     seen: Mutex<HashMap<u32, Option<f64>>>,
@@ -123,7 +127,7 @@ impl Tree {
         for (pid, started) in seen {
             if is_same(processes, pid, started) {
                 if let Err(err) = processes.kill_tree(pid) {
-                    tracing::debug!(pid, error = %err, "could not end a process the cli left");
+                    crate::logging::private_trace!(self.private_logs, debug, "could not end a process the cli left"; pid, error = %err);
                 }
                 ended += 1;
             }
@@ -133,13 +137,13 @@ impl Tree {
                 Ok(pids) => {
                     for pid in pids {
                         if let Err(err) = processes.kill_tree(pid) {
-                            tracing::debug!(pid, error = %err, "could not end a process in its folder");
+                            crate::logging::private_trace!(self.private_logs, debug, "could not end a process in its folder"; pid, error = %err);
                         }
                         ended += 1;
                     }
                 }
                 Err(err) => {
-                    tracing::debug!(dir = %dir.display(), error = %err, "no folder sweep here")
+                    crate::logging::private_trace!(self.private_logs, debug, "no folder sweep here"; dir = %dir.display(), error = %err)
                 }
             }
         }
@@ -156,11 +160,13 @@ pub struct Spawned {
 /// Spawns `spec` with piped stdio in its own process group.
 pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) -> Result<Spawned> {
     let Options {
+        private_logs,
         recorder,
         redactor,
         ledger,
         sweep_dir,
     } = options;
+    let private_logs = private_logs || ledger.as_ref().is_some_and(|ledger| ledger.private_logs());
     let mut command = tokio::process::Command::from(platform.processes().piped_command(spec));
     command.stdin(Stdio::piped()).kill_on_drop(false);
     let mut child = command
@@ -196,7 +202,11 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
             if let Some(redactor) = &redactor {
                 redactor.redact_in_place(&mut line);
             }
-            tracing::debug!(pid, stderr = %line, "cli stderr");
+            if private_logs {
+                tracing::debug!(pid, stderr = "tab chat", "cli stderr");
+            } else {
+                tracing::debug!(pid, stderr = %line, "cli stderr");
+            }
             let mut tail = tail.lock().unwrap_or_else(|p| p.into_inner());
             if tail.len() == STDERR_TAIL_LINES {
                 tail.pop_front();
@@ -206,6 +216,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
     });
 
     let tree = Arc::new(Tree {
+        private_logs,
         root: pid,
         platform: platform.clone(),
         seen: Mutex::new(HashMap::new()),
@@ -229,7 +240,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
                         started_at_ms,
                     };
                     if let Err(err) = ledger.record(artifact).await {
-                        tracing::warn!(pid = leader, error = %err, "could not record a process");
+                        crate::logging::private_trace!(private_logs, warn, "could not record a process"; pid = leader, error = %err);
                     }
                 }
             }
@@ -252,6 +263,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
 
     Ok(Spawned {
         process: Arc::new(CliProcess {
+            private_logs,
             pid,
             started_at_ms,
             platform,
@@ -266,6 +278,10 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
 }
 
 impl CliProcess {
+    pub(crate) fn private_logs(&self) -> bool {
+        self.private_logs
+    }
+
     pub fn pid(&self) -> u32 {
         self.pid
     }
@@ -342,7 +358,7 @@ impl CliProcess {
             "cli did not exit in time; killing its process tree"
         );
         if let Err(err) = self.platform.processes().kill_tree(self.pid) {
-            tracing::warn!(pid = self.pid, error = %err, "could not kill the cli process tree");
+            crate::logging::private_trace!(self.private_logs, warn, "could not kill the cli process tree"; pid = self.pid, error = %err);
         }
         tokio::time::timeout(REAP_WAIT, self.exited())
             .await

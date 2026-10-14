@@ -1379,6 +1379,26 @@ pub(crate) fn environment(env: &WorkerEnvironment<'_>) -> String {
 }
 
 /// A Chat's role.
+/// A tab's own chat's instructions: it is about the page, file or web page beside it.
+pub(crate) fn tab_chat(target: &crate::model::TabTarget, checkout: &str) -> String {
+    use crate::model::TabTarget;
+    let about = match target {
+        TabTarget::Page { .. } => {
+            "a page of the user's (a note in Markdown). You may read and change that page with read_page and write_page, and no other page"
+        }
+        TabTarget::File { .. } => {
+            "a file of the session's checkout. You may change that file with read_tab_file and write_tab_file; every other file you may only read"
+        }
+        TabTarget::Browser => {
+            "a web page in Brigadier's built-in browser. Each message brings what the page shows: its address, its text and what the user selected. You can't click, type or browse in it"
+        }
+    };
+    format!(
+        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are a chat beside {about}. It sits in a session whose checkout is {checkout}: you may read and search its files, but not change them, and you run no commands that change anything. Answer about what is beside you; keep replies short.\n{CHAT_AUTHORITY}",
+        today()
+    )
+}
+
 pub(crate) fn chat(memories: &[String]) -> String {
     let mut text = format!(
         "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are in a plain chat: there is no repository and you cannot edit code. You may search the web when current information helps; say where facts came from.\nWhen the user tells you something about themselves that will matter in later conversations (a preference, their role, what they work on), keep it with the save_memory tool, one short sentence, without announcing it: the user sees what you saved and can remove it.\n{CHAT_AUTHORITY}",

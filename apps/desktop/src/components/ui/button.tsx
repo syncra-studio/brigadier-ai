@@ -45,6 +45,7 @@ function Button({
   variant = "default",
   size = "default",
   asChild = false,
+  type,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
@@ -58,6 +59,9 @@ function Button({
       data-variant={variant}
       data-size={size}
       className={cn(buttonVariants({ variant, size, className }))}
+      // A button submits its form only when it says so: one left untyped inside a form would be
+      // the form's default button, which Enter in any of its fields clicks.
+      type={asChild ? type : (type ?? "button")}
       {...props}
     />
   );

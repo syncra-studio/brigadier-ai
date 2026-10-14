@@ -26,12 +26,14 @@ export type SearchResults = {
   checkout: string;
   query: SearchQuery;
   files: SearchFile[];
+  /** Files hidden from this run by dismissal, including rows dismissed after they arrived. */
+  filteredFiles?: number;
   /** Set once it ended: how many it found, and whether its limits stopped it first. */
   done: { files: number; matches: number; capped: boolean } | null;
   error: string | null;
 };
 
-type Entry = { form: SearchForm; results: SearchResults | null };
+type Entry = { form: SearchForm; results: SearchResults | null; dismissed?: { checkout: string; query: SearchQuery; paths: string[] } | null };
 
 type SearchState = { entries: Record<string, Entry>; order: readonly string[] };
 
@@ -83,6 +85,18 @@ export function setSearchForm(target: WorkspaceTarget, change: Partial<SearchFor
   patch(searchId(target), (entry) => ({ form: { ...entry.form, ...change } }));
 }
 
+/** Hides a file until the query changes or Enter resets it, including during automatic refreshes. */
+export function dismissSearchFile(target: WorkspaceTarget, path: string): void {
+  patch(searchId(target), ({ results, dismissed }) => {
+    if (!results) return {};
+    const files = results.files.filter((file) => file.path !== path);
+    return {
+      dismissed: { checkout: results.checkout, query: results.query, paths: [...new Set([...dismissed?.paths ?? [], path])] },
+      results: { ...results, files, filteredFiles: (results.filteredFiles ?? 0) + results.files.length - files.length },
+    };
+  });
+}
+
 /**
  * The search running for this window (the daemon runs one per connection): whose, and its id
  * once the daemon gave it. Until the first update arrives the earlier results stay, so a
@@ -92,16 +106,17 @@ let running: { token: object; id: number | null; owner: string; fresh: boolean }
 /** Updates that came before the id their search was given. */
 const early = new Map<number, SearchUpdate[]>();
 
-/** Searches a target's checkout, in place of any search running. */
-export function runSearch(target: WorkspaceTarget, query: SearchQuery): void {
+/** Searches again, preserving dismissals unless the query/checkout changes or Enter resets them. */
+export function runSearch(target: WorkspaceTarget, query: SearchQuery, resetDismissed = false): void {
   const owner = searchId(target);
   const checkout = workspaceKey(target);
   const token = {};
   early.clear();
   running = { token, id: null, owner, fresh: true };
   patch(owner, (entry) => ({
+    dismissed: !resetDismissed && entry.dismissed?.checkout === checkout && sameQuery(entry.dismissed.query, query) ? entry.dismissed : null,
     results: entry.results?.checkout === checkout
-      ? { ...entry.results, query, done: null, error: null }
+      ? { ...entry.results, query, done: null, error: null, filteredFiles: 0 }
       : { checkout, query, files: [], done: null, error: null },
   }));
   request({ method: "startSearch", target, query }).then(({ id }) => {
@@ -136,7 +151,7 @@ export function stopSearch(target: WorkspaceTarget): void {
 /** Stops a target's search and forgets its results: the query was cleared. */
 export function clearSearch(target: WorkspaceTarget): void {
   stopSearch(target);
-  patch(searchId(target), { results: null });
+  patch(searchId(target), { results: null, dismissed: null });
 }
 
 function applyUpdate(id: number, update: SearchUpdate): void {
@@ -145,12 +160,18 @@ function applyUpdate(id: number, update: SearchUpdate): void {
   const fresh = running.fresh;
   running.fresh = false;
   if (update.type === "done") running = null;
-  patch(owner, ({ results }) => {
+  patch(owner, ({ results, dismissed }) => {
     if (!results) return {};
     const files = fresh ? [] : results.files;
-    return update.type === "files"
-      ? { results: { ...results, files: [...files, ...update.files] } }
-      : { results: { ...results, files, done: { files: update.files, matches: update.matches, capped: update.capped } } };
+    const filteredFiles = fresh ? 0 : results.filteredFiles ?? 0;
+    if (update.type === "files") {
+      const paths = new Set(dismissed?.paths);
+      const incoming = update.files.filter((file) => !paths.has(file.path));
+      return { results: { ...results, files: [...files, ...incoming],
+        filteredFiles: filteredFiles + update.files.length - incoming.length } };
+    }
+    return { results: { ...results, files, filteredFiles,
+      done: { files: update.files, matches: update.matches, capped: update.capped } } };
   });
 }
 

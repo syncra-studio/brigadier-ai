@@ -13,6 +13,7 @@
 //! run through the adapter, read-only, with only the tools that read a change. Their tokens go
 //! to the routing store under the task `review:<id>`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -73,6 +74,14 @@ enum Covers {
     /// Up to this commit, reviewed clean: what came after is reviewed alone.
     Upto(Oid),
     Nothing,
+}
+
+/// The review findings the thread's own commits fix (`SessionManager::thread_fixes`).
+pub(crate) struct ThreadFix {
+    pub fixed: Vec<Finding>,
+    /// All of them are findings of the work since the session's last merge: a held merge's
+    /// consent covers the fix.
+    pub since_merge: bool,
 }
 
 /// The cleanup-ledger owner of a review's checkout and processes; also the task its tokens
@@ -352,16 +361,17 @@ impl SessionManager {
     }
 
     /// The review findings the thread's commits `base..tip` fix, when each of them names some
-    /// with the [`FIXES_TRAILER`] and all it names are findings of the session's work since its
-    /// last merge: then they get no review of their own, only the re-check of those it recorded
-    /// high, and a held merge's consent covers them. `None` otherwise.
+    /// with the [`FIXES_TRAILER`] and all it names are findings of the session's work: then
+    /// they get no review of their own, only the re-check of those it recorded high. A held
+    /// merge's consent covers them when those findings are all of the work since its last
+    /// merge (`since_merge`). `None` otherwise.
     pub(crate) async fn thread_fixes(
         &self,
         conversation_id: &ConversationId,
         repo: &Path,
         base: &Oid,
         tip: &Oid,
-    ) -> Option<Vec<Finding>> {
+    ) -> Option<ThreadFix> {
         let (git, repo, from, to) = (self.git.clone(), repo.to_owned(), base.clone(), tip.clone());
         let named = blocking(move || {
             git.open(&repo)
@@ -389,18 +399,32 @@ impl SessionManager {
             return None;
         }
         let board = self.core.board(conversation_id).await.ok()?;
-        let findings: Vec<&Finding> = super::landing::reviews_since_merge(&board)
-            .into_iter()
+        // Named findings are looked up across the whole conversation: a review that ran when
+        // the user merged reports after the merge, and its fix is still only a fix. Whether a
+        // held merge's consent covers the fix is the merge batch's question, asked apart.
+        let findings: Vec<&Finding> = board
+            .reviews
+            .values()
+            .filter(|review| {
+                review.kind == ReviewKind::Code && review.notify == ReviewFor::Orchestrator
+            })
             .flat_map(|review| &review.items)
             .collect();
+        let batch: HashSet<&str> = super::landing::reviews_since_merge(&board)
+            .into_iter()
+            .flat_map(|review| &review.items)
+            .map(|item| item.id.as_str())
+            .collect();
         let mut fixed: Vec<Finding> = Vec::new();
+        let mut since_merge = true;
         for id in ids {
             let found = findings.iter().find(|item| item.id == id)?;
+            since_merge &= batch.contains(id.as_str());
             if !fixed.iter().any(|item| item.id == id) {
                 fixed.push((*found).clone());
             }
         }
-        Some(fixed)
+        Some(ThreadFix { fixed, since_merge })
     }
 
     /// The one targeted re-check of the thread's commits `base..tip` that fix `fixed`: of those

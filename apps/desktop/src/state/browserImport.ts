@@ -10,7 +10,33 @@ import { formatAgo } from "@/lib/format";
 
 /** The installed browsers in the page's order, each with where it stands. */
 export function importSources(): Promise<ImportSource[]> {
-  return invoke<ImportSource[]>("browser_import_sources");
+  return invoke<ImportSource[]>("browser_import_sources").then((sources) => {
+    listed = { sources, atMs: Date.now() };
+    return sources;
+  });
+}
+
+/** The browsers as last listed, and when: the page shows them at once when it opens again. */
+export type ListedSources = { sources: ImportSource[]; atMs: number };
+let listed: ListedSources | null = null;
+let prefetching: Promise<ImportSource[]> | null = null;
+
+export function lastImportSources(): ListedSources | null {
+  return listed;
+}
+
+/** Lists the browsers ahead of the page opening (the pointer came to its row). */
+export function prefetchImportSources(): void {
+  if (prefetching) return;
+  prefetching = importSources().finally(() => {
+    prefetching = null;
+  });
+  prefetching.catch(() => {});
+}
+
+/** The page's read on opening: the prefetch's, while it is on its way, else a new one. */
+export function openingImportSources(): Promise<ImportSource[]> {
+  return prefetching ?? importSources();
 }
 
 /**

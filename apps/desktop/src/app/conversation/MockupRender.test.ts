@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
 
 test("a mockup gets its own session tab, busy while it builds, takes comments, sends them in one message and moves to the revision", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "mockup.html?drive=1", "mockup-result", 30000)) as Record<string, unknown>;
+  // Live: marking and sending decode and encode images in real time, which a busy machine's
+  // virtual time would run past.
+  const seen = JSON.parse(await renderFixtureLive(t, "mockup.html?drive=1", "mockup-result", 45000)) as Record<string, unknown>;
   if (process.env.MOCKUP_SEEN) console.log(JSON.stringify(seen, null, 2));
   assert.deepEqual(seen.building, { name: "Mockup, building", busy: true, active: "chat" });
   assert.deepEqual(seen.ready, { name: "Mockup", busy: false });

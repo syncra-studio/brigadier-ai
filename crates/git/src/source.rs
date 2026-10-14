@@ -11,6 +11,25 @@ use crate::{
 };
 
 impl Repo {
+    /// The checkout's staged and unstaged files, and the branch checked out (none when HEAD
+    /// is detached), from one `git status`.
+    pub fn source_status(&self) -> Result<(SourceChanges, Option<String>)> {
+        let bytes = self.cmd(
+            &[
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--branch",
+                "--untracked-files=all",
+            ],
+            true,
+        )?;
+        Ok((
+            parse::source_changes(&bytes)?,
+            parse::status(&bytes)?.branch,
+        ))
+    }
+
     /// The checkout's staged and unstaged files.
     pub fn source_changes(&self) -> Result<SourceChanges> {
         parse::source_changes(&self.cmd(

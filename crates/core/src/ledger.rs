@@ -27,6 +27,20 @@ use crate::model::{DomainEvent, streams};
 use crate::{Core, Error, Result, now_ms};
 
 const PAGE: u32 = 1_000;
+/// The owner of a tab's chat ([`crate::model::TabChat`]) starts so. Its records are kept in a
+/// stream of their own, which goes once everything it recorded is gone: nothing of it stays.
+pub const TAB_CHAT_OWNER: &str = "tabchat:";
+/// Where tab chats' owners keep their records: this, then the owner.
+const TAB_CHAT_STREAMS: &str = "cleanup:tabchat:";
+
+/// The stream `owner`'s records go to.
+fn owner_stream(owner: &str) -> String {
+    if owner.starts_with(TAB_CHAT_OWNER) {
+        format!("cleanup:{owner}")
+    } else {
+        streams::CLEANUP.to_owned()
+    }
+}
 /// Rounds of "find the processes in a folder, kill their trees" before giving up: a process
 /// may start another while it is being killed.
 const KILL_ROUNDS: usize = 3;
@@ -52,6 +66,8 @@ struct State {
     /// The branches Brigadier made (or kept for the user), by repository: what proves a branch
     /// Brigadier's to delete.
     made: HashSet<(String, String)>,
+    /// Tab chats whose records went this run: one recorded again must still be removed.
+    forgotten: HashSet<String>,
 }
 
 /// The branches Brigadier's records prove its own: those it made or kept for the user, and,
@@ -165,6 +181,8 @@ pub struct CleanupLedger {
     claude: Arc<Claude>,
     codex: Arc<Codex>,
     state: Mutex<State>,
+    /// A tab chat's records go, or one is added, one at a time: none slips in between.
+    tab_chats: tokio::sync::Mutex<()>,
     worktrees: Mutex<Option<WorktreeRemover>>,
     accounts: Mutex<Option<AccountResolver>>,
     #[cfg(test)]
@@ -173,6 +191,9 @@ pub struct CleanupLedger {
     /// reached, then waits for the second.
     #[cfg(test)]
     append_pause: Mutex<Option<AppendPause>>,
+    /// Holds the next forgetting of an owner, as `append_pause` holds an append.
+    #[cfg(test)]
+    forget_pause: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 #[cfg(test)]
@@ -190,14 +211,13 @@ impl CleanupLedger {
         codex: Arc<Codex>,
     ) -> Result<Self> {
         let mut state = State::default();
-        let mut after = 0;
-        loop {
-            let page = core
-                .store()
-                .read_stream_since(streams::CLEANUP.into(), after, PAGE)
-                .await?;
-            for event in &page {
-                after = event.stream_seq;
+        let mut events = read_stream(&core, streams::CLEANUP.into()).await?;
+        for head in core.store().stream_heads(TAB_CHAT_STREAMS.into()).await? {
+            events.extend(read_stream(&core, head.stream).await?);
+        }
+        events.sort_by_key(|event| event.seq);
+        {
+            for event in &events {
                 match crate::sessions::decode(event)? {
                     DomainEvent::CleanupRecorded { owner, artifact } => {
                         state.note_native(&artifact);
@@ -235,9 +255,6 @@ impl CleanupLedger {
                     _ => {}
                 }
             }
-            if page.len() < PAGE as usize {
-                break;
-            }
         }
         state.artifacts.retain(|_, artifacts| !artifacts.is_empty());
         Ok(Self {
@@ -246,12 +263,15 @@ impl CleanupLedger {
             claude,
             codex,
             state: Mutex::new(state),
+            tab_chats: tokio::sync::Mutex::new(()),
             worktrees: Mutex::new(None),
             accounts: Mutex::new(None),
             #[cfg(test)]
             test_providers: Mutex::new(None),
             #[cfg(test)]
             append_pause: Mutex::new(None),
+            #[cfg(test)]
+            forget_pause: Mutex::new(None),
         })
     }
 
@@ -304,6 +324,23 @@ impl CleanupLedger {
 
     /// Records `artifact` for `owner`, durably, before it is created or relied on.
     pub async fn record(&self, owner: &str, artifact: Artifact) -> Result<()> {
+        let tab_chat = owner.starts_with(TAB_CHAT_OWNER);
+        let _one = if tab_chat {
+            Some(self.tab_chats.lock().await)
+        } else {
+            None
+        };
+        if tab_chat && self.state().forgotten.contains(owner) {
+            // Its chat's records went already: this one is to go too, at the latest when the
+            // next launch sweeps.
+            self.append(DomainEvent::CleanupRequested {
+                owner: owner.to_owned(),
+            })
+            .await?;
+            let mut state = self.state();
+            state.forgotten.remove(owner);
+            state.disposing.insert(owner.to_owned());
+        }
         if self
             .state()
             .artifacts
@@ -413,7 +450,7 @@ impl CleanupLedger {
                 })
                 .await
             {
-                tracing::warn!(owner, error = %err, "could not record a cleanup request");
+                crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not record a cleanup request"; owner, error = %err);
             }
             self.state().disposing.insert(owner.to_owned());
         }
@@ -425,7 +462,13 @@ impl CleanupLedger {
         let removed = self.remove(owner, files).await;
         leftovers.failures.extend(removed.failures);
         leftovers.kept.extend(removed.kept);
-        if leftovers.is_clean() {
+        if leftovers.is_clean()
+            && owner.starts_with(TAB_CHAT_OWNER)
+            && self.artifacts(owner).is_empty()
+        {
+            // A tab's chat leaves no record: with all of it gone, its records go too.
+            self.forget_owner(owner).await;
+        } else if leftovers.is_clean() {
             // Everything in the snapshot is gone. Artifacts recorded meanwhile stay, both here
             // and on replay. Always end the request durably: a record's event can be stored
             // before it shows in memory, so memory can't tell whether one raced this disposal.
@@ -435,11 +478,74 @@ impl CleanupLedger {
                 })
                 .await
             {
-                tracing::warn!(owner, error = %err, "could not record a finished cleanup");
+                crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not record a finished cleanup"; owner, error = %err);
             }
             self.state().disposing.remove(owner);
         }
         leftovers
+    }
+
+    /// Forgets `owner` (a tab chat's) altogether once nothing of it is left: its records go,
+    /// with the CLI sessions they named. If they can't go now, its finished cleanup stays
+    /// recorded and the next launch's sweep tries again.
+    async fn forget_owner(&self, owner: &str) {
+        #[cfg(test)]
+        {
+            let pause = self.forget_pause.lock().unwrap().take();
+            if let Some((reached, release)) = pause {
+                reached.notify_one();
+                release.notified().await;
+            }
+        }
+        let _one = self.tab_chats.lock().await;
+        if !self.artifacts(owner).is_empty() {
+            // Recorded meanwhile: it is to go too, at the latest when the next launch sweeps.
+            if self
+                .append(DomainEvent::CleanupRequested {
+                    owner: owner.to_owned(),
+                })
+                .await
+                .is_err()
+            {
+                tracing::warn!("could not keep a tab chat's cleanup request");
+            }
+            self.state().disposing.insert(owner.to_owned());
+            return;
+        }
+        let stream = owner_stream(owner);
+        let natives: Vec<String> = match read_stream(&self.core, stream.clone()).await {
+            Ok(events) => events
+                .iter()
+                .filter_map(|event| match crate::sessions::decode(event) {
+                    Ok(DomainEvent::CleanupRecorded {
+                        artifact:
+                            Artifact::ClaudeSession { session_id: id, .. }
+                            | Artifact::CodexThread { thread_id: id, .. },
+                        ..
+                    }) => Some(id),
+                    _ => None,
+                })
+                .collect(),
+            Err(err) => {
+                crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not read a tab chat's records"; owner, error = %err);
+                return;
+            }
+        };
+        if let Err(err) = self.core.store().delete_streams(vec![stream]).await {
+            crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not forget a tab chat's records"; owner, error = %err);
+            return;
+        }
+        // Nor a copy in the store's write-ahead log.
+        if self.core.store().scrub().await.is_err() {
+            tracing::warn!("could not empty the store's write-ahead log after a tab chat");
+        }
+        let mut state = self.state();
+        state.disposing.remove(owner);
+        state.artifacts.remove(owner);
+        state.forgotten.insert(owner.to_owned());
+        for id in natives {
+            state.native.remove(&id);
+        }
     }
 
     /// After a restart, when nothing of Brigadier's runs: archives the Codex threads it still
@@ -450,17 +556,22 @@ impl CleanupLedger {
         if self.test_providers.lock().unwrap().is_some() {
             return;
         }
-        let threads: Vec<String> = self
+        let (private, threads): (Vec<_>, Vec<_>) = self
             .state()
             .artifacts
-            .values()
-            .flatten()
-            .filter_map(|artifact| match artifact {
-                Artifact::CodexThread { thread_id, .. } => Some(thread_id.clone()),
-                _ => None,
+            .iter()
+            .flat_map(|(owner, artifacts)| {
+                artifacts.iter().filter_map(move |artifact| match artifact {
+                    Artifact::CodexThread { thread_id, .. } => {
+                        Some((owner.starts_with(TAB_CHAT_OWNER), thread_id.clone()))
+                    }
+                    _ => None,
+                })
             })
-            .collect();
-        if threads.is_empty() {
+            .partition(|(private, _)| *private);
+        let private: Vec<String> = private.into_iter().map(|(_, id)| id).collect();
+        let threads: Vec<String> = threads.into_iter().map(|(_, id)| id).collect();
+        if threads.is_empty() && private.is_empty() {
             return;
         }
         // A conversation resumed meanwhile has a CLI process again: its thread stays open.
@@ -472,8 +583,19 @@ impl CleanupLedger {
                     })
             })
         };
-        if let Err(err) = self.codex.archive_threads(threads, open).await {
+        if !threads.is_empty()
+            && let Err(err) = self.codex.archive_threads(threads, false, &open).await
+        {
             tracing::debug!(error = %err, "could not archive codex threads");
+        }
+        if !private.is_empty()
+            && self
+                .codex
+                .archive_threads(private, true, open)
+                .await
+                .is_err()
+        {
+            tracing::debug!(conversation = "tab chat", "could not archive codex threads");
         }
     }
 
@@ -491,7 +613,7 @@ impl CleanupLedger {
             ended += processes.len();
             let leftovers = self.remove(owner, processes).await;
             if !leftovers.is_clean() {
-                tracing::warn!(owner, failures = ?leftovers.failures, "processes survived the sweep");
+                crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "processes survived the sweep"; owner, failures = ?leftovers.failures);
             }
         }
         if ended > 0 {
@@ -515,7 +637,7 @@ impl CleanupLedger {
             }
             let leftovers = self.dispose(&owner).await;
             if !leftovers.is_clean() {
-                tracing::warn!(owner, failures = ?leftovers.failures, "cleanup still incomplete");
+                crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "cleanup still incomplete"; owner, failures = ?leftovers.failures);
             }
         }
     }
@@ -677,7 +799,12 @@ impl CleanupLedger {
                 Artifact::ProcessesIn { dir } => {
                     let platform = self.platform.clone();
                     let dir = PathBuf::from(dir);
-                    match tokio::task::spawn_blocking(move || end_in_dir(&*platform, &dir)).await {
+                    let private_logs = owner.starts_with(TAB_CHAT_OWNER);
+                    match tokio::task::spawn_blocking(move || {
+                        end_in_dir(&*platform, &dir, private_logs)
+                    })
+                    .await
+                    {
                         Ok(Ok(())) => removed.push(artifact),
                         Ok(Err(err)) => leftovers.failures.push(err),
                         Err(err) => leftovers.failures.push(err.to_string()),
@@ -716,7 +843,7 @@ impl CleanupLedger {
                     {
                         Ok(Ok(Adopted::Removed)) => removed.push(artifact),
                         Ok(Ok(Adopted::Kept(why))) => {
-                            tracing::info!(owner, why, "left an adopted entry in place");
+                            crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), info, "left an adopted entry in place"; owner, why);
                             leftovers.kept.push(why);
                             removed.push(artifact);
                         }
@@ -726,7 +853,7 @@ impl CleanupLedger {
                 }
                 // Run segments share one worktree: the last owner using it removes it.
                 Artifact::Worktree { path, .. } if self.state().shares_worktree(owner, path) => {
-                    tracing::info!(owner, path, "left a worktree another owner still uses");
+                    crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), info, "left a worktree another owner still uses"; owner, path);
                     removed.push(artifact);
                 }
                 Artifact::Worktree { repo, path } => {
@@ -803,7 +930,10 @@ impl CleanupLedger {
         }
         for (kind, home, artifacts) in cli_files {
             let provider = self.remover(kind, home.as_deref());
-            match provider.remove(artifacts.clone()).await {
+            match provider
+                .remove_with_privacy(artifacts.clone(), owner.starts_with(TAB_CHAT_OWNER))
+                .await
+            {
                 Ok(()) => removed.extend(artifacts),
                 Err(err) => leftovers
                     .failures
@@ -829,13 +959,13 @@ impl CleanupLedger {
                     }
                 }
                 Err(err) => {
-                    tracing::warn!(owner, error = %err, "could not record removed artifacts");
+                    crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not record removed artifacts"; owner, error = %err);
                     leftovers.failures.push(err.to_string());
                 }
             }
         }
         if !leftovers.is_clean() {
-            tracing::warn!(owner, failures = ?leftovers.failures, "some artifacts were not removed");
+            crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "some artifacts were not removed"; owner, failures = ?leftovers.failures);
         }
         leftovers
     }
@@ -851,9 +981,37 @@ impl CleanupLedger {
                 release.notified().await;
             }
         }
-        let new = NewEvent::new(streams::CLEANUP, event.kind(), now_ms(), &event)?;
+        let stream = match &event {
+            DomainEvent::CleanupRecorded { owner, .. }
+            | DomainEvent::CleanupRemoved { owner, .. }
+            | DomainEvent::CleanupRequested { owner }
+            | DomainEvent::CleanupFinished { owner }
+            | DomainEvent::CleanupCompleted { owner, .. } => owner_stream(owner),
+            _ => streams::CLEANUP.to_owned(),
+        };
+        let new = NewEvent::new(stream, event.kind(), now_ms(), &event)?;
         self.core.store().append(vec![new]).await?;
         Ok(())
+    }
+}
+
+/// Every event of `stream`, oldest first.
+async fn read_stream(core: &Core, stream: String) -> Result<Vec<brigadier_store::StoredEvent>> {
+    let mut events = Vec::new();
+    let mut after = 0;
+    loop {
+        let page = core
+            .store()
+            .read_stream_since(stream.clone(), after, PAGE)
+            .await?;
+        let full = page.len() == PAGE as usize;
+        if let Some(last) = page.last() {
+            after = last.stream_seq;
+        }
+        events.extend(page);
+        if !full {
+            return Ok(events);
+        }
     }
 }
 
@@ -919,7 +1077,11 @@ fn is_process(artifact: &Artifact) -> bool {
 }
 
 /// Kills every process working inside `dir`, with its tree, until none is left.
-fn end_in_dir(platform: &dyn Platform, dir: &Path) -> std::result::Result<(), String> {
+fn end_in_dir(
+    platform: &dyn Platform,
+    dir: &Path,
+    private_logs: bool,
+) -> std::result::Result<(), String> {
     if !dir.exists() {
         return Ok(());
     }
@@ -936,7 +1098,7 @@ fn end_in_dir(platform: &dyn Platform, dir: &Path) -> std::result::Result<(), St
         }
         for pid in found {
             if let Err(err) = processes.kill_tree(pid) {
-                tracing::debug!(pid, error = %err, "could not kill a process in a Brigadier folder");
+                crate::logging::private_trace!(private_logs, debug, "could not kill a process in a Brigadier folder"; pid, error = %err);
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1083,7 +1245,7 @@ impl CleanupLedger {
             }
         }
         for place in std::iter::once(dir).chain(folders.iter().map(PathBuf::as_path)) {
-            if let Err(err) = end_in_dir(&*self.platform, place) {
+            if let Err(err) = end_in_dir(&*self.platform, place, false) {
                 tracing::debug!(error = %err, "could not end a test's processes");
             }
         }
@@ -1111,6 +1273,10 @@ struct OwnerLedger {
 }
 
 impl brigadier_providers::Ledger for OwnerLedger {
+    fn private_logs(&self) -> bool {
+        self.owner.starts_with(TAB_CHAT_OWNER)
+    }
+
     fn record(
         &self,
         artifact: Artifact,
@@ -1394,6 +1560,69 @@ mod tests {
             ]
         );
         assert!(fixture.load().await.disposing().is_empty());
+    }
+
+    /// Disposes of tab chat `owner` (it holds nothing, so its records are to go) and holds the
+    /// forgetting until the returned `Notify` is notified.
+    async fn pause_forgetting(
+        ledger: &Arc<CleanupLedger>,
+        owner: &'static str,
+    ) -> (tokio::task::JoinHandle<Leftovers>, Arc<Notify>) {
+        let (reached, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        *ledger.forget_pause.lock().unwrap() = Some((reached.clone(), release.clone()));
+        let disposing = {
+            let ledger = ledger.clone();
+            tokio::spawn(async move { ledger.dispose(owner).await })
+        };
+        reached.notified().await;
+        (disposing, release)
+    }
+
+    #[tokio::test]
+    async fn a_record_made_while_a_tab_chat_is_forgotten_stays_for_the_next_sweep() {
+        let fixture = Fixture::new().await;
+        let owner = "tabchat:forget-race";
+        let ledger = fixture.load().await;
+        let (old, held) = fixture.folder("tab-old");
+        ledger.record(owner, held).await.unwrap();
+        let (disposing, release) = pause_forgetting(&ledger, owner).await;
+        assert!(!old.exists());
+        // Say a process tree of the chat is recorded just as its records go.
+        let (path, artifact) = fixture.folder("tab-new");
+        let recording = {
+            let (ledger, artifact) = (ledger.clone(), artifact.clone());
+            tokio::spawn(async move { ledger.record(owner, artifact).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        release.notify_one();
+        assert!(disposing.await.unwrap().is_clean());
+        recording.await.unwrap().unwrap();
+        assert_eq!(ledger.artifacts(owner), vec![artifact.clone()]);
+        let reloaded = fixture.load().await;
+        assert_eq!(reloaded.artifacts(owner), vec![artifact]);
+        assert!(reloaded.disposing().contains(&owner.to_owned()));
+        reloaded.sweep().await;
+        assert!(!path.exists(), "the launch sweep removes it");
+        assert!(reloaded.artifacts(owner).is_empty());
+        assert!(fixture.load().await.artifacts(owner).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_record_made_after_a_tab_chat_was_forgotten_goes_at_the_next_sweep() {
+        let fixture = Fixture::new().await;
+        let owner = "tabchat:late-record";
+        let ledger = fixture.load().await;
+        let (_, held) = fixture.folder("late-old");
+        ledger.record(owner, held).await.unwrap();
+        assert!(ledger.dispose(owner).await.is_clean());
+        assert!(fixture.load().await.artifacts(owner).is_empty());
+        let (path, artifact) = fixture.folder("late-new");
+        ledger.record(owner, artifact).await.unwrap();
+        let reloaded = fixture.load().await;
+        assert!(reloaded.disposing().contains(&owner.to_owned()));
+        reloaded.sweep().await;
+        assert!(!path.exists(), "the launch sweep removes it");
+        assert!(fixture.load().await.artifacts(owner).is_empty());
     }
 
     fn worktree(path: &str) -> Artifact {

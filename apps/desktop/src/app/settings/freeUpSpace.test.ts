@@ -181,7 +181,10 @@ test("the page shows what is used, the Free up space row and Advanced", async ()
 
     const looking = render({ report: null, scanning: true });
     assert.match(looking, /Looking at what Brigadier keeps/);
-    assert.doesNotMatch(looking, /storage-bar/);
+    assert.doesNotMatch(looking, /data-slot="storage-bar"/);
+    // The bar and its legend's names hold their room until the scan answers.
+    assert.match(looking, /data-slot="storage-bar-pending"/);
+    assert.match(looking, />Work folders</);
 
     const updating = render({ scanning: true });
     assert.match(updating, /Updating…/);

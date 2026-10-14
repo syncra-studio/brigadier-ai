@@ -93,7 +93,7 @@ provider: ProviderKind,
  * The task's checkout when the terminal starts elsewhere (a read-only Codex worker
  * starts in its scratch folder).
  */
-checkout?: string, } | { "method": "openSideChat", conversation: Conversation, } | { "method": "writeTerminal" } | { "method": "resizeTerminal" } | { "method": "clearTerminal" } | { "method": "closeTerminal" } | { "method": "getComputerUse", computerUse: ComputerUseStatus, } | { "method": "grantComputerPermission" } | { "method": "checkComputerUse", computerUse: ComputerUseStatus, } | { "method": "confirmComputerCapture", computerUse: ComputerUseStatus, 
+checkout?: string, } | { "method": "openSideChat", conversation: Conversation, } | { "method": "openTabChat", conversation: Conversation, } | { "method": "keepTabChats" } | { "method": "setTabPage" } | { "method": "writeTerminal" } | { "method": "resizeTerminal" } | { "method": "clearTerminal" } | { "method": "closeTerminal" } | { "method": "getComputerUse", computerUse: ComputerUseStatus, } | { "method": "grantComputerPermission" } | { "method": "checkComputerUse", computerUse: ComputerUseStatus, } | { "method": "confirmComputerCapture", computerUse: ComputerUseStatus, 
 /**
  * Why screen capture didn't work, when it didn't.
  */

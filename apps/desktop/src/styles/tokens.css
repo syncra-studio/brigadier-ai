@@ -34,8 +34,8 @@
  *                                             an on/off switch
  *               min-w-settings-control        the room a Settings row keeps for its control
  *               h-page-toolbar                the strip atop a Settings page
- *               h-settings-band, pt-settings-top  the band over a Settings page (titlebar and
- *                                             toolbar strips) it scrolls under; where its title starts
+ *               h-settings-band, pt-settings-top  the band atop a Settings page, under the
+ *                                             titlebar, that it scrolls under; where its title starts
  *               max-h-action-list             a worker's expanded run of actions (9 rows)
  *               max-h-command-list            the composer's / menu (10 rows and a half, then scrolls)
  *               h-kbd, min-w-kbd              keyboard hints
@@ -85,7 +85,9 @@
  *               text-browser                  its address and its ⋯ menu's rows (13px)
  *               --browser-address-mask        the fade at the address field's end
  *                                             (`.browser-address-field`)
- *               w-browser-site-info           the popover of its site information button
+ *               w-browser-site-info           the popover of its site information button (and
+ *                                             of a page's question for the camera)
+ *               w-browser-downloads           its Downloads popover
  *               h-browser-zoom, w-browser-zoom-value  the ⋯ menu's zoom stepper and its 100%
  *               w-browser-find, h-browser-find-row, shadow-browser-find  the page's find bar
  *               w-browser-menu, h-browser-menu-item, rounded-browser-menu  its ⋯ menu
@@ -307,7 +309,7 @@
   --spacing-page-toolbar: 2.875rem;
   /* The band over a Settings page that drags the window: the titlebar's strip and the page's;
      the page scrolls under it, and its title starts 16px below it. */
-  --spacing-settings-band: calc(var(--spacing-titlebar) + var(--spacing-page-toolbar));
+  --spacing-settings-band: var(--spacing-page-toolbar);
   --spacing-settings-top: calc(var(--spacing-settings-band) + var(--spacing) * 4);
   /* A Settings row keeps at least this much room for its control. */
   --spacing-settings-control: min(10rem, 40cqw);
@@ -341,6 +343,7 @@
   --text-browser: 0.8125rem;
   --text-browser--line-height: 1.125rem;
   --spacing-browser-site-info: 20rem;
+  --spacing-browser-downloads: 22rem;
   --spacing-browser-zoom: 1.625rem;
   --spacing-browser-zoom-value: 2.75rem;
   /* The page's find bar: 340 wide, a 44 high row. */

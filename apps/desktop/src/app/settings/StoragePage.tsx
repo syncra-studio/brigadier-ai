@@ -85,6 +85,9 @@ const SHARED: Record<SharedPart, string> = {
   other: "Everything else",
 };
 
+/** What the page's last scan found, kept while the app runs. */
+let lastReport: StorageReport | null = null;
+
 /**
  * Settings → Storage. What Brigadier uses on this computer (a bar of its parts, scanned when the
  * page opens and again on Refresh), then a row to free up space: Review opens what can go, in a
@@ -93,9 +96,10 @@ const SHARED: Record<SharedPart, string> = {
  * under Advanced.
  */
 export function StoragePage() {
-  const [report, setReport] = useState<StorageReport | null>(null);
+  // What the last scan found shows at once when the page opens again; it looks again quietly.
+  const [report, setReport] = useState<StorageReport | null>(() => lastReport);
   const [error, setError] = useState<string | null>(null);
-  const [scanning, setScanning] = useState(true);
+  const [scanning, setScanning] = useState(() => lastReport === null);
   const [cleaning, setCleaning] = useState(false);
   const [cleaned, setCleaned] = useState<CleanReport | null>(null);
   const [cleanError, setCleanError] = useState<string | null>(null);
@@ -108,6 +112,7 @@ export function StoragePage() {
     scanStorage().then(
       (scanned) => {
         if (id !== latest.current) return;
+        lastReport = scanned;
         setReport(scanned);
         setScanning(false);
       },
@@ -232,7 +237,7 @@ export function StorageBody({
               )}
             </SettingsButton>
           </div>
-          {report && <UsageBar report={report} />}
+          {report ? <UsageBar report={report} /> : !error && <UsageBar report={null} />}
           {report && error && <ErrorLine error={error} />}
         </div>
       </SettingsSection>
@@ -307,11 +312,42 @@ export function StorageBody({
   );
 }
 
+/** A scan that found nothing, for the legend's names before the first scan answers. */
+const NO_REPORT: StorageReport = {
+  scanId: "",
+  dataDir: "",
+  totalBytes: 0,
+  cleanableBytes: 0,
+  projects: [],
+  shared: [],
+  items: [],
+  kept: [],
+};
+
 /** The bar of what Brigadier uses, its legend and the data folder. */
-function UsageBar({ report }: { report: StorageReport }) {
+function UsageBar({ report }: { report: StorageReport | null }) {
+  const mac = useApp((s) => s.info?.platform === "macos");
+  // Before the first scan: the empty bar and the legend's names, their sizes and the data
+  // folder still to come in the room they will take.
+  if (!report) {
+    return (
+      <>
+        <div data-slot="storage-bar-pending" aria-hidden className="bg-foreground/8 h-6 rounded-full" />
+        <ul aria-hidden className="flex flex-wrap gap-x-4 gap-y-1.5">
+          {usageParts(NO_REPORT).map((part) => (
+            <li key={part.key} className="grid grid-cols-[auto_auto] items-center gap-x-1.5 gap-y-0.5">
+              <span className="bg-foreground/15 size-2 rounded-full" />
+              <span className="text-foreground/65 text-label">{part.label}</span>
+              <span className="invisible col-start-1 col-end-3 text-xs">0 B</span>
+            </li>
+          ))}
+        </ul>
+        <span aria-hidden className="invisible text-xs">/</span>
+      </>
+    );
+  }
   const parts = usageParts(report);
   const total = Math.max(1, parts.reduce((sum, part) => sum + part.bytes, 0));
-  const mac = useApp((s) => s.info?.platform === "macos");
   return (
     <>
       <div

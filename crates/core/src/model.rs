@@ -265,6 +265,34 @@ pub struct ForkOrigin {
     pub message_id: String,
 }
 
+/// A tab's own chat: the chat in a split beside a page, a file or a web page, which belongs
+/// to that one tab of a session. It goes, leaving nothing behind, when the tab closes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TabChat {
+    /// The tab's id in the app.
+    pub tab_id: String,
+    pub target: TabTarget,
+}
+
+/// What a tab's chat is about, and so what it may change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TabTarget {
+    /// A page: the chat may read and change this page, and no other.
+    Page { page_id: String },
+    /// A file of the session's checkout, by its path inside it: the chat may change this file
+    /// and only read the rest.
+    File { path: String },
+    /// A web page in the built-in browser: the chat reads what the app sends with each
+    /// message (the address, the page's text, the selection) and can't use the site.
+    Browser,
+}
+
 /// What a new conversation is set up with, from the composer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
@@ -427,6 +455,10 @@ pub struct Conversation {
     /// with each of its turns. Side chats are temporary and left out of the sidebar.
     #[serde(default)]
     pub side_of: Option<ConversationId>,
+    /// Set for a tab's own chat (with `side_of`, its session): the tab it belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tab_chat: Option<TabChat>,
     /// Set while the conversation's model (a session's orchestrator, a Chat's model) is
     /// replaced because it hit a limit. Temporary: the saved choice in `setup`, the project's
     /// remembered one and the global default are never changed by it.
@@ -2112,6 +2144,15 @@ pub mod streams {
     pub fn raw_session(id: &super::RawSessionId) -> String {
         format!("raw:{id}")
     }
+
+    /// A tab's own chat's catalog events, kept apart from [`CATALOG`] so that, once its tab
+    /// closes, removing this stream leaves the catalog with nothing of it.
+    pub fn tab_chat(id: &ConversationId) -> String {
+        format!("tabchat:{id}")
+    }
+
+    /// Where every tab chat's catalog stream starts.
+    pub const TAB_CHATS: &str = "tabchat:";
 
     /// A conversation's messages, tasks, cards, queue and run state.
     pub fn conversation(id: &ConversationId) -> String {

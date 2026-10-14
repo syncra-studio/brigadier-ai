@@ -47,9 +47,23 @@ pub enum Role {
     },
     /// A Chat's model: it may save memories to the Personal Brain.
     Chat { conversation_id: ConversationId },
+    /// A tab's own chat: it may read and change its tab's page or file, and nothing else.
+    TabChat {
+        conversation_id: ConversationId,
+        tools: TabTools,
+    },
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`): it may only store the
     /// thread's command output, and calls no tools.
     OutputHook { conversation_id: ConversationId },
+}
+
+/// The tools of a tab's chat, by what its tab shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabTools {
+    /// `read_page` and `write_page`, for the tab's page only.
+    Page,
+    /// `read_tab_file` and `write_tab_file`, for the tab's file only.
+    File,
 }
 
 /// The command tools a thread has besides the orchestrator tools (THREAD-PLAN.md Q4): a Codex
@@ -389,9 +403,14 @@ pub struct StartPreview {
     /// inside the workspace.
     #[serde(default)]
     pub workdir: Option<String>,
+    /// "web" for a page the user opens in a browser, "app" for a desktop app that opens its own
+    /// window (it gets no URL). Left out, `tauri dev` and Electron commands are "app", anything
+    /// else "web".
+    #[serde(default)]
+    pub kind: Option<crate::work::PreviewKind>,
 }
 
-/// `stop_preview`: stop one preview, or every running one.
+/// `stop_preview`: stop one preview, or every running one, and remove it from the user's list.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StopPreview {
@@ -638,6 +657,21 @@ pub struct WritePage {
     #[serde(default)]
     pub title: Option<String>,
     /// The revision `read_page` returned: the write is refused if the page changed since.
+    pub base_revision: String,
+}
+
+/// `read_tab_file`: the file beside the chat, as it is now.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadTabFile {}
+
+/// `write_tab_file`: replace that file's text, if nobody changed it since `base_revision`.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WriteTabFile {
+    /// The file's whole new text.
+    pub text: String,
+    /// The revision `read_tab_file` returned: the write is refused if the file changed since.
     pub base_revision: String,
 }
 
@@ -1265,6 +1299,15 @@ pub enum ChatCall {
     SaveMemory(SaveMemory),
 }
 
+/// A tab chat's call.
+#[derive(Debug, Clone)]
+pub enum TabChatCall {
+    ReadPage(ReadPage),
+    WritePage(WritePage),
+    ReadFile,
+    WriteFile(WriteTabFile),
+}
+
 /// A tool call, for any role.
 #[derive(Debug, Clone)]
 pub enum ToolCall {
@@ -1272,6 +1315,7 @@ pub enum ToolCall {
     Worker(WorkerCall),
     Job(JobCall),
     Chat(ChatCall),
+    TabChat(TabChatCall),
 }
 
 /// An image in a tool's reply.

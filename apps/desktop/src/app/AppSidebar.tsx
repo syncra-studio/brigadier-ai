@@ -95,7 +95,7 @@ export function TitlebarNav() {
   const shortcuts = useShortcuts();
   const can = useCanStep();
   return (
-    <div className="h-titlebar-toggle start-titlebar-start absolute top-0 z-20 flex items-center gap-1.5">
+    <div data-slot="titlebar-nav" className="h-titlebar-toggle start-titlebar-start absolute top-0 z-20 flex items-center gap-1.5">
       <TitlebarTips>
         <TitlebarButton
           tooltip="Back"
@@ -485,23 +485,17 @@ export function StripMark() {
  * its list beside the strip.
  */
 export function AppStrip() {
-  const isChatDraft = useApp((s) => s.selection.type === "draft" && s.selection.kind === "chat");
   const shortcuts = useShortcuts();
+  const isChatDraft = useApp((s) => s.selection.type === "draft" && s.selection.kind === "chat");
   return (
     <>
       <StripMark />
-      <NavList className="mb-2 px-2">
+      <NavList className="px-2 pt-1">
         <li>
-          <StripButton
-            label="New chat"
-            selected={isChatDraft}
-            onClick={() => select({ type: "draft", kind: "chat" })}
-          >
+          <StripButton label="New chat" selected={isChatDraft} onClick={() => select({ type: "draft", kind: "chat" })}>
             <ComposeEditSquare />
           </StripButton>
         </li>
-      </NavList>
-      <NavList className="px-2 pt-1">
         <li>
           <StripButton label="Search" shortcut={shortcuts.search} onClick={() => openSearch()}>
             <MagnifyingGlassSearch />
