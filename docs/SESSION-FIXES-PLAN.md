@@ -626,13 +626,14 @@ noticed.
 ### Computer use: every role knows it, and live checks use it (added 2026-10-11)
 > **Removed 2026-10-13:** Brigadier's old computer use (its helper crate, the `computer` MCP server and its docs) is
 > gone, and so is everything below that relied on it. **Replaced:** a new bundled helper (`helpers/computer-use`) gives
-> the thread and every worker a `computer` MCP server and a `computer-use` skill; the tools named below are the old ones.
+> every worker a `computer` MCP server and a `computer-use` skill; the tools named below are the old ones.
 >
 > **Changed by §11 (2026-10-14):** a UI worker no longer builds and checks the dev app in its own worktree. It uses the
 > project's scripted UI checks, and one `live_look` task looks at the dev build of the integrated tree, once the
 > session's full checks pass. Its worker launches that build itself with the computer tools on scratch data. The
-> thread keeps its own computer tools to a quick look. The routing, the safety limits and the operate tasks below
-> stay; a change matched to a mockup keeps its own live capture.
+> thread has no computer tools (2026-10-14: given them, a Claude thread ran a long command as its own background job
+> more often than through `run`), so any look at an app goes to a worker. The routing, the safety limits and the
+> operate tasks below stay; a change matched to a mockup keeps its own live capture.
 
 The user's ask: Brigadier's macOS computer use (its helper crate, the `computer` MCP server's `apps`, `launch`,
 `observe`, `act`, `zoom`, and its docs) must be known to the thread, the workers and

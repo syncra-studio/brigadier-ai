@@ -190,8 +190,8 @@ pub(crate) const PEERS: &str = "Message another session's thread (list_sessions,
 pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a landing, a report's addendum, a CI result) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), never a new ending. Otherwise reply [quiet].";
 
 /// Where the thread sends a live look at an app (SESSION-FIXES-PLAN.md "Computer use"): to the
-/// workers, so screenshots stay out of its own context.
-pub(crate) const COMPUTER_ROUTING: &str = "\n- On this Mac you and every worker can open an app, look at it and use it with the computer tools, yours for a quick look only. So a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one delegate_task with live_look: true; its workers use scripted UI checks. A GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
+/// workers, which have the computer tools, so screenshots stay out of its own context.
+pub(crate) const COMPUTER_ROUTING: &str = "\n- On this Mac every worker can open an app, look at it and use it with the computer tools; you can't. So a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one delegate_task with live_look: true; its workers use scripted UI checks. A GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
 /// When the thread offers a mockup before a visible UI change, and how the mockup goes from
 /// the user's yes to the side-by-side (SESSION-FIXES-PLAN.md Q10).
 const MOCKUPS: &str = "- A visible UI change that isn't a small fix (a new control, panel, screen or layout): first ask_user \"Want a mockup first?\" (Yes / Skip; say if part of it can't be faked). Yes: delegate_task with mockup: true, then ask only what its screenshots can't show; the user's marked notes go to that worker (message_worker with their attachments). On their yes to the work, land the mockup, then delegate with matches_mockup; if they drop it, stop the mockup.";
@@ -449,6 +449,8 @@ pub(crate) const THREAD_HONESTY_REVISION: u32 = 24;
 /// A finding is recorded fixed only once checked in the merged code, and the thread's scratch
 /// goes in its temp folder, which goes when the request is over.
 pub(crate) const THREAD_CLEANUP_REVISION: u32 = 25;
+/// The thread has no computer tools of its own any more: a look at an app goes to a worker.
+pub(crate) const THREAD_NO_COMPUTER_REVISION: u32 = 26;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -585,6 +587,15 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: THREAD_CLEANUP_REVISION,
         thread: "From now on, record a review finding fixed only once you checked the fix in the merged code (its lines at the session branch's tip, or its test run there), and say how in record_findings' `checked`. A report or your notes are no check: without one the finding shows as unverified, and you tell the user so, never that the review is clean. Your own commands' scratch (a second checkout, its build output, logs, test data) goes in $TMPDIR, never elsewhere in /tmp, and no worker's spec names a /tmp path: when the request is over, Brigadier empties it and ends what your commands left running (a server listening on a port stays).",
+        worker: "",
+    },
+    Revision {
+        number: THREAD_NO_COMPUTER_REVISION,
+        thread: if cfg!(target_os = "macos") {
+            "From now on, you have no computer tools of your own: a look at an app, however quick, goes to a worker, as your instructions say (the worker on the task, a live_look task, or an operate task)."
+        } else {
+            ""
+        },
         worker: "",
     },
 ];
@@ -2401,10 +2412,10 @@ mod environment_tests {
             // After its own push, the thread looks at CI (Q1).
             assert!(text.contains("After your own `git push`, call "));
             assert!(text.contains("(`main` only through the usual merge into it here), push it"));
-            // It keeps its own computer tools to a quick look and routes the one live look at
-            // the landed work to a worker (computer use, §11).
+            // It has no computer tools and routes the one live look at the landed work to a
+            // worker (computer use, §11).
             assert_eq!(
-                text.contains("yours for a quick look only")
+                text.contains("every worker can open an app, look at it and use it with the computer tools; you can't")
                     && text.contains("a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one "),
                 cfg!(target_os = "macos")
             );
@@ -2932,9 +2943,10 @@ mod environment_tests {
         assert!(added.thread.contains("`checked`"));
         assert!(added.thread.contains("never that the review is clean"));
         assert!(added.thread.contains("$TMPDIR, never elsewhere in /tmp"));
-        assert_eq!(
-            revision_note(THREAD_CLEANUP_REVISION - 1, false).unwrap(),
-            format!("[instructions] {}", added.thread)
+        assert!(
+            revision_note(THREAD_CLEANUP_REVISION - 1, false)
+                .unwrap()
+                .starts_with(&format!("[instructions] {}", added.thread))
         );
         assert_eq!(revision_note(THREAD_CLEANUP_REVISION - 1, true), None);
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
@@ -2957,6 +2969,46 @@ mod environment_tests {
             );
             assert!(
                 prompt.contains("nor name a /tmp path in a spec"),
+                "{provider:?}"
+            );
+        }
+    }
+    /// A thread told the revision before hears once, on macOS, that it has no computer tools
+    /// of its own; a new thread's prompt says only workers have them.
+    #[test]
+    fn the_no_computer_revision_reaches_an_open_thread_and_its_prompt_says_it() {
+        let added = &REVISIONS[THREAD_NO_COMPUTER_REVISION as usize - 1];
+        assert_eq!(added.number, THREAD_NO_COMPUTER_REVISION);
+        assert!(added.worker.is_empty());
+        assert_eq!(revision_note(THREAD_NO_COMPUTER_REVISION - 1, true), None);
+        if cfg!(target_os = "macos") {
+            assert!(
+                added
+                    .thread
+                    .contains("you have no computer tools of your own")
+            );
+            assert_eq!(
+                revision_note(THREAD_NO_COMPUTER_REVISION - 1, false).unwrap(),
+                format!("[instructions] {}", added.thread)
+            );
+        } else {
+            assert_eq!(revision_note(THREAD_NO_COMPUTER_REVISION - 1, false), None);
+        }
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let prompt = thread(
+                &session("fullAccess"),
+                None,
+                &[],
+                None,
+                None,
+                provider,
+                false,
+            );
+            assert!(!prompt.contains("you and every worker"), "{provider:?}");
+            assert!(!prompt.contains("quick look only"), "{provider:?}");
+            assert_eq!(
+                prompt.contains("use it with the computer tools; you can't"),
+                cfg!(target_os = "macos"),
                 "{provider:?}"
             );
         }

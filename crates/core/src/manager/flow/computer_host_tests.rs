@@ -261,3 +261,66 @@ async fn an_agent_waiting_for_setup_opens_the_setup_window_once() {
     }
     assert_eq!(asked, 1);
 }
+
+/// A helper bundled where Brigadier.app keeps it, signed (ad hoc) so it passes the signature
+/// check when placed: computer use is then really available to agents.
+fn bundle_helper(flow: &Flow) {
+    let app = flow
+        .manager
+        .config
+        .daemon_exe
+        .parent()
+        .and_then(Path::parent)
+        .unwrap()
+        .join("Helpers")
+        .join(super::super::computer_use::HELPER_APP);
+    let bin = app.join("Contents/MacOS");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::copy(
+        "/usr/bin/true",
+        bin.join(super::super::computer_use::HELPER_BIN),
+    )
+    .unwrap();
+    std::fs::write(
+        app.join("Contents/Info.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>ai.brigadier.test-computer-use</string><key>CFBundleExecutable</key><string>brigadier-cu</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>
+"#,
+    )
+    .unwrap();
+    let signed = std::process::Command::new("/usr/bin/codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(signed.status.success(), "{signed:?}");
+}
+
+/// The thread has no computer tools, while computer use is on and its helper is ready: no
+/// `computer` server, no skill plugin and no word of them in its instructions. A live look
+/// at an app goes to a worker, which has them. Given them, a Claude thread ran a long command
+/// as its own background job more often than through `run`.
+#[tokio::test]
+async fn the_thread_has_no_computer_tools_while_workers_do() {
+    let flow = flow("thread-no-computer").await;
+    bundle_helper(&flow);
+    assert!(flow.manager.core.settings().computer_use);
+    assert!(
+        flow.manager
+            .computer_use_kit("a-worker", false)
+            .await
+            .is_some(),
+        "computer use is available to agents"
+    );
+    flow.say("Is the build green?").await;
+    flow.settled().await;
+    let specs = flow.thread_specs();
+    let (_, spec) = specs.first().expect("the thread started");
+    let servers: Vec<&str> = spec.mcp_servers.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(servers, ["brigadier"]);
+    assert!(spec.skill_plugins.is_empty());
+    let prompt = spec.append_system_prompt.as_deref().unwrap();
+    assert!(!prompt.contains(crate::manager::prompts::COMPUTER_USE));
+    assert!(prompt.contains("use it with the computer tools; you can't"));
+}

@@ -1147,7 +1147,8 @@ async fn boot(
         runtime.clone(),
         spawner,
         ManagerConfig {
-            daemon_exe: PathBuf::from("/fake/brigadierd"),
+            // Inside an app bundle that has no computer-use helper until a test puts one there.
+            daemon_exe: data.join("Brigadier.app/Contents/MacOS/brigadierd"),
         },
     )
     .await

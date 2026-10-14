@@ -2763,20 +2763,10 @@ impl SessionManager {
             }
         };
 
-        let (mut prompt, mut mcp) = (prompt, mcp);
-        // The thread drives apps itself only for a quick look; its skill and tools load when used.
-        let mut skill_plugins = Vec::new();
-        let mut redacted = grant_values.clone();
-        if conv.kind == ConversationKind::Session
-            && let Some(kit) = self.computer_use_kit(&conv.id.to_string(), false).await
-        {
-            prompt.push_str("\n\n");
-            prompt.push_str(prompts::COMPUTER_USE);
-            redacted.push(kit.token);
-            mcp.push(kit.server);
-            skill_plugins.push(kit.plugin);
-        }
-        let grant_redactor = super::secrets::redactor(redacted);
+        // The thread has no computer tools: a live look at an app goes to a worker, which has
+        // them. Given them, a Claude thread ran a long command as its own background job more
+        // often than through `run`, whose result then never reached the request.
+        let grant_redactor = super::secrets::redactor(grant_values.clone());
         let fresh = std::mem::take(&mut conv.state.lock().await.fresh);
         let mut resume = if fresh {
             None
@@ -2819,7 +2809,7 @@ impl SessionManager {
                 ConversationKind::Chat if tab_checkout.is_some() => ToolSet::Review,
                 ConversationKind::Chat => ToolSet::Web,
             },
-            skill_plugins,
+            skill_plugins: Vec::new(),
             // The workspace is the thread's to work in, never its own to clean up: it is not
             // recorded under the thread's owner. A tab chat's checkout is read the same way.
             add_dirs: launch
