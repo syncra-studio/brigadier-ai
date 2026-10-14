@@ -81,6 +81,9 @@ jobs:
             tauri-args: --bundles deb
             app: target/release/brigadier
     runs-on: ${{ matrix.os }}
+    env:
+      # Debug sidecars only serve clippy; omit their symbols to cut compile and cache I/O.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     defaults:
       run:
         shell: bash
@@ -102,7 +105,7 @@ jobs:
 
       - name: Faster release builds outside release tags
         if: "!startsWith(github.ref, 'refs/tags/v')"
-        # Keep release optimizations, but avoid LTO and let code generation run in parallel.
+        # Keep release optimizations, but avoid cross-crate LTO and parallelize code generation.
         # Cargo passes these settings to the app and its sidecar builds alike.
         run: |
           echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"
@@ -126,6 +129,8 @@ jobs:
           # Mount beside the checkout so this stays relative to the Cargo workspace.
           # The cache saves files before setup-dev-drive's post step dismounts the volume.
           workspaces: . -> ${{ runner.os == 'Windows' && '../dev-drive/target' || 'target' }}
+          # Pull requests restore the base branch cache without uploading a branch-only copy.
+          save-if: ${{ github.event_name != 'pull_request' }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
