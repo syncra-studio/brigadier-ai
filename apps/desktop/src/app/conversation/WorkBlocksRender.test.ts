@@ -58,6 +58,8 @@ test("a message steered in while a command runs sums the work above it up at onc
   const seen = await drive<{ before: Seen; after: Seen; bubble: string | null }>(t, "drive=steer");
   assert.deepEqual([seen.before.newest, seen.before.newestShimmers], ["Running sleep 30", true]);
   assert.deepEqual([seen.after.groupRow, seen.after.shimmer], ["Ran a command", false]);
+  // The live line moves under the bubble, though the command still runs.
+  assert.deepEqual([seen.after.status, seen.after.statusInWork], ["Thinking", true]);
   assert.match(seen.bubble ?? "", /^Use banker's rounding instead/);
 });
 

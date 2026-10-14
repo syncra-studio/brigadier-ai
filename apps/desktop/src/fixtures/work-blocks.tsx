@@ -11,7 +11,8 @@
  * - `drive=queue` (`kind=session` for a session): a queued message's ⋯ menu, and turning
  *   queueing off from it.
  *
- * The result goes to `<pre id="work-blocks-result">`.
+ * The result goes to `<pre id="work-blocks-result">`. `stop=running|answering|done|steer|menu` holds the
+ * page at that moment instead, for a screenshot.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -162,6 +163,11 @@ async function settle(ms = 50): Promise<void> {
   }
 }
 
+/** Holds the page at the moment `stop` names, for a screenshot. */
+async function hold(name: string): Promise<void> {
+  if (query.get("stop") === name) await new Promise(() => {});
+}
+
 /** The board as the daemon's events would leave it. */
 function change(edit: (board: Board) => Partial<Board>): void {
   useBoard.setState(({ board }) => (board ? { board: { ...board, ...edit(board) } } : {}));
@@ -229,6 +235,7 @@ async function driveTurn(): Promise<object> {
   steps([...daemon.steps, tool("sleep", 1.4, "shell", "sleep 4", "inProgress")]);
   await settle();
   out.running = seen();
+  await hold("running");
   steps(daemon.steps.map((step) => (step.kind.type === "tool" && step.kind.itemId === "sleep" ? tool("sleep", 1.4, "shell", "sleep 4", "completed") : step)));
   change(() => ({ streaming: { messageId: "line", text: "I’ll fix the rounding next.\n\nThen run the tests again.", requestId: "r1", phase: "commentary", startedAtMs: Date.now() } }));
   await settle();
@@ -254,6 +261,7 @@ async function driveTurn(): Promise<object> {
   change(() => ({ streaming: { messageId: "a1", text: answerText, requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
   await settle();
   out.answeringLater = seen();
+  await hold("answering");
   // Stored, the request still running: folded, the same time.
   const stored: Message = {
     id: "a1", conversationId: ID, seq: 2, role: "assistant", text: answerText, blob: null, createdAtMs: Date.now(), attachments: [],
@@ -274,6 +282,7 @@ async function driveTurn(): Promise<object> {
   request("r1", { state: { type: "done" }, endedAtMs: Date.now(), waitingFor: [] });
   await settle();
   out.done = seen();
+  await hold("done");
   out.actions = all("[data-slot=answer-actions] button", turn() ?? document).map((button) => button.getAttribute("aria-label") ?? text(one(".sr-only", button)));
   // Read again from the daemon, as after a restart.
   await loadConversation(ID);
@@ -294,6 +303,7 @@ async function driveSteer(): Promise<object> {
   useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
   change((board) => ({ requests: { ...board.requests, r2: daemon.requests.r2! }, head: "r2" }));
   await settle();
+  await hold("steer");
   return { before, after: seen(), bubble: text(one("[data-slot=request-steer]")) };
 }
 
@@ -303,6 +313,7 @@ async function driveQueue(): Promise<object> {
   trigger?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
   await settle();
   const items = all("[role=menuitem]").map((item) => text(item));
+  await hold("menu");
   all("[role=menuitem]").find((item) => text(item) === "Turn off queueing")?.click();
   for (const end = Date.now() + 3000; Date.now() < end && settings.followUp !== "steer"; ) await wait(25);
   return { items, followUp: useApp.getState().settings.followUp, saved: settings.followUp };

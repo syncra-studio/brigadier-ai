@@ -465,9 +465,10 @@ const ActivityItems: FC<{
   summary: boolean;
 }> = ({ activity, live, thought, streaming, commentary, requestIds, summary }) => {
   const head = useThreadStatusHead(live);
+  // Under a message just steered in, with what ran before it summed up, it thinks: even while that still runs.
   const line: (StatusHead & { thought?: boolean }) | null = !live
     ? null
-    : (head ?? (thought === null ? null : { text: thoughtTopic(thought, "newest") || "Thinking", tone: "busy", thought: true }));
+    : (head ?? (thought === null ? (activity.length === 0 ? { text: "Thinking", tone: "busy" } : null) : { text: thoughtTopic(thought, "newest") || "Thinking", tone: "busy", thought: true }));
   // A message to another session says how its exchange stands itself: the line stays under it.
   const newest = activity.at(-1);
   const lastStep = newest?.type === "group" ? newest.items.findLast((item) => item.type === "step") : undefined;
