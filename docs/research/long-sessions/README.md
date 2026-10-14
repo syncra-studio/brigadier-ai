@@ -21,3 +21,6 @@ Read in this order:
    and the session's went on the user's merge click, from a card that doesn't say so), and what the thread's fixed
    start is made of against the benchmark's token gap.
 7. `sources/`: the full source notes behind the digest (`vendor.md`, `papers.md`, `practice.md`).
+8. `BUILD-PLAN.md` (2026-10-15): the rebuild plan from the user's decisions Q35–Q42: the thread does the work itself,
+   phases A–E in build order with files, "done when" checks, benchmark targets against plain Claude Code and Codex,
+   the ship gate, and the trace of the merge card nobody clicked.
