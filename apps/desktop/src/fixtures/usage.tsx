@@ -281,7 +281,19 @@ function Fixture() {
         // The rows are static: nothing in them to press.
         seen.rowControls = all('[data-slot="usage-window"] button, [data-slot="usage-window"] [aria-expanded]').length;
         openTab("Activity");
-        return () => all('[data-slot="usage-chart"] svg').length > 0 && all('[data-slot="usage-tokens"]').length > 0;
+        // Every chart drawn at its current width: a hover maps the pointer through the measured
+        // size, which a loaded machine can leave behind the layout for a while.
+        return () => {
+          const charts = all('[data-slot="usage-chart"]');
+          return (
+            charts.length > 0 &&
+            charts.every((chart) => {
+              const width = chart.querySelector("svg")?.viewBox.baseVal.width;
+              return width !== undefined && width > 0 && width === chart.clientWidth;
+            }) &&
+            all('[data-slot="usage-tokens"]').length > 0
+          );
+        };
       },
       () => {
         seen.activity = {
