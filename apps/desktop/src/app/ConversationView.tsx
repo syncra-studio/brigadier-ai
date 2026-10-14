@@ -228,7 +228,7 @@ function signature(
     block.worked,
     block.quotaWait,
     block.cardWait,
-    block.texts.map((text) => [text.messageId, text.position, text.model]),
+    block.texts.map((text) => [text.messageId, text.position, text.model, text.anchors]),
     block.cards,
     block.tasks,
     block.rows,
@@ -298,7 +298,12 @@ function useItems(
         entry.texts.some((text, index) => text !== texts[index]);
       if (changed) {
         const meta: BlockMeta = {
-          texts: block.texts.map((text) => ({ position: text.position, model: text.model, update: text.update })),
+          texts: block.texts.map((text) => ({
+            position: text.position,
+            model: text.model,
+            update: text.update,
+            ...(text.anchors && { anchors: text.anchors }),
+          })),
           cards: block.cards,
           rows: block.rows,
           orchestratorSteps: block.orchestratorSteps,

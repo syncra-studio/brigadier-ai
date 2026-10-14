@@ -118,8 +118,8 @@ impl Core {
             let id = ConversationId(head.stream[prefix.len()..].to_owned());
             projection.touch(&id, head.at_ms);
         }
-        // So does when each last got a message from another session.
-        for head in store.peer_received_heads(prefix.clone()).await? {
+        // So does when each last answered a message from another session.
+        for head in store.peer_answered_heads(prefix.clone()).await? {
             let id = ConversationId(head.stream[prefix.len()..].to_owned());
             projection.peer_at(&id, head.at_ms);
         }

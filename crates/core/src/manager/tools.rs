@@ -647,6 +647,9 @@ impl SessionManager {
             OrchestratorCall::MessageSession(args) => {
                 crate::heap(|| self.message_session(id, args)).await
             }
+            OrchestratorCall::WaitForReplies(args) => {
+                crate::heap(|| self.wait_for_replies(id, args)).await
+            }
             OrchestratorCall::SettleWait(args) => {
                 crate::heap(|| self.settle_wait(id, &args.message_id)).await
             }

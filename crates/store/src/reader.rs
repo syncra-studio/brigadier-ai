@@ -154,12 +154,12 @@ pub(crate) fn stream_heads(conn: &Connection, prefix: &str) -> Result<Vec<Stream
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// Each stream under `prefix` that received a message from another session, with its newest
-/// such event (its `peer.received` events, off their partial index).
-pub(crate) fn peer_received_heads(conn: &Connection, prefix: &str) -> Result<Vec<StreamHead>> {
+/// Each stream under `prefix` that answered a message from another session, with its newest
+/// such event (its `peer.answered` events, off their partial index).
+pub(crate) fn peer_answered_heads(conn: &Connection, prefix: &str) -> Result<Vec<StreamHead>> {
     let mut upper = prefix.to_owned();
     upper.push(char::MAX);
-    let mut statement = conn.prepare_cached(PEER_RECEIVED_HEADS)?;
+    let mut statement = conn.prepare_cached(PEER_ANSWERED_HEADS)?;
     let rows = statement.query_map(params![prefix, upper], |row| {
         Ok(StreamHead {
             stream: row.get(0)?,
@@ -171,8 +171,8 @@ pub(crate) fn peer_received_heads(conn: &Connection, prefix: &str) -> Result<Vec
 }
 
 /// The kind is written out, not bound: only then may SQLite read the partial index.
-pub(crate) const PEER_RECEIVED_HEADS: &str = "SELECT stream, MAX(stream_seq), MAX(at_ms) FROM events \
-     WHERE kind = 'peer.received' AND stream >= ?1 AND stream < ?2 GROUP BY stream";
+pub(crate) const PEER_ANSWERED_HEADS: &str = "SELECT stream, MAX(stream_seq), MAX(at_ms) FROM events \
+     WHERE kind = 'peer.answered' AND stream >= ?1 AND stream < ?2 GROUP BY stream";
 
 /// Every distinct blob hash the events of `streams` reference.
 pub(crate) fn blob_hashes_of(conn: &Connection, streams: &[String]) -> Result<Vec<String>> {

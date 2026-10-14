@@ -369,6 +369,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "project_map" => ToolCall::Worker(W::ProjectMap),
         "list_sessions" => ToolCall::Orchestrator(O::ListSessions(arg(name, args))),
         "message_session" => ToolCall::Orchestrator(O::MessageSession(arg(name, args))),
+        "wait_for_replies" => ToolCall::Orchestrator(O::WaitForReplies(arg(name, args))),
         "read_session" => ToolCall::Orchestrator(O::ReadSession(arg(name, args))),
         "settle_wait" => ToolCall::Orchestrator(O::SettleWait(arg(name, args))),
         other => panic!("the flow harness doesn't know the tool {other}"),
@@ -1800,6 +1801,8 @@ mod peer_revision_tests;
 mod peer_session_tests;
 #[cfg(test)]
 mod peer_view_tests;
+#[cfg(test)]
+mod peer_wait_tests;
 #[cfg(test)]
 mod plan_tests;
 mod preview_tests;

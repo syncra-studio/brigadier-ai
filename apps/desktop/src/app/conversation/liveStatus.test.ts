@@ -188,3 +188,10 @@ test("a worker open in the user's terminal waits on the user", () => {
   assert.deepEqual(head(input({ ...leading, tasks: byId([task({ state: "takenOver" })]) })),
     { text: "Working in your terminal", tone: "needsYou" });
 });
+
+test("a turn resting on other sessions' replies says whom it waits for", () => {
+  assert.deepEqual(head(input({}, { state: "waiting", waitingFor: ["Docs"] })), { text: "Waiting for Docs to reply", tone: "still" });
+  assert.deepEqual(head(input({}, { state: "waiting", waitingFor: ["Docs", "Release notes"] })), {
+    text: "Waiting for Docs and Release notes to reply", tone: "still",
+  });
+});

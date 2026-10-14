@@ -107,7 +107,7 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
     const text = busy.length === 1 ? "Waiting for a worker" : `Waiting for ${busy.length} workers`;
     return { head: { text, tone: working ? "busy" : "still" } };
   }
-  // It rests until other sessions reply: "Waiting for API work".
+  // It rests until other sessions reply: "Waiting for API work to reply".
   if (state === "waiting" && input.waitingFor?.length) return { head: { text: waitingWords(input.waitingFor), tone: "still" } };
   // Waiting with nothing above to show (an overnight run's list): no line. A question in the
   // lead's text waits for nothing; the user is asked on cards.

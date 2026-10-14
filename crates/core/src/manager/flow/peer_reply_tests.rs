@@ -12,7 +12,7 @@ use tokio::sync::Notify;
 use super::peer_kit::{Peers, Sent, header_id, message_id, only, send};
 use super::{Flow, Options, Reply};
 use crate::board::Board;
-use crate::model::{ConversationId, Message, MessageRole, PeerState};
+use crate::model::{ConversationId, Message, PeerState};
 use crate::work::RequestState;
 
 /// Whether message `id` stands at `state` on `board`.
@@ -43,64 +43,6 @@ fn first_request(board: &Board) -> String {
         .unwrap()
         .id
         .clone()
-}
-
-/// A reply to the request whose turn is still running is steered into that turn: the turn
-/// reads it under a header naming what it answers, and the asked message is replied on
-/// both sides.
-#[tokio::test]
-async fn a_reply_is_steered_into_the_turn_that_asked() {
-    let peers = Peers::new();
-    let flow = Flow::start("peer-reply-steer", Options::default(), peers.script()).await;
-    let api = flow
-        .add_session("API work", None, ProviderKind::Codex)
-        .await;
-    let asked = Sent::default();
-    let read: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
-    let (kept, seen, to) = (asked.clone(), read.clone(), api.clone());
-    peers.on(&flow.conversation, move |turn| {
-        let (kept, seen, to) = (kept.clone(), seen.clone(), to.clone());
-        async move {
-            let reply = send(&turn, &to, "Which column holds names?", None).await;
-            kept.lock().unwrap().push(reply);
-            *seen.lock().unwrap() = turn.steered().await;
-            Reply::text("Names are in `name`.")
-        }
-    });
-    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", None);
-    flow.say("Ask the API session where names live.").await;
-    let board = flow
-        .until("the turn's end", |_| read.lock().unwrap().is_some())
-        .await;
-    let request = first_request(&board);
-    let board = flow.settled().await;
-    let question = message_id(&only(&asked).0);
-    let answer = message_id(&only(&replied).0);
-    let input = read.lock().unwrap().clone().unwrap();
-    assert!(
-        input.contains(&format!(
-            "[message from session \"API work\" in Flow · session {api} · id {answer} · reply to {question}]\nIt's `name`."
-        )),
-        "{input}"
-    );
-    assert_eq!(
-        peers.inputs_of(&flow.conversation).len(),
-        1,
-        "no second turn"
-    );
-    assert!(stands(&board, &question, &PeerState::Replied));
-    assert!(stands(&board, &answer, &PeerState::Seen));
-    let message = transcript_message(&flow, &flow.conversation, &answer).await;
-    assert_eq!(message.role, MessageRole::Peer);
-    assert_eq!(message.request_id.as_deref(), Some(request.as_str()));
-    assert_eq!(board.requests[&request].state, RequestState::Done);
-    assert!(
-        !board.requests.contains_key(&answer),
-        "a reply opens no request"
-    );
-    let at_api = flow.settled_in(&api).await;
-    assert!(stands(&at_api, &question, &PeerState::Replied));
-    flow.stop().await;
 }
 
 /// A request whose message waits for its reply rests "Waiting for ‹session›", not done; the
@@ -344,7 +286,7 @@ async fn a_reply_to_a_message_that_wasnt_from_its_target_is_refused() {
     flow.say_to(&docs, "Ask the Flow session whether the API is stable.")
         .await;
     flow.settled_in(&docs).await;
-    message_id(&only(&asked).0);
+    let question = message_id(&only(&asked).0);
     flow.until("both replies refused", |_| wrong.lock().unwrap().len() == 2)
         .await;
     assert_eq!(
@@ -354,8 +296,20 @@ async fn a_reply_to_a_message_that_wasnt_from_its_target_is_refused() {
             ("That message wasn't from Docs.".to_owned(), true),
         ]
     );
-    let board = flow.settled().await;
-    assert!(board.peer_messages.values().all(|record| !record.outgoing));
+    // The only reply that went is the turn's own answer, which Brigadier sends back.
+    let board = flow
+        .until("the answer sent back", |board| {
+            board.peer_messages.values().any(|record| record.outgoing)
+        })
+        .await;
+    let sent: Vec<_> = board
+        .peer_messages
+        .values()
+        .filter(|record| record.outgoing)
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(sent[0].automatic && sent[0].peer == docs);
+    assert_eq!(sent[0].reply_to.as_deref(), Some(question.as_str()));
     assert!(flow.board_of(&api).await.peer_messages.is_empty());
     flow.stop().await;
 }
@@ -531,10 +485,21 @@ async fn a_request_stops_waiting_for_a_session_deleted_before_it_replied() {
         ..Options::default()
     };
     let flow = Flow::start("peer-deleted", options, peers.script()).await;
-    // API work takes the message in a turn and doesn't reply; Docs is busy, so it waits.
+    // API work takes the message in a turn and asks its user first, so it hasn't answered;
+    // Docs is busy, so it waits.
     let api = flow
         .add_session("API work", None, ProviderKind::Claude)
         .await;
+    peers.on(&api, |turn| async move {
+        let asked = turn
+            .call(
+                "ask_user",
+                serde_json::json!({ "questions": [{ "question": "Which table?", "options": [{ "label": "users" }, { "label": "accounts" }], "recommended": 0 }] }),
+            )
+            .await;
+        assert!(!asked.is_error, "{}", asked.text);
+        Reply::text("[quiet]")
+    });
     let docs = flow.add_session("Docs", None, ProviderKind::Codex).await;
     let hold = Arc::new(Notify::new());
     let held = hold.clone();

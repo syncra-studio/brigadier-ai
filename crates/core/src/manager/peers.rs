@@ -327,6 +327,8 @@ impl SessionManager {
             hop: chain.hop + 1,
             request_id: request,
             turn_input_id: chain.input_id.clone(),
+            automatic: false,
+            answer_id: None,
         };
         {
             let _checked = self.peer_sends.lock().await;
@@ -337,6 +339,9 @@ impl SessionManager {
                 .record_peer_send(&send, ask)
                 .await
                 .map_err(refused)?;
+        }
+        if let Ok(conv) = self.conv(caller) {
+            conv.note_turn_send(&send.message_id).await;
         }
         if ask {
             // Under Ask for approval it goes once the user presses Send
@@ -468,6 +473,8 @@ impl SessionManager {
             hop: record.hop,
             request_id: record.request_id.clone(),
             turn_input_id: None,
+            automatic: false,
+            answer_id: None,
         };
         {
             let _checked = self.peer_sends.lock().await;
@@ -654,6 +661,15 @@ impl SessionManager {
             hop: record.hop,
             input_id: Some(message_id.to_owned()),
         };
+        // A reply the asking turn may wait for is held for that wait: its result, not a steer.
+        if let Some(original) = record.reply_to.as_deref()
+            && self.hold_reply(&conv, original, message_id).await
+        {
+            self.core
+                .record_peer_state(message_id, &sides, PeerState::Delivered)
+                .await?;
+            return Ok(Delivery::Delivered);
+        }
         if self
             .steer_peer(&conv, &envelope, &request, reply, chain)
             .await
@@ -727,6 +743,7 @@ impl SessionManager {
     /// oldest first, unless its CLI's transcript shows it took it as input before the daemon
     /// stopped (SESSION-MESSAGING-PLAN.md §4): then it is only recorded seen.
     pub(super) async fn recover_peer_messages(&self, conversation: &Conversation) {
+        self.return_handed_replies(&conversation.id).await;
         let Ok(board) = self.core.board(&conversation.id).await else {
             return;
         };

@@ -1,6 +1,6 @@
 //! What the app reads of messages between sessions (SESSION-MESSAGING-PLAN.md §6): each side's
-//! records in its conversation view, the receiver's time of its newest one for the sidebar's
-//! unread dot, and a row for every send refused before anything was recorded.
+//! records in its conversation view, when the receiver last finished answering one for the
+//! sidebar's unread dot, and a row for every send refused before anything was recorded.
 
 use std::sync::Arc;
 
@@ -12,70 +12,82 @@ use crate::model::{ConversationId, PeerState};
 use crate::work::OrchestratorStepKind;
 
 /// Both views list the message, the sender's with its text and request, the receiver's filed
-/// under the request it opened; only the receiver's conversation marks when one came.
+/// under the request it opened, and the answer Brigadier sent back for the receiver; only the
+/// receiver's conversation marks when it finished answering one.
 #[tokio::test]
-async fn each_side_reads_the_message_and_the_receiver_when_it_came() {
+async fn each_side_reads_the_message_and_the_receiver_when_it_answered() {
     let peers = Peers::new();
     let flow = Flow::start("peer-view", Options::default(), peers.script()).await;
     let api = flow.add_session("API", None, ProviderKind::Codex).await;
+    peers.on(&api, |_| async {
+        Reply::text("Noted: `name` is required now.")
+    });
     let text = "The schema changed.";
     let sent = peers.sends(&flow.conversation, &api, text);
     flow.say("Tell the API session.").await;
     flow.settled().await;
     let id = message_id(&only(&sent).0);
-    flow.until_in(&api, "the message seen", |board| {
+    flow.until("the answer back", |board| {
         board
             .peer_messages
-            .get(&id)
-            .is_some_and(|record| record.state == PeerState::Seen)
+            .values()
+            .any(|record| record.reply_to.as_deref() == Some(id.as_str()))
     })
     .await;
     flow.settled_in(&api).await;
+    flow.settled().await;
 
     let mine = flow
         .core
         .conversation_view(flow.conversation.clone(), 50)
         .await
         .unwrap();
-    let [record] = mine.peer_messages.as_slice() else {
+    let [record, reply] = mine.peer_messages.as_slice() else {
         panic!("{:?}", mine.peer_messages);
     };
     assert!(record.outgoing);
     assert_eq!(record.message_id, id);
     assert_eq!(record.peer, api);
     assert_eq!(record.text, text);
-    assert_eq!(record.state, PeerState::Seen);
+    assert_eq!(record.state, PeerState::Replied);
     let asked = mine
         .requests
         .iter()
         .find(|request| request.from_peer.is_none())
         .unwrap();
     assert_eq!(record.request_id.as_deref(), Some(asked.id.as_str()));
+    assert!(!reply.outgoing && reply.automatic);
+    assert_eq!(reply.reply_to.as_deref(), Some(id.as_str()));
     assert_eq!(mine.conversation.peer_at_ms, None);
 
     let theirs = flow.core.conversation_view(api.clone(), 50).await.unwrap();
-    let [received] = theirs.peer_messages.as_slice() else {
+    let [received, answered] = theirs.peer_messages.as_slice() else {
         panic!("{:?}", theirs.peer_messages);
     };
     assert!(!received.outgoing);
     assert_eq!(received.peer, flow.conversation);
     assert_eq!(received.request_id.as_deref(), Some(id.as_str()));
-    let message = theirs
+    assert!(answered.outgoing && answered.automatic);
+    assert_eq!(answered.message_id, reply.message_id);
+    let answer = theirs
         .messages
         .messages
         .iter()
-        .find(|message| message.id == id)
-        .unwrap();
-    assert_eq!(theirs.conversation.peer_at_ms, Some(message.created_at_ms));
-    // A daemon started again on the same store still knows when it came (the event's own time,
-    // written with the message), and that the sender received none.
-    let reloaded = crate::Core::load(flow.core.store().clone()).await.unwrap();
-    let at = reloaded.conversation(&api).unwrap().peer_at_ms.unwrap();
+        .find(|message| Some(&message.id) == answered.answer_id.as_ref())
+        .expect("the answer it carries");
+    assert_eq!(answer.text, "Noted: `name` is required now.");
+    assert_eq!(answered.text, answer.text);
+    assert_eq!(reply.answer_id, answered.answer_id);
+    let at = theirs.conversation.peer_at_ms.expect("marked");
     assert!(
-        (message.created_at_ms..message.created_at_ms + 5_000).contains(&at),
+        at >= answer.created_at_ms,
         "{at} vs {}",
-        message.created_at_ms
+        answer.created_at_ms
     );
+    // A daemon started again on the same store still knows when it answered (the event's own
+    // time), and that the sender answered none.
+    let reloaded = crate::Core::load(flow.core.store().clone()).await.unwrap();
+    assert_eq!(reloaded.conversation(&api).unwrap().peer_at_ms, Some(at));
     assert_eq!(
         reloaded
             .conversation(&flow.conversation)

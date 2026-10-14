@@ -48,6 +48,14 @@ fn migrations() -> Migrations<'static> {
              WHERE kind = 'peer.received';",
         )
         .comment("received peer messages by stream"),
+        // The dot marks a session that answered another's message, rather than one that got
+        // one: read off the events saying so.
+        M::up(
+            "DROP INDEX IF EXISTS events_peer_received; \
+             CREATE INDEX events_peer_answered ON events (stream, at_ms) \
+             WHERE kind = 'peer.answered';",
+        )
+        .comment("answered peer messages by stream"),
     ])
 }
 

@@ -658,11 +658,11 @@ impl Store {
             .await
     }
 
-    /// Each stream under `prefix` that has a `peer.received` event, with its newest one's
+    /// Each stream under `prefix` that has a `peer.answered` event, with its newest one's
     /// `stream_seq` and `at_ms`.
-    pub async fn peer_received_heads(&self, prefix: String) -> Result<Vec<StreamHead>> {
+    pub async fn peer_answered_heads(&self, prefix: String) -> Result<Vec<StreamHead>> {
         self.reads
-            .run(move |conn| reader::peer_received_heads(conn, &prefix))
+            .run(move |conn| reader::peer_answered_heads(conn, &prefix))
             .await
     }
 
@@ -867,7 +867,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn each_stream_names_its_newest_received_peer_message_off_its_own_index() {
+    async fn each_stream_names_its_newest_answered_peer_message_off_its_own_index() {
         let dir =
             Temp(std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4())));
         let store = Store::open(StoreConfig {
@@ -881,17 +881,17 @@ mod tests {
         };
         store
             .append(vec![
-                event("conversation:a", "peer.received", 10),
-                event("conversation:a", "message.appended", 11),
-                event("conversation:a", "peer.received", 20),
+                event("conversation:a", "peer.answered", 10),
+                event("conversation:a", "peer.received", 11),
+                event("conversation:a", "peer.answered", 20),
                 event("conversation:a", "message.appended", 30),
                 event("conversation:b", "message.appended", 40),
-                event("catalog", "peer.received", 50),
+                event("catalog", "peer.answered", 50),
             ])
             .await
             .unwrap();
         let heads = store
-            .peer_received_heads("conversation:".into())
+            .peer_answered_heads("conversation:".into())
             .await
             .unwrap();
         assert_eq!(
@@ -907,7 +907,7 @@ mod tests {
             .run(|conn| {
                 let mut statement = conn.prepare(&format!(
                     "EXPLAIN QUERY PLAN {}",
-                    reader::PEER_RECEIVED_HEADS
+                    reader::PEER_ANSWERED_HEADS
                 ))?;
                 let details = statement
                     .query_map(rusqlite::params!["conversation:", "conversation;"], |row| {
@@ -918,6 +918,6 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(plan.contains("events_peer_received"), "{plan}");
+        assert!(plan.contains("events_peer_answered"), "{plan}");
     }
 }

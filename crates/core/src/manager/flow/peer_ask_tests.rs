@@ -90,7 +90,8 @@ async fn next_note(flow: &Flow, peers: &Peers) -> String {
     })
     .await;
     flow.settled().await;
-    peers.inputs_of(&flow.conversation)[before].clone()
+    // The other session's answer may come back first, in a turn of its own.
+    peers.inputs_of(&flow.conversation)[before..].join("\n---\n")
 }
 
 /// Send: the stored text goes exactly as written, the model isn't asked again, and the
@@ -324,7 +325,7 @@ async fn the_twenty_first_approval_in_a_minute_is_refused() {
     assert!(
         states[..20]
             .iter()
-            .all(|state| state.due() || *state == PeerState::Seen),
+            .all(|state| state.due() || matches!(state, PeerState::Seen | PeerState::Replied)),
         "{states:#?}"
     );
     assert_eq!(

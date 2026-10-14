@@ -160,7 +160,8 @@ function leadWork(step: BlockOrchestratorStep): "work" | "hidden" | "apart" {
       return kind.name.startsWith("Diff of") ? "hidden" : "work";
     case "readReport":
       return "hidden";
-    // A message to another session is a row of the work, its refusal too.
+    // A message to another session is a row of the work (a wait for its reply joins it), its
+    // refusal too.
     case "peerSent":
     case "messageRefused":
       return "work";
@@ -177,6 +178,32 @@ export type LeadStep = BlockOrchestratorStep;
  * a live turn is the live line's, not the activity's.
  */
 export function turnActivity(sequence: readonly SequenceEntry[]): Activity<LeadStep, SequenceEntry>[] {
+  return groupLead(sequence).map((item) => (item.type === "group" ? { ...item, items: joinExchanges(item.items) } : item));
+}
+
+/**
+ * Messages to other sessions and the waits for their replies, next to each other in a group,
+ * read as one row: "Sent messages to Docs and API work, waited for their replies".
+ */
+function joinExchanges(items: GroupItem<LeadStep>[]): GroupItem<LeadStep>[] {
+  const out: GroupItem<LeadStep>[] = [];
+  for (const item of items) {
+    const last = out.at(-1);
+    if (item.type === "step" && item.step.kind.type === "peerSent" && last?.type === "step" && last.step.kind.type === "peerSent") {
+      const kind = last.step.kind;
+      const next = item.step.kind;
+      out[out.length - 1] = {
+        ...last,
+        step: { ...last.step, kind: { ...kind, messageIds: [...kind.messageIds, ...next.messageIds], waits: [...kind.waits, ...next.waits] } },
+      };
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
+}
+
+function groupLead(sequence: readonly SequenceEntry[]): Activity<LeadStep, SequenceEntry>[] {
   return groupActivity<LeadStep, SequenceEntry>(sequence, (entry) => {
     switch (entry.kind) {
       case "thinking": {

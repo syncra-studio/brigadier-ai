@@ -2,7 +2,7 @@ import { useAuiState } from "@assistant-ui/react";
 import { Chat, Check, Copy } from "@openai/apps-sdk-ui/components/Icon";
 import type { FC } from "react";
 
-import { receivedCaption, UNKNOWN_SESSION } from "@/app/conversation/activity/peerWords";
+import { sentByCaption, UNKNOWN_SESSION } from "@/app/conversation/activity/peerWords";
 import type { PeerOf } from "@/app/conversation/blocks";
 import { FoldedMarkdown, usePeerName } from "@/app/conversation/peerParts";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -12,16 +12,22 @@ import { formatSentAt } from "@/lib/format";
 import { openConversation } from "@/state/actions";
 
 /**
- * A message another session sent this one (SESSION-MESSAGING-PLAN.md §6.2), where the user's own
- * would stand: right-aligned in an outline with no fill, so it never reads as the user's; over
- * it, who sent it, opening the sender at its row; the time and Copy on hover.
+ * A message another session sent this one (SESSION-MESSAGING-PLAN.md §6.2), as the user's own
+ * stands: right-aligned in the same filled bubble, with over it who sent it ("Sent by API work
+ * from another session"), opening the sender at its row; the time and Copy on hover.
  */
 export const PeerMessageBlock: FC<{ peer: PeerOf; text: string; atMs: number }> = ({ peer, text, atMs }) => {
   const name = usePeerName(peer.from);
   const shown = name ?? UNKNOWN_SESSION;
-  const caption = receivedCaption(shown, peer.reply, peer.earlier);
+  const caption = sentByCaption(shown);
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const now = useNow(60_000);
+  const words = (
+    <>
+      <Chat aria-hidden className="size-3.5 shrink-0" />
+      <span className="min-w-0 truncate">{caption}</span>
+    </>
+  );
   return (
     <div
       data-slot="peer-message"
@@ -35,19 +41,17 @@ export const PeerMessageBlock: FC<{ peer: PeerOf; text: string; atMs: number }> 
           type="button"
           data-slot="peer-caption"
           onClick={() => openConversation(peer.from, { at: { message: peer.messageId } })}
-          className="text-muted-foreground hover:text-foreground rounded-control flex max-w-full min-w-0 items-center gap-1 text-xs"
+          className="text-muted-foreground hover:text-foreground rounded-control text-peer-caption flex max-w-full min-w-0 items-center gap-1"
         >
-          <Chat aria-hidden className="size-icon-xs shrink-0" />
-          <span className="min-w-0 truncate">{caption}</span>
+          {words}
         </button>
       ) : (
-        <span data-slot="peer-caption" className="text-muted-foreground flex max-w-full min-w-0 items-center gap-1 text-xs">
-          <Chat aria-hidden className="size-icon-xs shrink-0" />
-          <span className="min-w-0 truncate">{caption}</span>
+        <span data-slot="peer-caption" className="text-muted-foreground text-peer-caption flex max-w-full min-w-0 items-center gap-1">
+          {words}
         </span>
       )}
-      {/* A jump here flashes the message itself, inside its outline. */}
-      <div data-flash className="border-border text-foreground rounded-bubble max-w-full min-w-0 border px-4 py-2.5">
+      {/* A jump here flashes the message itself, inside its bubble. */}
+      <div data-flash className="bg-muted text-foreground rounded-bubble max-w-full min-w-0 px-4 py-2.5">
         <FoldedMarkdown text={text} />
       </div>
       <div className="text-muted-foreground flex items-center gap-1 opacity-0 transition-opacity group-hover/peer:opacity-100 group-focus-within/peer:opacity-100">

@@ -97,7 +97,7 @@ const LazyCardBody = lazy(loadCardBody);
 /** What an assistant block carries in its message metadata (`custom.block`). */
 export type BlockMeta = {
   /** Per text part, in order: the reply's position (infinite while it streams) and model. */
-  texts: { position: number; model: ModelChoice | null; update: boolean }[];
+  texts: { position: number; model: ModelChoice | null; update: boolean; anchors?: readonly string[] }[];
   cards: BlockCard[];
   /** The workers' rows, in the order they started. */
   rows: BlockRow[];
@@ -319,6 +319,8 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, stream
       return (
         <div
           data-slot="aui_assistant-message-content"
+          // The replies Brigadier sent other sessions with this answer land a jump here.
+          data-peer-message={entry.anchors?.join(" ")}
           className="text-foreground leading-relaxed wrap-break-word"
         >
           <ReplyText index={entry.index} streaming={streaming} />
@@ -440,7 +442,7 @@ const ActivityItems: FC<{
             live={live && index === activity.length - 1}
             describe={(step) => describePeerStep(step, peers) ?? describeLeadStep(shown(step), tasks)}
             renderStep={(step, key) => <Fragment key={key}>{peerStepRow(step) ?? <LeadStepRow step={shown(step)} />}</Fragment>}
-            reveal={revealing ? (step) => step.kind.type === "peerSent" && step.kind.messageId === revealing : undefined}
+            reveal={revealing ? (step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing) : undefined}
           />
         ) : (
           <SequenceEntry key={entryKey(item.entry)} entry={item.entry} streaming={streaming(item.entry)} />
@@ -503,7 +505,7 @@ export const RequestBlock: FC = () => {
   const fold = useFold();
   // A jump to a message this turn sent opens its work.
   const revealing = useRevealing(useViewConversation()?.id ?? null);
-  const holds = !!revealing && !!meta?.orchestratorSteps.some((step) => step.kind.type === "peerSent" && step.kind.messageId === revealing);
+  const holds = !!revealing && !!meta?.orchestratorSteps.some((step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing));
   const { show } = fold;
   useEffect(() => {
     if (holds) show();
@@ -631,6 +633,8 @@ export const RequestBlock: FC = () => {
             {answer !== null && (
               <div
                 data-slot="aui_assistant-message-content"
+                // The replies Brigadier sent other sessions with this answer land a jump here.
+                data-peer-message={meta.texts[answer]?.anchors?.join(" ")}
                 className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0) && "pt-activity")}
               >
                 <ReplyText index={answer} streaming={false} report={report || meta.session} />

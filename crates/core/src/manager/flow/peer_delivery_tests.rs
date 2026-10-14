@@ -69,6 +69,11 @@ async fn a_message_starts_a_turn_of_an_idle_session_in_another_project() {
         stands(board, &id, &PeerState::Seen)
     })
     .await;
+    // The turn's answer goes back to the sender as the reply.
+    flow.until_in(&docs, "the message answered", |board| {
+        stands(board, &id, &PeerState::Replied)
+    })
+    .await;
     flow.settled_in(&docs).await;
     let inputs = peers.inputs_of(&docs);
     assert_eq!(inputs.len(), 1, "{inputs:?}");
@@ -82,8 +87,8 @@ async fn a_message_starts_a_turn_of_an_idle_session_in_another_project() {
     );
     assert_received(&flow, &docs, &flow.conversation, &id, text).await;
     let sender = flow
-        .until("the sender's record seen", |board| {
-            stands(board, &id, &PeerState::Seen)
+        .until("the sender's record replied", |board| {
+            stands(board, &id, &PeerState::Replied)
         })
         .await;
     let record = &sender.peer_messages[&id];
@@ -175,7 +180,8 @@ async fn a_message_is_steered_into_a_busy_sessions_running_turn() {
         .expect("the turn read the steer");
     assert!(input.contains(&format!("· id {id}]\n{text}")), "{input}");
     assert_eq!(peers.inputs_of(&api).len(), 1, "no turn of its own");
-    assert!(stands(&board, &id, &PeerState::Seen));
+    // The turn's answer went back as the reply.
+    assert!(stands(&board, &id, &PeerState::Replied));
     assert_eq!(
         board.requests[&id].steered_into.as_deref(),
         Some(user_request.as_str())
@@ -316,7 +322,12 @@ async fn a_message_goes_on_with_a_turn_a_usage_limit_hands_over() {
                 .is_some_and(|request| request.state == crate::work::RequestState::Done)
         })
         .await;
-    assert!(stands(&board, &id, &PeerState::Seen));
+    assert!(!stands(&board, &id, &PeerState::Delivered));
+    // The stand-in's answer goes back as the reply.
+    flow.until_in(&api, "the message answered", |board| {
+        stands(board, &id, &PeerState::Replied)
+    })
+    .await;
     let inputs = peers.inputs_of(&api);
     assert_eq!(inputs.len(), 2, "{inputs:?}");
     assert!(

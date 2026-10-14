@@ -478,6 +478,9 @@
   --text-page-title--line-height: 2.125rem;
   --text-label: 0.8125rem;
   --text-label--line-height: 1.125rem;
+  /* Who sent a message from another session, over it (13px on a 19.5px line). */
+  --text-peer-caption: 0.8125rem;
+  --text-peer-caption--line-height: 1.21875rem;
   /* The sidebar panel's title ("Brigadier", "Settings"). */
   --text-nav-title: 1.125rem;
   --text-nav-title--line-height: 1.5rem;

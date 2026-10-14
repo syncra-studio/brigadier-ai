@@ -111,9 +111,11 @@ impl Projection {
             }
             DomainEvent::MessageAppended { message } => {
                 self.touch(&message.conversation_id, message.created_at_ms);
-                if message.role == crate::model::MessageRole::Peer {
-                    self.peer_at(&message.conversation_id, message.created_at_ms);
-                }
+            }
+            DomainEvent::PeerAnswered {
+                conversation_id, ..
+            } => {
+                self.peer_at(conversation_id, at_ms);
             }
             DomainEvent::SettingsChanged { settings } => {
                 if seq >= self.settings_seq {
@@ -174,6 +176,7 @@ impl Projection {
             | DomainEvent::PeerMessageReceived { .. }
             | DomainEvent::PeerMessageState { .. }
             | DomainEvent::PeerWaitSettled { .. }
+            | DomainEvent::PeerReplyHeld { .. }
             | DomainEvent::Probe { .. } => {}
         }
     }
@@ -184,7 +187,8 @@ impl Projection {
         }
     }
 
-    /// `id` received a message from another session at `at_ms` (its sidebar's unread dot).
+    /// `id` finished answering a message from another session at `at_ms` (its sidebar's
+    /// unread dot).
     pub(crate) fn peer_at(&mut self, id: &ConversationId, at_ms: i64) {
         if let Some(conversation) = self.conversations.get_mut(id) {
             conversation.peer_at_ms = conversation.peer_at_ms.max(Some(at_ms));
