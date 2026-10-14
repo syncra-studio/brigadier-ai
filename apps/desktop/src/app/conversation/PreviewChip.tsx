@@ -17,14 +17,17 @@ export function PreviewChip({ conversationId }: { conversationId: string }) {
   const trigger = useRef<HTMLButtonElement | null>(null);
   const card = useRef<HTMLElement | null>(null);
   const [open, setOpen] = useState(false);
-  const [now, setNow] = useState(Date.now);
   const active = chip?.active ?? false;
+  // A chip that starts (or follows a newer preview) reads the clock in the same render, never a
+  // stale one that would show 0s until the next tick.
+  const since = `${active}/${chip?.startedAtMs}`;
+  const [clock, setClock] = useState(() => ({ since, now: Date.now() }));
+  // eslint-disable-next-line react/purity
+  if (clock.since !== since) setClock({ since, now: Date.now() });
+  const now = clock.now;
   useEffect(() => {
-    // Synchronize the clock immediately when restarting its external timer.
-    // eslint-disable-next-line react/set-state-in-effect
-    setNow(Date.now());
     if (!active) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setClock((shown) => ({ ...shown, now: Date.now() })), 1000);
     return () => clearInterval(timer);
   }, [active]);
   // Cleared while open: the next preview's chip comes back closed.

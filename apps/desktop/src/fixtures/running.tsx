@@ -123,13 +123,26 @@ function Fixture() {
         useBoard.setState({ board: { ...useBoard.getState().board!, previews: { [stopped.id]: stopped } } });
       });
       const realNow = Date.now;
+      // Every text the chip ever holds from here on, even one replaced before the next paint.
+      const chipTexts: string[] = [];
+      const watch = new MutationObserver((records) => {
+        for (const record of records) {
+          if (!(record.target instanceof Node) || !record.target.parentElement?.closest('[data-slot="preview-chip"]') && !(record.target instanceof Element && record.target.closest('[data-slot="preview-chip"]'))) continue;
+          if (record.oldValue !== null) chipTexts.push(record.oldValue);
+          if (record.type === "characterData") chipTexts.push(record.target.textContent ?? "");
+          for (const node of record.addedNodes) chipTexts.push(node.textContent ?? "");
+        }
+      });
       at(4400, () => {
+        watch.observe(document.body, { subtree: true, childList: true, characterData: true, characterDataOldValue: true });
         Date.now = () => now + 120000;
         const started = { ...rows[0]!, startedAtMs: now + 60000 };
         useBoard.setState({ board: { ...useBoard.getState().board!, previews: { [started.id]: started } } });
       });
       at(4550, () => {
         seen.reactivated = document.querySelector('[data-slot="preview-chip"]')?.textContent;
+        watch.disconnect();
+        seen.reactivatedTexts = chipTexts;
         Date.now = realNow;
         document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click();
       });

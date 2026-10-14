@@ -4,7 +4,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 test("Running renders all states and controls pause, resume, stop, clear and the session browser", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "running.html?drive=1", "running-result", 30000)) as {
-    inboxHeader: string; chip: string; section: string; reactivated: string; sectionRemoved: boolean; focusAfterStop: string; lastStopFocus: string; lastStopRemoved: boolean; linkClosed: boolean;
+    inboxHeader: string; chip: string; section: string; reactivated: string; reactivatedTexts: string[]; sectionRemoved: boolean; focusAfterStop: string; lastStopFocus: string; lastStopRemoved: boolean; linkClosed: boolean;
     initial: { name: string; text: string; actions: string[]; indicator: string }[];
     paused: string[]; resumed: string[]; windows: string[]; error: string; browser: string;
     cleared: string[]; stopped: boolean; allStopped: boolean; empty: string; calls: string[];
@@ -37,6 +37,8 @@ test("Running renders all states and controls pause, resume, stop, clear and the
   assert.equal(seen.lastStopFocus, "summary-card");
   assert.equal(seen.lastStopRemoved, true);
   assert.match(seen.reactivated, /1m/, "elapsed time refreshes immediately when activity restarts");
+  assert.ok(seen.reactivatedTexts.some((text) => /1m/.test(text)), JSON.stringify(seen.reactivatedTexts));
+  assert.ok(!seen.reactivatedTexts.some((text) => /(?<!\d|m )0s/.test(text)), `the restarted chip never shows 0s, even for one render: ${JSON.stringify(seen.reactivatedTexts)}`);
   assert.equal(seen.allStopped, true);
   assert.match(seen.empty, /No previews/);
   assert.deepEqual(seen.calls, ["pausePreview", "resumePreview", "pausePreview", "clearPreviews", "stopPreview", "stopPreview"]);
