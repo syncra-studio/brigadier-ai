@@ -450,8 +450,11 @@ impl SessionManager {
             return Passed::No;
         }
         drop(held);
-        // One that ended already, with nothing left to decide, has nothing to come back for.
-        if review.state != ReviewState::Running && !findings_unsettled(&review) {
+        // One that read all of the landing and ended already, with nothing left to decide, has
+        // nothing to come back for. One that read part of it waits for the review of the rest,
+        // which settles the batch when it ends.
+        if reviewed == *tip && review.state != ReviewState::Running && !findings_unsettled(&review)
+        {
             self.settle_review_batch(&task.conversation_id, &tip.0)
                 .await;
         }
