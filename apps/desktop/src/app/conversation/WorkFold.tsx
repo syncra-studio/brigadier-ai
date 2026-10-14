@@ -1,8 +1,8 @@
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 
-/** Opening takes 300ms on a fast-out curve; closing 160ms (§4.2 of THREAD-PARITY-PLAN.md). */
+/** Opening takes 300ms on a fast-out curve; closing, also when an answer folds the work, 150ms on a quicker one. */
 const OPEN = { duration: 300, easing: "cubic-bezier(0.19, 1, 0.22, 1)" } as const;
-const CLOSE = { duration: 160, easing: "cubic-bezier(0.4, 0, 0.2, 1)" } as const;
+const CLOSE = { duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)" } as const;
 
 function reducedMotion(): boolean {
   return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
