@@ -34,6 +34,9 @@ const head = (status: StatusInput) => threadStatus(status).head;
 const line = (worker: Task) => taskActivityLines({ task: worker, activity: "Editing 3 files" }, 60_000);
 const call = (name: string) => ({ requestId: "r1", atMs: 0, position: 1,
   kind: { type: "tool", name, status: "inProgress" } }) as unknown as OrchestratorStep;
+/** What the lead's live line says once its CLI starts the call `name`. */
+const sending = (name: string) =>
+  doingOf({ type: "toolCall", itemId: "s", name, input: null, status: "inProgress", output: null } as unknown as ProviderEvent, null);
 const error = (kind: string, willRetry = true) =>
   ({ type: "error", error: { kind, message: "", willRetry, limit: null, code: null } }) as unknown as ProviderEvent;
 
@@ -148,6 +151,19 @@ test("the lead's retries show while its CLI retries, and clear when it goes on",
   // A retry after some text or thinking streamed still shows over the stalled rows.
   const stalled = { ...leading, doing: "Reconnecting", streaming: { messageId: "m", text: "Hi", requestId: "r1", startedAtMs: 0 } };
   assert.deepEqual(head(input(stalled, { thinkingLive: true })), { text: "Reconnecting", tone: "busy" });
+});
+
+test("a message to another session reads as sent, then its own row names where it goes", () => {
+  // Each CLI's name for the call: Claude's, and the thread of the other kind's.
+  assert.equal(sending("mcp__brigadier__message_session"), "Sending a message");
+  assert.equal(sending("brigadier/message_session"), "Sending a message");
+  assert.equal(sending("brigadier/delegate_task"), "Delegating to a worker");
+  const doing = { ...leading, doing: "Sending a message" };
+  assert.deepEqual(head(input(doing)), { text: "Sending a message", tone: "busy" });
+  // Its record is in: "Sending message to API work" says it, so the live line doesn't again.
+  const record = { messageId: "m1", outgoing: true, requestId: "r1", state: { type: "pending" } };
+  const recorded = { ...doing, peerMessages: { m1: record } } as unknown as Partial<Board>;
+  assert.equal(head(input(recorded)), null);
 });
 
 test("a worker's live line says what it does in plain words, never a raw tool name or shell wrapper", () => {

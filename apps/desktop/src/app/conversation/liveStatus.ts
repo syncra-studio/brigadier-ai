@@ -21,7 +21,7 @@ export type StatusHead = { text: string; tone: StatusTone };
 export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
-  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps">;
+  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages">;
   requestIds: readonly string[];
   state: BlockState;
   /** A live thinking snippet shows at the end of the work. */
@@ -67,7 +67,10 @@ function leadHead({ board, requestIds, thinkingLive, compacting }: StatusInput):
   const toolRunning = board.orchestratorSteps.some((step) => step.requestId === runRequest
     && step.kind.type === "tool" && step.kind.status === "inProgress" && !isPlumbing(step.kind.name));
   const streaming = !!board.streaming?.text && (board.streaming.requestId === null || requestIds.includes(board.streaming.requestId));
-  if (toolRunning || thinkingLive || compacting || streaming) return null;
+  // A message on its way has its own row: "Sending message to API work".
+  const sending = Object.values(board.peerMessages).some((message) => message.outgoing
+    && message.requestId === runRequest && message.state.type === "pending");
+  if (toolRunning || thinkingLive || compacting || streaming || sending) return null;
   if (board.doing) return { text: board.doing, tone: "busy" };
   return { text: board.run === "starting" ? "Starting" : "Thinking", tone: "busy" };
 }

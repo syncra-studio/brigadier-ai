@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 import { createStore, type StoreApi, useStore } from "zustand";
 
-import { liveActivity } from "@/app/conversation/activity/words";
+import { liveActivity, toolName } from "@/app/conversation/activity/words";
 import { showConversationNotice, shownNotice } from "@/state/notices";
 
 import type {
@@ -736,6 +736,8 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
   route_follow_up: "Sorting your follow-up",
   note_for_user: "Noting it for you",
   suggest_full_access: "Asking for more access",
+  // Until the message's record names where it goes ("Sending message to API work").
+  message_session: "Sending a message",
   WebSearch: "Searching the web",
   WebFetch: "Reading a web page",
 };
@@ -753,9 +755,9 @@ export function doingOf(event: ProviderEvent, current: string | null): string | 
         : "Reconnecting";
     case "toolCall": {
       if (event.status !== "inProgress") return null;
-      // MCP tools arrive namespaced (`mcp__brigadier__delegate_task`, `brigadier.delegate_task`).
-      const name = event.name.split(/__|\./).at(-1) ?? event.name;
-      return TOOL_DOING[name] ?? "Using a tool";
+      // MCP tools arrive namespaced (`mcp__brigadier__delegate_task`, `brigadier.delegate_task`,
+      // `brigadier/delegate_task`).
+      return TOOL_DOING[toolName(event.name)] ?? "Using a tool";
     }
     case "reasoning":
     case "message":
