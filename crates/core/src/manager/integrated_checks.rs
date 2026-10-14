@@ -411,6 +411,22 @@ impl SessionManager {
         }
     }
 
+    /// Records the runner's copy of `check`, with the requests that joined it meanwhile
+    /// (`ask_running_check`): the record holds them, the runner's copy may not.
+    async fn store_run(&self, check: &mut IntegratedCheck) {
+        let _records = self.integrated.records.lock().await;
+        if let Ok(board) = self.core.board(&check.conversation_id).await
+            && let Some(stored) = board.integrated_checks.get(&check.id)
+        {
+            for request in &stored.requests {
+                if !check.requests.contains(request) {
+                    check.requests.push(request.clone());
+                }
+            }
+        }
+        self.store_check(check).await;
+    }
+
     async fn store_check(&self, check: &IntegratedCheck) {
         if let Err(err) = self
             .core
@@ -546,12 +562,12 @@ impl SessionManager {
         };
         if check.state.is_final() {
             check.ended_at_ms = Some(now_ms());
-            self.store_check(&check).await;
+            self.store_run(&mut check).await;
             self.after_check(&check).await;
             return;
         }
         check.tasks = self.unchecked_tasks(id, &check).await;
-        self.store_check(&check).await;
+        self.store_run(&mut check).await;
         let state = self.full_check_run(&mut check, cancel).await;
         // The session closed under it: nothing is told, nothing is kept as a verdict.
         if cancel.is_cancelled() || self.is_closing(id) {
@@ -559,7 +575,7 @@ impl SessionManager {
         }
         check.state = state;
         check.ended_at_ms = Some(now_ms());
-        self.store_check(&check).await;
+        self.store_run(&mut check).await;
         self.after_check(&check).await;
     }
 
@@ -594,9 +610,13 @@ impl SessionManager {
         // Dependencies installed again when what pins them changed.
         match self.refresh_installs(&caller, &checkout, &scratch).await {
             Ok(None) => {}
+            // An install that fails says nothing of the code: the tip stays unchecked.
             Ok(Some((command, done))) => {
-                if let Some(state) = ended(&command, &done) {
-                    return state;
+                if done.status != "exit 0" {
+                    return interrupted(format!(
+                        "its dependencies couldn't be installed: `{command}` ended {} (its output: read_artifact {})",
+                        done.status, done.alias
+                    ));
                 }
             }
             Err(err) => {
@@ -612,7 +632,7 @@ impl SessionManager {
             check.state = IntegratedCheckState::Running {
                 command: Some(command.clone()),
             };
-            self.store_check(check).await;
+            self.store_run(check).await;
             let done = match self
                 .run_full_check(
                     &caller,
@@ -823,7 +843,11 @@ impl SessionManager {
         }
         if let Some(text) = self.check_message(check).await {
             let task_id = check.tasks.last().cloned();
-            let request = check.requests.last().cloned();
+            // The request whose answer waits for it, else the newest it was made due for.
+            let request = self
+                .waiting_request(check)
+                .await
+                .or_else(|| check.requests.last().cloned());
             let envelope = Envelope {
                 kind: InjectionKind::Decision,
                 label: format!("checks {}", check.id),
@@ -839,6 +863,29 @@ impl SessionManager {
         self.settle_requests(id).await;
     }
 
+    /// The newest of `check`'s requests whose answer the thread left to it ([quiet]) and
+    /// that still works or waits.
+    async fn waiting_request(&self, check: &IntegratedCheck) -> Option<String> {
+        let board = self.core.board(&check.conversation_id).await.ok()?;
+        let deferred = self
+            .conv(&check.conversation_id)
+            .ok()?
+            .request_activity()
+            .await
+            .deferred;
+        check
+            .requests
+            .iter()
+            .rev()
+            .find(|request| {
+                deferred.contains(*request)
+                    && board.requests.get(*request).is_some_and(|request| {
+                        matches!(request.state, RequestState::Working | RequestState::Waiting)
+                    })
+            })
+            .cloned()
+    }
+
     /// What the thread hears of a check's end; none for a pass no answer waits for.
     async fn check_message(&self, check: &IntegratedCheck) -> Option<String> {
         let board = self.core.board(&check.conversation_id).await.ok()?;
@@ -851,16 +898,7 @@ impl SessionManager {
         match &check.state {
             IntegratedCheckState::Passed { commands } => {
                 // Told when the thread left a request's answer to it ([quiet]).
-                let deferred = match self.conv(&check.conversation_id) {
-                    Ok(conv) => conv.request_activity().await.deferred,
-                    Err(_) => Default::default(),
-                };
-                let waited = check.requests.iter().any(|request| {
-                    deferred.contains(request)
-                        && board.requests.get(request).is_some_and(|request| {
-                            matches!(request.state, RequestState::Working | RequestState::Waiting)
-                        })
-                });
+                let waited = self.waiting_request(check).await.is_some();
                 let look = live_look_line(&tasks);
                 if !waited && look.is_empty() {
                     return None;

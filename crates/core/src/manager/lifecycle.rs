@@ -833,6 +833,8 @@ impl SessionManager {
             .set_lifecycle(id.clone(), Lifecycle::Active)
             .await?;
         self.open_fence(&id);
+        // A check the archive cut off, or one still due, runs again (§11).
+        self.recover_integrated_checks(&id).await;
         Ok(restored)
     }
 

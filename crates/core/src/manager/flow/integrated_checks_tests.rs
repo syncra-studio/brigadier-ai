@@ -432,7 +432,7 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
 
 /// A merge asked while the checks run is held; a restart cuts the run off and runs it again;
 /// its pass makes the merge due. Another session archived mid-run ends its run: its process
-/// stops, its checkout goes, and the thread hears nothing of it.
+/// stops, its checkout goes, and the thread hears nothing of it; restored, it runs again.
 #[tokio::test]
 async fn a_run_cut_off_by_a_restart_runs_again_and_an_archive_ends_it() {
     let merges: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -559,5 +559,16 @@ async fn a_run_cut_off_by_a_restart_runs_again_and_an_archive_ends_it() {
         "{:#?}",
         runs(&flow.repo)
     );
+    // Restored, the check its archive cut off runs again, to its end.
+    let before = started_in(&flow.repo).len();
+    flow.manager.restore(other.clone()).await.unwrap();
+    super::eventually("its run again", || started_in(&repo).len() == before + 1).await;
+    flow.until_in(&other, "its pass", |board| {
+        board
+            .integrated_checks
+            .values()
+            .any(|check| matches!(check.state, IntegratedCheckState::Passed { .. }))
+    })
+    .await;
     flow.stop().await;
 }
