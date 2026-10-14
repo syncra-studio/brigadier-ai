@@ -85,6 +85,7 @@ mod status;
 mod takeover;
 mod thread;
 mod thread_metrics;
+mod thread_scratch;
 mod tool_output;
 mod tools;
 mod trust;

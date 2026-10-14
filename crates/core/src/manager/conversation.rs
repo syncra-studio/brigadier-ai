@@ -286,6 +286,9 @@ struct ConvState {
     notes: Vec<String>,
     /// No new turn starts while the user's edit or redo takes the thread apart.
     held: bool,
+    /// The thread's scratch is being swept (its requests are over): no turn starts until
+    /// the sweep is done, which then looks for one ([`super::thread_scratch`]).
+    sweeping: bool,
     /// Tasks stopped by an edit or redo: what they still send is dropped.
     withdrawn: HashSet<TaskId>,
     /// The user messages the running turn carries (resent after a Chat fallback).
@@ -505,6 +508,9 @@ pub(crate) struct ConvLive {
     /// Landings whose review isn't stored yet: the landed task is final before its review
     /// starts, so a held merge waits for these as for a running review.
     pub(super) reviews_due: std::sync::atomic::AtomicUsize,
+    /// A turn ran since the thread's scratch was last swept: the next time its requests are
+    /// all over, it is swept ([`super::thread_scratch`]).
+    pub(super) scratch_used: std::sync::atomic::AtomicBool,
     /// The session's own landings on a held merge's branch, `from` → `to`, until the held tip
     /// moves along them: two landings may record theirs out of order. Held while the tip is
     /// read and moved on.
@@ -557,6 +563,7 @@ impl ConvLive {
             merge_lock: tokio::sync::Mutex::new(()),
             merge_told: std::sync::Mutex::new(None),
             reviews_due: std::sync::atomic::AtomicUsize::new(0),
+            scratch_used: std::sync::atomic::AtomicBool::new(false),
             held_moves: tokio::sync::Mutex::new(HashMap::new()),
             ci_watches: std::sync::Mutex::new(Vec::new()),
             status: std::sync::Mutex::default(),
@@ -737,6 +744,47 @@ impl ConvLive {
     }
 
     /// Whether a turn is starting or running, or work waits for one.
+    /// Whether nothing of the driver holds the thread's scratch: no turn starting or running,
+    /// nothing waiting for a turn (a message, an envelope, a task's or card's news on its
+    /// way), no hand-over, edit or close under way, and no command of its CLI's still going
+    /// (a Codex command left running, a background job, or the turn its end starts).
+    fn scratch_free(state: &ConvState) -> bool {
+        !(state.busy
+            || state.closing
+            || state.held
+            || state.sweeping
+            || state.hand_over.is_some()
+            || !state.inbox.is_empty()
+            || !state.pending.is_empty()
+            || !state.announcing.is_empty()
+            || !state.answering.is_empty()
+            || !state.holding.is_empty()
+            || !state.lingering.is_empty()
+            || state.lingering_request.is_some()
+            || state.background.is_some())
+    }
+
+    /// [`Self::scratch_free`], as it stands now.
+    pub(super) async fn scratch_idle(&self) -> bool {
+        Self::scratch_free(&*self.state.lock().await)
+    }
+
+    /// Reserves the thread's scratch for a sweep when nothing holds it: no turn starts until
+    /// [`Self::end_scratch_sweep`]. False when something holds it (nothing is reserved).
+    pub(super) async fn begin_scratch_sweep(&self) -> bool {
+        let mut state = self.state.lock().await;
+        if !Self::scratch_free(&state) {
+            return false;
+        }
+        state.sweeping = true;
+        true
+    }
+
+    /// The sweep is over: turns may start again (the caller looks for one).
+    pub(super) async fn end_scratch_sweep(&self) {
+        self.state.lock().await.sweeping = false;
+    }
+
     pub async fn is_busy(&self) -> bool {
         let state = self.state.lock().await;
         state.busy
@@ -1931,6 +1979,7 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             if state.busy
                 || state.held
+                || state.sweeping
                 || state.hand_over.is_some()
                 || !state.pending.is_empty()
                 || !state.inbox.is_empty()
@@ -2185,7 +2234,8 @@ impl SessionManager {
     async fn next_turn(self: Arc<Self>, conv: Arc<ConvLive>) {
         let waiting = {
             let state = conv.state.lock().await;
-            // A hand-over under way starts the next turn itself, once it has moved its turn.
+            // A hand-over under way starts the next turn itself, once it has moved its turn; a
+            // sweep of the thread's scratch looks for the next turn once it is done.
             if state.hand_over.is_some() {
                 return;
             }
@@ -2213,6 +2263,7 @@ impl SessionManager {
             if state.busy
                 || state.closing
                 || state.held
+                || state.sweeping
                 || state.hand_over.is_some()
                 || self.admit().is_err()
             {
@@ -2275,6 +2326,8 @@ impl SessionManager {
                 None => envelopes[0].1.clone(),
             };
             state.busy = true;
+            conv.scratch_used
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             state.landed = false;
             state.limit_hit = None;
             state.turn_error = None;
