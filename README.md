@@ -265,3 +265,5 @@ scripts/uninstall.sh --app-id ai.brigadier.app
 - [SECURITY.md](SECURITY.md): report vulnerabilities privately, never in a public issue.
 - [docs/](docs/README.md): design plans and the evidence behind the numbers above.
 - MIT, see [LICENSE](LICENSE). Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Brigadier is made by SYNCRA SRL. Founded and developed by Stephen Golban.
