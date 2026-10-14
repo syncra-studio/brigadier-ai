@@ -97,7 +97,16 @@ const LazyCardBody = lazy(loadCardBody);
 /** What an assistant block carries in its message metadata (`custom.block`). */
 export type BlockMeta = {
   /** Per text part, in order: the reply's position (infinite while it streams) and model. */
-  texts: { position: number; model: ModelChoice | null; update: boolean; anchors?: readonly string[] }[];
+  texts: {
+    position: number;
+    model: ModelChoice | null;
+    update: boolean;
+    anchors?: readonly string[];
+    /** Its CLI said it is the turn's final answer: when it started. */
+    answerAtMs?: number;
+    /** It streams as a line between the turn's steps. */
+    commentary?: boolean;
+  }[];
   cards: BlockCard[];
   /** The workers' rows, in the order they started. */
   rows: BlockRow[];

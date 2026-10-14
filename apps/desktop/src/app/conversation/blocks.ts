@@ -58,6 +58,10 @@ export type BlockText = {
    * here (SESSION-MESSAGING-PLAN.md §6.3).
    */
   anchors?: readonly string[];
+  /** Its CLI said it is the turn's final answer: when it started (the work folds from there). */
+  answerAtMs?: number;
+  /** It streams, and its CLI said it is a line between the turn's steps. */
+  commentary?: boolean;
 };
 
 /** Whether a reply is an update line: it starts with "Update:", bold or not. */
@@ -289,7 +293,16 @@ export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boo
 export function turnTime(
   meta: { state: BlockState; worked: readonly WorkSpan[]; quotaWait: boolean; cardWait: boolean; endedAtMs: number | null },
   now: number,
+  /** When its final answer started: it worked until then, whatever came after. */
+  answerAtMs?: number,
 ): number {
+  if (answerAtMs !== undefined) {
+    const until = (at: number) => Math.min(at, answerAtMs);
+    const spans = meta.worked
+      .filter((span) => span.fromMs < answerAtMs)
+      .map((span) => ({ ...span, toMs: until(span.toMs ?? answerAtMs) }));
+    return workedMs(spans, until(now));
+  }
   if (meta.state === "waiting" && !meta.quotaWait && !waitsOnCard(meta)) {
     return Math.max(0, now - (stoppedAtMs(meta.worked) ?? meta.endedAtMs ?? now));
   }
@@ -713,6 +726,7 @@ export function buildBlocks(
         model: message.model,
         update: isUpdate(item.text),
         ...(anchors && { anchors }),
+        ...(message.answerAtMs !== undefined && { answerAtMs: message.answerAtMs }),
       });
       continue;
     }
@@ -745,6 +759,8 @@ export function buildBlocks(
       text: streaming.text,
       model: null,
       update: isUpdate(streaming.text),
+      ...(streaming.phase === "answer" && { answerAtMs: streaming.startedAtMs }),
+      ...(streaming.phase === "commentary" && { commentary: true }),
     });
   }
 
@@ -921,7 +937,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
 
 /** What a block's work is made of, as its message metadata carries it. */
 export type SequenceSource = {
-  texts: readonly { position: number; anchors?: readonly string[] }[];
+  texts: readonly { position: number; anchors?: readonly string[]; answerAtMs?: number }[];
   cards: readonly BlockCard[];
   steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; peer?: PeerOf }[];
   compactions: readonly BlockCompaction[];
@@ -1003,6 +1019,18 @@ export function answerIndex(texts: readonly { update?: boolean }[], done: boolea
   if (!done || texts.length === 0) return null;
   const at = texts.findLastIndex((text) => !text.update);
   return at >= 0 ? at : texts.length - 1;
+}
+
+/**
+ * The reply a block still at work answers with: the one its CLI said is the turn's final answer,
+ * while it is the newest thing in the work. Its work folds the moment it starts and the answer
+ * goes under "Worked for …", though the request may still wait (for another session's reply,
+ * say). `null` otherwise, always with a CLI that doesn't say: its work folds once it is done.
+ */
+export function answeringIndex(texts: readonly { answerAtMs?: number }[], sequence: readonly SequenceEntry[]): number | null {
+  const newest = sequence.findLast((entry) => entry.kind !== "thinking");
+  if (newest?.kind !== "text") return null;
+  return texts[newest.index]?.answerAtMs === undefined ? null : newest.index;
 }
 
 /** The update lines under a finished block's answer: the replies after it, by index. */
