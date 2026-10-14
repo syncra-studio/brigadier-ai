@@ -1,12 +1,26 @@
 name: CI
 
+# Docs, the license and the repository's community files (issue forms, CODEOWNERS, the PR gate)
+# don't affect the build, so a push that changes only those skips CI.
 on:
   push:
     branches: [main]
     tags: ["v*"]
-    paths-ignore: ["**.md", "docs/**", "LICENSE"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - LICENSE
+      - .github/ISSUE_TEMPLATE/**
+      - .github/CODEOWNERS
+      - .github/workflows/pr-gate.yml
   pull_request:
-    paths-ignore: ["**.md", "docs/**", "LICENSE"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - LICENSE
+      - .github/ISSUE_TEMPLATE/**
+      - .github/CODEOWNERS
+      - .github/workflows/pr-gate.yml
   workflow_dispatch:
 
 # A push cancels an older push's run, never a run someone started by hand.

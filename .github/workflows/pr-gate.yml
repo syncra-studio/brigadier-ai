@@ -1,0 +1,126 @@
+name: PR gate
+
+# Enforces CONTRIBUTING.md's "Approval before code": a pull request from an author without write
+# access must close an open issue that is labelled `accepted` and assigned to that author.
+# Otherwise it is closed with a comment saying why. The `keep-open` label exempts one.
+#
+# `pull_request_target` runs this file as it is on `main`, with a token that can write. It must
+# never check out, build or run anything from the pull request: it only reads metadata through
+# the API, and every value from the event reaches the script through `env`, never inline.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize, ready_for_review, labeled, unlabeled]
+  issues:
+    types: [labeled, unlabeled, assigned, unassigned, closed]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+concurrency:
+  group: pr-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Approval before code
+    # Issues: only the changes that can withdraw an approval matter; another label doesn't.
+    # Pull requests: a label other than keep-open doesn't change the answer.
+    if: >-
+      (github.event_name == 'pull_request_target' &&
+        !((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+          github.event.label.name != 'keep-open')) ||
+      (github.event_name == 'issues' && !github.event.issue.pull_request &&
+        !((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+          github.event.label.name != 'accepted'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      EVENT: ${{ github.event_name }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      PR_QUERY: |
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              number state authorAssociation
+              author { login }
+              labels(first: 50) { nodes { name } }
+              closingIssuesReferences(first: 10) {
+                nodes {
+                  number state
+                  repository { nameWithOwner }
+                  labels(first: 50) { nodes { name } }
+                  assignees(first: 20) { nodes { login } }
+                }
+              }
+            }
+          }
+        }
+      OPEN_PRS_QUERY: |
+        query($owner: String!, $name: String!) {
+          repository(owner: $owner, name: $name) {
+            pullRequests(states: OPEN, first: 100) {
+              nodes { number closingIssuesReferences(first: 10) { nodes { number } } }
+            }
+          }
+        }
+    steps:
+      - name: Check approval
+        run: |
+          set -euo pipefail
+          owner="${REPO%/*}"
+          name="${REPO#*/}"
+          contributing="https://github.com/$REPO/blob/main/CONTRIBUTING.md#approval-before-code"
+
+          # Checks one pull request; closes it with a comment when it fails.
+          check() {
+            local pr="$1" data verdict
+            data="$(gh api graphql -f query="$PR_QUERY" -f owner="$owner" -f name="$name" -F number="$pr" \
+              --jq '.data.repository.pullRequest')"
+            verdict="$(jq -r --arg repo "$REPO" '
+              (.author.login // "" | ascii_downcase) as $login
+              | def issues: [.closingIssuesReferences.nodes[] | select(.repository.nameWithOwner == $repo)];
+                def accepted: [.labels.nodes[].name] | index("accepted") != null;
+                def ok: .state == "OPEN" and accepted
+                  and ([.assignees.nodes[].login | ascii_downcase] | index($login) != null);
+                if .state != "OPEN" then "skip"
+                elif (.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) then "pass"
+                elif ([.labels.nodes[].name] | index("keep-open") != null) then "pass"
+                elif (issues | length) == 0 then "no-issue"
+                elif any(issues[]; ok) then "pass"
+                elif all(issues[]; .state != "OPEN") then "issue-closed"
+                elif any(issues[]; .state == "OPEN" and accepted) then "not-assigned"
+                else "not-accepted"
+                end' <<<"$data")"
+            echo "#$pr: $verdict"
+            case "$verdict" in
+              skip|pass) return 0 ;;
+              no-issue) reason="it doesn't close an issue. Put \`Fixes #<issue>\` in its description, for an issue that is accepted and assigned to you." ;;
+              issue-closed) reason="the issue it closes is already closed." ;;
+              not-assigned) reason="the issue it closes is accepted, but not assigned to you." ;;
+              not-accepted) reason="the issue it closes hasn't been accepted (it has no \`accepted\` label)." ;;
+            esac
+            gh pr comment "$pr" --repo "$REPO" --body "This pull request was closed automatically: $reason
+
+          Every pull request from a contributor without write access needs an open issue that is labelled \`accepted\` and assigned to its author. See [Approval before code]($contributing). Once you have that approval, open a new pull request."
+            gh pr close "$pr" --repo "$REPO"
+          }
+
+          if [ "$EVENT" = "pull_request_target" ]; then
+            check "$PR_NUMBER"
+            exit 0
+          fi
+
+          # An issue changed: check every open pull request that closes it.
+          [[ "$ISSUE_NUMBER" =~ ^[0-9]+$ ]] || { echo "Unexpected issue number: $ISSUE_NUMBER" >&2; exit 1; }
+          prs="$(gh api graphql -f query="$OPEN_PRS_QUERY" -f owner="$owner" -f name="$name" \
+            --jq ".data.repository.pullRequests.nodes[]
+              | select(any(.closingIssuesReferences.nodes[]; .number == $ISSUE_NUMBER)) | .number")"
+          for pr in $prs; do
+            check "$pr"
+          done
