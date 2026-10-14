@@ -2,8 +2,8 @@ import { create } from "zustand";
 
 /**
  * When the user last had each conversation open, remembered with the app's other view state: a
- * session that received a message from another session since shows an unread dot in the
- * sidebar (SESSION-MESSAGING-PLAN.md §6.4).
+ * conversation that finished something since (a request, or an answer to another session, the
+ * daemon keeps when) shows an unread dot in the sidebar (SESSION-MESSAGING-PLAN.md §6.4).
  */
 export const LAST_OPENED_KEY = "brigadier.lastOpened";
 
@@ -34,7 +34,16 @@ export function markOpened(id: string, atMs: number): void {
   }
 }
 
-/** Whether a session got a message from another session since the user last had it open. */
-export function unread(peerAtMs: number | undefined, lastOpenedMs: number | undefined, open: boolean): boolean {
-  return !open && peerAtMs !== undefined && peerAtMs > (lastOpenedMs ?? 0);
+/**
+ * Whether a conversation finished something since the user last had it open: a request of it
+ * finished, or (a session) it answered what another session asked.
+ */
+export function unread(finishedAtMs: number | undefined, lastOpenedMs: number | undefined, open: boolean): boolean {
+  return !open && finishedAtMs !== undefined && finishedAtMs > (lastOpenedMs ?? 0);
+}
+
+/** When a conversation last finished something, for its unread dot. */
+export function lastFinished(conversation: { finishedAtMs?: number; peerAtMs?: number } | null | undefined): number | undefined {
+  const at = Math.max(conversation?.finishedAtMs ?? 0, conversation?.peerAtMs ?? 0);
+  return at > 0 ? at : undefined;
 }

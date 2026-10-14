@@ -110,7 +110,7 @@ import {
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
 import { useBoard } from "@/state/board";
-import { markOpened } from "@/state/lastOpened";
+import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
 import { CHAT_TAB, openFileTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { placeOf } from "@/state/terminalPlaces";
@@ -519,11 +519,11 @@ export function ConversationView({
     }),
     [folded.hidden, conversationId],
   );
-  // Open, its messages from other sessions are read: the sidebar's dot clears, and stays clear.
-  const peerAtMs = conversation?.peerAtMs ?? 0;
+  // Open, what it finished is seen: the sidebar's dot clears, and stays clear.
+  const finishedAtMs = lastFinished(conversation) ?? 0;
   useEffect(() => {
-    if (!embedded && conversationId) markOpened(conversationId, Math.max(Date.now(), peerAtMs));
-  }, [embedded, conversationId, peerAtMs]);
+    if (!embedded && conversationId) markOpened(conversationId, Math.max(Date.now(), finishedAtMs));
+  }, [embedded, conversationId, finishedAtMs]);
   // A jump to a message between sessions here: the earlier turns unfold, and it lands once shown.
   const reveal = useReveal((s) => (!embedded && s.reveal?.conversationId === conversationId ? s.reveal : null));
   const showEarlier = earlier.show;
