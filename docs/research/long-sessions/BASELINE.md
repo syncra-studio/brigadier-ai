@@ -26,9 +26,14 @@ completed task.
 
 **Built and on:**
 - Thread with tools, lean start (`--strict-mcp-config`, `--setting-sources project`), Brigadier's MCP server only.
-- Claude auto-compaction off and `idleCompaction: false` for every Brigadier Claude session (`P/claude/mod.rs:399`,
-  `:725`); Codex compaction pushed out of reach for sessions that must not compact (`P/codex/mod.rs:64`, `:1180`).
-  Brigadier rebirths and hands off instead.
+- **Compaction is off only for the thread.** The thread (orchestrator session) launches with `auto_compact: false`
+  (`M/conversation.rs:2830`; also `M/rebirth.rs:360`, `M/escalation.rs:273`), which turns off Claude's
+  auto-compaction (`P/claude/mod.rs:399`) and pushes Codex's `model_auto_compact_token_limit` out of reach
+  (`P/codex/mod.rs:64`, `:1180`). Brigadier rebirths the thread instead.
+- **Workers, reviews, research, Brain jobs and git-text jobs launch with `auto_compact: true`** (`M/workers.rs:1870`,
+  `M/review_runs.rs:1226`, `M/research.rs:263`, `M/brain_jobs.rs:568`, `M/git_actions.rs:521`). A worker is meant
+  to be handed off at 200k / 70% before the CLI compacts, but nothing stops the CLI compacting first (WEAK-SPOTS L2).
+- `idleCompaction: false` is set in every Brigadier Claude session's settings (`P/claude/mod.rs:725`).
 - Orchestrator/thread rebirth with a briefing (handoff 3k, state 2k, Brain 5k tokens; decisions whole), cold-cache
   rebirth from a warm-time checkpoint above 150k (`M/cold.rs`).
 - Worker hand-off at 200k / 70% with note, last messages, `<scratch>/handoff/` and `checks.md`.
