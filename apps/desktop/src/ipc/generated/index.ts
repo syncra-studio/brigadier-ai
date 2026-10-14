@@ -23,6 +23,8 @@ export type { ArtifactText } from "./ArtifactText";
 export type { AttachmentRef } from "./AttachmentRef";
 export type { Attempt } from "./Attempt";
 export type { AttemptEnd } from "./AttemptEnd";
+export type { BackgroundRun } from "./BackgroundRun";
+export type { BackgroundRunState } from "./BackgroundRunState";
 export type { BrainAnswer } from "./BrainAnswer";
 export type { BrainCaps } from "./BrainCaps";
 export type { BrainGraph } from "./BrainGraph";

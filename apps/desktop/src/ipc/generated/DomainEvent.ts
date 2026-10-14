@@ -3,6 +3,7 @@ import type { AccountsView } from "./AccountsView";
 import type { Approval } from "./Approval";
 import type { Artifact } from "./Artifact";
 import type { AttachmentRef } from "./AttachmentRef";
+import type { BackgroundRun } from "./BackgroundRun";
 import type { BrainJob } from "./BrainJob";
 import type { Compaction } from "./Compaction";
 import type { ComputerAction } from "./ComputerAction";
@@ -66,7 +67,7 @@ requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, 
 /**
  * The answer: a message id, or `task:<id>` for a worker's report.
  */
-subject: string, rating: Rating, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: ReviewRun, } | { "type": "integratedCheckUpdated", check: IntegratedCheck, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "computerActed", conversationId: ConversationId, taskId: TaskId, action: ComputerAction, } | { "type": "checkRan", conversationId: ConversationId, 
+subject: string, rating: Rating, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: ReviewRun, } | { "type": "integratedCheckUpdated", check: IntegratedCheck, } | { "type": "backgroundRunUpdated", run: BackgroundRun, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "computerActed", conversationId: ConversationId, taskId: TaskId, action: ComputerAction, } | { "type": "checkRan", conversationId: ConversationId, 
 /**
  * The worker's task; none for the thread.
  */

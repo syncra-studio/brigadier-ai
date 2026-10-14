@@ -3,4 +3,4 @@
 /**
  * Why something entered the orchestrator's context.
  */
-export type InjectionKind = "instructions" | "userMessage" | "report" | "workerQuestion" | "decision" | "taskFailed" | "toolResult" | "artifact" | "reseed" | "resume" | "followUp" | "briefing" | "reminder" | "run" | "peerMessage";
+export type InjectionKind = "instructions" | "userMessage" | "report" | "workerQuestion" | "decision" | "taskFailed" | "toolResult" | "artifact" | "reseed" | "resume" | "followUp" | "briefing" | "reminder" | "run" | "peerMessage" | "backgroundRun";
