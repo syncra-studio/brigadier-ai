@@ -212,7 +212,9 @@ function Fixture() {
         arrival(tab);
         seen[tab.startsWith("file") ? "fileTabClosed" : "browserTabClosed"] = !useSummary.getState().floating;
       }
+      // Back on the chat, a preview that arrived over another tab doesn't open the card late.
       useSessionTabs.setState({ sessions: { [id]: { tabs: [], active: CHAT_TAB } } });
+      seen.chatReturnClosed = !useSummary.getState().floating;
       arrival("new-preview");
     });
     at(4500, () => {
