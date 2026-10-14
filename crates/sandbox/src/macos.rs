@@ -1124,6 +1124,11 @@ mod tests {
             assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
             return;
         }
+        if nested_sandbox_refused(
+            "a_command_without_the_network_uses_unix_sockets_only_in_its_writable_roots",
+        ) {
+            return;
+        }
         let dir =
             Temp(std::env::temp_dir().join(format!("brig-cmd-socket-{}", std::process::id())));
         let writable = dir.join("writable");
