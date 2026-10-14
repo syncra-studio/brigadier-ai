@@ -98,6 +98,11 @@ pub trait Processes: Send + Sync {
     /// Whether `pid` has exited but its parent has not reaped it yet: it still answers
     /// [`Processes::is_alive`], but nothing of it runs any more.
     fn is_zombie(&self, pid: u32) -> bool;
+    /// Whether `pid` is stopped (SIGSTOP, SIGTSTP, a debugger): it runs nothing until a
+    /// SIGCONT, but a SIGKILL still ends it. False where that can't be told.
+    fn is_stopped(&self, _pid: u32) -> bool {
+        false
+    }
     /// Asks a process to exit (SIGTERM on Unix). On Windows this terminates it.
     fn terminate(&self, pid: u32) -> Result<()>;
     /// Kills a process and everything it started: its process group and, walking the process

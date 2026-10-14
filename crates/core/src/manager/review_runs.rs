@@ -185,37 +185,90 @@ pub(crate) fn items_of(number: u32, text: &str) -> Vec<Finding> {
     items
 }
 
-/// `task-7` for a task of `board` named `task-7`, `Task 7` or `7`.
-fn task_label(named: &str, board: &crate::board::Board) -> Option<String> {
+/// The task of `board` named `task-7`, `Task 7` or `7`.
+fn named_task<'a>(named: &str, board: &'a crate::board::Board) -> Option<&'a crate::work::Task> {
     let digits = named
         .trim_start_matches(|c: char| !c.is_ascii_digit())
         .trim_end_matches(|c: char| !c.is_ascii_digit());
     let number: u32 = digits.parse().ok()?;
-    board
-        .tasks
-        .values()
-        .any(|task| task.number == number)
-        .then(|| format!("task-{number}"))
+    board.tasks.values().find(|task| task.number == number)
 }
 
 /// A finding's status in a word or two, as the thread's replies and the merge's result say it.
 pub(crate) fn status_word(status: &FindingStatus) -> String {
     match status {
         FindingStatus::New => "not recorded".into(),
-        FindingStatus::Fixed {
-            task: Some(task), ..
-        } => format!("fixed in {task}"),
-        FindingStatus::Fixed { task: None, .. } => "fixed".into(),
+        FindingStatus::Fixed { task, checked, .. } => {
+            let fixed = match task {
+                Some(task) => format!("fixed in {task}"),
+                None => "fixed".into(),
+            };
+            if checked.is_some() {
+                fixed
+            } else {
+                format!("{fixed} (unverified: not checked in the merged code)")
+            }
+        }
         FindingStatus::Open { .. } => "open".into(),
         FindingStatus::Dismissed { why } => format!("dismissed: {why}"),
     }
+}
+
+/// What `record` makes of finding `id`, or why it can't be recorded: a fix credited to a task
+/// that hasn't landed fixed nothing in the merged code yet, and a dismissal says why. A fix
+/// with no `checked` is stored as is: it shows as unverified.
+fn recorded_status(
+    id: &str,
+    record: &crate::tools::FindingRecord,
+    board: &crate::board::Board,
+) -> std::result::Result<FindingStatus, String> {
+    use crate::tools::FindingVerdict;
+    let said = |text: &Option<String>| {
+        text.as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    let why = said(&record.why);
+    match record.status {
+        FindingVerdict::Fixed => {
+            let task = match record.task.as_deref().map(str::trim) {
+                None | Some("") => None,
+                Some(named) => match named_task(named, board) {
+                    Some(task) if task.landed.is_none() => {
+                        return Err(format!(
+                            "{id}: task-{} hasn't landed, so it fixed nothing in the merged code yet; record it open until it lands",
+                            task.number
+                        ));
+                    }
+                    Some(task) => Some(format!("task-{}", task.number)),
+                    None => return Err(format!("{id}: {named} is no task of this session")),
+                },
+            };
+            Ok(FindingStatus::Fixed {
+                task,
+                why,
+                checked: said(&record.checked),
+            })
+        }
+        FindingVerdict::Open => Ok(FindingStatus::Open { why }),
+        FindingVerdict::Dismissed => match why {
+            Some(why) => Ok(FindingStatus::Dismissed { why }),
+            None => Err(format!("{id}: say why you dismiss it")),
+        },
+    }
+}
+
+/// A finding recorded fixed without a check of the fix in the merged code.
+pub(crate) fn unverified(status: &FindingStatus) -> bool {
+    matches!(status, FindingStatus::Fixed { checked: None, .. })
 }
 
 /// What a code review's message to the thread ends with: its findings by id, and how to
 /// record them.
 fn record_line(items: &[Finding]) -> String {
     format!(
-        "Its findings:\n{}\nRecord what became of each with record_findings, all in one call: fixed (in task-N, or by you), open, or dismissed and why. If your answer is already written: {}",
+        "Its findings:\n{}\nRecord what became of each with record_findings, all in one call: fixed (in task-N, or by you, with how you checked it in the merged code), open, or dismissed and why. If your answer is already written: {}",
         listed(items),
         super::prompts::LATE_EVENT
     )
@@ -1529,7 +1582,6 @@ impl SessionManager {
         conversation_id: &ConversationId,
         args: crate::tools::RecordFindings,
     ) -> Result<String> {
-        use crate::tools::FindingVerdict;
         if args.items.is_empty() {
             return Err(Error::Invalid(
                 "`items` is empty: list every finding of the review.".into(),
@@ -1562,34 +1614,12 @@ impl SessionManager {
                     }
                 },
             };
-            let why = record
-                .why
-                .as_deref()
-                .map(str::trim)
-                .filter(|why| !why.is_empty())
-                .map(str::to_owned);
-            let status = match record.status {
-                FindingVerdict::Fixed => {
-                    let task = match record.task.as_deref().map(str::trim) {
-                        None | Some("") => None,
-                        Some(named) => match task_label(named, &board) {
-                            Some(label) => Some(label),
-                            None => {
-                                problems.push(format!("{id}: {named} is no task of this session"));
-                                continue;
-                            }
-                        },
-                    };
-                    FindingStatus::Fixed { task, why }
+            let status = match recorded_status(&id, record, &board) {
+                Ok(status) => status,
+                Err(problem) => {
+                    problems.push(problem);
+                    continue;
                 }
-                FindingVerdict::Open => FindingStatus::Open { why },
-                FindingVerdict::Dismissed => match why {
-                    Some(why) => FindingStatus::Dismissed { why },
-                    None => {
-                        problems.push(format!("{id}: say why you dismiss it"));
-                        continue;
-                    }
-                },
             };
             let item = changed[index]
                 .items
@@ -1628,9 +1658,21 @@ impl SessionManager {
             .filter(|item| item.status == FindingStatus::New)
             .map(|item| item.id.clone())
             .collect();
+        let unverified: Vec<String> = changed
+            .iter()
+            .flat_map(|review| &review.items)
+            .filter(|item| unverified(&item.status))
+            .map(|item| item.id.clone())
+            .collect();
         let mut reply = format!("Recorded: {}.", said.join(", "));
         if !unrecorded.is_empty() {
             reply.push_str(&format!(" Still not recorded: {}.", unrecorded.join(", ")));
+        }
+        if !unverified.is_empty() {
+            reply.push_str(&format!(
+                " Unverified: {}. The user sees them as unverified, not as clean: tell them so plainly, or check each in the merged code and record it again with `checked`.",
+                unverified.join(", ")
+            ));
         }
         // A merge held for these findings looks again.
         self.check_held_merge(conversation_id).await;
@@ -1867,6 +1909,7 @@ mod tests {
         first.items[2].status = FindingStatus::Fixed {
             task: Some("task-2".into()),
             why: None,
+            checked: Some("a:3 at the tip guards it now".into()),
         };
         board.reviews.insert(first.id.clone(), first);
         let merged = super::super::landing::merged_findings(&board);
@@ -1898,14 +1941,26 @@ mod tests {
             merged,
             " Findings you haven't recorded: R2.1, R2.2. Record them with record_findings, and tell the user which stay open."
         );
-        // Recorded fixed and dismissed: nothing open.
+        // Recorded fixed on a report's word: unverified, never "all fixed".
         let second = board.reviews.get_mut("second").unwrap();
         second.items[0].status = FindingStatus::Fixed {
             task: None,
             why: None,
+            checked: None,
         };
         second.items[1].status = FindingStatus::Dismissed {
             why: "by design".into(),
+        };
+        assert_eq!(
+            super::super::landing::merged_findings(&board),
+            " Recorded fixed but never checked in the merged code (unverified): R2.1 Four. Tell the user plainly that these are unverified, never that the review is clean; or check each in the merged code and record it again with `checked`."
+        );
+        // Checked in the merged code: nothing open.
+        let second = board.reviews.get_mut("second").unwrap();
+        second.items[0].status = FindingStatus::Fixed {
+            task: None,
+            why: None,
+            checked: Some("ran its test at the tip: passes".into()),
         };
         assert_eq!(
             super::super::landing::merged_findings(&board),
@@ -1977,5 +2032,97 @@ mod tests {
         assert!(cut.len() < long.len());
         assert!(cut.ends_with("[… the rest of the review is cut]"));
         assert_eq!(clipped("short"), "short");
+    }
+
+    fn record(value: serde_json::Value) -> crate::tools::FindingRecord {
+        serde_json::from_value(value).expect("a record")
+    }
+
+    /// A fix credited to a task counts only once that task has landed, and a fix with no
+    /// check in the merged code is stored as unverified.
+    #[test]
+    fn a_fix_is_recorded_unverified_without_a_check_and_refused_before_its_task_lands() {
+        let mut task: crate::work::Task = serde_json::from_value(serde_json::json!({
+            "id": "t9",
+            "conversationId": "c1",
+            "number": 9,
+            "position": 0,
+            "title": "Fix the loader",
+            "kind": "implement",
+            "spec": "Fix it.",
+            "access": { "repo": "write", "network": false, "unsandboxed": false },
+            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
+            "state": "reported",
+            "attachments": [],
+            "createdAtMs": 0,
+            "updatedAtMs": 0
+        }))
+        .expect("a task");
+        let mut board = crate::board::Board::default();
+        board.tasks.insert(task.id.clone(), task.clone());
+        let fixed_in_9 =
+            record(serde_json::json!({"id": "R1.1", "status": "fixed", "task": "task-9"}));
+        let refused = recorded_status("R1.1", &fixed_in_9, &board).unwrap_err();
+        assert!(refused.contains("task-9 hasn't landed"), "{refused}");
+        task.landed = Some("abc123".into());
+        board.tasks.insert(task.id.clone(), task);
+        let status = recorded_status("R1.1", &fixed_in_9, &board).unwrap();
+        assert_eq!(
+            status,
+            FindingStatus::Fixed {
+                task: Some("task-9".into()),
+                why: None,
+                checked: None
+            }
+        );
+        assert!(unverified(&status));
+        assert_eq!(
+            status_word(&status),
+            "fixed in task-9 (unverified: not checked in the merged code)"
+        );
+        let checked = record(serde_json::json!({
+            "id": "R1.1", "status": "fixed", "task": "Task 9",
+            "checked": " loader.rs:12 at the tip reads the old format ",
+        }));
+        let status = recorded_status("R1.1", &checked, &board).unwrap();
+        assert_eq!(
+            status,
+            FindingStatus::Fixed {
+                task: Some("task-9".into()),
+                why: None,
+                checked: Some("loader.rs:12 at the tip reads the old format".into())
+            }
+        );
+        assert!(!unverified(&status));
+        assert_eq!(status_word(&status), "fixed in task-9");
+        // A blank check is no check.
+        let blank = record(serde_json::json!({"id": "R1.1", "status": "fixed", "checked": "  "}));
+        assert!(unverified(
+            &recorded_status("R1.1", &blank, &board).unwrap()
+        ));
+        let unknown =
+            record(serde_json::json!({"id": "R1.1", "status": "fixed", "task": "task-4"}));
+        assert!(
+            recorded_status("R1.1", &unknown, &board)
+                .unwrap_err()
+                .contains("task-4 is no task")
+        );
+    }
+
+    /// A fix stored before checks were recorded reads as unverified, never as clean.
+    #[test]
+    fn an_older_stored_fix_reads_as_unverified() {
+        let status: FindingStatus =
+            serde_json::from_value(serde_json::json!({"type": "fixed", "task": null, "why": null}))
+                .expect("an older fix");
+        assert_eq!(
+            status,
+            FindingStatus::Fixed {
+                task: None,
+                why: None,
+                checked: None
+            }
+        );
+        assert!(unverified(&status));
     }
 }

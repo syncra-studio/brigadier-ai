@@ -132,7 +132,8 @@ async fn a_reviews_findings_are_items_the_thread_records_and_the_merge_lists_the
                 Some("P1"),
                 FindingStatus::Fixed {
                     task: None,
-                    why: None
+                    why: None,
+                    checked: None
                 }
             ),
             (
@@ -153,7 +154,7 @@ async fn a_reviews_findings_are_items_the_thread_records_and_the_merge_lists_the
     );
     assert_eq!(
         replies.lock().unwrap()[0],
-        "Recorded: R1.1 fixed, R1.2 open, R1.3 dismissed: the file is generated."
+        "Recorded: R1.1 fixed (unverified: not checked in the merged code), R1.2 open, R1.3 dismissed: the file is generated. Unverified: R1.1. The user sees them as unverified, not as clean: tell them so plainly, or check each in the merged code and record it again with `checked`."
     );
     flow.settled().await;
     flow.say("Merge it.").await;
@@ -172,10 +173,15 @@ async fn a_reviews_findings_are_items_the_thread_records_and_the_merge_lists_the
         ),
         "{merged}"
     );
+    // R1.1 was recorded fixed on no check: the merge says it is unverified, never clean.
     assert!(
-        !merged.contains("R1.1") && !merged.contains("R1.3"),
+        merged.contains(
+            "Recorded fixed but never checked in the merged code (unverified): R1.1 Old notes no longer load."
+        ),
         "{merged}"
     );
+    assert!(!merged.contains("R1.3"), "{merged}");
+    assert!(!merged.contains("all fixed or dismissed"), "{merged}");
     assert!(!merged.contains("found 3"), "{merged}");
     flow.stop().await;
 }

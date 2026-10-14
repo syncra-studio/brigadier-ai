@@ -85,6 +85,8 @@ impl SessionManager {
     /// cleanups that could not finish before (worktrees need the git engine) finish now.
     pub(super) async fn recover(&self) {
         self.runtime.ledger().sweep().await;
+        // No thread runs yet: what their commands left goes before anything starts again.
+        self.sweep_scratch_at_launch().await;
         self.reconcile_trust().await;
         // Tab chats whose session went go now; those whose tab closed, once the app says.
         self.sweep_tab_chats().await;

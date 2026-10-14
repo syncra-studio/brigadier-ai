@@ -107,11 +107,15 @@ function FindingSection({ section }: { section: ReviewSection }) {
   );
 }
 
-/** Each chip coloured as the app's badges are: open warns, fixed is done, dismissed is quiet. */
+/**
+ * Each chip coloured as the app's badges are: open warns, fixed is done, a fix nobody checked
+ * warns softly, dismissed is quiet.
+ */
 const STATUS_BADGE: Record<FindingLabel, ComponentProps<typeof Badge>> = {
   Open: { variant: "warning" },
   New: { variant: "secondary" },
   Fixed: { variant: "success" },
+  Unverified: { variant: "outline", className: "border-warning/50 text-warning" },
   Dismissed: { variant: "outline", className: "border-divider text-foreground/65" },
 };
 

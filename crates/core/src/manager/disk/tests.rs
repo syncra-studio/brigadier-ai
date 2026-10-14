@@ -725,3 +725,43 @@ async fn agent_files_go_only_with_proof_once_what_they_served_is_gone() {
     let _ = ours;
     flow.stop().await;
 }
+
+/// What a thread's commands left in its temporary folder, which a crash kept its request's
+/// end from sweeping, is listed while its session is idle and swept from here.
+#[tokio::test]
+async fn an_idle_threads_leftover_temp_files_are_listed_and_swept() {
+    use crate::manager::workers::{SessionTemp, session_temp_dir};
+    let (flow, _worktree, _branch) = session("disk-thread-scratch").await;
+    let tmp = session_temp_dir(&flow.conversation, SessionTemp::Thread);
+    crate::manager::flow::eventually("the request end's sweep", || {
+        std::fs::read_dir(&tmp).is_ok_and(|mut entries| entries.next().is_none())
+    })
+    .await;
+    let (items, _) = scan(&flow, context()).await;
+    assert!(
+        !labels(&items)
+            .iter()
+            .any(|label| label.contains("Thread temp")),
+        "{:?}",
+        labels(&items)
+    );
+    std::fs::create_dir_all(tmp.join("bt-main/target")).unwrap();
+    std::fs::write(tmp.join("bt-main/target/out.bin"), vec![1u8; 256 * 1024]).unwrap();
+    let (items, _) = scan(&flow, context()).await;
+    let listed = named(&items, "Thread temp files of 1 idle session");
+    assert_eq!(listed.item.category, CleanCategory::Temporary);
+    assert!(listed.item.bytes >= 256 * 1024, "{}", listed.item.bytes);
+    assert!(
+        matches!(&listed.action, Action::SweepThreadScratch(ids) if ids.as_slice() == std::slice::from_ref(&flow.conversation))
+    );
+    let cleaned = flow
+        .manager
+        .clean_storage(listed.action.clone(), context())
+        .await
+        .unwrap();
+    assert!(cleaned.reclaimed >= 256 * 1024, "{cleaned:?}");
+    assert!(cleaned.failures.is_empty(), "{cleaned:?}");
+    assert!(!tmp.join("bt-main").exists());
+    assert!(tmp.is_dir());
+    flow.stop().await;
+}

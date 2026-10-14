@@ -90,9 +90,22 @@ pub(super) fn window_owners() -> Vec<u32> {
 /// is missing or fails.
 #[cfg(target_os = "macos")]
 pub(super) async fn listening_ports(group: u32) -> Vec<u16> {
-    let group = group.to_string();
+    lsof_listening("-g", group).await
+}
+
+/// The TCP ports process `pid` listens on, per `lsof`; none when it is missing or fails.
+#[cfg(target_os = "macos")]
+pub(super) async fn process_listening_ports(pid: u32) -> Vec<u16> {
+    lsof_listening("-p", pid).await
+}
+
+/// The TCP ports the processes `lsof` selects with `flag` `id` (`-g` a group, `-p` a process)
+/// listen on.
+#[cfg(target_os = "macos")]
+async fn lsof_listening(flag: &str, id: u32) -> Vec<u16> {
+    let id = id.to_string();
     let output = tokio::process::Command::new("/usr/sbin/lsof")
-        .args(["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-Fn", "-g", &group])
+        .args(["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-Fn", flag, &id])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
@@ -120,6 +133,29 @@ fn lsof_ports(output: &str) -> Vec<u16> {
 /// `/proc/net/tcp{,6}` that one of their open files is.
 #[cfg(target_os = "linux")]
 pub(super) async fn listening_ports(group: u32) -> Vec<u16> {
+    // The process group is the fifth field of `stat`, the third after the command's `)`.
+    proc_listening(move |pid| {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().nth(2))
+                .and_then(|pgrp| pgrp.parse::<u32>().ok())
+                == Some(group)
+        })
+    })
+    .await
+}
+
+/// The TCP ports process `pid` listens on.
+#[cfg(target_os = "linux")]
+pub(super) async fn process_listening_ports(pid: u32) -> Vec<u16> {
+    let pid = pid.to_string();
+    proc_listening(move |of| of == pid).await
+}
+
+/// The TCP ports the processes `wanted` picks (by pid) listen on: the listening sockets of
+/// `/proc/net/tcp{,6}` that one of their open files is.
+#[cfg(target_os = "linux")]
+async fn proc_listening(wanted: impl Fn(&str) -> bool + Send + 'static) -> Vec<u16> {
     tokio::task::spawn_blocking(move || {
         let mut listening = std::collections::HashMap::new();
         for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
@@ -144,18 +180,9 @@ pub(super) async fn listening_ports(group: u32) -> Vec<u16> {
         let Ok(processes) = std::fs::read_dir("/proc") else {
             return ports;
         };
-        // The process group is the fifth field of `stat`, the third after the command's `)`.
-        let in_group = |pid: &str| {
-            std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
-                stat.rsplit_once(')')
-                    .and_then(|(_, rest)| rest.split_whitespace().nth(2))
-                    .and_then(|pgrp| pgrp.parse::<u32>().ok())
-                    == Some(group)
-            })
-        };
         for process in processes.flatten() {
             let pid = process.file_name().to_string_lossy().into_owned();
-            if !pid.bytes().all(|b| b.is_ascii_digit()) || !in_group(&pid) {
+            if !pid.bytes().all(|b| b.is_ascii_digit()) || !wanted(&pid) {
                 continue;
             }
             let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
@@ -179,6 +206,11 @@ pub(super) async fn listening_ports(group: u32) -> Vec<u16> {
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(super) async fn listening_ports(_group: u32) -> Vec<u16> {
+    Vec::new()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(super) async fn process_listening_ports(_pid: u32) -> Vec<u16> {
     Vec::new()
 }
 

@@ -108,7 +108,7 @@ How to work:
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
 - {LONG_COMMANDS}
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
-- Land finished work with land_phase (no phase needed), each report at once. Each landing and commit of yours queues the session's full checks, run once in the background on everyone's work; never run them yourself or ask the user how much to check. [checks failed …]: one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix the cause, then rerun_checks. Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
+- Land finished work with land_phase (no phase needed), each report at once. Each landing and commit of yours queues the session's full checks, run once in the background on everyone's work; never run them yourself or ask the user how much to check. [checks failed …]: one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix the cause, then rerun_checks. Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. Record one fixed only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
 - "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). Offer propose_merge only once no worker writes. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
 - Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`. One fixing only findings adds `--trailer "{FIXES_TRAILER}: R2.2, R2.3"`; a held merge covers it.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
@@ -117,7 +117,8 @@ How to work:
 - Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. After your own `git push`, call ci_status and do what it says. On [ci … failed], fix it on that branch (`main` only through the usual merge into it here), push it and call watch_ci again without asking: the user's yes to watching covers that, nothing else. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - {PEERS}
 - Tools return at once; never wait or poll. Reports, questions, reviews and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report].
-- Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder.
+- Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder, nor name a /tmp path in a spec.
+- Your commands' scratch (second checkouts, build output, logs) goes in $TMPDIR, never elsewhere in /tmp; it is emptied when the request is over.
 - Brigadier cleans up after you; use clean_up only if the user asks. Never delete branches, worktrees or temp folders by hand: "Operation not permitted" on another session's branch or folder is Brigadier protecting it, so leave it.{GRILLING}
 
 How to talk to the user:
@@ -442,6 +443,9 @@ pub(crate) const MERGE_FAST_REVISION: u32 = 22;
 /// readiness question answered first, a steered message from another session answered on
 /// its own.
 pub(crate) const THREAD_HONESTY_REVISION: u32 = 23;
+/// A finding is recorded fixed only once checked in the merged code, and the thread's scratch
+/// goes in its temp folder, which goes when the request is over.
+pub(crate) const THREAD_CLEANUP_REVISION: u32 = 24;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -575,6 +579,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: THREAD_HONESTY_REVISION,
         thread: "From now on, lead so the user never has to guess whether to wait. Before a long or blocking step, say in one line what you run, why, and roughly how long. A yes/no or readiness question (\"are we ready to merge?\") gets its answer first, with your recommendation and the reason, before anything runs; then propose the next step and, when the choice is theirs, ask with ask_user options (\"Run the full checks first (~15 min)\" / \"Merge now\" / \"Not yet\"), or propose_merge; list_tasks now says where the full checks stand. Never start a long run silently in answer to a question, and never run the full suite yourself: the full checks run on their own and rerun_checks starts them again. A long command goes through run or run_check, never your own shell or a background job of your CLI's (`&`, nohup): past a minute it goes on in the background, the call returns its run-N id, and its result comes to you as a message in the same request. A message from another session steered in while you work on something else: answer it on its own with message_session (reply_to its id), carrying only what answers it; your answer to the user doesn't reach it.",
+        worker: "",
+    },
+    Revision {
+        number: THREAD_CLEANUP_REVISION,
+        thread: "From now on, record a review finding fixed only once you checked the fix in the merged code (its lines at the session branch's tip, or its test run there), and say how in record_findings' `checked`. A report or your notes are no check: without one the finding shows as unverified, and you tell the user so, never that the review is clean. Your own commands' scratch (a second checkout, its build output, logs, test data) goes in $TMPDIR, never elsewhere in /tmp, and no worker's spec names a /tmp path: when the request is over, Brigadier empties it and ends what your commands left running (a server listening on a port stays).",
         worker: "",
     },
 ];
@@ -2424,8 +2433,9 @@ mod environment_tests {
         // while work runs, bug 6's clean_up and computer use's routing, Q10's mockup offer, and
         // the tour's CI fix through the merge and finding-fix trailer, messages between
         // sessions, §11's landing at once with the full checks run once, and the long-step
-        // line, the readiness answer first and long commands through Brigadier's runs).
-        assert!(codex.len() < 17_100, "{}", codex.len());
+        // line, the readiness answer first and long commands through Brigadier's runs, and
+        // findings fixed only once checked and the thread's scratch in its temp folder).
+        assert!(codex.len() < 17_450, "{}", codex.len());
     }
 
     #[test]
@@ -2865,14 +2875,15 @@ mod environment_tests {
     fn the_thread_honesty_revision_reaches_an_open_thread_and_its_prompt_says_it() {
         let added = &REVISIONS[THREAD_HONESTY_REVISION as usize - 1];
         assert_eq!(added.number, THREAD_HONESTY_REVISION);
-        assert_eq!(revision(), THREAD_HONESTY_REVISION);
+        assert!(revision() >= THREAD_HONESTY_REVISION);
         assert!(added.worker.is_empty());
         assert!(added.thread.contains("are we ready to merge?"));
         assert!(added.thread.contains("Run the full checks first (~15 min)"));
         assert!(added.thread.contains("reply_to its id"));
-        assert_eq!(
-            revision_note(THREAD_HONESTY_REVISION - 1, false).unwrap(),
-            format!("[instructions] {}", added.thread)
+        assert!(
+            revision_note(THREAD_HONESTY_REVISION - 1, false)
+                .unwrap()
+                .starts_with(&format!("[instructions] {}", added.thread))
         );
         assert_eq!(revision_note(THREAD_HONESTY_REVISION - 1, true), None);
         let prompt = |provider| {
@@ -2905,6 +2916,46 @@ mod environment_tests {
         assert!(prompt(ProviderKind::Claude).contains(
             "in the background by itself (mcp__brigadier__run, mcp__brigadier__run_check)"
         ));
+    }
+    /// A thread told the revision before hears once that a finding is fixed only once checked
+    /// in the merged code, and that its scratch goes in its temp folder; a new thread's prompt
+    /// says both.
+    #[test]
+    fn the_thread_cleanup_revision_reaches_an_open_thread_and_its_prompt_says_it() {
+        let added = &REVISIONS[THREAD_CLEANUP_REVISION as usize - 1];
+        assert_eq!(added.number, THREAD_CLEANUP_REVISION);
+        assert!(added.worker.is_empty());
+        assert!(added.thread.contains("`checked`"));
+        assert!(added.thread.contains("never that the review is clean"));
+        assert!(added.thread.contains("$TMPDIR, never elsewhere in /tmp"));
+        assert_eq!(
+            revision_note(THREAD_CLEANUP_REVISION - 1, false).unwrap(),
+            format!("[instructions] {}", added.thread)
+        );
+        assert_eq!(revision_note(THREAD_CLEANUP_REVISION - 1, true), None);
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let prompt = thread(
+                &session("fullAccess"),
+                None,
+                &[],
+                None,
+                Some("/work/session @ brigadier/flow"),
+                provider,
+                true,
+            );
+            assert!(
+                prompt.contains("saying how in `checked`: a report or your notes are no check"),
+                "{provider:?}"
+            );
+            assert!(
+                prompt.contains("goes in $TMPDIR, never elsewhere in /tmp; it is emptied when the request is over"),
+                "{provider:?}"
+            );
+            assert!(
+                prompt.contains("nor name a /tmp path in a spec"),
+                "{provider:?}"
+            );
+        }
     }
 
     /// SESSION-FIXES-PLAN.md Q6.1: a thread and a worker told the revision before review

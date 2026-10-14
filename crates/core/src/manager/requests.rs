@@ -265,6 +265,8 @@ impl SessionManager {
         if (waiting && !self.answer_working(conversation_id).await) || reminded {
             self.kick(&conv);
         }
+        // Requests all over: what the thread's commands left goes.
+        self.sweep_scratch_when_over(&conv);
     }
 
     /// The newest answer, when nothing but what Brigadier owes it keeps it working (or only

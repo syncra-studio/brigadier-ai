@@ -26,7 +26,7 @@ export function batchReviews(
 }
 
 /** What the thread recorded of a finding, as its chip says it. */
-export type FindingLabel = "Open" | "New" | "Fixed" | "Dismissed";
+export type FindingLabel = "Open" | "New" | "Fixed" | "Unverified" | "Dismissed";
 
 /** One finding as the review line's list shows it: what it is and what the thread recorded. */
 export type FindingRow = {
@@ -61,8 +61,12 @@ function findingStatus(status: Finding["status"]): { status: FindingLabel; note:
       return { status: "New", note: null };
     case "fixed": {
       const task = status.task ? `Fixed in ${status.task}` : null;
-      const note = [task, status.why].filter(Boolean).join(": ");
-      return { status: "Fixed", note: note || null };
+      const said = [task, status.why].filter(Boolean).join(": ");
+      // A fix the thread took on a report's word, never checked in the merged code.
+      if (!status.checked) {
+        return { status: "Unverified", note: [said, "Not checked against the merged code"].filter(Boolean).join(". ") };
+      }
+      return { status: "Fixed", note: [said, `Checked: ${status.checked}`].filter(Boolean).join(". ") };
     }
     case "open":
       return { status: "Open", note: status.why };
@@ -71,31 +75,41 @@ function findingStatus(status: Finding["status"]): { status: FindingLabel; note:
   }
 }
 
-/** How many findings the thread recorded as open, and how many it hasn't recorded yet. */
-function counts(reviews: readonly ReviewRun[]): { open: number; unrecorded: number } {
+/**
+ * How many findings the thread recorded as open, how many as fixed without a check in the merged
+ * code, and how many it hasn't recorded yet.
+ */
+function counts(reviews: readonly ReviewRun[]): { open: number; unverified: number; unrecorded: number } {
   let open = 0;
+  let unverified = 0;
   let unrecorded = 0;
   for (const review of reviews) {
     for (const item of review.items) {
       if (item.status.type === "open") open += 1;
+      if (item.status.type === "fixed" && !item.status.checked) unverified += 1;
       if (item.status.type === "new") unrecorded += 1;
     }
     // A review stored before findings were items: what it found was never recorded.
     if (review.items.length === 0 && review.state.type === "findings") unrecorded += review.state.count;
   }
-  return { open, unrecorded };
+  return { open, unverified, unrecorded };
 }
 
 /**
  * A batch's outcome in a word or two, from what the thread recorded of each finding (Q7):
- * "running…" while a review runs (merging doesn't wait for it), then "2 open · 1 new", "clean"
- * or "couldn’t run". Null when nothing was reviewed.
+ * "running…" while a review runs (merging doesn't wait for it), then "2 open · 1 unverified ·
+ * 1 new", "clean" or "couldn’t run". A fix nobody checked in the merged code is never clean.
+ * Null when nothing was reviewed.
  */
 function outcome(reviews: readonly ReviewRun[]): string | null {
   if (reviews.length === 0) return null;
   if (reviews.some((review) => review.state.type === "running")) return "running…";
-  const { open, unrecorded } = counts(reviews);
-  const parts = [...(open > 0 ? [`${open} open`] : []), ...(unrecorded > 0 ? [`${unrecorded} new`] : [])];
+  const { open, unverified, unrecorded } = counts(reviews);
+  const parts = [
+    ...(open > 0 ? [`${open} open`] : []),
+    ...(unverified > 0 ? [`${unverified} unverified`] : []),
+    ...(unrecorded > 0 ? [`${unrecorded} new`] : []),
+  ];
   if (parts.length > 0) return parts.join(" · ");
   if (reviews.every((review) => review.state.type === "failed")) return "couldn’t run";
   return "clean";
@@ -116,13 +130,18 @@ export function reviewStatus(reviews: readonly ReviewRun[]): string | null {
 
 /**
  * The merged work's line: "Merged · review clean", or "Merged · 2 open (not fixed)" for what the
- * thread left open; a review that ends after the merge says so too.
+ * thread left open and "Merged · 1 fixed, unverified" for a fix it never checked in the merged
+ * code; a review that ends after the merge says so too.
  */
 export function mergedStatus(reviews: readonly ReviewRun[]): string | null {
   if (reviews.length === 0) return null;
   if (reviews.some((review) => review.state.type === "running")) return "Merged · review running…";
-  const { open, unrecorded } = counts(reviews);
-  const parts = [...(open > 0 ? [`${open} open (not fixed)`] : []), ...(unrecorded > 0 ? [`${unrecorded} new`] : [])];
+  const { open, unverified, unrecorded } = counts(reviews);
+  const parts = [
+    ...(open > 0 ? [`${open} open (not fixed)`] : []),
+    ...(unverified > 0 ? [`${unverified} fixed, unverified`] : []),
+    ...(unrecorded > 0 ? [`${unrecorded} new`] : []),
+  ];
   if (parts.length > 0) return `Merged · ${parts.join(" · ")}`;
   if (reviews.every((review) => review.state.type === "failed")) return "Merged · review couldn’t run";
   return "Merged · review clean";

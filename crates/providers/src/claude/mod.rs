@@ -1582,6 +1582,10 @@ impl ProviderSession for ClaudeSession {
     fn is_running(&self) -> bool {
         self.process.is_running()
     }
+
+    fn left_behind(&self) -> Vec<(u32, Option<f64>)> {
+        self.process.left_behind()
+    }
 }
 
 /// Reads Claude's output until it exits: forwards events, pairs control responses, keeps

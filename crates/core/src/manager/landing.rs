@@ -1393,7 +1393,8 @@ impl SessionManager {
         };
         self.open_round(id, None, kind, vec![item]).await?;
         Ok(format!(
-            "Asked the user whether to merge `{branch}` into `{base}`. The card shows under your final answer: write it now, unless you already did. The answer arrives as an [answer] message."
+            "Asked the user whether to merge `{branch}` into `{base}`. The card shows under your final answer: write it now, unless you already did. The answer arrives as an [answer] message.{}",
+            unsettled_findings(&board)
         ))
     }
 
@@ -2660,6 +2661,7 @@ pub(super) fn merged_findings(board: &crate::board::Board) -> String {
         .filter(|item| item.status == FindingStatus::New)
         .map(|item| item.id.as_str())
         .collect();
+    let unverified = unverified_findings(&items);
     let mut text = String::new();
     if !open.is_empty() {
         text.push_str(&format!(
@@ -2673,10 +2675,67 @@ pub(super) fn merged_findings(board: &crate::board::Board) -> String {
             new.join(", ")
         ));
     }
+    if !unverified.is_empty() {
+        text.push_str(&unverified_text(&unverified));
+    }
     if text.is_empty() {
         text.push_str(" Its review's findings are all fixed or dismissed, as you recorded them.");
     }
     text.push_str(&untracked);
+    text
+}
+
+/// The findings recorded fixed without a check in the merged code, with their titles.
+fn unverified_findings(items: &[&crate::work::Finding]) -> Vec<String> {
+    items
+        .iter()
+        .filter(|item| super::review_runs::unverified(&item.status))
+        .map(|item| format!("{} {}", item.id, item.title))
+        .collect()
+}
+
+/// What the thread is told of findings recorded fixed without a check in the merged code.
+fn unverified_text(unverified: &[String]) -> String {
+    format!(
+        " Recorded fixed but never checked in the merged code (unverified): {}. Tell the user plainly that these are unverified, never that the review is clean; or check each in the merged code and record it again with `checked`.",
+        unverified.join("; ")
+    )
+}
+
+/// What `propose_merge` tells the thread of the findings since the last merge that aren't
+/// settled: recorded open, not recorded, or fixed without a check. Its card's note must not
+/// say they are fixed.
+pub(super) fn unsettled_findings(board: &crate::board::Board) -> String {
+    use crate::work::FindingStatus;
+    let reviews = reviews_since_merge(board);
+    let items: Vec<_> = reviews.iter().flat_map(|review| &review.items).collect();
+    let open: Vec<String> = items
+        .iter()
+        .filter(|item| matches!(item.status, FindingStatus::Open { .. }))
+        .map(|item| format!("{} {}", item.id, item.title))
+        .collect();
+    let new: Vec<&str> = items
+        .iter()
+        .filter(|item| item.status == FindingStatus::New)
+        .map(|item| item.id.as_str())
+        .collect();
+    let unverified = unverified_findings(&items);
+    let mut text = String::new();
+    if !open.is_empty() {
+        text.push_str(&format!(
+            " Review findings you recorded open: {}. Your answer tells the user they are not fixed.",
+            open.join("; ")
+        ));
+    }
+    if !new.is_empty() {
+        text.push_str(&format!(
+            " Findings you haven't recorded: {}.",
+            new.join(", ")
+        ));
+    }
+    if !unverified.is_empty() {
+        text.push_str(&unverified_text(&unverified));
+    }
     text
 }
 

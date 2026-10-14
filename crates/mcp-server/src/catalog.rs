@@ -231,9 +231,12 @@ or when a failure wasn't the code's (a flaky test, the machine). Their result co
 const RECORD_FINDINGS: &str = "Record what became of a code review's findings, every one, in \
 one call, after its [review …] message: by the id the message lists (R3.2), fixed (with the task \
 that fixed it, task-7, or none for your own fix), open (not fixed; it should be), or dismissed \
-(not worth fixing, with why). Set high on an open one that loses data, breaks the build or a \
-security boundary. Brigadier only stores and shows what you record: the review line counts your \
-open ones, and finish_session lists them for the user. Record again when a status changes.";
+(not worth fixing, with why). Before you record one fixed, check it in the merged code (read its \
+lines at the session branch's tip, or run its test) and say how in checked: a worker's report or \
+your notes are no check, and without checked it shows as unverified, never as clean. Set high on \
+an open one that loses data, breaks the build or a security boundary. Brigadier only stores and \
+shows what you record: the review line counts your open and unverified ones, and finish_session \
+lists them for the user. Record again when a status changes.";
 
 const LIST_SESSIONS: &str = "List the other sessions of your projects that message_session \
 can reach, newest activity first: each one's id, title, project, state (working, idle, \

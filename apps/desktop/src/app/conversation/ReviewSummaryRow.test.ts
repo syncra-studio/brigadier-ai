@@ -49,7 +49,7 @@ test("the review row lists findings as compact rows: status and severity chips, 
     const findings = findingRows([review("1", 1, { type: "findings", count: 4 }, [
       item("R1.1", { type: "dismissed", why: "the CLI ignores extra arguments everywhere" }, "`--version` ignores extra arguments"),
       item("R1.2", { type: "open", why: null }),
-      item("R1.3", { type: "fixed", task: "task-7", why: null }),
+      item("R1.3", { type: "fixed", task: "task-7", why: null, checked: "read at the tip" }),
       item("R1.4", { type: "new" }),
       ...Array.from({ length: 6 }, (_, n) => item(`R1.${n + 5}`, { type: "new" })),
     ])]);
@@ -69,7 +69,7 @@ test("the review row lists findings as compact rows: status and severity chips, 
     // The dismissal's why and the id wait for hover; no id column.
     assert.doesNotMatch(words(html), /the CLI ignores|\bR1\.1\b/);
     assert.match(html, /title="R1\.1 · the CLI ignores extra arguments everywhere"/);
-    assert.match(html, /title="R1\.3 · Fixed in task-7"/);
+    assert.match(html, /title="R1\.3 · Fixed in task-7\. Checked: read at the tip"/);
     // Ten findings never grow the card: the list holds about six rows, then scrolls.
     assert.equal(count(html, "review-finding"), 10);
     assert.match(html, /data-slot="review-findings" class="[^"]*max-h-\[calc\(var\(--spacing-row\)\*6\)\][^"]*overflow-y-auto/);
