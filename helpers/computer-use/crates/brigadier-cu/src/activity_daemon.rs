@@ -135,21 +135,12 @@ fn identity(
     }
 }
 
-/// The executable name of `pid` (`ps -o comm=`), without its directory.
+/// The executable name of `pid` (its `argv[0]`, as `ps -o comm=` shows it),
+/// without its directory.
 fn resolve_process_name(pid: i64) -> Option<String> {
-    if pid <= 0 {
-        return None;
-    }
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     {
-        let output = std::process::Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "comm="])
-            .output()
-            .ok()?;
-        let raw = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        if raw.is_empty() {
-            return None;
-        }
+        let raw = crate::process_name::process_name(i32::try_from(pid).ok()?)?;
         Some(
             std::path::Path::new(&raw)
                 .file_name()
@@ -157,6 +148,11 @@ fn resolve_process_name(pid: i64) -> Option<String> {
                 .unwrap_or(&raw)
                 .to_owned(),
         )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pid;
+        None
     }
 }
 
@@ -192,26 +188,22 @@ fn process_facts(pid: u32) -> (Option<i64>, Option<u32>) {
     facts
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Read from the kernel rather than `ps`, which a sandboxed process can't run.
+#[cfg(target_os = "macos")]
 fn read_process_facts(pid: u32) -> (Option<i64>, Option<u32>) {
-    let Ok(output) = std::process::Command::new("ps")
-        .args(["-o", "ppid=,lstart=", "-p", &pid.to_string()])
-        .output()
-    else {
+    let Some(identity) = crate::serve::macos_process_identity(pid) else {
         return (None, None);
     };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut parts = text.split_whitespace();
-    let ppid = parts.next().and_then(|v| v.parse().ok());
-    // lstart is a date string; hash it into a stable generation marker.
-    let rest: Vec<&str> = parts.collect();
-    let start = (!rest.is_empty()).then(|| {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        rest.hash(&mut hasher);
-        (hasher.finish() >> 1) as i64
-    });
-    (start, ppid)
+    let start = identity
+        .start_seconds
+        .checked_mul(1_000_000)
+        .and_then(|micros| micros.checked_add(identity.start_microseconds));
+    (start, Some(identity.parent_process_id))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_process_facts(_pid: u32) -> (Option<i64>, Option<u32>) {
+    (None, None)
 }
 
 /// The label a call's session is keyed by.
@@ -482,7 +474,11 @@ mod tests {
         assert!(caller(None, true).is_user());
         let me = caller(Some(std::process::id()), false);
         assert!(!me.is_user());
-        assert!(me.identity.actor.starts_with("agent:") || me.identity.actor.starts_with("proc:"));
+        // Its parent is read from the kernel, which works inside a sandbox too.
+        assert_eq!(
+            me.identity.actor,
+            format!("agent:{}", std::os::unix::process::parent_id())
+        );
         assert_eq!(caller(None, false).identity.actor, "anonymous");
     }
 

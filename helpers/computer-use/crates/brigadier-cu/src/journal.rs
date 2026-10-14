@@ -78,17 +78,13 @@ fn truncate(text: &str) -> String {
 fn client_name() -> &'static str {
     static NAME: OnceLock<String> = OnceLock::new();
     NAME.get_or_init(|| {
-        #[cfg(unix)]
-        let ppid = std::os::unix::process::parent_id();
-        std::process::Command::new("/bin/ps")
-            .args(["-o", "comm=", "-p", &ppid.to_string()])
-            .output()
+        #[cfg(target_os = "macos")]
+        let name = i32::try_from(std::os::unix::process::parent_id())
             .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| {
-                let s = s.trim();
-                s.rsplit('/').next().unwrap_or(s).to_owned()
-            })
+            .and_then(crate::process_name::process_name);
+        #[cfg(not(target_os = "macos"))]
+        let name: Option<String> = None;
+        name.map(|s| s.rsplit('/').next().unwrap_or(&s).to_owned())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "unknown".to_owned())
     })

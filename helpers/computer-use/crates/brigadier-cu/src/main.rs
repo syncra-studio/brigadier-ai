@@ -46,6 +46,8 @@ mod journal;
 mod lifecycle;
 mod mcp;
 mod owner_watch;
+#[cfg(target_os = "macos")]
+mod process_name;
 // Moved whole from the old driver crate; a few of its items have no caller
 // here yet.
 #[cfg(target_os = "macos")]

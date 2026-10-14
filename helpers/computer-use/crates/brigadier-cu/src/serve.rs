@@ -1055,7 +1055,7 @@ fn process_descends_from(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProcessIdentity {
     process_id: u32,
-    parent_process_id: u32,
+    pub(crate) parent_process_id: u32,
     pub(crate) start_seconds: i64,
     pub(crate) start_microseconds: i64,
 }
