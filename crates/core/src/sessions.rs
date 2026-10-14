@@ -20,8 +20,8 @@ use crate::projection::Projection;
 
 mod peer_records;
 use crate::work::{
-    AttachmentRef, ConversationActivity, Mention, MessageQueue, OrchestratorEntry, QueuedMessage,
-    RequestState, RequestUndo, Task, TaskId, UserRequest, WorkSpan,
+    AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, OrchestratorEntry,
+    QueuedMessage, RequestState, RequestUndo, Task, TaskId, UserRequest, WorkSpan,
 };
 use crate::{Error, Result, now_ms};
 pub(crate) use peer_records::PeerSend;
@@ -721,6 +721,7 @@ impl Core {
                         quota_wait: false,
                         waiting_for: Vec::new(),
                         from_peer: None,
+                        held_by: None,
                     },
                 },
             ),
@@ -1424,6 +1425,7 @@ impl Core {
             reviews: board.sorted_reviews(),
             previews: board.sorted_previews(),
             integrated_checks: board.sorted_integrated_checks(),
+            background_runs: board.sorted_background_runs(),
             peer_messages: board.sorted_peer_messages(),
         })
     }
@@ -1676,6 +1678,68 @@ impl Core {
         Ok(())
     }
 
+    /// Says which of the thread's commands the steered requests `request_ids` and the queued
+    /// follow-ups `item_ids` wait behind (`None`: none any more, the thread reads them).
+    /// Those already saying so, or gone, are left as they are.
+    pub(crate) async fn mark_held(
+        &self,
+        id: &ConversationId,
+        request_ids: &[String],
+        item_ids: &[String],
+        held: Option<HeldBy>,
+    ) -> Result<()> {
+        let mut boards = self.boards.lock().await;
+        if !boards.contains_key(id) {
+            let board = self.load_board(id).await?;
+            boards.insert(id.clone(), board);
+        }
+        let Some(board) = boards.get(id) else {
+            return Ok(());
+        };
+        let mut events: Vec<DomainEvent> = request_ids
+            .iter()
+            .filter_map(|request_id| board.requests.get(request_id))
+            .filter(|request| request.held_by != held)
+            .map(|request| DomainEvent::RequestUpdated {
+                request: UserRequest {
+                    held_by: held.clone(),
+                    ..request.clone()
+                },
+            })
+            .collect();
+        let mut queue = board.queue.clone();
+        let mut queue_changed = false;
+        for item in &mut queue.items {
+            if item_ids.contains(&item.id) && item.held_by != held {
+                item.held_by = held.clone();
+                queue_changed = true;
+            }
+        }
+        if queue_changed {
+            events.push(DomainEvent::QueueChanged {
+                conversation_id: id.clone(),
+                queue,
+            });
+        }
+        if events.is_empty() {
+            return Ok(());
+        }
+        let stored = self
+            .record(
+                events
+                    .iter()
+                    .map(|event| (streams::conversation(id), event.clone()))
+                    .collect(),
+            )
+            .await?;
+        if let Some(board) = boards.get_mut(id) {
+            for (event, seq) in events.iter().zip(stored) {
+                board.apply(event, seq);
+            }
+        }
+        Ok(())
+    }
+
     /// A snapshot of a conversation's tasks.
     pub async fn tasks(&self, id: &ConversationId) -> Result<Vec<Task>> {
         Ok(self.board(id).await?.sorted_tasks())
@@ -1709,6 +1773,7 @@ impl Core {
             queued_at_ms: now_ms(),
             edited_at_ms: None,
             deciding,
+            held_by: None,
         };
         let queued = item.clone();
         self.change_queue(id, move |queue| {

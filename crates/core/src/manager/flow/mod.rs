@@ -1770,6 +1770,8 @@ mod accounts_tests;
 #[cfg(test)]
 mod answer_tests;
 #[cfg(test)]
+mod background_tests;
+#[cfg(test)]
 mod base_merge_tests;
 #[cfg(test)]
 mod brain_first_tests;
@@ -1795,6 +1797,8 @@ mod findings_tests;
 mod git_writing_tests;
 #[cfg(test)]
 mod held_merge_tests;
+#[cfg(test)]
+mod honesty_tests;
 #[cfg(all(test, unix))]
 mod integrated_checks_tests;
 #[cfg(test)]

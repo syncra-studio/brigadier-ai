@@ -280,7 +280,9 @@ sandbox as your own shell, in `workdir` (the workspace by default; it must be in
 workspace or your scratch folder). The whole output is kept: up to 8 KB comes back as it is, \
 longer output as a digest (the exit status, the error and warning lines, the first and last \
 lines) with an out-… id; page through the rest with read_artifact. `timeout_secs` defaults to \
-600 (at most 1800); the command is stopped then.";
+600 (at most 1800); the command is stopped then. A command still going after a minute goes on \
+in the background: the call returns its run-N id, and its result comes to you as a message in \
+the same request, so you never wait on it or run it again.";
 
 const RUN_CHECK: &str = "Run a check (tests, lint, typecheck, build, formatting) in your \
 checkout and get its result: use it for every check rather than your shell. A check that \
@@ -290,7 +292,9 @@ changes call for (the changed packages and those that depend on them) and runs n
 with your access in `workdir` (relative to your checkout's root, the root by default). Up to 8 KB \
 of output comes back as it is, longer output as a digest (the exit status, the error and warning \
 lines, the first and last lines) with where to read the whole of it. `timeout_secs` defaults to \
-600 (at most 1800); the command is stopped then.";
+600 (at most 1800); the command is stopped then. The thread's check still going after a minute \
+goes on in the background: the call returns its run-N id, and its result comes as a message in \
+the same request.";
 
 const RUN_UNSANDBOXED: &str = "Like run, but outside the sandbox, for a command the sandbox \
 blocked (the network, files outside the workspace): it waits for approval first, decided on \
@@ -311,7 +315,9 @@ const PREVIEW_LOG: &str = "The last lines of a preview's output (stdout and stde
 the latest preview's by default), with its state and an out-… id to page through its whole log \
 with read_artifact.";
 
-const LIST_TASKS: &str = "List this session's tasks: id, title, kind, status and model.";
+const LIST_TASKS: &str = "List this session's tasks (id, title, kind, status and model), then \
+where the session's full checks stand (passed, running and for how long, failed, due) and which \
+of your commands run in the background: call it before you say whether the work is ready.";
 
 const CODE_SEARCH: &str = "Search the repository's code index (instant; it is kept current \
 as files change): symbol definitions by name (functions, types, classes, methods) and files \

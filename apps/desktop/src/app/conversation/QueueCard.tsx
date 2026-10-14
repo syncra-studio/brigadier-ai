@@ -35,6 +35,7 @@ import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { AttachmentRef, QueuedMessage } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { deleteQueued, openQueuedInSideChat, resumeQueue } from "@/state/actions";
+import { HeldNote } from "@/app/conversation/HeldNote";
 import { useBoard } from "@/state/board";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
@@ -171,7 +172,9 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                   <span className="text-muted-foreground">{attached}</span>
                 )}
               </span>
-              {item.deciding && (
+              {item.deciding && item.heldBy ? (
+                <HeldNote held={item.heldBy} className="shrink-0 truncate" />
+              ) : item.deciding && (
                 <span
                   title="Brigadier is checking whether this belongs to the answer in progress"
                   className="text-muted-foreground shimmer shrink-0 text-xs motion-reduce:animate-none"

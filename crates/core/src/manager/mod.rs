@@ -17,6 +17,7 @@
 
 mod accounts;
 mod add_project;
+mod background_runs;
 mod brain_first;
 mod brain_jobs;
 mod brains;
@@ -116,6 +117,7 @@ use crate::tools::{Grants, Role, ToolCall, ToolHost, ToolReply};
 use crate::work::{DiffStat, TaskId, TaskState, WorkerDiff};
 use crate::{Core, Error, Result};
 
+pub(crate) use background_runs::background_run_number;
 pub use brains::{BrainCounters, IndexRunStats};
 pub use closing::Turn;
 pub use conversation::SendOutcome;
@@ -171,6 +173,8 @@ pub struct SessionManager {
     prewarms: prewarm::Prewarms,
     /// The sessions' full checks on the integrated tree ([`integrated_checks`]).
     integrated: integrated_checks::IntegratedChecks,
+    /// The thread's commands gone to the background ([`background_runs`]).
+    background_runs: background_runs::BackgroundRuns,
     /// The previews running now ([`preview`]).
     previews: preview::Previews,
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
@@ -292,6 +296,7 @@ impl SessionManager {
             ref_records: Arc::default(),
             prewarms: prewarm::Prewarms::default(),
             integrated: integrated_checks::IntegratedChecks::default(),
+            background_runs: background_runs::BackgroundRuns::default(),
             previews: preview::Previews::default(),
             running_reviews: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),

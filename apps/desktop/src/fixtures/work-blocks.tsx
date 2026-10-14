@@ -10,6 +10,9 @@
  * - `drive=steer`: a message steered in while a command runs.
  * - `drive=queue` (`kind=session` for a session): a queued message's ⋯ menu, and turning
  *   queueing off from it.
+ * - `drive=background` (with `kind=session`): the thread's check goes to the background and it
+ *   says so; the request works on with a live line and a context-card row (Stop) until the
+ *   result's answer.
  *
  * The result goes to `<pre id="work-blocks-result">`. `stop=running|answering|done|steer|menu` holds the
  * page at that moment instead, for a screenshot.
@@ -21,6 +24,7 @@ import { ConversationView } from "@/app/ConversationView";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
+  BackgroundRun,
   Conversation,
   ConversationView as View,
   Message,
@@ -99,6 +103,7 @@ function view(): View {
 }
 
 let settings = { followUp: "queue" } as Settings;
+const calls: string[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
@@ -110,6 +115,9 @@ mockIPC((command, payload) => {
       return { method: req.method, settings };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
+    case "stopBackgroundRun":
+      calls.push(`${req.method} ${req.runId}`);
+      return { method: req.method };
     default:
       return { method: req.method };
   }
@@ -118,7 +126,8 @@ mockIPC((command, payload) => {
 useApp.setState((state) => ({
   conversations,
   connection: { status: "connected", daemon: null, reason: null },
-  pinnedSummary: false,
+  // The background drive reads the context card beside the thread.
+  pinnedSummary: drive === "background",
   settings: { ...state.settings, followUp: "queue" },
 }));
 openConversation(ID);
@@ -304,6 +313,12 @@ async function driveSteer(): Promise<object> {
   steps([tool("sleep", 1.1, "shell", "sleep 30", "inProgress")]);
   await settle();
   const before = seen();
+  // A follow-up sent meanwhile waits behind the command rather than deciding on and on.
+  const held = { command: "sleep 30", sinceMs: Date.now() - 2 * 60_000 };
+  change(() => ({ queue: { items: [{ ...queued, deciding: true, heldBy: held }], paused: false } }));
+  await settle();
+  const deciding = { note: text(one("[data-slot=message-queue-item] [data-slot=held-note]")), shimmer: text(one("[data-slot=message-queue-item] .shimmer")) };
+  change(() => ({ queue: { items: [], paused: false } }));
   // The user steers a message in while the command runs.
   const steered = user("r2", 2, "Use banker's rounding instead", Date.now());
   daemon.messages = [...daemon.messages, steered];
@@ -311,8 +326,19 @@ async function driveSteer(): Promise<object> {
   useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
   change((board) => ({ requests: { ...board.requests, r2: daemon.requests.r2! }, head: "r2" }));
   await settle();
+  const after = seen();
+  const bubble = text(one("[data-slot=request-steer]"));
+  // Not read yet: the thread is inside the command.
+  request("r2", { heldBy: held });
+  await settle();
+  const steerHeld = text(one("[data-slot=request-steer] [data-slot=held-note]"));
   await hold("steer");
-  return { before, after: seen(), bubble: text(one("[data-slot=request-steer]")) };
+  // The command ended: the thread reads it, the note goes.
+  const { heldBy: _read, ...read } = daemon.requests.r2!;
+  daemon.requests.r2 = read;
+  change((board) => ({ requests: { ...board.requests, r2: read } }));
+  await settle();
+  return { before, after, bubble, deciding, steerHeld, steerRead: text(one("[data-slot=request-steer] [data-slot=held-note]")) };
 }
 
 async function driveQueue(): Promise<object> {
@@ -327,7 +353,45 @@ async function driveQueue(): Promise<object> {
   return { items, followUp: useApp.getState().settings.followUp, saved: settings.followUp };
 }
 
-void (drive === "steer" ? driveSteer() : drive === "queue" ? driveQueue() : driveTurn())
+async function driveBackground(): Promise<object> {
+  await settle(600);
+  // The thread's check outlasted its call: it went to the background, and the thread said so.
+  steps([...daemon.steps, tool("check", 1.3, "mcp__brigadier__run_check", "cargo test --workspace", "completed")]);
+  const said: Message = {
+    id: "a1", conversationId: ID, seq: 2, role: "assistant", blob: null, createdAtMs: Date.now(), attachments: [], mentions: [],
+    text: "The full Rust tests run in the background, about 15 minutes; I'll answer when they finish.", model: null,
+    requestId: "r1", parentId: "r1", answerAtMs: Date.now(),
+  };
+  daemon.messages = [...daemon.messages, said];
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  const run: BackgroundRun = {
+    id: "run-1", conversationId: ID, requestId: "r1", tool: "run_check", command: "cargo test --workspace",
+    startedAtMs: Date.now() - 6 * 60_000 - 5_000, endedAtMs: null, state: { type: "running" },
+  };
+  daemon.run = "idle";
+  change(() => ({ run: "idle", runRequest: null, head: "a1", backgroundRuns: { [run.id]: run } }));
+  await settle(300);
+  const card = () => one("[data-slot=background-run]");
+  const running = {
+    ...seen(),
+    said: all("[data-slot=request-work]", turn() ?? document).some((part) => text(part)?.includes("about 15 minutes")),
+    row: text(card()),
+    elapsed: text(one("[data-slot=background-run-elapsed]")),
+  };
+  await hold("background");
+  one<HTMLButtonElement>("button", card() ?? document.createElement("div"))?.click();
+  for (const end = Date.now() + 3000; Date.now() < end && calls.length === 0; ) await wait(25);
+  // The result came and the thread answered it: the request is done, the run's row gone.
+  const answer: Message = { ...said, id: "a2", seq: 3, text: "The full Rust tests pass: 812 tests, no failures.", createdAtMs: Date.now(), answerAtMs: Date.now() };
+  daemon.messages = [...daemon.messages, answer];
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change(() => ({ head: "a2", backgroundRuns: { [run.id]: { ...run, endedAtMs: Date.now(), state: { type: "finished", status: "exit 0" } } } }));
+  request("r1", { state: { type: "done" }, endedAtMs: Date.now(), worked: [{ fromMs: begun, toMs: Date.now() }] });
+  await settle(300);
+  return { running, calls, done: { ...seen(), row: text(card()) } };
+}
+
+void (drive === "steer" ? driveSteer() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

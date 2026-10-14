@@ -274,6 +274,7 @@ impl Core {
                         quota_wait: false,
                         waiting_for: Vec::new(),
                         from_peer: Some(send.from.clone()),
+                        held_by: None,
                     },
                 },
             ));

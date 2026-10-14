@@ -24,11 +24,12 @@ where
 }
 
 /// The project's full checks: each run is logged in the repository's git folder (outside
-/// every tree, so the check cache never sees it), held while `hold-checks` is there, and
-/// fails while the tree has a `broken.txt`.
+/// every tree, so the check cache never sees it), with its TMPDIR, held while `hold-checks`
+/// is there, and fails while the tree has a `broken.txt`.
 const FULL_CHECKS: &str = r#"#!/bin/sh
 common=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
 echo "start $$ $(pwd -P)" >> "$common/full-checks.runs"
+echo "$TMPDIR" >> "$common/full-checks.tmp"
 while [ -f "$common/hold-checks" ]; do sleep 0.05; done
 if [ -f broken.txt ]; then
   echo "broken.txt must not be in the tree"
@@ -188,6 +189,15 @@ async fn parallel_workers_land_at_once_and_the_integrated_tree_is_checked_once()
     assert!(
         dirs[0].ends_with("/tree") && dirs[0].contains("/checks/"),
         "the session's check checkout: {dirs:#?}"
+    );
+    // Its temporary files go to the full checks' own short folder, never the data folder's.
+    let tmp = crate::manager::workers::session_temp_dir(
+        &flow.conversation,
+        crate::manager::workers::SessionTemp::Checks,
+    );
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join(".git/full-checks.tmp")).unwrap(),
+        format!("{}\n", tmp.display())
     );
     for task in board.tasks.values() {
         let worktree = task.workspace.as_ref().unwrap().worktree.clone().unwrap();

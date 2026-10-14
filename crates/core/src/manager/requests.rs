@@ -163,6 +163,7 @@ impl SessionManager {
             return;
         };
         let activity = conv.request_activity().await;
+        let mut reminded = false;
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
@@ -205,6 +206,13 @@ impl SessionManager {
                 // Brigadier wakes the thread for it later: its answer isn't written yet, so it
                 // isn't over between turns. A stop or a failure above wins.
                 RequestState::Working
+            } else if request.steered_into.is_none()
+                && self.remind_narrated(&conv, &board, id).await
+            {
+                // Its user saw only a narration line: the thread is asked for its answer, and
+                // the request works until it has given one (or failed to).
+                reminded = true;
+                RequestState::Working
             } else {
                 RequestState::Done
             };
@@ -245,7 +253,7 @@ impl SessionManager {
             && activity.carried.is_empty()
             && !board.queue.paused
             && board.queue.items.first().is_some_and(|item| !item.deciding);
-        if waiting && !self.answer_working(conversation_id).await {
+        if (waiting && !self.answer_working(conversation_id).await) || reminded {
             self.kick(&conv);
         }
     }
@@ -430,7 +438,8 @@ fn tasks_in(board: &Board, request: &str, matches: impl Fn(TaskState) -> bool) -
 }
 
 /// Whether a task of the request runs, lands, or is about to (a fix Brigadier checks and
-/// lands once its worker's turn is over).
+/// lands once its worker's turn is over), or a command of its thread runs in the background:
+/// its result comes as a message.
 fn runs_in(board: &Board, request: &str) -> bool {
     tasks_in(board, request, |state| {
         matches!(
@@ -438,6 +447,10 @@ fn runs_in(board: &Board, request: &str) -> bool {
             TaskState::Queued | TaskState::Starting | TaskState::Running | TaskState::Landing
         )
     }) || relanding_in(board, request)
+        || board.background_runs.values().any(|run| {
+            run.state == crate::work::BackgroundRunState::Running
+                && run.request_id.as_deref() == Some(request)
+        })
 }
 
 /// Whether Brigadier still owes the request a turn: something under way will wake the thread
@@ -629,6 +642,7 @@ mod tests {
             quota_wait: false,
             waiting_for: Vec::new(),
             from_peer: None,
+            held_by: None,
         }
     }
 

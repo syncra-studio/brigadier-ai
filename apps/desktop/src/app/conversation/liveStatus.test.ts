@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
+import { elapsedWords, type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
 import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import type { OrchestratorStep, ProviderEvent, Question, Task, WaitingItem } from "@/ipc/generated";
+import type { BackgroundRun, IntegratedCheck, OrchestratorStep, ProviderEvent, Question, Task, WaitingItem } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { applyToBoard, type Board, doingOf, emptyBoard, type ShownApproval } from "@/state/board";
 
@@ -210,4 +210,34 @@ test("a turn resting on other sessions' replies says whom it waits for", () => {
   assert.deepEqual(head(input({}, { state: "waiting", waitingFor: ["Docs", "Release notes"] })), {
     text: "Waiting for Docs and Release notes to reply", tone: "still",
   });
+});
+
+const run = (patch: Partial<BackgroundRun> = {}): BackgroundRun => ({ id: "run-1", conversationId: "c", requestId: "r1", tool: "run_check",
+  command: "cargo test -p brigadier-core --lib -- flow::background_tests", startedAtMs: 1_000, endedAtMs: null,
+  state: { type: "running" }, ...patch });
+
+test("a long run the request waits on says what runs and since when, rather than Thinking", () => {
+  assert.deepEqual(head(input({ backgroundRuns: byId([run()]) })),
+    { text: "Running cargo test -p brigadier-core --lib -- f…", tone: "busy", sinceMs: 1_000 });
+  // Only its first line names a script.
+  assert.deepEqual(head(input({ backgroundRuns: byId([run({ command: "make\nmake test" })]) }))?.text, "Running make");
+  // Over, or another request's: the line is back to what the thread does.
+  assert.deepEqual(head(input({ backgroundRuns: byId([run({ state: { type: "finished", status: "exit 0" } })]) })), { text: "Thinking", tone: "busy" });
+  assert.deepEqual(head(input({ backgroundRuns: byId([run({ requestId: "r2" })]) })), { text: "Thinking", tone: "busy" });
+  // While the thread itself works, its own line says what it does.
+  assert.deepEqual(head(input({ ...leading, backgroundRuns: byId([run()]) })), { text: "Thinking", tone: "busy" });
+  // The session's full checks a request's answer waits on.
+  const check = { id: "check-1", conversationId: "c", repo: "/r", branch: "b", tip: "abc", state: { type: "running", command: "cargo test" },
+    dueAtMs: 500, startedAtMs: 2_000, endedAtMs: null, requests: ["r1"], tasks: [], rerun: false } as IntegratedCheck;
+  assert.deepEqual(head(input({ integratedChecks: byId([check]) })), { text: "Running the full checks", tone: "busy", sinceMs: 2_000 });
+  assert.deepEqual(head(input({ integratedChecks: byId([{ ...check, state: { type: "due" }, startedAtMs: null }]) })),
+    { text: "Running the full checks", tone: "busy", sinceMs: 500 });
+  assert.deepEqual(head(input({ integratedChecks: byId([{ ...check, state: { type: "passed", commands: [] } }]) })), { text: "Thinking", tone: "busy" });
+});
+
+test("a run's elapsed time is short", () => {
+  assert.equal(elapsedWords(42_000), "42s");
+  assert.equal(elapsedWords(6 * 60_000 + 59_000), "6m");
+  assert.equal(elapsedWords(65 * 60_000), "1h 5m");
+  assert.equal(elapsedWords(-5), "0s");
 });

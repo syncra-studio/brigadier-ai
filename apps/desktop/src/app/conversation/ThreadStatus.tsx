@@ -1,9 +1,10 @@
 import { type FC, useMemo } from "react";
 
-import { type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
+import { elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
 import { waitingWords } from "@/app/conversation/activity/peerWords";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
 import type { BlockState } from "@/app/conversation/blocks";
+import { useNow } from "@/hooks/use-now";
 import type { QuotaWait } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
@@ -32,26 +33,30 @@ export function useThreadStatusHead(props: ThreadStatusProps | null): StatusHead
   const view = useMemo(() => (json ? (JSON.parse(json) as ThreadStatusView) : null), [json]);
   const words = useWorkerText(view?.head?.text ?? "");
   const head = view?.head;
-  return useMemo(() => (head ? { text: words, tone: head.tone } : null), [head, words]);
+  return useMemo(() => (head ? { ...head, text: words } : null), [head, words]);
 }
 
-/** The status line on its own, when no work row says it. */
-export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => (
-  <div data-slot="thread-status" data-tone={head.tone} className="flex min-w-0">
-    {/* As wide as its words, so the sweep crosses them rather than the whole row. */}
-    <div
-      data-slot="request-activity"
-      className={cn(
-        "w-fit max-w-full truncate text-sm",
-        // Waiting on the user is live too: it shimmers as quietly as the work, the card itself asks.
-        (head.tone === "busy" || head.tone === "needsYou") && "shimmer",
-        head.tone === "still" && "text-muted-foreground",
-      )}
-    >
-      {head.text}
+/** The status line on its own, when no work row says it; a long run's says how long it has gone. */
+export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => {
+  const now = useNow(head.sinceMs === undefined ? null : 5_000);
+  const text = head.sinceMs === undefined ? head.text : `${head.text} · ${elapsedWords(now - head.sinceMs)}`;
+  return (
+    <div data-slot="thread-status" data-tone={head.tone} className="flex min-w-0">
+      {/* As wide as its words, so the sweep crosses them rather than the whole row. */}
+      <div
+        data-slot="request-activity"
+        className={cn(
+          "w-fit max-w-full truncate text-sm",
+          // Waiting on the user is live too: it shimmers as quietly as the work, the card itself asks.
+          (head.tone === "busy" || head.tone === "needsYou") && "shimmer",
+          head.tone === "still" && "text-muted-foreground",
+        )}
+      >
+        {text}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 /**
  * The last line of a live turn, one line: what happens right now ("Thinking", "Delegating to a
@@ -66,12 +71,14 @@ export const ThreadStatus: FC<ThreadStatusProps> = (props) => {
 
 /**
  * The line under an answer whose request still waits: what waits on the user first, else the
- * sessions whose replies it waits for (also while the answer streams), else what it waits on.
+ * sessions whose replies it waits for (also while the answer streams), else a long run the
+ * request works on until its result comes, else what it waits on.
  */
 export const AnsweredStatus: FC<ThreadStatusProps & { waiting: boolean }> = ({ waiting, ...props }) => {
   const head = useThreadStatusHead(props);
   const waitingFor = props.waitingFor ?? NONE;
   if (head?.tone === "needsYou") return <StatusLine head={head} />;
   if (waitingFor.length > 0) return <StatusLine head={{ text: waitingWords(waitingFor), tone: "still" }} />;
+  if (head?.sinceMs !== undefined) return <StatusLine head={head} />;
   return waiting && head ? <StatusLine head={head} /> : null;
 };

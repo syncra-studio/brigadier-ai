@@ -318,6 +318,7 @@ function useItems(
               text: steer.text,
               atMs: steer.message.createdAtMs,
               attachments: steer.message.attachments,
+              requestId: steer.message.requestId ?? steer.message.id,
               ...(peer && { peer }),
             };
           }),

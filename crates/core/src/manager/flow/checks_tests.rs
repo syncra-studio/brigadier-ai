@@ -330,3 +330,70 @@ async fn a_task_worktree_gets_a_stand_in_for_each_ignored_sidecar() {
     assert_eq!(status, "", "nothing to commit");
     flow.stop().await;
 }
+
+/// A thread's checks and commands get its short temporary folder under /tmp as TMPDIR, not
+/// its folder in the data folder (a long path with spaces, where a test that binds a Unix
+/// socket fails): at each level, in the sandbox that level gives, a socket binds there.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_threads_checks_and_commands_bind_sockets_in_their_short_temporary_folder() {
+    use crate::manager::workers::{SessionTemp, session_temp_dir};
+    use crate::model::PermissionLevel;
+
+    const BIND: &str = "printf '%s\\n' \"$TMPDIR\"; python3 -c 'import os, socket; \
+        s = socket.socket(socket.AF_UNIX); s.bind(os.path.join(os.environ[\"TMPDIR\"], \"probe.sock\")); \
+        print(\"bound\")'; rm -f \"$TMPDIR/probe.sock\"";
+    for permission in [
+        PermissionLevel::AskForApproval,
+        PermissionLevel::ApproveForMe,
+        PermissionLevel::FullAccess,
+    ] {
+        let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+        let log = replies.clone();
+        let flow = Flow::start(
+            "short-tmp",
+            Options {
+                permission,
+                ..Options::default()
+            },
+            script(move |turn| {
+                let log = log.clone();
+                async move {
+                    for (tool, args) in [
+                        ("run_check", json!({ "command": BIND })),
+                        ("run", json!({ "command": BIND })),
+                    ] {
+                        let reply = turn.call(tool, args).await;
+                        assert!(!reply.is_error, "{tool}: {}", reply.text);
+                        log.lock().unwrap().push(reply.text);
+                    }
+                    Reply::text("Bound.")
+                }
+            }),
+        )
+        .await;
+        flow.say("Bind a socket.").await;
+        flow.settled().await;
+        let tmp = session_temp_dir(&flow.conversation, SessionTemp::Thread);
+        let tmp = tmp.to_str().unwrap();
+        assert!(
+            tmp.starts_with("/tmp/brigadier-test-t") && !tmp.contains(' '),
+            "{tmp}"
+        );
+        let replies = replies.lock().unwrap().clone();
+        assert_eq!(replies.len(), 2, "{permission:?}");
+        for reply in replies {
+            assert_eq!(reply, format!("[exit 0]\n{tmp}\nbound\n"), "{permission:?}");
+        }
+        // The folder goes with the session.
+        flow.manager
+            .delete(flow.conversation.clone())
+            .await
+            .unwrap();
+        super::eventually("the temporary folder to go", || {
+            !std::path::Path::new(tmp).exists()
+        })
+        .await;
+        flow.stop().await;
+    }
+}

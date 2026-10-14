@@ -108,7 +108,9 @@ const TOOLCHAINS: &[(&str, &str, &[&str])] = &[
 /// The `package.json` scripts offered as checks.
 const SCRIPTS: &[&str] = &["test", "lint", "typecheck", "check", "build", "fmt"];
 /// A version of the key's recipe: results kept under another recipe are never found.
-const KEY_RECIPE: &str = "brigadier-check-1";
+/// Recipe 2: a thread's and the full checks' `TMPDIR` moved out of the data folder, so a socket
+/// bind that failed there never answers from the cache.
+const KEY_RECIPE: &str = "brigadier-check-2";
 
 /// Who calls `run_check`, and where its commands run.
 struct Caller {
@@ -123,6 +125,10 @@ struct Caller {
     /// The checkout: a worker's worktree, the thread's workspace.
     tree: Option<PathBuf>,
     scratch: PathBuf,
+    /// Its commands' `TMPDIR`: a task's test data folder, the thread's or the full checks'
+    /// short temporary folder ([`super::workers::session_temp_dir`]), never a folder in the
+    /// app's data folder, whose long path with spaces breaks a test that binds a socket there.
+    tmp: PathBuf,
     /// The folder its access's writable working directory is, when that isn't its checkout
     /// (a read-only Codex worker works from its scratch folder): its checks run from there
     /// too, so they can't write a checkout its own shell can't.
@@ -197,14 +203,16 @@ struct Kept {
 }
 
 impl SessionManager {
-    /// `run_check` for the thread of `id` (`task`: none) or the worker of `task`.
+    /// `run_check` for the thread of `id` (`task`: none) or the worker of `task`. The
+    /// thread's goes to the background when it holds the call too long, its waits for the
+    /// same check and for the build lease included ([`super::background_runs`]).
     pub(crate) async fn run_check_tool(
         &self,
         id: &ConversationId,
         task: Option<&TaskId>,
         args: RunCheck,
     ) -> Result<String> {
-        let caller = self.check_caller(id, task).await?;
+        let mut caller = self.check_caller(id, task).await?;
         let command = args
             .command
             .as_deref()
@@ -218,7 +226,8 @@ impl SessionManager {
             command,
             &check_tmpdir(&caller),
             brigadier_sandbox::limits::open_files(),
-        );
+        )
+        .to_owned();
         let workdir = run_workdir(
             args.workdir.as_deref(),
             caller.tree.as_deref(),
@@ -228,21 +237,52 @@ impl SessionManager {
             .timeout_secs
             .map_or(RUN_TIMEOUT_DEFAULT, Duration::from_secs)
             .clamp(Duration::from_secs(1), RUN_TIMEOUT_MAX);
-        let key = self.check_key(&caller, &workdir, command).await;
+        if task.is_some() {
+            return self
+                .check_now(&caller, &workdir, &command, timeout, args.rerun)
+                .await
+                .map(|(_, reply)| reply);
+        }
+        // The thread's check is the session's, not its CLI's: a check gone to the background
+        // outlives the CLI.
+        let cli_ended = std::mem::replace(&mut caller.ended, CancellationToken::new());
+        caller.owner = super::background_runs::background_owner(id);
+        let cancel = caller.ended.clone();
+        let (manager, words) = (self.arc(), command.clone());
+        let work = async move {
+            manager
+                .check_now(&caller, &workdir, &words, timeout, args.rerun)
+                .await
+        };
+        self.in_foreground(id, "run_check", &command, cli_ended, cancel, work)
+            .await
+    }
+
+    /// Runs `command` for `caller` once no run of the same check is under way, unless it
+    /// already ran on the same files (and `rerun` is off): its status and reply.
+    async fn check_now(
+        &self,
+        caller: &Caller,
+        workdir: &Path,
+        command: &str,
+        timeout: Duration,
+        rerun: bool,
+    ) -> Result<(String, String)> {
+        let key = self.check_key(caller, workdir, command).await;
         // One run of a key at a time: a caller that waited answers from what the other kept.
         let _running = match &key {
             Ok(key) => check_lock(&key.hash, timeout).await,
             Err(_) => None,
         };
-        if let (Ok(key), false) = (&key, args.rerun)
-            && let Some(done) = self.cached_check(&caller, key, command).await
+        if let (Ok(key), false) = (&key, rerun)
+            && let Some(done) = self.cached_check(caller, key, command).await
         {
-            return Ok(done.reply);
+            return Ok((done.status, done.reply));
         }
         let heavy = crate::machine::heavy::line_is_heavy(command);
-        self.run_check_command(&caller, &workdir, command, timeout, key, heavy)
+        self.run_check_command(caller, workdir, command, timeout, key, heavy)
             .await
-            .map(|done| done.reply)
+            .map(|done| (done.status, done.reply))
     }
 
     /// The caller that runs the full checks of conversation `id` in `checkout`.
@@ -252,6 +292,7 @@ impl SessionManager {
         id: &ConversationId,
         checkout: PathBuf,
         scratch: PathBuf,
+        tmp: PathBuf,
         access: Access,
         owner: String,
         ended: CancellationToken,
@@ -277,6 +318,7 @@ impl SessionManager {
             owner,
             tree: Some(checkout),
             scratch,
+            tmp,
             cwd_grant: None,
             redactor,
             base: Base::Head,
@@ -387,6 +429,7 @@ impl SessionManager {
                 owner,
                 tree,
                 scratch,
+                tmp: super::workers::test_data_dir(task_id),
                 cwd_grant,
                 redactor,
                 base: workspace.base.map_or(Base::Head, Base::Commit),
@@ -421,6 +464,7 @@ impl SessionManager {
             owner: cli.owner.clone(),
             tree: launch.workspace.map(|workspace| workspace.path),
             scratch: self.owned_dir("orch", &id.0),
+            tmp: self.thread_temp(id).await?,
             cwd_grant: None,
             redactor,
             base,
@@ -962,13 +1006,9 @@ impl SessionManager {
 /// Where a check of a caller with checkout `tree` runs, for `workdir`: the folder its access
 /// grants as its working directory when that isn't its checkout (`cwd_grant`), else the
 /// checkout's root when `workdir` is in it, else `workdir` itself.
-/// The temporary folder a check runs with: a task's test data folder, the thread's scratch
-/// folder.
+/// The temporary folder a check runs with ([`Caller::tmp`]).
 fn check_tmpdir(caller: &Caller) -> PathBuf {
-    caller
-        .task_id
-        .as_ref()
-        .map_or_else(|| caller.scratch.clone(), super::workers::test_data_dir)
+    caller.tmp.clone()
 }
 
 /// `command` without the leading prefixes proven to change nothing about how it runs (bug 8):

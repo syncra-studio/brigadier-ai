@@ -5023,6 +5023,36 @@ pub(crate) fn test_data_dir(id: &TaskId) -> PathBuf {
     test_data_root().join(name)
 }
 
+/// Whose commands a session's own short temporary folder ([`session_temp_dir`]) is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionTemp {
+    /// The thread's CLI, its `run` commands and its checks.
+    Thread,
+    /// The session's full checks.
+    Checks,
+}
+
+/// The temporary folder of session `id`'s thread or full checks: short and free of spaces,
+/// under the system's temporary folder like a task's test data folder, never in the app's
+/// data folder, whose long path with spaces breaks what the commands make there (a Unix
+/// socket's path holds at most 104 bytes on macOS). Named like a task's test data folder
+/// (`brigadier-test-` and 8 letters or digits; the first, `t` or `k`, is never a task id's
+/// hex), so the sweeps, sandboxes and protections that know those know it.
+pub(crate) fn session_temp_dir(id: &ConversationId, role: SessionTemp) -> PathBuf {
+    let tag = match role {
+        SessionTemp::Thread => 't',
+        SessionTemp::Checks => 'k',
+    };
+    let letters: Vec<char> = id.0.chars().filter(char::is_ascii_alphanumeric).collect();
+    let tail: String = letters[letters.len().saturating_sub(7)..].iter().collect();
+    test_data_root().join(format!("brigadier-test-{tag}{tail:0>7}"))
+}
+
+/// The cleanup owner of a session thread's temporary folder ([`session_temp_dir`]).
+pub(crate) fn thread_temp_owner(id: &ConversationId) -> String {
+    format!("thread-temp:{id}")
+}
+
 /// The folder every task's test data folder is made in.
 pub(crate) fn test_data_root() -> PathBuf {
     if cfg!(unix) {

@@ -7,6 +7,7 @@ import { showConversationNotice, shownNotice } from "@/state/notices";
 import type {
   Approval,
   ApprovalSubject,
+  BackgroundRun,
   Compaction,
   ComputerAction,
   ContextUsage,
@@ -86,6 +87,8 @@ export type Board = {
   previews: Record<string, Preview>;
   /** The runs of the session's full checks on its landed work, by id (SESSION-FIXES-PLAN.md §11). */
   integratedChecks: Record<string, IntegratedCheck>;
+  /** The thread's run / run_check commands still going after a minute, owned by the session, by id. */
+  backgroundRuns: Record<string, BackgroundRun>;
   /** Overnight runs, a segment each, by id. */
   overnight: Record<string, OvernightRun>;
   /** What each user message set in motion, by request id (the message's id). */
@@ -267,6 +270,7 @@ export function emptyBoard(conversationId: string): Board {
     reviews: {},
     previews: {},
     integratedChecks: {},
+    backgroundRuns: {},
     overnight: {},
     requests: {},
     workerSteps: [],
@@ -376,6 +380,8 @@ export function boardFromView(
     previews: byId(view.previews ?? []),
     // Nor one from before the full checks ran on the landed work.
     integratedChecks: byId(view.integratedChecks ?? []),
+    // Nor one from before the thread's long commands went to the background.
+    backgroundRuns: byId(view.backgroundRuns ?? []),
     overnight: byId(view.overnight),
     requests: byId(view.requests),
     workerSteps: view.workerSteps,
@@ -570,6 +576,8 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, reviews: { ...board.reviews, [event.review.id]: event.review } };
     case "integratedCheckUpdated":
       return { ...board, integratedChecks: { ...board.integratedChecks, [event.check.id]: event.check } };
+    case "backgroundRunUpdated":
+      return { ...board, backgroundRuns: { ...board.backgroundRuns, [event.run.id]: event.run } };
     case "previewUpdated":
       return { ...board, previews: { ...board.previews, [event.preview.id]: event.preview } };
     case "previewsCleared":

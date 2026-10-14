@@ -8,12 +8,18 @@
 //! [quiet] turn, or a worker, review or card still going keeps its request working, so the
 //! reply carries the finished answer. A reply that already went (the thread's own, or this
 //! one) marks the message replied in the same write, so it is sent once, across restarts.
+//!
+//! The final answer is the reply only when it answers that message alone. A message steered
+//! into other work (or with the user's messages steered into its request) is answered by the
+//! thread on its own (message_session with reply_to); one it left unanswered gets a reminder
+//! once, then the sender hears it went unanswered, never the other work's answer.
 
 use super::SessionManager;
+use super::conversation::Envelope;
 use crate::board::{Board, PeerRecord};
 use crate::model::{ConversationId, Message, MessageRole, PeerState};
 use crate::sessions::PeerSend;
-use crate::work::RequestState;
+use crate::work::{InjectionKind, RequestState};
 
 /// Whether `record` is a message another session sent this one asking for something, taken
 /// by its CLI, with no reply yet.
@@ -47,6 +53,9 @@ enum Over {
     /// A restart cut the thread off before it answered.
     CutOff,
     Silent,
+    /// The message came amid other work, and the thread didn't answer it on its own even
+    /// when reminded: that work's answer isn't the reply.
+    Unanswered,
 }
 
 impl SessionManager {
@@ -117,7 +126,7 @@ impl SessionManager {
                             .is_some_and(|of| family.contains(&of))
                 })
                 .max_by_key(|message| message.seq);
-            let over = match answer {
+            let mut over = match answer {
                 Some(answer) => Over::Answer(Box::new(answer.clone())),
                 None => match states.iter().find_map(|state| match state {
                     RequestState::Failed { error } => Some(Over::Failed(error.clone())),
@@ -129,8 +138,58 @@ impl SessionManager {
                     None => Over::Silent,
                 },
             };
+            // Steered into other work, or with the user's messages steered into it: the
+            // final answer is that work's too, so the thread answers on its own, reminded once.
+            let mixed = request != root || family.len() > 1;
+            if mixed && matches!(over, Over::Answer(_) | Over::Silent) {
+                if self.remind_unanswered_peer(id, record, root).await {
+                    continue;
+                }
+                over = Over::Unanswered;
+            }
             self.send_answer(id, record, root, over).await;
         }
+    }
+
+    /// Asks session `id`'s thread, once, to answer `record` on its own, in its request
+    /// `root`, which works again until then. Whether it was asked now.
+    async fn remind_unanswered_peer(
+        &self,
+        id: &ConversationId,
+        record: &PeerRecord,
+        root: &str,
+    ) -> bool {
+        let Ok(conv) = self.conv(id) else {
+            return false;
+        };
+        if !conv.remind_peer_once(&record.message_id).await {
+            return false;
+        }
+        let title = self
+            .core
+            .conversation(&record.peer)
+            .map_or_else(|_| "another session".to_owned(), |sender| sender.title);
+        let text = self
+            .peer_message_text(id, &record.peer, &record.message_id)
+            .await;
+        let asked: String = text.chars().take(300).collect();
+        let more = if asked.len() < text.len() { "…" } else { "" };
+        let envelope = Envelope {
+            kind: InjectionKind::Reminder,
+            label: format!("unanswered peer {}", record.message_id),
+            task_id: None,
+            text: format!(
+                "[You haven't answered the message from session \"{title}\" (id {id}): \
+                 \"{asked}{more}\". It came amid other work, so your answer to the user doesn't \
+                 reach it. Answer it now with message_session (to {peer}, reply_to {id}), \
+                 carrying only what answers it, then reply {quiet}.]",
+                id = record.message_id,
+                peer = record.peer,
+                quiet = super::prompts::QUIET,
+            ),
+        };
+        self.deliver_for(id, envelope, Some(root.to_owned())).await;
+        true
     }
 
     /// The requests of session `id` still working, as its board has them.
@@ -178,6 +237,10 @@ impl SessionManager {
             ),
             Over::Silent => (
                 format!("[\"{}\" finished without an answer]", me.title),
+                None,
+            ),
+            Over::Unanswered => (
+                format!("[\"{}\" didn't answer your message]", me.title),
                 None,
             ),
         };

@@ -675,6 +675,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "planUpdated":
     case "reviewUpdated":
     case "integratedCheckUpdated":
+    case "backgroundRunUpdated":
     case "threadCommitsSeen":
     case "outputStored":
     case "computerActed":

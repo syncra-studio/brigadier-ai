@@ -9,7 +9,10 @@
 //!   a card) is a follow-up: it waits in the queue, marked deciding, while the orchestrator
 //!   judges it with `route_follow_up`. One that belongs to that answer joins it (steered in,
 //!   shown inside its block); one of its own waits until no answer works, then goes as its
-//!   own request. A follow-up the orchestrator didn't judge waits too.
+//!   own request. A follow-up the orchestrator didn't judge by the end of its turn waits too;
+//!   one still unjudged after [`DECIDING_WAIT`] (the thread is inside a long command) joins
+//!   the working answer. A message steered in while a command of the thread's runs says so
+//!   (`held_by`) until that command ends and the thread can read it.
 //! - Worker results arrive as [`Envelope`]s in the inbox. Only final reports, blocking
 //!   questions, card outcomes and task failures ever enter the orchestrator's context;
 //!   worker progress never does. An envelope arriving while the orchestrator is idle starts
@@ -53,14 +56,49 @@ use crate::runtime::{is_delta, merge_delta};
 use crate::sessions::{inline_image_tokens, push_block};
 use crate::tools::{Role, RunTools};
 use crate::work::{
-    AttachmentRef, Compaction, CompactionState, ContextInjection, InjectionKind, OrchestratorEntry,
-    OrchestratorStepKind, QuestionKind, QueuedMessage, QuotaWait, RequestState, RunState, Task,
-    TaskId,
+    AttachmentRef, Compaction, CompactionState, ContextInjection, HeldBy, InjectionKind,
+    OrchestratorEntry, OrchestratorStepKind, QuestionKind, QueuedMessage, QuotaWait, RequestState,
+    RunState, Task, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
 /// Text deltas arriving within this window are stored as one event.
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
+
+/// How long a request its thread's CLI jobs kept working waits, once they ended, for the turn
+/// the CLI starts on its own to speak of them.
+const JOB_TURN_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 30 });
+
+/// How long a follow-up waits for the thread's judgment before it joins the working answer:
+/// a thread inside a long command can't judge it, and the user shouldn't watch it decide.
+pub(crate) const DECIDING_WAIT: Duration = Duration::from_secs(if cfg!(test) { 3 } else { 20 });
+
+/// Characters of a CLI job's output its message to the thread carries (the end of it).
+const JOB_OUTPUT_TAIL: usize = 4000;
+
+/// What the thread hears when its CLI ended while jobs of its own still ran (`words`: the
+/// commands known by name; `count`: those it only counted).
+fn cut_jobs_envelope(words: &[String], count: u32) -> Envelope {
+    let what = if words.is_empty() {
+        match count {
+            1 => "a background job of yours".to_owned(),
+            n => format!("{n} background jobs of yours"),
+        }
+    } else {
+        let named: Vec<String> = words.iter().map(|words| format!("`{words}`")).collect();
+        format!("your background command {}", named.join(", "))
+    };
+    Envelope {
+        kind: InjectionKind::BackgroundRun,
+        label: "background job cut off".into(),
+        task_id: None,
+        text: format!(
+            "[{what} stopped when your CLI ended, before it finished: no result came. If you \
+             still need it, run it again with run or run_check: a long command goes to the \
+             background on its own and its result comes back to you as a message.]"
+        ),
+    }
+}
 /// How long a blocking MCP call may take for the thread: its `run_check` (and a Codex
 /// thread's `run`) waits for its command (THREAD-PLAN.md Q4, Q8 lever 3), so the longest
 /// command timeout plus a minute, so a command that runs out its time is still reaped and its
@@ -186,6 +224,18 @@ struct ConvState {
     continuing: HashSet<String>,
     /// The thread's commands (Bash, `run`, a Codex shell item) running in this turn.
     commands: HashSet<String>,
+    /// The words of the running turn's Codex shell commands, by item: one still running when
+    /// the turn ends becomes a job of its CLI's (`lingering`).
+    command_words: HashMap<String, String>,
+    /// The CLI's own background jobs (`ProviderEvent::BackgroundJobs`): each one's end starts
+    /// a turn of its own.
+    cli_jobs: u32,
+    /// Codex shell commands still running after the turn that started them ended, by item,
+    /// with their words: each one's end comes to the thread as a message.
+    lingering: HashMap<String, String>,
+    /// The request whose turn left its CLI's jobs running: it works until they have ended and
+    /// the thread heard of it. While they run, the CLI stays up (nothing retires it).
+    jobs_request: Option<String>,
     /// The user stopped the turn while a command ran: its CLI is closed when the turn ends,
     /// which ends that command's process tree (a CLI's interrupt can leave it running); the
     /// next turn resumes the session.
@@ -245,6 +295,16 @@ struct ConvState {
     /// Queued follow-ups the running turn was asked about: the ones it leaves undecided wait
     /// in the queue when it ends.
     asked: Vec<String>,
+    /// Follow-ups that joined the working answer unjudged after [`DECIDING_WAIT`]: the
+    /// thread's late judgment of one is answered so.
+    joined_unjudged: Vec<String>,
+    /// The thread's commands running now (shell, `run`, `run_check`, a Codex shell item), by
+    /// item, oldest first: what a message sent into the turn waits behind.
+    holding: Vec<(String, HeldBy)>,
+    /// The steered requests and queued follow-ups marked as waiting behind them, unmarked when
+    /// the last ends.
+    held_requests: Vec<String>,
+    held_items: Vec<String>,
     /// Replies that were streaming when a message was steered in, and the request they
     /// answer (the one before the steer).
     replying_for: HashMap<String, String>,
@@ -256,6 +316,17 @@ struct ConvState {
     narration: HashMap<String, Narration>,
     /// Requests the user saw a reply for.
     spoke: HashSet<String>,
+    /// Messages of other sessions the thread was reminded to answer on their own (see
+    /// [`SessionManager::answer_owed`]): once each.
+    peers_reminded: HashSet<String>,
+    /// Per request: the last reply the user saw, and whether its turn went on working after
+    /// it (a line like "Now the full suites…" followed by a command): if nothing is said
+    /// after it, it is no answer.
+    last_said: HashMap<String, (String, bool)>,
+    /// Requests that were over with only a narration line said, whose thread was asked once
+    /// for its answer (see [`SessionManager::remind_narrated`]): a second end without one
+    /// closes them with a plain line, not the narration.
+    narrated: HashSet<String>,
     /// Requests in which the orchestrator sent a worker back and the user has seen nothing
     /// since: such a request must not end with nothing said.
     sent_back: HashMap<String, Unanswered>,
@@ -309,6 +380,24 @@ impl ConvState {
     fn carry_peers(&mut self) {
         let peers = std::mem::take(&mut self.in_turn_peers);
         self.inbox.splice(0..0, peers);
+    }
+
+    /// The requests and follow-ups marked as waiting behind a command, unless none are.
+    fn take_held(&mut self) -> Option<(Vec<String>, Vec<String>)> {
+        let requests = std::mem::take(&mut self.held_requests);
+        let items = std::mem::take(&mut self.held_items);
+        (!requests.is_empty() || !items.is_empty()).then_some((requests, items))
+    }
+
+    /// The thread's oldest command running now, which a message sent in waits behind.
+    fn held_by(&self) -> Option<HeldBy> {
+        self.holding.first().map(|(_, held)| held.clone())
+    }
+
+    /// Whether the CLI's own jobs still run past their turn, or one that ended still owes its
+    /// turn (see `jobs_request`).
+    fn has_cli_jobs(&self) -> bool {
+        self.cli_jobs > 0 || !self.lingering.is_empty() || self.jobs_request.is_some()
     }
 }
 
@@ -474,10 +563,62 @@ impl ConvLive {
     /// The CLI session while it runs no turn and isn't being closed.
     pub(crate) async fn idle_cli(&self) -> Option<Arc<Cli>> {
         let state = self.state.lock().await;
-        if state.busy || state.closing {
+        if state.busy || state.closing || state.has_cli_jobs() {
             return None;
         }
         state.cli.clone()
+    }
+
+    /// Whether the thread is yet to be reminded to answer another session's message
+    /// `message_id` on its own; it counts as reminded from now on.
+    pub(super) async fn remind_peer_once(&self, message_id: &str) -> bool {
+        self.state
+            .lock()
+            .await
+            .peers_reminded
+            .insert(message_id.to_owned())
+    }
+
+    /// The running turn started a call or command: the last reply its request showed was said
+    /// mid-work (see `ConvState::last_said`).
+    async fn went_on_working(&self) {
+        let mut state = self.state.lock().await;
+        if let Some(request) = state.request.clone()
+            && let Some((_, followed)) = state.last_said.get_mut(&request)
+        {
+            *followed = true;
+        }
+    }
+
+    /// Whether its CLI's own jobs still run past their turn (see `ConvState::jobs_request`).
+    pub(crate) async fn has_cli_jobs(&self) -> bool {
+        self.state.lock().await.has_cli_jobs()
+    }
+
+    /// Tracks the thread's command `item` (`words`) by its `status` as what messages sent into
+    /// the turn wait behind; once none runs, returns the requests and queued follow-ups marked
+    /// as waiting, to unmark.
+    async fn holding_command(
+        &self,
+        item: &str,
+        words: &str,
+        status: ItemStatus,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        let mut state = self.state.lock().await;
+        if status == ItemStatus::InProgress {
+            if !state.holding.iter().any(|(of, _)| of == item) {
+                state.holding.push((
+                    item.to_owned(),
+                    HeldBy {
+                        command: words.chars().take(240).collect(),
+                        since_ms: now_ms(),
+                    },
+                ));
+            }
+            return None;
+        }
+        state.holding.retain(|(of, _)| of != item);
+        state.holding.is_empty().then(|| state.take_held())?
     }
 
     /// Tracks the thread's command `item` by its `status` (see `ConvState::commands`).
@@ -496,7 +637,7 @@ impl ConvLive {
         let taken = {
             let mut state = self.state.lock().await;
             let current = state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli));
-            if !current || state.busy || state.closing {
+            if !current || state.busy || state.closing || state.has_cli_jobs() {
                 return;
             }
             state.closing = true;
@@ -761,6 +902,7 @@ impl ConvLive {
                 )
                 .chain(state.announcing.values().flatten().cloned())
                 .chain(state.answering.values().flatten().cloned())
+                .chain(state.jobs_request.clone())
                 .collect(),
             outcomes: state.outcomes.clone(),
             deferred: state.deferred.clone(),
@@ -1048,6 +1190,13 @@ impl SessionManager {
             }
             _ => false,
         };
+        // A command of the thread's running now holds it: it reads the message once that ends.
+        let held = steered.then(|| state.held_by()).flatten();
+        if held.is_some()
+            && let Some(request) = &message.request_id
+        {
+            state.held_requests.push(request.clone());
+        }
         let into = if steered {
             self.log_user_injection(conv, &message).await;
             // The user wrote again: whatever was asked of them is answered or moot.
@@ -1065,9 +1214,53 @@ impl SessionManager {
         drop(state);
         self.note_steered(conv, message.request_id.as_deref(), into)
             .await;
+        if let (Some(held), Some(request)) = (held, &message.request_id) {
+            self.mark_held(conv, std::slice::from_ref(request), &[], Some(held))
+                .await;
+        }
         self.settle_requests(&conv.id).await;
         if !steered {
             self.kick(conv);
+        }
+    }
+
+    /// Marks steered requests and queued follow-ups as waiting behind the thread's command
+    /// `held`, or (`None`) as read now.
+    async fn mark_held(
+        &self,
+        conv: &ConvLive,
+        requests: &[String],
+        items: &[String],
+        held: Option<HeldBy>,
+    ) {
+        if let Err(err) = self.core.mark_held(&conv.id, requests, items, held).await {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not mark messages held by a command"; conversation = %conv.id, error = %err);
+        }
+    }
+
+    /// The thread's command `item` (`words`) started or ended: once none runs, the messages
+    /// that waited behind them are read.
+    async fn command_holds(
+        &self,
+        conv: &Arc<ConvLive>,
+        item: &str,
+        words: &str,
+        status: ItemStatus,
+    ) {
+        if let Some((requests, items)) = conv.holding_command(item, words, status).await {
+            self.mark_held(conv, &requests, &items, None).await;
+        }
+    }
+
+    /// The turn ended: no command of it holds a message any more.
+    async fn release_held(&self, conv: &Arc<ConvLive>) {
+        let held = {
+            let mut state = conv.state.lock().await;
+            state.holding.clear();
+            state.take_held()
+        };
+        if let Some((requests, items)) = held {
+            self.mark_held(conv, &requests, &items, None).await;
         }
     }
 
@@ -1108,9 +1301,18 @@ impl SessionManager {
                 .is_ok(),
             _ => false,
         };
+        self.judge_within(conv, &item.id);
         if steered {
             state.asked.push(item.id.clone());
+            let held = state.held_by();
+            if held.is_some() {
+                state.held_items.push(item.id.clone());
+            }
             drop(state);
+            if held.is_some() {
+                self.mark_held(conv, &[], std::slice::from_ref(&item.id), held)
+                    .await;
+            }
             self.log_injection(
                 &conv.id,
                 InjectionKind::FollowUp,
@@ -1145,6 +1347,15 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             state.asked.retain(|asked| asked != item_id);
             state.asking.retain(|(asking, _)| asking != item_id);
+            if state.joined_unjudged.iter().any(|joined| joined == item_id) {
+                state.joined_unjudged.retain(|joined| joined != item_id);
+                return Ok(
+                    "It already joined this work after waiting to be judged and reaches you as \
+                     the user's message: act on it and answer it in the final answer with the \
+                     rest."
+                        .into(),
+                );
+            }
         }
         let queued = self
             .core
@@ -1182,6 +1393,58 @@ impl SessionManager {
              worker gets it with message_worker) and answer it in the final answer with the rest."
                 .into(),
         )
+    }
+
+    /// Gives the thread [`DECIDING_WAIT`] to judge follow-up `item_id`; one still unjudged
+    /// then joins the working answer, the thread reading it as soon as it can (a command it
+    /// runs ends), so the user never watches it decide for minutes.
+    fn judge_within(&self, conv: &Arc<ConvLive>, item_id: &str) {
+        let (manager, conv, item_id) = (self.arc(), conv.clone(), item_id.to_owned());
+        self.spawn(async move {
+            tokio::time::sleep(DECIDING_WAIT).await;
+            manager.join_unjudged(&conv, &item_id).await;
+        });
+    }
+
+    async fn join_unjudged(&self, conv: &Arc<ConvLive>, item_id: &str) {
+        {
+            let mut state = conv.state.lock().await;
+            let unjudged = state.asked.iter().any(|asked| asked == item_id)
+                || state.asking.iter().any(|(asking, _)| asking == item_id);
+            if !unjudged {
+                return;
+            }
+            state.asked.retain(|asked| asked != item_id);
+            state.asking.retain(|(asking, _)| asking != item_id);
+            state.joined_unjudged.push(item_id.to_owned());
+            state.held_items.retain(|held| held != item_id);
+        }
+        let id = &conv.id;
+        let deciding = self.core.board(id).await.is_ok_and(|board| {
+            board
+                .queue
+                .items
+                .iter()
+                .any(|item| item.id == item_id && item.deciding)
+        });
+        if !deciding {
+            return;
+        }
+        let working = self.working_request(id).await;
+        let message = conv
+            .user_write(async {
+                let item = self.core.take_queued(id, item_id).await?;
+                self.core
+                    .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
+                    .await
+            })
+            .await;
+        match message {
+            Ok(message) => self.join_working(conv, message, working).await,
+            Err(err) => {
+                crate::logging::private_trace!(conv.private_logs, warn, "could not join an unjudged follow-up"; conversation = %id, error = %err);
+            }
+        }
     }
 
     /// Sends a session's next queued message once no answer works (one that only waits on the
@@ -1383,9 +1646,19 @@ impl SessionManager {
         // The newest answer that works only for what Brigadier owes it (a CI watch, a held
         // merge, a review it left its answer to) has no turn to interrupt: it ends Stopped.
         let owed = self.owed_only(&conv).await;
+        // So does one a background run of its thread's keeps working: the Stop ends the run.
+        let backgrounded: Vec<String> = match self.core.board(&id).await {
+            Ok(board) => board
+                .background_runs
+                .values()
+                .filter(|run| run.state == crate::work::BackgroundRunState::Running)
+                .filter_map(|run| run.request_id.clone())
+                .collect(),
+            Err(_) => Vec::new(),
+        };
         let (stopped, handed_over) = {
             let mut state = conv.state.lock().await;
-            if let Some(request) = owed {
+            for request in owed.into_iter().chain(backgrounded) {
                 state.outcomes.insert(request, RequestState::Stopped);
             }
             // A limited turn being handed over: it ends Stopped, and its messages don't go again.
@@ -1455,6 +1728,7 @@ impl SessionManager {
             None => Ok(()),
         };
         self.stop_previews(&id, super::preview::USER_STOP).await;
+        self.stop_background_runs(&id);
         self.drop_prewarm(&id, "stopped by the user");
         // What Brigadier still owed the stopped answers ends with them, so nothing wakes the
         // thread for them later or merges on its own: the CI watches, and the held merge
@@ -2168,6 +2442,11 @@ impl SessionManager {
         let mut tab_checkout = None;
         let dir = self.owned_dir(area, &conv.id.0);
         self.prepare_owned_dir(&owner, &dir).await?;
+        let tmp = if conv.kind == ConversationKind::Session {
+            Some(self.thread_temp(&conv.id).await?)
+        } else {
+            None
+        };
 
         // A stand-in while the chosen model is at its limit (the saved choice is untouched).
         let fallback = conversation
@@ -2363,10 +2642,10 @@ impl SessionManager {
                 .map(|workspace| vec![workspace.path.clone()])
                 .or_else(|| tab_checkout.clone().map(|checkout| vec![checkout]))
                 .unwrap_or_default(),
-            env: match conv.kind {
-                ConversationKind::Session => SessionManager::thread_env(&dir, choice.provider),
-                ConversationKind::Chat => Vec::new(),
-            },
+            env: tmp
+                .as_deref()
+                .map(|tmp| SessionManager::thread_env(tmp, choice.provider))
+                .unwrap_or_default(),
             unset_env: Vec::new(),
             low_priority: false,
             record_to: None,
@@ -2898,7 +3177,10 @@ impl SessionManager {
             tokio::select! {
                 event = events.recv() => match event {
                     // Never stored.
-                    Some(ProviderEvent::Progress { .. } | ProviderEvent::BackgroundJobs { .. }) => {}
+                    Some(ProviderEvent::Progress { .. }) => {}
+                    Some(ProviderEvent::BackgroundJobs { running }) => {
+                        self.cli_jobs_changed(&conv, &cli, running).await;
+                    }
                     // Only a session's thread keeps what it read (a Chat only searches the web).
                     Some(event @ ProviderEvent::Looked { .. }) => {
                         if conv.kind == ConversationKind::Session {
@@ -2986,7 +3268,7 @@ impl SessionManager {
             self.on_conversation_event(&conv, &cli, reply).await;
         }
         self.grants.revoke_owner(&cli.owner);
-        let (was_busy, closing, failed) = {
+        let (was_busy, closing, failed, jobs) = {
             let mut state = conv.state.lock().await;
             if state
                 .cli
@@ -2998,6 +3280,14 @@ impl SessionManager {
             let was_busy = state.busy;
             state.busy = false;
             state.compacting = false;
+            // The CLI's own jobs end with it.
+            let jobs = state.has_cli_jobs().then(|| {
+                let mut words: Vec<String> =
+                    std::mem::take(&mut state.lingering).into_values().collect();
+                words.sort();
+                let count = std::mem::take(&mut state.cli_jobs);
+                (words, count, state.jobs_request.take())
+            });
             let mut failed = None;
             if let Some(request) = state.request.take()
                 && was_busy
@@ -3011,10 +3301,16 @@ impl SessionManager {
                 );
                 failed = Some(request);
             }
-            (was_busy, state.closing, failed)
+            (was_busy, state.closing, failed, jobs)
         };
         self.end_compaction(&conv, ENDED_UNEXPECTEDLY.into()).await;
         cli.ended.cancel();
+        if let Some((words, count, request)) = jobs
+            && (!words.is_empty() || count > 0)
+        {
+            self.deliver_for(&conv.id, cut_jobs_envelope(&words, count), request)
+                .await;
+        }
         if was_busy && !closing {
             // The run names the failed request, which says it in the thread.
             self.set_run_for(
@@ -3028,6 +3324,100 @@ impl SessionManager {
             self.set_run(&conv.id, RunState::Idle, None).await;
         }
         self.settle_requests(&conv.id).await;
+    }
+
+    /// The thread's CLI says how many of its own background jobs run (Claude). Once none
+    /// does, the CLI starts a turn of its own for what ended (see `on_conversation_event`);
+    /// should none come, the request they kept working is free after [`JOB_TURN_WAIT`].
+    async fn cli_jobs_changed(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, running: u32) {
+        if conv.kind != ConversationKind::Session {
+            return;
+        }
+        let waiting = {
+            let mut state = conv.state.lock().await;
+            if !state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli)) {
+                return;
+            }
+            state.cli_jobs = running;
+            if running > 0 && state.jobs_request.is_none() {
+                state.jobs_request = state.request.clone();
+            }
+            running == 0 && !state.busy && state.lingering.is_empty()
+        };
+        if !waiting {
+            return;
+        }
+        let (manager, conv) = (self.arc(), conv.clone());
+        self.spawn(async move {
+            tokio::time::sleep(JOB_TURN_WAIT).await;
+            let freed = {
+                let mut state = conv.state.lock().await;
+                let idle = !state.busy && state.cli_jobs == 0 && state.lingering.is_empty();
+                idle && state.jobs_request.take().is_some()
+            };
+            if freed {
+                manager.settle_requests(&conv.id).await;
+            }
+        });
+    }
+
+    /// A Codex shell command of the thread's started or ended. One that ended after its turn
+    /// (a job of its CLI's) tells the thread, in the request that started it.
+    async fn command_seen(
+        &self,
+        conv: &Arc<ConvLive>,
+        item: &str,
+        command: &str,
+        status: ItemStatus,
+        exit: Option<i32>,
+        output: Option<&str>,
+    ) {
+        if conv.kind != ConversationKind::Session {
+            return;
+        }
+        let ended = {
+            let mut state = conv.state.lock().await;
+            if status == ItemStatus::InProgress {
+                let words = brigadier_providers::policy::unwrapped_command(command);
+                state
+                    .command_words
+                    .insert(item.to_owned(), words.to_owned());
+                return;
+            }
+            state.command_words.remove(item);
+            let Some(words) = state.lingering.remove(item) else {
+                return;
+            };
+            let request = state.jobs_request.clone();
+            // Its message carries the request now.
+            if state.cli_jobs == 0 && state.lingering.is_empty() {
+                state.jobs_request = None;
+            }
+            (words, request)
+        };
+        let (words, request) = ended;
+        let status = exit.map_or_else(
+            || format!("{status:?}").to_lowercase(),
+            |code| format!("exit {code}"),
+        );
+        let output = output.unwrap_or_default();
+        let tail: String = {
+            let chars: Vec<char> = output.chars().collect();
+            chars[chars.len().saturating_sub(JOB_OUTPUT_TAIL)..]
+                .iter()
+                .collect()
+        };
+        let text = self.hide_secrets(&conv.id, tail.into_bytes()).await;
+        let envelope = Envelope {
+            kind: InjectionKind::BackgroundRun,
+            label: "background command finished".into(),
+            task_id: None,
+            text: format!(
+                "[your background command `{words}` finished after your turn · {status}]\n{}",
+                String::from_utf8_lossy(&text)
+            ),
+        };
+        self.deliver_for(&conv.id, envelope, request).await;
     }
 
     async fn store_deltas(&self, conv: &ConvLive, deltas: Vec<ProviderEvent>) {
@@ -3120,8 +3510,25 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             let narration = state.narration.remove(request);
             let spoke = state.spoke.remove(request);
+            let reminded = state.narrated.remove(request);
+            let mid_work = state
+                .last_said
+                .remove(request)
+                .is_some_and(|(_, followed)| followed);
             if spoke || narration.is_some() || !done {
                 state.sent_back.remove(request);
+            }
+            // Asked for its answer once already and still none: a plain closing line, never
+            // the narration that only said what came next.
+            if reminded && done && (narration.is_some() || (spoke && mid_work)) {
+                drop(state);
+                self.notice(
+                    &conv.id,
+                    brigadier_providers::NoticeLevel::Warning,
+                    "The thread ended this request without an answer. Ask it again for one.",
+                )
+                .await;
+                return;
             }
             if spoke {
                 return;
@@ -3171,6 +3578,75 @@ impl SessionManager {
         {
             crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
         }
+    }
+
+    /// A request about to end done whose user saw no answer, only a line said before more
+    /// work ("Now the full suites…") or hidden narration: rather than end on that line, the
+    /// thread is asked once for its answer, naming the messages the user steered into it.
+    /// Whether it was asked: the request then works until that turn ends.
+    pub(super) async fn remind_narrated(
+        &self,
+        conv: &Arc<ConvLive>,
+        board: &crate::board::Board,
+        request: &str,
+    ) -> bool {
+        if conv.kind != ConversationKind::Session
+            || super::requests::run_of_request(board, request).is_some()
+        {
+            return false;
+        }
+        let mut steered: Vec<&crate::work::UserRequest> = board
+            .requests
+            .values()
+            .filter(|of| of.steered_into.as_deref() == Some(request))
+            .collect();
+        steered.sort_by_key(|of| of.started_at_ms);
+        let steered: Vec<String> = steered
+            .iter()
+            .map(|of| format!("\u{201c}{}\u{201d}", of.preview))
+            .collect();
+        let mut state = conv.state.lock().await;
+        if state.narrated.contains(request) {
+            return false;
+        }
+        // The line the user saw last went on with work (or they saw none, only hidden
+        // narration).
+        let last = if state.spoke.contains(request) {
+            match state.last_said.get(request) {
+                Some((text, true)) => text.trim().to_owned(),
+                _ => return false,
+            }
+        } else {
+            match state.narration.get(request) {
+                Some(narration) => narration.text.trim().to_owned(),
+                None => return false,
+            }
+        };
+        let also = if steered.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " The user also wrote, while you worked: {}. Answer those too.",
+                steered.join(", ")
+            )
+        };
+        state.narrated.insert(request.to_owned());
+        state.inbox.push((
+            Envelope {
+                kind: InjectionKind::Reminder,
+                label: "no answer".into(),
+                task_id: None,
+                text: format!(
+                    "[Nothing runs for this request any more, and the user has seen no answer to \
+                     it: your last words were \"{last}\", which only said what you were about to \
+                     do. Answer them now, in a few lines: what you did, what came of it, and what \
+                     is still pending, if anything.{also} Don't reply {}.]",
+                    prompts::QUIET
+                ),
+            },
+            Some(request.to_owned()),
+        ));
+        true
     }
 
     /// A request still over with nothing said a while after it ended (see
@@ -3289,6 +3765,9 @@ impl SessionManager {
                         let mut state = conv.state.lock().await;
                         state.spoke.insert(request.clone());
                         state.narration.remove(request);
+                        state
+                            .last_said
+                            .insert(request.clone(), (text.to_owned(), false));
                         conv.status.lock().unwrap().shown(request, now_ms());
                     }
                     if let Err(err) = self
@@ -3389,6 +3868,9 @@ impl SessionManager {
                 output,
             } => {
                 let name = crate::digest::bare_tool_name(name);
+                if *status == ItemStatus::InProgress {
+                    conv.went_on_working().await;
+                }
                 // The CLI has the wait's result: the replies handed to it are taken.
                 if name == "wait_for_replies" && *status == ItemStatus::Completed {
                     self.replies_taken(conv, item_id).await;
@@ -3396,6 +3878,14 @@ impl SessionManager {
                 let shell = crate::digest::is_shell_tool(name);
                 if shell {
                     conv.running_command(item_id, *status).await;
+                }
+                if shell || name == "run_check" {
+                    let words = input
+                        .as_deref()
+                        .and_then(|input| serde_json::from_str::<serde_json::Value>(input).ok())
+                        .and_then(|args| args.get("command")?.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| name.to_owned());
+                    self.command_holds(conv, item_id, &words, *status).await;
                 }
                 let ended_at_ms = (*status != ItemStatus::InProgress).then(now_ms);
                 // A shell tool's result names its exit status on its first line.
@@ -3449,9 +3939,29 @@ impl SessionManager {
                 command,
                 status,
                 exit_code,
+                output,
                 ..
             } => {
                 conv.running_command(item_id, *status).await;
+                if *status == ItemStatus::InProgress {
+                    conv.went_on_working().await;
+                }
+                self.command_holds(
+                    conv,
+                    item_id,
+                    &brigadier_providers::policy::unwrapped_command(command),
+                    *status,
+                )
+                .await;
+                self.command_seen(
+                    conv,
+                    item_id,
+                    command,
+                    *status,
+                    *exit_code,
+                    output.as_deref(),
+                )
+                .await;
                 let command = brigadier_providers::policy::unwrapped_command(command);
                 self.orchestrator_step(
                     &conv.id,
@@ -3500,7 +4010,17 @@ impl SessionManager {
                 let started = {
                     let mut state = conv.state.lock().await;
                     state.landed = true;
-                    std::mem::take(&mut state.awaiting_start).then(|| state.request.clone())
+                    let current = state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli));
+                    if !state.busy && current && state.has_cli_jobs() {
+                        // A turn its CLI started on its own, a background job of its having
+                        // ended: it runs like one Brigadier started, for the job's request, so
+                        // its end is that turn's and a message sent meanwhile steers into it.
+                        state.busy = true;
+                        state.request = state.jobs_request.clone();
+                        Some(state.request.clone())
+                    } else {
+                        std::mem::take(&mut state.awaiting_start).then(|| state.request.clone())
+                    }
                 };
                 if let Some(request) = started {
                     self.set_run_for(&conv.id, RunState::Running, None, request)
@@ -3711,6 +4231,15 @@ impl SessionManager {
         let in_run = self.overnight.active.get(&conv.id).is_some();
         let (limit_hit, ended, landed, carried, asked, served, end_commands, unshown) = {
             let mut state = conv.state.lock().await;
+            // A Codex command still running when its turn ended goes on as its CLI's job.
+            let words = std::mem::take(&mut state.command_words);
+            if status == TurnStatus::Completed && conv.kind == ConversationKind::Session {
+                for (item, words) in words {
+                    if state.commands.contains(&item) {
+                        state.lingering.insert(item, words);
+                    }
+                }
+            }
             state.commands.clear();
             // Taken now, so no turn starts on it in between (a stand-in closes it anyway).
             let end_commands = (std::mem::take(&mut state.end_commands)
@@ -3736,6 +4265,15 @@ impl SessionManager {
                 _ => None,
             };
             let served = state.request.take();
+            // The CLI's jobs still running keep this request working until they ended and
+            // the thread spoke of them; once none runs, the request is free of them.
+            if state.cli_jobs > 0 || !state.lingering.is_empty() {
+                if state.jobs_request.is_none() {
+                    state.jobs_request.clone_from(&served);
+                }
+            } else {
+                state.jobs_request = None;
+            }
             // An error the request won't show after all (its turn didn't fail) is a notice.
             let unshown = state.unshown_error.take().filter(|_| {
                 served.is_none() || !matches!(ended, Some(RequestState::Failed { .. }))
@@ -3823,6 +4361,7 @@ impl SessionManager {
         }
         // Replies the turn held for its waits and didn't take go by ordinary delivery.
         self.return_held_replies(conv).await;
+        self.release_held(conv).await;
         // Follow-ups the turn left undecided wait in the queue for their own turn.
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);

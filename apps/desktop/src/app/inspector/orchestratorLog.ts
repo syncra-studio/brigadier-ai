@@ -47,6 +47,7 @@ export const KIND_LABELS: Record<InjectionKind, string> = {
   reminder: "reminder",
   run: "overnight run",
   peerMessage: "session message",
+  backgroundRun: "background run",
 };
 
 export function groupOf(kind: InjectionKind): InjectionGroup {

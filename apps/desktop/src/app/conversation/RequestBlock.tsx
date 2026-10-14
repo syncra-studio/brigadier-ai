@@ -56,6 +56,7 @@ import {
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
 import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
 import type { StatusHead } from "@/app/conversation/liveStatus";
+import { HeldNote } from "@/app/conversation/HeldNote";
 import { AnsweredStatus, StatusLine, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
@@ -116,7 +117,7 @@ export type BlockMeta = {
   orchestratorSteps: BlockOrchestratorStep[];
   thinking?: ThinkingSegment[];
   /** Messages the user steered into the turn, shown as bubbles in the work. */
-  steers: { position: number; text: string; atMs: number; attachments: AttachmentRef[]; peer?: PeerOf }[];
+  steers: { position: number; text: string; atMs: number; attachments: AttachmentRef[]; requestId?: string; peer?: PeerOf }[];
   /** Compactions of a Chat's context in the turn, or after it. */
   compactions: BlockCompaction[];
   state: BlockState;
@@ -364,7 +365,7 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: boolean
     case "steer":
       // Another session's message steered in, or a reply into its request's turn.
       if (entry.peer) return <PeerMessageBlock peer={entry.peer} text={entry.text} atMs={entry.atMs} />;
-      return <SteerBubble text={entry.text} atMs={entry.atMs} attachments={entry.attachments} />;
+      return <SteerBubble text={entry.text} atMs={entry.atMs} attachments={entry.attachments} requestId={entry.requestId} />;
     case "orchestrator":
       return <>{entry.steps.map((step) => <ThreadStep key={step.position} step={step} />)}</>;
     case "compaction":
@@ -417,13 +418,16 @@ const CompactionBlock: FC<{ compaction: BlockCompaction }> = ({ compaction }) =>
 };
 
 /** A follow-up the user sent while the block worked: their bubble, inside the block. */
-const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly AttachmentRef[] }> = ({
+const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly AttachmentRef[]; requestId?: string | undefined }> = ({
   text,
   atMs,
   attachments,
+  requestId,
 }) => {
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const now = useNow(60_000);
+  // Sent while the thread is inside a command: it reads it once that ends.
+  const held = useBoard((s) => (requestId ? s.board?.requests[requestId]?.heldBy : undefined));
   return (
     <div
       data-slot="request-steer"
@@ -432,6 +436,7 @@ const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly Attach
       <div className="bg-muted text-foreground rounded-bubble max-w-full min-w-0 px-4 py-2.5 whitespace-pre-wrap wrap-anywhere">
         <InlineImageText text={text} attachments={attachments} Text={MentionText} />
       </div>
+      {held && <HeldNote held={held} />}
       <div className="text-muted-foreground flex items-center gap-1 opacity-0 transition-opacity group-hover/steer:opacity-100 group-focus-within/steer:opacity-100">
         <span className="pe-1 text-xs tabular-nums">{formatSentAt(atMs, now)}</span>
         <TooltipIconButton tooltip={isCopied ? "Copied" : "Copy"} onClick={() => copyToClipboard(text)}>
@@ -588,6 +593,11 @@ export const RequestBlock: FC = () => {
   const workersActive = useBoard((s) =>
     Object.values(s.board?.tasks ?? {}).some(
       (task) => task.requestId !== null && !!requestIds?.includes(task.requestId) && !isFinal(task),
+    )
+    // A long run whose result the request is owed works like a worker: the thread's word on it
+    // is a line in the work, and its answer comes with the result.
+    || Object.values(s.board?.backgroundRuns ?? {}).some(
+      (run) => run.state.type === "running" && run.requestId !== null && !!requestIds?.includes(run.requestId),
     ),
   );
   // A run's morning report folds its details.
