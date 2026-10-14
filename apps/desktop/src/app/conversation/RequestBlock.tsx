@@ -470,8 +470,8 @@ const ActivityItems: FC<{
     : (head ?? (thought === null ? null : { text: thoughtTopic(thought, "newest") || "Thinking", tone: "busy", thought: true }));
   // A message to another session says how its exchange stands itself: the line stays under it.
   const newest = activity.at(-1);
-  const step = newest?.type === "group" ? newest.items.findLast((item) => item.type === "step") : undefined;
-  const inGroup = step?.type === "step" && step.step.kind.type !== "peerSent" && step.step.kind.type !== "messageRefused";
+  const lastStep = newest?.type === "group" ? newest.items.findLast((item) => item.type === "step") : undefined;
+  const inGroup = lastStep?.type === "step" && lastStep.step.kind.type !== "peerSent" && lastStep.step.kind.type !== "messageRefused";
   const tasks = useBoard((s) => s.board?.tasks);
   const approvals = useBoard((s) => s.board?.approvals);
   const revealing = useRevealing(useViewConversation()?.id ?? null);
@@ -614,8 +614,8 @@ export const RequestBlock: FC = () => {
     foldable ||
     meta.state === "stopped" ||
     meta.state === "failed" ||
-    // A Chat's says it works until its reply streams, and only once something came.
-    (live && (meta.session || (meta.texts.length === 0 && sequence.length > 0) || meta.steers.length > 0));
+    // A Chat's says it works over its steps, and with none until its reply streams, once something came.
+    (live && (meta.session || meta.steers.length > 0 || activity.some((item) => item.type === "group" && item.items.some((each) => each.type === "step")) || (meta.texts.length === 0 && sequence.length > 0)));
   const streams = (index: number) => meta.texts[index]?.position === Number.POSITIVE_INFINITY;
   const streaming = (entry: Entry) => !done && entry.kind === "text" && streams(entry.index);
   const commentary = (entry: Entry) => entry.kind === "text" && !!meta.texts[entry.index]?.commentary;
