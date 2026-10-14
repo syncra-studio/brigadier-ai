@@ -153,17 +153,6 @@ def turns(ipc_data, conv, from_ms, to_ms):
         db.close()
 
 
-# Fields the daemon's requests and queued messages have today: a new one that is set on a steer
-# while the command it waits for runs is the state saying it is read when that command ends.
-KNOWN_REQUEST_KEYS = {"id", "conversationId", "preview", "state", "startedAtMs", "endedAtMs", "steeredInto",
-                      "steeredAfter", "undo", "worked", "quotaWait", "waitingFor", "fromPeer"}
-KNOWN_QUEUE_KEYS = {"id", "text", "attachments", "mentions", "queuedAtMs", "editedAtMs", "deciding"}
-
-
-def extra_fields(obj, known):
-    return {k: v for k, v in obj.items() if k not in known and v not in (None, False, [], {}, "")}
-
-
 # ----- the run -------------------------------------------------------------------------------
 
 class Smoke:
@@ -327,12 +316,10 @@ class Smoke:
             if not running and cmd_end is None:
                 cmd_end = now_ms()
             steer_req = next((r for r in v["requests"] if r["id"] == steer_id), None)
-            extra = {}
-            if steer_req:
-                extra.update(extra_fields(steer_req, KNOWN_REQUEST_KEYS))
-            for item in v["queue"]["items"]:
-                if steer_code in item["text"]:
-                    extra.update(extra_fields(item, KNOWN_QUEUE_KEYS))
+            # heldBy, on the steered request or its queue item, names the command it is read after.
+            held = [o["heldBy"] for o in [steer_req or {}] + [i for i in v["queue"]["items"] if steer_code in i["text"]]
+                    if o.get("heldBy")]
+            extra = {"heldBy": held[0]} if held else {}
             if running and extra:
                 deferred.update(extra)
             if not running and deferred and deferred_after is None:
@@ -351,8 +338,8 @@ class Smoke:
         check(sc, "the steer goes into the running request", steer_req and steer_req.get("steeredInto") == root,
               f"steeredInto={steer_req.get('steeredInto') if steer_req else 'no request'}")
         check(sc, "while the command runs, the steer says it is read when the command ends", deferred,
-              "no field on the steered request or its queue item says so",
-              info=f"fields {sorted(deferred)}" if deferred else "")
+              "no heldBy on the steered request or its queue item",
+              info=f"heldBy {deferred['heldBy']}" if deferred else "")
         if deferred:
             check(sc, "that state clears once the command ended", not deferred_after, f"still {deferred_after}" if deferred_after else "")
         check(sc, "the steer is answered", assistant_after(v, steer_at, steer_code), f"no answer with {steer_code}")

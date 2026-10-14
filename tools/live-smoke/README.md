@@ -30,8 +30,8 @@ project's `.smoke/` folder, so "answered" means an assistant message carries it.
 
 1. **Long command** (C1). A foreground `sleep 70 && …` command; once its step runs, a follow-up
    and then a steer. The follow-up isn't Deciding for more than 30 s; the steer goes into the
-   running request, its state says it is read when the command ends (a field on the steered
-   request or its queued message that isn't in today's schema, then cleared), and it is
+   running request, its state says it is read when the command ends (`heldBy` on the steered
+   request or its queued message, naming the command, then cleared), and it is
    answered; the follow-up is answered; the command's real output reaches the user; every
    request ends.
 2. **Background job** (C2, alongside 1). The thread starts `sleep 70 && …` as a background job
