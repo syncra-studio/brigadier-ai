@@ -191,6 +191,9 @@ pub struct SessionManager {
     /// Held while a message to another session is checked against the hop and rate rules
     /// and recorded, so two sends can't both pass the same last place.
     peer_sends: tokio::sync::Mutex<()>,
+    /// Requests the last restart cut off before they answered: a message they owe a reply
+    /// to hears that, so its sender can ask again.
+    cut_off: Mutex<HashSet<String>>,
     waiters: Waiters,
     admitting: AtomicBool,
     background: TaskTracker,
@@ -296,6 +299,7 @@ impl SessionManager {
             stopping: Mutex::new(HashSet::new()),
             fixes_starting: tokio::sync::Mutex::new(()),
             peer_sends: tokio::sync::Mutex::new(()),
+            cut_off: Mutex::new(HashSet::new()),
             waiters: Waiters::default(),
             admitting: AtomicBool::new(true),
             background: TaskTracker::new(),
@@ -614,6 +618,10 @@ impl SessionManager {
 
     fn stopping_lock(&self) -> MutexGuard<'_, HashSet<TaskId>> {
         self.stopping.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn cut_off_lock(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.cut_off.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Whether `task` is being stopped right now.

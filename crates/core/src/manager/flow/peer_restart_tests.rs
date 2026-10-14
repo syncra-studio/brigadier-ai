@@ -232,3 +232,55 @@ async fn a_message_sent_on_after_a_restart_stays_in_its_chain() {
     flow.settled_in(&api).await;
     flow.stop().await;
 }
+
+/// The daemon dies while the receiver's turn works on a message: nothing resumes that turn,
+/// so the sender's reply says the restart cut it off, and the sender can ask again.
+#[tokio::test]
+async fn a_receiver_a_crash_cut_off_replies_that_it_was_cut_off() {
+    let peers = Peers::new();
+    let mut flow = Flow::start("peer-crash-cut-off", Options::default(), peers.script()).await;
+    let api = flow
+        .add_session("API work", None, ProviderKind::Codex)
+        .await;
+    let sent = peers.sends(&flow.conversation, &api, "Please add a `name` column.");
+    // The receiver's turn never ends before the crash.
+    let hold = Arc::new(Notify::new());
+    let held = hold.clone();
+    peers.on(&api, move |_| {
+        let held = held.clone();
+        async move {
+            held.notified().await;
+            Reply::text("Added.")
+        }
+    });
+    flow.say("Ask the API session for a name column.").await;
+    while sent.lock().unwrap().is_empty() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let id = message_id(&only(&sent).0);
+    flow.until_in(&api, "the message seen", |board| {
+        stands(board, &id, &PeerState::Seen)
+    })
+    .await;
+    flow.crash().await;
+    flow.until_in(&api, "the message replied", |board| {
+        stands(board, &id, &PeerState::Replied)
+    })
+    .await;
+    flow.until("the reply received", |board| {
+        board
+            .peer_messages
+            .values()
+            .any(|record| !record.outgoing && record.reply_to.as_deref() == Some(id.as_str()))
+    })
+    .await;
+    flow.settled().await;
+    let reply = "[\"API work\" was cut off by a restart before it answered]";
+    assert_eq!(peers.count_in(&flow.conversation, reply), 1);
+    assert_eq!(
+        peers.count_in(&flow.conversation, "finished without an answer"),
+        0
+    );
+    hold.notify_waiters();
+    flow.stop().await;
+}

@@ -139,6 +139,8 @@ Rules:
 - **Each message is owed one reply.** The automatic reply is written in the same transaction that marks its message
   `replied`, so it goes once, across restarts. A message that already has a reply (the thread's own early one) gets
   none.
+  A receiver whose turn a restart cut off before it answered isn't run again for it: its reply says
+  `["‹title›" was cut off by a restart before it answered]`, so the sender can ask again.
 - **Archive and delete.** Archiving a session with pending messages for it marks them `dropped { archived }`. Deleting a
   session removes its streams as today. The other side keeps its own record and shows "Couldn't deliver: the session
   was deleted".

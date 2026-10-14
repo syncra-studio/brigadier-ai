@@ -196,8 +196,14 @@ impl SessionManager {
             self.recover_peer_messages(&conversation).await;
             // What waits for the user matches the tasks and reports as they are now.
             self.reconcile_waiting(&conversation.id).await;
-            // Nothing runs any more: what was working is over or waits for the user.
+            // Nothing runs any more: what was working is over or waits for the user. What ends
+            // here was cut off, and a message it owes a reply to hears so.
+            let working = self.working_requests(&conversation.id).await;
+            self.cut_off_lock().extend(working.iter().cloned());
             self.settle_requests(&conversation.id).await;
+            let still = self.working_requests(&conversation.id).await;
+            self.cut_off_lock()
+                .retain(|request| !still.contains(request));
         }
         // A message whose card the user answered just before the daemon stopped goes now, or
         // is declined.

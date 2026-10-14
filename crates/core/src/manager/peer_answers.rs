@@ -44,6 +44,8 @@ enum Over {
     Answer(Box<Message>),
     Stopped,
     Failed(String),
+    /// A restart cut the thread off before it answered.
+    CutOff,
     Silent,
 }
 
@@ -123,11 +125,33 @@ impl SessionManager {
                     _ => None,
                 }) {
                     Some(over) => over,
+                    None if self.cut_off_any(&family) => Over::CutOff,
                     None => Over::Silent,
                 },
             };
             self.send_answer(id, record, root, over).await;
         }
+    }
+
+    /// The requests of session `id` still working, as its board has them.
+    pub(super) async fn working_requests(&self, id: &ConversationId) -> Vec<String> {
+        self.core.board(id).await.map_or_else(
+            |_| Vec::new(),
+            |board| {
+                board
+                    .requests
+                    .values()
+                    .filter(|request| request.state == RequestState::Working)
+                    .map(|request| request.id.clone())
+                    .collect()
+            },
+        )
+    }
+
+    /// Whether the last restart cut off any of `requests`.
+    fn cut_off_any(&self, requests: &[&str]) -> bool {
+        let cut_off = self.cut_off_lock();
+        requests.iter().any(|request| cut_off.contains(*request))
     }
 
     /// Sends the reply to `record` from session `id`, filed under its request `root`.
@@ -145,6 +169,13 @@ impl SessionManager {
                 None,
             ),
             Over::Failed(error) => (format!("[\"{}\" couldn't answer: {error}]", me.title), None),
+            Over::CutOff => (
+                format!(
+                    "[\"{}\" was cut off by a restart before it answered]",
+                    me.title
+                ),
+                None,
+            ),
             Over::Silent => (
                 format!("[\"{}\" finished without an answer]", me.title),
                 None,
