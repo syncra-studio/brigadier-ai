@@ -58,12 +58,6 @@ impl Finder for FakeFinder {
     fn selected_files(&self, _pid: i32, _window_id: Option<u32>) -> Vec<PathBuf> {
         vec![PathBuf::from("/fx/a.txt"), PathBuf::from("/fx/sub")]
     }
-    fn point_files(&self, _pid: i32, window_id: Option<u32>, _x: f64, _y: f64) -> Vec<PathBuf> {
-        match window_id {
-            Some(5) => vec![PathBuf::from("/fx/a.txt")],
-            _ => vec![],
-        }
-    }
     fn is_folder(&self, path: &Path) -> bool {
         path.extension().is_none()
     }
@@ -245,7 +239,7 @@ async fn open_keys_and_menus_open_the_selected_files_only() {
 }
 
 #[tokio::test]
-async fn a_pixel_double_click_opens_the_row_under_it_behind() {
+async fn a_pixel_double_click_selects_then_opens_behind() {
     let (registry, seen) = build(false);
     registry
         .invoke(
@@ -253,22 +247,12 @@ async fn a_pixel_double_click_opens_the_row_under_it_behind() {
             json!({"pid": FINDER, "window_id": 5, "x": 40, "y": 60}),
         )
         .await;
-    {
-        // Only the launch is nested: a nested click would wait for the
-        // desktop action turn the double-click holds.
-        let seen = seen.lock().unwrap();
-        assert!(seen.driver.is_empty());
-        let tools: Vec<&str> = seen.nested.iter().map(|(tool, _)| tool.as_str()).collect();
-        assert_eq!(tools, ["launch_app"]);
-    }
-    // Nothing known under the point: Finder's own double-click.
-    registry
-        .invoke(
-            "double_click",
-            json!({"pid": FINDER, "window_id": 6, "x": 40, "y": 60}),
-        )
-        .await;
-    assert_eq!(seen.lock().unwrap().driver, ["double_click"]);
+    let seen = seen.lock().unwrap();
+    // The selecting click is the driver's own, inside the double-click's
+    // turn: a nested click through the registry would wait for that turn.
+    assert_eq!(seen.driver, ["click"]);
+    let tools: Vec<&str> = seen.nested.iter().map(|(tool, _)| tool.as_str()).collect();
+    assert_eq!(tools, ["launch_app"]);
 }
 
 #[tokio::test]

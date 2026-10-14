@@ -15,17 +15,19 @@
 //!
 //! - an element gesture reads the file from the element's row (`AXURL`);
 //! - a key or menu gesture reads the items selected in the Finder window;
-//! - a pixel double-click reads the row under the point.
+//! - a pixel double-click first clicks once with the driver's own `click`,
+//!   which selects the item under it, then reads the selection.
 //!
 //! [`install`] wraps the driver's tools; call it before
 //! [`crate::guard::install`], so the guard checks the target first. The
 //! nested `launch_app` call goes through the registry, so the guard checks
-//! the app a file opens in too. It must stay the only nested call: the
-//! registry runs one desktop action at a time, and the gesture being
-//! wrapped already holds that turn, so a nested `click` would wait forever.
+//! the app a file opens in too. The selecting click must not: the registry
+//! runs one desktop action at a time, and the gesture being wrapped already
+//! holds that turn, so a `click` through the registry would wait forever.
+//! It calls the driver's `click` below this layer instead, inside the turn.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use async_trait::async_trait;
 use cua_driver_core::action_record::{
@@ -55,7 +57,7 @@ pub enum Gesture {
     /// A key or menu command on the window's selected items, in their own
     /// app or, for File > Open With, in the app it names.
     Selection { with: Option<String> },
-    /// A double-click at a pixel: the row under it.
+    /// A double-click at a pixel: whatever a click there selects.
     PixelDoubleClick,
 }
 
@@ -174,9 +176,6 @@ pub trait Finder: Send + Sync {
     fn element_files(&self, pid: i32, args: &Value) -> Vec<PathBuf>;
     /// The files selected in `window_id` (else Finder's focused window).
     fn selected_files(&self, pid: i32, window_id: Option<u32>) -> Vec<PathBuf>;
-    /// The files of the row at window-local screenshot pixel `x`, `y` of
-    /// `window_id`.
-    fn point_files(&self, pid: i32, window_id: Option<u32>, x: f64, y: f64) -> Vec<PathBuf>;
     /// A folder Finder shows in a window (not a package such as an app).
     fn is_folder(&self, path: &Path) -> bool;
     /// The bundle id of the app Finder would open `path` in.
@@ -246,26 +245,36 @@ pub fn install(registry: &mut ToolRegistry) {
 
 /// [`install`] with the given Finder and registry calls.
 pub fn install_with(registry: &mut ToolRegistry, finder: Arc<dyn Finder>, calls: Arc<dyn Calls>) {
+    // The driver's `click` under this layer, for the pixel double-click's
+    // selecting click (`TOOLS` wraps `click` first).
+    let click: Arc<OnceLock<Arc<dyn Tool>>> = Arc::default();
     for tool in TOOLS {
         if registry.tool_names().all(|name| name != *tool) {
             continue;
         }
         let finder = finder.clone();
         let calls = calls.clone();
+        let click = click.clone();
         registry.wrap(tool, move |inner| {
+            let inner: Arc<dyn Tool> = Arc::from(inner);
+            if inner.def().name == "click" {
+                let _ = click.set(inner.clone());
+            }
             Box::new(FinderOpen {
                 inner,
                 finder,
                 calls,
+                click,
             }) as Box<dyn Tool>
         });
     }
 }
 
 struct FinderOpen {
-    inner: Box<dyn Tool>,
+    inner: Arc<dyn Tool>,
     finder: Arc<dyn Finder>,
     calls: Arc<dyn Calls>,
+    click: Arc<OnceLock<Arc<dyn Tool>>>,
 }
 
 #[async_trait]
@@ -323,11 +332,19 @@ impl Tool for FinderOpen {
             Gesture::Element => (self.finder.element_files(pid, &args), None),
             Gesture::Selection { with } => (self.finder.selected_files(pid, window_id), with),
             Gesture::PixelDoubleClick => {
-                let at = |key: &str| args.get(key).and_then(Value::as_f64).unwrap_or(-1.0);
-                (
-                    self.finder.point_files(pid, window_id, at("x"), at("y")),
-                    None,
-                )
+                let Some(click) = self.click.get() else {
+                    return self.inner.invoke(args).await;
+                };
+                // The first click of the double-click selects the item.
+                let mut first = args.clone();
+                if let Some(object) = first.as_object_mut() {
+                    object.insert("count".to_owned(), json!(1));
+                }
+                let selected = click.invoke(first).await;
+                if selected.is_error == Some(true) {
+                    return selected;
+                }
+                (self.finder.selected_files(pid, window_id), None)
             }
         };
         let files: Vec<PathBuf> = items
@@ -485,13 +502,6 @@ impl Finder for System {
         unsafe { system::selected_files(pid, window_id) }
     }
 
-    fn point_files(&self, pid: i32, window_id: Option<u32>, x: f64, y: f64) -> Vec<PathBuf> {
-        match window_id {
-            Some(window_id) => unsafe { system::point_files(pid, window_id, x, y) },
-            None => vec![],
-        }
-    }
-
     fn is_folder(&self, path: &Path) -> bool {
         path.is_dir() && !system::is_package(path)
     }
@@ -514,8 +524,8 @@ mod system {
     use objc2_foundation::{NSBundle, NSString, NSURL};
     use platform_macos::ax::bindings::{
         ax_get_window_id, copy_ax_windows_including, copy_children, copy_element_attr,
-        copy_url_attr, AXUIElementCopyAttributeValue, AXUIElementCopyElementAtPosition,
-        AXUIElementCreateApplication, AXUIElementGetTypeID, AXUIElementRef,
+        copy_url_attr, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
+        AXUIElementGetTypeID, AXUIElementRef,
     };
     use serde_json::Value;
 
@@ -551,55 +561,6 @@ mod system {
         let file = file_within(parent, ROW_DEPTH);
         CFRelease(parent as CFTypeRef);
         file.into_iter().collect()
-    }
-
-    #[link(name = "ApplicationServices", kind = "framework")]
-    extern "C" {
-        fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> i32;
-    }
-
-    /// The row of `pid`'s app at window-local screenshot pixel `x`, `y` of
-    /// `window_id`, by an Accessibility hit test: no event is sent. A point
-    /// that `pid` doesn't own there, such as one covered by another app's
-    /// window, has no files.
-    pub unsafe fn point_files(pid: i32, window_id: u32, x: f64, y: f64) -> Vec<PathBuf> {
-        if x < 0.0 || y < 0.0 {
-            return vec![];
-        }
-        let Some(bounds) = platform_macos::windows::window_bounds_by_id(window_id)
-            .filter(|bounds| bounds.width > 0.0 && bounds.height > 0.0)
-        else {
-            return vec![];
-        };
-        // Screenshot pixels per point, from the window's own capture (1× or 2×).
-        let Some(scale) = platform_macos::capture::screenshot_window_bytes(window_id)
-            .ok()
-            .and_then(|png| platform_macos::capture::png_dimensions(&png).ok())
-            .map(|(width, _)| f64::from(width) / bounds.width)
-            .filter(|scale| (scale - 1.0).abs() < 0.05 || (scale - 2.0).abs() < 0.05)
-        else {
-            return vec![];
-        };
-        let scale = scale.round();
-        let (screen_x, screen_y) = (bounds.x + x / scale, bounds.y + y / scale);
-        let app = AXUIElementCreateApplication(pid);
-        if app.is_null() {
-            return vec![];
-        }
-        let mut hit: AXUIElementRef = std::ptr::null_mut();
-        let err = AXUIElementCopyElementAtPosition(app, screen_x as f32, screen_y as f32, &mut hit);
-        CFRelease(app as CFTypeRef);
-        if err != 0 || hit.is_null() {
-            return vec![];
-        }
-        let mut owner = 0;
-        let files = if AXUIElementGetPid(hit, &mut owner) == 0 && owner == pid {
-            row_files(hit)
-        } else {
-            vec![]
-        };
-        CFRelease(hit as CFTypeRef);
-        files
     }
 
     pub unsafe fn selected_files(pid: i32, window_id: Option<u32>) -> Vec<PathBuf> {
@@ -857,15 +818,6 @@ mod tests {
             vec![]
         }
         fn selected_files(&self, _pid: i32, _window_id: Option<u32>) -> Vec<PathBuf> {
-            vec![]
-        }
-        fn point_files(
-            &self,
-            _pid: i32,
-            _window_id: Option<u32>,
-            _x: f64,
-            _y: f64,
-        ) -> Vec<PathBuf> {
             vec![]
         }
         fn is_folder(&self, _path: &Path) -> bool {
