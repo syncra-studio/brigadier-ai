@@ -1135,6 +1135,9 @@ pub(crate) mod tests {
         fn is_zombie(&self, pid: u32) -> bool {
             self.0.processes().is_zombie(pid)
         }
+        fn is_stopped(&self, pid: u32) -> bool {
+            self.0.processes().is_stopped(pid)
+        }
         fn terminate(&self, pid: u32) -> brigadier_sandbox::Result<()> {
             self.0.processes().terminate(pid)
         }

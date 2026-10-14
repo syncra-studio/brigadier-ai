@@ -88,6 +88,14 @@ impl Processes for LinuxProcesses {
                 == Some("Z")
         })
     }
+    fn is_stopped(&self, pid: u32) -> bool {
+        // `T` stopped by a signal, `t` by a tracer.
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rfind(')')
+                .and_then(|index| stat[index + 1..].split_whitespace().next())
+                .is_some_and(|state| state == "T" || state == "t")
+        })
+    }
     fn terminate(&self, pid: u32) -> Result<()> {
         unix::terminate(pid)
     }

@@ -117,6 +117,29 @@ impl Tree {
         leaders
     }
 
+    /// The processes seen below the CLI that still run (still the ones seen) but are no
+    /// longer below it: what a command that ended left behind, parented to `launchd`/`init`
+    /// (a server put in the background, a test's child its killed parent left, stopped or
+    /// not). What runs below the CLI (its MCP servers, a command still going) is not among
+    /// them.
+    fn left_behind(&self) -> Vec<(u32, Option<f64>)> {
+        let processes = self.platform.processes();
+        let below: std::collections::HashSet<u32> = processes
+            .descendants(self.root)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let seen: Vec<(u32, Option<f64>)> = lock(&self.seen)
+            .iter()
+            .map(|(pid, started)| (*pid, *started))
+            .collect();
+        seen.into_iter()
+            .filter(|(pid, started)| {
+                *pid != self.root && !below.contains(pid) && is_same(processes, *pid, *started)
+            })
+            .collect()
+    }
+
     /// Kills every process seen that still runs and is still the one seen (same start time),
     /// with its own tree and group, then whatever still works inside the swept folder. Returns
     /// how many were running.
@@ -292,6 +315,16 @@ impl CliProcess {
 
     pub fn is_running(&self) -> bool {
         self.exit.borrow().is_none()
+    }
+
+    /// What the CLI's commands that ended left running, out of its process tree, with each
+    /// one's start time: the caller decides what of it to end (see [`Tree::left_behind`]).
+    /// Everything of it still ends with the CLI.
+    pub fn left_behind(&self) -> Vec<(u32, Option<f64>)> {
+        if !self.is_running() {
+            return Vec::new();
+        }
+        self.tree.left_behind()
     }
 
     /// Writes one line (a newline is appended) to the CLI's stdin.
@@ -488,6 +521,77 @@ mod tests {
             ended.is_ok(),
             "sweeping the shared folder should end the other CLI"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// What a finished command left running out of the CLI's tree (an orphan, stopped here
+    /// as a killed test's children are) is what `left_behind` lists; the CLI's own live child
+    /// is not.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn left_behind_lists_a_finished_commands_orphan_and_not_a_live_child() {
+        let root = std::env::temp_dir().join(format!("brigadier-left-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let orphan_file = root.join("orphan");
+        let child_file = root.join("child");
+        // The middle shell outlives a tracker walk, then exits: its sleep is orphaned.
+        let script = format!(
+            "/bin/sleep 61 & echo $! > '{child}'; /bin/sh -c '/bin/sleep 62 & echo $! > \"{orphan}\"; /bin/sleep 2'; exec /bin/cat",
+            child = child_file.display(),
+            orphan = orphan_file.display(),
+        );
+        let mut spec = SpawnSpec::new("/bin/sh").arg("-c").arg(script);
+        spec.cwd = Some(root.clone());
+        let cli = spawn(platform.clone(), &spec, Options::default())
+            .unwrap()
+            .process;
+        let read_pid = |path: &std::path::Path| -> Option<u32> {
+            std::fs::read_to_string(path).ok()?.trim().parse().ok()
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let (orphan, child) = loop {
+            if let (Some(orphan), Some(child)) = (read_pid(&orphan_file), read_pid(&child_file)) {
+                let gone = !platform
+                    .processes()
+                    .descendants(cli.pid())
+                    .unwrap()
+                    .contains(&orphan);
+                if gone && !cli.left_behind().is_empty() {
+                    break (orphan, child);
+                }
+            }
+            assert!(std::time::Instant::now() < deadline, "no orphan showed up");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        };
+        let processes = platform.processes();
+        processes.suspend(orphan).unwrap();
+        let left: Vec<u32> = cli.left_behind().into_iter().map(|(pid, _)| pid).collect();
+        assert_eq!(left, vec![orphan], "only the orphan is left behind");
+        assert!(processes.is_stopped(orphan), "the orphan reads stopped");
+        assert!(!processes.is_stopped(child));
+        // A stopped process still ends with a kill.
+        processes.kill_tree(orphan).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while processes.is_alive(orphan) && !processes.is_zombie(orphan) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the stopped orphan survived"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(cli.left_behind().is_empty());
+        cli.shutdown(Duration::from_secs(5)).await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while processes.is_alive(child) && !processes.is_zombie(child) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the CLI's child outlived it"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

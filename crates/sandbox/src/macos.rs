@@ -70,6 +70,9 @@ impl Processes for MacProcesses {
     fn is_zombie(&self, pid: u32) -> bool {
         is_zombie(pid)
     }
+    fn is_stopped(&self, pid: u32) -> bool {
+        kinfo_proc(pid).is_some_and(|info| u32::from(info[P_STAT]) == libc::SSTOP)
+    }
     fn terminate(&self, pid: u32) -> Result<()> {
         unix::terminate(pid)
     }

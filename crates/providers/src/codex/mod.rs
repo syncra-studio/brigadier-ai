@@ -1994,6 +1994,10 @@ impl ProviderSession for CodexSession {
     fn is_running(&self) -> bool {
         self.rpc.process.is_running()
     }
+
+    fn left_behind(&self) -> Vec<(u32, Option<f64>)> {
+        self.rpc.process.left_behind()
+    }
 }
 
 /// Serves a session's app-server output until it exits. `trusted` names the MCP servers whose
