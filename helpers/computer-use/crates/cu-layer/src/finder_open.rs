@@ -15,13 +15,14 @@
 //!
 //! - an element gesture reads the file from the element's row (`AXURL`);
 //! - a key or menu gesture reads the items selected in the Finder window;
-//! - a pixel double-click first clicks once, which selects the item under
-//!   it, then reads the selection.
+//! - a pixel double-click reads the row under the point.
 //!
 //! [`install`] wraps the driver's tools; call it before
 //! [`crate::guard::install`], so the guard checks the target first. The
-//! nested `click` and `launch_app` calls go through the registry, so the
-//! guard checks the app a file opens in too.
+//! nested `launch_app` call goes through the registry, so the guard checks
+//! the app a file opens in too. It must stay the only nested call: the
+//! registry runs one desktop action at a time, and the gesture being
+//! wrapped already holds that turn, so a nested `click` would wait forever.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
@@ -54,7 +55,7 @@ pub enum Gesture {
     /// A key or menu command on the window's selected items, in their own
     /// app or, for File > Open With, in the app it names.
     Selection { with: Option<String> },
-    /// A double-click at a pixel: whatever a click there selects.
+    /// A double-click at a pixel: the row under it.
     PixelDoubleClick,
 }
 
@@ -173,6 +174,9 @@ pub trait Finder: Send + Sync {
     fn element_files(&self, pid: i32, args: &Value) -> Vec<PathBuf>;
     /// The files selected in `window_id` (else Finder's focused window).
     fn selected_files(&self, pid: i32, window_id: Option<u32>) -> Vec<PathBuf>;
+    /// The files of the row at window-local screenshot pixel `x`, `y` of
+    /// `window_id`.
+    fn point_files(&self, pid: i32, window_id: Option<u32>, x: f64, y: f64) -> Vec<PathBuf>;
     /// A folder Finder shows in a window (not a package such as an app).
     fn is_folder(&self, path: &Path) -> bool;
     /// The bundle id of the app Finder would open `path` in.
@@ -319,16 +323,11 @@ impl Tool for FinderOpen {
             Gesture::Element => (self.finder.element_files(pid, &args), None),
             Gesture::Selection { with } => (self.finder.selected_files(pid, window_id), with),
             Gesture::PixelDoubleClick => {
-                // The first click of the double-click selects the item.
-                let mut click = args.clone();
-                if let Some(object) = click.as_object_mut() {
-                    object.insert("count".to_owned(), json!(1));
-                }
-                let selected = self.calls.call("click", click).await;
-                if selected.is_error == Some(true) {
-                    return selected;
-                }
-                (self.finder.selected_files(pid, window_id), None)
+                let at = |key: &str| args.get(key).and_then(Value::as_f64).unwrap_or(-1.0);
+                (
+                    self.finder.point_files(pid, window_id, at("x"), at("y")),
+                    None,
+                )
             }
         };
         let files: Vec<PathBuf> = items
@@ -486,6 +485,13 @@ impl Finder for System {
         unsafe { system::selected_files(pid, window_id) }
     }
 
+    fn point_files(&self, pid: i32, window_id: Option<u32>, x: f64, y: f64) -> Vec<PathBuf> {
+        match window_id {
+            Some(window_id) => unsafe { system::point_files(pid, window_id, x, y) },
+            None => vec![],
+        }
+    }
+
     fn is_folder(&self, path: &Path) -> bool {
         path.is_dir() && !system::is_package(path)
     }
@@ -502,12 +508,14 @@ mod system {
     use core_foundation::array::CFArray;
     use core_foundation::base::{CFGetTypeID, CFRelease, CFRetain, CFTypeRef, TCFType};
     use core_foundation::string::CFString;
+    use objc2::rc::Retained;
+    use objc2::{msg_send_id, ClassType};
     use objc2_app_kit::NSWorkspace;
     use objc2_foundation::{NSBundle, NSString, NSURL};
     use platform_macos::ax::bindings::{
         ax_get_window_id, copy_ax_windows_including, copy_children, copy_element_attr,
-        copy_url_attr, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
-        AXUIElementGetTypeID, AXUIElementRef,
+        copy_url_attr, AXUIElementCopyAttributeValue, AXUIElementCopyElementAtPosition,
+        AXUIElementCreateApplication, AXUIElementGetTypeID, AXUIElementRef,
     };
     use serde_json::Value;
 
@@ -528,19 +536,70 @@ mod system {
         let Ok(ResolvedElement::Element { element, .. }) = store.resolve(pid, args) else {
             return vec![];
         };
-        let pointer = element.as_ptr() as AXUIElementRef;
-        unsafe {
-            if let Some(file) = file_within(pointer, ROW_DEPTH) {
-                return vec![file];
-            }
-            // An image or label inside the row: its row names the file.
-            let Some(parent) = copy_element_attr(pointer, "AXParent") else {
-                return vec![];
-            };
-            let file = file_within(parent, ROW_DEPTH);
-            CFRelease(parent as CFTypeRef);
-            file.into_iter().collect()
+        unsafe { row_files(element.as_ptr() as AXUIElementRef) }
+    }
+
+    /// The file of the row `element` is, or is inside.
+    unsafe fn row_files(element: AXUIElementRef) -> Vec<PathBuf> {
+        if let Some(file) = file_within(element, ROW_DEPTH) {
+            return vec![file];
         }
+        // An image or label inside the row: its row names the file.
+        let Some(parent) = copy_element_attr(element, "AXParent") else {
+            return vec![];
+        };
+        let file = file_within(parent, ROW_DEPTH);
+        CFRelease(parent as CFTypeRef);
+        file.into_iter().collect()
+    }
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> i32;
+    }
+
+    /// The row of `pid`'s app at window-local screenshot pixel `x`, `y` of
+    /// `window_id`, by an Accessibility hit test: no event is sent. A point
+    /// that `pid` doesn't own there, such as one covered by another app's
+    /// window, has no files.
+    pub unsafe fn point_files(pid: i32, window_id: u32, x: f64, y: f64) -> Vec<PathBuf> {
+        if x < 0.0 || y < 0.0 {
+            return vec![];
+        }
+        let Some(bounds) = platform_macos::windows::window_bounds_by_id(window_id)
+            .filter(|bounds| bounds.width > 0.0 && bounds.height > 0.0)
+        else {
+            return vec![];
+        };
+        // Screenshot pixels per point, from the window's own capture (1× or 2×).
+        let Some(scale) = platform_macos::capture::screenshot_window_bytes(window_id)
+            .ok()
+            .and_then(|png| platform_macos::capture::png_dimensions(&png).ok())
+            .map(|(width, _)| f64::from(width) / bounds.width)
+            .filter(|scale| (scale - 1.0).abs() < 0.05 || (scale - 2.0).abs() < 0.05)
+        else {
+            return vec![];
+        };
+        let scale = scale.round();
+        let (screen_x, screen_y) = (bounds.x + x / scale, bounds.y + y / scale);
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return vec![];
+        }
+        let mut hit: AXUIElementRef = std::ptr::null_mut();
+        let err = AXUIElementCopyElementAtPosition(app, screen_x as f32, screen_y as f32, &mut hit);
+        CFRelease(app as CFTypeRef);
+        if err != 0 || hit.is_null() {
+            return vec![];
+        }
+        let mut owner = 0;
+        let files = if AXUIElementGetPid(hit, &mut owner) == 0 && owner == pid {
+            row_files(hit)
+        } else {
+            vec![]
+        };
+        CFRelease(hit as CFTypeRef);
+        files
     }
 
     pub unsafe fn selected_files(pid: i32, window_id: Option<u32>) -> Vec<PathBuf> {
@@ -598,7 +657,7 @@ mod system {
     unsafe fn file_within(element: AXUIElementRef, depth: usize) -> Option<PathBuf> {
         if let Some(file) = copy_url_attr(element)
             .filter(|url| url.starts_with("file://"))
-            .and_then(|url| crate::launch::local_file_target(&url))
+            .and_then(|url| file_path(&url))
         {
             return Some(file);
         }
@@ -640,6 +699,18 @@ mod system {
             .collect()
     }
 
+    /// The path a file URL names. Finder's rows give file reference URLs
+    /// (`file:///.file/id=…`), which name the file by its id, not its path.
+    pub(super) fn file_path(url: &str) -> Option<PathBuf> {
+        let path = unsafe {
+            NSURL::URLWithString(&NSString::from_str(url))?
+                .filePathURL()?
+                .path()?
+        }
+        .to_string();
+        path.starts_with('/').then(|| PathBuf::from(path))
+    }
+
     pub fn is_package(path: &Path) -> bool {
         let path = NSString::from_str(&path.to_string_lossy());
         unsafe { NSWorkspace::sharedWorkspace().isFilePackageAtPath(&path) }
@@ -647,7 +718,12 @@ mod system {
 
     pub fn default_app(path: &Path) -> Option<String> {
         unsafe {
-            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            // `fileURLWithPath:` as an optional: the generated binding panics
+            // on nil.
+            let path = NSString::from_str(&path.to_string_lossy());
+            let url: Option<Retained<NSURL>> =
+                msg_send_id![NSURL::class(), fileURLWithPath: &*path];
+            let url = url?;
             let app = NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&url)?;
             let bundle = NSBundle::bundleWithURL(&app)?;
             Some(bundle.bundleIdentifier()?.to_string())
@@ -745,6 +821,32 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finder_file_reference_urls_resolve_to_paths() {
+        use objc2_foundation::{NSString, NSURL};
+
+        let dir = std::env::temp_dir().join(format!("cu-layer-finder-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a b.txt");
+        std::fs::write(&file, "x").unwrap();
+        let path = file.canonicalize().unwrap();
+        let reference = unsafe {
+            NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
+                .fileReferenceURL()
+                .unwrap()
+                .absoluteString()
+                .unwrap()
+        }
+        .to_string();
+        assert!(reference.starts_with("file:///.file/id="), "{reference}");
+        assert_eq!(system::file_path(&reference), Some(path.clone()));
+        let plain = format!("file://{}", path.to_string_lossy().replace(' ', "%20"));
+        assert_eq!(system::file_path(&plain), Some(path));
+        assert_eq!(system::default_app(Path::new("")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     struct Folders;
 
     impl Finder for Folders {
@@ -755,6 +857,15 @@ mod tests {
             vec![]
         }
         fn selected_files(&self, _pid: i32, _window_id: Option<u32>) -> Vec<PathBuf> {
+            vec![]
+        }
+        fn point_files(
+            &self,
+            _pid: i32,
+            _window_id: Option<u32>,
+            _x: f64,
+            _y: f64,
+        ) -> Vec<PathBuf> {
             vec![]
         }
         fn is_folder(&self, _path: &Path) -> bool {
