@@ -113,6 +113,8 @@ function summary(event: DomainEvent): string {
       return `${event.review.kind} review ${event.review.state.type}`;
     case "integratedCheckUpdated":
       return `${event.check.id} ${event.check.state.type} at ${event.check.tip.slice(0, 10)}`;
+    case "backgroundRunUpdated":
+      return `${event.run.id} ${event.run.state.type}: ${event.run.command}`;
     case "threadCommitsSeen":
       return `${event.branch} seen at ${event.tip.slice(0, 10)}`;
     case "outputStored":

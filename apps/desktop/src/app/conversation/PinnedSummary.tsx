@@ -46,6 +46,7 @@ import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
+import { BackgroundRunsSummary } from "@/app/conversation/BackgroundRunsSummary";
 import {
   SummaryRow,
   SummaryRowButton,
@@ -899,6 +900,7 @@ function SessionSummaryContent({
             />
           )}
           <WorkersSummary conversationId={conversation.id} />
+          <BackgroundRunsSummary conversationId={conversation.id} />
           <Sources conversationId={conversation.id} />
         </div>
       </SummaryCard>

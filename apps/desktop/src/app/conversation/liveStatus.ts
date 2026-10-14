@@ -12,7 +12,8 @@ import { type Board, RETRYING } from "@/state/board";
  */
 export type StatusTone = "busy" | "still" | "needsYou";
 
-export type StatusHead = { text: string; tone: StatusTone };
+/** `sinceMs`: a long run's start, its elapsed time said after the words ("Running the full checks · 6m"). */
+export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number };
 
 /**
  * What the end of a live turn says: one line. Each worker's own progress is in the Workers
@@ -21,7 +22,7 @@ export type StatusHead = { text: string; tone: StatusTone };
 export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
-  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages">;
+  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages" | "backgroundRuns" | "integratedChecks">;
   requestIds: readonly string[];
   state: BlockState;
   /** A live thinking snippet shows at the end of the work. */
@@ -36,6 +37,39 @@ export type StatusInput = {
 
 function quotaWords(resetsAtMs: number | null): string {
   return resetsAtMs === null ? "Waiting for quota" : `Waiting for quota · resets ${formatTime(resetsAtMs)}`;
+}
+
+/** How long a run has gone, short: "40s", "6m", "1h 5m". */
+export function elapsedWords(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/** A command as a live line names it: its first line, cut short. */
+function commandWords(command: string): string {
+  const line = command.trim().split("\n")[0] ?? "";
+  return line.length > 40 ? `${line.slice(0, 39).trimEnd()}…` : line;
+}
+
+/**
+ * A long run these requests wait on while the thread rests: a command of its own gone to the
+ * background, else the session's full checks on its landed work. The request works until its
+ * result comes, so the line says what runs and for how long rather than "Thinking".
+ */
+function runningHead({ board, requestIds }: StatusInput): StatusHead | null {
+  const run = Object.values(board.backgroundRuns)
+    .filter((each) => each.state.type === "running" && each.requestId !== null && requestIds.includes(each.requestId))
+    .toSorted((a, b) => a.startedAtMs - b.startedAtMs)[0];
+  if (run) {
+    return { text: `Running ${commandWords(run.command)}`, tone: "busy", sinceMs: run.startedAtMs };
+  }
+  const check = Object.values(board.integratedChecks)
+    .find((each) => (each.state.type === "due" || each.state.type === "running") && each.requests.some((id) => requestIds.includes(id)));
+  if (check) return { text: "Running the full checks", tone: "busy", sinceMs: check.startedAtMs ?? check.dueAtMs };
+  return null;
 }
 
 /** What only the user can do for these requests, in a few words; `null` when nothing. */
@@ -110,6 +144,8 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
     const text = busy.length === 1 ? "Waiting for a worker" : `Waiting for ${busy.length} workers`;
     return { head: { text, tone: working ? "busy" : "still" } };
   }
+  const running = runningHead(input);
+  if (running) return { head: running };
   // It rests until other sessions reply: "Waiting for API work to reply".
   if (state === "waiting" && input.waitingFor?.length) return { head: { text: waitingWords(input.waitingFor), tone: "still" } };
   // Waiting with nothing above to show (an overnight run's list): no line. A question in the

@@ -2,6 +2,7 @@ import { CheckCircle, ChevronRight, ExclamationMarkCircle, ShieldCheck } from "@
 import { type ComponentProps, useState } from "react";
 
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
+import { elapsedWords } from "@/app/conversation/liveStatus";
 import {
   type FindingLabel,
   type FindingRow,
@@ -12,6 +13,7 @@ import {
 } from "@/app/conversation/reviewStatus";
 import { SummaryRow, SummaryRowButton } from "@/components/assistant-ui/elements/summary-section";
 import { Badge } from "@/components/ui/badge";
+import { useNow } from "@/hooks/use-now";
 import { cn } from "@/lib/utils";
 
 /**
@@ -32,6 +34,7 @@ export function ReviewRows({ conversationId }: { conversationId: string }) {
  */
 export function ChecksRow({ conversationId }: { conversationId: string }) {
   const line = useChecksLine(conversationId);
+  const now = useNow(line?.sinceMs === undefined ? null : 5_000);
   if (!line) return null;
   return (
     <SummaryRow
@@ -39,6 +42,7 @@ export function ChecksRow({ conversationId }: { conversationId: string }) {
       title={line.title}
       icon={line.failed ? <ExclamationMarkCircle /> : <CheckCircle />}
       muted={!line.failed}
+      meta={line.sinceMs === undefined ? undefined : elapsedWords(now - line.sinceMs)}
     >
       {line.text}
     </SummaryRow>

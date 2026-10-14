@@ -207,6 +207,9 @@ test("the checks line follows the newest run of the session's full checks", () =
   const running = check("check-10", { type: "running", command: "tools/full-checks.sh" });
   assert.equal(checksLine([running, passed])?.text, "Checks running…");
   assert.equal(checksLine([passed, check("check-10", { type: "due" })])?.text, "Checks running…");
+  // While they run, the row says for how long: since they started, else since they were due.
+  assert.equal(checksLine([{ ...running, startedAtMs: 5_000 }])?.sinceMs, 5_000);
+  assert.equal(checksLine([{ ...running, dueAtMs: 2_000 }])?.sinceMs, 2_000);
   const failed = check("check-11", {
     type: "failed",
     command: "cargo test --workspace",

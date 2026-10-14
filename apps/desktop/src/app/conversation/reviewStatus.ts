@@ -215,6 +215,8 @@ export type ChecksLine = {
   /** The line's hover text: what ran, or why it failed. */
   title: string;
   failed: boolean;
+  /** While they run: since when, said as the time they have gone. */
+  sinceMs?: number;
 };
 
 /** A check's number, from its id `check-<n>`. */
@@ -233,9 +235,9 @@ export function checksLine(checks: readonly IntegratedCheck[]): ChecksLine | nul
   const at = latest.tip.slice(0, 10);
   switch (latest.state.type) {
     case "due":
-      return { text: "Checks running…", title: `Due at ${at}`, failed: false };
+      return { text: "Checks running…", title: `Due at ${at}`, failed: false, sinceMs: latest.dueAtMs };
     case "running":
-      return { text: "Checks running…", title: latest.state.command ?? `At ${at}`, failed: false };
+      return { text: "Checks running…", title: latest.state.command ?? `At ${at}`, failed: false, sinceMs: latest.startedAtMs ?? latest.dueAtMs };
     case "passed":
       return { text: "Checks passed", title: `${latest.state.commands.join(", ") || "Nothing to run"} at ${at}`, failed: false };
     case "failed":

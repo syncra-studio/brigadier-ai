@@ -1558,6 +1558,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.stop_preview(conversation_id, preview_id)).await?;
             Response::StopPreview
         }
+        Request::StopBackgroundRun {
+            conversation_id,
+            run_id,
+        } => {
+            heap(|| sessions.stop_background_run(conversation_id, run_id)).await?;
+            Response::StopBackgroundRun
+        }
         Request::PausePreview {
             conversation_id,
             preview_id,

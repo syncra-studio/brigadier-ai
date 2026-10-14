@@ -503,6 +503,11 @@ pub enum Request {
         conversation_id: ConversationId,
         preview_id: String,
     },
+    /// Stops one of the thread's commands gone to the background (`run_id`); the thread hears it.
+    StopBackgroundRun {
+        conversation_id: ConversationId,
+        run_id: String,
+    },
     ResumePreview {
         conversation_id: ConversationId,
         preview_id: String,
@@ -1244,6 +1249,7 @@ pub enum Response {
     Interrupt,
     Resume,
     StopPreview,
+    StopBackgroundRun,
     PausePreview,
     ResumePreview,
     ClearPreviews,
@@ -1968,5 +1974,12 @@ mod preview_tests {
         );
         let decoded: Response = serde_json::from_value(wire).unwrap();
         assert!(matches!(decoded, Response::PreviewLog { tail, .. } if tail == "last two\nlines"));
+    }
+
+    #[test]
+    fn stopping_one_background_run_keeps_its_wire_method() {
+        let wire = serde_json::json!({"method": "stopBackgroundRun", "conversationId": "c", "runId": "run-1"});
+        let request: Request = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
     }
 }

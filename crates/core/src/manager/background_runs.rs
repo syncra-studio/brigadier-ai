@@ -11,9 +11,10 @@
 //! - **Recorded** as a [`BackgroundRun`] when it goes to the background, so the request works
 //!   and the app shows it; a restart that cuts one off records it interrupted and tells the
 //!   thread, which may run it again.
-//! - **Stopped** with the user's Stop and the session's archive or delete, telling nothing.
+//! - **Stopped** with the user's Stop and the session's archive or delete, telling nothing; one
+//!   the user stops on its own (the context card's Stop) tells the thread, which answers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
@@ -47,6 +48,8 @@ pub(crate) fn background_owner(id: &ConversationId) -> String {
 #[derive(Default)]
 pub(crate) struct BackgroundRuns {
     running: std::sync::Mutex<HashMap<(ConversationId, String), CancellationToken>>,
+    /// The runs the user stopped one by one: the thread hears it.
+    stopped_alone: std::sync::Mutex<HashSet<(ConversationId, String)>>,
     /// Held while a run's number is taken and its start recorded.
     numbering: tokio::sync::Mutex<()>,
 }
@@ -158,7 +161,29 @@ impl SessionManager {
         if cancel.is_cancelled() {
             run.state = BackgroundRunState::Stopped;
             self.store_background_run(&run).await;
-            self.settle_requests(&run.conversation_id).await;
+            let alone = self
+                .background_runs
+                .stopped_alone
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&(run.conversation_id.clone(), run.id.clone()));
+            if alone {
+                let envelope = Envelope {
+                    kind: InjectionKind::BackgroundRun,
+                    label: format!("{} stopped", run.id),
+                    task_id: None,
+                    text: format!(
+                        "[The user stopped {} before it finished · {} `{}`: no result came. \
+                         Don't run it again unless they ask; say in one line where that leaves \
+                         the work.]",
+                        run.id, run.tool, run.command
+                    ),
+                };
+                self.deliver_for(&run.conversation_id, envelope, run.request_id.clone())
+                    .await;
+            } else {
+                self.settle_requests(&run.conversation_id).await;
+            }
             return;
         }
         let (status, text) = match result {
@@ -193,6 +218,26 @@ impl SessionManager {
                 cancel.cancel();
             }
         }
+    }
+
+    /// The user's Stop of one background run (the context card's): it ends, and the thread
+    /// hears it in the run's request. A run already over is refused.
+    pub async fn stop_background_run(&self, id: ConversationId, run: String) -> Result<()> {
+        let running = self
+            .background_runs
+            .running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let Some(cancel) = running.get(&(id.clone(), run.clone())) else {
+            return Err(crate::Error::Invalid(format!("{run} isn't running")));
+        };
+        self.background_runs
+            .stopped_alone
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert((id, run));
+        cancel.cancel();
+        Ok(())
     }
 
     /// At startup: a background run the restart cut off is recorded so, and the thread hears

@@ -76,3 +76,20 @@ test("a queued message's ⋯ opens it in a side chat in a session, and turns que
   const session = await drive<{ items: string[] }>(t, "drive=queue&kind=session");
   assert.deepEqual(session.items, ["Edit message", "Open in side chat", "Turn off queueing"]);
 });
+
+test("a check gone to the background keeps its request working, says what runs and for how long, and its row stops it", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ running: Seen & { said: boolean; row: string | null; elapsed: string | null }; calls: string[]; done: Seen & { row: string | null } }>(
+    t, "drive=background&kind=session",
+  );
+  // The thread's word on the run is a line in the work; the request still works, its live line the run's.
+  assert.match(seen.running.header ?? "", /^Working for/);
+  assert.equal(seen.running.said, true);
+  assert.deepEqual([seen.running.status, seen.running.statusInWork], ["Running cargo test --workspace · 6m", true]);
+  // The context card's row: the command, its time, Stop.
+  assert.match(seen.running.row ?? "", /cargo test --workspace.*6m.*Stop/);
+  assert.equal(seen.running.elapsed, "6m");
+  assert.deepEqual(seen.calls, ["stopBackgroundRun run-1"]);
+  // The result's answer settles it: no live line, no row, the answer outside the folded work.
+  assert.deepEqual([seen.done.status, seen.done.row, seen.done.answer], [null, null, "The full Rust tests pass: 812 tests, no failures."]);
+  assert.match(seen.done.header ?? "", /^Worked for/);
+});

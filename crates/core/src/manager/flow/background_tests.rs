@@ -294,6 +294,74 @@ async fn the_users_stop_ends_a_background_run_quietly() {
     flow.stop().await;
 }
 
+/// The context card's Stop ends one background run: recorded stopped, and the thread hears it
+/// in the run's request and answers, so the user isn't left with a silent end.
+#[tokio::test]
+async fn the_users_stop_of_one_background_run_tells_the_thread() {
+    let inputs: Log = Default::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "background-stop-one",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("The user stopped run-1") {
+                    return Reply::text("Stopped the long run; it didn't finish.");
+                }
+                let reply = turn
+                    .call("run", json!({ "command": "sleep 60; echo late" }))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text(crate::manager::prompts::QUIET)
+            }
+        }),
+    )
+    .await;
+    flow.say("Run the long one.").await;
+    flow.until("the run to go to the background", |board| {
+        run_state(board, "run-1") == Some(BackgroundRunState::Running)
+    })
+    .await;
+    flow.manager
+        .stop_background_run(flow.conversation.clone(), "run-1".into())
+        .await
+        .unwrap();
+    let board = flow
+        .until("the request to settle on the thread's answer", |board| {
+            run_state(board, "run-1") == Some(BackgroundRunState::Stopped)
+                && board
+                    .requests
+                    .values()
+                    .all(|request| request.state == RequestState::Done)
+        })
+        .await;
+    assert_eq!(board.requests.len(), 1, "{:?}", board.requests);
+    assert!(
+        answers(&flow)
+            .await
+            .iter()
+            .any(|text| text == "Stopped the long run; it didn't finish."),
+        "{:?}",
+        answers(&flow).await
+    );
+    // A run already over can't be stopped.
+    assert!(
+        flow.manager
+            .stop_background_run(flow.conversation.clone(), "run-1".into())
+            .await
+            .is_err()
+    );
+    let inputs = inputs.lock().unwrap().clone();
+    assert!(
+        inputs.iter().any(|input| input
+            .contains("[The user stopped run-1 before it finished · run `sleep 60; echo late`")),
+        "{inputs:#?}"
+    );
+    flow.stop().await;
+}
+
 /// A run the restart cut off is recorded so, and the thread hears it in the run's request.
 #[tokio::test]
 async fn a_background_run_cut_off_by_a_restart_tells_the_thread() {

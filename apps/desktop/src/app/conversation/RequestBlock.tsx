@@ -588,6 +588,11 @@ export const RequestBlock: FC = () => {
   const workersActive = useBoard((s) =>
     Object.values(s.board?.tasks ?? {}).some(
       (task) => task.requestId !== null && !!requestIds?.includes(task.requestId) && !isFinal(task),
+    )
+    // A long run whose result the request is owed works like a worker: the thread's word on it
+    // is a line in the work, and its answer comes with the result.
+    || Object.values(s.board?.backgroundRuns ?? {}).some(
+      (run) => run.state.type === "running" && run.requestId !== null && !!requestIds?.includes(run.requestId),
     ),
   );
   // A run's morning report folds its details.
