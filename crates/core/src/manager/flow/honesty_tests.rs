@@ -466,3 +466,71 @@ async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
     );
     flow.stop().await;
 }
+
+/// The user steers a message into a turn that said what it was about to do and went on
+/// working: the turn now answers the steered message, so the first request isn't reminded of
+/// its line while that turn still runs, nor after it answered.
+#[tokio::test]
+async fn a_steer_into_a_narrated_turn_brings_no_reminder() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let inputs: Log = Default::default();
+    let (release, log) = (gate.clone(), inputs.clone());
+    let flow = Flow::start(
+        "honesty-steer-narrated",
+        Options::default(),
+        script(move |turn| {
+            let (gate, log) = (gate.clone(), log.clone());
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains(REMINDED) {
+                    return Reply::text("Reminded.");
+                }
+                narrate(&turn, NARRATION).await;
+                gate.notified().await;
+                Reply::text("The suites passed, with banker's rounding.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Run the full checks.").await;
+    flow.until("the turn to go on working", |board| {
+        board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { status, .. } if *status == ItemStatus::InProgress)
+        })
+    })
+    .await;
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "Use banker's rounding.".into(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+    flow.until("the message to be steered in", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.steered_into.is_some())
+    })
+    .await;
+    release.notify_one();
+    let board = flow.settled().await;
+    assert!(
+        board
+            .requests
+            .values()
+            .all(|request| request.state == RequestState::Done),
+        "{:?}",
+        board.requests
+    );
+    let inputs = inputs.lock().unwrap().clone();
+    assert!(
+        inputs.iter().all(|input| !input.contains(REMINDED)),
+        "{inputs:#?}"
+    );
+    flow.stop().await;
+}

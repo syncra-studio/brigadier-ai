@@ -401,6 +401,24 @@ impl ConvState {
     }
 }
 
+/// Whether request `of` was steered, directly or down a chain, into `root`.
+fn steered_from(board: &crate::board::Board, of: &str, root: &str) -> bool {
+    let mut at = of;
+    // A steer chain is short; the bound only guards against a cycle in stored data.
+    for _ in 0..board.requests.len() {
+        match board
+            .requests
+            .get(at)
+            .and_then(|request| request.steered_into.as_deref())
+        {
+            Some(into) if into == root => return true,
+            Some(into) => at = into,
+            None => return false,
+        }
+    }
+    false
+}
+
 /// Where the thread's one reminder to answer a message of another session stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PeerReminder {
@@ -3652,8 +3670,33 @@ impl SessionManager {
             .iter()
             .map(|of| format!("\u{201c}{}\u{201d}", of.preview))
             .collect();
+        // The requests steered into its turn, however far down the chain: the turn answers
+        // the last of them from then on.
+        let family: Vec<&str> = board
+            .requests
+            .keys()
+            .map(String::as_str)
+            .filter(|of| *of != request && steered_from(board, of, request))
+            .collect();
         let mut state = conv.state.lock().await;
         if state.narrated.contains(request) {
+            return false;
+        }
+        // Its turn goes on (or will) under a request steered into it, or one of those was
+        // answered: it isn't over unanswered.
+        let carries = |of: &str| {
+            (state.busy && state.request.as_deref() == Some(of))
+                || state
+                    .inbox
+                    .iter()
+                    .any(|(_, carried)| carried.as_deref() == Some(of))
+                || state
+                    .pending
+                    .iter()
+                    .any(|message| message.request_id.as_deref() == Some(of))
+                || matches!(state.last_said.get(of), Some((_, false)))
+        };
+        if family.iter().any(|of| carries(of)) {
             return false;
         }
         // The line the user saw last went on with work (or they saw none, only hidden
