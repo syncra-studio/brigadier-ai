@@ -129,8 +129,11 @@ if [ -n "$patch_list" ]; then
   done <<<"$patch_list"
 fi
 
-# Ignored files would silently drop out of the commit.
-ignored="$(git -C "$top" ls-files --others --ignored --exclude-standard -- "$up_rel" || true)"
+# Ignored files would silently drop out of the commit. Only what the sync writes is checked: a
+# lock a direct cargo run left in upstream/ is ignored on purpose.
+vendored=("$up_rel/crates" "$up_rel/Skills" "$up_rel/LICENSE.md" "$up_rel/Cargo.toml")
+for f in "${root_files[@]}"; do vendored+=("$up_rel/$f"); done
+ignored="$(git -C "$top" ls-files --others --ignored --exclude-standard -- "${vendored[@]}" || true)"
 [ -z "$ignored" ] || die "these vendored files are ignored by .gitignore: $ignored"
 
 # The record in UPSTREAM.md, between the sync markers.
