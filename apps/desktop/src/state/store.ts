@@ -616,6 +616,15 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     // route previews and refresh state are read again (getUsage in state/usage).
     case "rankingsChanged":
       return { ...slice, rankingsRevision: slice.rankingsRevision + 1 };
+    case "requestFinished": {
+      // A request of it finished: its sidebar row's unread dot, if it wasn't open.
+      const conversation = slice.conversations[event.conversationId];
+      if (!conversation || (conversation.finishedAtMs ?? 0) >= envelope.atMs) return slice;
+      return {
+        ...slice,
+        conversations: { ...slice.conversations, [event.conversationId]: { ...conversation, finishedAtMs: envelope.atMs } },
+      };
+    }
     case "peerAnswered": {
       // The session finished what another one asked: its sidebar row's unread dot.
       const conversation = slice.conversations[event.conversationId];

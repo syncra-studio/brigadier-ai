@@ -91,6 +91,8 @@ pub(crate) struct Reply {
     pub crash: Option<i32>,
     /// The turn fails on this error (an API error, say), which isn't retried.
     pub error: Option<String>,
+    /// Its text streams first, the CLI saying it is the turn's final answer.
+    pub answer: bool,
 }
 
 impl Reply {
@@ -940,9 +942,20 @@ impl ProviderSession for FakeSession {
                         .await;
                 }
                 if !reply.text.is_empty() {
+                    let item_id = uuid::Uuid::new_v4().to_string();
+                    if reply.answer {
+                        let _ = tx
+                            .send(ProviderEvent::MessageDelta {
+                                item_id: item_id.clone(),
+                                text: reply.text.clone(),
+                                phase: Some(brigadier_providers::TextPhase::Answer),
+                            })
+                            .await;
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
                     let _ = tx
                         .send(ProviderEvent::Message {
-                            item_id: uuid::Uuid::new_v4().to_string(),
+                            item_id,
                             role: Speaker::Assistant,
                             text: reply.text,
                         })
@@ -1745,6 +1758,8 @@ impl Flow {
 
 #[cfg(test)]
 mod accounts_tests;
+#[cfg(test)]
+mod answer_tests;
 #[cfg(test)]
 mod base_merge_tests;
 #[cfg(test)]

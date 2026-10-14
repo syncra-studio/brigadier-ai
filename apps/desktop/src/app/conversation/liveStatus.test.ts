@@ -42,7 +42,7 @@ test("a plain chat: Thinking until its own rows show, then nothing extra", () =>
   assert.deepEqual(head(input({ run: "starting", runRequest: "r1" })), { text: "Starting", tone: "busy" });
   assert.deepEqual(head(input({ ...leading, doing: "Searching the web" })), { text: "Searching the web", tone: "busy" });
   // Streaming text, a live thinking snippet, a running tool and a compaction show themselves.
-  assert.equal(head(input({ ...leading, streaming: { messageId: "m", text: "Hi", requestId: "r1" } })), null);
+  assert.equal(head(input({ ...leading, streaming: { messageId: "m", text: "Hi", requestId: "r1", startedAtMs: 0 } })), null);
   assert.equal(head(input(leading, { thinkingLive: true })), null);
   assert.equal(head(input(leading, { compacting: true })), null);
   assert.equal(head(input({ ...leading, orchestratorSteps: [call("Read")] })), null);
@@ -146,7 +146,7 @@ test("the lead's retries show while its CLI retries, and clear when it goes on",
   assert.equal(doingOf({ type: "reasoningDelta" } as unknown as ProviderEvent, "Reconnecting"), null);
   assert.equal(doingOf({ type: "reasoningDelta" } as unknown as ProviderEvent, "Searching the web"), "Searching the web");
   // A retry after some text or thinking streamed still shows over the stalled rows.
-  const stalled = { ...leading, doing: "Reconnecting", streaming: { messageId: "m", text: "Hi", requestId: "r1" } };
+  const stalled = { ...leading, doing: "Reconnecting", streaming: { messageId: "m", text: "Hi", requestId: "r1", startedAtMs: 0 } };
   assert.deepEqual(head(input(stalled, { thinkingLive: true })), { text: "Reconnecting", tone: "busy" });
 });
 

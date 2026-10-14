@@ -117,6 +117,11 @@ impl Projection {
             } => {
                 self.peer_at(conversation_id, at_ms);
             }
+            DomainEvent::RequestFinished {
+                conversation_id, ..
+            } => {
+                self.finished_at(conversation_id, at_ms);
+            }
             DomainEvent::SettingsChanged { settings } => {
                 if seq >= self.settings_seq {
                     self.settings = settings.clone();
@@ -192,6 +197,13 @@ impl Projection {
     pub(crate) fn peer_at(&mut self, id: &ConversationId, at_ms: i64) {
         if let Some(conversation) = self.conversations.get_mut(id) {
             conversation.peer_at_ms = conversation.peer_at_ms.max(Some(at_ms));
+        }
+    }
+
+    /// A request of `id` finished at `at_ms` (its sidebar's unread dot).
+    pub(crate) fn finished_at(&mut self, id: &ConversationId, at_ms: i64) {
+        if let Some(conversation) = self.conversations.get_mut(id) {
+            conversation.finished_at_ms = conversation.finished_at_ms.max(Some(at_ms));
         }
     }
 

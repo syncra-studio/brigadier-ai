@@ -1590,13 +1590,21 @@ pub(crate) fn merge_delta(deltas: &mut Vec<ProviderEvent>, event: ProviderEvent)
     use ProviderEvent::{CommandOutputDelta, MessageDelta, ReasoningDelta};
     match (deltas.last_mut(), event) {
         (
-            Some(MessageDelta { item_id, text }),
+            Some(MessageDelta {
+                item_id,
+                text,
+                phase,
+            }),
             MessageDelta {
                 item_id: next,
                 text: more,
+                phase: said,
             },
-        )
-        | (
+        ) if *item_id == next => {
+            text.push_str(&more);
+            *phase = phase.or(said);
+        }
+        (
             Some(ReasoningDelta { item_id, text }),
             ReasoningDelta {
                 item_id: next,

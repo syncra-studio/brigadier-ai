@@ -56,6 +56,13 @@ fn migrations() -> Migrations<'static> {
              WHERE kind = 'peer.answered';",
         )
         .comment("answered peer messages by stream"),
+        // When each conversation's requests last finished: its unread dot for a finish the user
+        // didn't see, read at startup off these rows alone.
+        M::up(
+            "CREATE INDEX events_request_finished ON events (stream, at_ms) \
+             WHERE kind = 'request.finished';",
+        )
+        .comment("finished requests by stream"),
     ])
 }
 

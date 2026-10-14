@@ -273,6 +273,7 @@ impl Parser {
                             out.push(Output::Event(ProviderEvent::MessageDelta {
                                 item_id: block.item_id.clone(),
                                 text: text.to_owned(),
+                                phase: None,
                             }));
                         }
                     }

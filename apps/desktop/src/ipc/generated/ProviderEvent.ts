@@ -10,6 +10,7 @@ import type { NoticeLevel } from "./NoticeLevel";
 import type { ProviderError } from "./ProviderError";
 import type { QuotaSnapshot } from "./QuotaSnapshot";
 import type { Role } from "./Role";
+import type { TextPhase } from "./TextPhase";
 import type { TokenUsage } from "./TokenUsage";
 import type { TurnStatus } from "./TurnStatus";
 
@@ -19,7 +20,11 @@ import type { TurnStatus } from "./TurnStatus";
  * Streaming text arrives as `*Delta` events keyed by `itemId`; the matching final event
  * (`message`, `reasoning`) carries the complete text and replaces whatever the deltas built.
  */
-export type ProviderEvent = { "type": "sessionStarted", nativeId: string, model: string | null, cwd: string | null, cliVersion: string | null, } | { "type": "turnStarted", turnId: string | null, } | { "type": "messageDelta", itemId: string, text: string, } | { "type": "message", itemId: string, role: Role, text: string, } | { "type": "reasoningDelta", itemId: string, text: string, } | { "type": "reasoning", itemId: string, text: string, } | { "type": "toolCall", itemId: string, name: string, 
+export type ProviderEvent = { "type": "sessionStarted", nativeId: string, model: string | null, cwd: string | null, cliVersion: string | null, } | { "type": "turnStarted", turnId: string | null, } | { "type": "messageDelta", itemId: string, text: string, 
+/**
+ * What the reply is, when its CLI says so as it starts (Codex does; Claude doesn't).
+ */
+phase?: TextPhase, } | { "type": "message", itemId: string, role: Role, text: string, } | { "type": "reasoningDelta", itemId: string, text: string, } | { "type": "reasoning", itemId: string, text: string, } | { "type": "toolCall", itemId: string, name: string, 
 /**
  * Tool input as JSON text, once complete.
  */

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use brigadier_providers::{
     Access, Artifact, ModelCatalog, ProviderEvent, ProviderKind, ProviderStatus, QuotaSnapshot,
+    TextPhase,
 };
 use brigadier_router::{
     Area, Explanation, Learned, MergedModel, OverrideRule, ProviderQuota, QuotaSample, RankedPlace,
@@ -484,6 +485,11 @@ pub struct Conversation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub peer_at_ms: Option<i64>,
+    /// When a request of it last finished (its sidebar row's unread dot when that came while
+    /// it wasn't open); folded from those events, never stored as such.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub finished_at_ms: Option<i64>,
 }
 
 /// A conversation's model standing in for the chosen one while that one is at a limit.
@@ -690,6 +696,11 @@ pub struct Message {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub peer: Option<Box<PeerRef>>,
+    /// For an assistant message its CLI wrote as the turn's final answer: when it started, so
+    /// the turn's work folds and its time stops there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub answer_at_ms: Option<i64>,
 }
 
 /// Global size and spacing scale for every control.
@@ -1071,6 +1082,13 @@ pub struct StreamingMessage {
     pub text: String,
     /// The request the running turn serves.
     pub request_id: Option<String>,
+    /// What it is, when its CLI said: a line between steps, or the turn's final answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub phase: Option<TextPhase>,
+    /// When it started.
+    #[serde(default)]
+    pub started_at_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1985,6 +2003,10 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         message_id: String,
         text: String,
+        /// What the reply is, when its CLI says (the first delta of it says).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        phase: Option<TextPhase>,
     },
     /// Reasoning text in timeline order. A complete event replaces the accumulated deltas.
     ThinkingDelta {
@@ -2221,6 +2243,12 @@ pub enum DomainEvent {
     PeerWaitSettled {
         message_id: String,
     },
+    /// A request of the conversation finished: its answer is written, or it failed (its
+    /// sidebar row's unread dot when the user wasn't looking).
+    RequestFinished {
+        conversation_id: ConversationId,
+        request_id: String,
+    },
     /// This session's answer to another session's message went back to it, as the reply
     /// Brigadier sent for it: the session finished what it was asked (its sidebar row's unread
     /// dot, SESSION-MESSAGING-PLAN.md §6.4).
@@ -2315,6 +2343,7 @@ impl DomainEvent {
             Self::PeerWaitSettled { .. } => "peer.settled",
             Self::PeerReplyHeld { .. } => "peer.held",
             Self::PeerAnswered { .. } => "peer.answered",
+            Self::RequestFinished { .. } => "request.finished",
             Self::Probe { .. } => "diag.probe",
         }
     }

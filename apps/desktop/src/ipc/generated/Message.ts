@@ -44,4 +44,9 @@ parentId: string | null,
 /**
  * A peer message's sender (its role is [`MessageRole::Peer`]).
  */
-peer?: PeerRef, };
+peer?: PeerRef, 
+/**
+ * For an assistant message its CLI wrote as the turn's final answer: when it started, so
+ * the turn's work folds and its time stops there.
+ */
+answerAtMs?: number, };

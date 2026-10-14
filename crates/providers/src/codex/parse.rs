@@ -86,6 +86,8 @@ pub struct Parser {
     /// The compaction running now: whether Codex started it on its own, the context before
     /// it, and the size reported since it started.
     compacting: Option<(bool, Option<i64>, Option<i64>)>,
+    /// What each reply started as: a line between steps or the turn's final answer.
+    phases: HashMap<String, TextPhase>,
 }
 
 impl Parser {
@@ -234,9 +236,12 @@ impl Parser {
                     out,
                     self.private_logs,
                 ) {
+                    // Each delta says what it is, so one held back for redaction loses nothing.
+                    let phase = self.phases.get(&delta.item_id).copied();
                     out.push(Output::Event(ProviderEvent::MessageDelta {
                         item_id: delta.item_id,
                         text: delta.delta,
+                        phase,
                     }));
                 }
             }
@@ -347,6 +352,24 @@ impl Parser {
     }
 
     fn item(&mut self, item: ThreadItem, completed: bool, out: &mut Vec<Output>) {
+        if let ThreadItem::AgentMessage {
+            id,
+            phase: Some(phase),
+            ..
+        } = &item
+        {
+            if completed {
+                self.phases.remove(id);
+            } else {
+                let phase = match phase {
+                    p::MessagePhase::FinalAnswer => TextPhase::Answer,
+                    p::MessagePhase::Commentary | p::MessagePhase::PartialAnswer => {
+                        TextPhase::Commentary
+                    }
+                };
+                self.phases.insert(id.clone(), phase);
+            }
+        }
         let looked = completed.then(|| looked(&item)).flatten();
         let event = match item {
             ThreadItem::UserMessage { id, content, .. } if completed => ProviderEvent::Message {
@@ -1330,6 +1353,42 @@ mod tests {
                 Output::Control(_) => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_reply_says_whether_it_is_the_final_answer_as_it_streams() {
+        let mut parser = Parser::live();
+        let started = |id: &str, phase: &str| {
+            json!({ "method": "item/started", "params": { "threadId": "t1", "turnId": "u1", "startedAtMs": 1,
+                "item": { "type": "agentMessage", "id": id, "text": "", "phase": phase } } })
+        };
+        let delta = |id: &str, text: &str| {
+            json!({ "method": "item/agentMessage/delta", "params": {
+                "threadId": "t1", "turnId": "u1", "itemId": id, "delta": text } })
+        };
+        events(&mut parser, &started("c1", "commentary"));
+        assert!(matches!(
+            &events(&mut parser, &delta("c1", "Reading it."))[..],
+            [ProviderEvent::MessageDelta {
+                phase: Some(TextPhase::Commentary),
+                ..
+            }]
+        ));
+        events(&mut parser, &started("a1", "final_answer"));
+        for text in ["It has ", "3 lines."] {
+            assert!(matches!(
+                &events(&mut parser, &delta("a1", text))[..],
+                [ProviderEvent::MessageDelta {
+                    phase: Some(TextPhase::Answer),
+                    ..
+                }]
+            ));
+        }
+        // A reply that didn't say has no phase.
+        assert!(matches!(
+            &events(&mut parser, &delta("x1", "hi"))[..],
+            [ProviderEvent::MessageDelta { phase: None, .. }]
+        ));
     }
 
     #[test]

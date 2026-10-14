@@ -515,10 +515,11 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
     }
     case "messageDelta": {
       const current = board.streaming;
-      const streaming =
+      const phase = current?.messageId === event.messageId ? (current.phase ?? event.phase) : event.phase;
+      const streaming: StreamingMessage =
         current?.messageId === event.messageId
-          ? { ...current, text: current.text + event.text }
-          : { messageId: event.messageId, text: event.text, requestId: board.runRequest };
+          ? { ...current, text: current.text + event.text, ...(phase && { phase }) }
+          : { messageId: event.messageId, text: event.text, requestId: board.runRequest, startedAtMs: atMs, ...(phase && { phase }) };
       return { ...board, streaming };
     }
     case "orchestratorLogged": {

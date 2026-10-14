@@ -31,7 +31,7 @@ use std::time::Duration;
 use brigadier_providers::{
     Access, ApprovalDecision, Artifact, Decider, ErrorKind, InputFile, InputPart, ItemStatus,
     LimitHit, McpServer, Origin, OutputHook, ProviderEvent, ProviderKind, ProviderSession,
-    Role as ProviderRole, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
+    Role as ProviderRole, SessionSpec, Started, TextPhase, ToolSet, TurnInput, TurnStatus,
 };
 use brigadier_store::StreamPage;
 use tokio::sync::mpsc;
@@ -242,6 +242,8 @@ struct ConvState {
     /// Replies that were streaming when a message was steered in, and the request they
     /// answer (the one before the steer).
     replying_for: HashMap<String, String>,
+    /// Replies their CLI said are the turn's final answer, and when each started showing.
+    answers: HashMap<String, i64>,
     /// Per request: the last reply the narration filter kept out of the thread, which the
     /// thread gets after all if the request ends with nothing else said (see
     /// [`SessionManager::release_narration`]).
@@ -2889,6 +2891,16 @@ impl SessionManager {
                         }
                     }
                     Some(event) if is_delta(&event) => {
+                        // The turn's final answer starts: its work folds from here.
+                        if let ProviderEvent::MessageDelta {
+                            item_id,
+                            phase: Some(TextPhase::Answer),
+                            ..
+                        } = &event
+                        {
+                            let mut state = conv.state.lock().await;
+                            state.answers.entry(item_id.clone()).or_insert_with(now_ms);
+                        }
                         merge_delta(&mut deltas, event);
                         deadline.get_or_insert_with(|| tokio::time::Instant::now() + DELTA_WINDOW);
                     }
@@ -3009,10 +3021,15 @@ impl SessionManager {
         let events: Vec<DomainEvent> = deltas
             .into_iter()
             .filter_map(|event| match event {
-                ProviderEvent::MessageDelta { item_id, text } => Some(DomainEvent::MessageDelta {
+                ProviderEvent::MessageDelta {
+                    item_id,
+                    text,
+                    phase,
+                } => Some(DomainEvent::MessageDelta {
                     conversation_id: id.clone(),
                     message_id: item_id,
                     text,
+                    phase,
                 }),
                 ProviderEvent::ReasoningDelta { item_id, text } => {
                     Some(DomainEvent::ThinkingDelta {
@@ -3133,6 +3150,7 @@ impl SessionManager {
                 narration.text,
                 Some(narration.model),
                 Some(request.to_owned()),
+                None,
             )
             .await
         {
@@ -3237,13 +3255,14 @@ impl SessionManager {
                 role: ProviderRole::Assistant,
                 text,
             } => {
-                let request = {
+                let (request, answer_at_ms) = {
                     let mut state = conv.state.lock().await;
                     state.last_reply = Some(text.clone());
-                    state
+                    let request = state
                         .replying_for
                         .remove(item_id)
-                        .or_else(|| state.request.clone())
+                        .or_else(|| state.request.clone());
+                    (request, state.answers.remove(item_id))
                 };
                 let shown = if conv.kind == ConversationKind::Session {
                     without_quiet(text)
@@ -3265,6 +3284,7 @@ impl SessionManager {
                             text.to_owned(),
                             Some(cli.model.clone()),
                             request,
+                            answer_at_ms,
                         )
                         .await
                     {
@@ -5041,8 +5061,9 @@ impl NativeIds {
 /// so the user never sees it appear.
 struct Quiet {
     enabled: bool,
-    /// Text streamed so far per reply still held back; released replies are absent.
-    held: HashMap<String, String>,
+    /// Text streamed so far per reply still held back, and what its CLI said it is; released
+    /// replies are absent.
+    held: HashMap<String, (String, Option<TextPhase>)>,
     released: HashSet<String>,
 }
 
@@ -5064,18 +5085,31 @@ impl Quiet {
         deltas
             .into_iter()
             .filter_map(|event| match event {
-                ProviderEvent::MessageDelta { item_id, text } => {
+                ProviderEvent::MessageDelta {
+                    item_id,
+                    text,
+                    phase,
+                } => {
                     if self.released.contains(&item_id) {
-                        return Some(ProviderEvent::MessageDelta { item_id, text });
+                        return Some(ProviderEvent::MessageDelta {
+                            item_id,
+                            text,
+                            phase,
+                        });
                     }
-                    let so_far = self.held.entry(item_id.clone()).or_default();
+                    let (so_far, said) = self.held.entry(item_id.clone()).or_default();
                     so_far.push_str(&text);
+                    *said = said.or(phase);
                     if prompts::QUIET.starts_with(so_far.trim()) || so_far.len() < NARRATION_BYTES {
                         return None;
                     }
-                    let text = self.held.remove(&item_id).unwrap_or_default();
+                    let (text, phase) = self.held.remove(&item_id).unwrap_or_default();
                     self.released.insert(item_id.clone());
-                    Some(ProviderEvent::MessageDelta { item_id, text })
+                    Some(ProviderEvent::MessageDelta {
+                        item_id,
+                        text,
+                        phase,
+                    })
                 }
                 event => Some(event),
             })

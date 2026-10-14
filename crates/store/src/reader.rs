@@ -174,6 +174,26 @@ pub(crate) fn peer_answered_heads(conn: &Connection, prefix: &str) -> Result<Vec
 pub(crate) const PEER_ANSWERED_HEADS: &str = "SELECT stream, MAX(stream_seq), MAX(at_ms) FROM events \
      WHERE kind = 'peer.answered' AND stream >= ?1 AND stream < ?2 GROUP BY stream";
 
+/// Each stream under `prefix` with a finished request, with its newest such event (its
+/// `request.finished` events, off their partial index).
+pub(crate) fn request_finished_heads(conn: &Connection, prefix: &str) -> Result<Vec<StreamHead>> {
+    let mut upper = prefix.to_owned();
+    upper.push(char::MAX);
+    let mut statement = conn.prepare_cached(REQUEST_FINISHED_HEADS)?;
+    let rows = statement.query_map(params![prefix, upper], |row| {
+        Ok(StreamHead {
+            stream: row.get(0)?,
+            stream_seq: row.get(1)?,
+            at_ms: row.get(2)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The kind is written out, not bound: only then may SQLite read the partial index.
+pub(crate) const REQUEST_FINISHED_HEADS: &str = "SELECT stream, MAX(stream_seq), MAX(at_ms) FROM events \
+     WHERE kind = 'request.finished' AND stream >= ?1 AND stream < ?2 GROUP BY stream";
+
 /// Every distinct blob hash the events of `streams` reference.
 pub(crate) fn blob_hashes_of(conn: &Connection, streams: &[String]) -> Result<Vec<String>> {
     let mut hashes = std::collections::BTreeSet::new();

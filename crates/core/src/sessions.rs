@@ -123,6 +123,11 @@ impl Core {
             let id = ConversationId(head.stream[prefix.len()..].to_owned());
             projection.peer_at(&id, head.at_ms);
         }
+        // And when a request of each last finished.
+        for head in store.request_finished_heads(prefix.clone()).await? {
+            let id = ConversationId(head.stream[prefix.len()..].to_owned());
+            projection.finished_at(&id, head.at_ms);
+        }
 
         let core = Arc::new(Self {
             store,
@@ -358,6 +363,7 @@ impl Core {
             cleanup_pending: false,
             deleting: false,
             peer_at_ms: None,
+            finished_at_ms: None,
         };
         events.insert(
             0,
@@ -757,6 +763,7 @@ impl Core {
         text: String,
         model: Option<ModelChoice>,
         request_id: Option<String>,
+        answer_at_ms: Option<i64>,
     ) -> Result<Message> {
         self.conversation(&id)?;
         let mut message = self
@@ -764,6 +771,7 @@ impl Core {
             .await?;
         message.model = model;
         message.request_id = request_id;
+        message.answer_at_ms = answer_at_ms;
         let stored = self
             .record_conversation(
                 &id,
@@ -810,6 +818,7 @@ impl Core {
             request_id: None,
             parent_id,
             peer: None,
+            answer_at_ms: None,
         })
     }
 
@@ -1538,10 +1547,27 @@ impl Core {
         if request == before {
             return Ok(false);
         }
+        // It finished now: written out or failed (a stop is the user's own, a steer goes on in
+        // the turn it joined).
+        let finished = matches!(before.state, RequestState::Working | RequestState::Waiting)
+            && matches!(
+                request.state,
+                RequestState::Done | RequestState::Failed { .. }
+            )
+            && request.steered_into.is_none();
+        let request_id = request.id.clone();
         let event = DomainEvent::RequestUpdated { request };
-        let stored = self
-            .record(vec![(streams::conversation(id), event.clone())])
-            .await?;
+        let mut events = vec![(streams::conversation(id), event.clone())];
+        if finished {
+            events.push((
+                streams::conversation(id),
+                DomainEvent::RequestFinished {
+                    conversation_id: id.clone(),
+                    request_id,
+                },
+            ));
+        }
+        let stored = self.record(events).await?;
         if let Some(board) = boards.get_mut(id) {
             board.apply(&event, stored[0]);
         }

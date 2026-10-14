@@ -58,4 +58,9 @@ quotaWait: QuotaWait | null,
  * unread dot, SESSION-MESSAGING-PLAN.md §6.4); folded from those events, never stored as
  * such.
  */
-peerAtMs?: number, };
+peerAtMs?: number, 
+/**
+ * When a request of it last finished (its sidebar row's unread dot when that came while
+ * it wasn't open); folded from those events, never stored as such.
+ */
+finishedAtMs?: number, };

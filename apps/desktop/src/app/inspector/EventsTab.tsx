@@ -163,6 +163,8 @@ function summary(event: DomainEvent): string {
       return event.hold.type;
     case "peerAnswered":
       return `answered ${event.messageId}`;
+    case "requestFinished":
+      return `finished ${event.requestId}`;
     case "peerWaitSettled":
       return event.messageId;
   }

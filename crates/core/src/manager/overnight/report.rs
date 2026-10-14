@@ -159,6 +159,7 @@ impl SessionManager {
                     text.clone(),
                     None,
                     Some(request_id),
+                    None,
                 )
                 .await
             {

@@ -369,7 +369,7 @@ async function stream(messageId: string, requestId: string, words: number): Prom
   for (let index = 0; index < words; index++) {
     text += `${index % 12 === 11 ? "\n\n" : " "}word${index}`;
     useBoard.setState(({ board }) =>
-      board ? { board: { ...board, run: "running", runRequest: requestId, streaming: { messageId, text, requestId } } } : {},
+      board ? { board: { ...board, run: "running", runRequest: requestId, streaming: { messageId, text, requestId, startedAtMs: Date.now() } } } : {},
     );
     await wait(20);
     await frame();

@@ -453,7 +453,9 @@ impl EventRedactor {
     pub(crate) fn apply(&mut self, mut event: ProviderEvent, out: &mut Vec<ProviderEvent>) {
         let redactor = self.redactor.clone();
         let delta = match &mut event {
-            ProviderEvent::MessageDelta { item_id, text } => Some((Stream::Message, item_id, text)),
+            ProviderEvent::MessageDelta { item_id, text, .. } => {
+                Some((Stream::Message, item_id, text))
+            }
             ProviderEvent::ReasoningDelta { item_id, text } => {
                 Some((Stream::Reasoning, item_id, text))
             }
@@ -511,7 +513,11 @@ impl EventRedactor {
 
 fn delta(stream: Stream, item_id: String, text: String) -> ProviderEvent {
     match stream {
-        Stream::Message => ProviderEvent::MessageDelta { item_id, text },
+        Stream::Message => ProviderEvent::MessageDelta {
+            item_id,
+            text,
+            phase: None,
+        },
         Stream::Reasoning => ProviderEvent::ReasoningDelta { item_id, text },
         Stream::CommandOutput => ProviderEvent::CommandOutputDelta { item_id, text },
     }

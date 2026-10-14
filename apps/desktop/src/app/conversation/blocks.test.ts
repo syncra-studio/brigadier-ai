@@ -371,7 +371,7 @@ test("a working request shows a reply written after its work in place: only a do
     orchestratorSteps: [
       { requestId: request, atMs: 603, position: 603, kind: { type: "landed", taskIds: ["one"], commits: 1, branch: "b", head: "h" } },
     ],
-    streaming: streaming === null ? null : { messageId: "live", text: streaming, requestId: request },
+    streaming: streaming === null ? null : { messageId: "live", text: streaming, requestId: request, startedAtMs: 0 },
   });
   const requestBlock = (said: Message[], d: BoardDigest) => {
     const found = buildBlocks([user, ...said], {}, false, d, []).find((candidate) => candidate.key === request);

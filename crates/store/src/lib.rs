@@ -658,6 +658,14 @@ impl Store {
             .await
     }
 
+    /// Each stream under `prefix` that has a `request.finished` event, with its newest one's
+    /// `stream_seq` and `at_ms`.
+    pub async fn request_finished_heads(&self, prefix: String) -> Result<Vec<StreamHead>> {
+        self.reads
+            .run(move |conn| reader::request_finished_heads(conn, &prefix))
+            .await
+    }
+
     /// Each stream under `prefix` that has a `peer.answered` event, with its newest one's
     /// `stream_seq` and `at_ms`.
     pub async fn peer_answered_heads(&self, prefix: String) -> Result<Vec<StreamHead>> {
@@ -919,5 +927,57 @@ mod tests {
             .await
             .unwrap();
         assert!(plan.contains("events_peer_answered"), "{plan}");
+    }
+    #[tokio::test]
+    async fn each_stream_names_its_newest_finished_request_off_its_own_index() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4())));
+        let store = Store::open(StoreConfig {
+            db_path: dir.join("db.sqlite"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .expect("a store");
+        let event = |stream: &str, kind: &str, at_ms: i64| {
+            NewEvent::new(stream, kind, at_ms, &serde_json::json!({})).unwrap()
+        };
+        store
+            .append(vec![
+                event("conversation:a", "request.finished", 10),
+                event("conversation:a", "request.updated", 11),
+                event("conversation:a", "request.finished", 20),
+                event("conversation:b", "request.updated", 40),
+                event("catalog", "request.finished", 50),
+            ])
+            .await
+            .unwrap();
+        let heads = store
+            .request_finished_heads("conversation:".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            heads
+                .iter()
+                .map(|head| (head.stream.as_str(), head.at_ms))
+                .collect::<Vec<_>>(),
+            [("conversation:a", 20)]
+        );
+        let plan = store
+            .reads
+            .run(|conn| {
+                let mut statement = conn.prepare(&format!(
+                    "EXPLAIN QUERY PLAN {}",
+                    reader::REQUEST_FINISHED_HEADS
+                ))?;
+                let details = statement
+                    .query_map(rusqlite::params!["conversation:", "conversation;"], |row| {
+                        row.get::<_, String>(3)
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(details.join("\n"))
+            })
+            .await
+            .unwrap();
+        assert!(plan.contains("events_request_finished"), "{plan}");
     }
 }

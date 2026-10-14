@@ -560,16 +560,22 @@ impl Board {
                 }
             }
             DomainEvent::MessageDelta {
-                message_id, text, ..
+                message_id,
+                text,
+                phase,
+                ..
             } => match &mut self.streaming {
                 Some(streaming) if streaming.message_id == *message_id => {
                     streaming.text.push_str(text);
+                    streaming.phase = streaming.phase.or(*phase);
                 }
                 _ => {
                     self.streaming = Some(StreamingMessage {
                         message_id: message_id.clone(),
                         text: text.clone(),
                         request_id: self.run_request.clone(),
+                        phase: *phase,
+                        started_at_ms: crate::now_ms(),
                     });
                 }
             },

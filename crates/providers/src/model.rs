@@ -517,6 +517,14 @@ pub enum NoticeLevel {
     Warning,
 }
 
+/// What a streaming reply is: a line between the turn's steps, or the turn's final answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum TextPhase {
+    Commentary,
+    Answer,
+}
+
 /// Everything a provider session reports, in one vocabulary for every CLI.
 ///
 /// Streaming text arrives as `*Delta` events keyed by `itemId`; the matching final event
@@ -541,6 +549,10 @@ pub enum ProviderEvent {
     MessageDelta {
         item_id: String,
         text: String,
+        /// What the reply is, when its CLI says so as it starts (Codex does; Claude doesn't).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        phase: Option<TextPhase>,
     },
     Message {
         item_id: String,
