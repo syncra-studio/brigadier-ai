@@ -13,6 +13,8 @@ pub mod browser;
 pub mod catalog;
 #[cfg(target_os = "macos")]
 pub mod cursor_motion;
+#[cfg(target_os = "macos")]
+pub mod finder_open;
 pub mod focus_policy;
 pub mod guard;
 pub mod hotkey;

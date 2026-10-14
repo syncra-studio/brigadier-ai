@@ -30,8 +30,9 @@ pub struct Options {
 /// builds the driver's tools under the driver's own runtime scope, so
 /// element tokens taken in one call resolve in the next. Brigadier's
 /// `page`, `scroll`, `hotkey`, `type_text`, `get_window_state` and
-/// `launch_app` go in before the guard,
-/// which wraps every tool last. A session's recording stops when the
+/// `launch_app`, and the Finder gestures that open a file
+/// ([`crate::finder_open`]), go in before the guard, which wraps every tool
+/// last. A session's recording stops when the
 /// session ends.
 pub fn build(options: Options) -> Result<Arc<ToolRegistry>, String> {
     crate::focus_policy::install();
@@ -57,12 +58,14 @@ pub fn build(options: Options) -> Result<Arc<ToolRegistry>, String> {
         crate::web_typing::install(&mut registry);
         crate::keep_drawn::install(&mut registry);
         crate::launch::install(&mut registry);
+        crate::finder_open::install(&mut registry);
         stop_recording_when_session_ends(&mut registry);
         crate::guard::install(&mut registry);
         registry
     });
     let registry = Arc::new(registry);
     registry.init_self_weak();
+    crate::finder_open::set_registry(&registry);
     Ok(registry)
 }
 
