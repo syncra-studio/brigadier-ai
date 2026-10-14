@@ -631,28 +631,115 @@ pub(crate) mod tests {
         .unwrap()
     }
 
+    /// `pid`'s state as the first letter `ps` shows (`T` stopped, `Z` a zombie), empty when
+    /// there is no such process. Read from the kernel: `ps` is setuid, which a sandboxed shell
+    /// can't start.
+    #[cfg(target_os = "macos")]
+    #[allow(unsafe_code)]
     fn state(pid: u32) -> String {
-        let out = Command::new("ps")
-            .args(["-o", "stat=", "-p", &pid.to_string()])
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        use nix::libc;
+        // `struct kinfo_proc`: 648 bytes on 64-bit macOS, `kp_proc.p_stat` at offset 36.
+        let mut info = [0u8; 648];
+        let mut size = info.len();
+        let mut mib = [
+            libc::CTL_KERN,
+            libc::KERN_PROC,
+            libc::KERN_PROC_PID,
+            pid as libc::c_int,
+        ];
+        // SAFETY: `info` is writable for `size` bytes and the call writes at most that many,
+        // updating `size`; the result is checked before `info` is read.
+        let read = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                4,
+                info.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        // No such process leaves `size` at 0.
+        if read != 0 || size != info.len() {
+            return String::new();
+        }
+        match u32::from(info[36]) {
+            libc::SSTOP => "T",
+            libc::SZOMB => "Z",
+            _ => "S",
+        }
+        .to_owned()
+    }
+
+    /// `pid`'s state letter from `/proc/<pid>/stat`, after the command in parentheses.
+    #[cfg(not(target_os = "macos"))]
+    fn state(pid: u32) -> String {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| {
+                let (_, rest) = stat.rsplit_once(") ")?;
+                rest.get(..1).map(str::to_owned)
+            })
+            .unwrap_or_default()
+    }
+
+    /// A stand-in worker CLI, in a process group of its own with everything it starts.
+    /// Dropped however its test ends, panics included, it kills the whole group (stopped
+    /// members too, which would otherwise never end) before it reaps the CLI, so the group's
+    /// id can't name another group yet. The group also holds a stopped process of the test's
+    /// own: should the test binary itself be killed, the group is left orphaned with a stopped
+    /// member, and the kernel then hangs up on every member, so nothing it started outlives it.
+    pub(crate) struct Worker {
+        cli: Child,
+        sentinel: Child,
+    }
+
+    impl Worker {
+        fn spawn(command: &mut Command) -> Self {
+            use std::os::unix::process::CommandExt;
+            let cli = command.process_group(0).spawn().unwrap();
+            let sentinel = Command::new("/bin/sleep")
+                .arg("86400")
+                .process_group(cli.id() as i32)
+                .spawn()
+                .unwrap();
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(sentinel.id() as i32),
+                nix::sys::signal::Signal::SIGSTOP,
+            );
+            Self { cli, sentinel }
+        }
+
+        fn id(&self) -> u32 {
+            self.cli.id()
+        }
+    }
+
+    impl Drop for Worker {
+        fn drop(&mut self) {
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(self.cli.id() as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+            let _ = self.cli.wait();
+            let _ = self.sentinel.wait();
+        }
     }
 
     /// A stand-in worker CLI (`sh`) running a stand-in build: a program named `cargo` (a copy
     /// of `sleep`) run as `cargo test`, which starts a child of its own. Returns once the build
     /// has started that child, so no test stops it halfway through starting.
-    fn worker_with_build(dir: &Path) -> (Child, PathBuf) {
+    fn worker_with_build(dir: &Path) -> (Worker, PathBuf) {
         worker_with_build_running(dir, "/bin/sleep 300")
     }
 
     /// [`worker_with_build`] whose build's child runs `child` (a shell command line).
-    fn worker_with_build_running(dir: &Path, child: &str) -> (Child, PathBuf) {
+    fn worker_with_build_running(dir: &Path, child: &str) -> (Worker, PathBuf) {
         worker_running(dir, child, "test")
     }
 
     /// A stand-in worker running `cargo <subcommand> -p core`, whose child runs `child`.
-    fn worker_running(dir: &Path, child: &str, subcommand: &str) -> (Child, PathBuf) {
+    fn worker_running(dir: &Path, child: &str, subcommand: &str) -> (Worker, PathBuf) {
         let bin = dir.join("bin");
         std::fs::create_dir_all(dir).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
@@ -667,11 +754,11 @@ pub(crate) mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let child = Command::new("/bin/sh")
-            .arg("-c")
-            .arg(format!("{} {subcommand} -p core; true", cargo.display()))
-            .spawn()
-            .unwrap();
+        let child = Worker::spawn(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("{} {subcommand} -p core; true", cargo.display())),
+        );
         wait_for(|| ready.exists().then_some(()));
         (child, cargo)
     }
@@ -696,7 +783,7 @@ pub(crate) mod tests {
     fn a_build_under_a_worker_is_found_stopped_and_let_go_on() {
         let dir = TempDir::new();
         let platform = platform(dir.path());
-        let (mut worker, _) = worker_with_build(dir.path());
+        let (worker, _) = worker_with_build(dir.path());
         let seen = wait_for(|| {
             let seen = heavy_under(&*platform, worker.id(), "task:t");
             // The build and its own child are up.
@@ -723,8 +810,7 @@ pub(crate) mod tests {
             assert!(running(member.pid), "running again: {}", state(member.pid));
         }
         assert!(!dir.path().join("stopped.json").exists());
-        platform.processes().kill_tree(worker.id()).unwrap();
-        worker.wait().unwrap();
+        drop(worker);
     }
 
     #[test]
@@ -739,7 +825,7 @@ pub(crate) mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let (mut worker, _) = worker_with_build_running(dir.path(), &rustc.display().to_string());
+        let (worker, _) = worker_with_build_running(dir.path(), &rustc.display().to_string());
         let build = wait_for(|| {
             let seen = heavy_under(&*platform, worker.id(), "task:t");
             (seen.len() == 1
@@ -753,8 +839,7 @@ pub(crate) mod tests {
         assert_eq!(seen.len(), 1, "{seen:?}");
         assert_eq!(seen[0].root, build);
         assert_eq!(seen[0].command, "cargo test -p core");
-        platform.processes().kill_tree(worker.id()).unwrap();
-        worker.wait().unwrap();
+        drop(worker);
     }
 
     #[test]
@@ -771,7 +856,7 @@ pub(crate) mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let (mut worker, _) =
+        let (worker, _) =
             worker_with_build_running(dir.path(), &format!("{} build", inner.display()));
         let outer = wait_for(|| heavy_under(&*platform, worker.id(), "task:t").pop());
         let nested = wait_for(|| {
@@ -788,15 +873,14 @@ pub(crate) mod tests {
         assert_eq!(nested.command, "cargo build");
         let seen = outermost(&*platform, vec![nested, outer.clone()]);
         assert_eq!(seen, vec![outer], "only the outer command");
-        platform.processes().kill_tree(worker.id()).unwrap();
-        worker.wait().unwrap();
+        drop(worker);
     }
 
     #[test]
     fn a_restart_lets_go_on_what_a_dead_daemon_left_stopped() {
         let dir = TempDir::new();
         let platform = platform(dir.path());
-        let (mut worker, _) = worker_with_build(dir.path());
+        let (worker, _) = worker_with_build(dir.path());
         let root = wait_for(|| {
             heavy_under(&*platform, worker.id(), "task:t")
                 .first()
@@ -814,8 +898,7 @@ pub(crate) mod tests {
         assert_eq!(next.sweep(&*platform), 1);
         assert!(running(root.pid));
         assert!(!file.exists());
-        platform.processes().kill_tree(worker.id()).unwrap();
-        worker.wait().unwrap();
+        drop(worker);
     }
 
     const HOT: MachineLoad = MachineLoad {
@@ -849,11 +932,6 @@ pub(crate) mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-    }
-
-    fn end(platform: &dyn Platform, mut worker: Child) {
-        platform.processes().kill_tree(worker.id()).unwrap();
-        worker.wait().unwrap();
     }
 
     /// Done-when (0): with the guard faked to hot, a new worker and a new build wait (a row
@@ -909,7 +987,7 @@ pub(crate) mod tests {
         assert!(stopped(waiting.pid));
         assert!(running(calm.pid), "running work untouched");
         // The running build ends; still hot, so the new one keeps waiting.
-        end(&*platform, first);
+        drop(first);
         clis.remove(0);
         assert!(watch.tick(&clis, t0 + TICK * 2).is_empty());
         assert!(stopped(waiting.pid));
@@ -921,7 +999,7 @@ pub(crate) mod tests {
         watch.tick(&clis, t0 + TICK * 3);
         assert!(running(waiting.pid));
         assert!(!dir.path().join("stopped.json").exists());
-        end(&*platform, second);
+        drop(second);
     }
 
     /// Done-when (0b): critical heat for a minute suspends a running build (not killed), it
@@ -977,7 +1055,7 @@ pub(crate) mod tests {
         assert_eq!(next.recover(), 1);
         assert!(running(build.pid));
         assert!(!file.exists());
-        end(&*platform, worker);
+        drop(worker);
     }
 
     #[tokio::test]
@@ -997,7 +1075,7 @@ pub(crate) mod tests {
         assert!(stopped(build.pid));
         watch.quit();
         assert!(running(build.pid));
-        end(&*platform, worker);
+        drop(worker);
     }
 
     /// Bug 8: a heavy `run_check` waits for the lease before it starts, and once running is
@@ -1022,7 +1100,7 @@ pub(crate) mod tests {
         let waiting = tokio::time::timeout(Duration::from_millis(200), watch.wait_check(ticket));
         assert!(waiting.await.is_err(), "it waits while the build runs");
         // The build ends: the next look lets the check start.
-        end(&*platform, first);
+        drop(first);
         watch.tick(&[], t0 + Duration::from_secs(2));
         tokio::time::timeout(Duration::from_secs(5), watch.wait_check(ticket))
             .await
@@ -1061,14 +1139,14 @@ pub(crate) mod tests {
         }
         // The check ends: the later build goes on once it cools.
         watch.end_check(ticket);
-        end(&*platform, check);
+        drop(check);
         watch.guard.fake(MachineLoad::default());
         watch.tick(
             &[("task:c".to_owned(), later_cli)],
             t0 + Duration::from_secs(400),
         );
         assert!(running(later_build.pid));
-        end(&*platform, later);
+        drop(later);
     }
 
     #[tokio::test]
