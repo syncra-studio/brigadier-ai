@@ -101,6 +101,36 @@ async fn land_reports(turn: &Turn) -> bool {
     landed
 }
 
+/// The thread lands the first two workers' reports together, in the turn that hears the second,
+/// so both landings fall in one settle window however loaded the machine is (lands spread over
+/// two turns were seconds apart under load, and each got a check of its own); a later report
+/// lands at once.
+async fn land_pair(turn: &Turn, reported: &Mutex<Vec<u32>>) -> bool {
+    let pair: Vec<u32> = (1..=2)
+        .filter(|n| turn.input.contains(&format!("[report task-{n} ")))
+        .collect();
+    if pair.is_empty() {
+        return land_reports(turn).await;
+    }
+    let both = {
+        let mut reported = reported.lock().unwrap();
+        reported.extend(pair);
+        reported.sort_unstable();
+        reported.dedup();
+        reported.len() == 2
+    };
+    if both {
+        for n in 1..=2 {
+            let reply = turn
+                .call("land_phase", json!({"task": format!("task-{n}")}))
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            assert!(reply.text.starts_with("Landed "), "{}", reply.text);
+        }
+    }
+    true
+}
+
 async fn delegate(turn: &Turn, title: &str, spec: &str) {
     let reply = turn
         .call(
@@ -131,12 +161,13 @@ async fn session_tip(flow: &Flow) -> (String, String) {
 async fn parallel_workers_land_at_once_and_the_integrated_tree_is_checked_once() {
     let checked: Arc<Mutex<Vec<String>>> = Arc::default();
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let reported: Arc<Mutex<Vec<u32>>> = Arc::default();
     let (seen, heard) = (checked.clone(), inputs.clone());
     let mut flow = Flow::start(
         "integrated-once",
         options(),
         script(move |turn| {
-            let (seen, heard) = (seen.clone(), heard.clone());
+            let (seen, heard, reported) = (seen.clone(), heard.clone(), reported.clone());
             async move {
                 if !turn.is_orchestrator() {
                     let file = if turn.task_number() == Some(1) {
@@ -147,7 +178,7 @@ async fn parallel_workers_land_at_once_and_the_integrated_tree_is_checked_once()
                     return worker(&turn, file, &seen).await;
                 }
                 heard.lock().unwrap().push(turn.input.clone());
-                if land_reports(&turn).await {
+                if land_pair(&turn, &reported).await {
                     return Reply::text("[quiet]");
                 }
                 if turn.input.contains("[checks passed at ") {
@@ -285,6 +316,7 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
         merges: Vec<String>,
     }
     let seen: Arc<Mutex<Seen>> = Arc::default();
+    let reported: Arc<Mutex<Vec<u32>>> = Arc::default();
     let log = seen.clone();
     let flow = Flow::start(
         "integrated-fail",
@@ -297,7 +329,7 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
             ..options()
         },
         script(move |turn| {
-            let log = log.clone();
+            let (log, reported) = (log.clone(), reported.clone());
             async move {
                 if turn.is_review() {
                     return Reply::text("No findings.");
@@ -326,7 +358,7 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
                     return worker(&turn, file, &checked).await;
                 }
                 log.lock().unwrap().inputs.push(turn.input.clone());
-                if land_reports(&turn).await {
+                if land_pair(&turn, &reported).await {
                     return Reply::text("[quiet]");
                 }
                 if turn.input.contains("[checks failed at ") {
