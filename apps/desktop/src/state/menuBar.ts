@@ -32,16 +32,26 @@ function sync(): void {
 
 /** Whether the computer-use item shows, as last told to the shell. */
 let computerMenu: boolean | null = null;
+/** Set once the app is up: making the item takes the shell's main thread a while, which at
+ * startup holds up the first screen. */
+let computerMenuAllowed = false;
 
 /** Shows the computer-use menu-bar item while computer use and "Show in menu bar" are on. */
 function syncComputerMenu(): void {
   const { settings, info } = useApp.getState();
-  const shown = info?.platform === "macos" && settings.computerUse && settings.computerUseMenuBar;
+  const shown =
+    computerMenuAllowed && info?.platform === "macos" && settings.computerUse && settings.computerUseMenuBar;
   if (shown === computerMenu) return;
   computerMenu = shown;
   invoke("set_computer_menu", { shown }).catch((error: unknown) => {
     console.error("updating the computer-use menu-bar item failed", error);
   });
+}
+
+/** Lets the computer-use item show, once startup is done. */
+export function allowComputerMenu(): void {
+  computerMenuAllowed = true;
+  syncComputerMenu();
 }
 
 export function startMenuBar(): void {

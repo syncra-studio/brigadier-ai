@@ -58,7 +58,6 @@ jobs:
 
   build:
     name: Build, clippy, smoke (${{ matrix.name }})
-    needs: checks
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -75,18 +74,42 @@ jobs:
             os: windows-latest
             rust-targets: ""
             tauri-args: --bundles nsis
-            app: target/release/brigadier.exe
+            app: ../dev-drive/target/release/brigadier.exe
           - name: Linux
             os: ubuntu-24.04
             rust-targets: ""
             tauri-args: --bundles deb
             app: target/release/brigadier
     runs-on: ${{ matrix.os }}
+    env:
+      # Debug sidecars only serve clippy; omit their symbols to cut compile and cache I/O.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+
+      - name: Windows Cargo files on ReFS
+        if: runner.os == 'Windows'
+        uses: samypr100/setup-dev-drive@562171fe8df7401fdf582d766cd3b6ab80d5b1a0 # v4
+        with:
+          # Native Dev Drives need at least 50 GB. A dynamic disk uses only the space written.
+          drive-size: 64GB
+          drive-type: Dynamic
+          drive-format: ReFS
+          mount-path: ${{ github.workspace }}/../dev-drive
+          env-mapping: |
+            CARGO_HOME,{{ DEV_DRIVE }}/.cargo
+            CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
+
+      - name: Faster release builds outside release tags
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        # Keep release optimizations, but avoid cross-crate LTO and parallelize code generation.
+        # Cargo passes these settings to the app and its sidecar builds alike.
+        run: |
+          echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16" >> "$GITHUB_ENV"
 
       - name: Linux system dependencies
         if: runner.os == 'Linux'
@@ -103,6 +126,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: build-${{ matrix.name }}
+          # Mount beside the checkout so this stays relative to the Cargo workspace.
+          # The cache saves files before setup-dev-drive's post step dismounts the volume.
+          workspaces: . -> ${{ runner.os == 'Windows' && '../dev-drive/target' || 'target' }}
+          # Pull requests restore the base branch cache without uploading a branch-only copy.
+          save-if: ${{ github.event_name != 'pull_request' }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:

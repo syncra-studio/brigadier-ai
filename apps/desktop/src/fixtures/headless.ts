@@ -44,10 +44,17 @@ function chromium(): string {
 
 /**
  * Serves the fixtures through Vite until the test ends: its address, a scratch folder in the
- * system temporary folder (never the app's data), and what Vite logged.
+ * system temporary folder (never the app's data), what Vite logged, and `stopFirst`, which names
+ * what must be gone before the folder goes (the browser, whose profile is in it).
  */
-async function serveFixtures(t: TestContext): Promise<{ url: string; scratch: string; log: () => string }> {
+async function serveFixtures(t: TestContext): Promise<{
+  url: string;
+  scratch: string;
+  log: () => string;
+  stopFirst: (stop: () => void | Promise<void>) => void;
+}> {
   const scratch = mkdtempSync(join(tmpdir(), "fixture-render-"));
+  const stops: (() => void | Promise<void>)[] = [];
   // Keep Vite outside the pure-module test loader, which only resolves TypeScript imports.
   const config = {
     cacheDir: join(scratch, "vite-cache"),
@@ -77,6 +84,8 @@ async function serveFixtures(t: TestContext): Promise<{ url: string; scratch: st
   server.stdout.on("data", (chunk: Buffer) => { serverOutput += chunk.toString(); });
   server.stderr.on("data", (chunk: Buffer) => { serverErrors += chunk.toString(); });
   t.after(async () => {
+    // The browser first: until it's gone it writes into its profile here, and the folder can't go.
+    for (const stop of stops) await stop();
     if (server.exitCode === null && server.signalCode === null) {
       const stopped = new Promise((resolve) => server.once("exit", resolve));
       server.kill();
@@ -89,7 +98,8 @@ async function serveFixtures(t: TestContext): Promise<{ url: string; scratch: st
     // Its pipes too, which a process it started could otherwise hold open.
     server.stdout.destroy();
     server.stderr.destroy();
-    rmSync(scratch, { recursive: true, force: true });
+    // A process the browser started may still be closing its files: a few tries.
+    rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     assert.equal(serverErrors, "", "Vite must render without compilation errors");
   });
   const url = await new Promise<string>((resolve, reject) => {
@@ -110,7 +120,7 @@ async function serveFixtures(t: TestContext): Promise<{ url: string; scratch: st
       reject(new Error(`Vite exited ${code}: ${serverErrors}`));
     });
   });
-  return { url, scratch, log: () => serverOutput };
+  return { url, scratch, log: () => serverOutput, stopFirst: (stop) => stops.push(stop) };
 }
 
 /** The requests Vite started and never answered, from its log. */
@@ -127,7 +137,7 @@ function unanswered(log: string): string[] {
  */
 export async function renderFixturePage(t: TestContext, page: string, resultId: string, budgetMs = 5000): Promise<string> {
   const binary = chromium();
-  const { url, scratch, log } = await serveFixtures(t);
+  const { url, scratch, log, stopFirst } = await serveFixtures(t);
   // One process on macOS: a worker's sandbox lets Chromium look up Mach services but not register
   // the one its child processes rendezvous on, so the multi-process browser aborts there. Linux
   // Chrome crashes (SIGTRAP) in single-process mode, so it keeps the default.
@@ -156,7 +166,7 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
     }
   };
   const late = setTimeout(killGroup, 45000);
-  t.after(() => {
+  stopFirst(() => {
     clearTimeout(late);
     killGroup();
   });
@@ -201,7 +211,7 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
  */
 export async function renderFixtureLive(t: TestContext, page: string, resultId: string, timeoutMs = 60000, reducedMotion = false): Promise<string> {
   const binary = chromium();
-  const { url, scratch, log } = await serveFixtures(t);
+  const { url, scratch, log, stopFirst } = await serveFixtures(t);
   const profile = join(scratch, "profile");
   const oneProcess = process.platform === "darwin" ? ["--single-process"] : [];
   const browser = spawn(binary, [
@@ -212,7 +222,7 @@ export async function renderFixtureLive(t: TestContext, page: string, resultId: 
   browser.stderr.on("data", (chunk: Buffer) => { browserLog += chunk.toString(); });
   // A throwaway browser on a scratch profile: killed outright (one process ignores SIGTERM), with
   // the processes it started (its own group: Linux Chrome's renderers and helpers).
-  t.after(async () => {
+  stopFirst(async () => {
     if (browser.exitCode === null && browser.signalCode === null) {
       const stopped = new Promise((resolve) => browser.once("exit", resolve));
       process.kill(-browser.pid!, "SIGKILL");

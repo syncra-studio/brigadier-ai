@@ -28,6 +28,7 @@ import { markMounted, revealApp } from "@/lib/splash";
 import { markStartup } from "@/lib/startup";
 import { setMetricsStreaming, toggleInspector, toggleSettings } from "@/state/actions";
 import { openFolderPicker } from "@/state/addProject";
+import { allowComputerMenu } from "@/state/menuBar";
 import { useApp, type Selection } from "@/state/store";
 import { HOME_PLACE } from "@/state/terminalPlaces";
 
@@ -96,6 +97,7 @@ export function App() {
         // Settings, once the app is up and idle: it then opens on the next frame. (The smoke
         // check opens it straight away, and measures the app as it is.)
         if (!useApp.getState().info?.smoke) whenIdle(warmSettings);
+        whenIdle(allowComputerMenu);
         return appReady(nowEpochMs());
       })
       .then((coldStartMs) => {
