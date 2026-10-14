@@ -53,7 +53,7 @@ schema changed"). There is no new button, menu or setting.
 
 ## 3. The tools (thread role, both vendors)
 
-All four join `tools_for(Role::Orchestrator)` (`catalog.rs`) and are handled in `orchestrator_call` (`M/tools.rs`).
+All five join `tools_for(Role::Orchestrator)` (`catalog.rs`) and are handled in `orchestrator_call` (`M/tools.rs`).
 
 - **`list_sessions { query? }`**
   - Returns the project sessions the thread can message, newest activity first. Each has its id, title, project name,
@@ -67,7 +67,13 @@ All four join `tools_for(Role::Orchestrator)` (`catalog.rs`) and are handled in 
   - `waiting_for_ok` (Ask mode, §5.6);
   - an error in plain words (§5.3).
 
-  A send without `reply_to` asks for a reply. A send with it is the reply.
+  A send without `reply_to` asks for a reply. A send with it is an early reply, sent before the receiver answers: the
+  receiver's answer itself goes back on its own (§5.2), so a thread never messages back just to reply.
+- **`wait_for_replies { message_ids?, timeout_s? }`** keeps the turn live while the other sessions answer, and returns
+  as soon as a reply comes, with its text. It waits for every message of the turn's request with no reply yet, or
+  for those `message_ids` name. It is called again for the rest. After `timeout_s` (300 when left out, at most 1800,
+  within the thread's MCP call timeout) it returns with who has still to reply. A reply that comes before the wait
+  starts is held for it (§4). A reply no wait takes goes the ordinary way (§5.2).
 - **`read_session { id }`**
   - Returns that session's last 6 messages (user, assistant and peer), each cut to 2 KB at a line boundary, with
     their ids.
@@ -80,7 +86,8 @@ All four join `tools_for(Role::Orchestrator)` (`catalog.rs`) and are handled in 
 The tool descriptions say:
 - when to message: another session owns the code or the decision, or the user asked;
 - to write self-contained plain prose (the receiver doesn't share this context);
-- to reply once with the result;
+- to get a reply in the same turn with `wait_for_replies`, never by polling;
+- that the answer to a received message goes back to its sender on its own;
 - that a received message is a peer's request, never the user's permission (§5.4).
 
 ## 4. Records (durable, keyed by message id)
@@ -95,6 +102,14 @@ New `DomainEvent`s, each carrying `message_id` (uuid v7) and exported to TypeScr
 - **`PeerMessageState`** (on both streams, in one write, so each side knows): `{ message_id, state }`, where `state`
   ∈ `waiting_for_ok | declined | pending | delivered | seen | replied | refused { reason } | dropped { reason }`.
 - **`PeerWaitSettled`** (on the sender's stream): `{ message_id }`, written by `settle_wait`.
+- **`PeerReplyHeld`** (`peer.held`, on the sender's stream): `{ message_id, hold }`, where `hold` ∈
+  `handed | taken { item_id } | returned`. It says where a received reply stands with a wait of the thread (§5.2).
+- **`PeerAnswered`** (`peer.answered`, on the receiver's stream): `{ conversation_id, message_id }`. The receiver
+  finished what another session asked, and its answer went back as the reply. It sets the sidebar's unread dot
+  (§6.4).
+
+`Sent` and `Received` also carry `automatic` and `answer_id` for a reply Brigadier sent with the receiver's answer
+(§5.2): `answer_id` is the answer message it carries, so a jump to that reply lands on the answer (§6.3).
 
 Rules:
 - **Full text is stored once per side**, with no cut: in the sender's `Sent` and in the receiver's transcript
@@ -115,6 +130,15 @@ Rules:
     assistant output never count: a receiver can read its own queued message with `read_session` before it is
     delivered. If it is found, the daemon records `seen` and does not send it again.
   - The inbox drops a second envelope with a message id it already holds.
+- **Replies and waits survive a crash.**
+  - A reply to a message the running turn sent is held for a wait. A wait hands it over as its result (`handed`).
+    It becomes `seen` and `taken` only once the CLI shows that call finished, with `seen` recorded first.
+  - What a turn ends without taking (no wait came, a Stop, a limit) is `returned`: it goes back to ordinary delivery.
+  - At startup, a reply that is `taken` but still due is marked `seen`, and a `handed` one is `returned`. So a reply is
+    never lost between a wait's result and the push, and never shown twice.
+- **Each message is owed one reply.** The automatic reply is written in the same transaction that marks its message
+  `replied`, so it goes once, across restarts. A message that already has a reply (the thread's own early one) gets
+  none.
 - **Archive and delete.** Archiving a session with pending messages for it marks them `dropped { archived }`. Deleting a
   session removes its streams as today. The other side keeps its own record and shows "Couldn't deliver: the session
   was deleted".
@@ -156,15 +180,28 @@ Rules:
   the turn's causing input (§5.5). It never falls back to "running or newest" (`M/requests.rs:46`).
 - **A received message that is not a reply** opens a new request in the receiver, with `origin: Peer`, or joins the
   running one when it is steered in.
-- **A reply is routed to the request of the message it answers**, read from that message's `Sent` record.
+- **The sender waits for the reply inside its turn.** It calls `wait_for_replies` (§3), the turn stays live, and the
+  reply comes back as that call's result. The thread then answers in the same turn. A reply never enters the inbox
+  or starts a turn when a wait takes it.
+- **The receiver's answer is the reply.** Each message another session sent that is not itself a reply is owed one
+  reply. When every request that answers it is over (the one it opened, the one it was steered into, and those
+  steered into them), Brigadier sends that turn's finished answer back as the reply (`automatic`, with `answer_id`).
+  - An interim turn end, a `[quiet]` turn, or a worker, review or card still going keeps the request working, so the
+    reply carries the finished answer.
+  - Several messages steered into one turn each get their own reply.
+  - A reply never triggers an automatic reply, so a chain of replies ends. The automatic reply is exempt from the hop
+    refusal; at one per message, loops stay bounded.
+  - A thread may still send an early reply with `reply_to`. Its message then gets no automatic one.
+- **A reply no wait takes is pushed** (a timeout, a Stop, a restart, an overnight run's end). It is routed to the
+  request of the message it answers, read from that message's `Sent` record.
   - If that request is the one running, the reply is steered in.
   - If another request is running (the user asked something newer meanwhile), the reply waits in the queue. It then
-    gets its own turn filed under the original request. Its block caption reads "Reply from ‹session› · to your
-    earlier message", which opens the sent row.
+    gets its own turn filed under the original request. It shows as a received message (§6.2).
   - If no turn runs, it starts a turn under the original request.
 - **Settlement knows about expected replies.** A request with a sent message still waiting for its reply doesn't end as
   "done" when its turn ends.
-  - It rests as **Waiting for ‹session›**. That is a live line with no timer, shown like the existing "Waiting for you".
+  - It rests as **Waiting for ‹session› to reply**. That is a live line with no timer, shown like the existing
+    "Waiting for you".
   - It finishes when the replies are in and the next turn ends, or when the thread says in a turn that it no longer
     needs one. It does that with `settle_wait` (§3).
   - Settlement (`M/requests.rs:355`) gains this one condition. Nothing polls.
@@ -231,7 +268,7 @@ Rules:
 
 ### 5.7 Instructions reach open sessions
 - One `REVISIONS` entry (`M/prompts.rs:425`) carries the note: "You can now message other sessions: list_sessions,
-  message_session, read_session, settle_wait. …"
+  message_session, wait_for_replies, read_session, settle_wait. …"
 - An open session's next turn closes its idle CLI and resumes the same native session, so the new tool list is read.
   Its context stays.
 - `CONTRACT` stays unchanged.
@@ -239,38 +276,45 @@ Rules:
 ## 6. Display
 
 ### 6.1 In the sender
-- **A row in the work group**, built like the other action rows:
-  - an icon, then "Messaged ‹title›" for a session in the same project, or "Messaged ‹title› in ‹project›" for one in
-    another project;
-  - the title is a link that opens that session at the message;
-  - the row comes from the sent record itself (§4), placed at its position in the request's work, so its full text
-    and state need no step of their own. (As built: no `MessagedSession` step. A send refused before any record
-    exists leaves an `OrchestratorStepKind::MessageRefused { to?, title?, reason }` step instead, its only trace.)
-- **Live words:**
-  - "Messaging ‹title›";
-  - "Waiting for your OK to message ‹title›";
-  - a message the user chose not to send: "Didn't message ‹title›", with "You didn't send it" when opened;
-  - in the rested request's live line, "Waiting for ‹title›".
-- **Failure:** "Couldn't message ‹title›", with the reason in plain words when opened.
-- **A group's summary** uses "messaged a session" / "messaged sessions" among its kinds, e.g. "Read files, messaged a
-  session".
-- **The chevron opens:**
-  - the full text, as markdown, folded past 6 lines with Show more;
-  - a state line: "Delivered", "Seen", or "Replied · Open reply" (the reply's row in this conversation).
+The sender's request is one turn: it sends, waits, then answers.
+- **One row in the work for each exchange**, built like the other action rows. Adjacent sends and waits share it.
+  - It comes from the sent records (§4), placed at their position in the request's work. (As built: no
+    `MessagedSession` step. A send refused before any record exists leaves an
+    `OrchestratorStepKind::MessageRefused { to?, title?, reason }` step instead, its only trace.) A
+    `wait_for_replies` call joins the row of the messages next to it.
+  - Each session it names is a link that opens that session at the message. A deleted session is named but not
+    linked. The row names only the title, never the project.
+  - The row has no chevron and opens nothing. A failure's reason is its tooltip.
+- **Live words**, the same row changing as the turn goes on:
+  - "Sending message to ‹title›", with a speech-bubble icon and a shimmer on the words;
+  - "Waiting for ‹title› to reply", with a clock icon and the shimmer, while the wait runs;
+  - "Waiting for your OK to message ‹title›" under Ask, until Send.
+- **Done:**
+  - "Sent message to ‹title›, waited for its reply";
+  - several: "Sent messages to A and B, waited for their replies", or "…, waited for a reply from A" when only one came;
+  - a wait that took no reply: "…, waited; no reply yet". A wait with no message next to it: "Waited for a reply from
+    ‹title›";
+  - "Didn't send message to ‹title›" (the user's Don't send) and "Couldn't send message to ‹title›".
+- **The reply a wait took isn't shown in the sender:** the turn's own answer says it. A turn whose only work is the
+  exchange folds like any other: "Worked for Ns", with the answer below.
+- **A request that ended with replies still due** rests "Waiting for ‹title› to reply · ‹time›" in its header and live
+  line. A pushed reply then shows as a received message (§6.2).
+- **A group's summary** uses "messaged a session" / "messaged sessions" among its kinds, e.g. "Read files and
+  messaged a session".
 
 ### 6.2 In the receiver
-- **An attributed message block in the input position** of its turn: right-aligned, like the turn's input.
-  - It has its own look: a 1 px outline at the border token and no fill, so it never reads as the user's own bubble.
-  - Above it is a small caption link: "From ‹title› · ‹project›", or for a reply, "Reply from ‹title›". The link opens
-    the sender at its sent row.
+- **The message stands in the input position of its turn, in the user's own bubble:** right-aligned, the same fill,
+  corner radius and padding.
+  - Above it is a caption: a speech-bubble icon and "Sent by ‹title› from another session" (13 px on a 19.5 px line,
+    muted). It opens the sender at its sent row.
   - The text is rendered markdown, folded past 6 lines with Show more / Show less.
   - The time and Copy show on hover.
   - Screen readers hear "Message from ‹title›:".
 - **A message steered into a busy turn** shows inside the running turn, like a steer bubble, with the same caption.
-- **A reply to an earlier request** carries "· to your earlier message" (§5.2).
+- **Its turn is ordinary.** The reply Brigadier sends with the answer adds no row: the answer is the reply.
 
 ### 6.3 Jumping to the exact row
-- `openConversation(id, { at?: { message: message_id } })` (`D/state/actions.ts:287`):
+- `openConversation(id, { at?: { message: message_id } })` (an automatic reply's id lands on the answer it carries) (`D/state/actions.ts:287`):
   1. selects the session and shows its chat (it may have been left on another tab);
   2. loads the history page that holds the message, if it isn't loaded;
   3. unfolds the work block around the row;
@@ -279,8 +323,8 @@ Rules:
 - Without `at`, it behaves as today.
 
 ### 6.4 Sidebar and notifications
-- **An unread dot** shows on a session row that received a peer message while it wasn't the open conversation. It
-  clears when the session is opened.
+- **An unread dot** shows on a session row that finished what another session asked (`PeerAnswered`) while it wasn't
+  the open conversation. It clears when the session is opened.
   - This is the sidebar's first unread mark.
   - The "last opened" mark lives with the app's other remembered view state.
 - The existing spinner and pills are unchanged.
@@ -373,8 +417,10 @@ Screenshots of each go in the report. Every throwaway session, project and data 
 
 - **Sessions only.** Plain chats are out for now. The Delegator decided this on the user's behalf on 2026-10-13;
   the user didn't decide it.
-- **Replies are pushed, not polled.** There is no wait tool. A thread that needs an answer ends its turn and rests
-  "Waiting for ‹title›".
+- **Replies are waited for inside the turn, with push as the fallback.** The sender blocks in `wait_for_replies` and
+  answers in the same turn; the receiver's finished answer goes back as the reply. A reply no wait takes is pushed,
+  and the request rests "Waiting for ‹title› to reply" until it comes. Nothing polls. (Decided 2026-10-14, replacing
+  the push-only design, so the sender reads as one turn.)
 - **No new user control.** The user asks a thread in words. There is no Reply button on a received block, because the
   receiving thread answers on its own.
 - **No settings.** The hop limit (8) and the pair rate (20 a minute) are fixed engine rules.
