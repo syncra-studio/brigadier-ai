@@ -263,6 +263,8 @@ scripts/uninstall.sh --app-id ai.brigadier.app
   requests need an accepted issue first, and they're closed automatically without one.
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): building, checks, layout and dependency notes.
 - [SECURITY.md](SECURITY.md): report vulnerabilities privately, never in a public issue.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): Contributor Covenant 2.1; report problems to
+  hello@syncra.studio.
 - [docs/](docs/README.md): design plans and the evidence behind the numbers above.
 - MIT, see [LICENSE](LICENSE). Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 

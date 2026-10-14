@@ -129,6 +129,9 @@ machine, and say so.
 Be direct, factual and civil. Personal attacks, harassment, spam and repeated rule-breaking get
 you blocked from the repository without further notice.
 
+This project follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report conduct problems to
+hello@syncra.studio.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).
