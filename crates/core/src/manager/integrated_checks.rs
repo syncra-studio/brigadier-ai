@@ -841,7 +841,7 @@ impl SessionManager {
         if matches!(check.state, IntegratedCheckState::Passed { .. }) {
             self.release_checked_holds(id).await;
         }
-        if let Some(text) = self.check_message(check).await {
+        if let Some((text, optional_pass)) = self.check_message(check).await {
             let task_id = check.tasks.last().cloned();
             // The request whose answer waits for it, else the newest it was made due for.
             let request = self
@@ -850,7 +850,11 @@ impl SessionManager {
                 .or_else(|| check.requests.last().cloned());
             let envelope = Envelope {
                 kind: InjectionKind::Decision,
-                label: format!("checks {}", check.id),
+                label: format!(
+                    "checks {}{}",
+                    if optional_pass { "passed " } else { "" },
+                    check.id
+                ),
                 task_id,
                 text,
             };
@@ -887,7 +891,7 @@ impl SessionManager {
     }
 
     /// What the thread hears of a check's end; none for a pass no answer waits for.
-    async fn check_message(&self, check: &IntegratedCheck) -> Option<String> {
+    async fn check_message(&self, check: &IntegratedCheck) -> Option<(String, bool)> {
         let board = self.core.board(&check.conversation_id).await.ok()?;
         let tasks: Vec<&Task> = check
             .tasks
@@ -915,14 +919,17 @@ impl SessionManager {
                             .join(", ")
                     )
                 };
-                Some(format!(
-                    "[checks passed at {at}] The session's full checks ({}) pass on `{}`{covered}.{look}",
-                    commands
-                        .iter()
-                        .map(|command| format!("`{command}`"))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    check.branch,
+                Some((
+                    format!(
+                        "[checks passed at {at}] The session's full checks ({}) pass on `{}`{covered}.{look}",
+                        commands
+                            .iter()
+                            .map(|command| format!("`{command}`"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        check.branch,
+                    ),
+                    look.is_empty(),
                 ))
             }
             IntegratedCheckState::Failed {
@@ -946,18 +953,24 @@ impl SessionManager {
                             .join("; ")
                     )
                 };
-                Some(format!(
-                    "[checks failed at {at}] The session's full checks failed on `{branch}`: `{command}` ({status}).{excerpt}{whole}\n{landed}\nJudge which change broke it and send it back to that task's worker in one fix task (role fix, subject that task: it resumes the worker's own session), with the failing command and the lines that show why. Don't run the full checks yourself: once the fix lands they run again on their own. A failure that isn't the code's (a flaky test, the machine): rerun_checks.",
-                    branch = check.branch,
-                    whole = output
-                        .as_ref()
-                        .map(|alias| format!("\nThe whole output: read_artifact {alias}."))
-                        .unwrap_or_default(),
+                Some((
+                    format!(
+                        "[checks failed at {at}] The session's full checks failed on `{branch}`: `{command}` ({status}).{excerpt}{whole}\n{landed}\nJudge which change broke it and send it back to that task's worker in one fix task (role fix, subject that task: it resumes the worker's own session), with the failing command and the lines that show why. Don't run the full checks yourself: once the fix lands they run again on their own. A failure that isn't the code's (a flaky test, the machine): rerun_checks.",
+                        branch = check.branch,
+                        whole = output
+                            .as_ref()
+                            .map(|alias| format!("\nThe whole output: read_artifact {alias}."))
+                            .unwrap_or_default(),
+                    ),
+                    false,
                 ))
             }
-            IntegratedCheckState::Interrupted { reason } => Some(format!(
-                "[checks couldn't run at {at}] The session's full checks on `{}` couldn't finish: {reason}. That tip is unchecked, so nothing merges until they pass. Fix what stops them if you can, then call rerun_checks.",
-                check.branch
+            IntegratedCheckState::Interrupted { reason } => Some((
+                format!(
+                    "[checks couldn't run at {at}] The session's full checks on `{}` couldn't finish: {reason}. That tip is unchecked, so nothing merges until they pass. Fix what stops them if you can, then call rerun_checks.",
+                    check.branch
+                ),
+                false,
             )),
             IntegratedCheckState::Due | IntegratedCheckState::Running { .. } => None,
         }

@@ -572,3 +572,111 @@ async fn a_run_cut_off_by_a_restart_runs_again_and_an_archive_ends_it() {
     .await;
     flow.stop().await;
 }
+
+/// A pass queued while a later turn runs is needed only if that turn still defers its answer.
+async fn pass_during_a_later_turn(quiet: bool) {
+    let first = Arc::new(tokio::sync::Notify::new());
+    let later = Arc::new(tokio::sync::Notify::new());
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (first_gate, later_gate, heard) = (first.clone(), later.clone(), inputs.clone());
+    let flow = Flow::start(
+        "integrated-mid-turn",
+        options(),
+        script(move |turn| {
+            let (first, later, heard) = (first_gate.clone(), later_gate.clone(), heard.clone());
+            async move {
+                heard.lock().unwrap().push(turn.input.clone());
+                if turn.input.starts_with("Wait for checks") {
+                    first.notified().await;
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("Continue the answer") {
+                    later.notified().await;
+                    return Reply::text(if quiet {
+                        "[quiet]"
+                    } else {
+                        "The work is complete."
+                    });
+                }
+                Reply::text("The checks pass.")
+            }
+        }),
+    )
+    .await;
+    std::fs::write(hold(&flow.repo), "").unwrap();
+    flow.say("Wait for checks.").await;
+    let board = flow
+        .until("the first turn", |_| !inputs.lock().unwrap().is_empty())
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    let tip = brigadier_git::Oid(git(&flow.repo, &["rev-parse", "main"]));
+    flow.manager
+        .checks_due(
+            &flow.conversation,
+            &flow.repo,
+            "main",
+            &tip,
+            Some(request.clone()),
+        )
+        .await;
+    first.notify_one();
+    flow.until("the first turn deferring to checks", |board| {
+        board.run == crate::work::RunState::Idle
+            && board.requests[&request].state == crate::work::RequestState::Working
+    })
+    .await;
+    flow.manager
+        .deliver_for(
+            &flow.conversation,
+            crate::manager::conversation::Envelope {
+                kind: crate::work::InjectionKind::Decision,
+                label: "continue".into(),
+                task_id: None,
+                text: "Continue the answer".into(),
+            },
+            Some(request.clone()),
+        )
+        .await;
+    flow.until("the later turn", |_| {
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("Continue the answer"))
+    })
+    .await;
+    std::fs::remove_file(hold(&flow.repo)).unwrap();
+    // Wait for delivery, not only the stored verdict: it is in the inbox before this turn ends.
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    let deadline = tokio::time::Instant::now() + super::PATIENCE;
+    while !conv.request_activity().await.carried.contains(&request) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "pass was not queued"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    later.notify_one();
+    flow.settled().await;
+    let heard = inputs.lock().unwrap().clone();
+    assert_eq!(
+        heard
+            .iter()
+            .filter(|input| input.contains("[checks passed at "))
+            .count(),
+        usize::from(quiet),
+        "{heard:#?}"
+    );
+    assert_eq!(heard.len(), if quiet { 3 } else { 2 }, "{heard:#?}");
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_pass_during_a_turn_that_answers_does_not_start_an_extra_turn() {
+    pass_during_a_later_turn(false).await;
+}
+
+#[tokio::test]
+async fn a_pass_during_a_turn_that_still_defers_delivers_once() {
+    pass_during_a_later_turn(true).await;
+}
