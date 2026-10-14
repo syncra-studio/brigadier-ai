@@ -2677,9 +2677,7 @@ impl SessionManager {
                     },
                 );
                 grant_values.push(grant.clone());
-                // Loaded from the start, never behind a Claude thread's tool search with the
-                // computer tools: a thread has to see `run` to run a long command through it.
-                let mut server = self.brigadier_server(grant, RUNNER_TOOL_TIMEOUT_SECS, true);
+                let mut server = self.brigadier_server(grant, RUNNER_TOOL_TIMEOUT_SECS, false);
                 // Under Ask for approval the user approves each command that leaves the sandbox;
                 // a Claude thread's at Approve for me goes to Brigadier's reviewer instead.
                 if commands == RunTools::WithEscalation
