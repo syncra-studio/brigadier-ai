@@ -14,6 +14,7 @@ import type {
   Decision,
   DiffStat,
   EventEnvelope,
+  IntegratedCheck,
   MachineStep,
   MemoryChange,
   MessageQueue,
@@ -83,6 +84,8 @@ export type Board = {
   reviews: Record<string, ReviewRun>;
   /** The thread's previews (a dev server, the app it runs for the user), by id. */
   previews: Record<string, Preview>;
+  /** The runs of the session's full checks on its landed work, by id (SESSION-FIXES-PLAN.md §11). */
+  integratedChecks: Record<string, IntegratedCheck>;
   /** Overnight runs, a segment each, by id. */
   overnight: Record<string, OvernightRun>;
   /** What each user message set in motion, by request id (the message's id). */
@@ -263,6 +266,7 @@ export function emptyBoard(conversationId: string): Board {
     plans: {},
     reviews: {},
     previews: {},
+    integratedChecks: {},
     overnight: {},
     requests: {},
     workerSteps: [],
@@ -307,6 +311,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "questionUpdated",
   "planUpdated",
   "reviewUpdated",
+  "integratedCheckUpdated",
   "previewUpdated",
   "previewsCleared",
   "overnightUpdated",
@@ -369,6 +374,8 @@ export function boardFromView(
     reviews: byId(view.reviews ?? []),
     // A daemon from before previews sends none.
     previews: byId(view.previews ?? []),
+    // Nor one from before the full checks ran on the landed work.
+    integratedChecks: byId(view.integratedChecks ?? []),
     overnight: byId(view.overnight),
     requests: byId(view.requests),
     workerSteps: view.workerSteps,
@@ -561,6 +568,8 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, plans: placed(board.plans, event.plan, envelope, board) };
     case "reviewUpdated":
       return { ...board, reviews: { ...board.reviews, [event.review.id]: event.review } };
+    case "integratedCheckUpdated":
+      return { ...board, integratedChecks: { ...board.integratedChecks, [event.check.id]: event.check } };
     case "previewUpdated":
       return { ...board, previews: { ...board.previews, [event.preview.id]: event.preview } };
     case "previewsCleared":

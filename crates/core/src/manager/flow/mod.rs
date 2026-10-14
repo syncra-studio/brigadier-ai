@@ -368,6 +368,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "preview_log" => ToolCall::Orchestrator(O::PreviewLog(arg(name, args))),
         "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
         "clean_up" => ToolCall::Orchestrator(O::CleanUp),
+        "rerun_checks" => ToolCall::Orchestrator(O::RerunChecks),
         "project_map" => ToolCall::Worker(W::ProjectMap),
         "list_sessions" => ToolCall::Orchestrator(O::ListSessions(arg(name, args))),
         "message_session" => ToolCall::Orchestrator(O::MessageSession(arg(name, args))),
@@ -1377,6 +1378,8 @@ pub(crate) struct Options {
     /// The thread's vendor (Claude by default).
     pub thread: ProviderKind,
     pub behavior: Arc<FakeBehavior>,
+    /// Files the repository starts with besides its README (path, contents).
+    pub files: Vec<(&'static str, &'static str)>,
 }
 
 impl Default for Options {
@@ -1389,6 +1392,7 @@ impl Default for Options {
             reviews: None,
             thread: ProviderKind::Claude,
             behavior: Arc::default(),
+            files: Vec::new(),
         }
     }
 }
@@ -1403,6 +1407,11 @@ impl Flow {
         git(&repo, &["init", "-q", "-b", "main"]);
         std::fs::write(repo.join("README.md"), "# Flow\n").unwrap();
         std::fs::write(repo.join(".gitignore"), "*.log\n").unwrap();
+        for (path, text) in &options.files {
+            let path = repo.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-q", "-m", "Start"]);
         let data = dir.join("data");
@@ -1786,6 +1795,8 @@ mod findings_tests;
 mod git_writing_tests;
 #[cfg(test)]
 mod held_merge_tests;
+#[cfg(all(test, unix))]
+mod integrated_checks_tests;
 #[cfg(test)]
 mod litter_tests;
 #[cfg(test)]

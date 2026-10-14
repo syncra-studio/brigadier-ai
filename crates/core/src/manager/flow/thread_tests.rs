@@ -726,20 +726,10 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
                             "Add notes\n\nBrigadier-Author: thread",
                         );
                         made.lock().unwrap().extend([start, tip]);
-                        // The branch moved under the worker: it is rebased, checks itself and
-                        // lands on its own, while this turn still runs.
+                        // The branch moved under the worker: it is rebased and lands at once.
                         let landed = turn.call("land_phase", json!({"task": "task-1"})).await;
                         assert!(!landed.is_error, "{}", landed.text);
-                        assert!(landed.text.contains("rebased"), "{}", landed.text);
-                        let deadline = std::time::Instant::now() + super::PATIENCE;
-                        loop {
-                            let tasks = turn.call("list_tasks", json!({})).await;
-                            if tasks.text.contains("Landed") {
-                                break;
-                            }
-                            assert!(std::time::Instant::now() < deadline, "{}", tasks.text);
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                        }
+                        assert!(landed.text.starts_with("Landed "), "{}", landed.text);
                         return Reply::text("Added the greeting and notes.");
                     }
                     if turn.input.contains("Add a greeting") {

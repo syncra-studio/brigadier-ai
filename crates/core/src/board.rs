@@ -29,6 +29,7 @@ pub(crate) const KINDS: &[&str] = &[
     "question.updated",
     "plan.updated",
     "review.updated",
+    "integrated_check.updated",
     "thread.seen",
     "output.stored",
     "thread.looked",
@@ -137,6 +138,8 @@ pub(crate) struct Board {
     pub(crate) runs: HashMap<OvernightRunId, OvernightRun>,
     /// Its one-shot reviews, by id.
     pub(crate) reviews: HashMap<String, ReviewRun>,
+    /// Its runs of the full checks on the integrated tree, by id.
+    pub(crate) integrated_checks: HashMap<String, crate::work::IntegratedCheck>,
     /// Per branch: the tip up to which the thread's commits were looked at.
     pub(crate) thread_tips: HashMap<String, String>,
     /// Per branch: where the thread's commits were first looked for, which its self-edit
@@ -253,6 +256,10 @@ impl Board {
             }
             DomainEvent::ReviewUpdated { review } => {
                 self.reviews.insert(review.id.clone(), review.clone());
+            }
+            DomainEvent::IntegratedCheckUpdated { check } => {
+                self.integrated_checks
+                    .insert(check.id.clone(), check.clone());
             }
             DomainEvent::ThreadCommitsSeen { branch, tip, .. } => {
                 self.thread_starts
@@ -658,6 +665,13 @@ impl Board {
         let mut reviews: Vec<ReviewRun> = self.reviews.values().cloned().collect();
         reviews.sort_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms).then(a.id.cmp(&b.id)));
         reviews
+    }
+
+    /// Its runs of the full checks on the integrated tree, oldest first (by number).
+    pub(crate) fn sorted_integrated_checks(&self) -> Vec<crate::work::IntegratedCheck> {
+        let mut checks: Vec<_> = self.integrated_checks.values().cloned().collect();
+        checks.sort_by_key(|check| crate::manager::integrated_check_number(&check.id));
+        checks
     }
 
     /// Its previews, oldest first.

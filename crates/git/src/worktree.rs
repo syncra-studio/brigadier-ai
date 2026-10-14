@@ -530,6 +530,21 @@ impl Worktree {
         Ok(Some(commit))
     }
 
+    /// Puts a detached checkout at `at`: its tracked files as they are there, and whatever a
+    /// check left in them, or left untracked and not ignored, gone. Its ignored folders
+    /// (dependency installs, build output) stay, which is what makes the next check warm.
+    /// Refused on a checkout that is on a branch.
+    pub fn check_out_detached(&self, at: &Oid) -> Result<()> {
+        valid_oid(at)?;
+        if self.repo.symbolic_head()?.is_some() {
+            return Err(Error::Invalid("the checkout is on a branch".into()));
+        }
+        self.repo
+            .cmd(&["checkout", "-q", "--force", "--detach", &at.0], false)?;
+        self.repo.cmd(&["clean", "-q", "-d", "--force"], false)?;
+        Ok(())
+    }
+
     /// Whether HEAD holds commits no branch, tag or remote branch has: a detached checkout
     /// that moved on from where it was made. Removing the checkout would lose them.
     pub fn commits_only_here(&self) -> Result<bool> {
@@ -861,6 +876,37 @@ mod tests {
             "n\n"
         );
         assert!(f.dir.join("warm/cache/built").exists(), "the cache stays");
+    }
+
+    #[test]
+    fn a_detached_checkout_checks_out_another_commit_keeping_only_its_ignored_files() {
+        let f = fixture("check-out-detached");
+        let wt = f
+            .repo
+            .add_worktree(
+                &f.dir.join("checks"),
+                WorktreeSpec::Detached { at: f.base.clone() },
+            )
+            .expect("a detached worktree");
+        fs::write(f.repo.root().join(".git/info/exclude"), "cache/\n").expect("an exclude");
+        fs::create_dir_all(f.dir.join("checks/cache")).expect("a folder");
+        fs::write(f.dir.join("checks/cache/built"), "built\n").expect("a cached file");
+        // What a check left behind: a changed tracked file and an untracked one.
+        let newer = commit(&f.wt.repo, "Newer", &[("n.rs", "n\n")]);
+        fs::write(f.dir.join("checks/README.md"), "changed by a check\n").expect("a change");
+        fs::write(f.dir.join("checks/left.txt"), "left\n").expect("a leftover");
+        wt.check_out_detached(&newer).expect("the newer commit");
+        assert_eq!(wt.head().expect("HEAD"), newer);
+        assert_eq!(wt.repo.symbolic_head().expect("HEAD"), None);
+        assert_eq!(
+            fs::read_to_string(f.dir.join("checks/n.rs")).expect("the newer file"),
+            "n\n"
+        );
+        assert!(!f.dir.join("checks/left.txt").exists(), "the leftover goes");
+        assert!(wt.repo.status(false).expect("status").dirty().is_empty());
+        assert!(f.dir.join("checks/cache/built").exists(), "the cache stays");
+        // A checkout on a branch is never moved this way.
+        assert!(f.wt.check_out_detached(&f.base).is_err());
     }
 
     #[test]

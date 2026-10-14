@@ -626,6 +626,7 @@ impl SessionManager {
         .await;
         match found {
             Ok(Some((tip, base))) => {
+                let theirs = base.is_some();
                 if let Some(base) = base {
                     // Commits that only fix review findings get no review of their own, and a
                     // held merge's consent covers them (SESSION-FIXES-PLAN.md Q3.4, Q6.1).
@@ -650,6 +651,12 @@ impl SessionManager {
                     }
                 }
                 self.record_thread_tip(id, branch, &tip).await;
+                // The thread's own commits make the session's full checks due, as a landing
+                // does (SESSION-FIXES-PLAN.md §11).
+                if theirs {
+                    let request = self.request_for(id, None).await;
+                    self.checks_due(id, repo, branch, &tip, request).await;
+                }
             }
             Ok(None) => {}
             Err(err) => {

@@ -186,6 +186,7 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
   - Add a check cache keyed by (tree hash including uncommitted changes, command, relevant env) → exit, digest, log blob. Workers run checks through a `run_check` tool.
   - "Only affected checks": a per-project path → check map, learned into the Brain.
   - A shared per-project `CARGO_TARGET_DIR` for check builds. The build lease already serializes them (`crates/core/src/machine/builds.rs`).
+  - Since 2026-10-14 workers run only their own change's checks; the session's full checks run once per integrated tip, in the background (SESSION-FIXES-PLAN.md §11).
 - **Lever 4: one-shot cross-vendor reviews** (Q12).
 - **Lever 5: non-blocking plan review.** `review_plan` runs a one-shot review in the background. The findings reach the thread as a message, and the worker is never parked on it.
 - **Lever 6: pre-warmed worker.** When a user message arrives, the daemon prepares one task worktree from the session tip (`M/warm.rs:156`; per-task today, no pool) and one idle CLI for the default implement route. It is used by the next `delegate_task`. It is dropped when the tip moves or after 10 min.

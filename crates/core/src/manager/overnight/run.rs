@@ -492,6 +492,43 @@ impl SessionManager {
             ));
         }
         let tip = self.run_tip(&run).await?;
+        // A phase is done once the session's full checks pass at the run's tip
+        // (SESSION-FIXES-PLAN.md §11): that tip is what the user's Merge takes.
+        if args.outcome == StepOutcome::Done
+            && let (Some(workspace), Some(Setup::Session { repo, .. })) =
+                (run.workspace.as_ref(), self.core.conversation(id)?.setup)
+        {
+            use super::super::integrated_checks::ChecksGate;
+            match self
+                .checks_gate(
+                    id,
+                    std::path::Path::new(&repo),
+                    &workspace.branch,
+                    super::super::integrated_checks::MERGE_WAIT,
+                )
+                .await?
+            {
+                ChecksGate::Passed(checked) if checked.0 == tip => {}
+                ChecksGate::Passed(_) => {
+                    return Err(Error::Invalid(format!(
+                        "`{}` moved while the phase was settled; settle it again.",
+                        workspace.branch
+                    )));
+                }
+                ChecksGate::Waiting(why) => {
+                    return Err(Error::Invalid(format!(
+                        "Phase {} isn't settled: the session's full checks {why}, and a phase is done only once they pass at the run's tip. Their result comes as a message; settle the phase then.",
+                        args.phase
+                    )));
+                }
+                ChecksGate::Failed(why) => {
+                    return Err(Error::Invalid(format!(
+                        "Phase {} isn't settled: the session's full checks {why}. Send the failure back to the task that broke it; once the fix lands they run again, and the phase settles after they pass.",
+                        args.phase
+                    )));
+                }
+            }
+        }
         let settlement = StepSettlement {
             outcome: args.outcome,
             summary: summary.clone(),

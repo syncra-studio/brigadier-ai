@@ -376,6 +376,10 @@ impl SessionManager {
                 last.push('\n');
                 last.push_str(&prompts::undecided_note(&undecided));
             }
+            if let Some(line) = super::integrated_checks::checking_line(&board, request) {
+                last.push('\n');
+                last.push_str(&line);
+            }
         }
         notes
     }
@@ -449,7 +453,10 @@ fn runs_in(board: &Board, request: &str) -> bool {
 ///   commits'), or a landing's review not stored yet, when its last turn ended on [quiet]
 ///   (`deferred`): the thread left its answer to the review's end. A review that runs on after
 ///   the thread answered is a late event and holds nothing up; its findings make the request
-///   work again and come as an update line (SESSION-FIXES-PLAN.md bug 4).
+///   work again and come as an update line (SESSION-FIXES-PLAN.md bug 4);
+/// - the session's full checks due or running for it, when its last turn ended on [quiet]: the
+///   thread left its answer to their result (SESSION-FIXES-PLAN.md §11). Checks that run on
+///   after the thread answered hold nothing up; a failure comes as a message all the same.
 ///
 /// A request stopped or failed stays so whatever it is owed (see `settle_requests`); the
 /// user's Stop also ends its watches and held merge (`SessionManager::interrupt`).
@@ -478,7 +485,8 @@ pub(super) fn owed_a_turn(board: &Board, request: &str, deferred: bool, reviews_
             review.state == ReviewState::Running
                 && review_request(board, review).as_deref() == Some(request)
         }) || (reviews_due && tasks_in(board, request, |state| state == TaskState::Landed)));
-    watched || held || reviewed
+    let checking = deferred && super::integrated_checks::checking_for(board, request);
+    watched || held || reviewed || checking
 }
 
 /// The request a review belongs to: its own, else its task's.
