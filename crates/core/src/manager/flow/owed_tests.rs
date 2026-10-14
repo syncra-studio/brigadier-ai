@@ -346,6 +346,11 @@ async fn a_review_of_the_threads_commit_keeps_a_quiet_request_working_until_it_e
                 commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
                 return Reply::text("[quiet]");
             }
+            if turn.input.starts_with("[checks passed") {
+                // The test repo has no checks, so they pass at once: the thread still leaves
+                // its answer to the review (answering here would make the review a late event).
+                return Reply::text("[quiet]");
+            }
             Reply::text("Noted.")
         }),
     )
@@ -492,6 +497,10 @@ async fn a_regenerated_quiet_turn_waits_for_its_review_despite_the_earlier_answe
                         return Reply::text("Ready to add the notes.");
                     }
                     commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.starts_with("[checks passed") {
+                    // As in the review test above: the answer is still left to the review.
                     return Reply::text("[quiet]");
                 }
                 Reply::text("Added and reviewed the notes.")
