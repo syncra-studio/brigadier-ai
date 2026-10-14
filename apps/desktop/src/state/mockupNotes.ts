@@ -1,9 +1,9 @@
 import { create } from "zustand";
 
 /**
- * The user's notes on a mockup (SESSION-FIXES-PLAN.md Q10), as the reference app comments on
- * an image: a click drops a numbered marker on a screenshot and a note says what to change
- * there. They are kept until sent together, as one message with the marked screenshots.
+ * The user's notes on a mockup (SESSION-FIXES-PLAN.md Q10): a click drops a numbered marker on
+ * a screenshot and a note says what to change there. They are kept until sent together, as one
+ * message with the marked screenshots.
  */
 
 /** A note at a point of one screen's screenshot, as fractions of its width and height. */
@@ -36,9 +36,9 @@ export function markerNumber(notes: readonly MockupNote[], note: MockupNote): nu
 }
 
 /**
- * The one message the notes are sent as: one `Image N:` block per marked screenshot (the
- * reference app's shape), each note with its point and marker number, so the thread passes
- * them to the mockup's worker with the files.
+ * The one message the notes are sent as: one `Image N:` block per marked screenshot, each
+ * note with its point and marker number, so the thread passes them to the mockup's worker
+ * with the files.
  */
 export function notesMessage(version: number, notes: readonly MockupNote[]): string {
   const blocks = notesByScreen(notes).map(({ screen, notes: own }, index) => [

@@ -400,7 +400,7 @@ If a task is inconclusive, rerun it once with the arm order swapped. Missing evi
 > - Never touch `/Applications/Brigadier.app`, its daemon or `~/Library/Application Support/Brigadier`. Test with a dev identity and a scratch `BRIGADIER_DATA_DIR`. Never smoke-test the installed bundle on a temp dir.
 > - No backups (no `.bak`, no `backup/*` branches, no app copies). Clean up your own scratch, test identities and processes. Kill only PIDs you started; never `pkill`/`killall` by name.
 > - Models: never Fable; Opus 5.5 by default; Sonnet 5 only for mechanical chores; Codex for reviews and bounded tasks; effort never above `high`, no ultracode.
-> - Never name the reference app or its vendor in the repo (see memory). No user-facing quality knobs: ship the best behaviour on.
+> - Never name any app studied for ideas, or its vendor, in the repo (see memory). No user-facing quality knobs: ship the best behaviour on.
 > - Check every third-party CLI flag or API against the installed version's `--help` or current docs, and cite it.
 > - Before you report: `tools/full-checks.sh`, `cargo fmt`, `clippy`, `gen-ts`, `pnpm` checks on the exact tree.
 

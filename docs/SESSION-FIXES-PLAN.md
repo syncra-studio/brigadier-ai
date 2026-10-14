@@ -696,14 +696,14 @@ Brigadier's own briefs, and used where a live look settles a question.
 
 ### REA for study tasks (added 2026-10-11)
 **Outcome (2026-10-11): measured and dropped.** REA was built on its own branch and its measured study question run
-with Q6's A/B rules (`docs/evidence/2026-10-11-rea-study.md`). It missed the gate: with REA the worker used 1.12× the
+with Q6's A/B rules. It missed the gate: with REA the worker used 1.12× the
 tokens of the worker without it (6.29M against 5.60M raw; the gate is ≤ 0.5×), took 667 s against 520 s, and a
 blind reviewer judged its answer further from the written findings. Its analysis crashed twice on the 567 MB bundle.
 REA is not shipped: the branch is never merged, and nothing below is built. The section stays as the record of what
 was weighed.
 
 The user's ask: offer REA (`github.com/morluto/rea`, MIT, npm `rea-agents`) to tasks that study an app without its
-source. In B, each "study the reference app" worker spent 6–12M tokens reading the app by hand.
+source. In B, each "study the app" worker spent 6–12M tokens reading the app by hand.
 
 **What REA is** (researched 2026-10-11; read only, nothing installed):
 - **What it does:** an MCP server and CLI, stdio, started as `rea mcp` (`scripts/rea.mjs`), with about 130 tools.
@@ -1154,7 +1154,7 @@ see only Claude's `Bash` and our `run`, not Codex's built-in shell (which the th
 
 ## 5. Q10: where the mockup shows
 
-Both options were studied on 2026-10-11: the current assistant-ui docs and registry, and the reference app's bundle
+Both options were studied on 2026-10-11: the current assistant-ui docs and registry, and another app's bundle
 (code only, extracted to a scratch folder and deleted).
 
 **(a) assistant-ui's canvas-split** (`elements/canvas-split`, registry item `elements-canvas-split`, MIT).
@@ -1170,7 +1170,7 @@ Both options were studied on 2026-10-11: the current assistant-ui docs and regis
 - **What it lacks:** a screen built from our real components needs the window's width, and its chat column would
   duplicate our thread. We would keep perhaps a third of it.
 
-**(b) The reference app.**
+**(b) A side-panel preview tab (studied separately).**
 - **Every preview is a side-panel tab,** from one tab registry: open or reveal, with an icon, a title, `split` or
   `full-width` presentation, and restore after restart.
 - **The artifact tab** has a header with zoom ("Zoom to fit", percent), Open / Open in, View source, "Refresh for latest"
@@ -1194,7 +1194,7 @@ by a chip in the thread the way `C/PreviewChip.tsx` opens Running.
    - **offer:** an `ask_user` card;
    - **build:** a chip;
    - **react:** notes on the picture, sent as one message;
-   - **compare:** mockup and live screenshot side by side, as the reference app's canvas view does.
+   - **compare:** mockup and live screenshot side by side, in a canvas view across images.
 4. From canvas-split, borrow the header shape (title, version, building/done, Close) and the tool-UI pattern
    (`by_name` + `useToolArgsStatus`), which work on 0.15.22. No new dependency.
 5. One surface in our own tokens: nothing vendored to keep in sync.
@@ -1358,8 +1358,8 @@ THREAD-PARITY §5). The user's answer: the gentlest way, a full start-over only 
 5. Q6.4: worker handoff at 200k.
 6. Q6.5: the article settings, each checked against the installed CLI's docs.
 7. REA for study tasks: built on its own branch and measured with its study question, with and without. **Dropped:**
-   1.12× the tokens without it against the ≤ 0.5× gate, slower, and judged further from the findings
-   (`docs/evidence/2026-10-11-rea-study.md`). Nothing of it ships but the evidence.
+   1.12× the tokens without it against the ≤ 0.5× gate, slower, and judged further from the findings.
+   Nothing of it ships but the evidence.
 8. Q6.6: Brain facts in the pack, the "Brain first" steer, `learned` write-back, per-worker Brain metrics on the row
    and in the Inspector.
 9. The "after" run, verified independently, written to `docs/evidence/<date>-session-fixes-tokens.md`.
@@ -1668,8 +1668,8 @@ the mockup in it, and of the final side-by-side. A thread open since phase 5 off
     the installed app. A report never says "not checked in the live app" for a check computer use could do.
 - **No backups** (no `.bak`, no `backup/*` branches, no app copies). Clean up your own scratch folders, test
   identities and processes.
-- **No source-app names.** Never name the reference app or its vendor in code, docs or commits: say "the reference
-  app". No marks of its vendor.
+- **No source-app names.** Never name any app studied for ideas, or its vendor, in code, docs or commits: describe
+  the behaviour or design itself instead.
 - **Models:**
   - Subagents one at a time, with narrow briefs; replace one at about 150k context.
   - Never Fable. Opus 5.5 by default, Sonnet 5 only for mechanical chores, Codex for reviews and bounded tasks.

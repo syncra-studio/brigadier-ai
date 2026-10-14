@@ -68,7 +68,7 @@ The seed was searched for the task's own words:
 - **"Settings > Configuration" and "default permission"** appear in two places:
   - B's two thread decisions, recorded with the user before task 7 began. They are the same
     decisions the request states.
-  - B's task 4 study report, which describes the reference app.
+  - B's task 4 study report, which describes the studied app.
 
 ### Session B for reference (`worker_tokens.py`, read-only snapshot)
 

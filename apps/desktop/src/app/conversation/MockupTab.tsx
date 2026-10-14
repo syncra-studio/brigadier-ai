@@ -15,7 +15,7 @@ import { earlierShots, type Mockup, mockupOf, revisedSince, sentShots, type Shot
 import { changeNotes, markedName, markerNumber, mockupNotesOf, type MockupNote, NO_NOTES, notePlacement, notesByScreen, notesMessage, pointIn, sendEnded, takeNotes, useSessionNotes } from "@/state/mockupNotes";
 import { useApp } from "@/state/store";
 
-/** The zoom menu's steps, as the reference app's image tab offers them. */
+/** The zoom menu's steps. */
 const ZOOMS = [25, 50, 100, 150, 200] as const;
 const MIN_ZOOM = 10;
 const MAX_ZOOM = 400;
@@ -47,7 +47,7 @@ const STATUS_WORDS: Record<Mockup["status"], string> = {
   building: "Building", ready: "Ready", stopped: "Stopped", matching: "Being built for real", compared: "Compared with the app",
 };
 
-/** A capsule floating over the stage, as the reference app's image tab draws its controls. */
+/** A capsule floating over the stage, holding its controls. */
 const CAPSULE = "bg-popover/90 text-popover-foreground shadow-mockup-control rounded-capsule h-mockup-control pointer-events-auto flex shrink-0 items-center backdrop-blur-xl text-sm";
 
 /**
@@ -231,7 +231,7 @@ function ZoomMenu({ zoom, percent, onChange }: { zoom: Zoom; percent: number; on
   );
 }
 
-/** Pinch or ⌘-scroll zooms, as on the reference app's image stage. */
+/** Pinch or ⌘-scroll zooms the image stage. */
 function useWheelZoom(element: HTMLElement | null, percent: number, onZoom: (zoom: Zoom) => void) {
   useEffect(() => {
     if (!element) return;
@@ -280,7 +280,7 @@ function Focused({ conversationId, item, zoom, commenting, onFitted, onZoom }: {
   );
 }
 
-/** Drag to pan a zoomed image, with the grab cursor the reference app shows. */
+/** Drag to pan a zoomed image, with a grab cursor. */
 function usePan(enabled: boolean) {
   const from = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -390,7 +390,7 @@ function local(event: ReactPointerEvent) {
 
 const at = (point: { x: number; y: number }): CSSProperties => ({ left: `${point.x * 100}%`, top: `${point.y * 100}%` });
 
-/** A note's marker: a numbered drop pointing at its place, as the reference app marks images. */
+/** A note's marker: a numbered drop pointing at its place on the image. */
 function Marker({ at: point, number, label, selected = false, ghost = false, onClick }: {
   at: { x: number; y: number }; number?: number; label: string; selected?: boolean; ghost?: boolean; onClick?: (() => void) | undefined;
 }) {

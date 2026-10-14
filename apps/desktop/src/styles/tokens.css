@@ -253,10 +253,10 @@
   /* Attachments: an image thumbnail's side, a file card's width. */
   --spacing-attachment-thumb: 7.625rem;
   --spacing-attachment-card: 14rem;
-  /* A mockup's tab (SESSION-FIXES-PLAN.md Q10), as the reference app's image tab measures: its
-     header band, a floating control's height, a note's marker and the gap from it to the
-     note's box, the box's width and heights (writing, editing), the bottom toolbar, a canvas
-     tile's height, the file pill's longest name, the zoom menu and the notes list. */
+  /* A mockup's tab (SESSION-FIXES-PLAN.md Q10): its header band, a floating control's height,
+     a note's marker and the gap from it to the note's box, the box's width and heights
+     (writing, editing), the bottom toolbar, a canvas tile's height, the file pill's longest
+     name, the zoom menu and the notes list. */
   --spacing-mockup-header: 3rem;
   --spacing-mockup-control: 2rem;
   --spacing-mockup-marker: 1.875rem;
