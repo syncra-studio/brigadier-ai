@@ -25,7 +25,7 @@ import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
-import { type Activity, type LeadStep, turnActivity } from "@/app/conversation/activity/group";
+import { type Activity, type LeadStep, thoughtTopic, turnActivity } from "@/app/conversation/activity/group";
 import { deniedCall } from "@/app/conversation/activity/words";
 import { waitingWords } from "@/app/conversation/activity/peerWords";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
@@ -40,6 +40,7 @@ import {
   type BlockState,
   type PeerOf,
   answerIndex,
+  answeringIndex,
   blockFinished,
   endsWithPlan,
   blockSequence,
@@ -54,7 +55,8 @@ import {
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
 import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
-import { ThreadStatus } from "@/app/conversation/ThreadStatus";
+import type { StatusHead } from "@/app/conversation/liveStatus";
+import { StatusLine, ThreadStatus, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { describeTurnError } from "@/app/conversation/turnError";
@@ -207,13 +209,17 @@ const WorkHeader: FC<{
   quota: boolean;
   /** The sessions whose replies it waits for, by title. */
   waitingFor: readonly string[];
+  /** Its final answer streams or stands while the request still runs: its work is over. */
+  answering: boolean;
+  /** When its final answer started, where its time stops. */
+  answerAtMs: number | undefined;
   onToggle: () => void;
-}> = ({ meta, phase, open, foldable, quota, waitingFor, onToggle }) => {
+}> = ({ meta, phase, open, foldable, quota, waitingFor, answering, answerAtMs, onToggle }) => {
   const phaseElapsed = useElapsed(phase?.startedAtMs ?? 0, phase?.endedAtMs ?? null, !!phase && !phase.settled);
   const now = useTicking(!phase && isLive(meta.state));
-  const elapsed = phase ? phaseElapsed : turnTime(meta, now);
+  const elapsed = phase ? phaseElapsed : turnTime(meta, now, answerAtMs);
   // Waiting on its own question card, the turn still works: the card says it waits.
-  const state = waitsOnCard(meta) ? "working" : meta.state;
+  const state = answering ? "done" : waitsOnCard(meta) ? "working" : meta.state;
   const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota || meta.quotaWait, waitingFor);
   const text = (
     <span
@@ -318,13 +324,31 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
   );
 };
 
+/**
+ * A line between the turn's steps while it is written: one shimmering line of it so far, like
+ * the step rows; it settles into its paragraph once whole.
+ */
+const CommentaryLine: FC<{ index: number }> = ({ index }) => {
+  const text = useAuiState((s) => {
+    const part = s.message.parts[index];
+    return part?.type === "text" ? part.text : "";
+  });
+  const line = (text.split("\n").find((each) => each.trim()) ?? "").replace(/^[#>*\-\s]+/, "").replaceAll(/[*_`]/g, "");
+  return (
+    <div data-slot="commentary-live" className="shimmer w-fit max-w-full truncate text-sm leading-(--spacing-activity-row) motion-reduce:animate-none">
+      {line || "Thinking"}
+    </div>
+  );
+};
+
 /** A reply, card or row in the block's work. */
-const SequenceEntry: FC<{ entry: Entry; streaming: boolean }> = ({ entry, streaming }) => {
+const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: boolean }> = ({ entry, streaming, commentary = false }) => {
   switch (entry.kind) {
     case "thinking":
       // Only the live thought is an entry: a settled one sits in its work group.
       return entry.live ? <ThinkingRow text={entry.segment.text} live /> : null;
     case "text":
+      if (streaming && commentary) return <CommentaryLine index={entry.index} />;
       return (
         <div
           data-slot="aui_assistant-message-content"
@@ -420,16 +444,34 @@ const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly Attach
 
 /**
  * A turn's activity in order (THREAD-UX-PLAN.md §3.1): its work groups and everything else as it
- * is. The live and the folded turn render the same items, so nothing moves when the turn ends;
- * only its last group, while the turn is live, says the step it is on.
+ * is. The live and the folded turn render the same items, so nothing moves when the turn ends.
+ * The live turn's newest work has one live line: what waits on the user, else what the lead does
+ * ("Thinking", "Waiting for a worker"), else the live thought's heading. When the work ends on a
+ * group of steps, that group's row says it, unless its step runs and says itself; otherwise the
+ * line goes under the work.
  */
 const ActivityItems: FC<{
   activity: readonly Activity<LeadStep, Entry>[];
-  live: boolean;
+  /** The live turn's newest work: what its live line reads from; `null` for any other. */
+  live: ThreadStatusProps | null;
+  /** The live thought, if the lead thinks right now. */
+  thought: string | null;
   streaming: (entry: Entry) => boolean;
+  /** A streaming reply that is a line between the steps, not an answer. */
+  commentary: (entry: Entry) => boolean;
   /** The turn's requests, whose denied approvals its failed calls may be. */
   requestIds: readonly string[];
-}> = ({ activity, live, streaming, requestIds }) => {
+  /** A follow-up was steered in after this work: its groups sum up at once. */
+  summary: boolean;
+}> = ({ activity, live, thought, streaming, commentary, requestIds, summary }) => {
+  const head = useThreadStatusHead(live);
+  const line: (StatusHead & { thought?: boolean }) | null = !live
+    ? null
+    : (head ?? (thought === null ? null : { text: thoughtTopic(thought, "newest") || "Thinking", tone: "busy", thought: true }));
+  // A message to another session says how its exchange stands itself: the line stays under it.
+  const newest = activity.at(-1);
+  const step = newest?.type === "group" ? newest.items.findLast((item) => item.type === "step") : undefined;
+  const inGroup = step?.type === "step" && step.step.kind.type !== "peerSent" && step.step.kind.type !== "messageRefused";
   const tasks = useBoard((s) => s.board?.tasks);
   const approvals = useBoard((s) => s.board?.approvals);
   const revealing = useRevealing(useViewConversation()?.id ?? null);
@@ -448,15 +490,18 @@ const ActivityItems: FC<{
           <ActivityGroup
             key={`group:${item.key}`}
             items={item.items}
-            live={live && index === activity.length - 1}
+            live={!!live && index === activity.length - 1}
+            liveLabel={inGroup && index === activity.length - 1 ? line : null}
+            summary={summary}
             describe={(step) => describePeerStep(step, peers) ?? describeLeadStep(shown(step), tasks)}
             renderStep={(step, key) => <Fragment key={key}>{peerStepRow(step) ?? <LeadStepRow step={shown(step)} />}</Fragment>}
             reveal={revealing ? (step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing) : undefined}
           />
         ) : (
-          <SequenceEntry key={entryKey(item.entry)} entry={item.entry} streaming={streaming(item.entry)} />
+          <SequenceEntry key={entryKey(item.entry)} entry={item.entry} streaming={streaming(item.entry)} commentary={commentary(item.entry)} />
         ),
       )}
+      {!inGroup && line && (line.thought && thought !== null ? <ThinkingRow text={thought} live /> : <StatusLine head={line} />)}
     </>
   );
 };
@@ -547,10 +592,15 @@ export const RequestBlock: FC = () => {
   const live = phase ? !phase.settled : isLive(meta.state);
   const last = meta.texts.length - 1;
   const sequence = blockSequence(meta);
-  // Its work folds once, when the request is done; while it works, a reply streams in place.
-  const done = blockFinished(meta.state, phase);
+  const finished = blockFinished(meta.state, phase);
+  // Its work folds the moment its CLI starts the final answer, though the request may still wait
+  // (for another session's reply, say); with a CLI that doesn't say, once the request is done.
+  // Until then a reply streams in place.
+  const answering = !finished && !phase && live && !workersActive ? answeringIndex(meta.texts, sequence) : null;
+  const done = finished || answering !== null;
   // A run over folds to its outcome; the thread's replies during it go into the fold.
-  const answer = endsWithPlan(sequence) ? null : answerIndex(meta.texts, done && !phase);
+  const answer = answering ?? (endsWithPlan(sequence) ? null : answerIndex(meta.texts, finished && !phase));
+  const answerAtMs = answer === null ? undefined : meta.texts[answer]?.answerAtMs;
   const updates = updateIndices(meta.texts, answer);
   const activity = turnActivity(sequence);
   // The answer, kept cards and access notices stay outside the fold.
@@ -564,7 +614,21 @@ export const RequestBlock: FC = () => {
     foldable ||
     meta.state === "stopped" ||
     meta.state === "failed" ||
-    (live && (meta.session || meta.texts.length === 0 || meta.steers.length > 0));
+    // A Chat's says it works until its reply streams, and only once something came.
+    (live && (meta.session || (meta.texts.length === 0 && sequence.length > 0) || meta.steers.length > 0));
+  const streams = (index: number) => meta.texts[index]?.position === Number.POSITIVE_INFINITY;
+  const streaming = (entry: Entry) => !done && entry.kind === "text" && streams(entry.index);
+  const commentary = (entry: Entry) => entry.kind === "text" && !!meta.texts[entry.index]?.commentary;
+  const liveThought = sequence.findLast((entry) => entry.kind === "thinking" && entry.live);
+  const status: ThreadStatusProps = {
+    requestIds: meta.requestIds,
+    // A live run works on, whatever the thread's last turn came to.
+    state: isLive(meta.state) ? meta.state : "working",
+    thinkingLive: !!liveThought,
+    compacting: meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running"),
+    quotaWait,
+    waitingFor,
+  };
 
   return (
     <MessagePrimitive.Root
@@ -586,6 +650,8 @@ export const RequestBlock: FC = () => {
             foldable={foldable}
             quota={quotaWait !== null && meta.state === "working" && !workersActive}
             waitingFor={waitingFor}
+            answering={answering !== null}
+            answerAtMs={answerAtMs}
             onToggle={fold.toggle}
           />
         )}
@@ -606,23 +672,13 @@ export const RequestBlock: FC = () => {
                 <ActivityItems
                   activity={part.items}
                   requestIds={meta.requestIds}
-                  live={live && !done && index === parts.length - 1}
-                  streaming={(entry) => !done && entry.kind === "text" && meta.texts[entry.index]?.position === Number.POSITIVE_INFINITY}
+                  live={live && !done && index === parts.length - 1 ? status : null}
+                  thought={liveThought?.kind === "thinking" ? liveThought.segment.text : null}
+                  streaming={streaming}
+                  commentary={commentary}
+                  // A follow-up steered in after it: the work before it is over, whatever still runs.
+                  summary={parts.slice(index + 1).some((next) => next.type === "steer")}
                 />
-                {live && !done && index === parts.length - 1 && (
-                  <>
-                    {sequence.map((entry) => entry.kind === "thinking" && entry.live && <SequenceEntry key={entryKey(entry)} entry={entry} streaming={false} />)}
-                    <ThreadStatus
-                      requestIds={meta.requestIds}
-                      // A live run works on, whatever the thread's last turn came to.
-                      state={isLive(meta.state) ? meta.state : "working"}
-                      thinkingLive={sequence.some((entry) => entry.kind === "thinking" && entry.live)}
-                      compacting={meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running")}
-                      quotaWait={quotaWait}
-                      waitingFor={waitingFor}
-                    />
-                  </>
-                )}
               </div>
             </WorkFold>
           ),
@@ -646,9 +702,11 @@ export const RequestBlock: FC = () => {
                 data-peer-message={meta.texts[answer]?.anchors?.join(" ")}
                 className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0) && "pt-activity")}
               >
-                <ReplyText index={answer} streaming={false} report={report || meta.session} />
+                <ReplyText index={answer} streaming={streams(answer)} report={!streams(answer) && (report || meta.session)} />
               </div>
             )}
+            {/* Answered, it may still wait for another session's reply: that line stays under the answer. */}
+            {answering !== null && meta.state === "waiting" && <ThreadStatus {...status} />}
             {/* A late event's "Update: …" line: small, under the answer, never a new answer. */}
             {updates.map((index) => (
               <div
@@ -732,7 +790,7 @@ const ModelChanged: FC<{ model: ModelChoice | null; picked: ModelChoice | null }
 };
 
 /**
- * Under the answer: copy it, rate it and, in a Chat, ask for another answer and move between
+ * Under the answer: copy it, read it aloud, rate it and, in a Chat, ask for another answer and move between
  * answers (a session's answers have neither). The latest answer always shows them, an older one
  * on hover or focus; when it came shows on hover. Copy and Read aloud take the text `shown`
  * (the answer and its update lines, by part), or else the last part.
@@ -777,6 +835,7 @@ const AnswerActions: FC<{
           <Copy className="animate-in zoom-in-75 fade-in duration-150" />
         )}
       </TooltipIconButton>
+      <ReadAloud text={answer} />
       <RateMenu rated={rated}>
         <ActionBarPrimitive.FeedbackPositive asChild>
           <RateItem rating="good" />
@@ -785,7 +844,6 @@ const AnswerActions: FC<{
           <RateItem rating="bad" />
         </ActionBarPrimitive.FeedbackNegative>
       </RateMenu>
-      <ReadAloud text={answer} />
       {!session && rework && (
         <ActionBarPrimitive.Reload asChild>
           <TooltipIconButton tooltip="Try again">
