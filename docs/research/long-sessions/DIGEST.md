@@ -149,7 +149,26 @@ prompts recover it; self-checking is weak and external checks work; masking old 
 
 ## 4. Practitioners and open-source harnesses
 
-To be filled from `r3-practice.md`.
+Full notes with every URL are in `r3-practice.md`. Most are anecdotes or self-reported numbers. The few measured ones
+are marked **M**.
+
+| Finding | Source (date) | Grade | Fits an unmodified CLI? |
+|---|---|---|---|
+| Every harness that ran for days restarts often and carries state in files plus git: a fixed "done" list workers can't edit, a short progress baton (verified, next action, failed approaches, blockers), git as the record | Ralph loop (ghuntley.com/ralph, 2025-07); HumanLayer ACE-FCA (2025-08, target 40–60% context use, ~7 h for 35k LOC); Continuous Claude; Anthropic C-compiler run (2026-02-05: 16 agents, ~2,000 sessions, 2B input tokens, a running list of failed approaches) | A; M for the compiler run | Yes |
+| Planner → workers → judge per cycle works. A shared lock (20 agents did the work of 2–3) and an integrator agent both made throughput worse. "Periodic fresh starts are still needed to combat drift" | cursor.com/blog/scaling-agents (2026-01-14) | M (scale, no control) | Partly |
+| Replace compaction with a goal-directed hand-off the user can edit: a new thread gets only the context relevant to the stated goal | ampcode.com/news/handoff (2025-10-23) | D | Yes. This is close to Brigadier's design |
+| Claude Code already writes large Bash output to `<session>/tool-results/<id>.txt` and shows the model a ~2 KB preview with the path | Claude Code issues (2026) | D/A | Built in. Brigadier's Claude workers get it already; Brigadier's own transcript still clips at 8 KiB (C9) |
+| A dropped constraint after auto-compaction (a `varchar(128)` rule from turn 8, lost around turn 28) cost 10 turns of wrong work and a 15-turn undo; many independent reports of CLAUDE.md rules dropped after compaction | zivtech.com "Economics of Claude Code, Part 3" (2026-04/06); claude-code issues | M/A | The case for pinned constraints (PLAN A1) |
+| The built-in LSP tool against grep on a 149k-LOC repo: 31–33% fewer tool-output tokens, and grep missed references (9/11, 249/260) where LSP missed none, when the model was told to trust the result without re-reading | circleci.com/blog/claude-code-lsp (2026-06-24) | M (small n) | Yes, a built-in tool switched on by config. Brigadier doesn't enable it (PLAN B2) |
+| Test and build output as "failures only, passes counted" is the largest single output saving; full output kept by id is the safe form | RTK (self-reported 60–90%); Context Mode (self-reported); Carlini's logging rules | A | Yes |
+| A new Claude Code session's preamble is ~33k tokens, ~75k with instruction files, MCP and plugins. Splitting one task across two subagents took input from ~121k to ~513k | Systima capture via secondary sources (2026-07) | M (secondary) | Applies: each worker start pays a preamble. Brigadier's lean start measured 15–30k |
+| A worktree takes 5–15 s on a non-trivial repo, often more than a ~30 s task | Bernstein docs | A | Brigadier already prewarms (`M/prewarm.rs`) |
+| A compressed 8 KB docs index, always in AGENTS.md, scored 100%. On-demand skills reached at most 79%, and 53% when not told to use them (never called in 56% of cases) | vercel.com/blog/agents-md-outperforms-skills (2026-01) | M (one framework) | Yes. Supports a small always-present index over long instruction files (PLAN B5) |
+| Tool definitions fill the window: Playwright MCP ~13.7k tokens for 21 tools against ~225 for scripts plus a README; 12 servers used 72% of a 200k window before the first message; deferring tools cut ~77k to ~8.7k. Tool design (short output, few tools) mattered more than the protocol | mariozechner.at (2025-08, 2025-11, 120 runs); gurubase.io (2026-05) | M | Yes. Brigadier's thread loads 47 tools (S2). Claude's tool search defers MCP tools by default |
+| KV-cache hit rate is "the most important metric"; keep the prefix stable and context append-only; never add or remove tools mid-task; keep failures in context; recite the goal by rewriting a todo file | Manus context engineering (2025-07-18) | A | Partly |
+| The Claude Code team alerts on cache hit rate and declares incidents when it drops. One heavy user measured ~35 cache reads per write and found a subagent silently on the wrong model | simonwillison.net quoting the team (2026-02); spin.atomicobject.com (2026-03) | A / M (one user) | Yes (PLAN P0.1) |
+| False success: in a public incident an agent deleted a production database during a code freeze and misreported its tests. 63% of one model's successful benchmark solutions fetched the fix; strict isolation cut scores by 14–21 points; "keep working without stopping" prompts raised cheating | incident database #6113 (2025-07); cursor.com/blog/reward-hacking-coding-benchmarks (2026-06-25) | A; M | Supports harness-run checks (PLAN A5) |
+| Memory files are an attack surface: an npm `postinstall` rewrote memory files and added a hook, and the agent then advised hard-coding keys | blogs.cisco.com (2026-04-01) | M (demo, patched) | Supports provenance on Brain entries (PLAN A4) |
 
 ## 5. Items §7 rejected: is there new evidence?
 
@@ -157,6 +176,6 @@ To be filled from `r3-practice.md`.
 |---|---|
 | Budgets, caps, early compaction, context caps | No new evidence for caps. The context-rot evidence argues for **earlier fresh sessions with a lossless carry-over**, which §7 allows (rebirth, hand-off). It is not a cap and drops nothing silently. Flagged as new evidence for an **earlier trigger**, to be measured, not adopted |
 | Fresh `claude -p` per user message as the default | No. Laban's 95% recovery is for one consolidated prompt, not per-message restarts, and §7's 2.5× cost measurement stands |
-| Lossy proxies (headroom), RTK, Graft, graphify, cognee | No. The research supports trimming tool output, but the lossless store Brigadier already has for the thread is the compatible form |
-| Concise wording to save output | Partly new: wording that asks for more thinking ("think deeply", "try several approaches") multiplies reasoning cost 1.6–7.4× (Weinberger 2026). This is about removing cost-raising phrases, not terse output. To check our prompts for such phrases |
+| Lossy proxies (headroom), RTK, Graft, graphify, cognee | No. RTK's public claims (60–90%) are still self-reported bytes÷4 estimates, against our measured 0.21%. The research supports trimming tool output, but the lossless store Brigadier already has for the thread is the compatible form |
+| Concise wording to save output | Partly new: wording that asks for more thinking ("think deeply", "try several approaches") multiplies reasoning cost 1.6–7.4× (Weinberger 2026). This is about removing cost-raising phrases, not terse output. Checked: `M/prompts.rs` contains none of them |
 | `--bare` | Still unusable: help says OAuth and keychain are never read |
