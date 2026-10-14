@@ -2318,11 +2318,17 @@ pub async fn run_serve_with_owner(
                                 let activity_args = activity_start.as_ref().map(|_| args.clone());
                                 // The session travels as the adapter's evidence
                                 // (`_session_id`), which plain `invoke` would drop.
-                                let result = cu_layer::scope::with_scope(
-                                    scope,
-                                    reg.invoke_from_trusted_adapter(&tool_name, args),
-                                )
-                                .await;
+                                // Typing waits for another agent's typing into
+                                // the same app to finish instead of being refused.
+                                let turn = cu_layer::typing_turn::in_turn(
+                                    &tool_name,
+                                    &args,
+                                    cu_layer::scope::with_scope(
+                                        scope,
+                                        reg.invoke_from_trusted_adapter(&tool_name, args.clone()),
+                                    ),
+                                );
+                                let result = turn.await;
                                 let mut result_obj = serde_json::to_value(&result)
                                     .unwrap_or_else(|_| serde_json::json!({"content": []}));
                                 result_obj["isError"] =

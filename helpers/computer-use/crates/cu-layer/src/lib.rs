@@ -34,6 +34,7 @@ pub mod scroll;
 pub mod target_policy;
 pub mod text;
 pub mod tokens;
+pub mod typing_turn;
 pub mod web_typing;
 #[cfg(target_os = "macos")]
 pub mod window_list;

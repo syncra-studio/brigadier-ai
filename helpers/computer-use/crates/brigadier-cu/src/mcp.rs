@@ -124,9 +124,15 @@ async fn handle_request(req: Request, id: Value, registry: &Arc<ToolRegistry>) -
                     on_target: None,
                     session: None,
                 };
-                let result =
-                    cu_layer::scope::with_scope(scope, registry.invoke(&call.name, call.args))
-                        .await;
+                let result = cu_layer::typing_turn::in_turn(
+                    &call.name,
+                    &call.args,
+                    cu_layer::scope::with_scope(
+                        scope,
+                        registry.invoke(&call.name, call.args.clone()),
+                    ),
+                )
+                .await;
                 match serde_json::to_value(result) {
                     Ok(v) => Response::ok(id, v),
                     Err(e) => Response::error(id, -32603, format!("Serialize error: {e}")),
