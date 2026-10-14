@@ -145,3 +145,55 @@ fn nothing_is_kept_when_the_window_server_refuses() {
     assert!(!keep.keep(10, 1, "a"));
     assert!(!keep.kept(1));
 }
+
+fn read(
+    on_current_space: bool,
+    driver_note: Option<&str>,
+) -> cua_driver_core::protocol::ToolResult {
+    let mut structured =
+        serde_json::json!({"pid": 10, "window_id": 1, "on_current_space": on_current_space});
+    let mut result = cua_driver_core::protocol::ToolResult::text("- [0] AXWindow");
+    if let Some(note) = driver_note {
+        structured["off_space_staleness"] = note.into();
+        result
+            .content
+            .push(cua_driver_core::protocol::Content::text(note));
+    }
+    result.with_structured(structured)
+}
+
+fn texts(result: &cua_driver_core::protocol::ToolResult) -> Vec<String> {
+    result
+        .content
+        .iter()
+        .filter_map(|item| match item {
+            cua_driver_core::protocol::Content::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_web_window_on_another_space_is_read_as_an_older_picture() {
+    use cu_layer::keep_drawn::{note_older_picture, OLDER_PICTURE};
+    let mut result = read(
+        false,
+        Some("confirm their effect after the window is shown"),
+    );
+    note_older_picture(&mut result, true);
+    assert_eq!(texts(&result), ["- [0] AXWindow", OLDER_PICTURE]);
+    assert_eq!(
+        result.structured_content.unwrap()["off_space_staleness"],
+        OLDER_PICTURE
+    );
+
+    for (on_current_space, web) in [(true, true), (false, false)] {
+        let mut result = read(on_current_space, None);
+        note_older_picture(&mut result, web);
+        assert_eq!(
+            texts(&result),
+            ["- [0] AXWindow"],
+            "{on_current_space} {web}"
+        );
+    }
+}

@@ -14,6 +14,11 @@
 //! the helper exits, or dropped when the window is gone. Nothing here
 //! activates, raises or moves a window. The setting belongs to the helper's
 //! window-server connection, so it also ends if the helper crashes.
+//!
+//! A web app's window on another Space than the user's isn't drawn at all, so
+//! its screenshot shows the last picture it drew. A read of such a window
+//! says so ([`note_older_picture`]), so an agent goes by the tree, read from
+//! the app just now, where the two disagree.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -62,6 +67,11 @@ impl KeepDrawn {
     /// Keep `window_id` of `pid` drawn for `owner`. `true` when it is kept
     /// (now or already); `false` when it isn't a web app's window, is
     /// already covered, or the window server refused.
+    /// Whether `pid`'s app draws its pages with Chromium.
+    pub fn web_engine(&self, pid: i32) -> bool {
+        self.occlusion.web_engine(pid)
+    }
+
     pub fn keep(&self, pid: i32, window_id: u32, owner: &str) -> bool {
         let mut pins = self.pins.lock().unwrap_or_else(|e| e.into_inner());
         pins.retain(|window, _| *window == window_id || self.occlusion.exists(*window));
@@ -201,13 +211,47 @@ impl Tool for KeepDrawnRead {
         if result.is_error == Some(true) {
             return result;
         }
+        let mut result = result;
         if let Some((pid, window_id)) = read_target(&args, &result) {
             let owner = crate::scope::current().session.unwrap_or_default();
             let keep = self.keep;
-            let _ = tokio::task::spawn_blocking(move || keep.keep(pid, window_id, &owner)).await;
+            let web = tokio::task::spawn_blocking(move || {
+                keep.keep(pid, window_id, &owner);
+                keep.web_engine(pid)
+            })
+            .await
+            .unwrap_or(false);
+            note_older_picture(&mut result, web);
         }
         result
     }
+}
+
+/// What a read of a web app's window on another Space says about its
+/// screenshot.
+pub const OLDER_PICTURE: &str = "This window is on another Space than the user's, where macOS \
+    doesn't draw it, so the screenshot can be an older picture than the tree. Where they \
+    disagree, go by the tree, which was read from the app just now, and by your actions' \
+    answers.";
+
+/// Adds [`OLDER_PICTURE`] to a read of a web app's (`web`) window that is
+/// on another Space, in place of the driver's own note about it.
+pub fn note_older_picture(result: &mut ToolResult, web: bool) {
+    use cua_driver_core::protocol::Content;
+    let Some(Value::Object(structured)) = result.structured_content.as_mut() else {
+        return;
+    };
+    if !web || structured.get("on_current_space") != Some(&Value::Bool(false)) {
+        return;
+    }
+    if let Some(Value::String(driver_note)) = structured.get("off_space_staleness") {
+        let driver_note = driver_note.clone();
+        result
+            .content
+            .retain(|item| !matches!(item, Content::Text { text, .. } if *text == driver_note));
+    }
+    structured.insert("off_space_staleness".into(), OLDER_PICTURE.into());
+    result.content.push(Content::text(OLDER_PICTURE));
 }
 
 /// The process-wide windows kept drawn, released when the process exits.
