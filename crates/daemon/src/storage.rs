@@ -470,6 +470,7 @@ fn rank(action: &Action) -> u8 {
         | Action::RemoveEmptyDir(_)
         | Action::DeleteModel { .. }
         | Action::DeleteBuildFiles(_)
+        | Action::SweepThreadScratch(_)
         | Action::Adopt(_) => 5,
         Action::CollectBlobs => 6,
         Action::Compact => 7,
