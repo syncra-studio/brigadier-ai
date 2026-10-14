@@ -56,6 +56,12 @@ refused rather than cut.
 | S4 | **Context packs reuse the whole conversation's reads,** not the task's, up to 16 KiB | `M/reads.rs:28`, `:94`, `:198`; `M/context_pack.rs:69`, `:326` | Med | A |
 | S5 | **Prewarming starts on any user message,** including read-only asks | `M/prewarm.rs:35`, `:112` | Low/Med | A (suspected) |
 
+## 4b. Effort
+
+| # | Weak spot | Evidence | Sev. | Source |
+|---|---|---|---|---|
+| E1 | **The effort the thread asks for is applied to whatever model the task gets.** Only Operate has a floor. The thread is told to pick "low" for a mechanical edit and "medium" for small work, whatever the model. In one study inside Claude Code, Sonnet 5 at low resolved 12/25 against 19/25 at high (p = 0.016), while Opus 5 at low was on the cost–quality frontier. Defaults without an ask are high for implement, review and merge | `crates/router/src/decide.rs:190-218`, `:1590-1607`; `M/prompts.rs:103`; DIGEST finding 8 | Med | B |
+
 ## 5. Supervision
 
 | # | Weak spot | Evidence | Sev. | Source |
