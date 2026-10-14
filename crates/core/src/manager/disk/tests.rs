@@ -752,7 +752,7 @@ async fn an_idle_threads_leftover_temp_files_are_listed_and_swept() {
     assert_eq!(listed.item.category, CleanCategory::Temporary);
     assert!(listed.item.bytes >= 256 * 1024, "{}", listed.item.bytes);
     assert!(
-        matches!(&listed.action, Action::SweepThreadScratch(ids) if ids == &[flow.conversation.clone()])
+        matches!(&listed.action, Action::SweepThreadScratch(ids) if ids.as_slice() == std::slice::from_ref(&flow.conversation))
     );
     let cleaned = flow
         .manager
