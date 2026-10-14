@@ -891,6 +891,8 @@ impl Sandbox for Seatbelt {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+
     use super::*;
 
     /// A folder in the temp directory, removed when dropped however the test ends.
@@ -910,8 +912,62 @@ mod tests {
         }
     }
 
+    /// Whether `test` can't run here because this process can't apply a Seatbelt profile: a
+    /// process already inside a macOS sandbox (an agent's sandboxed shell) is refused another
+    /// one. Says so on stderr; any other failure is left to the test to report.
+    fn nested_sandbox_refused(test: &str) -> bool {
+        static REFUSED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        let refused = REFUSED.get_or_init(|| {
+            let probe = Command::new(SANDBOX_EXEC)
+                .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
+                .output()
+                .ok()?;
+            let stderr = String::from_utf8_lossy(&probe.stderr).trim().to_owned();
+            (!probe.status.success() && stderr.contains("Operation not permitted"))
+                .then_some(stderr)
+        });
+        if let Some(stderr) = refused {
+            // Straight to stderr: the test harness keeps a passing test's `eprintln!` to itself.
+            let _ = writeln!(
+                std::io::stderr(),
+                "skipped {test}: this process runs inside a macOS sandbox, which can't apply \
+                 another one ({stderr}); run it from an unsandboxed shell"
+            );
+        }
+        refused.is_some()
+    }
+
+    /// A child process, killed and reaped when dropped however the test ends: a stopped one
+    /// left behind would never end on its own.
+    struct Reaped(std::process::Child);
+
+    impl Drop for Reaped {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// Whether `pid` comes to be stopped (`stopped`) or running (`!stopped`) within 5 s, per
+    /// its `kinfo_proc`: a signal is delivered a little after `kill` returns.
+    fn becomes_stopped(pid: u32, stopped: bool) -> bool {
+        let is_stopped =
+            || kinfo_proc(pid).is_some_and(|info| u32::from(info[P_STAT]) == libc::SSTOP);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while is_stopped() != stopped {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        true
+    }
+
     #[test]
     fn seatbelt_denies_reading_a_denied_folder_and_reads_the_rest() {
+        if nested_sandbox_refused("seatbelt_denies_reading_a_denied_folder_and_reads_the_rest") {
+            return;
+        }
         let dir = Temp(std::env::temp_dir().join(format!("brig-deny-read-{}", std::process::id())));
         let secret = dir.join("run");
         std::fs::create_dir_all(&secret).unwrap();
@@ -943,6 +999,10 @@ mod tests {
 
     #[test]
     fn protection_denies_only_its_paths_and_gives_back_the_exceptions() {
+        if nested_sandbox_refused("protection_denies_only_its_paths_and_gives_back_the_exceptions")
+        {
+            return;
+        }
         let dir = Temp(std::env::temp_dir().join(format!("brig-protect-{}", std::process::id())));
         let refs = dir.join("refs/heads/brigadier");
         std::fs::create_dir_all(refs.join("aa")).unwrap();
@@ -1007,6 +1067,9 @@ mod tests {
     /// `.git` stay protected: the narrower rule wins, whichever comes first.
     #[test]
     fn a_protected_path_inside_an_exception_stays_protected() {
+        if nested_sandbox_refused("a_protected_path_inside_an_exception_stays_protected") {
+            return;
+        }
         let dir = Temp(std::env::temp_dir().join(format!("brig-inner-{}", std::process::id())));
         let refs = dir.join(".git/refs/heads/brigadier");
         std::fs::create_dir_all(refs.join("aa")).unwrap();
@@ -1112,6 +1175,9 @@ mod tests {
         const SOCKET_PROBE: &str = "BRIGADIER_PREVIEW_SOCKET_PROBE";
         if let Some(path) = std::env::var_os(SOCKET_PROBE) {
             let _listener = UnixListener::bind(path).unwrap();
+            return;
+        }
+        if nested_sandbox_refused("gui_preview_keeps_filesystem_and_network_confinement") {
             return;
         }
         let dir =
@@ -1281,27 +1347,18 @@ mod tests {
 
     #[test]
     fn reads_a_child_s_arguments_and_stops_and_continues_it() {
-        let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        let pid = child.id();
+        let child = Reaped(Command::new("/bin/sleep").arg("30").spawn().unwrap());
+        let pid = child.0.id();
         assert_eq!(
             MacProcesses.command_line(pid),
             Some(vec!["/bin/sleep".to_owned(), "30".to_owned()])
         );
-        let state = || {
-            let out = Command::new("ps")
-                .args(["-o", "stat=", "-p", &pid.to_string()])
-                .output()
-                .unwrap();
-            String::from_utf8_lossy(&out.stdout).trim().to_owned()
-        };
         MacProcesses.suspend(pid).unwrap();
-        assert!(state().starts_with('T'), "stopped: {}", state());
+        assert!(becomes_stopped(pid, true), "never stopped");
         MacProcesses.resume(pid).unwrap();
-        assert!(!state().starts_with('T'), "running: {}", state());
+        assert!(becomes_stopped(pid, false), "never continued");
         assert!(MacProcesses.cpu_time_ms(pid).is_some());
         assert!(MacProcesses.cpu_time_ms(std::process::id()).is_some());
-        child.kill().unwrap();
-        child.wait().unwrap();
     }
 
     #[test]
