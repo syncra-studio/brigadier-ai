@@ -4,16 +4,14 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey.svg)](#status-and-roadmap)
 
-<!-- Hero GIF goes here, above the pitch, once a real capture exists. -->
-
 **Brigadier runs Claude Code and Codex as one team on your Mac.** You talk to one thread. It
-plans the work, hands it to agents running in parallel in their own git worktrees, and the other
-vendor's model reviews every change after it lands.
+makes small changes itself, hands the rest to agents running in parallel in their own git
+worktrees, and the other vendor's model reviews every change in the background.
 
 - **Parallel agents, cross-vendor review.** Each task runs in its own worktree on the model
-  best suited to it, and its commits land by fast-forward. Every landing then gets a read-only
-  review from the other vendor (Codex reviews Claude's work, Claude reviews Codex's) in the background.
-  The findings go back to the thread, which fixes them or says why not.
+  best suited to it, and its commits land by fast-forward. Every change also gets a read-only
+  review from the other vendor (Codex reviews Claude's work, Claude reviews Codex's) in the
+  background, and the work doesn't wait for it. The thread fixes the findings or says why not.
 - **Computer use in the background (macOS).** Workers can open and use the apps they build, and
   any other app a task needs, without moving your cursor or bringing the app to the front: a
   step that would interrupt you is refused. System Settings is read-only to them. The
@@ -78,9 +76,9 @@ rough edges.
 
 ## What's in it
 
-- **Sessions.** One thread per piece of work. It reads and runs things itself, makes tiny edits,
-  and starts workers for the rest. It works on your checked-out branch, or on a new worktree and
-  branch that merges into its base when you ask.
+- **Sessions.** One thread per piece of work. It reads and runs things, makes small changes
+  itself, and starts workers for the rest. It works on your checked-out branch, or on a new
+  worktree and branch that merges into its base when you ask.
 - **Overnight runs.** Type `/overnight` with a plan and when it should be ready. The session works
   through the plan phase by phase until it's done or the deadline comes, then leaves a morning
   report and a notification.
@@ -128,12 +126,12 @@ records.
 ### Sessions
 
 A session is one long-lived CLI session (Claude or Codex), the **thread**, that talks with you.
-It reads code, runs builds and tests, and makes tiny edits itself. Everything else goes to
-**workers**: one CLI session per task, on a model the router picks for that kind of work. A
-write task gets its own worktree on a task branch and a scratch folder outside the repository.
-It starts with a context pack (what the thread already read and searched) and with the
-dependency installs and build caches of your checkout copied in, so its first build doesn't
-start from nothing. Workers follow your repository's `CLAUDE.md` and `AGENTS.md` whichever
+It reads code, runs builds and tests, and makes a small change itself: one bounded change in one
+area, about 100 changed lines or fewer. Everything else goes to **workers**: one CLI session per
+task, on a model the router picks for that kind of work. A write task gets its own worktree on a
+task branch and a scratch folder outside the repository. It starts with a context pack (what
+the thread already read and searched) and with the dependency installs and build caches of your
+checkout copied in, so its first build doesn't start from nothing. Workers follow your repository's `CLAUDE.md` and `AGENTS.md` whichever
 vendor runs them.
 
 A worker reports when it's done. Its commits then **land**:
@@ -146,13 +144,16 @@ A worker reports when it's done. Its commits then **land**:
 - **Checked** once on the combined work. Workers run only the checks of their own change; the
   project's full checks run in the background on the branch the work landed on, and a failure
   goes back to the worker that caused it. A merge of a session's work waits for a pass at its tip.
-- **Reviewed** afterwards. Every landing gets one read-only review by the other vendor, in its
-  own checkout, in the background. Nothing waits for it. Its findings go to the thread as a
-  message, even after a merge, and the thread fixes them or says why not. Settings ›
-  Configuration › "Review the work" turns reviews off (they're on by default).
+- **Reviewed** in the background. Every change gets one read-only review by the other vendor,
+  in its own checkout. A worker starts it once its work is committed and reports without
+  waiting for it; the thread's own commits get theirs once it makes them. Findings that reach a
+  worker before it reports are its to fix. Later ones go to the thread as a message, and the
+  thread fixes them or says why not. Settings › Configuration › "Review the work" turns reviews
+  off (they're on by default).
 
 A new-worktree session merges into its base only when you say so: on the merge card the thread
-offers, or by asking in plain words.
+offers, or by asking in plain words. The merge then waits until the reviews of the work have
+ended and the thread has recorded each finding as fixed or dismissed; an open finding stops it.
 
 Archiving a session removes its worktrees, scratch folders, CLI session files and processes,
 including detached children. Unfinished work is kept as a WIP commit on its task
@@ -290,7 +291,7 @@ Neither removes the computer-use helper's Accessibility and Screen Recording ent
 - [SECURITY.md](SECURITY.md): report vulnerabilities privately, never in a public issue.
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): Contributor Covenant 2.1; report problems to
   hello@syncra.studio.
-- [docs/](docs/README.md): design plans and the evidence behind the numbers above.
+- [docs/](docs/README.md): design plans and dated evidence (measurements and acceptance runs).
 - MIT, see [LICENSE](LICENSE). Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Brigadier is made by SYNCRA SRL. Founded and developed by Stephen Golban.

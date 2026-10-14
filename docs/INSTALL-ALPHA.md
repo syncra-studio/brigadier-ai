@@ -1,14 +1,17 @@
 # Install Brigadier alpha on macOS
 
-The `v0.1.0-alpha` release requires macOS 14 or later. Download the DMG that
-matches your Mac from the [alpha release](https://github.com/syncra-studio/brigadier-ai/releases/tag/v0.1.0-alpha):
-`Brigadier_0.1.0_aarch64.dmg` for Apple Silicon or `Brigadier_0.1.0_x64.dmg` for
-Intel. The Intel bundle is cross-built; an Intel launch has not been verified.
-The installer refuses to install an architecture missing from the release checksums.
+**The `v0.1.0-alpha` release is not published yet.** Until it is, build Brigadier from source
+as the [README](../README.md#install) describes. The steps below work once the release is up.
+
+The alpha requires macOS 14 or later. The release will have one DMG per architecture:
+`Brigadier_0.1.0_aarch64.dmg` for Apple Silicon and `Brigadier_0.1.0_x64.dmg` for Intel. The
+Intel bundle is cross-built; an Intel launch has not been verified. The installer refuses to
+install an architecture missing from the release checksums.
 
 ## One-line install
 
-Once the alpha release is published:
+Once the alpha release is published (until then this command fails, because the tag doesn't
+exist):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/syncra-studio/brigadier-ai/v0.1.0-alpha/scripts/install.sh | sh
@@ -27,8 +30,8 @@ download it and read it before running `sh install.sh`.
 
 ## Manual install from the DMG
 
-1. Download the DMG and `SHA256SUMS` into the same folder. In Terminal, enter
-   that folder and check the hash (use the filename for your architecture):
+1. Download the DMG and `SHA256SUMS` from the release's page on GitHub into the same
+   folder. In Terminal, enter that folder and check the hash (use the filename for your architecture):
 
    ```sh
    shasum -a 256 Brigadier_0.1.0_aarch64.dmg
