@@ -2,8 +2,8 @@
 
 What the vendors, the research literature and practitioners say, graded, and what each means for Brigadier. The
 baseline (what Brigadier already does, measured or rejected) is `BASELINE.md`. Probes run for this digest are in
-`PROBES.md`. Full source notes (longer, with every URL) are in the run directory: `r1-vendor.md`, `r2-papers.md`,
-`r3-practice.md`.
+`PROBES.md`. Full source notes (longer, with every URL) are in `sources/`: `vendor.md`, `papers.md`,
+`practice.md`.
 
 **Grades.** Evidence: **M** measured with numbers, **C** controlled study, **V** vendor claim, **A** anecdote or one
 run. Applicability to Brigadier, which drives the user's unmodified CLIs on subscription sign-in: **CLI✓** verified
@@ -115,7 +115,7 @@ Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-
 
 ## 3. Research literature
 
-Grouped findings with the strongest sources (full list with dates, sizes and URLs in `r2-papers.md`):
+Grouped findings with the strongest sources (full list with dates, sizes and URLs in `sources/papers.md`):
 
 - **Context rot.** Chroma "Context Rot" (2025-07, 18 models: a 300-token focused prompt beat the 113k full history
   for every model). Du et al. arXiv 2510.05381 (accuracy −13.9% to −85% from length alone, even with perfect
@@ -149,7 +149,7 @@ prompts recover it; self-checking is weak and external checks work; masking old 
 
 ## 4. Practitioners and open-source harnesses
 
-Full notes with every URL are in `r3-practice.md`. Most are anecdotes or self-reported numbers. The few measured ones
+Full notes with every URL are in `sources/practice.md`. Most are anecdotes or self-reported numbers. The few measured ones
 are marked **M**.
 
 | Finding | Source (date) | Grade | Fits an unmodified CLI? |
