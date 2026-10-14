@@ -7,9 +7,9 @@ order, each with files, checks and a ship gate.
 - **Base:** current `main` (`c9a73e38`). `launch` (`50695633`) is already merged into it.
 - **Paths:** `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`, `D/` = `apps/desktop/src/`. Line
   numbers are at `c9a73e38` unless marked `@d669bca0` (the research's base).
-- **Item names:** F1–F5, A1–A15, B1–B8, P0.1–P0.3, V1–V3 and R are `PLAN.md`'s ("research A11" here). U1–U9
-  and C/G/S/L/W/N are `WEAK-SPOTS.md`'s. This plan's own steps are named by phase: A1–A11, B0–B5, C1–C6, D1.0–D1.6,
-  E1–E3, D2.1–D2.4.
+- **Item names:** F1–F5, A1–A15, B1–B8, P0.1–P0.3, V1–V3 and R are `PLAN.md`'s ("research A11" here).
+  U1–U9 and C/G/S/L/W/N are `WEAK-SPOTS.md`'s. This plan's own steps are named by phase: A0–A11, B0–B5, C1–C6,
+  D1.0–D1.7, E1–E3, D2.1–D2.4 (with D2.3b).
 - **What `launch` already did, and this plan builds on:**
   - the thread makes small changes itself (about 100 lines or fewer, `M/prompts.rs:107`);
   - a worker reports once its checks pass, with its review in the background;
@@ -93,7 +93,8 @@ must feel as direct and as cheap as the plain CLI.
 - **Q34's lead per request, with its outline,** for normal asks. For big jobs Q34 still holds: an advisory
   other-vendor plan review, one fresh verifier, and landing with no card.
 - **THREAD-PLAN Q9:** worktree and branch removed after a merge, and the next message starts fresh. This also retires
-  `ensure_target`'s recreate-from-base path for merged sessions.
+  `ensure_target`'s post-merge disposal retry (`M/workers.rs:2502-2517`), and old post-merge disposals are cancelled
+  at upgrade before the startup sweep (A3).
 - **Merge cards everywhere:** THREAD-PLAN's card, research F3 (better card wording), and research §6 item 8 ("Merge
   and keep working", now moot because a merge always keeps working).
 - **Auto-learned facts:** SESSION-FIXES Q6.6's `learned` write-back as Convention nodes.
@@ -187,26 +188,38 @@ gpt-6.1-sol, both at high.
 
 | Order | Phase | Why here |
 |---|---|---|
-| 1 | **A: What hurt the user**, ending with the memory safeguards (A11) | Confirmed in real sessions, small, and what the user sees. A11 closes Q35's "no saved facts on its own" and must exist before B and C lean harder on the Brain |
-| 2 | **B: The thread is the worker**, opening with measurement (B0) and including the fork cache fix (B5) | The new model itself. B0 gives V3 and P0.1, which B and B5's proof need. B5 is small, measured, and paid on every idle long thread |
-| 3 | **C: Fewest tokens** | Measured against B's call pattern with P0.1 |
-| 4 | **D1: Never forgets, without the output store** | V2 is built first; constraints (D1.1) come before selective loading (D1.6) |
+| 1 | **A: What hurt the user**, opening with the V3 and V1 harness (A0) and ending with the memory safeguards (A11) | Confirmed in real sessions, small, and what the user sees. A2 and A6 are judged on V3 cases, so V3 comes first. A11 closes Q35's "no saved facts on its own" and must exist before B and C lean harder on the Brain |
+| 2 | **B: The thread is the worker**, opening with P0.1 (B0) and including the fork cache fix (B5) | The new model itself. B5's proof is one `handoff` row tagged by P0.1. B5 is small, measured, and paid on every idle long thread |
+| 3 | **C: Fewest tokens** | Measured against B's call pattern with P0.1. Effort by model (research B3) waits for V2's abstention score, so it moves to D1.7 |
+| 4 | **D1: Never forgets, without the output store** | V2 is built first; constraints (D1.1) come before selective loading (D1.6); effort floors (D1.7) need V2 |
 | 5 | **E: Never hallucinates** | Small and binding (Q38). Its in-turn checks need nothing from P0.3 |
-| 6 | **D2: Never forgets, with the output store** | Workers come off compaction only after same-session resume (D1.3) and the output store (D2.1), or a forced hand-off passes clipped output (PLAN §4) |
+| 6 | **D2: Never forgets, with the output store** | Workers come off compaction only after same-session resume (D1.3) and the output store (D2.1), or a forced hand-off passes clipped output (PLAN §4). The thread's in-turn overflow guard (D2.3b) uses the same store and seams |
 | 7 | **X: Experiments** | A10 only after P0.1, V2 and B5. An experiment, never a silent threshold change |
 
-**Where the P0 measurement goes:** where it is first needed.
-- **V3 and the per-request usage report** open B, because B is judged on V3 and the bench.
-- **P0.1** (cache writes by lifetime, a missed-prefix estimate per call, cause tags) is also in B0, because B5's proof
+**Where the P0 measurement goes:** each fixture is built before its first consumer.
+- **V3, V1's accounting and the per-request usage report** open A (A0). A2 and A6 are V3 cases, every phase after A
+  is judged on V3 or V1, and B5's idle-gap run is a V1 run.
+- **P0.1** (cache writes by lifetime, a missed-prefix estimate per call, cause tags) opens B (B0), because B5's proof
   is one `handoff` row and C's savers are claims about cache writes.
-- **V2** opens D1, the first phase whose claims are about continuity.
-- **Phase A needs none of it:** its checks are flow tests and a bench regression.
+- **V2** opens D1 (D1.0), before its first consumers: D1.1–D1.4, then D1.7 (effort floors, which need V2's "unknown
+  instead of a guess" score), E and D2.
+- **What waits for D2.1:** V2 items planted beyond the 8 KiB clip. D1.3 is accepted on items inside the clip with the
+  loss labelled. Its lossless gate is rerun in D2's validation.
 
 ---
 
 ### Phase A: What hurt the user
 
 Scope: the confirmed failures from SESSION-FORENSICS, Q36, Q37 and Q41.6, then the memory safeguards.
+
+**A0. The V3 and V1 harness first** (P0.2's V3 and V1 parts).
+- **V3 as fixtures** in `tools/ab`, with scoring scripts. The 12 asks run cold and warm, each with a seeded and with an
+  empty Brain. A's deliverable cases (A1, A2, A6) are added to the set as extra frozen cases.
+- **V1's accounting in the same harness:** cold and warm regimes, alternating order, completion rate, and usage
+  through settlement.
+- **A per-request usage report** in the Inspector, through settlement, with thread turns and model calls per request.
+- **Done when:** three reruns of each fixture on an unchanged build agree per ask, and a request report sums to
+  `turn_usage`.
 
 **A1. Deliverables survive (F1, U1, U2).**
 - **Links:** before disposal, the core maps each scratch or `outputs/` path to its stored output (`report_files`
@@ -239,16 +252,32 @@ Scope: the confirmed failures from SESSION-FORENSICS, Q36, Q37 and Q41.6, then t
 - **"Close workspace":** an action in the branch row's ⋯ menu (`D/app/conversation/GitActions.tsx:61`,
   `PinnedSummary.tsx:759`). It runs the archive path's `wind_down` (`M/lifecycle.rs:607`, with `keep_session_changes`
   first) for this session only, after a confirm that names what goes.
-- **Retired:** `forget_session_worktree`'s merge caller (`:751`) and the merged-session recreate path in
-  `ensure_target`. Its broken-worktree retry (`M/workers.rs:2502-2517`) stays. The rule in `M/prompts.rs:303`
-  changes (R).
+- **Retired: every merge-driven removal path, not only the first one.**
+  - `release_merged_session`'s merge caller in `finish_session`, and `forget_session_worktree`'s merge use
+    (`M/lifecycle.rs:751`).
+  - The retry in `ensure_target` (`M/workers.rs:2502-2517`). It is not a broken-worktree retry: when a merged
+    session's `session:` owner is still being disposed (a post-merge removal that failed), it finishes that disposal
+    and then calls `forget_session_worktree`. Under Q36 that would delete an open session's workspace, so it goes.
+  - The rule in `M/prompts.rs:303` changes (R).
+- **Reconcile old post-merge disposals at upgrade, before the startup sweep.**
+  - The launch sweep (`crates/core/src/ledger.rs:604-640`) finishes every disposal the previous daemon had started,
+    before the session manager recovers anything.
+  - A one-time reconcile runs first. Any `session:` owner still marked disposing whose conversation is not archived
+    or deleted has its disposal cancelled: it was a merge's removal. The worktree stays, and the session's setup path
+    is restored if the worktree still exists.
+  - Owners disposed by archive, delete, project removal or uninstall (`wind_down`, `M/lifecycle.rs:607`) keep
+    today's cleanup.
 - **Task worktrees** still go when their task ends, with outputs and unfinished work kept: they are Brigadier's own
   scratch, not the user's workspace.
-- **Done when:** flow tests show:
-  - after a merge, the worktree and branch remain, the branch is at the merge, and the next request works in the same
-    path;
-  - Close workspace removes it only after the confirm;
-  - archive and delete behave as today.
+- **Done when:**
+  - flow test: after a merge, the worktree and branch remain, the branch is at the merge, and the next request works
+    in the same path;
+  - flow test: Close workspace removes it only after the confirm;
+  - archive and delete behave as today;
+  - upgrade test: a store with a failed post-merge disposal (`session:` owner disposing, worktree on disk,
+    conversation live) is opened by the new daemon. The startup sweep, `ensure_target` and the next request all leave
+    the worktree in place, and the session works in it;
+  - the same test with an archived conversation still removes it.
 
 **A4. Merge only when the user asks (Q37), with no cards.**
 - **Remove the card:** delete `propose_merge` (`M/landing.rs:1299`, `merge_offer` `:2866`, catalog
@@ -307,13 +336,25 @@ Scope: the confirmed failures from SESSION-FORENSICS, Q36, Q37 and Q41.6, then t
   engine path answered it on its own.
 - **Fix:** A4, plus three changes.
   1. **No consequential default:** a card with a choice that is hard to undo has no lit choice until the user moves to
-     one. Enter does nothing until then. This covers the merge cards that remain (overnight's run card,
-     `PinnedSummary.tsx:883`) and "Implement this plan?".
-  2. **No window-wide Enter for those cards:** only Enter on the focused card, or a click. Digits need the card
-     focused.
+     one, even when it takes focus on its own. Enter does nothing until then.
+  2. **No window-wide Enter for those cards:** only Enter on the focused card after a deliberate selection, or a
+     click. Digits need the card focused.
   3. **Every answer records its origin** (click, enter, digit or typed, plus the client), so the next question like
      this is answered from the data.
+- **The cards this covers:**
+  - `ChoiceCard` (`ActionCards.tsx:646`) whenever one of its choices is consequential: merge cards that remain
+    (overnight's run card, `PinnedSummary.tsx:883`) and "Implement this plan?";
+  - the plan rail's direct approval, `PhasePlanAction` (`ActionCards.tsx:1100`), which today approves a plan on a
+    window-wide Enter with no card focused at all;
+  - the approval card's auto-focused Allow (`ActionCards.tsx:422-456`), which gets the same rule: Enter allows only
+    after the user has focused Allow.
 - **Done when:**
+  - render test, the dangerous case first: a consequential `ChoiceCard` mounts and takes focus on its own. It shows no
+    selection, and Enter right after the mount answers nothing;
+  - render tests: a deliberate selection (arrow key or click on a choice) followed by Enter submits that choice; a
+    click on a choice submits it;
+  - render test: `PhasePlanAction` ignores Enter anywhere in the window and approves only on its own focused control
+    or a click;
   - render tests: Enter in the thread body, the side panel or the titlebar with a consequential card open answers
     nothing; "1" with the card unfocused answers nothing;
   - unit test: the answer event stores its origin;
@@ -365,7 +406,14 @@ Scope: the confirmed failures from SESSION-FORENSICS, Q36, Q37 and Q41.6, then t
   unless they cite a user decision.
 - **User decisions stay decisions:** `learn_user_decision` (`:1303`) covers the user's words, card answers and outline
   go-aheads.
-- **Wrong claims:** the thread can supersede a claim it finds wrong (`@remember` with `supersedes`).
+- **The thread's own `remember` writes go through the same rules.** Today `remember_tool` (`M/brains.rs:792-850`)
+  writes Decision, Convention and Contract nodes directly, with orchestrator provenance and no evidence. After A11:
+  - **a user decision** (or a personal preference) needs a `user_message` reference. The engine checks that the
+    message exists in this conversation, is the user's, and contains any quoted span given. With a valid reference
+    the node is a user decision. Without one it is refused for that kind, with the reason;
+  - **anything else the thread records** is a thread claim, `unverified`, with the session as its source;
+  - **evidence it names** (`files` with line ranges, a check id) is kept for E1, which decides promotion.
+- **Wrong claims:** the thread can replace a claim it finds wrong (`remember` with `replaces`, which exists today).
 - **Labels:** `brain_lines` (`M/context_pack.rs:170`) and `query_brain` print each line's source and state ("user
   decision", "worker claim, unverified", "enrichment, unverified") and put verified facts first.
 - **Migration** (one store migration, run once at upgrade):
@@ -380,6 +428,10 @@ Scope: the confirmed failures from SESSION-FORENSICS, Q36, Q37 and Q41.6, then t
   - migration test: a store with report, orchestrator and user nodes comes out with the right states and provenance;
   - flow test: a false `learned` line that passed checks and a clean review reaches a later worker's brief, a
     `query_brain` answer and a forced rebirth briefing labelled "worker claim, unverified", never as a decision;
+  - flow test: an unsupported claim saved through `remember` (a "convention" with no user message and no evidence)
+    reaches a worker's brief and a forced rebirth briefing labelled "thread claim, unverified";
+  - flow test: a `remember` decision citing a real user message is a user decision; one citing a message that isn't
+    the user's, or a span not in it, is refused;
   - R.
 
 **Validation:**
@@ -403,9 +455,7 @@ Scope: the confirmed failures from SESSION-FORENSICS, Q36, Q37 and Q41.6, then t
 
 Scope: Q35 and Q39 in the engine and the prompts, the measurement B and C need, and the fork cache fix.
 
-**B0. Measurement first.**
-- **V3 as fixtures** in `tools/ab` (P0.2's V3 half), with scoring scripts.
-- **A per-request usage report** in the Inspector, through settlement, with thread turns and model calls per request.
+**B0. P0.1 first** (V3, V1's accounting and the request report already exist from A0).
 - **P0.1:**
   - parse `cache_creation.ephemeral_1h_input_tokens` and `ephemeral_5m_input_tokens` (`P/claude/parse.rs`);
   - estimate the missed prefix per call (previous prompt − cache read, labelled an estimate);
@@ -413,8 +463,7 @@ Scope: Q35 and Q39 in the engine and the prompts, the measurement B and C need, 
     tool-set change, CLI upgrade;
   - keep Codex's cached share per turn.
 - **Done when:**
-  - three reruns of each V3 fixture on an unchanged build agree per ask;
-  - a request report sums to `turn_usage`;
+  - the Inspector's request report shows writes by lifetime and by cause;
   - the C11 fork row of 10-14, replayed from a fixture, shows about 252k missed with cause "note fork".
 
 **B1. The thread does normal work itself (Q35). R.**
@@ -439,18 +488,27 @@ Scope: Q35 and Q39 in the engine and the prompts, the measurement B and C need, 
 
 **B2. Reviews scaled to risk (Q39). R.**
 - **Tiny** (an answer, or an edit the thread's own checks fully cover): no review.
-- **Bigger or risky:** one other-vendor review in the background (`M/review_runs.rs`). It covers:
-  - a thread commit over a cheap size line (engine rule: more than about 30 changed lines or more than 2 files);
-  - a commit the thread marks risky (persistence, security, migrations, concurrency, deletion, public API);
-  - every worker landing.
-
-  Findings are judged against the code and the request. Valid ones are fixed before the final answer, so the request
-  isn't "done" while a review of its work is unsettled; this replaces `launch`'s "the review comes after". Out-of-scope
-  findings are dismissed with their reason. The size line is tuned from V1, not guessed.
+- **Bigger or risky:** one other-vendor review in the background (`M/review_runs.rs`).
+  - **Measured per change, not per commit.** The engine tracks the request's **unreviewed diff**: every thread commit
+    since the last commit a review covered, taken together. When that accumulated range crosses the size line (about
+    30 changed lines or more than 2 files, a cheap engine rule), one review of the whole range starts.
+  - **Before the final answer** the engine checks again. If the request's unreviewed diff is over the line, or holds
+    a commit the thread marked risky (persistence, security, migrations, concurrency, deletion, public API), a review
+    of that range starts. "Done" waits for it.
+  - **Every worker landing** gets its review, as today.
+  - **Judging:** findings are judged against the code and the request. Valid ones are fixed before the final answer,
+    so the request isn't "done" while a review of its work is unsettled; this replaces `launch`'s "the review comes
+    after". Out-of-scope findings are dismissed with their reason. The size line is tuned from V1, not guessed.
 - **Big jobs:** `review_plan` before building and `start_verifier` at the end, with evidence per "done when" point.
-- **"Review the work" off:** no review, nothing waits, and the answer says no review ran.
-- **Done when:** flow tests per tier (which review starts, and when "done" may be written); the off switch skips all
-  of them; T2's final answer lists what the review found and what was fixed.
+- **"Review the work" off:** no other-vendor review and nothing waits. The thread's own checks stay, and the answer
+  says no review ran (Q43).
+- **Done when:**
+  - flow tests per tier: which review starts, and when "done" may be written;
+  - flow test: four commits of 10 lines each in 3 files, each under the line, get one review of their combined range
+    before "done";
+  - flow test: one tiny commit gets no review;
+  - the off switch skips all of them;
+  - T2's final answer lists what the review found and what was fixed.
 
 **B3. Small asks answered directly, with file:line (research B1). R.**
 - **Answers:** the thread answers code questions from the Brain, `code_search`, `code_refs` and a few precise reads,
@@ -465,14 +523,29 @@ Scope: Q35 and Q39 in the engine and the prompts, the measurement B and C need, 
 - **Done when:** model and render tests pass, and an open session told `short_replies: false` gets one note.
 
 **B5. The note fork shares the thread's prefix (research A11).**
-- **Same spec as the thread:** the checkpoint and hand-off fork (`M/rebirth.rs:347`, today `ToolSet::None`) launches
-  from a clone of the thread's live `SessionSpec`, with the same tools, MCP servers, model, effort and settings.
-- **No tool can run:** a `PreToolUse` command hook in its `--settings` denies every native and MCP call, and
-  Brigadier's MCP server refuses fork owners.
-- **No false refresh:** the `refreshed` extension (`M/cold.rs:164-172`) goes.
+- **Claude, which is where the cost was measured** (C11; Codex threads aren't checkpointed, N5):
+  - **Same spec as the thread:** the checkpoint and hand-off fork (`M/rebirth.rs:337-366`, today `ToolSet::None` and
+    no MCP servers) launches from a clone of the thread's live `SessionSpec`, with the same tools, MCP servers,
+    model, effort and settings. Only origin, ephemerality, recording and folder ownership change.
+  - **It keeps `Access::ReadOnly`** (`M/rebirth.rs:344`), as today, and its prompt keeps "don't call any tool".
+  - **Every call is refused before it runs:** a `PreToolUse` command hook in the fork's `--settings` denies every
+    tool, native and MCP. Hooks are client-side, so the prefix stays the same. Brigadier's MCP server also refuses
+    calls from a fork owner. Tools are not removed: `--disallowedTools` would change the prefix again.
+- **Codex: unchanged until its probe passes.**
+  - Today a Codex fork has `ToolSet::None`, which only turns off web search: Codex's own shell and patch tools stay,
+    under `Access::ReadOnly` (`P/codex/mod.rs:1187-1194` @d669bca0).
+  - Codex hooks are off for every Codex session (`DISABLED_FEATURES`, `P/codex/mod.rs:116-123`). Codex's hook coverage
+    has documented exceptions, so a hook alone can't promise "no tool runs" there.
+  - A Codex fork changes only after three things pass: the Codex hooks-isolation probe (PLAN §5); tests that its
+    native shell and patch calls are denied, beyond the read-only sandbox; and a measurement that it shares the
+    thread's prefix.
+- **No false refresh:** the `refreshed` extension (`M/cold.rs:164-172`) goes, for both providers.
 - **Done when:**
-  - one `handoff` row reads about the thread's context and writes a few thousand;
-  - a test fork asked to call `Bash` and an MCP tool is refused both times, with nothing changed on disk;
+  - one Claude `handoff` row reads about the thread's context and writes a few thousand, with the deny hook in place;
+  - a Claude test fork asked to call `Bash`, `Edit` and an MCP tool is refused each time, with nothing changed on
+    disk;
+  - a test confirms the fork's spec still has `Access::ReadOnly`;
+  - the Codex fork's spec is unchanged unless its probe and denial tests are recorded as passing;
   - V1 with an idle gap over 50 minutes, through settlement.
 
 **Validation:**
@@ -497,7 +570,7 @@ rule on resume and then do a V3 tiny edit itself.
 
 ### Phase C: Fewest tokens
 
-Scope: the per-call fixed cost, thread wakes, effort, and background spend, measured with P0.1 and V3.
+Scope: the per-call fixed cost, thread wakes and background spend, measured with P0.1, V3 and V1.
 
 **C1. A smaller fixed start (research B8; R for (b)).**
 - **(a)** `delegate_task`'s 6 kB schema trimmed to one line per field, with rare-field detail moved into the brief
@@ -532,13 +605,8 @@ Target: 3–5k fewer tokens per thread call.
 - **Done when:** V1 shows fewer thread turns per request at equal quality, and a flow test shows a question still
   wakes the thread at once.
 
-**C4. Effort by model and step (research B3).**
-- **Floors:** per model family, from measured data (`crates/router/src/decide.rs:190-218` @d669bca0). The thread names
-  the effort for the job; the router applies the model's floor.
-- **Switching cost:** Claude 5.5 can switch effort between steps for one ≈9.4k write (PROBES P2). Codex is assumed to
-  miss its cache on each switch until its probe says otherwise.
-- **Done when:** V1 per model and effort on frozen tasks, with completion rates. A lower effort is adopted only where
-  completion holds and V2's "unknown instead of a guess" score doesn't drop.
+**C4. Effort by model and step: moved to D1.7.** Its acceptance needs V2's "unknown instead of a guess" score, and V2
+is built in D1.0.
 
 **C5. Brain enrichment cost (S8).**
 - **The spend:** about 2.98M Haiku cache writes in 14 days, against the thread's 0.50M.
@@ -602,8 +670,15 @@ delays non-urgent reactions by seconds (C3).
   account's config folder; Codex by thread, if its probe allows.
 - **"Prompt is too long":** goes to the size hand-off, labelled not lossless until D2.1.
 - **Probes first** (PLAN §5).
-- **Done when:** V2 with an injected limit, an account switch and a context-window error, on both providers, answers
-  every planted item.
+- **Done when (interim, in D1):**
+  - V2 with an injected limit and an account switch, on both providers: every planted item answered, since the
+    session is resumed whole;
+  - V2 with a context-window error: every item planted inside the 8 KiB clip is answered. Items beyond the clip may be
+    lost, but the successor's brief says its transcript is clipped, and the successor answers "unknown" rather than
+    guessing for any it lost;
+  - no context-window error goes to a reroute.
+- **Done when (lossless, rerun in D2's validation after D2.1):** the context-window seam answers every planted item,
+  including those beyond the clip, on both providers.
 
 **D1.4. Restart survival (research A3).**
 - **Checkpoint:** the cold-cache checkpoint is persisted when written and reloaded at start (`M/cold.rs`).
@@ -629,10 +704,18 @@ delays non-urgent reactions by seconds (C3).
 - **Done when:** V1 on a monorepo sub-package task shows a smaller first call at equal completion, and V2's constraint
   item still passes.
 
+**D1.7. Effort by model and step (research B3, moved from C4).**
+- **Floors:** per model family, from measured data (`crates/router/src/decide.rs:190-218` @d669bca0). The thread names
+  the effort for the job; the router applies the model's floor.
+- **Switching cost:** Claude 5.5 can switch effort between steps for one ≈9.4k write (PROBES P2). Codex is assumed to
+  miss its cache on each switch until its probe says otherwise.
+- **Done when:** V1 per model and effort on frozen tasks, with completion rates. A lower effort is adopted only where
+  completion holds and V2's "unknown instead of a guess" score doesn't drop.
+
 **Validation:**
-- V2: all items pass on both providers;
-- bench T7, n = 3: every feature plain Claude Code passes, Brigadier passes too, with no CLI compaction and tokens
-  ≤ 1.2× its median.
+- V2: all items pass on both providers, except D1.3's beyond-clip items, which wait for D2;
+- bench T7, n = 3: every feature plain Claude Code passes, Brigadier passes too, with tokens ≤ 1.2× its median. CLI
+  compaction events are reported; the guarantee that none happen is D2.3's.
 
 **Risk:** a constraint wrongly superseded is a loss, so supersession is explicit only. D1.3 depends on the CLIs
 accepting a copied transcript, so it is probed first.
@@ -640,16 +723,21 @@ accepting a copied transcript, so it is probed first.
 ### Phase E: Never hallucinates (after D1, before D2)
 
 **E1. Facts need evidence (the rest of research A4, Q38).**
-- **Promotion:** a claim becomes a fact only with evidence for that claim:
+- **Promotion:** a claim becomes a fact only with evidence for that claim. Evidence is one of two things:
   - a cited file:line that still says so, re-read by the engine when the claim is used;
-  - a check id whose output shows it;
-  - or a review that examined it.
+  - a check id whose output shows it.
 
+  A review counts only through the evidence it points to: a finding that cites a file:line or a check output for this
+  claim supplies that evidence, which is then verified like any other. A review is not an evidence route of its own.
   Passing checks or a clean review of the landing is not evidence for an unrelated claim.
+- **Independent of the review switch:** promotion works the same with "Review the work" on or off. Q43's off switch
+  stops other-vendor reviews only, not memory verification.
 - **Contradiction:** a contradicting finding supersedes the claim.
-- **Reviews off:** claims stay claims.
-- **Done when:** V2's false `learned` line never reaches a brief as fact, and a true claim with a file:line is
-  promoted after the re-read.
+- **Done when:**
+  - V2's false `learned` line never reaches a brief as fact;
+  - a true claim with a file:line is promoted after the re-read, and a true claim with a check id is promoted from
+    that check's output, each with reviews on and with reviews off;
+  - a review finding with no file:line or check output for the claim promotes nothing.
 
 **E2. Overnight "verified" needs evidence per criterion (research A5). R.**
 - **Overnight acceptance** (`M/overnight/run.rs:448-567` @d669bca0): each criterion is [met] only with a check id or an
@@ -679,12 +767,32 @@ findings ≤ the better plain arm.
 ### Phase D2: Never forgets (the output store and compaction)
 
 **D2.1. Durable raw output (research P0.3).**
-- **Claude:** a `PostToolBatch` hook in `--settings` stores each tool result as the model saw it, by `tool_use_id`.
-- **Codex:** Brigadier's `run`. Codex hooks are used only if their probe finds a way that keeps the user's hooks out
-  (`DISABLED_FEATURES`, `P/codex/mod.rs:116`).
+- **The guarantee:** every supported tool path stores its result **before** Brigadier's 8 KiB normalisation clip
+  (`OUTPUT_CLIP`, `P/claude/parse.rs:18`, `P/codex/parse.rs:17`). The clipped event carries a durable reference to the
+  stored copy, and the exported transcript carries those references.
+- **Claude:** a `PostToolBatch` hook in `--settings` stores each tool result as the model saw it, by `tool_use_id`,
+  for workers and the thread.
+- **Codex, which has no hook to lean on:** Codex hooks stay off (`DISABLED_FEATURES`, `P/codex/mod.rs:116-123`), and
+  Brigadier's `run` covers only what is run through it, not a worker's native commands. So the store sits in the
+  parse layer, independent of hooks:
+  - a command's `aggregated_output` is stored before `clip()` (`P/codex/parse.rs:418`);
+  - an MCP tool call's result text is stored before `clip()` (`:482`);
+  - a dynamic tool call's output is stored the same way;
+  - each event carries the stored copy's reference.
+
+  Whether the app-server's `aggregated_output` is itself complete or bounded by `tool_output_token_limit` is a probe
+  (PLAN §5). Where it is bounded, the event is marked "the CLI gave an excerpt only", and no successor is told it has
+  more. Codex hooks are added only if the hooks-isolation probe passes, and they are never the only store.
 - **Export:** `worker_transcript()` is replaced by a streamed export that marks itself incomplete, with the missing
   ranges.
-- **Done when:** fault tests (page read error, decode error, interrupted export) each mark the export incomplete.
+- **Done when:**
+  - fault tests (page read error, decode error, interrupted export) each mark the export incomplete;
+  - **preservation, per provider:** a worker command prints a planted marker 50 KiB into a 200 KiB output. On
+    Claude: Bash and an MCP tool. On Codex: a native command and an MCP tool. The original CLI session files are then
+    deleted, and the marker is still retrieved through the exported event's reference;
+  - where Codex gives only an excerpt, the event says so, and the test records the bound.
+- **Rollout block:** Codex's forced hand-off (D2.3) is not switched on until Codex passes the preservation test, or
+  until its excerpt bound is labelled and V2's beyond-clip items for Codex pass from the stored copies.
 
 **D2.2. Keep the CLI's own output files (research A8).**
 - Before a hand-off, reroute, review-hold cleanup or disposal, copy the `tool-results/` files that Claude's transcript
@@ -697,8 +805,36 @@ findings ≤ the better plain arm.
 - **Guard:** the hand-off point sits below each provider's real ceiling.
 - **Steer:** the wrap-up steer repeats after each further stretch of growth, and a hard line interrupts the turn and
   hands off.
-- **Hook:** a `PreCompact` hook blocks proactive compaction and triggers the hand-off.
+- **Hook:** a `PreCompact` hook blocks proactive compaction and triggers the hand-off (Claude; Codex only through a
+  passed hooks probe).
 - **Done when:** oversized tool results on a 200k-window model give a hand-off and no compaction, on both providers.
+  On Codex this waits for D2.1's preservation gate.
+
+**D2.3b. The thread's in-turn overflow guard.**
+- **The gap today:** on `main` a thread's context report only records usage (`M/conversation.rs:4264-4280`). Rebirth
+  is considered only after the turn ends (`consider_rebirth`, `:4729`). A compaction is only logged as a contract
+  breach (`:4281`).
+- **Why it matters more now:** under Q35 the thread does the implementation work itself, so one long turn can cross
+  Codex's compaction ceiling (Codex clamps its limit to about 90% of the window) or Claude's hard limit ("prompt is
+  too long").
+- **Guard:**
+  - **a steer line** below each provider's ceiling: the first context report past it sends the thread a mid-turn
+    steer to commit what it has and wrap up. It repeats after each further stretch of growth;
+  - **a hard line** nearer the ceiling, safely below Codex's clamp: Brigadier interrupts the turn and runs the
+    thread's rebirth at once, without waiting for the turn to end. The successor continues the request;
+  - **"prompt is too long" on the thread** goes to that same rebirth, never to a failed request;
+  - **on Claude,** the thread's `--settings` also carries the `PreCompact` hook, so any proactive compaction is
+    blocked and turned into the rebirth.
+- **Durable recovery:** the interruption is recorded before the CLI is stopped ("interrupted for rebirth at N tokens",
+  with the request id). A daemon restart in between finishes the rebirth and resumes the request instead of losing it
+  or replaying the turn. The successor's briefing names the interrupted step and the last commit, using D2.1's stored
+  outputs and D1.1's ruled-out notes.
+- **Done when:**
+  - **threads and workers, both providers, on a 200k-window model:** an oversized tool result inside one turn gives a
+    steer, then an interrupt and rebirth (thread) or hand-off (worker), and no `CompactionStarted`;
+  - a "prompt is too long" injected on the thread gives a rebirth and a continued request;
+  - a daemon kill between the interrupt and the rebirth recovers and finishes the request;
+  - V2's planted items survive the in-turn seam.
 
 **D2.4. Honest successor seams (research A2) and the thread's own work in transcript search (research A15).**
 - **Successors** of a crash, missing CLI files or a cross-provider move get the streamed export, the note,
@@ -708,11 +844,14 @@ findings ≤ the better plain arm.
   rebirths.
 
 **Validation:**
-- V2, all items, on both providers;
+- V2, all items, on both providers, including D1.3's context-window seam with items beyond the clip (its lossless
+  gate) and D2.3b's in-turn seam;
 - bench T7L, n = 2–3: Brigadier passes as many features as the better plain arm or more, with no CLI compaction and
   no lost constraint. Tokens and time are reported per vendor, with the cache regime.
 
-**Risk:** disk growth from stored outputs and a file write per tool batch, both measured in V1.
+**Risk:** disk growth from stored outputs and a file write per tool batch, both measured in V1. A mid-turn thread
+interrupt (D2.3b) may cut a step in half: the steer comes first, and the successor gets the last commit and the
+interrupted step by name.
 
 ### Phase X: Experiments
 
@@ -774,7 +913,8 @@ Each item must be true at the end; how it is checked is in brackets.
    bench transcript audit).
 7. No merge happens unless the user clicked "Merge into main" or wrote it (A4 and A5 flow tests, including stored
    answers, restart and old sessions).
-8. A stray Enter or "1" never answers a consequential card (A5 render tests).
+8. A stray Enter or "1" never answers a consequential card, including one that has just taken focus on its own and
+   the plan rail's approval (A5 render tests).
 9. After a merge, the workspace is still there and the next message works in it (A3 flow test).
 10. A workspace goes only on archive, delete or "Close workspace" (A3 tests).
 11. No spare worktrees: none after a question, a self-edit or a quit (A8 flow test).
@@ -783,17 +923,20 @@ Each item must be true at the end; how it is checked is in brackets.
 14. The thread never hands the user a defect it can fix (A6 V3 case).
 15. "Worked 11m · waited for you 18m": the user's reading time is never shown as work (A9 tests).
 16. A stopped worker says "stopped", never "done" (A7 render test).
-17. No claim is briefed as fact without evidence, and every Brain line says where it came from (A11 and E1 V2 item;
-    migration test).
+17. No claim is briefed as fact without evidence, whether a worker reported it or the thread saved it with
+    `remember`, and every Brain line says where it came from (A11 and E1 tests, with reviews on and off; migration
+    test).
 18. Final answers list checks run, the review state and what wasn't checked (E3 audit).
-19. Bigger changes get one other-vendor review, and valid findings are fixed before "done"; tiny edits get the
-    thread's own checks only (B2 flow tests; T2's final answer).
+19. Bigger changes get one other-vendor review, judged on the request's whole unreviewed diff, not commit by commit,
+    and valid findings are fixed before "done"; tiny edits get the thread's own checks only (B2 flow tests,
+    including the four-small-commits case; T2's final answer).
 20. A usage limit or an account switch continues the same session with nothing lost (D1.3 V2 run).
 21. Nothing planted early is lost after two rebirths, including a constraint with its exception and a ruled-out
     approach (V2, all items, both providers).
 22. A daemon restart loses no waiting worker (D1.4 V2 run).
 23. A hung worker or a silent thread is caught in minutes, not 50 (D1.5 fault injection).
-24. No worker or thread is compacted by its CLI; Brigadier hands off instead (D2.3 test; no compaction in T7L).
+24. No worker or thread is compacted by its CLI, even inside one long turn; workers hand off and threads are reborn
+    mid-turn (D2.3 and D2.3b tests on both providers; no compaction in T7L).
 25. The 24-feature long task finishes at least as many features as the best plain CLI (bench T7L).
 26. An idle long thread's note fork reads the cache instead of rewriting it (B5's `handoff` row).
 27. Settings has exactly two behaviour toggles, "Review the work" and "Start workers on its own", and no quality knobs
