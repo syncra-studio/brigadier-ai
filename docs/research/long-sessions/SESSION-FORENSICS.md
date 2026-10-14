@@ -43,7 +43,7 @@ Thread turns and their usage come from `routing.sqlite turn_usage`. Events come 
 | 23:42:40 | User: "See the Providers settings page… redesign it fully, propose me some variants… open to move the routing to its own page under Agents" | conversation stream |
 | 23:42:43–23:43:20 (T1, 37 s) | The thread reads the code and asks on a card: which structure (4 variants as text), Usage on or off the page, mockups or not | T1 usage: cache read 268,239, write 52,208, output 3,567. First call's context 31,414 (orch seq 161136) |
 | 23:46:36 | User answers: Providers + Routing; keep Usage separate; "Mock up my pick" (the recommended options) | waited 3 m 16 s on the card |
-| 23:46:37–23:47:00 (T2) | `remember`, then `delegate_task` for the mockup (task-1) | The router's reason was Claude Code's weekly window "projected at 459% by its reset", while the weekly window showed 23% used (not investigated further; §2.7) |
+| 23:46:37–23:47:00 (T2) | `remember`, then `delegate_task` for the mockup (task-1) | The router's reason was Claude Code's weekly window "projected at 459% by its reset", a forecast at the current rate to the window's reset, with 23% used so far. Not checked against the projection code (§2) |
 | 23:46:59–23:53:10 | task-1 builds fixtures, commits `d0ccfc22` and takes 12 screenshots | the task's `outputs` (mockup-1..12.png, stored as blobs) |
 | 23:53:12–23:53:25 (T3) | The thread reads 2 of the PNGs and asks whether to build it and whether to rename "In use" | |
 | 00:07:42 | User: "No, I'll need you to give me a prompt I can give to an LLM designer…"; keep "In use" | waited 14 m 17 s on the card. **The user's own choice, not a bug** |
@@ -60,7 +60,7 @@ Thread turns and their usage come from `routing.sqlite turn_usage`. Events come 
 | 00:18:13 | User quits the app | Log: "quit requested by a client". `task-next-7a56b89b` is never dropped. Relaunches at 00:21:52 and 00:31:19 end only processes. The worktree is still on disk |
 
 **Totals:**
-- **Thread:** 8 model calls; cache read 1,813,759; cache write 82,505; output 12,851; context at most 82.6k; about $1.28 at API prices.
+- **Thread:** 8 turns, **30 model calls** (the native transcript `c4b49086-fe00-4d0b-9470-22c6f8f29c79` has 30 assistant message ids with usage, and their sums match these totals exactly; Brigadier records the CLI's per-turn result usage, which sums the turn's calls, `crates/providers/src/claude/parse.rs:795-816`); cache read 1,813,759; cache write 82,505; output 12,851; context at most 82.6k; about $1.28 at API prices.
 - **task-1 (Codex):** 25 calls; input 126,690; cached 2.10M; output 15.7k.
 - **task-2 (Codex):** 24 calls; input 145,948; cached 1.82M; output 17.6k.
 
@@ -96,7 +96,7 @@ The switch from mockups to a designer brief is **not** on the list. The user cho
   - The user clicked it at 00:13 and got nothing.
 - **Root cause:**
   - A read-only task is disposed as soon as its post-report turn ends: `M/workers.rs:3017-3025` → `finish_read_task` → `dispose_task` (`M/workers.rs:4638`; disposal `:4677-4679`).
-  - The scratch dir, `outputs/` included, goes through the ledger (`M/ledger.rs:910-927`).
+  - The scratch dir, `outputs/` included, goes through the ledger (`crates/core/src/ledger.rs:910-927`).
   - Outputs are stored as blobs first: `report_files` at `M/outputs.rs:201`, called from `M/workers.rs:3553` (comment at `:3542`); `final_outputs` at `M/outputs.rs:248`.
   - The task card can open and save them: `D/app/conversation/TaskDetails.tsx:210-212` and `D/app/conversation/WorkerThread.tsx:218`, calling `save_artifact`/`artifact_copy` (`M/outputs.rs:668`, `:681`).
   - So nothing was lost, and the **intended place for a deliverable is the task card**. The thread's first sentence ("save it from the task card") was right.
@@ -120,8 +120,9 @@ The switch from mockups to a designer brief is **not** on the list. The user cho
   - At 00:11:36, prompted by the addendum, it told the user the file "is also saved at" that path.
 - **Root cause:**
   - The late-event rule `LATE_EVENT` (`M/prompts.rs:190`) makes any addendum that "changes what the user must know" worth an "Update:" line.
-  - Nothing in the addendum or the rules tells the thread the scratch is gone, or that outputs live on the card.
-  - The thread trusted the worker's words over its own check from 8 s before.
+  - The thread **had** been told where the output lives: the report envelope it read (seq 162234) says "Outputs (the user saves them from the task card; read_artifact reads them)", listing this file's stored id (`M/prompts.rs:1598-1605`). Its first answer said so.
+  - What nothing says is that the task's scratch is gone: the addendum still carries the worker's scratch link.
+  - So the thread overrode both the guidance it had and its own failed existence check from 8 s before, and trusted the worker's words.
 - **launch `3755744e`:**
   - "A worker's words after its report ride with the report while the thread hasn't read it".
   - Here the thread had already read the report, so the addendum would still have come as a separate event. So launch fixes this only partly.
@@ -179,8 +180,8 @@ The switch from mockups to a designer brief is **not** on the list. The user cho
   - The app quit at 00:18:13, before the 10-minute unused timer. The worktree is still on disk after two relaunches.
 - **Root cause:**
   - A pre-warm is made on every user message (`M/conversation.rs:1121`; `M/prewarm.rs:124-133`).
-  - Its expiry is an in-memory timer. Its owner is never marked as being disposed, so the launch sweep `ledger.sweep` skips it (`M/ledger.rs:604`).
-  - It surfaces only as "Orphaned" in Settings › Storage (`crates/core/src/disk/mod.rs:497`, `:1665ff`).
+  - Its expiry is an in-memory timer. Its owner is never marked as being disposed, so the launch sweep `ledger.sweep` skips it (`crates/core/src/ledger.rs:604`).
+  - It surfaces only as "Orphaned" in Settings › Storage (`M/disk/mod.rs:497`, `:1665ff`).
 - **Fix:**
   - Drop pre-warms on quit.
   - At launch, sweep `task-next-*` owners that have no task.
@@ -211,17 +212,22 @@ See §3. This is what the user means by "the thread deletes its worktree".
 ### Observation, not a bug: the route to Codex
 
 - The router sent the mockup to Codex because "Claude Code's weekly window is projected at 459% by its reset". The weekly usage shown was 23%.
-- The projection code wasn't checked in this pass.
-- It's worth one look, because a wrong projection silently moves work to the other vendor.
+- These don't contradict each other: a projection extrapolates the recent rate to the window's reset, and a busy evening early in a weekly window can project far past 100% while little of it is used.
+- The projection code wasn't checked in this pass, so whether 459% was a fair forecast is open. It's worth one look only because a projection that overreacts to one busy hour moves work to the other vendor without saying so.
 
 ## 3. Does the thread delete its own worktree? (U9)
+
+Short answer: worktrees **are** removed without a merge, but by design and by the engine, not by the thread deciding
+on its own. A task's worktree goes when the task ends (a scout right after its report, a stopped task at once), and
+a session's when it is archived or deleted. A **session** worktree goes on its own only after the user consents to
+a merge (on the card or in words), which is the case that matches what the user describes.
 
 ### 3.1 This session
 
 - **No session worktree was removed in this session.**
-- What disappeared was:
-  - task-2's scratch, with the deliverable (U1);
-  - task-1's worktree when it was stopped. Its branch was kept.
+- Two task worktrees were removed automatically, with no merge and no click:
+  - task-2's (the scout), with its scratch and the deliverable, 2 s after its report (U1; path A below);
+  - task-1's (the mockup), when the thread stopped it at 00:07:51. Its commit was kept on its branch (path A).
 
 ### 3.2 The earlier session that matches the user's description
 
@@ -234,7 +240,7 @@ Session `01a1366e-0c0c-7514-9936-13ab33fbb16e` ("See the activity from the tabba
 - **`finish_session`:** merged 25 commits into main at `a182860a`.
 - **11:20:40:** cleanup owner `session:01a1366e…` removed the worktree (seq 160929–160932), and the session's setup path became null.
 
-So the removal followed the user's own click, and it is the **designed** behaviour:
+So this session worktree's removal followed the user's own click, and it is the **designed** behaviour:
 - `docs/THREAD-PLAN.md:200`, Q9: "after merge, the session worktree and branch are removed; the next message starts fresh".
 - `:202-203`: `ensure_target` recreates the worktree at the same path, from the base tip.
 
@@ -247,38 +253,42 @@ The code path:
 ### 3.3 Why it feels like self-deletion
 
 - **The merge card never says the workspace goes.**
-  - It reads "Merge `{branch}` into `{base}`?" (`M/landing.rs:2780-2790`), with options at `M/cards.rs:884`/`:888` and "Not yet" at `M/landing.rs:1407`.
+  - It reads "Merge `{branch}` into `{base}`?" (`M/landing.rs:2780-2790`), with options at `M/cards.rs:884`/`:888` and "Not yet" at `M/landing.rs:1378`.
   - It doesn't say that the worktree and branch are removed and that the next message starts from a fresh one.
   - So "Merge" reads like "approve", but it ends the workspace.
 - **The thread offers the merge whenever it thinks it's done.**
   - The rule is "When the work has landed, ask them once, on a card, with propose_merge" (`M/prompts.rs:293`; also `:112`).
   - In 01a1366e the first card came after a single task. The thread had decided the request was done, which the user didn't think.
   - Then the user asked about merging three times while the work went on, so merging and finishing became one blurred step.
-- **What the user wanted:** to merge into main and keep going in the same workspace. The design instead gives a fresh worktree from the new main. Nothing is lost (the commits are on main), but uncommitted scratch files, open previews and the "place" of the work are gone.
+- **What the user wanted:** to merge into main and keep going in the same workspace. The design instead gives a fresh worktree from the new main.
+  - Nothing committed is lost: the commits are on main.
+  - Uncommitted work isn't lost either: a worktree with tracked changes or untracked files keeps itself and its branch (`M/lifecycle.rs:708-725`; the dirty list leaves out only git-ignored entries, `crates/git/src/parse.rs:48-53`), and the thread is told why.
+  - What does go from a clean worktree is what git ignores (build output, caches, `node_modules`), so the next message may rebuild from scratch, plus the "place" of the work and any preview running from it.
 
 ### 3.4 Every code path that removes a session or task worktree
 
 | | Path | When | What is kept |
 |---|---|---|---|
-| A | `dispose_task` `M/workers.rs:4638` | Landing, a read task done, stop, failure, recovery, `wind_down` | Outputs as blobs. A WIP commit for stopped or failed tasks (`:4644`). The branch is dropped only when Done (`:4683`) |
+| A | `dispose_task` `M/workers.rs:4638` | Landing, a read task done, stop, failure, recovery, `wind_down` | Outputs as blobs. For stopped or failed tasks, `keep_unfinished` (`:4643-4648`) keeps unfinished work as a WIP commit on the branch, and then the branch stays. The branch is deleted (`:4683`) for Done, and for a stopped or failed task with no unfinished work (`:4761`) or whose work overlapped the user's changes and was kept as a diff (`:4769-4777`). A landed branch is deleted by the landing once merged |
 | B | `release_merged_session` `M/lifecycle.rs:687` | `finish_session` after a merge | Nothing: designed (Q9). Skipped if dirty or locked |
 | C | `wind_down` `M/lifecycle.rs:607` | Archive, delete, project removal, uninstall | `keep_session_changes` `:834` runs first |
 | D | `ensure_target` retry `M/workers.rs:2502-2517` | A broken worktree being recreated | |
-| E | `release_hold` `M/review_hold.rs:178` | Review hold released | |
+| E | A review's detached checkout: recorded at `M/review_runs.rs:1085-1093`, disposed when the review ends at `:1067` (a restart's sweep removes what is left) | Each review | Not a task or session worktree. (`release_hold`, `M/review_hold.rs:178`, removes no worktree: only the landed worker's CLI session files kept for its review, `:30-39`, `:102-118`, and its branch while still merged) |
 | F | Pre-warm `drop_slot` `M/prewarm.rs:277`, `adopt_prewarm` `:246` | Replaced, unused for 10 min, hibernate (`M/lifecycle.rs:464`), closed (`:611`), merged (`:727`) | Not run at quit (U6) |
 | G | The `clean_up` tool `M/clean_up.rs:19` | The thread asks | It touches a `session:` owner only if disposal already started (`:61-64`). The prompt forbids manual removal (`M/prompts.rs:122`) |
-| H | Launch `ledger.sweep` `M/ledger.rs:604` | At start | Only for owners already being disposed |
-| I | Settings › Storage `crates/core/src/disk/mod.rs:564`, `:753`, `:629`; empty project folder `:1279` | The user clicks | |
-| J | Overnight run worktrees `M/overnight/workspace.rs:136` | Run end | |
+| H | Launch `ledger.sweep` `crates/core/src/ledger.rs:604` | At start | Only for owners already being disposed |
+| I | Settings › Storage `M/disk/mod.rs:564`, `:753`, `:629`; empty project folder `:1279` | The user clicks | |
+| J | Overnight run worktrees, `release_run_worktrees` `M/overnight/workspace.rs:112-140` | When the session closes (archive or delete: `release_conversation_runs`, `M/lifecycle.rs:547`, `:1059`, `:1152-1160`), **not** at run end | Kept for Continue and Merge while the session lives. Changes are kept as a WIP commit first; a worktree whose changes can't be kept stays; never while a run still uses it |
 | K | Test data and thread temp at start (`M/lifecycle.rs:262`, `M/thread_scratch.rs:156`) | At start | |
 
 - The remover itself is `M/lifecycle.rs:46-81`: `git worktree remove --force`, then prune (`crates/git/src/repo.rs:503`).
-- The ledger's `remove()` is at `M/ledger.rs:774`.
+- The ledger's `remove()` is at `crates/core/src/ledger.rs:774`.
 - Other removals checked in the logs:
   - 10-13 20:42: archives the user started (`session:` owners).
   - 10-14 14:02 UTC: housekeeping "Empty work folder of a project", which removes only an empty `worktrees/<project>` directory.
 - Hibernate and quit never remove a session worktree.
-- **The only thread tool that can remove one is `finish_session`, and only after the user's consent. There is no evidence of a removal without a user click.**
+- **For a session worktree,** `finish_session` is what starts the normal removal after a merge, and only with the user's consent: their answer on the merge card, or their own words in their latest message (`M/landing.rs:1436-1438`). `clean_up` can finish a removal that was already started and didn't complete (`M/clean_up.rs:61-72`), but it can't start one.
+- **No session worktree was removed without the user's consent** (a merge answer or an archive) in the data checked. Task worktrees are removed on every task's end, by the engine, as designed (path A).
 
 One stale doc: `docs/PLAN.md:109` still says there is no merge card. That's outside this research; it's noted here only.
 
@@ -301,25 +311,29 @@ One stale doc: `docs/PLAN.md:109` still says there is no merge card. That's outs
 - **The "~40k prompt" is that average: 382k ÷ ~10 calls.**
   - So it is the fixed start plus the turn's growing history, not the fixed start alone.
 - `launch` adds about 1.6 kB to the thread's instructions (the small-change rule, `include_request`, the review lines; `git diff d669bca0 50695633 -- M/prompts.rs`). That's about 0.4k tokens, plus about 0.4 kB on `delegate_task`'s schema.
-- So the fixed start on `launch` is about the 31.4k measured at `d669bca0`, not 40k.
+- So the fixed start on `launch` is about the 31.2k measured at `d669bca0`, not 40k.
+- In the forensics session the same arithmetic gives a larger average: 1.90M prompt tokens over 30 calls ≈ 63k per call, because the thread read files and artifacts into its history. The fixed part of each call stays ≈31k.
 
 ### 4.2 What the fixed start is made of (measured at `d669bca0`)
 
-The first thread call's context in this session was **31,414 tokens** (orch seq 161136), before any tool result. It splits like this:
+The first thread call's prompt in this session was **31,198 tokens** (cache write 31,196, cache read 0: the first
+assistant message of transcript `c4b49086…`; 31,414 with its output, orch seq 161136), before any tool result. The
+session was a Full-access Claude thread on macOS with reviews on and the browser on (the injection's `told`,
+seq 161118: `permission: fullAccess`, `reviewWork: true`, `browser: true`). It splits like this:
 
 | Part | Size | How measured | Plain Claude Code pays it? |
 |---|---|---|---|
-| Brigadier's MCP tool catalog for the thread (45 tools; 46 with `run`) | **46,717 bytes of JSON, ≈13k tokens** (range 11.7k–15.6k at 4.0–3.0 bytes/token). Descriptions alone are 19,356 bytes | A throwaway test on a `git archive` copy of `d669bca0` (run dir `workers/w07/catalog-sizes.txt`). Not tokenized exactly | No |
-| Brigadier's instructions (`--append-system-prompt`) | **19,969 bytes, ≈5.0k tokens** | The injection log, seq 161118: `tokensEstimate` 4,993. Built by `M/thread.rs:300-335` from `prompts::thread` (`M/prompts.rs:65-160`), plus the reviews-off, git-writing and browser sections, plus repo instructions (brigadier-ai has none) | No |
-| Claude Code's own system prompt and the thread's 8 built-in tools (`THREAD_TOOLS`, `crates/providers/src/claude/mod.rs:76`: Read, Grep, Glob, Bash, Edit, Write, WebSearch, WebFetch) | **≈13k** (range ≈10.5–15k) | The remainder: 31.4k − 5.0k − 13k − 0.25k | Yes, more in fact: plain Claude Code ships more built-in tools |
-| The user message and the first output | ≈0.25k | | Yes |
+| Brigadier's MCP tool catalog for this thread: 46 tools, `run` included (Full access gives `RunTools::Run`, `M/run.rs:72`) | **48,023 bytes of JSON, ≈14k tokens** (range 12.0k–16.0k at 4.0–3.0 bytes/token). Descriptions alone are 20,138 bytes | A throwaway test on a `git archive` copy of `d669bca0`, role `orchestrator_run` (run dir `workers/w07/catalog-sizes.txt`). Bytes, not tokens: not tokenized exactly | No |
+| Brigadier's instructions (`--append-system-prompt`) | **19,969 bytes, ≈5.0k tokens** | The injection log, seq 161118: `bytes` 19,969, `tokensEstimate` 4,993 (Brigadier's own estimate). Built by `M/thread.rs:300-335` from `prompts::thread` (`M/prompts.rs:65-160`), the git-writing section (empty here) and repo instructions (brigadier-ai has none). With reviews and the browser on, neither the reviews-off nor the browser-off section is added (`M/thread.rs:322-328`, `M/prompts.rs:686-691`). **Personal Brain preferences** go here too (`M/conversation.rs:2643-2653` → `M/prompts.rs:144`, `:1162-1171`), up to 6,000 bytes (≈1.5k, `MEMORY_BYTES`, `M/brain_jobs.rs:67`); this session had none (its preferences fingerprint `af1349b9f5f9a1a6` is the hash of no input) | No |
+| Claude Code's own system prompt and the thread's 8 built-in tools (`THREAD_TOOLS`, `crates/providers/src/claude/mod.rs:76`: Read, Grep, Glob, Bash, Edit, Write, WebSearch, WebFetch) | **≈12k** (range ≈10–14k) | The remainder: 31.2k − 5.0k − 14k − 0.05k (the user's message) | Yes, more in fact: plain Claude Code ships more built-in tools |
 
-- So **Brigadier's own share is about 18k tokens on every thread call**: the catalog about 13k, the instructions about 5k.
-- The tool catalog alone is about 70% of that.
-- There is no briefing and no Brain block at a session's first call. Brain context reaches the thread only through tool results, and a rebirth briefing only after a rebirth.
+- So **Brigadier's own share is about 19k tokens on every thread call** here: the catalog about 14k, the instructions about 5k (up to about 1.5k more for a user with Personal Brain preferences).
+- The tool catalog alone is about 70–75% of that.
+- There is no rebirth briefing and no Project Brain block at a session's first call: Project Brain facts reach the thread only through tool results (`query_brain`, context packs to workers), and a briefing only after a rebirth. Personal Brain preferences are the exception above.
+- Over this session's 30 calls, Brigadier's share was about 30 × 19k ≈ 570k of the 1.90M prompt tokens, about 30%.
 - WEAK-SPOTS S2's earlier 24–25k was measured before computer use and the newer tools arrived.
 
-Catalog bytes by group:
+Catalog bytes by group (the `orchestrator_none` set; `run` adds 1,306 bytes):
 
 | Group | Bytes |
 |---|---|
@@ -359,7 +373,7 @@ The savings below are per call. On bench T1, multiply by about 10 calls.
 
 | Rank | Change | Saving | Notes |
 |---|---|---|---|
-| 1 | **Fewer thread calls for the same work** (B1, A14, launch's self-edit). The gap is roughly (Brigadier's ≈18k) × calls, so every call saved saves the whole fixed start | ≈31k + history per call | Already the direction of `launch` (`cab67d97`) |
+| 1 | **Fewer thread calls for the same work** (B1, A14, launch's self-edit). The gap is roughly (Brigadier's ≈19k) × calls, so every call saved saves the whole fixed start | ≈31k + history per call | Already the direction of `launch` (`cab67d97`) |
 | 2 | **Load rarely used tool groups lazily, behind Claude Code's tool search:** overnight, CI, previews, pages, peers, the planning and approval tools beyond `ask_user`/`note_for_user`, `suggest_full_access`, `record_findings`. That is about 20–25 kB | **≈6–7k tokens per call; ≈60–70k on bench T1** (≈15% of 429k) | Reverses `533bac83`, which took tool search out of the thread so nothing waits behind a search: **the user's call** (PLAN §6). Needs a probe: deferred schemas keep the cached prefix stable, and the extra search hop is rare |
 | 3 | **Trim `delegate_task`'s schema** (6 kB). Long doc comments describe rare fields (operate `target`/`end_state`, `mockup`/`matches_mockup`, `phase`/`role`, `image_generation`, `quality`). Keep one line per field and move the detail into the brief rules that use it | ≈1k per call | No rule changes |
 | 4 | **Instruction sections only where they apply:** peers, previews, mockups, overnight. Send them as `[settings]`-style notes at the moment they apply, as the browser and reviews sections already are | ≈1–2k per call | Each section must still arrive before its first use, so this needs a test per section |
