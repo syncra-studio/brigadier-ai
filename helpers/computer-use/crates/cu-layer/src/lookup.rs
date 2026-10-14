@@ -24,20 +24,32 @@ impl Lookups for System {
     fn app_for_pid(&self, pid: i64) -> Option<TargetIdentity> {
         use objc2_app_kit::NSRunningApplication;
         let pid32 = i32::try_from(pid).ok().filter(|pid| *pid > 0)?;
-        unsafe {
-            let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid32)?;
-            let bundle_id = app.bundleIdentifier().map(|value| value.to_string());
-            let name = app
-                .localizedName()
-                .map(|value| value.to_string())
-                .or_else(|| bundle_id.clone())
-                .unwrap_or_default();
+        let running = unsafe {
+            NSRunningApplication::runningApplicationWithProcessIdentifier(pid32).map(|app| {
+                let bundle_id = app.bundleIdentifier().map(|value| value.to_string());
+                let name = app
+                    .localizedName()
+                    .map(|value| value.to_string())
+                    .or_else(|| bundle_id.clone())
+                    .unwrap_or_default();
+                TargetIdentity {
+                    name,
+                    bundle_id,
+                    pid: Some(pid),
+                }
+            })
+        };
+        // Just after the daemon starts, AppKit can know nothing yet of an app that is running,
+        // and a target nobody can name passes the guard: the bundle its executable runs from
+        // names it then.
+        running.or_else(|| {
+            let app = app_bundle_of(&executable_of(pid32)?)?;
             Some(TargetIdentity {
-                name,
-                bundle_id,
+                name: stem(&app)?,
+                bundle_id: bundle_id_at(&app),
                 pid: Some(pid),
             })
-        }
+        })
     }
 
     fn pid_for_window(&self, window_id: u64) -> Option<i64> {
@@ -94,6 +106,35 @@ impl Lookups for System {
     fn name_for_bundle(&self, _bundle_id: &str) -> Option<String> {
         None
     }
+}
+
+/// The executable `pid` runs, read from the kernel.
+#[cfg(target_os = "macos")]
+fn executable_of(pid: i32) -> Option<std::path::PathBuf> {
+    let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: `buffer` is writable for the length passed; the result is checked.
+    let written = unsafe {
+        libc::proc_pidpath(
+            pid,
+            buffer.as_mut_ptr().cast(),
+            u32::try_from(buffer.len()).ok()?,
+        )
+    };
+    buffer.truncate(usize::try_from(written).ok().filter(|n| *n > 0)?);
+    Some(std::path::PathBuf::from(String::from_utf8(buffer).ok()?))
+}
+
+/// The `.app` bundle whose main executable is `executable`
+/// (`<bundle>.app/Contents/MacOS/<name>`).
+#[cfg(target_os = "macos")]
+fn app_bundle_of(executable: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos = executable.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    (macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && app.extension()? == "app")
+        .then(|| app.to_path_buf())
 }
 
 #[cfg(target_os = "macos")]
@@ -159,4 +200,50 @@ pub fn target_app(
         }
     }
     None
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn an_app_is_named_by_the_bundle_its_executable_runs_from() {
+        assert_eq!(
+            app_bundle_of(Path::new("/Applications/Notes.app/Contents/MacOS/Notes")).as_deref(),
+            Some(Path::new("/Applications/Notes.app"))
+        );
+        // A helper's own bundle, not the app around it.
+        assert_eq!(
+            app_bundle_of(Path::new(
+                "/d/Brigadier.app/Contents/Helpers/Computer Use.app/Contents/MacOS/brigadier-cu"
+            ))
+            .as_deref(),
+            Some(Path::new(
+                "/d/Brigadier.app/Contents/Helpers/Computer Use.app"
+            ))
+        );
+        assert_eq!(app_bundle_of(Path::new("/usr/bin/true")), None);
+        assert_eq!(
+            app_bundle_of(Path::new("/d/Tool.app/Contents/Resources/tool")),
+            None
+        );
+
+        // What the fallback reads for a running app: Finder always runs.
+        let out = std::process::Command::new("pgrep")
+            .args(["-x", "Finder"])
+            .output()
+            .unwrap();
+        let finder: i32 = String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .next()
+            .expect("Finder runs")
+            .parse()
+            .unwrap();
+        let app = app_bundle_of(&executable_of(finder).unwrap()).unwrap();
+        assert_eq!(stem(&app).as_deref(), Some("Finder"));
+        assert_eq!(bundle_id_at(&app).as_deref(), Some("com.apple.finder"));
+        assert_eq!(executable_of(-1), None);
+    }
 }
