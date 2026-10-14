@@ -551,18 +551,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
       const id = message.conversationId;
       let { conversations, threads } = slice;
       const conversation = conversations[id];
-      // Another session's message also marks when one last came (the sidebar's unread dot).
-      const peerAtMs =
-        message.role === "peer" ? Math.max(conversation?.peerAtMs ?? 0, message.createdAtMs) : conversation?.peerAtMs;
-      if (conversation && (conversation.updatedAtMs < message.createdAtMs || peerAtMs !== conversation.peerAtMs)) {
-        conversations = {
-          ...conversations,
-          [id]: {
-            ...conversation,
-            updatedAtMs: Math.max(conversation.updatedAtMs, message.createdAtMs),
-            ...(peerAtMs !== undefined && { peerAtMs }),
-          },
-        };
+      if (conversation && conversation.updatedAtMs < message.createdAtMs) {
+        conversations = { ...conversations, [id]: { ...conversation, updatedAtMs: message.createdAtMs } };
       }
       const thread = threads[id];
       if (thread) {
@@ -626,12 +616,22 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     // route previews and refresh state are read again (getUsage in state/usage).
     case "rankingsChanged":
       return { ...slice, rankingsRevision: slice.rankingsRevision + 1 };
+    case "peerAnswered": {
+      // The session finished what another one asked: its sidebar row's unread dot.
+      const conversation = slice.conversations[event.conversationId];
+      if (!conversation || (conversation.peerAtMs ?? 0) >= envelope.atMs) return slice;
+      return {
+        ...slice,
+        conversations: { ...slice.conversations, [event.conversationId]: { ...conversation, peerAtMs: envelope.atMs } },
+      };
+    }
     case "probe":
     // Messages between sessions show from the board.
     case "peerMessageSent":
     case "peerMessageReceived":
     case "peerMessageState":
     case "peerWaitSettled":
+    case "peerReplyHeld":
     // A draft's pinned attachments only matter to blob collection.
     case "draftPinned":
     // The cleanup ledger shows in the event list only.

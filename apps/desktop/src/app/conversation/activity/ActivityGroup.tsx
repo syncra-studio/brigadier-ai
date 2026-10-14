@@ -1,4 +1,4 @@
-import { ChevronRight, Globe } from "@openai/apps-sdk-ui/components/Icon";
+import { ChevronRight, Clock, Globe } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useState } from "react";
 
 import type { GroupItem, Thought as ThoughtItem } from "@/app/conversation/activity/group";
@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 export type Described = { words: StepWords; status: ItemStatus; exit?: number | null };
 
 function StepIcon({ words }: { words: StepWords }) {
-  const Icon = words.web ? Globe : WORK_ICONS[words.kind];
+  const Icon = words.web ? Globe : words.waiting ? Clock : WORK_ICONS[words.kind];
   return <Icon aria-hidden className="size-4 shrink-0" />;
 }
 

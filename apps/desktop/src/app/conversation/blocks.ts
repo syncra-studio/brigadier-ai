@@ -10,6 +10,7 @@ import type {
   MachineStep,
   MachineStepKind,
   Message,
+  ItemStatus,
   ModelChoice,
   OrchestratorStep,
   OrchestratorStepKind,
@@ -52,6 +53,11 @@ export type BlockText = {
   model: ModelChoice | null;
   /** A short "Update: …" line after the answer, for a late event (SESSION-FIXES-PLAN.md bug 4). */
   update: boolean;
+  /**
+   * The replies Brigadier sent other sessions carrying this answer: a jump to one of them lands
+   * here (SESSION-MESSAGING-PLAN.md §6.3).
+   */
+  anchors?: readonly string[];
 };
 
 /** Whether a reply is an update line: it starts with "Update:", bold or not. */
@@ -72,11 +78,15 @@ export type BlockRow = { type: "task"; taskId: string; taskIds?: string[]; kind?
  */
 export type DecidedStep = { type: "decided"; what: string; why: string };
 
+/** A wait of the thread for the replies to its messages (`wait_for_replies`), as its call stands. */
+export type PeerWaitCall = { itemId: string; status: ItemStatus; requestId: string | null };
+
 /**
- * A message this session sent another, as its row in the work (SESSION-MESSAGING-PLAN.md §6.1):
- * the record says where it went, how it stands and what it said.
+ * Messages this session sent others, and its waits for their replies, as one row of the work
+ * (SESSION-MESSAGING-PLAN.md §6.1): "Sent message to Docs, waited for its reply". The records
+ * say where each went and how it stands; adjacent sends and waits share the row.
  */
-export type PeerSentStep = { type: "peerSent"; messageId: string };
+export type PeerSentStep = { type: "peerSent"; messageIds: readonly string[]; waits: readonly PeerWaitCall[] };
 
 /** A row about the machine: work waiting for it to cool down, a build paused or resumed. */
 export type MachineWords = {
@@ -137,6 +147,11 @@ export type PeerAnchor = { kind: "peer"; message: Message; text: string; earlier
  * included ("· to your earlier message").
  */
 export type PeerOf = { messageId: string; from: string; reply: boolean; earlier: boolean };
+
+/** Whether a received reply went to a wait of the thread's turn, as its result, and stays there. */
+export function heldForWait(record: PeerMessage | undefined): boolean {
+  return record?.hold?.type === "handed" || record?.hold?.type === "taken";
+}
 
 /** A transcript message's sender, when another session sent it. */
 export function peerOf(message: Message, earlier = false): PeerOf | undefined {
@@ -443,6 +458,18 @@ export function buildBlocks(
       }
       continue;
     }
+    // A wait for replies is part of the row of the messages it waits for.
+    if (step.kind.type === "tool" && toolName(step.kind.name) === "wait_for_replies") {
+      const wait = { itemId: step.kind.itemId, status: step.kind.status, requestId: step.requestId };
+      placed.push({
+        kind: "orchestrator",
+        position: step.position,
+        requestId: step.requestId,
+        step: { kind: { type: "peerSent", messageIds: [], waits: [wait] }, position: step.position, ...(step.atMs !== undefined && { atMs: step.atMs }) },
+        atMs: step.atMs,
+      });
+      continue;
+    }
     // Plumbing shows by what came of it: a worker's sentence, a card, the merge.
     if (step.kind.type === "tool" && isPlumbing(step.kind.name)) continue;
     // A run's own steps show as its phases, but a refused message has no other trace.
@@ -456,15 +483,16 @@ export function buildBlocks(
       atMs: step.atMs,
     });
   }
-  // A message to another session is a row of the work that sent it, from its record.
+  // A message to another session is a row of the work that sent it, from its record. The answer
+  // Brigadier sent back for this session is its turn's answer itself: no row.
   for (const peer of Object.values(board.peerMessages ?? {})) {
-    if (!peer.outgoing) continue;
+    if (!peer.outgoing || peer.automatic) continue;
     const atMs = peer.sentAtMs ?? board.requests[peer.requestId ?? ""]?.startedAtMs ?? 0;
     placed.push({
       kind: "orchestrator",
       position: peer.position,
       requestId: peer.requestId,
-      step: { kind: { type: "peerSent", messageId: peer.messageId }, position: peer.position, atMs },
+      step: { kind: { type: "peerSent", messageIds: [peer.messageId], waits: [] }, position: peer.position, atMs },
       atMs,
     });
   }
@@ -622,6 +650,11 @@ export function buildBlocks(
   // reply's own block, by request id.
   const continued = new Map<string, string>();
   const blockKey = (requestId: string): string => continued.get(requestId) ?? requestId;
+  // The replies Brigadier sent for this session, by the answer each carries.
+  const answered = new Map<string, string[]>();
+  for (const peer of Object.values(board.peerMessages ?? {})) {
+    if (peer.outgoing && peer.automatic && peer.answerId) answered.set(peer.answerId, [...(answered.get(peer.answerId) ?? []), peer.messageId]);
+  }
   for (const item of current) {
     // Anything older than the loaded page waits until that page loads.
     if (hasMore && item.position < oldest) continue;
@@ -643,6 +676,8 @@ export function buildBlocks(
           open(request, message.createdAtMs).user = { kind: "peer", message, text: item.text, earlier: false };
           continue;
         }
+        // A reply a wait of the turn took is that call's result: the thread's answer says it.
+        if (heldForWait(board.peerMessages?.[message.id])) continue;
         // A reply, filed under the request that asked: a block inside its turn, or, after a
         // newer request, a turn of its own.
         const key = blockKey(request);
@@ -670,12 +705,14 @@ export function buildBlocks(
       if (message.requestId && !blocks.has(key) &&
         !(key.startsWith("run-") && board.requests[key])) continue;
       blockOf.set(message.id, key);
+      const anchors = answered.get(message.id);
       open(key, message.createdAtMs).texts.push({
         messageId: message.id,
         position: item.position,
         text: item.text,
         model: message.model,
         update: isUpdate(item.text),
+        ...(anchors && { anchors }),
       });
       continue;
     }
@@ -884,7 +921,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
 
 /** What a block's work is made of, as its message metadata carries it. */
 export type SequenceSource = {
-  texts: readonly { position: number }[];
+  texts: readonly { position: number; anchors?: readonly string[] }[];
   cards: readonly BlockCard[];
   steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; peer?: PeerOf }[];
   compactions: readonly BlockCompaction[];
@@ -897,7 +934,7 @@ export type SequenceSource = {
 /** One line or card of a block's work. */
 export type SequenceEntry =
   | { kind: "thinking"; segment: ThinkingSegment; live: boolean; position: number }
-  | { kind: "text"; index: number; position: number }
+  | { kind: "text"; index: number; position: number; anchors?: readonly string[] }
   | { kind: "card"; card: BlockCard; position: number }
   | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number; peer?: PeerOf }
   | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
@@ -912,7 +949,12 @@ export type SequenceEntry =
 export function blockSequence(source: SequenceSource): SequenceEntry[] {
   const entries: SequenceEntry[] = [
     ...(source.thinking ?? []).map((segment) => ({ kind: "thinking" as const, segment, live: false, position: segment.position })),
-    ...source.texts.map((text, index) => ({ kind: "text" as const, index, position: text.position })),
+    ...source.texts.map((text, index) => ({
+      kind: "text" as const,
+      index,
+      position: text.position,
+      ...(text.anchors && { anchors: text.anchors }),
+    })),
     ...source.cards.map((card) => ({ kind: "card" as const, card, position: card.position })),
     ...source.steers.map((steer) => ({ kind: "steer" as const, ...steer })),
     ...source.compactions

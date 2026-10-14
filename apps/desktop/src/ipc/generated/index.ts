@@ -304,6 +304,7 @@ export type { RemoveProjectReport } from "./RemoveProjectReport";
 export type { ReplaceFile } from "./ReplaceFile";
 export type { ReplaceOutcome } from "./ReplaceOutcome";
 export type { ReplaceSkip } from "./ReplaceSkip";
+export type { ReplyHold } from "./ReplyHold";
 export type { RepoAccess } from "./RepoAccess";
 export type { RepoInfo } from "./RepoInfo";
 export type { Report } from "./Report";

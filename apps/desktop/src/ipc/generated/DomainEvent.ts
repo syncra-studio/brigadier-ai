@@ -33,6 +33,7 @@ import type { Rating } from "./Rating";
 import type { RawSession } from "./RawSession";
 import type { RawSessionId } from "./RawSessionId";
 import type { RawState } from "./RawState";
+import type { ReplyHold } from "./ReplyHold";
 import type { ResolvedBy } from "./ResolvedBy";
 import type { ReviewRun } from "./ReviewRun";
 import type { RunState } from "./RunState";
@@ -105,12 +106,28 @@ turnInputId: string | null, state: PeerState,
 /**
  * When it was allowed to go: now, or the user's Send under Ask for approval.
  */
-sentAtMs: number | null, } | { "type": "peerMessageReceived", messageId: string, from: ConversationId, replyTo: string | null, chainId: string, hop: number, 
+sentAtMs: number | null, 
+/**
+ * Brigadier sent it for this session: its answer to the message it replies to.
+ */
+automatic: boolean, 
+/**
+ * An automatic reply: the answer message it carries.
+ */
+answerId: string | null, } | { "type": "peerMessageReceived", messageId: string, from: ConversationId, replyTo: string | null, chainId: string, hop: number, 
 /**
  * The request of this session's it is filed under.
  */
-requestId: string, } | { "type": "peerMessageState", messageId: string, state: PeerState, 
+requestId: string, 
+/**
+ * A reply Brigadier sent for the other session: its answer.
+ */
+automatic: boolean, 
+/**
+ * An automatic reply: the other session's answer message it carries.
+ */
+answerId: string | null, } | { "type": "peerMessageState", messageId: string, state: PeerState, 
 /**
  * Set when this change let it go (the user's Send).
  */
-sentAtMs: number | null, } | { "type": "peerWaitSettled", messageId: string, } | { "type": "probe", burstId: string, index: number, count: number, };
+sentAtMs: number | null, } | { "type": "peerWaitSettled", messageId: string, } | { "type": "peerAnswered", conversationId: ConversationId, messageId: string, } | { "type": "peerReplyHeld", messageId: string, hold: ReplyHold, } | { "type": "probe", burstId: string, index: number, count: number, };

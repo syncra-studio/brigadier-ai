@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { type Activity, groupActivity, type Sorted, thoughtOf, thoughtTopic, turnActivity, workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
-import { blockSequence, buildBlocks } from "@/app/conversation/blocks";
+import { type BlockOrchestratorStep, blockSequence, buildBlocks, type SequenceEntry } from "@/app/conversation/blocks";
 import type { ThreadEntry } from "@/components/transcript/activity";
 import type { TranscriptItem } from "@/components/transcript/transcript";
 import { answerWords, questionAnswers, questionRound, questionRowWords } from "@/app/conversation/cards/questionRound";
@@ -300,4 +300,24 @@ test("a question card's row says what it asks, what it asked, and the recommende
   assert.equal(answerWords(item, "No"), "No");
   const merge = { ...single, kind: { type: "merge" as const, branch: "b", base: "main", conflicted: false, conflicts: [] }, answer: null, answeredAtMs: null };
   assert.equal(questionRowWords(merge), "Asking whether to merge into main");
+});
+
+const stepAt = (position: number, kind: BlockOrchestratorStep["kind"]): SequenceEntry => ({ kind: "orchestrator", steps: [{ kind, position }], position });
+const waitCall = (itemId: string) => ({ itemId, status: "completed" as const, requestId: "a1" });
+
+test("messages to other sessions and the waits for their replies, next to each other, are one row of the work", () => {
+  const sequence: SequenceEntry[] = [
+    stepAt(1, { type: "peerSent", messageIds: ["m1"], waits: [] }),
+    stepAt(2, { type: "peerSent", messageIds: ["m2"], waits: [] }),
+    stepAt(3, { type: "peerSent", messageIds: [], waits: [waitCall("w1")] }),
+    stepAt(4, { type: "tool", itemId: "t1", name: "Read", detail: null, status: "completed", throughPosition: 4 }),
+    stepAt(5, { type: "peerSent", messageIds: [], waits: [waitCall("w2")] }),
+  ];
+  const [group] = turnActivity(sequence);
+  assert.ok(group?.type === "group");
+  assert.deepEqual(group.items.map((item) => item.type === "step" ? item.step.kind : item.type), [
+    { type: "peerSent", messageIds: ["m1", "m2"], waits: [waitCall("w1")] },
+    { type: "tool", itemId: "t1", name: "Read", detail: null, status: "completed", throughPosition: 4 },
+    { type: "peerSent", messageIds: [], waits: [waitCall("w2")] },
+  ]);
 });

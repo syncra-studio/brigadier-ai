@@ -4,17 +4,23 @@
  * over IPC answered here. Each session's history comes in pages through `getConversation` and
  * `listMessages`, as from the daemon.
  *
- * - The gallery (default): "API schema" (project Website) sent messages that stand in every
- *   state, its newest turn still sending; "Docs" (project Handbook) received them: a message that
- *   opened a turn, one steered into a running turn, a reply to an earlier request, and its own
- *   turn resting "Waiting for API schema". `open=docs` opens Docs. `unfold=1` opens every turn's
- *   work and every message row, for a look at all of it.
+ * - The gallery (default): "API schema" (project Website) messages other sessions and waits for
+ *   their replies in the same turn, in every state: a reply its wait took, messages it only sent,
+ *   two sessions asked and one late (its request rests waiting, the late reply comes as its own
+ *   message), a declined, a refused and an undeliverable message, and its newest turn waiting
+ *   for Docs to reply now (`live=sending`: still sending; `live=ok`: waiting for the user's OK;
+ *   `live=rested`: its wait ran out, and the turn rests on the reply).
+ *   "Docs" (project Handbook) received them: a message that opened a turn, one steered into a
+ *   running turn, one from Style guide, its own question answered inside its turn, and the
+ *   newest message still being answered. `open=docs` opens Docs, `open=notes` Release notes.
+ *   `unfold=1` opens every turn's work and every group, for a look at all of it.
  * - `history=long`: both sessions with long histories, read ten messages a page: the messages
  *   between them sit in old turns, folded, on pages not yet read.
  *
- * `drive=gallery` reads every state off the page; `drive=jump` (with `history=long`) jumps from
- * a sent row to its message in the receiver and from a received message to its sent row, and
- * checks the sidebar's unread dot. Each writes what it saw to `<pre id="peer-result">`.
+ * `drive=gallery` reads every state off the page and jumps from a reply Brigadier sent to the
+ * answer it carries; `drive=jump` (with `history=long`) jumps from a sent row to its message in
+ * the receiver and from a received message to its sent row, and checks the sidebar's unread dot;
+ * `drive=live` reads API schema's newest turn. Each writes what it saw to `<pre id="peer-result">`.
  * `density=compact` for the compact density.
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -131,7 +137,13 @@ function ask(s: Side, id: string, text: string): void {
 }
 
 /** Another session's message as this one received it, filed under `filed` (its own request by default). */
-function received(s: Side, id: string, from: string, text: string, options: { filed?: string; replyTo?: string; steeredInto?: string } = {}): void {
+function received(
+  s: Side,
+  id: string,
+  from: string,
+  text: string,
+  options: { filed?: string; replyTo?: string; steeredInto?: string; hold?: PeerMessage["hold"]; automatic?: boolean; working?: boolean } = {},
+): void {
   const filed = options.filed ?? id;
   const shaped = message(s, {
     id,
@@ -152,25 +164,44 @@ function received(s: Side, id: string, from: string, text: string, options: { fi
     sentAtMs: null,
     settled: false,
     position: shaped.seq,
+    automatic: options.automatic ?? false,
+    ...(options.hold && { hold: options.hold }),
   });
-  if (filed === id) request(s, id, text, shaped.createdAtMs, { fromPeer: from, steeredInto: options.steeredInto ?? null });
-  const conversation = conversations[s.id];
-  if (conversation) conversation.peerAtMs = Math.max(conversation.peerAtMs ?? 0, shaped.createdAtMs);
+  if (filed === id) {
+    request(s, id, text, shaped.createdAtMs, {
+      fromPeer: from,
+      steeredInto: options.steeredInto ?? null,
+      ...(options.working && { state: { type: "working" } }),
+    });
+  }
 }
 
-function sent(s: Side, filed: string, id: string, to: string, text: string, state: PeerState, replyTo?: string): void {
+function sent(s: Side, filed: string, id: string, to: string, text: string, state: PeerState, more: { replyTo?: string; answerId?: string } = {}): void {
   const { seq, at } = tick(s);
   s.peers.push({
     messageId: id,
     outgoing: true,
     peer: to,
-    ...(replyTo && { replyTo }),
+    ...(more.replyTo && { replyTo: more.replyTo }),
     requestId: filed,
     state,
     text,
     blob: null,
     sentAtMs: state.type === "waitingForOk" ? null : at,
     settled: state.type !== "delivered" && state.type !== "seen",
+    position: seq,
+    automatic: !!more.answerId,
+    ...(more.answerId && { answerId: more.answerId }),
+  });
+}
+
+/** The thread waits in its turn for the replies (`wait_for_replies`), its call `item`. */
+function waits(s: Side, filed: string, item: string, status: "inProgress" | "completed" = "completed"): void {
+  const { seq, at } = tick(s);
+  s.steps.push({
+    requestId: filed,
+    kind: { type: "tool", itemId: item, name: "mcp__brigadier__wait_for_replies", detail: null, status, throughPosition: seq, ...(status === "completed" && { endedAtMs: at + 4000 }) },
+    atMs: at,
     position: seq,
   });
 }
@@ -185,16 +216,28 @@ function refused(s: Side, filed: string, title: string, reason: string): void {
   s.steps.push({ requestId: filed, kind: { type: "messageRefused", title, reason }, atMs: at, position: seq });
 }
 
-/** The thread's answer, which ends the request (or leaves it as `state` says). */
-function answer(s: Side, filed: string, text: string, state: RequestState = { type: "done" }): void {
+/** The thread's answer, which ends the request (or leaves it as `state` says); its message's id. */
+function answer(s: Side, filed: string, text: string, state: RequestState = { type: "done" }): string {
   const shaped = message(s, { id: `${filed}-answer-${s.seq + 1}`, role: "assistant", text, requestId: filed });
   const asked = s.requests[filed];
-  if (!asked) return;
+  if (!asked) return shaped.id;
   const over = state.type !== "working" && state.type !== "waiting";
   asked.state = state;
   asked.endedAtMs = over ? shaped.createdAtMs : null;
   // Resting "Waiting for" a reply, it no longer works: its span ends, as the daemon ends it.
   asked.worked = [{ fromMs: asked.startedAtMs, toMs: state.type === "working" ? null : shaped.createdAtMs }];
+  return shaped.id;
+}
+
+/**
+ * The receiver answers another session's message `asked` from `to` (filed under `filed`): its
+ * answer goes back as the reply `reply`, which Brigadier sends; the session's row gets its dot.
+ */
+function answers(s: Side, filed: string, asked: string, to: string, reply: string, text: string): void {
+  const said = answer(s, filed, text);
+  sent(s, filed, reply, to, text, { type: "seen" }, { replyTo: asked, answerId: said });
+  const conversation = conversations[s.id];
+  if (conversation) conversation.peerAtMs = Math.max(conversation.peerAtMs ?? 0, s.at);
 }
 
 /** Turns of other work, to make a history long. */
@@ -252,38 +295,52 @@ session(NOTES, WEBSITE, "Release notes");
 session(DOCS, HANDBOOK, "Docs");
 session(STYLE, HANDBOOK, "Style guide");
 
+const live = query.get("live");
+
 if (!long) {
   const api = side(API);
   const docs = side(DOCS);
+  const notes = side(NOTES);
   // Docs' history before API schema's message came.
   filler(docs, 1);
 
-  ask(api, "a1", "Tell the Docs session the schema changed and ask them to update the guide.");
+  // Asked, waited for, answered: one turn, the reply its wait's result.
+  ask(api, "a1", "Ask the Docs session to update the guide for the schema change, and tell me when it's done.");
   read(api, "a1", "schema.sql");
   read(api, "a1", "openapi.yaml");
   sent(api, "a1", "m1", DOCS, SCHEMA_CHANGED, { type: "replied" });
+  waits(api, "a1", "w1");
   received(docs, "m1", API, SCHEMA_CHANGED);
   read(docs, "m1", "guide/orders.md");
   const reply = "Done: the **Orders** section documents `status` and its three values, and `is_paid` is marked deprecated.";
-  sent(docs, "m1", "m1-reply", API, reply, { type: "seen" }, "m1");
-  answer(docs, "m1", "Updated the Orders section of the guide and told API schema.");
-  received(api, "m1-reply", DOCS, reply, { filed: "a1", replyTo: "m1" });
+  answers(docs, "m1", "m1", API, "m1-reply", reply);
+  received(api, "m1-reply", DOCS, reply, { filed: "a1", replyTo: "m1", automatic: true, hold: { type: "taken", itemId: "w1" } });
   answer(api, "a1", "Docs updated the guide: `status` is documented and `is_paid` is marked deprecated.");
 
+  // Only sent: nothing to wait for.
   ask(api, "a2", "Let Release notes know the schema changed.");
   sent(api, "a2", "m2", NOTES, "The `orders` table has a new `status` column; worth a line in the next release notes.", { type: "seen" });
   // Too long for the record: its text there is the head, the whole of it in the blob store.
   api.peers.at(-1)!.blob = M2_BLOB;
   answer(api, "a2", "Release notes has it.");
+  received(notes, "m2", API, M2_FULL);
+  answers(notes, "m2", "m2", API, "m2-reply", "Added a line for the `status` column.");
 
+  // Two asked, one late: the turn ends waiting for it, and its reply comes as a message of its own.
   ask(docs, "d2", "Draft the changelog for 2.4.");
   read(docs, "d2", "CHANGELOG.md");
-  ask(api, "a3", "Tell Docs about the new events endpoint.");
-  sent(api, "a3", "m3", DOCS, "There's a new `GET /orders/{id}/events` endpoint: mention it in the changelog.", { type: "delivered" });
-  received(docs, "m3", API, "There's a new `GET /orders/{id}/events` endpoint: mention it in the changelog.", { steeredInto: "d2" });
-  answer(api, "a3", "Sent; Docs hasn't picked it up yet.");
-  answer(docs, "d2", "Drafted the 2.4 changelog, with the new events endpoint.");
-  answer(docs, "m3", "Added.");
+  ask(api, "a3", "Ask Docs and Release notes whether the events endpoint is in their drafts.");
+  sent(api, "a3", "m3", DOCS, "Is the new `GET /orders/{id}/events` endpoint in your changelog draft?", { type: "replied" });
+  sent(api, "a3", "m3b", NOTES, "Is the new `GET /orders/{id}/events` endpoint in the release notes?", { type: "replied" });
+  waits(api, "a3", "w3");
+  received(docs, "m3", API, "Is the new `GET /orders/{id}/events` endpoint in your changelog draft?", { steeredInto: "d2" });
+  answers(docs, "d2", "m3", API, "m3-reply", "Drafted the 2.4 changelog, with the new events endpoint.");
+  docs.requests["m3"]!.state = { type: "done" };
+  received(api, "m3-reply", DOCS, "Drafted the 2.4 changelog, with the new events endpoint.", { filed: "a3", replyTo: "m3", automatic: true, hold: { type: "taken", itemId: "w3" } });
+  answer(api, "a3", "Docs has it in the changelog; Release notes hasn't answered yet.", { type: "waiting" });
+  api.requests["a3"]!.waitingFor = [NOTES];
+  received(notes, "m3b", API, "Is the new `GET /orders/{id}/events` endpoint in the release notes?");
+  answers(notes, "m3b", "m3b", API, "m3b-reply", "Not yet: I'll add it with the 2.4 notes.");
 
   ask(api, "a4", "Ask Docs to drop the old payments page.");
   sent(api, "a4", "m4", DOCS, "Please delete `guide/payments-v1.md`.", { type: "declined" });
@@ -297,36 +354,45 @@ if (!long) {
   sent(api, "a6", "m6", GONE, "Migration notes: run `0042_order_status.sql` before deploying.", { type: "dropped", reason: "deleted" });
   answer(api, "a6", "The Payments session was deleted before it took the message.");
 
+  // Docs asks API schema in turn, and its wait takes the answer.
   ask(docs, "d3", "Ask API schema which fields are deprecated.");
   sent(docs, "d3", "q1", API, "Which fields of `orders` are deprecated?", { type: "replied" });
-  answer(docs, "d3", "Asked API schema; I'll carry on when it answers.", { type: "waiting" });
-  docs.requests["d3"]!.waitingFor = [API];
-  ask(docs, "d4", "Meanwhile, fix the typo in the intro.");
-  answer(docs, "d4", "Fixed: “recieve” is now “receive”.");
-  docs.requests["d3"]!.waitingFor = [];
-  received(docs, "q1-reply", API, "Deprecated: `is_paid` and `shipping_code`. Both go in 2.6.", { filed: "d3", replyTo: "q1" });
+  waits(docs, "d3", "wq1");
+  received(api, "q1", DOCS, "Which fields of `orders` are deprecated?");
+  answers(api, "q1", "q1", DOCS, "q1-reply", "Deprecated: `is_paid` and `shipping_code`. Both go in 2.6.");
+  received(docs, "q1-reply", API, "Deprecated: `is_paid` and `shipping_code`. Both go in 2.6.", { filed: "d3", replyTo: "q1", automatic: true, hold: { type: "taken", itemId: "wq1" } });
   answer(docs, "d3", "API schema says `is_paid` and `shipping_code` are deprecated; both are marked in the guide.");
+
+  // Release notes' late reply reaches API schema's request that waits for it.
+  received(api, "m3b-reply", NOTES, "Not yet: I'll add it with the 2.4 notes.", { filed: "a3", replyTo: "m3b", automatic: true });
+  api.requests["a3"]!.waitingFor = [];
+  answer(api, "a3", "Release notes will add the events endpoint with the 2.4 notes.");
 
   const style = side(STYLE);
   style.at = docs.at;
   received(docs, "s1", STYLE, "Headings use sentence case from now on: “Order status”, not “Order Status”.");
-  answer(docs, "s1", "Switched the guide's headings to sentence case.");
+  answers(docs, "s1", "s1", STYLE, "s1-reply", "Switched the guide's headings to sentence case.");
 
-  ask(docs, "d6", "Ask API schema to confirm the field names before I publish.");
-  sent(docs, "d6", "q2", API, "Before I publish: are the field names in `guide/orders.md` final?", { type: "delivered" });
-  answer(docs, "d6", "Asked API schema to confirm.", { type: "waiting" });
-  docs.requests["d6"]!.waitingFor = [API];
-  received(api, "q2", DOCS, "Before I publish: are the field names in `guide/orders.md` final?", { filed: "q2" });
-  answer(api, "q2", "Confirmed them; the reply goes to Docs once I've checked the migration.", { type: "working" });
-
-  // API schema's newest turn, still sending: one message waits for the user's OK, one goes out.
-  ask(api, "a7", "Ask Docs to review the guide, and tell Release notes it's ready.");
-  sent(api, "a7", "m7", DOCS, "Could you review the Orders section once more?", { type: "waitingForOk" });
-  sent(api, "a7", "m8", NOTES, "The guide is ready for the release notes.", { type: "pending" });
+  // API schema's newest turn, live: it asks Docs and waits for the reply, which Docs is working on.
+  ask(api, "a7", "Ask Docs whether the guide is ready to publish, and tell me what it says.");
   api.requests["a7"]!.state = { type: "working" };
-  // The turn that answered Docs' question is over before it.
-  api.requests["q2"]!.state = { type: "done" };
-  api.requests["q2"]!.endedAtMs = api.requests["a7"]!.startedAtMs;
+  if (live === "ok") {
+    sent(api, "a7", "m7", DOCS, "Is the guide ready to publish?", { type: "waitingForOk" });
+  } else if (live === "sending") {
+    sent(api, "a7", "m7", DOCS, "Is the guide ready to publish?", { type: "pending" });
+  } else if (live === "rested") {
+    // The wait ran out before Docs replied: the turn rests on the reply, which comes as a message.
+    sent(api, "a7", "m7", DOCS, "Is the guide ready to publish?", { type: "seen" });
+    waits(api, "a7", "w7");
+    received(docs, "m7", API, "Is the guide ready to publish?", { working: true });
+    answer(api, "a7", "Docs hasn't replied yet; I'll tell you what it says when it does.", { type: "waiting" });
+    api.requests["a7"]!.waitingFor = [DOCS];
+  } else {
+    sent(api, "a7", "m7", DOCS, "Is the guide ready to publish?", { type: "seen" });
+    waits(api, "a7", "w7", "inProgress");
+    received(docs, "m7", API, "Is the guide ready to publish?", { working: true });
+    read(docs, "m7", "guide/orders.md");
+  }
 } else {
   const api = side(API);
   const docs = side(DOCS);
@@ -340,7 +406,7 @@ if (!long) {
   answer(api, "j1", "Told Docs.");
   received(docs, "ml", API, SCHEMA_CHANGED);
   const first = docs.seq;
-  answer(docs, "ml", "Updated the guide.");
+  answers(docs, "ml", "ml", API, "ml-reply", "Updated the guide.");
   // Then Docs starts a long turn; a page of its history ends just after the turn's message, and
   // holds the message before it too.
   ask(docs, "jb", "Draft the release blog post.");
@@ -356,7 +422,7 @@ if (!long) {
   answer(api, "j2", "Told Docs about the events endpoint.");
   received(docs, "mk", API, "There's a new `GET /orders/{id}/events` endpoint: mention it in the post.", { steeredInto: "jb" });
   answer(docs, "jb", "Drafted the post, with the events endpoint.");
-  answer(docs, "mk", "Mentioned it.");
+  answers(docs, "mk", "mk", API, "mk-reply", "Mentioned it.");
   // Docs works on, long after.
   filler(docs, 32);
 }
@@ -382,7 +448,7 @@ function view(id: string): View {
   const s = side(id);
   const conversation = conversations[id]!;
   conversation.updatedAtMs = s.messages.at(-1)?.createdAtMs ?? start;
-  const live = Object.values(s.requests).find((asked) => asked.state.type === "working");
+  const working = Object.values(s.requests).find((asked) => asked.state.type === "working");
   return {
     conversation,
     context: null,
@@ -400,8 +466,8 @@ function view(id: string): View {
     decisions: [],
     waiting: [],
     queue: { items: [], paused: false },
-    run: live ? "running" : "idle",
-    runRequest: live?.id ?? null,
+    run: working ? "running" : "idle",
+    runRequest: working?.id ?? null,
     head: s.messages.at(-1)?.id ?? null,
     ratings: {},
     streaming: null,
@@ -446,7 +512,7 @@ mockIPC((command, payload) => {
 }, { shouldMockEvents: true });
 mockWindows("main");
 
-openConversation(query.get("open") === "docs" ? DOCS : API);
+openConversation(query.get("open") === "docs" ? DOCS : query.get("open") === "notes" ? NOTES : API);
 
 /** The app's window layout (App.tsx) around the open session, without its dialogs. */
 function PeerPage() {
@@ -522,7 +588,7 @@ function within(element: HTMLElement, rect: DOMRect): boolean {
 
 /** Where a jump landed: the message's element, how far its centre is from the view's, and what holds it. */
 function landing(messageId: string) {
-  const element = one(`[data-peer-message="${messageId}"]`);
+  const element = one(`[data-peer-message~="${messageId}"]`);
   const box = viewport()?.getBoundingClientRect();
   const rect = element?.getBoundingClientRect();
   const scroller = viewport();
@@ -547,7 +613,7 @@ function landing(messageId: string) {
  * `from` it landed, in ms.
  */
 async function landed(messageId: string, from = performance.now()): Promise<number> {
-  await until(() => useReveal.getState().reveal === null && one(`[data-peer-message="${messageId}"][data-revealed=true]`) !== null, 15000);
+  await until(() => useReveal.getState().reveal === null && one(`[data-peer-message~="${messageId}"][data-revealed=true]`) !== null, 15000);
   const ms = Math.round(performance.now() - from);
   await wait(800);
   return ms;
@@ -562,42 +628,77 @@ function dots(): Record<string, boolean> {
   );
 }
 
+/** The message rows shown now: how each stands, its words, and the sessions it links. */
+function messageRows() {
+  return all("[data-slot=orchestrator-step][data-kind=message]")
+    .filter((row) => row.getClientRects().length > 0)
+    .map((row) => ({
+      state: row.getAttribute("data-state"),
+      label: text(one("[data-slot=peer-words]", row)),
+      links: all("[data-slot=peer-link]", row).map((link) => text(link)),
+      chevron: !!row.querySelector("svg + span + svg, [data-slot=chevron]") || row.getAttribute("role") === "button",
+    }));
+}
+
+/** API schema's newest turn: its row of messages, what its header and the thread's status line say. */
+function liveTurn() {
+  const row = all("[data-slot=orchestrator-step][data-kind=message]").at(-1) ?? null;
+  return {
+    state: row?.getAttribute("data-state") ?? null,
+    label: text(one("[data-slot=peer-words]", row ?? document)),
+    shimmer: !!row?.querySelector(".shimmer"),
+    header: text(all("[data-slot=request-work-label]").at(-1) ?? null),
+    status: text(one("[data-slot=thread-status]")),
+  };
+}
+
+/** `drive=live`: the newest turn as it stands (with `live=sending|ok|rested`, or waiting by default). */
+async function driveLive(): Promise<object> {
+  await shown(API);
+  await wait(300);
+  return liveTurn();
+}
+
 async function driveGallery(): Promise<object> {
   await shown(API);
+  // The newest turn, live: its row says what it does now.
+  await wait(300);
+  const liveRow = liveTurn();
   await unfoldAll();
-  const rows = all("[data-slot=orchestrator-step][data-kind=message]").map((row) => ({
-    state: row.getAttribute("data-state"),
-    label: text(one("[role=button] > span, :scope > span", row)),
-    link: !!one("[data-slot=peer-link]", row),
-    line: text(one("[data-slot=peer-state]", row)),
-  }));
-  // Opened inside its group's scrolling list, the replied row's state line shows.
-  await wait(200);
-  const replied = one("[data-peer-message=m1] [data-slot=peer-state]");
-  const lineShown = !!replied && within(replied, replied.getBoundingClientRect());
-  // A message whose whole text is in the blob store shows all of it.
-  const whole = text(one("[data-peer-message=m2] [data-slot=peer-sent-detail]"));
+  const rows = messageRows();
   const groups = all("[data-slot=work-group] > button").map((group) => text(group));
-  const replyInSender = all("[data-slot=peer-message]").map((block) => ({ caption: text(one("[data-slot=peer-caption]", block)), inTurn: !!block.closest("[data-role=assistant]") }));
-  // "Open reply" jumps to the reply within the same session.
-  one<HTMLButtonElement>("[data-slot=peer-open-reply]")?.click();
-  await landed("m1-reply");
-  const openReply = landing("m1-reply");
+  const replyInSender = all("[data-slot=peer-message]").map((block) => ({
+    id: block.getAttribute("data-peer-message"),
+    caption: text(one("[data-slot=peer-caption]", block)),
+    inTurn: !!block.closest("[data-role=assistant]"),
+  }));
+  // A late reply's caption opens the session that answered, at the answer it carries.
+  const late = one<HTMLButtonElement>("[data-peer-message=m3b-reply] [data-slot=peer-caption]");
+  const toAnswerAt = performance.now();
+  late?.click();
+  const toAnswerMs = await landed("m3b-reply", toAnswerAt);
+  const toAnswer = { ...landing("m3b-reply"), ms: toAnswerMs, text: text(one("[data-peer-message~=m3b-reply]")) };
 
   openConversation(DOCS);
   await shown(DOCS);
   await wait(300);
   const blocks = all("[data-slot=peer-message]").map((block) => {
-    const bubble = block.querySelector<HTMLElement>("[data-slot=peer-text]")?.parentElement?.parentElement ?? null;
+    const bubble = block.querySelector<HTMLElement>("[data-flash]");
     const style = bubble ? getComputedStyle(bubble) : null;
+    const user = one<HTMLElement>("[data-slot=aui_user-message-root] .aui-user-message-content");
+    const userStyle = user ? getComputedStyle(user) : null;
+    const caption = one("[data-slot=peer-caption]", block);
     return {
       id: block.getAttribute("data-peer-message"),
-      caption: text(one("[data-slot=peer-caption]", block)),
+      caption: text(caption),
+      captionFont: caption ? [getComputedStyle(caption).fontSize, getComputedStyle(caption).lineHeight].map(Number.parseFloat) : null,
       label: block.getAttribute("aria-label"),
       inTurn: !!block.closest("[data-role=assistant]"),
       asInput: !!block.closest("[data-role=user]"),
-      outline: style?.borderTopWidth ?? null,
+      // Outline, corner radius, and padding top and right, in px.
+      box: style ? [style.borderTopWidth, style.borderTopLeftRadius, style.paddingTop, style.paddingRight].map(Number.parseFloat) : null,
       fill: style?.backgroundColor ?? null,
+      sameAsUser: !!style && !!userStyle && style.backgroundColor === userStyle.backgroundColor && style.borderTopLeftRadius === userStyle.borderTopLeftRadius,
       more: !!Array.from(block.querySelectorAll("button")).find((button) => text(button) === "Show more"),
     };
   });
@@ -607,16 +708,9 @@ async function driveGallery(): Promise<object> {
   Array.from(longest?.querySelectorAll("button") ?? []).find((button) => text(button) === "Show more")?.click();
   await wait(200);
   const opened = longest?.querySelector<HTMLElement>("[data-slot=peer-text]")?.clientHeight ?? 0;
-  const waiting = {
-    header: text(all("[data-slot=request-work-label]").at(-1) ?? null),
-    status: text(one("[data-slot=thread-status]")),
-  };
   await unfoldAll();
-  const docsRows = all("[data-slot=orchestrator-step][data-kind=message]").map((row) => ({
-    state: row.getAttribute("data-state"),
-    label: text(one("[role=button] > span, :scope > span", row)),
-  }));
-  return { rows, lineShown, whole, groups, replyInSender, openReply, blocks, showMore: { clipped, opened }, waiting, docsRows };
+  const docsRows = messageRows();
+  return { liveRow, rows, groups, replyInSender, toAnswer, blocks, showMore: { clipped, opened }, docsRows };
 }
 
 async function driveJump(): Promise<object> {
@@ -668,8 +762,8 @@ async function driveJump(): Promise<object> {
 Object.assign(window, { peerFixture: { useApp, useBoard, openConversation } });
 
 const drive = query.get("drive");
-if (drive === "gallery" || drive === "jump") {
-  void (drive === "gallery" ? driveGallery() : driveJump())
+if (drive === "gallery" || drive === "jump" || drive === "live") {
+  void (drive === "gallery" ? driveGallery() : drive === "live" ? driveLive() : driveJump())
     .catch((error: unknown) => ({ error: String(error) }))
     .then((result) => {
       const out = document.createElement("pre");

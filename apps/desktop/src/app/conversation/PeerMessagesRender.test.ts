@@ -19,70 +19,90 @@ function assertLanded(landing: Landing, selection: string): void {
   assert.equal(landing.selection, selection);
 }
 
+type Turn = { state: string | null; label: string | null; shimmer: boolean; header: string | null; status: string | null };
+type Row = { state: string | null; label: string | null; links: string[]; chevron: boolean };
+
 test("Messages between sessions read in every state, on both sides", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "peer-messages.html?drive=gallery", "peer-result", 90000)) as {
     error?: string;
-    rows: { state: string; label: string; link: boolean; line: string | null }[];
-    lineShown: boolean;
-    whole: string | null;
+    liveRow: Turn;
+    rows: Row[];
     groups: string[];
-    replyInSender: { caption: string; inTurn: boolean }[];
-    openReply: Landing;
-    blocks: { id: string; caption: string; label: string; inTurn: boolean; asInput: boolean; outline: string; fill: string; more: boolean }[];
+    replyInSender: { id: string | null; caption: string | null; inTurn: boolean }[];
+    toAnswer: Landing & { ms: number; text: string | null };
+    blocks: {
+      id: string; caption: string; captionFont: number[]; label: string; inTurn: boolean; asInput: boolean;
+      box: number[]; sameAsUser: boolean; more: boolean;
+    }[];
     showMore: { clipped: number; opened: number };
-    waiting: { header: string; status: string };
-    docsRows: { state: string; label: string }[];
+    docsRows: Row[];
   };
   assert.equal(seen.error, undefined);
-  // The sender's rows: the session (and its project when it's another), the state under the text,
-  // and a link to the receiver only when there is one to open.
+  // The newest turn waits for Docs inside the turn: one row, shimmering, under the live header.
+  assert.deepEqual({ ...seen.liveRow, header: seen.liveRow.header?.replace(/\d.*$/, "") }, {
+    state: "waiting", label: "Waiting for Docs to reply", shimmer: true, header: "Working for ", status: null,
+  });
+  // The sender's rows, one per exchange: what went where and the replies its waits took. A row
+  // opens to nothing; each session it names is a link, but not one the app no longer has.
   assert.deepEqual(seen.rows, [
-    { state: "replied", label: "Messaged Docs in Handbook", link: true, line: "Replied · Open reply" },
-    { state: "seen", label: "Messaged Release notes", link: true, line: "Seen" },
-    { state: "delivered", label: "Messaged Docs in Handbook", link: true, line: "Delivered" },
-    { state: "declined", label: "Didn’t message Docs in Handbook", link: true, line: "You didn’t send it" },
-    { state: "refused", label: "Couldn’t message Billing", link: false, line: "Billing is archived, so it can't take messages." },
-    { state: "dropped", label: "Couldn’t message a session", link: false, line: "Couldn’t deliver: the session was deleted" },
-    { state: "waitingForOk", label: "Waiting for your OK to message Docs in Handbook", link: true, line: "Waiting for your OK" },
-    { state: "pending", label: "Messaging Release notes", link: true, line: null },
+    { state: "waited", label: "Sent message to Docs, waited for its reply", links: ["Docs"], chevron: false },
+    { state: "seen", label: "Sent message to Release notes", links: ["Release notes"], chevron: false },
+    { state: "waited", label: "Sent messages to Docs and Release notes, waited for a reply from Docs", links: ["Docs", "Release notes", "Docs"], chevron: false },
+    { state: "declined", label: "Didn’t send message to Docs", links: ["Docs"], chevron: false },
+    { state: "refused", label: "Couldn’t send message to Billing", links: [], chevron: false },
+    { state: "dropped", label: "Couldn’t send message to a session", links: [], chevron: false },
+    { state: "waiting", label: "Waiting for Docs to reply", links: ["Docs"], chevron: false },
   ]);
-  // Opened inside its group's scrolling list, a row brings its state line into the list's view.
-  assert.equal(seen.lineShown, true);
-  // A message too long for its record shows its whole text, read from the blob store.
-  assert.match(seen.whole ?? "", /The rest of the long note: the migration runs before the deploy\./);
-  assert.deepEqual(seen.groups, ["Read files and messaged a session", "Messaging Release notes"]);
-  // In the sender, the reply sits inside the turn that asked; a message that opened a turn stands as its input.
+  // A turn whose only work is its message folds no group of its own: the row stands alone.
+  assert.deepEqual(seen.groups, ["Read files and messaged a session"]);
+  // A reply a wait took isn't in the sender's thread: the turn's answer says it. A late reply, and
+  // a message that opened a turn, stand as the turn's input, as the user's own would.
   assert.deepEqual(seen.replyInSender, [
-    { caption: "Reply from Docs", inTurn: true },
-    { caption: "From Docs · Handbook", inTurn: false },
+    { id: "q1", caption: "Sent by Docs from another session", inTurn: false },
+    { id: "m3b-reply", caption: "Sent by Release notes from another session", inTurn: false },
   ]);
-  // "Open reply" lands on the reply in the same session.
-  assertLanded(seen.openReply, "peer-api");
+  // The late reply's caption opens Release notes at the answer that reply carried.
+  assert.equal(seen.toAnswer.found, true);
+  assert.equal(seen.toAnswer.revealed, true);
+  assert.equal(seen.toAnswer.inView, true);
+  assert.equal(seen.toAnswer.inTurn, true);
+  assert.equal(seen.toAnswer.selection, "peer-notes");
+  assert.equal(seen.toAnswer.text, "Not yet: I'll add it with the 2.4 notes.");
 
-  // The receiver's blocks: an outline, no fill, a caption naming the sender, read out as a message from it.
+  // The receiver's messages: the user's own bubble, a caption naming the sender above it.
   assert.deepEqual(seen.blocks.map(({ id, caption, inTurn, asInput }) => ({ id, caption, inTurn, asInput })), [
-    { id: "m1", caption: "From API schema · Website", inTurn: false, asInput: true },
-    { id: "m3", caption: "From API schema · Website", inTurn: true, asInput: false },
-    { id: "q1-reply", caption: "Reply from API schema · to your earlier message", inTurn: false, asInput: true },
-    { id: "s1", caption: "From Style guide", inTurn: false, asInput: true },
+    { id: "m1", caption: "Sent by API schema from another session", inTurn: false, asInput: true },
+    { id: "m3", caption: "Sent by API schema from another session", inTurn: true, asInput: false },
+    { id: "s1", caption: "Sent by Style guide from another session", inTurn: false, asInput: true },
+    { id: "m7", caption: "Sent by API schema from another session", inTurn: false, asInput: true },
   ]);
   for (const block of seen.blocks) {
-    assert.equal(Number.parseFloat(block.outline), 1, block.id);
-    // A fill with no alpha: the block is clear, its outline alone sets it apart.
-    assert.match(block.fill, /,\s*0\)$/, block.id);
+    // No outline, the corner radius and padding of the user's own bubble, its fill too.
+    assert.deepEqual(block.box, [0, 22, 10, 16], block.id);
+    assert.equal(block.sameAsUser, true, block.id);
+    // The caption's size and line height.
+    assert.deepEqual(block.captionFont, [13, 19.5], block.id);
     assert.equal(block.label, block.caption.includes("Style guide") ? "Message from Style guide:" : "Message from API schema:");
   }
   // A long message folds to a few lines, and Show more opens all of it.
   assert.deepEqual(seen.blocks.map((block) => block.more), [true, false, false, false]);
   assert.ok(seen.showMore.opened > seen.showMore.clipped, `${seen.showMore.opened} > ${seen.showMore.clipped}`);
-  // A turn resting on a reply says whom it waits for, in its header and its live line.
-  assert.match(seen.waiting.header, /^Waiting for API schema · /);
-  assert.equal(seen.waiting.status, "Waiting for API schema");
-  assert.deepEqual(seen.docsRows, [
-    { state: "seen", label: "Messaged API schema in Website" },
-    { state: "replied", label: "Messaged API schema in Website" },
-    { state: "delivered", label: "Messaged API schema in Website" },
-  ]);
+  // Docs' own question, waited for and answered in one turn; its answers to API schema add no rows.
+  assert.deepEqual(seen.docsRows, [{ state: "waited", label: "Sent message to API schema, waited for its reply", links: ["API schema"], chevron: false }]);
+});
+
+test("The sender's newest turn says what it does now: sending, waiting for the user's OK, waiting for the reply, or resting on it", { timeout: 120000 }, async (t) => {
+  const turn = async (live: string) => {
+    const seen = JSON.parse(await renderFixtureLive(t, `peer-messages.html?drive=live${live}`, "peer-result", 90000)) as Turn & { error?: string };
+    assert.equal(seen.error, undefined);
+    return { ...seen, header: seen.header?.replace(/\d.*$/, "") ?? null };
+  };
+  assert.deepEqual(await turn("&live=sending"), { state: "sending", label: "Sending message to Docs", shimmer: true, header: "Working for ", status: "Thinking" });
+  assert.deepEqual(await turn("&live=ok"), { state: "waitingForOk", label: "Waiting for your OK to message Docs", shimmer: false, header: "Working for ", status: "Thinking" });
+  // Its wait ran out before Docs replied: the turn rests on the reply, which comes as a message.
+  assert.deepEqual(await turn("&live=rested"), {
+    state: "waited", label: "Sent message to Docs, waited; no reply yet", shimmer: false, header: "Waiting for Docs to reply · ", status: "Waiting for Docs to reply",
+  });
 });
 
 test("A jump opens the other session at the exact message, both ways, and the sidebar marks a message not yet seen", { timeout: 120000 }, async (t) => {

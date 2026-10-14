@@ -159,6 +159,10 @@ function summary(event: DomainEvent): string {
       return `from ${event.from}, hop ${event.hop}`;
     case "peerMessageState":
       return event.state.type;
+    case "peerReplyHeld":
+      return event.hold.type;
+    case "peerAnswered":
+      return `answered ${event.messageId}`;
     case "peerWaitSettled":
       return event.messageId;
   }

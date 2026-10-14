@@ -54,7 +54,8 @@ fallback: ModelFallback | null,
  */
 quotaWait: QuotaWait | null, 
 /**
- * When it last received a message from another session (its sidebar row's unread dot,
- * SESSION-MESSAGING-PLAN.md §6.4); folded from its messages, never stored as such.
+ * When it last finished answering a message from another session (its sidebar row's
+ * unread dot, SESSION-MESSAGING-PLAN.md §6.4); folded from those events, never stored as
+ * such.
  */
 peerAtMs?: number, };

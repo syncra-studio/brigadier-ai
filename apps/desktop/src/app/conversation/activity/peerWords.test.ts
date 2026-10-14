@@ -2,78 +2,110 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  peerLabel,
+  type Exchange,
+  exchangeDescribed,
+  exchangeWords,
+  type PeerRef,
+  type PeerSend,
   peerNameOf,
-  receivedCaption,
+  plainWords,
   receiverHasIt,
   refusedDescribed,
   replyOf,
-  sentDescribed,
-  stateLine,
+  sentByCaption,
   UNKNOWN_SESSION,
   waitingWords,
 } from "@/app/conversation/activity/peerWords";
-import type { Conversation, PeerMessage, PeerState, Project } from "@/ipc/generated";
+import type { Conversation, ItemStatus, PeerMessage, PeerState, Project } from "@/ipc/generated";
 
-const docs = { title: "Docs", project: "Handbook" };
-const notes = { title: "Release notes", project: null };
+const docs: PeerRef = { session: "docs", title: "Docs" };
+const notes: PeerRef = { session: "notes", title: "Release notes" };
 
 const STATES: PeerState[] = [
   { type: "waitingForOk" }, { type: "pending" }, { type: "delivered" }, { type: "seen" }, { type: "replied" },
   { type: "declined" }, { type: "refused", reason: "Docs is archived." }, { type: "dropped", reason: "deleted" },
 ];
 
-test("a sent message's row names the session, and its project when it's another, in every state", () => {
-  const rows = STATES.map((state) => {
-    const described = sentDescribed(state, docs);
-    return [state.type, described.status, described.status === "inProgress" ? described.words.doing : described.words.done];
-  });
-  assert.deepEqual(rows, [
-    ["waitingForOk", "completed", "Waiting for your OK to message Docs in Handbook"],
-    ["pending", "inProgress", "Messaging Docs in Handbook"],
-    ["delivered", "completed", "Messaged Docs in Handbook"],
-    ["seen", "completed", "Messaged Docs in Handbook"],
-    ["replied", "completed", "Messaged Docs in Handbook"],
-    ["declined", "completed", "Didn’t message Docs in Handbook"],
-    ["refused", "completed", "Couldn’t message Docs in Handbook"],
-    ["dropped", "completed", "Couldn’t message Docs in Handbook"],
+const send = (ref: PeerRef, type: PeerState["type"]): PeerSend => ({ ...ref, state: { type } as PeerState });
+const exchange = (sends: PeerSend[], waits: ItemStatus[] = [], received: PeerRef[] = [], waitingOn: PeerRef[] = []): Exchange => ({
+  sends, waits, received, waitingOn,
+});
+const line = (value: Exchange) => {
+  const words = exchangeWords(value);
+  return [plainWords(words.parts), words.status, words.waiting];
+};
+
+test("a row of one message reads how it stands, from sending to waiting to the finished exchange", () => {
+  assert.deepEqual(STATES.map((state) => [state.type, ...line(exchange([send(docs, state.type)]))]), [
+    ["waitingForOk", "Waiting for your OK to message Docs", "completed", false],
+    ["pending", "Sending message to Docs", "inProgress", false],
+    ["delivered", "Sent message to Docs", "completed", false],
+    ["seen", "Sent message to Docs", "completed", false],
+    ["replied", "Sent message to Docs", "completed", false],
+    ["declined", "Didn’t send message to Docs", "completed", false],
+    ["refused", "Couldn’t send message to Docs", "completed", false],
+    ["dropped", "Couldn’t send message to Docs", "completed", false],
   ]);
-  // Once it went, a pending row reads as sent.
-  assert.equal(sentDescribed({ type: "pending" }, notes).words.done, "Messaged Release notes");
-  assert.equal(sentDescribed({ type: "seen" }, notes).words.kind, "message");
-  // A group of rows that didn't send says so in its summary.
-  assert.equal(sentDescribed({ type: "declined" }, notes).words.phrase, "Didn’t message a session");
-  assert.deepEqual(refusedDescribed(UNKNOWN_SESSION).words.done, "Couldn’t message a session");
+  // Once it went, the same row waits for the receiver, then names the reply it waited for.
+  assert.deepEqual(line(exchange([send(docs, "delivered")], ["inProgress"])), ["Waiting for Docs to reply", "inProgress", true]);
+  assert.deepEqual(line(exchange([send(docs, "replied")], ["completed"], [docs])), ["Sent message to Docs, waited for its reply", "completed", false]);
+  assert.deepEqual(line(exchange([send(docs, "seen")], ["completed"])), ["Sent message to Docs, waited; no reply yet", "completed", false]);
+  assert.deepEqual(line(exchange([send(docs, "seen")], ["failed"])), ["Sent message to Docs, couldn’t wait for a reply", "completed", false]);
 });
 
-test("the state line under a sent message, and when its name opens the message in the receiver", () => {
-  assert.deepEqual(STATES.map((state) => stateLine(state).text), [
-    "Waiting for your OK", "Sending", "Delivered", "Seen", "Replied", "You didn’t send it", "Docs is archived.",
-    "Couldn’t deliver: the session was deleted",
+test("a row of several messages names each session once, and only the replies that came", () => {
+  const both = [send(docs, "replied"), send(notes, "seen")];
+  assert.deepEqual(line(exchange(both)), ["Sent messages to Docs and Release notes", "completed", false]);
+  assert.deepEqual(line(exchange([send(docs, "pending"), send(notes, "pending")])), ["Sending messages to Docs and Release notes", "inProgress", false]);
+  // While one is still due, the row names the one it waits for.
+  assert.deepEqual(line(exchange(both, ["completed", "inProgress"], [docs], [notes])), ["Waiting for Release notes to reply", "inProgress", true]);
+  assert.deepEqual(line(exchange(both, ["completed"], [docs])), ["Sent messages to Docs and Release notes, waited for a reply from Docs", "completed", false]);
+  assert.deepEqual(line(exchange([send(docs, "replied"), send(notes, "replied")], ["completed", "completed"], [docs, notes])), [
+    "Sent messages to Docs and Release notes, waited for their replies", "completed", false,
   ]);
-  assert.deepEqual(STATES.filter((state) => stateLine(state).reply).map((state) => state.type), ["replied"]);
-  assert.equal(stateLine({ type: "dropped", reason: "archived" }).text, "Couldn’t deliver: the session was archived");
-  assert.equal(stateLine({ type: "dropped", reason: "the daemon stopped" }).text, "Couldn’t deliver: the daemon stopped");
-  // Only a message the receiver has opens it there.
+  // Two messages to one session are one name.
+  assert.deepEqual(line(exchange([send(docs, "seen"), send(docs, "seen")])), ["Sent messages to Docs", "completed", false]);
+  // A mix of sent and refused says both.
+  assert.deepEqual(line(exchange([send(docs, "seen"), send(notes, "refused")])), ["Sent message to Docs, couldn’t send message to Release notes", "completed", false]);
+});
+
+test("a wait with no message next to it is a row of its own", () => {
+  assert.deepEqual(line(exchange([], ["inProgress"], [], [docs])), ["Waiting for Docs to reply", "inProgress", true]);
+  assert.deepEqual(line(exchange([], ["inProgress"])), ["Waiting for replies", "inProgress", true]);
+  assert.deepEqual(line(exchange([], ["completed"], [docs])), ["Waited for a reply from Docs", "completed", false]);
+  assert.deepEqual(line(exchange([], ["completed"], [docs, notes])), ["Waited for replies from Docs and Release notes", "completed", false]);
+  assert.deepEqual(line(exchange([], ["completed"])), ["Waited; no reply yet", "completed", false]);
+});
+
+test("the row's words as a group reads them: kind, summary phrase and the waiting clock", () => {
+  const waiting = exchangeDescribed(exchange([send(docs, "seen")], ["inProgress"]));
+  assert.deepEqual(waiting, {
+    words: { kind: "message", doing: "Waiting for Docs to reply", done: "Waiting for Docs to reply", object: "Docs", waiting: true },
+    status: "inProgress",
+  });
+  const refused = exchangeDescribed(exchange([send(docs, "refused")]));
+  assert.equal(refused.words.kind, "other");
+  assert.equal(refused.words.phrase, "Couldn’t message a session");
+  // A message waiting for the user's OK counts as sent for the group.
+  assert.equal(exchangeDescribed(exchange([send(docs, "waitingForOk")])).words.kind, "message");
+  assert.deepEqual(refusedDescribed(UNKNOWN_SESSION).words.done, "Couldn’t send message to a session");
+});
+
+test("only a message the receiver has opens it there", () => {
   assert.deepEqual(STATES.filter(receiverHasIt).map((state) => state.type), ["pending", "delivered", "seen", "replied", "dropped"]);
 });
 
-test("a received message's caption, and a turn's words while it waits for replies", () => {
-  assert.equal(receivedCaption(docs, false, false), "From Docs · Handbook");
-  assert.equal(receivedCaption(notes, false, false), "From Release notes");
-  assert.equal(receivedCaption(docs, true, false), "Reply from Docs");
-  assert.equal(receivedCaption(docs, true, true), "Reply from Docs · to your earlier message");
-  assert.equal(peerLabel(docs), "Docs in Handbook");
-  assert.equal(peerLabel(notes), "Release notes");
+test("a received message's caption, and a request's words while it waits for replies", () => {
+  assert.equal(sentByCaption({ title: "API work", project: "Handbook" }), "Sent by API work from another session");
   assert.equal(waitingWords([]), "Waiting for a reply");
-  assert.equal(waitingWords(["Docs"]), "Waiting for Docs");
-  assert.equal(waitingWords(["Docs", "Style guide"]), "Waiting for Docs and Style guide");
-  assert.equal(waitingWords(["Docs", "Style guide", "Release notes"]), "Waiting for Docs, Style guide and Release notes");
+  assert.equal(waitingWords(["Docs"]), "Waiting for Docs to reply");
+  assert.equal(waitingWords(["Docs", "Style guide"]), "Waiting for Docs and Style guide to reply");
+  assert.equal(waitingWords(["Docs", "Style guide", "Release notes"]), "Waiting for Docs, Style guide and Release notes to reply");
 });
 
 const record = (messageId: string, outgoing: boolean, replyTo?: string): PeerMessage => ({
   messageId, outgoing, peer: "docs", requestId: "a1", state: { type: "seen" }, text: "", blob: null,
-  sentAtMs: null, settled: false, position: 1, ...(replyTo && { replyTo }),
+  sentAtMs: null, settled: false, position: 1, automatic: false, ...(replyTo && { replyTo }),
 });
 const conversation = (id: string, projectId: string | null, title: string) => ({ id, projectId, title }) as Conversation;
 

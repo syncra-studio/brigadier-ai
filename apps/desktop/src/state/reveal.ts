@@ -29,7 +29,8 @@ export function useRevealing(conversationId: string | null): string | null {
 
 /** The row or block of `messageId` in a shown thread. */
 function shownElement(messageId: string): HTMLElement | null {
-  const found = document.querySelectorAll<HTMLElement>(`[data-peer-message="${CSS.escape(messageId)}"]`);
+  // A row of several messages names each of them.
+  const found = document.querySelectorAll<HTMLElement>(`[data-peer-message~="${CSS.escape(messageId)}"]`);
   return [...found].find((element) => element.closest("[data-slot=aui_thread-viewport]") && element.getClientRects().length > 0) ?? null;
 }
 

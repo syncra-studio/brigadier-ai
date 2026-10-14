@@ -615,8 +615,15 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
         sentAtMs: sent ? event.sentAtMs : null,
         settled: false,
         position: streamSeq,
+        automatic: event.automatic,
+        ...(event.answerId !== null && { answerId: event.answerId }),
       };
       return { ...board, peerMessages: { ...board.peerMessages, [event.messageId]: message } };
+    }
+    case "peerReplyHeld": {
+      const known = board.peerMessages[event.messageId];
+      if (!known) return board;
+      return { ...board, peerMessages: { ...board.peerMessages, [event.messageId]: { ...known, hold: event.hold } } };
     }
     case "peerMessageState": {
       const known = board.peerMessages[event.messageId];

@@ -15,6 +15,7 @@ import {
   endsWithPlan,
   foldsAway,
   foldTurns,
+  heldForWait,
   isUpdate,
   judgementCall,
   peerOf,
@@ -601,7 +602,7 @@ const peerRequest = (id: string, seq: number, more: Partial<UserRequest> = {}): 
 } as UserRequest);
 const record = (messageId: string, position: number, requestId: string, state: PeerMessage["state"], outgoing = true): PeerMessage => ({
   messageId, outgoing, peer: "docs", requestId, state, text: messageId, blob: null,
-  sentAtMs: position * 1000, settled: false, position,
+  sentAtMs: position * 1000, settled: false, position, automatic: false,
 });
 const peerDigest = (requests: UserRequest[], peerMessages: PeerMessage[] = [], orchestratorSteps: OrchestratorStep[] = []): BoardDigest => ({
   tasks: {}, approvals: {}, questions: {}, plans: {}, decisions: [], machineSteps: [], compactions: {},
@@ -625,7 +626,7 @@ test("a session's sent messages are rows of the turn that sent them, in every st
   const incoming = record("in", 30, "a1", { type: "seen" }, false);
   const refusal: OrchestratorStep = { requestId: "a1", atMs: 20_000, position: 20, kind: { type: "messageRefused", title: "Billing", reason: "Billing is archived." } };
   const blocks = buildBlocks([said("a1", 1, "user", "a1")], {}, false, peerDigest([peerRequest("a1", 1)], [...sent, incoming], [refusal]), []);
-  const steps = keyed(blocks, "a1").orchestratorSteps.map((step) => step.kind.type === "peerSent" ? step.kind.messageId : step.kind.type);
+  const steps = keyed(blocks, "a1").orchestratorSteps.map((step) => step.kind.type === "peerSent" ? step.kind.messageIds.join(" ") : step.kind.type);
   assert.deepEqual(steps, ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "messageRefused"]);
 });
 
@@ -633,7 +634,7 @@ test("an overnight run's refused message keeps its row, as its sent ones do", ()
   const refusal: OrchestratorStep = { requestId: "run-1", atMs: 3000, position: 3, kind: { type: "messageRefused", title: "Billing", reason: "Billing is archived." } };
   const sent = record("m1", 4, "run-1", { type: "delivered" });
   const blocks = buildBlocks([said("run-1-said", 2, "assistant", "run-1"), said("run-1-done", 5, "assistant", "run-1")], {}, false, peerDigest([peerRequest("run-1", 1)], [sent], [refusal]), []);
-  const steps = keyed(blocks, "run-1").orchestratorSteps.map((step) => step.kind.type === "peerSent" ? step.kind.messageId : step.kind.type);
+  const steps = keyed(blocks, "run-1").orchestratorSteps.map((step) => step.kind.type === "peerSent" ? step.kind.messageIds.join(" ") : step.kind.type);
   assert.deepEqual(steps, ["messageRefused", "m1"]);
 });
 
@@ -738,4 +739,49 @@ test("a turn waiting for other sessions' replies names them, a steered one's too
   ];
   const [turn] = buildBlocks(thread, {}, false, peerDigest(requests), []);
   assert.deepEqual(turn!.waitingFor, ["api", "notes"]);
+});
+
+test("a wait for replies is part of the messages' row, and the answer Brigadier sent back for this session is no row", () => {
+  const wait: OrchestratorStep = {
+    requestId: "a1", atMs: 5000, position: 5,
+    kind: { type: "tool", itemId: "w1", name: "mcp__brigadier__wait_for_replies", detail: null, status: "inProgress", throughPosition: 5 },
+  };
+  const sent = record("m1", 4, "a1", { type: "seen" });
+  // The reply this session's answer carried to a session that asked it.
+  const automatic = { ...record("auto", 6, "a1", { type: "delivered" }), automatic: true, answerId: "a1-answer" };
+  const blocks = buildBlocks([said("a1", 1, "user", "a1")], {}, false, peerDigest([peerRequest("a1", 1)], [sent, automatic], [wait]), []);
+  const steps = keyed(blocks, "a1").orchestratorSteps.map((step) => step.kind);
+  assert.deepEqual(steps, [
+    { type: "peerSent", messageIds: ["m1"], waits: [] },
+    { type: "peerSent", messageIds: [], waits: [{ itemId: "w1", status: "inProgress", requestId: "a1" }] },
+  ]);
+});
+
+/** A reply to `m1`, and where it stands with a wait. */
+const replyHeld = (hold?: PeerMessage["hold"]) => ({ ...record("r1", 5, "a1", { type: "seen" }, false), ...(hold && { hold }) });
+/** The reply Brigadier sent another session, carrying `q1-answer`. */
+const sentBack = (id: string) => ({ ...record(id, 4, "q1", { type: "delivered" }), automatic: true, answerId: "q1-answer" });
+
+test("a reply a wait took is that call's result, not a message of the thread; a returned one shows as ever", () => {
+  const thread = [said("a1", 1, "user", "a1"), fromPeer("r1", 5, "a1", "m1"), said("a1-answer", 6, "assistant", "a1")];
+  for (const hold of [{ type: "handed" }, { type: "taken", itemId: "w1" }] as PeerMessage["hold"][]) {
+    const [turn] = buildBlocks(thread, {}, false, peerDigest([peerRequest("a1", 1)], [replyHeld(hold)]), []);
+    assert.deepEqual(turn!.steers, [], String(hold?.type));
+    assert.deepEqual(turn!.texts.map((text) => text.messageId), ["a1-answer"]);
+  }
+  for (const hold of [undefined, { type: "returned" }] as PeerMessage["hold"][]) {
+    const [turn] = buildBlocks(thread, {}, false, peerDigest([peerRequest("a1", 1)], [replyHeld(hold)]), []);
+    assert.deepEqual(turn!.steers.map((steer) => steer.message.id), ["r1"], hold?.type ?? "none");
+  }
+  assert.equal(heldForWait(undefined), false);
+});
+
+test("an answer Brigadier sent back to the sessions that asked carries their replies' ids, for a jump to land on it", () => {
+  const thread = [fromPeer("q1", 1, "q1"), said("q1-answer", 3, "assistant", "q1")];
+  const [turn] = buildBlocks(thread, {}, false, peerDigest([peerRequest("q1", 1, { fromPeer: "api" })], [sentBack("auto1"), sentBack("auto2")]), []);
+  assert.deepEqual(turn!.texts.map((text) => [text.messageId, text.anchors]), [["q1-answer", ["auto1", "auto2"]]]);
+  assert.deepEqual(turn!.orchestratorSteps, []);
+  // The block's sequence keeps them on its text.
+  const entries = blockSequence({ texts: turn!.texts, cards: [], steers: [], compactions: [], orchestratorSteps: [], rows: [] });
+  assert.deepEqual(entries.map((entry) => entry.kind === "text" && entry.anchors), [["auto1", "auto2"]]);
 });

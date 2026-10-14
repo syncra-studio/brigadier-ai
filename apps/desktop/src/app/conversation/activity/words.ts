@@ -27,6 +27,8 @@ export type StepWords = {
   phrase?: string;
   /** It reaches the network (a web page, `curl`, `git fetch`). */
   web?: boolean;
+  /** It waits for other sessions to reply. */
+  waiting?: boolean;
 };
 
 export type ToolStep = Extract<OrchestratorStepKind, { type: "tool" }>;
