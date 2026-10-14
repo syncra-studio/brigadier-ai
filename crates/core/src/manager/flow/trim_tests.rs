@@ -146,6 +146,9 @@ async fn a_trimmed_output_is_read_back_whole_by_its_own_session_only() {
         spec.mcp_servers[0].tool_timeout_secs,
         Some(super::super::run::RUN_TIMEOUT_MAX.as_secs() + 60)
     );
+    // Its own tools are loaded from the start, never behind tool search with another
+    // server's: a thread that had to look `run` up started its own background job instead.
+    assert!(spec.mcp_servers[0].always_load);
 
     // Only its hook's grant stores output; a short output is left alone.
     let log = fifty_kb();

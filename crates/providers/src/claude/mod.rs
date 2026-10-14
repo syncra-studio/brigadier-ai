@@ -72,8 +72,12 @@ SendMessage,TaskStop,Monitor,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlan
 /// Claude's built-in tool that starts a sub-agent (`Task` is its older name).
 const SUB_AGENT_TOOLS: &str = "Agent,Task";
 /// A thread's built-in tools ([`ToolSet::Thread`]): no sub-agents (`Agent`/`Task`) and nothing
-/// that runs on in the background (`Monitor`, scheduling); its workers are Brigadier's.
-const THREAD_TOOLS: &str = "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch";
+/// that runs on in the background (`Monitor`, scheduling); its workers are Brigadier's. Tool
+/// search stays, so a server not loaded from the start ([`McpServer::always_load`], the
+/// `computer` tools) waits behind it until used: without it all forty of those tools were in
+/// every request, and a thread given them ran a long command as its own `nohup … &` more often
+/// than through `run`.
+const THREAD_TOOLS: &str = "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch";
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 /// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
@@ -2196,7 +2200,7 @@ mod tests {
             };
             assert_eq!(
                 after("--tools").as_deref(),
-                Some("Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch")
+                Some("Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch")
             );
             assert_eq!(after("--permission-mode").as_deref(), Some(mode));
             assert_eq!(
