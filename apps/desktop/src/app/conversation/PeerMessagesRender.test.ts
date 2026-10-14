@@ -120,8 +120,10 @@ test("A jump opens the other session at the exact message, both ways, and the si
   assert.equal(seen.toReceiver.loadedBefore, 0);
   assert.equal(seen.toReceiver.pagesRead, true);
   assertLanded(seen.toReceiver, "peer-docs");
-  // It lands once its folds are still, not when the wait for them runs out (4 s).
-  assert.ok(seen.toReceiver.ms < 3000, `landed in ${seen.toReceiver.ms} ms`);
+  // It lands once its folds are still, not when the wait for them runs out (4 s from the jump):
+  // timed from its row showing (fold animations and a few still frames, under a second even
+  // with the CPU slowed), so how fast the machine reads and draws the session doesn't count.
+  assert.ok(seen.toReceiver.ms < 2000, `landed ${seen.toReceiver.ms} ms after its row showed`);
   assert.deepEqual(seen.afterOpen, none);
   // Back from the received message's caption to its sent row, deep in folded work 32 turns back.
   assert.equal(seen.hadCaption, true);
@@ -131,7 +133,7 @@ test("A jump opens the other session at the exact message, both ways, and the si
   // Left on another tab, the sender shows its chat, where the row is.
   assert.equal(seen.toSender.chat, true);
   // A long group's list fades its edges as it scrolls, an animation that never ends: no fold.
-  assert.ok(seen.toSender.ms < 3000, `landed in ${seen.toSender.ms} ms`);
+  assert.ok(seen.toSender.ms < 2000, `landed ${seen.toSender.ms} ms after its row showed`);
   assert.equal(seen.toSender.workOpen, true);
   assert.equal(seen.toSender.group, "open");
   assert.deepEqual(seen.afterBack, none);

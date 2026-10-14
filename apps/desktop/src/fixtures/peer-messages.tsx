@@ -609,12 +609,19 @@ function landing(messageId: string) {
 }
 
 /**
- * Waits for a jump to `messageId` to land, its folds still and its flash over; how long after
- * `from` it landed, in ms.
+ * Waits for a jump to `messageId` in `conversationId` to land, its folds still and its flash over;
+ * how long after its row showed in that thread it landed, in ms. Reading and drawing the session
+ * before that goes at the machine's pace; from there the landing waits only for its folds.
+ * `left` is the element the jump started from, which may carry the same message's id.
  */
-async function landed(messageId: string, from = performance.now()): Promise<number> {
+async function landed(messageId: string, conversationId: string, left: Element | null): Promise<number> {
+  await until(() =>
+    useBoard.getState().board?.conversationId === conversationId &&
+    all(`[data-peer-message~="${messageId}"]`, viewport() ?? document.createElement("div"))
+      .some((element) => element !== left && element.getClientRects().length > 0), 15000);
+  const shownAt = performance.now();
   await until(() => useReveal.getState().reveal === null && one(`[data-peer-message~="${messageId}"][data-revealed=true]`) !== null, 15000);
-  const ms = Math.round(performance.now() - from);
+  const ms = Math.round(performance.now() - shownAt);
   await wait(800);
   return ms;
 }
@@ -674,9 +681,8 @@ async function driveGallery(): Promise<object> {
   }));
   // A late reply's caption opens the session that answered, at the answer it carries.
   const late = one<HTMLButtonElement>("[data-peer-message=m3b-reply] [data-slot=peer-caption]");
-  const toAnswerAt = performance.now();
   late?.click();
-  const toAnswerMs = await landed("m3b-reply", toAnswerAt);
+  const toAnswerMs = await landed("m3b-reply", NOTES, late?.closest("[data-peer-message]") ?? null);
   const toAnswer = { ...landing("m3b-reply"), ms: toAnswerMs, text: text(one("[data-peer-message~=m3b-reply]")) };
 
   openConversation(DOCS);
@@ -724,9 +730,9 @@ async function driveJump(): Promise<object> {
   all("[data-slot=work-group] > button[data-state=closed]").at(-1)?.click();
   await until(() => !!row());
   const loadedBefore = useApp.getState().threads[DOCS]?.items.length ?? 0;
-  const toReceiverAt = performance.now();
-  one<HTMLButtonElement>("[data-slot=peer-link]", row() ?? document)?.click();
-  const toReceiverMs = await landed("mk", toReceiverAt);
+  const sentRow = row();
+  one<HTMLButtonElement>("[data-slot=peer-link]", sentRow ?? document)?.click();
+  const toReceiverMs = await landed("mk", DOCS, sentRow);
   const toReceiver = { ...landing("mk"), ms: toReceiverMs, pagesRead: (useApp.getState().threads[DOCS]?.items.length ?? 0) > 10, loadedBefore };
   const afterOpen = dots();
 
@@ -735,9 +741,8 @@ async function driveJump(): Promise<object> {
   const hadCaption = !!caption;
   // API schema was left on another tab: the jump brings its chat back.
   useSessionTabs.setState((state) => ({ sessions: { ...state.sessions, [API]: { tabs: [], ...state.sessions[API], active: "review" } } }));
-  const toSenderAt = performance.now();
   caption?.click();
-  const toSenderMs = await landed("ml", toSenderAt);
+  const toSenderMs = await landed("ml", API, caption?.closest("[data-peer-message]") ?? null);
   const toSender = { ...landing("ml"), ms: toSenderMs, pagesRead: (useApp.getState().threads[API]?.items.length ?? 0) > 10, chat: sessionTabs(API).active === CHAT_TAB };
   const afterBack = dots();
 
