@@ -9,7 +9,7 @@ use brigadier_providers::ProviderKind;
 use serde_json::json;
 use tokio::sync::Notify;
 
-use super::peer_kit::{Peers, Sent, header_id, message_id, only, send};
+use super::peer_kit::{Peers, Sent, header_id, message_id, only, reply_sent, send};
 use super::{Flow, Options, Reply};
 use crate::board::Board;
 use crate::model::{ConversationId, Message, PeerState};
@@ -56,7 +56,7 @@ async fn a_request_waits_for_its_reply_and_ends_after_the_replys_turn() {
         .await;
     let gate = Arc::new(Notify::new());
     let asked = peers.sends(&flow.conversation, &api, "Which column holds names?");
-    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", Some(gate.clone()));
+    peers.answers(&api, "It's `name`.", Some(gate.clone()));
     flow.say("Ask the API session where names live.").await;
     let board = flow
         .until("the request waiting for API work", |board| {
@@ -81,7 +81,7 @@ async fn a_request_waits_for_its_reply_and_ends_after_the_replys_turn() {
         })
         .await;
     assert!(board.requests[&request].waiting_for.is_empty());
-    let answer = message_id(&only(&replied).0);
+    let answer = reply_sent(&flow, &api, &message_id(&only(&asked).0)).await;
     let inputs = peers.inputs_of(&flow.conversation);
     assert_eq!(inputs.len(), 2, "{inputs:?}");
     assert_eq!(header_id(&inputs[1]).as_deref(), Some(answer.as_str()));
@@ -102,7 +102,7 @@ async fn a_reply_after_a_newer_request_waits_and_is_filed_under_the_one_that_ask
         .await;
     let gate = Arc::new(Notify::new());
     let asked = peers.sends(&flow.conversation, &api, "Which column holds names?");
-    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", Some(gate.clone()));
+    peers.answers(&api, "It's `name`.", Some(gate.clone()));
     flow.say("Ask the API session where names live.").await;
     let board = flow
         .until("the request waiting", |board| {
@@ -148,13 +148,14 @@ async fn a_reply_after_a_newer_request_waits_and_is_filed_under_the_one_that_ask
     }
     let turns = peers.inputs_of(&flow.conversation).len();
     gate.notify_one();
-    flow.until_in(&api, "the reply sent", |_| {
-        replied.lock().unwrap().len() == 1
-    })
-    .await;
-    let (reply, failed) = only(&replied);
-    assert!(!failed && reply.contains("\"state\":\"queued\""), "{reply}");
-    let answer = message_id(&reply);
+    let answer = reply_sent(&flow, &api, &message_id(&only(&asked).0)).await;
+    // It waits in the inbox while the newer request's turn runs.
+    let board = flow
+        .until("the reply delivered", |board| {
+            board.peer_messages.contains_key(&answer)
+        })
+        .await;
+    assert!(!stands(&board, &answer, &PeerState::Seen));
     hold.notify_one();
     let board = flow
         .until("the reply seen", |board| {
@@ -196,8 +197,8 @@ async fn a_reply_after_the_users_stop_starts_no_turn_and_joins_the_next() {
         .add_session("API work", None, ProviderKind::Claude)
         .await;
     let gate = Arc::new(Notify::new());
-    peers.sends(&flow.conversation, &api, "Which column holds names?");
-    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", Some(gate.clone()));
+    let asked = peers.sends(&flow.conversation, &api, "Which column holds names?");
+    peers.answers(&api, "It's `name`.", Some(gate.clone()));
     flow.say("Ask the API session where names live.").await;
     let board = flow
         .until("the request waiting", |board| {
@@ -217,11 +218,7 @@ async fn a_reply_after_the_users_stop_starts_no_turn_and_joins_the_next() {
     })
     .await;
     gate.notify_one();
-    flow.until_in(&api, "the reply sent", |_| {
-        replied.lock().unwrap().len() == 1
-    })
-    .await;
-    let answer = message_id(&only(&replied).0);
+    let answer = reply_sent(&flow, &api, &message_id(&only(&asked).0)).await;
     let board = flow
         .until("the late reply delivered", |board| {
             stands(board, &answer, &PeerState::Delivered)
@@ -323,7 +320,7 @@ async fn a_settled_wait_lets_the_request_end() {
         .add_session("API work", None, ProviderKind::Claude)
         .await;
     let gate = Arc::new(Notify::new());
-    peers.replies(&api, &flow.conversation, "It's `name`.", Some(gate.clone()));
+    peers.answers(&api, "It's `name`.", Some(gate.clone()));
     let settled = Sent::default();
     let (kept, to) = (settled.clone(), api.clone());
     peers.on(&flow.conversation, move |turn| {
@@ -371,7 +368,7 @@ async fn a_reply_after_an_overnight_run_ended_waits_for_the_morning() {
         .add_session("API work", None, ProviderKind::Claude)
         .await;
     let gate = Arc::new(Notify::new());
-    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", Some(gate.clone()));
+    peers.answers(&api, "It's `name`.", Some(gate.clone()));
     let asked = Sent::default();
     let (kept, to) = (asked.clone(), api.clone());
     peers.on(&flow.conversation, move |turn| {
@@ -432,11 +429,7 @@ async fn a_reply_after_an_overnight_run_ended_waits_for_the_morning() {
     flow.settled().await;
     let turns = peers.inputs_of(&flow.conversation).len();
     gate.notify_one();
-    flow.until_in(&api, "the reply sent", |_| {
-        replied.lock().unwrap().len() == 1
-    })
-    .await;
-    let answer = message_id(&only(&replied).0);
+    let answer = reply_sent(&flow, &api, &message_id(&only(&asked).0)).await;
     flow.until("the late reply delivered", |board| {
         stands(board, &answer, &PeerState::Delivered)
     })

@@ -555,10 +555,11 @@ async fn a_second_wait_takes_the_slower_of_two_replies() {
     flow.stop().await;
 }
 
-/// A receiver that replies itself (`reply_to`) is not answered for again: the message is
-/// replied once.
+/// A receiver that replies itself (`reply_to`) to the message that opened its request is
+/// refused, plainly: its answer is the reply, which Brigadier sends, so the message is
+/// replied once, with what it wrote.
 #[tokio::test]
-async fn an_explicit_reply_is_not_doubled() {
+async fn a_reply_to_the_message_that_opened_the_request_is_refused() {
     let peers = Peers::new();
     let flow = Flow::start("peer-wait-explicit", Options::default(), peers.script()).await;
     let api = flow
@@ -572,18 +573,39 @@ async fn an_explicit_reply_is_not_doubled() {
         json!({}),
         None,
     );
-    let replied = peers.replies(&api, &flow.conversation, "It's `name`.", None);
+    let refused = Sent::default();
+    let kept = refused.clone();
+    peers.on(&api, move |turn| {
+        let kept = kept.clone();
+        async move {
+            let Some(original) = header_id(&turn.input) else {
+                return Reply::text("Done.");
+            };
+            let from = super::peer_kit::header_session(&turn.input).unwrap();
+            let reply = send(&turn, &from, "It's `name`.", Some(&original)).await;
+            kept.lock().unwrap().push(reply);
+            Reply::text("It's `name`.")
+        }
+    });
     flow.say("Ask the API session where names live.").await;
     flow.until("the wait's result", |_| !waited.lock().unwrap().is_empty())
         .await;
     flow.settled().await;
     let at_api = flow.settled_in(&api).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        only(&refused),
+        (
+            "Write your answer as your reply; Brigadier sends it back to Flow. Nothing was sent."
+                .to_owned(),
+            true
+        )
+    );
     let question = message_id(&only(&asked).0);
     let back = sent_by(&at_api);
     assert_eq!(back.len(), 1, "{back:?}");
-    assert!(!back[0].automatic);
-    assert_eq!(back[0].message_id, message_id(&only(&replied).0));
+    assert!(back[0].automatic);
+    assert_eq!(back[0].reply_to.as_deref(), Some(question.as_str()));
     assert!(stands(&at_api, &question, &PeerState::Replied));
     assert!(only(&waited).0.ends_with("\nIt's `name`."));
     flow.stop().await;

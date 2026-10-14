@@ -44,6 +44,16 @@ fn root_of<'a>(board: &'a Board, request: &'a str) -> &'a str {
     at
 }
 
+/// Whether request `request` answers its message alone: not steered into other work, with
+/// nothing steered into it. Brigadier then sends its final answer back as the reply.
+pub(super) fn answers_alone(board: &Board, request: &str) -> bool {
+    root_of(board, request) == request
+        && !board
+            .requests
+            .keys()
+            .any(|other| other != request && root_of(board, other) == request)
+}
+
 /// How the requests answering a message ended, once all are over: the answer message, if
 /// the thread wrote one after the message, and how they ended.
 enum Over {
@@ -140,7 +150,7 @@ impl SessionManager {
             };
             // Steered into other work, or with the user's messages steered into it: the
             // final answer is that work's too, so the thread answers on its own, reminded once.
-            let mixed = request != root || family.len() > 1;
+            let mixed = !answers_alone(&board, request);
             if mixed && matches!(over, Over::Answer(_) | Over::Silent) {
                 if self.remind_unanswered_peer(id, record, root).await != PeerReminder::Given {
                     continue;

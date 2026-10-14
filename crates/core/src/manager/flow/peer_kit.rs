@@ -120,33 +120,51 @@ impl Peers {
 }
 
 impl Peers {
-    /// Has each turn of session `from` that took a message from `to` answer it with a reply
-    /// saying `text`, once `gate` (if any) lets it; other turns answer "Done.".
-    pub(super) fn replies(
+    /// Has each turn of session `from` that took a message answer it with `text`, once `gate`
+    /// (if any) lets it, which Brigadier sends back as the reply; other turns answer "Done.".
+    pub(super) fn answers(
         &self,
         from: &ConversationId,
-        to: &ConversationId,
         text: &str,
         gate: Option<Arc<tokio::sync::Notify>>,
-    ) -> Sent {
-        let sent = Sent::default();
-        let (kept, to, text) = (sent.clone(), to.clone(), text.to_owned());
+    ) {
+        let text = text.to_owned();
         self.on(from, move |turn| {
-            let (kept, to, text, gate) = (kept.clone(), to.clone(), text.clone(), gate.clone());
+            let (text, gate) = (text.clone(), gate.clone());
             async move {
-                let Some(original) = header_id(&turn.input) else {
+                if header_id(&turn.input).is_none() {
                     return Reply::text("Done.");
-                };
+                }
                 if let Some(gate) = gate {
                     gate.notified().await;
                 }
-                let reply = send(&turn, &to, &text, Some(&original)).await;
-                kept.lock().unwrap().push(reply);
-                Reply::text("Replied.")
+                Reply::text(text)
             }
         });
-        sent
     }
+}
+
+/// The id of the reply session `from` sent to message `question`, once it went.
+pub(super) async fn reply_sent(
+    flow: &super::Flow,
+    from: &ConversationId,
+    question: &str,
+) -> String {
+    let board = flow
+        .until_in(from, "the reply sent", |board| {
+            board
+                .peer_messages
+                .values()
+                .any(|record| record.outgoing && record.reply_to.as_deref() == Some(question))
+        })
+        .await;
+    board
+        .peer_messages
+        .values()
+        .find(|record| record.outgoing && record.reply_to.as_deref() == Some(question))
+        .unwrap()
+        .message_id
+        .clone()
 }
 
 /// The one reply `sent` holds.

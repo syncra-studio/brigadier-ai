@@ -305,13 +305,27 @@ impl SessionManager {
             .map(str::to_owned);
         if let Some(original) = &reply_to {
             let board = self.core.board(caller).await.map_err(refused)?;
-            let from_target = board
+            let record = board
                 .peer_messages
                 .get(original)
-                .is_some_and(|record| !record.outgoing && record.peer == target.id);
-            if !from_target {
+                .filter(|record| !record.outgoing && record.peer == target.id);
+            let Some(record) = record else {
                 return Err(refused(Error::Invalid(format!(
                     "That message wasn't from {}.",
+                    target.title
+                ))));
+            };
+            // The message that opened this request, answered by nothing else: its reply is this
+            // request's answer, which Brigadier sends. A reply of the thread's own would leave
+            // that answer empty, or send it twice.
+            let opened_this = record.request_id.as_deref().is_some_and(|of| {
+                request.as_deref() == Some(of)
+                    && super::peer_answers::owes_reply(record)
+                    && super::peer_answers::answers_alone(&board, of)
+            });
+            if opened_this {
+                return Err(refused(Error::Invalid(format!(
+                    "Write your answer as your reply; Brigadier sends it back to {}. Nothing was sent.",
                     target.title
                 ))));
             }
