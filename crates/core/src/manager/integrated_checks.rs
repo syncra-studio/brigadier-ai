@@ -841,13 +841,28 @@ impl SessionManager {
         if matches!(check.state, IntegratedCheckState::Passed { .. }) {
             self.release_checked_holds(id).await;
         }
-        if let Some((text, optional_pass)) = self.check_message(check).await {
-            let task_id = check.tasks.last().cloned();
-            // The request whose answer waits for it, else the newest it was made due for.
-            let request = self
-                .waiting_request(check)
-                .await
-                .or_else(|| check.requests.last().cloned());
+        // Every independent request that deferred to this run gets its own outcome.
+        let mut requests: Vec<_> = self
+            .waiting_requests(check)
+            .await
+            .into_iter()
+            .map(Some)
+            .collect();
+        let waited = !requests.is_empty();
+        if requests.is_empty() {
+            requests.push(check.requests.last().cloned());
+        }
+        // Queue the whole batch before settling or starting a turn, so delivering the
+        // first result cannot settle the other requests before their messages are queued.
+        let mut queued = None;
+        let count = requests.len();
+        for (index, request) in requests.into_iter().enumerate() {
+            // A live look is work for the thread once, on the newest waiting request.
+            let Some((text, optional_pass)) =
+                self.check_message(check, waited, index + 1 == count).await
+            else {
+                continue;
+            };
             let envelope = Envelope {
                 kind: InjectionKind::Decision,
                 label: format!(
@@ -855,43 +870,55 @@ impl SessionManager {
                     if optional_pass { "passed " } else { "" },
                     check.id
                 ),
-                task_id,
+                task_id: check.tasks.last().cloned(),
                 text,
             };
-            match request {
-                Some(request) => self.deliver_for(id, envelope, Some(request)).await,
-                None => self.deliver(id, envelope).await,
+            let request = match request {
+                Some(request) => Some(request),
+                None => self.request_for(id, envelope.task_id.as_ref()).await,
+            };
+            if let Some(conv) = self.queue_envelope(id, envelope, request).await {
+                queued = Some(conv);
             }
+        }
+        if let Some(conv) = queued {
+            self.settle_requests(id).await;
+            self.kick(&conv);
         }
         self.check_held_merge(id).await;
         self.settle_requests(id).await;
     }
 
-    /// The newest of `check`'s requests whose answer the thread left to it ([quiet]) and
-    /// that still works or waits.
-    async fn waiting_request(&self, check: &IntegratedCheck) -> Option<String> {
-        let board = self.core.board(&check.conversation_id).await.ok()?;
-        let deferred = self
-            .conv(&check.conversation_id)
-            .ok()?
-            .request_activity()
-            .await
-            .deferred;
+    /// All of `check`'s requests whose answers the thread left to it ([quiet]) and
+    /// that still work or wait.
+    async fn waiting_requests(&self, check: &IntegratedCheck) -> Vec<String> {
+        let Ok(board) = self.core.board(&check.conversation_id).await else {
+            return Vec::new();
+        };
+        let Ok(conv) = self.conv(&check.conversation_id) else {
+            return Vec::new();
+        };
+        let deferred = conv.request_activity().await.deferred;
         check
             .requests
             .iter()
-            .rev()
-            .find(|request| {
+            .filter(|request| {
                 deferred.contains(*request)
                     && board.requests.get(*request).is_some_and(|request| {
                         matches!(request.state, RequestState::Working | RequestState::Waiting)
                     })
             })
             .cloned()
+            .collect()
     }
 
     /// What the thread hears of a check's end; none for a pass no answer waits for.
-    async fn check_message(&self, check: &IntegratedCheck) -> Option<(String, bool)> {
+    async fn check_message(
+        &self,
+        check: &IntegratedCheck,
+        waited: bool,
+        include_live_look: bool,
+    ) -> Option<(String, bool)> {
         let board = self.core.board(&check.conversation_id).await.ok()?;
         let tasks: Vec<&Task> = check
             .tasks
@@ -902,8 +929,11 @@ impl SessionManager {
         match &check.state {
             IntegratedCheckState::Passed { commands } => {
                 // Told when the thread left a request's answer to it ([quiet]).
-                let waited = self.waiting_request(check).await.is_some();
-                let look = live_look_line(&tasks);
+                let look = if include_live_look {
+                    live_look_line(&tasks)
+                } else {
+                    String::new()
+                };
                 if !waited && look.is_empty() {
                     return None;
                 }
