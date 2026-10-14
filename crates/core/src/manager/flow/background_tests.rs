@@ -294,6 +294,38 @@ async fn the_users_stop_ends_a_background_run_quietly() {
     flow.stop().await;
 }
 
+/// A tool call dropped while its command runs (its MCP request cancelled, its bridge gone)
+/// ends the command rather than leaving it running with no one to hear its result.
+#[tokio::test]
+async fn a_dropped_call_ends_its_command() {
+    let flow = Flow::start(
+        "background-dropped",
+        Options::default(),
+        script(|_| async { Reply::text("Looked.") }),
+    )
+    .await;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let ended = cancel.clone();
+    let seen = cancel.clone();
+    let call = flow.manager.in_foreground(
+        &flow.conversation,
+        "run",
+        "sleep 600",
+        tokio_util::sync::CancellationToken::new(),
+        cancel,
+        async move {
+            seen.cancelled().await;
+            Ok(("[stopped]".to_owned(), String::new()))
+        },
+    );
+    let held = tokio::time::timeout(std::time::Duration::from_millis(300), call).await;
+    assert!(held.is_err(), "the call returned while its command ran");
+    tokio::time::timeout(std::time::Duration::from_secs(5), ended.cancelled())
+        .await
+        .expect("the dropped call's command was not ended");
+    flow.stop().await;
+}
+
 /// The context card's Stop ends one background run: recorded stopped, and the thread hears it
 /// in the run's request and answers, so the user isn't left with a silent end.
 #[tokio::test]

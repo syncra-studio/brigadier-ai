@@ -44,6 +44,29 @@ pub(crate) fn background_owner(id: &ConversationId) -> String {
     format!("background:{id}")
 }
 
+/// A command's work while its tool call holds it ([`SessionManager::in_foreground`]): dropped
+/// before the background watcher takes it, the work is cancelled, and a run already recorded
+/// running is still watched to its end, so it reads stopped.
+struct Handoff {
+    manager: std::sync::Arc<SessionManager>,
+    handle: Option<tokio::task::JoinHandle<Result<(String, String)>>>,
+    cancel: CancellationToken,
+    run: Option<BackgroundRun>,
+}
+
+impl Drop for Handoff {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        self.cancel.cancel();
+        if let Some(run) = self.run.take() {
+            self.manager
+                .watch_background_run(handle, run, self.cancel.clone());
+        }
+    }
+}
+
 /// What ends each running background run, by conversation and id.
 #[derive(Default)]
 pub(crate) struct BackgroundRuns {
@@ -77,16 +100,25 @@ impl SessionManager {
             Ok(conv) => conv.running_request().await,
             Err(_) => None,
         };
-        let mut handle = tokio::spawn(work);
+        // Until the background watcher owns the work, a dropped call (its MCP request cancelled,
+        // its bridge gone) ends the work rather than leaving it running unowned.
+        let mut handoff = Handoff {
+            manager: self.arc(),
+            handle: Some(tokio::spawn(work)),
+            cancel: cancel.clone(),
+            run: None,
+        };
+        let handle = handoff.handle.as_mut().expect("held until handed off");
         let joined = tokio::select! {
-            joined = &mut handle => Some(joined),
+            joined = &mut *handle => Some(joined),
             () = cli_ended.cancelled() => {
                 cancel.cancel();
-                Some((&mut handle).await)
+                Some(handle.await)
             }
             () = tokio::time::sleep(FOREGROUND) => None,
         };
         if let Some(joined) = joined {
+            handoff.handle = None;
             return joined
                 .map_err(|err| crate::Error::Invalid(err.to_string()))?
                 .map(|(_, reply)| reply);
@@ -122,6 +154,8 @@ impl SessionManager {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .insert((id.clone(), run.id.clone()), cancel.clone());
+            // Recorded running from here: a dropped call still records how it ended.
+            handoff.run = Some(run.clone());
             self.store_background_run(&run).await;
             run
         };
@@ -134,6 +168,19 @@ impl SessionManager {
             secs = FOREGROUND.as_secs(),
             quiet = super::prompts::QUIET,
         );
+        handoff.run = None;
+        let handle = handoff.handle.take().expect("held until handed off");
+        self.watch_background_run(handle, run, cancel);
+        Ok(reply)
+    }
+
+    /// Waits for a background run's work and records how it ended.
+    fn watch_background_run(
+        &self,
+        handle: tokio::task::JoinHandle<Result<(String, String)>>,
+        run: BackgroundRun,
+        cancel: CancellationToken,
+    ) {
         let manager = self.arc();
         self.spawn(async move {
             let result = handle
@@ -141,7 +188,6 @@ impl SessionManager {
                 .unwrap_or_else(|err| Err(crate::Error::Invalid(err.to_string())));
             manager.background_run_ended(run, result, cancel).await;
         });
-        Ok(reply)
     }
 
     /// A background run ended: recorded, and unless the user's Stop or the session's close
@@ -160,7 +206,6 @@ impl SessionManager {
         run.ended_at_ms = Some(now_ms());
         if cancel.is_cancelled() {
             run.state = BackgroundRunState::Stopped;
-            self.store_background_run(&run).await;
             let alone = self
                 .background_runs
                 .stopped_alone
@@ -179,9 +224,9 @@ impl SessionManager {
                         run.id, run.tool, run.command
                     ),
                 };
-                self.deliver_for(&run.conversation_id, envelope, run.request_id.clone())
-                    .await;
+                self.end_with_message(run, envelope).await;
             } else {
+                self.store_background_run(&run).await;
                 self.settle_requests(&run.conversation_id).await;
             }
             return;
@@ -191,7 +236,6 @@ impl SessionManager {
             Err(err) => ("couldn't run".to_owned(), format!("[couldn't run: {err}]")),
         };
         run.state = BackgroundRunState::Finished { status };
-        self.store_background_run(&run).await;
         let envelope = Envelope {
             kind: InjectionKind::BackgroundRun,
             label: format!("{} finished", run.id),
@@ -201,8 +245,23 @@ impl SessionManager {
                 run.id, run.tool, run.command
             ),
         };
-        self.deliver_for(&run.conversation_id, envelope, run.request_id.clone())
+        self.end_with_message(run, envelope).await;
+    }
+
+    /// Records a background run's end with the message the thread hears of it: the message is
+    /// queued first, so its request is carried by one or the other throughout and a settling
+    /// in between can't end it before the message comes.
+    async fn end_with_message(&self, run: BackgroundRun, envelope: Envelope) {
+        let id = run.conversation_id.clone();
+        let conv = self
+            .queue_envelope(&id, envelope, run.request_id.clone())
             .await;
+        self.store_background_run(&run).await;
+        // The request works again until the orchestrator has read it.
+        self.settle_requests(&id).await;
+        if let Some(conv) = conv {
+            self.kick(&conv);
+        }
     }
 
     /// Ends the session's background runs (the user's Stop, an archive or delete): each is
