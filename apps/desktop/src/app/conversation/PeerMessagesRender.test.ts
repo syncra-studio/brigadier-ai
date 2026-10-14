@@ -97,7 +97,8 @@ test("The sender's newest turn says what it does now: sending, waiting for the u
     assert.equal(seen.error, undefined);
     return { ...seen, header: seen.header?.replace(/\d.*$/, "") ?? null };
   };
-  assert.deepEqual(await turn("&live=sending"), { state: "sending", label: "Sending message to Docs", shimmer: true, header: "Working for ", status: "Thinking" });
+  // The row says it sends: no live line under it.
+  assert.deepEqual(await turn("&live=sending"), { state: "sending", label: "Sending message to Docs", shimmer: true, header: "Working for ", status: null });
   assert.deepEqual(await turn("&live=ok"), { state: "waitingForOk", label: "Waiting for your OK to message Docs", shimmer: false, header: "Working for ", status: "Thinking" });
   // Its wait ran out before Docs replied: the turn rests on the reply, which comes as a message.
   assert.deepEqual(await turn("&live=rested"), {
