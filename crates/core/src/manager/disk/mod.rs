@@ -476,9 +476,13 @@ impl SessionManager {
                     OwnerState::Unfinished
                 } else {
                     let alive = match owner.split_once(':') {
-                        Some(("orch" | "chat" | "session" | "workers", id)) => {
-                            records.conversation(id).is_some()
-                        }
+                        // A session's thread temporary folder, background runs and full
+                        // checks go with the session, as its own folders do.
+                        Some((
+                            "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
+                            | "checks",
+                            id,
+                        )) => records.conversation(id).is_some(),
                         // A pre-warm's reserved task id has no task yet.
                         Some(("task", id)) => records.task(id).is_some() || self.prewarms.owns(id),
                         // A landed worker's session, kept for its review's findings.
@@ -877,9 +881,11 @@ impl SessionManager {
             .filter(|(_, _, disposing)| !disposing)
             .any(|(owner, artifacts, _)| {
                 let conversation_gone = match owner.split_once(':') {
-                    Some(("orch" | "chat" | "session" | "workers", id)) => {
-                        !catalog.conversations.iter().any(|c| c.id.0 == id)
-                    }
+                    Some((
+                        "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
+                        | "checks",
+                        id,
+                    )) => !catalog.conversations.iter().any(|c| c.id.0 == id),
                     _ => false,
                 };
                 !conversation_gone
@@ -1681,7 +1687,10 @@ impl Scanner<'_> {
                 }
             }
             let (what, many) = match owner.split_once(':') {
-                Some(("orch" | "session" | "workers", _)) => ("a session", "sessions"),
+                Some((
+                    "orch" | "session" | "workers" | "thread-temp" | "background" | "checks",
+                    _,
+                )) => ("a session", "sessions"),
                 Some(("chat", _)) => ("a Chat", "Chats"),
                 Some(("task", _)) => ("a worker", "workers"),
                 Some(("brain", _)) => ("a Brain job", "Brain jobs"),
