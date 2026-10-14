@@ -160,6 +160,8 @@ export type { IndexRun } from "./IndexRun";
 export type { IndexState } from "./IndexState";
 export type { IndexStatus } from "./IndexStatus";
 export type { InjectionKind } from "./InjectionKind";
+export type { IntegratedCheck } from "./IntegratedCheck";
+export type { IntegratedCheckState } from "./IntegratedCheckState";
 export type { IpcError } from "./IpcError";
 export type { ItemStatus } from "./ItemStatus";
 export type { KeepAwake } from "./KeepAwake";

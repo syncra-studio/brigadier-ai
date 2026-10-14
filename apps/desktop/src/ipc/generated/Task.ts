@@ -96,7 +96,7 @@ candidate: Candidate | null,
  */
 gateLink: GateLink | null, 
 /**
- * Set while its work is being landed, or rebased and waiting for its quick self-check:
+ * Set while its work is being landed, or its merge worker was sent back to finish it:
  * its next report lands on its own (fast-forward only, never reviewed again). Older
  * tasks: the commit message it was accepted with.
  */
@@ -145,6 +145,11 @@ messages: Array<string>,
  * message from the orchestrator).
  */
 reworkRounds: number, 
+/**
+ * It looks at the integrated tree's own dev build, live, for the visible changes that
+ * landed: the one live check of the app, instead of one per worker (§11).
+ */
+liveLook?: boolean, 
 /**
  * What it took from and gave to the project's Brain (SESSION-FIXES-PLAN.md Q6.6).
  */

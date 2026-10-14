@@ -1,4 +1,4 @@
-import { ChevronRight, ShieldCheck } from "@openai/apps-sdk-ui/components/Icon";
+import { CheckCircle, ChevronRight, ExclamationMarkCircle, ShieldCheck } from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, useState } from "react";
 
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
@@ -7,6 +7,7 @@ import {
   type FindingRow,
   type ReviewRow,
   type ReviewSection,
+  useChecksLine,
   useReviewRow,
 } from "@/app/conversation/reviewStatus";
 import { SummaryRow, SummaryRowButton } from "@/components/assistant-ui/elements/summary-section";
@@ -22,6 +23,26 @@ import { cn } from "@/lib/utils";
 export function ReviewRows({ conversationId }: { conversationId: string }) {
   const row = useReviewRow(conversationId);
   return row && <ReviewSummaryRow row={row} />;
+}
+
+/**
+ * The session's full checks on its landed work, in one quiet row under the reviews: running,
+ * passed, or failed with the command that failed (SESSION-FIXES-PLAN.md §11). No setting, no
+ * card: they always run once, in the background.
+ */
+export function ChecksRow({ conversationId }: { conversationId: string }) {
+  const line = useChecksLine(conversationId);
+  if (!line) return null;
+  return (
+    <SummaryRow
+      data-slot="checks-line"
+      title={line.title}
+      icon={line.failed ? <ExclamationMarkCircle /> : <CheckCircle />}
+      muted={!line.failed}
+    >
+      {line.text}
+    </SummaryRow>
+  );
 }
 
 /**

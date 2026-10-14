@@ -36,7 +36,7 @@ import {
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
 import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
-import { ReviewRows } from "@/app/conversation/ReviewSummaryRow";
+import { ChecksRow, ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { ComputerAccessRow } from "@/app/conversation/ComputerAccessRow";
@@ -883,6 +883,7 @@ function SessionSummaryContent({
               </GitActions>
             )}
             <ReviewRows conversationId={conversation.id} />
+            <ChecksRow conversationId={conversation.id} />
             {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />

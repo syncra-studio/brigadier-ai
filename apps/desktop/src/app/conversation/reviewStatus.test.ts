@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { batchReviews, findingRows, reviewLines, reviewRow, reviewStatus } from "@/app/conversation/reviewStatus";
-import type { Finding, FindingStatus, OrchestratorStep, ReviewRun, ReviewState } from "@/ipc/generated";
+import { batchReviews, checksLine, findingRows, reviewLines, reviewRow, reviewStatus } from "@/app/conversation/reviewStatus";
+import type { Finding, FindingStatus, IntegratedCheck, IntegratedCheckState, OrchestratorStep, ReviewRun, ReviewState } from "@/ipc/generated";
 
 const review = (id: string, startedAtMs: number, state: ReviewState, kind: ReviewRun["kind"] = "code"): ReviewRun => ({
   id,
@@ -178,4 +178,46 @@ test("one batch alone keeps its own words in an unlabelled list", () => {
   });
   const now = review("1", 10, { type: "running" });
   assert.equal(reviewRow(reviewLines([], [now]))?.text, "Review running…");
+});
+
+const check = (id: string, state: IntegratedCheckState): IntegratedCheck => ({
+  id,
+  conversationId: "c1",
+  repo: "/repo",
+  branch: "work",
+  tip: "abcdef1234567890",
+  state,
+  dueAtMs: 0,
+  startedAtMs: null,
+  endedAtMs: null,
+  requests: [],
+  tasks: [],
+  rerun: false,
+});
+
+test("the checks line follows the newest run of the session's full checks", () => {
+  assert.equal(checksLine([]), null);
+  const passed = check("check-9", { type: "passed", commands: ["tools/full-checks.sh"] });
+  assert.deepEqual(checksLine([passed]), {
+    text: "Checks passed",
+    title: "tools/full-checks.sh at abcdef1234",
+    failed: false,
+  });
+  // Numbered, not ordered as strings: check-10 is newer than check-9.
+  const running = check("check-10", { type: "running", command: "tools/full-checks.sh" });
+  assert.equal(checksLine([running, passed])?.text, "Checks running…");
+  assert.equal(checksLine([passed, check("check-10", { type: "due" })])?.text, "Checks running…");
+  const failed = check("check-11", {
+    type: "failed",
+    command: "cargo test --workspace",
+    status: "exit 101",
+    output: "out-3",
+  });
+  assert.deepEqual(checksLine([passed, running, failed]), {
+    text: "Checks failed: cargo test --workspace",
+    title: "exit 101 at abcdef1234",
+    failed: true,
+  });
+  const cut = check("check-12", { type: "interrupted", reason: "a restart" });
+  assert.deepEqual(checksLine([failed, cut]), { text: "Checks couldn't run", title: "a restart", failed: true });
 });

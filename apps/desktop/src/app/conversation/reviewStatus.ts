@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 
-import type { Finding, OrchestratorStep, ReviewRun } from "@/ipc/generated";
+import type { Finding, IntegratedCheck, OrchestratorStep, ReviewRun } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 
 /**
@@ -207,4 +207,50 @@ export function useReviewRow(conversationId: string): ReviewRow | null {
     return JSON.stringify(reviewRow(reviewLines(board.orchestratorSteps, Object.values(board.reviews))));
   });
   return useMemo(() => (json ? (JSON.parse(json) as ReviewRow | null) : null), [json]);
+}
+
+/** The context card's line for the session's full checks on its landed work: running, passed or failed. */
+export type ChecksLine = {
+  text: string;
+  /** The line's hover text: what ran, or why it failed. */
+  title: string;
+  failed: boolean;
+};
+
+/** A check's number, from its id `check-<n>`. */
+const checkNumber = (check: IntegratedCheck) => Number(check.id.replace(/^check-/, "")) || 0;
+
+/**
+ * Where the session's newest run of its full checks stands (SESSION-FIXES-PLAN.md §11): they run
+ * once on everyone's landed work, in the background. Null before the first landing.
+ */
+export function checksLine(checks: readonly IntegratedCheck[]): ChecksLine | null {
+  const latest = checks.reduce<IntegratedCheck | null>(
+    (newest, check) => (newest && checkNumber(newest) >= checkNumber(check) ? newest : check),
+    null,
+  );
+  if (!latest) return null;
+  const at = latest.tip.slice(0, 10);
+  switch (latest.state.type) {
+    case "due":
+      return { text: "Checks running…", title: `Due at ${at}`, failed: false };
+    case "running":
+      return { text: "Checks running…", title: latest.state.command ?? `At ${at}`, failed: false };
+    case "passed":
+      return { text: "Checks passed", title: `${latest.state.commands.join(", ") || "Nothing to run"} at ${at}`, failed: false };
+    case "failed":
+      return { text: `Checks failed: ${latest.state.command}`, title: `${latest.state.status} at ${at}`, failed: true };
+    case "interrupted":
+      return { text: "Checks couldn't run", title: latest.state.reason, failed: true };
+  }
+}
+
+/** The checks line of the board's session. */
+export function useChecksLine(conversationId: string): ChecksLine | null {
+  const json = useBoard((s) => {
+    const board = s.board;
+    if (!board || board.conversationId !== conversationId) return null;
+    return JSON.stringify(checksLine(Object.values(board.integratedChecks)));
+  });
+  return useMemo(() => (json ? (JSON.parse(json) as ChecksLine | null) : null), [json]);
 }
