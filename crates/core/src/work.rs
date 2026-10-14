@@ -1593,6 +1593,11 @@ pub enum FindingStatus {
     Fixed {
         task: Option<String>,
         why: Option<String>,
+        /// How the thread checked the fix in the merged code (the lines it read at a commit,
+        /// a test it ran). None: it took the fix on a report's or its notes' word, and the
+        /// finding shows as unverified, never as clean.
+        #[serde(default)]
+        checked: Option<String>,
     },
     /// Still open: nobody fixed it (yet).
     Open { why: Option<String> },

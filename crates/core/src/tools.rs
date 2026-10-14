@@ -789,7 +789,8 @@ pub struct NoteForUser {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum FindingVerdict {
-    /// Fixed: name the task that fixed it in `task`, or leave it out for your own fix.
+    /// Fixed: name the task that fixed it in `task`, or leave it out for your own fix, and
+    /// say in `checked` how you checked it in the merged code.
     Fixed,
     /// Not fixed, and it still should be: it goes back to the worker, or to the user's list.
     Open,
@@ -807,6 +808,12 @@ pub struct FindingRecord {
     /// For a fixed one: the task that fixed it (`task-7`).
     #[serde(default)]
     pub task: Option<String>,
+    /// For a fixed one: how you checked the fix in the merged code, the session branch's tip
+    /// (the lines you read there, with the commit, or the test you ran and what it said). A
+    /// worker's report or your notes are no check: leave it out then, and the finding shows
+    /// as unverified.
+    #[serde(default)]
+    pub checked: Option<String>,
     /// Why, in your words, for the user: required to dismiss.
     #[serde(default)]
     pub why: Option<String>,
