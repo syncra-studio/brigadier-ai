@@ -157,7 +157,10 @@ const turn = () => all("[data-role=assistant]").at(-1) ?? null;
 const animating = () =>
   document.getAnimations().some((animation) => animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity);
 
-/** Waits `ms`, then until nothing animates (a shimmer's endless sweep aside) and the turn's text holds for 100ms of frames. */
+/**
+ * Waits `ms`, then until nothing animates (a shimmer's endless sweep aside), no reply waits for its
+ * renderer's code (its placeholder pulses on and says nothing) and the turn's text holds for 100ms of frames.
+ */
 async function settle(ms = 50): Promise<void> {
   await wait(ms);
   const until = performance.now() + 8000;
@@ -166,7 +169,7 @@ async function settle(ms = 50): Promise<void> {
   while (performance.now() < until) {
     await frame();
     const now = text(turn());
-    if (animating() || now !== last) stillSince = performance.now();
+    if (animating() || one("[data-slot=reply-loading]") || now !== last) stillSince = performance.now();
     else if (performance.now() - stillSince >= 100) return;
     last = now;
   }
