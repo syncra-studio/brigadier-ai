@@ -3,4 +3,10 @@
 /**
  * What became of a finding, as the thread recorded it.
  */
-export type FindingStatus = { "type": "new" } | { "type": "fixed", task: string | null, why: string | null, } | { "type": "open", why: string | null, } | { "type": "dismissed", why: string, };
+export type FindingStatus = { "type": "new" } | { "type": "fixed", task: string | null, why: string | null, 
+/**
+ * How the thread checked the fix in the merged code (the lines it read at a commit,
+ * a test it ran). None: it took the fix on a report's or its notes' word, and the
+ * finding shows as unverified, never as clean.
+ */
+checked: string | null, } | { "type": "open", why: string | null, } | { "type": "dismissed", why: string, };

@@ -36,7 +36,8 @@ const item = (id: string, status: FindingStatus): Finding =>
 const found = (id: string, startedAtMs: number, items: Finding[]): ReviewRun =>
   ({ ...review(id, startedAtMs, { type: "findings", count: items.length }), items });
 const open = (id: string) => item(id, { type: "open", why: null });
-const fixed = (id: string) => item(id, { type: "fixed", task: null, why: null });
+const fixed = (id: string) => item(id, { type: "fixed", task: null, why: null, checked: "its test passes at the tip" });
+const unchecked = (id: string) => item(id, { type: "fixed", task: "task-9", why: null, checked: null });
 const text = (lines: ReturnType<typeof reviewLines>) => ({ merged: lines.merged?.text ?? null, current: lines.current?.text ?? null });
 
 test("the review line says the review runs, then what the thread recorded, in plain words", () => {
@@ -55,7 +56,7 @@ test("the review line says the review runs, then what the thread recorded, in pl
 });
 
 test("two reviews, 3 + 2 findings, 4 fixed and 1 dismissed, read clean; one left open reads 1 open", () => {
-  const fixedIn = (id: string): Finding => item(id, { type: "fixed", task: "task-7", why: null });
+  const fixedIn = (id: string): Finding => item(id, { type: "fixed", task: "task-7", why: null, checked: "read at the tip" });
   const first = found("1", 1, [fixedIn("R1.1"), fixedIn("R1.2"), fixedIn("R1.3")]);
   const second = found("2", 2, [fixedIn("R2.1"), item("R2.2", { type: "dismissed", why: "by design" })]);
   assert.equal(reviewStatus([first, second]), "Review: clean");
@@ -70,17 +71,28 @@ test("two reviews, 3 + 2 findings, 4 fixed and 1 dismissed, read clean; one left
 
 test("a click lists each finding with what the thread recorded", () => {
   const rows = findingRows([found("1", 1, [
-    item("R1.1", { type: "fixed", task: "task-7", why: null }),
+    item("R1.1", { type: "fixed", task: "task-7", why: null, checked: "loader.rs:12 at the tip" }),
     item("R1.2", { type: "open", why: "needs the user" }),
     item("R1.3", { type: "dismissed", why: "the test covers it" }),
     item("R1.4", { type: "new" }),
+    item("R1.5", { type: "fixed", task: "task-8", why: null, checked: null }),
   ])]);
   assert.deepEqual(rows.map((row) => [row.id, row.severity, row.status, row.note, row.open]), [
-    ["R1.1", "P2", "Fixed", "Fixed in task-7", false],
+    ["R1.1", "P2", "Fixed", "Fixed in task-7. Checked: loader.rs:12 at the tip", false],
     ["R1.2", "P2", "Open", "needs the user", true],
     ["R1.3", "P2", "Dismissed", "the test covers it", false],
     ["R1.4", "P2", "New", null, false],
+    ["R1.5", "P2", "Unverified", "Fixed in task-8. Not checked against the merged code", false],
   ]);
+});
+
+test("a fix nobody checked in the merged code reads unverified, never clean", () => {
+  const batch = found("1", 10, [unchecked("R1.1"), unchecked("R1.2"), fixed("R1.3")]);
+  assert.equal(reviewStatus([batch]), "Review: 2 unverified");
+  assert.equal(reviewStatus([found("1", 10, [open("R1.1"), unchecked("R1.2")])]), "Review: 1 open · 1 unverified");
+  assert.deepEqual(text(reviewLines([merged(20)], [batch])), { merged: "Merged · 2 fixed, unverified", current: null });
+  const row = reviewRow(reviewLines([merged(20)], [batch, review("2", 30, { type: "clean" })]));
+  assert.equal(row?.text, "Merged: 2 unverified · Since the merge: clean");
 });
 
 test("after a merge, the line counts only that merge's open findings, never across merges", () => {

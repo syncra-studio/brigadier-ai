@@ -402,8 +402,8 @@ if (reviewsAt === "before" || reviewsAt === "after") {
     state: { type: "findings", count: items.length }, startedAtMs: at, endedAtMs: at + 60_000, findings: null, number: n, items,
   });
   reviews.rv1 = review(1, ago(900), [
-    { id: "R1.1", severity: "P1", title: "The theme flashes light before the first paint", location: "src/main.tsx:12", status: { type: "fixed", task: "task-4", why: null }, high: true },
-    { id: "R1.2", severity: "P2", title: "The switch has no accessible name", location: "src/app/settings/Appearance.tsx:88", status: { type: "fixed", task: "task-4", why: null }, high: false },
+    { id: "R1.1", severity: "P1", title: "The theme flashes light before the first paint", location: "src/main.tsx:12", status: { type: "fixed", task: "task-4", why: null, checked: "main.tsx:12 at the tip sets the theme before the first paint" }, high: true },
+    { id: "R1.2", severity: "P2", title: "The switch has no accessible name", location: "src/app/settings/Appearance.tsx:88", status: { type: "fixed", task: "task-4", why: null, checked: "Appearance.tsx:88 at the tip names the switch" }, high: false },
     { id: "R1.3", severity: "P3", title: "A test name says “colour”", location: "src/state/settings.test.ts:41", status: { type: "dismissed", why: "the project writes British English" }, high: false },
   ]);
   reviews.rv2 = review(2, ago(400), [
