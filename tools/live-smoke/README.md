@@ -45,9 +45,10 @@ project's `.smoke/` folder, so "answered" means an assistant message carries it.
    exactly one reply came and the wait took it (`taken`), the sender spent exactly one turn
    (`turn_usage`), its answer carries the reply; the receiver got it once and replied once; the
    reply carries its answer, and in b) leaves out the receiver's unrelated output.
-4. **Stop during a wait.** X runs its own user's `sleep 30`; C3 messages it and waits, and is
-   stopped while its wait runs. The request is stopped, its wait failed, the late reply arrives
-   once, after the Stop, and shows once, and no turn or request starts for it.
+4. **Stop during a wait.** C1 runs its own user's `sleep 45` (a Claude thread takes a message
+   steered into its turn only after its command, so its reply comes late); C3 messages it and
+   waits, and is stopped while its wait runs. The request is stopped, its wait failed, the late
+   reply arrives once, after the Stop, and shows once, and no turn or request starts for it.
 5. **Final answers.** Every request family (a request and those steered into it) that ended
    done ends on an assistant message that carries one of its codes: never a narration line,
    empty, or `[quiet]`. Stopped requests are checked in 4 instead.

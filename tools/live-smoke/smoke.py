@@ -473,15 +473,18 @@ class Smoke:
 
     def scenario_stop(self):
         sc = "4 stop during a wait"
-        to = self.convs["X"]
-        # The receiver is busy with its own user's command, so its reply comes late.
+        to = self.convs["C1"]
+        # The receiver is busy with its own user's command, so its reply comes late. A Claude thread takes a
+        # message steered into its turn only once its command returns; a Codex thread can answer it mid-command,
+        # at once, so a Codex receiver doesn't make the reply late.
         busy = code("W")
-        self.send("X", f"Run the shell command `sleep 30` and wait for it, then reply with the code {busy}.", codes=[busy])
-        if not check(sc, "the receiver is busy with a command", until(lambda: self.running_command("X", "sleep 30"), 60),
-                     "no running `sleep 30` step on X within 60 s"):
+        self.send("C1", f"Run exactly this shell command in the foreground and wait for it, then reply with the code {busy}: "
+                        f"`sleep 45`", codes=[busy])
+        if not check(sc, "the receiver is busy with a command", until(lambda: self.running_command("C1", "sleep 45"), 60),
+                     "no running `sleep 45` step on C1 within 60 s"):
             return
         late = code("R")
-        _, rid = self.send("C3", f"Find the session titled \"Smoke X\" with list_sessions and use message_session to send it "
+        _, rid = self.send("C3", f"Find the session titled \"Smoke C1\" with list_sessions and use message_session to send it "
                                  f"this message: \"Reply with the code {late}.\" Then call wait_for_replies, and tell me "
                                  f"the reply you got.")
         waiting = until(lambda: next((s for s in tool_steps(self.view("C3"), "wait_for_replies")
@@ -517,7 +520,7 @@ class Smoke:
             check(sc, "no turn starts for it", n == 0 and not after, f"{n} turns metered, {len(after)} answers after it")
         new = [r for r in v["requests"] if r["startedAtMs"] > stopped_at]
         check(sc, "no request starts after the Stop", not new, f"{len(new)} new")
-        until(lambda: self.idle("X"), 60)
+        until(lambda: self.idle("C1"), 60)
 
     # -- scenario 5: every finished request ends on a real answer --
 
