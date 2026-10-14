@@ -208,7 +208,9 @@ async fn a_prefix_that_changes_nothing_still_answers_from_the_cache() {
                 check("echo checked".into()).await;
                 check(format!("ulimit -Sn {}; echo checked", limits.soft)).await;
                 check(format!("TMPDIR={tmpdir} echo checked")).await;
-                check("ulimit -n 8192; echo checked".into()).await;
+                // Lower than the limits it inherits (8192 at least), whatever they are: a shell
+                // started with both at 8192 would make `ulimit -n 8192` change nothing.
+                check("ulimit -n 4096; echo checked".into()).await;
                 check("TMPDIR=/tmp/elsewhere echo checked".into()).await;
                 let reply = turn
                     .call("submit_report", json!({"summary": "Checked."}))
