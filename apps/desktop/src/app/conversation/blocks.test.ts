@@ -7,6 +7,7 @@ import { settledSession } from "@/fixtures/settledSession";
 import {
   anchorMessage,
   answerIndex,
+  answeringIndex,
   type Block,
   blockFinished,
   type BoardDigest,
@@ -20,6 +21,7 @@ import {
   judgementCall,
   peerOf,
   shownBranch,
+  type SequenceEntry,
   type ThreadNode,
   updateIndices,
 } from "@/app/conversation/blocks";
@@ -784,4 +786,18 @@ test("an answer Brigadier sent back to the sessions that asked carries their rep
   // The block's sequence keeps them on its text.
   const entries = blockSequence({ texts: turn!.texts, cards: [], steers: [], compactions: [], orchestratorSteps: [], rows: [] });
   assert.deepEqual(entries.map((entry) => entry.kind === "text" && entry.anchors), [["auto1", "auto2"]]);
+});
+
+const text = (index: number, position: number): SequenceEntry => ({ kind: "text", index, position });
+
+test("a block still at work answers with the reply its CLI called the final answer, only while that is its newest entry", () => {
+  const thinking = { kind: "thinking", segment: {} as never, live: true, position: 9 } as SequenceEntry;
+  const texts = [{}, { answerAtMs: 50 }];
+  assert.equal(answeringIndex(texts, [text(0, 1), text(1, 3)]), 1);
+  // A thought after it doesn't take it back.
+  assert.equal(answeringIndex(texts, [text(0, 1), text(1, 3), thinking]), 1);
+  // A line between steps, or the answer with work after it, is not the answer yet.
+  assert.equal(answeringIndex(texts, [text(1, 3), text(0, 4)]), null);
+  assert.equal(answeringIndex(texts, [text(1, 3), { kind: "steer", position: 4, text: "more", atMs: 0, attachments: [] } as SequenceEntry]), null);
+  assert.equal(answeringIndex([{}], [text(0, 1)]), null);
 });

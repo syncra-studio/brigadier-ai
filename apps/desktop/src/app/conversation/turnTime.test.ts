@@ -137,3 +137,11 @@ test("a joined turn waits for quota only while every waiting part does", () => {
   const [quota] = buildBlocks(messages, {}, false, { ...empty, requests: { first, steer: { ...steer, quotaWait: true, worked: [span(50, null)] } } }, []);
   assert.equal(quota?.quotaWait, true);
 });
+
+test("a turn's time stops where its final answer started, whatever ran or waited after", () => {
+  const meta = { state: "waiting" as const, quotaWait: false, cardWait: false, endedAtMs: null };
+  assert.equal(turnTime({ ...meta, worked: [span(0, null)] }, 9_000, 4_000), 4_000);
+  assert.equal(turnTime({ ...meta, worked: [span(0, 2_000), span(3_000, 8_000), span(5_000, null)] }, 9_000, 4_000), 3_000);
+  // Work that began after the answer started doesn't count.
+  assert.equal(turnTime({ ...meta, state: "done", worked: [span(0, 1_000), span(6_000, 7_000)] }, 9_000, 4_000), 1_000);
+});
