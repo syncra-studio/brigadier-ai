@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use brigadier_providers::ProviderKind;
 
-use super::peer_kit::{Peers, Sent, message_id, only, send};
+use super::peer_kit::{Peers, Sent, is_reply, message_id, only, send};
 use super::{FakeBehavior, Flow, Options, Reply};
 use crate::board::PeerRecord;
 use crate::model::PeerState;
@@ -71,8 +71,8 @@ async fn a_forwarded_message_keeps_its_chain_and_counts_hops() {
 }
 
 /// Two sessions that answer each other forever: eight messages go, the ninth is refused in
-/// the plan's words, and nothing more is sent. The user's next message starts a new chain,
-/// whose first message goes again.
+/// the plan's words, and nothing more is sent but the reply carrying the refused turn's answer.
+/// The user's next message starts a new chain, whose first message goes again.
 #[tokio::test]
 async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() {
     let peers = Peers::new();
@@ -97,6 +97,10 @@ async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() 
         peers.on(&from, move |turn| {
             let (all, to) = (all.clone(), to.clone());
             async move {
+                // A reply only informs: the turn it starts sends nothing.
+                if is_reply(&turn.input) {
+                    return Reply::text("Noted.");
+                }
                 let reply = send(&turn, &to, "What do you think?", None).await;
                 all.lock().unwrap().push(reply);
                 Reply::text("Asked.")
@@ -122,17 +126,28 @@ async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() 
             true
         )
     );
-    let mut hops: Vec<u32> = flow
-        .board()
-        .await
+    let (board, at_api) = (flow.board().await, flow.board_of(&api).await);
+    let sent: Vec<_> = board
         .peer_messages
         .values()
-        .chain(flow.board_of(&api).await.peer_messages.values())
+        .chain(at_api.peer_messages.values())
         .filter(|record| record.outgoing)
+        .collect();
+    let mut hops: Vec<u32> = sent
+        .iter()
+        .filter(|record| record.reply_to.is_none())
         .map(|record| record.hop)
         .collect();
     hops.sort_unstable();
     assert_eq!(hops, (1..=8).collect::<Vec<_>>());
+    // The turn whose send was refused still answers the eighth message: Brigadier's reply,
+    // exempt from the hop rule, and a reply starts no reply of its own.
+    assert!(
+        sent.iter()
+            .filter(|record| record.reply_to.is_some())
+            .all(|record| record.automatic && record.hop == 9),
+        "{sent:#?}"
+    );
     // The user's word: a new chain, at hop 1 again.
     flow.say("One more question for them.").await;
     flow.until("the new chain's first message", |_| {
