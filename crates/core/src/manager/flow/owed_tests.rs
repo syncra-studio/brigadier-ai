@@ -418,14 +418,21 @@ async fn a_quiet_late_turn_keeps_an_answered_request_done_while_its_review_runs(
     )
     .await;
     flow.say("Add notes.").await;
+    // The request settles just after the run goes idle: its answer is seen once it has.
     let board = flow
-        .until("the review running, the thread idle", |board| {
-            board.run == RunState::Idle
-                && board
-                    .reviews
-                    .values()
-                    .any(|review| review.state == ReviewState::Running)
-        })
+        .until(
+            "the review running, the thread idle, the request answered",
+            |board| {
+                board.run == RunState::Idle
+                    && board
+                        .reviews
+                        .values()
+                        .any(|review| review.state == ReviewState::Running)
+                    && board
+                        .latest_request()
+                        .is_some_and(|request| request.state == RequestState::Done)
+            },
+        )
         .await;
     let request = board.latest_request().unwrap().id.clone();
     assert_eq!(stays(&flow, &request).await, RequestState::Done, "answered");
