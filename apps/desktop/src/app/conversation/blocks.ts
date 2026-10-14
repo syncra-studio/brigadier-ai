@@ -939,7 +939,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
 export type SequenceSource = {
   texts: readonly { position: number; anchors?: readonly string[]; answerAtMs?: number }[];
   cards: readonly BlockCard[];
-  steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; peer?: PeerOf }[];
+  steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; requestId?: string; peer?: PeerOf }[];
   compactions: readonly BlockCompaction[];
   orchestratorSteps: readonly BlockOrchestratorStep[];
   thinking?: readonly ThinkingSegment[];
@@ -952,7 +952,7 @@ export type SequenceEntry =
   | { kind: "thinking"; segment: ThinkingSegment; live: boolean; position: number }
   | { kind: "text"; index: number; position: number; anchors?: readonly string[] }
   | { kind: "card"; card: BlockCard; position: number }
-  | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number; peer?: PeerOf }
+  | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number; requestId?: string; peer?: PeerOf }
   | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
   | { kind: "compaction"; compaction: BlockCompaction; position: number }
   | { kind: "row"; row: BlockRow; position: number };

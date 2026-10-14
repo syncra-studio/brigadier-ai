@@ -148,6 +148,7 @@ export type { GateRole } from "./GateRole";
 export type { GitState } from "./GitState";
 export type { GitStyle } from "./GitStyle";
 export type { Heat } from "./Heat";
+export type { HeldBy } from "./HeldBy";
 export type { HistoryFilter } from "./HistoryFilter";
 export type { HookOutput } from "./HookOutput";
 export type { ImportFailure } from "./ImportFailure";

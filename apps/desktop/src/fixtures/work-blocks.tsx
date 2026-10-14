@@ -313,6 +313,12 @@ async function driveSteer(): Promise<object> {
   steps([tool("sleep", 1.1, "shell", "sleep 30", "inProgress")]);
   await settle();
   const before = seen();
+  // A follow-up sent meanwhile waits behind the command rather than deciding on and on.
+  const held = { command: "sleep 30", sinceMs: Date.now() - 2 * 60_000 };
+  change(() => ({ queue: { items: [{ ...queued, deciding: true, heldBy: held }], paused: false } }));
+  await settle();
+  const deciding = { note: text(one("[data-slot=message-queue-item] [data-slot=held-note]")), shimmer: text(one("[data-slot=message-queue-item] .shimmer")) };
+  change(() => ({ queue: { items: [], paused: false } }));
   // The user steers a message in while the command runs.
   const steered = user("r2", 2, "Use banker's rounding instead", Date.now());
   daemon.messages = [...daemon.messages, steered];
@@ -320,8 +326,19 @@ async function driveSteer(): Promise<object> {
   useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
   change((board) => ({ requests: { ...board.requests, r2: daemon.requests.r2! }, head: "r2" }));
   await settle();
+  const after = seen();
+  const bubble = text(one("[data-slot=request-steer]"));
+  // Not read yet: the thread is inside the command.
+  request("r2", { heldBy: held });
+  await settle();
+  const steerHeld = text(one("[data-slot=request-steer] [data-slot=held-note]"));
   await hold("steer");
-  return { before, after: seen(), bubble: text(one("[data-slot=request-steer]")) };
+  // The command ended: the thread reads it, the note goes.
+  const { heldBy: _read, ...read } = daemon.requests.r2!;
+  daemon.requests.r2 = read;
+  change((board) => ({ requests: { ...board.requests, r2: read } }));
+  await settle();
+  return { before, after, bubble, deciding, steerHeld, steerRead: text(one("[data-slot=request-steer] [data-slot=held-note]")) };
 }
 
 async function driveQueue(): Promise<object> {

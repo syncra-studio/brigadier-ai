@@ -642,6 +642,7 @@ mod tests {
             quota_wait: false,
             waiting_for: Vec::new(),
             from_peer: None,
+            held_by: None,
         }
     }
 

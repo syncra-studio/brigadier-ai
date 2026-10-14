@@ -62,12 +62,19 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
 });
 
 test("a message steered in while a command runs sums the work above it up at once", { timeout: 120000 }, async (t) => {
-  const seen = await drive<{ before: Seen; after: Seen; bubble: string | null }>(t, "drive=steer");
+  const seen = await drive<{
+    before: Seen; after: Seen; bubble: string | null; deciding: { note: string | null; shimmer: string | null };
+    steerHeld: string | null; steerRead: string | null;
+  }>(t, "drive=steer");
   assert.deepEqual([seen.before.newest, seen.before.newestShimmers], ["Running sleep 30", true]);
   assert.deepEqual([seen.after.groupRow, seen.after.shimmer], ["Ran a command", false]);
   // The live line moves under the bubble, though the command still runs.
   assert.deepEqual([seen.after.status, seen.after.statusInWork], ["Thinking", true]);
   assert.match(seen.bubble ?? "", /^Use banker's rounding instead/);
+  // Behind the thread's command, a follow-up and a steered message say when they are read, not "Deciding".
+  assert.deepEqual(seen.deciding, { note: "Read when the current command ends · running 2m", shimmer: null });
+  assert.equal(seen.steerHeld, "Read when the current command ends · running 2m");
+  assert.equal(seen.steerRead, null);
 });
 
 test("a queued message's ⋯ opens it in a side chat in a session, and turns queueing off", { timeout: 120000 }, async (t) => {

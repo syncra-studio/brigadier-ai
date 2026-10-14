@@ -9,7 +9,10 @@
 //!   a card) is a follow-up: it waits in the queue, marked deciding, while the orchestrator
 //!   judges it with `route_follow_up`. One that belongs to that answer joins it (steered in,
 //!   shown inside its block); one of its own waits until no answer works, then goes as its
-//!   own request. A follow-up the orchestrator didn't judge waits too.
+//!   own request. A follow-up the orchestrator didn't judge by the end of its turn waits too;
+//!   one still unjudged after [`DECIDING_WAIT`] (the thread is inside a long command) joins
+//!   the working answer. A message steered in while a command of the thread's runs says so
+//!   (`held_by`) until that command ends and the thread can read it.
 //! - Worker results arrive as [`Envelope`]s in the inbox. Only final reports, blocking
 //!   questions, card outcomes and task failures ever enter the orchestrator's context;
 //!   worker progress never does. An envelope arriving while the orchestrator is idle starts
@@ -53,9 +56,9 @@ use crate::runtime::{is_delta, merge_delta};
 use crate::sessions::{inline_image_tokens, push_block};
 use crate::tools::{Role, RunTools};
 use crate::work::{
-    AttachmentRef, Compaction, CompactionState, ContextInjection, InjectionKind, OrchestratorEntry,
-    OrchestratorStepKind, QuestionKind, QueuedMessage, QuotaWait, RequestState, RunState, Task,
-    TaskId,
+    AttachmentRef, Compaction, CompactionState, ContextInjection, HeldBy, InjectionKind,
+    OrchestratorEntry, OrchestratorStepKind, QuestionKind, QueuedMessage, QuotaWait, RequestState,
+    RunState, Task, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -65,6 +68,10 @@ const DELTA_WINDOW: Duration = Duration::from_millis(30);
 /// How long a request its thread's CLI jobs kept working waits, once they ended, for the turn
 /// the CLI starts on its own to speak of them.
 const JOB_TURN_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 30 });
+
+/// How long a follow-up waits for the thread's judgment before it joins the working answer:
+/// a thread inside a long command can't judge it, and the user shouldn't watch it decide.
+pub(crate) const DECIDING_WAIT: Duration = Duration::from_secs(if cfg!(test) { 3 } else { 20 });
 
 /// Characters of a CLI job's output its message to the thread carries (the end of it).
 const JOB_OUTPUT_TAIL: usize = 4000;
@@ -288,6 +295,16 @@ struct ConvState {
     /// Queued follow-ups the running turn was asked about: the ones it leaves undecided wait
     /// in the queue when it ends.
     asked: Vec<String>,
+    /// Follow-ups that joined the working answer unjudged after [`DECIDING_WAIT`]: the
+    /// thread's late judgment of one is answered so.
+    joined_unjudged: Vec<String>,
+    /// The thread's commands running now (shell, `run`, `run_check`, a Codex shell item), by
+    /// item, oldest first: what a message sent into the turn waits behind.
+    holding: Vec<(String, HeldBy)>,
+    /// The steered requests and queued follow-ups marked as waiting behind them, unmarked when
+    /// the last ends.
+    held_requests: Vec<String>,
+    held_items: Vec<String>,
     /// Replies that were streaming when a message was steered in, and the request they
     /// answer (the one before the steer).
     replying_for: HashMap<String, String>,
@@ -363,6 +380,18 @@ impl ConvState {
     fn carry_peers(&mut self) {
         let peers = std::mem::take(&mut self.in_turn_peers);
         self.inbox.splice(0..0, peers);
+    }
+
+    /// The requests and follow-ups marked as waiting behind a command, unless none are.
+    fn take_held(&mut self) -> Option<(Vec<String>, Vec<String>)> {
+        let requests = std::mem::take(&mut self.held_requests);
+        let items = std::mem::take(&mut self.held_items);
+        (!requests.is_empty() || !items.is_empty()).then_some((requests, items))
+    }
+
+    /// The thread's oldest command running now, which a message sent in waits behind.
+    fn held_by(&self) -> Option<HeldBy> {
+        self.holding.first().map(|(_, held)| held.clone())
     }
 
     /// Whether the CLI's own jobs still run past their turn, or one that ended still owes its
@@ -564,6 +593,32 @@ impl ConvLive {
     /// Whether its CLI's own jobs still run past their turn (see `ConvState::jobs_request`).
     pub(crate) async fn has_cli_jobs(&self) -> bool {
         self.state.lock().await.has_cli_jobs()
+    }
+
+    /// Tracks the thread's command `item` (`words`) by its `status` as what messages sent into
+    /// the turn wait behind; once none runs, returns the requests and queued follow-ups marked
+    /// as waiting, to unmark.
+    async fn holding_command(
+        &self,
+        item: &str,
+        words: &str,
+        status: ItemStatus,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        let mut state = self.state.lock().await;
+        if status == ItemStatus::InProgress {
+            if !state.holding.iter().any(|(of, _)| of == item) {
+                state.holding.push((
+                    item.to_owned(),
+                    HeldBy {
+                        command: words.chars().take(240).collect(),
+                        since_ms: now_ms(),
+                    },
+                ));
+            }
+            return None;
+        }
+        state.holding.retain(|(of, _)| of != item);
+        state.holding.is_empty().then(|| state.take_held())?
     }
 
     /// Tracks the thread's command `item` by its `status` (see `ConvState::commands`).
@@ -1135,6 +1190,13 @@ impl SessionManager {
             }
             _ => false,
         };
+        // A command of the thread's running now holds it: it reads the message once that ends.
+        let held = steered.then(|| state.held_by()).flatten();
+        if held.is_some()
+            && let Some(request) = &message.request_id
+        {
+            state.held_requests.push(request.clone());
+        }
         let into = if steered {
             self.log_user_injection(conv, &message).await;
             // The user wrote again: whatever was asked of them is answered or moot.
@@ -1152,9 +1214,53 @@ impl SessionManager {
         drop(state);
         self.note_steered(conv, message.request_id.as_deref(), into)
             .await;
+        if let (Some(held), Some(request)) = (held, &message.request_id) {
+            self.mark_held(conv, std::slice::from_ref(request), &[], Some(held))
+                .await;
+        }
         self.settle_requests(&conv.id).await;
         if !steered {
             self.kick(conv);
+        }
+    }
+
+    /// Marks steered requests and queued follow-ups as waiting behind the thread's command
+    /// `held`, or (`None`) as read now.
+    async fn mark_held(
+        &self,
+        conv: &ConvLive,
+        requests: &[String],
+        items: &[String],
+        held: Option<HeldBy>,
+    ) {
+        if let Err(err) = self.core.mark_held(&conv.id, requests, items, held).await {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not mark messages held by a command"; conversation = %conv.id, error = %err);
+        }
+    }
+
+    /// The thread's command `item` (`words`) started or ended: once none runs, the messages
+    /// that waited behind them are read.
+    async fn command_holds(
+        &self,
+        conv: &Arc<ConvLive>,
+        item: &str,
+        words: &str,
+        status: ItemStatus,
+    ) {
+        if let Some((requests, items)) = conv.holding_command(item, words, status).await {
+            self.mark_held(conv, &requests, &items, None).await;
+        }
+    }
+
+    /// The turn ended: no command of it holds a message any more.
+    async fn release_held(&self, conv: &Arc<ConvLive>) {
+        let held = {
+            let mut state = conv.state.lock().await;
+            state.holding.clear();
+            state.take_held()
+        };
+        if let Some((requests, items)) = held {
+            self.mark_held(conv, &requests, &items, None).await;
         }
     }
 
@@ -1195,9 +1301,18 @@ impl SessionManager {
                 .is_ok(),
             _ => false,
         };
+        self.judge_within(conv, &item.id);
         if steered {
             state.asked.push(item.id.clone());
+            let held = state.held_by();
+            if held.is_some() {
+                state.held_items.push(item.id.clone());
+            }
             drop(state);
+            if held.is_some() {
+                self.mark_held(conv, &[], std::slice::from_ref(&item.id), held)
+                    .await;
+            }
             self.log_injection(
                 &conv.id,
                 InjectionKind::FollowUp,
@@ -1232,6 +1347,15 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             state.asked.retain(|asked| asked != item_id);
             state.asking.retain(|(asking, _)| asking != item_id);
+            if state.joined_unjudged.iter().any(|joined| joined == item_id) {
+                state.joined_unjudged.retain(|joined| joined != item_id);
+                return Ok(
+                    "It already joined this work after waiting to be judged and reaches you as \
+                     the user's message: act on it and answer it in the final answer with the \
+                     rest."
+                        .into(),
+                );
+            }
         }
         let queued = self
             .core
@@ -1269,6 +1393,58 @@ impl SessionManager {
              worker gets it with message_worker) and answer it in the final answer with the rest."
                 .into(),
         )
+    }
+
+    /// Gives the thread [`DECIDING_WAIT`] to judge follow-up `item_id`; one still unjudged
+    /// then joins the working answer, the thread reading it as soon as it can (a command it
+    /// runs ends), so the user never watches it decide for minutes.
+    fn judge_within(&self, conv: &Arc<ConvLive>, item_id: &str) {
+        let (manager, conv, item_id) = (self.arc(), conv.clone(), item_id.to_owned());
+        self.spawn(async move {
+            tokio::time::sleep(DECIDING_WAIT).await;
+            manager.join_unjudged(&conv, &item_id).await;
+        });
+    }
+
+    async fn join_unjudged(&self, conv: &Arc<ConvLive>, item_id: &str) {
+        {
+            let mut state = conv.state.lock().await;
+            let unjudged = state.asked.iter().any(|asked| asked == item_id)
+                || state.asking.iter().any(|(asking, _)| asking == item_id);
+            if !unjudged {
+                return;
+            }
+            state.asked.retain(|asked| asked != item_id);
+            state.asking.retain(|(asking, _)| asking != item_id);
+            state.joined_unjudged.push(item_id.to_owned());
+            state.held_items.retain(|held| held != item_id);
+        }
+        let id = &conv.id;
+        let deciding = self.core.board(id).await.is_ok_and(|board| {
+            board
+                .queue
+                .items
+                .iter()
+                .any(|item| item.id == item_id && item.deciding)
+        });
+        if !deciding {
+            return;
+        }
+        let working = self.working_request(id).await;
+        let message = conv
+            .user_write(async {
+                let item = self.core.take_queued(id, item_id).await?;
+                self.core
+                    .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
+                    .await
+            })
+            .await;
+        match message {
+            Ok(message) => self.join_working(conv, message, working).await,
+            Err(err) => {
+                crate::logging::private_trace!(conv.private_logs, warn, "could not join an unjudged follow-up"; conversation = %id, error = %err);
+            }
+        }
     }
 
     /// Sends a session's next queued message once no answer works (one that only waits on the
@@ -3703,6 +3879,14 @@ impl SessionManager {
                 if shell {
                     conv.running_command(item_id, *status).await;
                 }
+                if shell || name == "run_check" {
+                    let words = input
+                        .as_deref()
+                        .and_then(|input| serde_json::from_str::<serde_json::Value>(input).ok())
+                        .and_then(|args| args.get("command")?.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| name.to_owned());
+                    self.command_holds(conv, item_id, &words, *status).await;
+                }
                 let ended_at_ms = (*status != ItemStatus::InProgress).then(now_ms);
                 // A shell tool's result names its exit status on its first line.
                 let exit = output
@@ -3762,6 +3946,13 @@ impl SessionManager {
                 if *status == ItemStatus::InProgress {
                     conv.went_on_working().await;
                 }
+                self.command_holds(
+                    conv,
+                    item_id,
+                    &brigadier_providers::policy::unwrapped_command(command),
+                    *status,
+                )
+                .await;
                 self.command_seen(
                     conv,
                     item_id,
@@ -4170,6 +4361,7 @@ impl SessionManager {
         }
         // Replies the turn held for its waits and didn't take go by ordinary delivery.
         self.return_held_replies(conv).await;
+        self.release_held(conv).await;
         // Follow-ups the turn left undecided wait in the queue for their own turn.
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);

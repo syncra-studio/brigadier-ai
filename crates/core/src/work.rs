@@ -1589,6 +1589,21 @@ pub struct QueuedMessage {
     /// belongs to that answer (it joins it) or is a request of its own (it waits here).
     #[serde(default)]
     pub deciding: bool,
+    /// The thread's command it waits behind while being judged: the thread reads it once
+    /// that command ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub held_by: Option<HeldBy>,
+}
+
+/// The thread's command that a message sent into its running turn waits behind: the thread
+/// can't read it before the command ends, so the app says when it will be read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldBy {
+    /// The command's own words.
+    pub command: String,
+    pub since_ms: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -2146,6 +2161,11 @@ pub struct UserRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub from_peer: Option<ConversationId>,
+    /// Steered into a turn while the thread's command runs: the thread reads it once that
+    /// command ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub held_by: Option<HeldBy>,
 }
 
 /// A stretch of time a request worked.

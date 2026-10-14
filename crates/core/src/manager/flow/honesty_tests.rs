@@ -287,3 +287,182 @@ async fn a_message_left_unanswered_amid_other_work_says_so() {
     assert!(!replies[0].contains("U990085"), "{}", replies[0]);
     flow.stop().await;
 }
+
+/// The thread's `Bash` of `command`, started or ended.
+fn bash(command: &str, status: ItemStatus) -> ProviderEvent {
+    ProviderEvent::ToolCall {
+        item_id: "bash-1".into(),
+        name: "Bash".into(),
+        input: Some(json!({ "command": command }).to_string()),
+        status,
+        output: (status != ItemStatus::InProgress).then(|| "ok".into()),
+    }
+}
+
+/// The 33fbb16e "deciding" case: a follow-up sent while the thread is inside a long command
+/// says it waits behind it, and with no judgment after the wait it joins the working answer
+/// rather than deciding for minutes; the thread reads it once the command ends, and its late
+/// judgment hears it already joined.
+#[tokio::test]
+async fn a_follow_up_behind_a_long_command_joins_the_working_answer_unjudged() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let (inputs, item): (Log, Arc<Mutex<Option<String>>>) = Default::default();
+    let (release, log, judged) = (gate.clone(), inputs.clone(), item.clone());
+    let flow = Flow::start(
+        "honesty-deciding",
+        Options::default(),
+        script(move |turn| {
+            let (gate, log, item) = (gate.clone(), log.clone(), item.clone());
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                turn.emit(bash("cargo test --workspace", ItemStatus::InProgress))
+                    .await;
+                // Asked to judge the follow-up, then handed the user's message unjudged.
+                for _ in 0..2 {
+                    let steered = turn.steered().await.unwrap_or_default();
+                    log.lock().unwrap().push(steered);
+                }
+                gate.notified().await;
+                turn.emit(bash("cargo test --workspace", ItemStatus::Completed))
+                    .await;
+                let id = item.lock().unwrap().clone().unwrap();
+                let late = turn
+                    .call(
+                        "route_follow_up",
+                        json!({ "follow_up": id, "joins": false }),
+                    )
+                    .await;
+                log.lock().unwrap().push(late.text);
+                Reply::text("The tests pass, and the formatting is clean too.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Run the tests.").await;
+    flow.until("the command to run", |board| {
+        board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { status, .. } if *status == ItemStatus::InProgress)
+        })
+    })
+    .await;
+    flow.say("Also check the formatting.").await;
+    let board = flow
+        .until("the follow-up to say what it waits behind", |board| {
+            board.queue.items.first().is_some_and(|queued| {
+                queued.deciding
+                    && queued
+                        .held_by
+                        .as_ref()
+                        .is_some_and(|held| held.command == "cargo test --workspace")
+            })
+        })
+        .await;
+    *judged.lock().unwrap() = Some(board.queue.items[0].id.clone());
+    let board = flow
+        .until(
+            "the unjudged follow-up to join the working answer",
+            |board| {
+                board.queue.items.is_empty()
+                    && board.requests.values().any(|request| {
+                        request.steered_into.is_some()
+                            && request
+                                .held_by
+                                .as_ref()
+                                .is_some_and(|held| held.command == "cargo test --workspace")
+                    })
+            },
+        )
+        .await;
+    assert_eq!(board.requests.len(), 2, "{:?}", board.requests);
+    release.notify_one();
+    let board = flow.settled().await;
+    assert!(
+        board
+            .requests
+            .values()
+            .all(|request| request.held_by.is_none() && request.state == RequestState::Done),
+        "{:?}",
+        board.requests
+    );
+    let inputs = inputs.lock().unwrap().clone();
+    assert!(
+        inputs[2].contains("Also check the formatting."),
+        "the user's message joined: {inputs:#?}"
+    );
+    assert!(
+        inputs[3].starts_with("It already joined this work"),
+        "{inputs:#?}"
+    );
+    flow.stop().await;
+}
+
+/// A message the user steers in while the thread's command runs says so until the command
+/// ends, then the thread reads it.
+#[tokio::test]
+async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let inputs: Log = Default::default();
+    let (release, log) = (gate.clone(), inputs.clone());
+    let flow = Flow::start(
+        "honesty-steer-held",
+        Options::default(),
+        script(move |turn| {
+            let (gate, log) = (gate.clone(), log.clone());
+            async move {
+                turn.emit(bash("sleep 300", ItemStatus::InProgress)).await;
+                gate.notified().await;
+                turn.emit(bash("sleep 300", ItemStatus::Completed)).await;
+                let steered = turn.steered().await.unwrap_or_default();
+                log.lock().unwrap().push(steered);
+                Reply::text("Stopped waiting; using banker's rounding.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Wait five minutes.").await;
+    flow.until("the command to run", |board| {
+        board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { status, .. } if *status == ItemStatus::InProgress)
+        })
+    })
+    .await;
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "Use banker's rounding instead.".into(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+    flow.until("the steered message to wait behind the command", |board| {
+        board.requests.values().any(|request| {
+            request.steered_into.is_some()
+                && request
+                    .held_by
+                    .as_ref()
+                    .is_some_and(|held| held.command == "sleep 300")
+        })
+    })
+    .await;
+    release.notify_one();
+    flow.until("the command's end to let the thread read it", |board| {
+        board.requests.len() == 2
+            && board
+                .requests
+                .values()
+                .all(|request| request.held_by.is_none())
+    })
+    .await;
+    flow.settled().await;
+    let inputs = inputs.lock().unwrap().clone();
+    assert!(
+        inputs
+            .iter()
+            .any(|input| input.contains("Use banker's rounding instead.")),
+        "{inputs:#?}"
+    );
+    flow.stop().await;
+}
