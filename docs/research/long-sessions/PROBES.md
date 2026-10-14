@@ -45,3 +45,26 @@ B1, a fresh session in the same folder with the same flags made within the hour,
 the cache and wrote 0. This is the same result §7 recorded on 2.1.285, so it still holds on 2.1.299.
 
 Cost of all probes: about 8 small calls and one 112k-token write (the JSON reported $1.00 at API prices for C1).
+
+## P4. Codex: effort change on resume (codex-cli 0.162.1, gpt-6.1-sol, `codex exec --json`, `exec resume`)
+
+`codex exec resume` reports the thread's running totals, so each row is the difference from the row before. Every
+turn adds about 24.8k input (the whole thread re-sent).
+
+| Turn | effort | input added | cached of it |
+|---|---|---|---|
+| c1 fresh | medium | 22,809 | 13,184 |
+| c2 | medium | 24,794 | 22,656 |
+| c3 | **low** | 24,812 | 13,184 |
+| c4 | low | 24,830 | 13,184 |
+| c5 | low | 24,848 | 24,576 |
+| c6 | **medium** | 24,866 | 24,576 |
+| c7 | medium | 24,884 | 13,184 |
+
+**Result: inconclusive.** Hits swing between the 13.2k shared start and the whole thread from turn to turn, with or
+without an effort change: c6 switched back to medium and hit fully, and c7 at an unchanged effort missed. Codex's
+cache acts best-effort, as the vendor docs describe it (routing by prefix, no guarantee). An effort effect can't be
+read from 7 turns. Two things follow:
+- Codex usage comparisons need many turns per arm: one session's cache luck can move uncached input by about 45% per turn.
+- The effort question needs a probe of n ≥ 10 alternating turns per condition over the app-server, the path
+  Brigadier uses.
