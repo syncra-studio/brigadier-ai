@@ -263,6 +263,12 @@ async function driveTurn(): Promise<object> {
   change(() => ({ streaming: { messageId: "a1", text: answerText, requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
   await settle();
   out.answeringLater = seen();
+  // A question for the user while it streams: that wins over the wait for the other session.
+  change(() => ({ questions: { ask: question } }));
+  await settle();
+  out.answeringAsked = seen();
+  change(() => ({ questions: {} }));
+  await settle();
   await hold("answering");
   // Stored, the request still running: folded, the same time.
   const stored: Message = {

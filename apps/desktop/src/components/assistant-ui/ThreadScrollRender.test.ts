@@ -170,6 +170,9 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     ["sent", null, "Sending message to A long session"],
     ["waiting", null, "Waiting for A long session to reply"],
     ["waited", "Thinking", "Sent message to A long session, waited; no reply yet"],
+    ["again", null, "Sending message to A long session"],
+    // A retry stalling the turn still says so.
+    ["retrying", "Reconnecting", "Sending message to A long session"],
   ]);
   assert.equal(seen.peerExchange.tops.length, 1, `the user's message moved: ${seen.peerExchange.tops.join(", ")}`);
   assert.equal(seen.working.distance, 0);

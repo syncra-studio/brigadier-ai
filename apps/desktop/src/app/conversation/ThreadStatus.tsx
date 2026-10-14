@@ -1,6 +1,7 @@
 import { type FC, useMemo } from "react";
 
 import { type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
+import { waitingWords } from "@/app/conversation/activity/peerWords";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
 import type { BlockState } from "@/app/conversation/blocks";
 import type { QuotaWait } from "@/ipc/generated";
@@ -61,4 +62,16 @@ export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => (
 export const ThreadStatus: FC<ThreadStatusProps> = (props) => {
   const head = useThreadStatusHead(props);
   return head ? <StatusLine head={head} /> : null;
+};
+
+/**
+ * The line under an answer whose request still waits: what waits on the user first, else the
+ * sessions whose replies it waits for (also while the answer streams), else what it waits on.
+ */
+export const AnsweredStatus: FC<ThreadStatusProps & { waiting: boolean }> = ({ waiting, ...props }) => {
+  const head = useThreadStatusHead(props);
+  const waitingFor = props.waitingFor ?? NONE;
+  if (head?.tone === "needsYou") return <StatusLine head={head} />;
+  if (waitingFor.length > 0) return <StatusLine head={{ text: waitingWords(waitingFor), tone: "still" }} />;
+  return waiting && head ? <StatusLine head={head} /> : null;
 };

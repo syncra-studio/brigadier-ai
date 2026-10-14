@@ -56,7 +56,7 @@ import {
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
 import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
 import type { StatusHead } from "@/app/conversation/liveStatus";
-import { StatusLine, ThreadStatus, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
+import { AnsweredStatus, StatusLine, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { describeTurnError } from "@/app/conversation/turnError";
@@ -80,7 +80,7 @@ import { modelName, sameModel, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { openConversation, send } from "@/state/actions";
 import { readAloud, stopReading, useReading } from "@/state/readAloud";
-import { useBoard } from "@/state/board";
+import { RETRYING, useBoard } from "@/state/board";
 import { useRevealing } from "@/state/reveal";
 import { useApp } from "@/state/store";
 
@@ -492,7 +492,8 @@ const ActivityItems: FC<{
     && sentStep.kind.waits.length === 0 && sentStep.kind.messageIds.length > 0
     && sentStep.kind.messageIds.every((id) => { const record = peers.records[id]; return !!record && went(record.state); })
     ? sentStep : null;
-  const shownLine = going && line?.tone !== "needsYou" ? null : line;
+  // What waits on the user, or a retry stalling the turn, still shows.
+  const shownLine = going && line?.tone !== "needsYou" && !RETRYING.has(line?.text ?? null) ? null : line;
   // A call the user's Deny stopped reads as declined, not failed.
   const shown = (step: LeadStep): LeadStep =>
     approvals && step.kind.type === "tool" && deniedCall(step.kind, step.atMs, requestIds, Object.values(approvals))
@@ -721,9 +722,7 @@ export const RequestBlock: FC = () => {
               </div>
             )}
             {/* Answered, it may still wait for another session's reply: that line stays under the answer. */}
-            {answering !== null && (waitingFor.length > 0
-              ? <StatusLine head={{ text: waitingWords(waitingFor), tone: "still" }} />
-              : meta.state === "waiting" && <ThreadStatus {...status} />)}
+            {answering !== null && <AnsweredStatus {...status} waiting={meta.state === "waiting"} />}
             {/* A late event's "Update: …" line: small, under the answer, never a new answer. */}
             {updates.map((index) => (
               <div

@@ -16,7 +16,7 @@ async function drive<T>(t: test.TestContext, query: string): Promise<T> {
 }
 
 test("a turn has one live line, folds the moment its final answer starts, and keeps that time through the end and a reload", { timeout: 120000 }, async (t) => {
-  const seen = await drive<Record<"thinking" | "thought" | "question" | "running" | "commentary" | "answering" | "answeringLater" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
+  const seen = await drive<Record<"thinking" | "thought" | "question" | "running" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
     foldMs: number; actions: string[];
   }>(t, "drive=turn");
   // Nothing runs: the newest group's own row says "Thinking"; no line of its own under it.
@@ -50,6 +50,7 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
       ["Waiting for Billing to reply", true, false],
     );
   }
+  assert.equal(seen.answeringAsked.status, "Waiting for your answer");
   assert.equal(seen.stored.answer, "Fixed the rounding: round now rounds half-up, and the tests pass.");
   // Answered but waiting for another session's reply: that line stays, under the answer, outside the work.
   assert.deepEqual(

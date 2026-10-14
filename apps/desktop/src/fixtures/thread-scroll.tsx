@@ -657,8 +657,9 @@ const steps = {
     const tops: number[] = [];
     let on = true;
     const tick = () => {
+      if (!on) return;
       tops.push(userTop());
-      if (on) requestAnimationFrame(tick);
+      requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
     const stages: { stage: string; userTop: number; status: string | null; rows: string[] }[] = [];
@@ -673,7 +674,7 @@ const steps = {
       stages.push({
         stage,
         userTop: userTop(),
-        status: $('[data-slot="thread-status"]')?.textContent ?? null,
+        status: [...document.querySelectorAll('[data-slot="thread-status"]')].at(-1)?.textContent ?? null,
         rows: [...document.querySelectorAll("[data-slot=peer-words]")].map((row) => row.textContent ?? ""),
       });
     };
@@ -681,9 +682,9 @@ const steps = {
       type: "orchestratorLogged", conversationId,
       entry: { type: "provider", provider: "claude", event: { type: "toolCall", itemId, name, input: null, status, output: null } },
     });
-    const stepped = (name: string, itemId: string, status: string) => ({
+    const stepped = (name: string, itemId: string, status: string, request = requestId) => ({
       type: "orchestratorStepped",
-      step: { requestId, atMs: Date.now(), position: 0, kind: { type: "tool", itemId, name, detail: null, status, throughPosition: 0 } },
+      step: { requestId: request, atMs: Date.now(), position: 0, kind: { type: "tool", itemId, name, detail: null, status, throughPosition: 0 } },
     });
     const asked = { id: requestId, conversationId, preview: "", state: { type: "working" }, startedAtMs: Date.now(), endedAtMs: null,
       steeredInto: null, steeredAfter: null, undo: null, worked: [{ fromMs: Date.now(), toMs: null }], quotaWait: false };
@@ -700,6 +701,26 @@ const steps = {
     await emit("waited", logged("mcp__brigadier__wait_for_replies", "wait-1", "completed"), stepped("mcp__brigadier__wait_for_replies", "wait-1", "completed"));
     on = false;
     stopStreaming(conversationId, "other-peer-answer", "6 + 7 is 13.", requestId);
+    await emit("answered", { type: "requestUpdated", request: { ...asked, state: { type: "done" }, endedAtMs: Date.now() } });
+    stages.pop();
+    await settle(200);
+    // A new turn sends, then the provider retries before anything follows: the retry still shows.
+    await send({ text: "Ask it 7 + 8 too.", attachments: [], mentions: [] });
+    await settle(600);
+    const again = stored[conversationId]!.at(-1)!.requestId!;
+    await emit("again", { type: "requestUpdated", request: { ...asked, id: again } },
+      { type: "runStateChanged", conversationId, state: "running", error: null, requestId: again },
+      logged("mcp__brigadier__message_session", "send-2", "inProgress"),
+      stepped("mcp__brigadier__message_session", "send-2", "inProgress", again),
+      { type: "peerMessageSent", messageId: "peer-2", to: "long", text: "What is 7 + 8?", blob: null, replyTo: null, chainId: "chain-2", hop: 1,
+        requestId: again, turnInputId: null, state: { type: "delivered" }, sentAtMs: Date.now(), automatic: false, answerId: null },
+      stepped("mcp__brigadier__message_session", "send-2", "completed", again),
+      logged("mcp__brigadier__message_session", "send-2", "completed"));
+    await emit("retrying", {
+      type: "orchestratorLogged", conversationId,
+      entry: { type: "provider", provider: "claude", event: { type: "error", error: { kind: "network", message: "reset", willRetry: true, limit: null, code: null } } },
+    });
+    stopStreaming(conversationId, "other-peer-again", "7 + 8 is 15.", again);
     await settle(200);
     return { stages, tops: [...new Set(tops)] };
   },
