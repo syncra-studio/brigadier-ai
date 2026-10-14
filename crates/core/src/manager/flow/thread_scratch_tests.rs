@@ -292,3 +292,125 @@ async fn the_launch_sweeps_what_a_quit_left() {
     end(&children);
     flow.stop().await;
 }
+
+/// A server started through a wrapper (`sh -c`, as `npm run dev` starts node) in the temporary
+/// folder itself stays with its wrapper, and so does everything in the folder it works in.
+#[tokio::test]
+async fn a_server_below_a_wrapper_in_the_folder_itself_keeps_it() {
+    let children: Arc<Mutex<Vec<Child>>> = Arc::default();
+    let made = children.clone();
+    let flow = Flow::start(
+        "scratch-wrapper",
+        Options::default(),
+        script(move |turn| {
+            let made = made.clone();
+            async move {
+                let tmp = session_temp_dir(&turn.conversation().unwrap(), SessionTemp::Thread);
+                std::fs::create_dir_all(&tmp).unwrap();
+                std::fs::write(tmp.join("index.html"), b"<p>served</p>").unwrap();
+                let wrapper = spawn_in(
+                    &tmp,
+                    "/bin/sh",
+                    &[
+                        "-c",
+                        "python3 -c \"import socket, time\ns = socket.socket()\ns.bind(('127.0.0.1', 0))\ns.listen()\nopen('up', 'w').close()\ntime.sleep(300)\"; true",
+                    ],
+                );
+                made.lock().unwrap().push(wrapper);
+                for _ in 0..250 {
+                    if tmp.join("up").exists() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                assert!(tmp.join("up").exists());
+                Reply::text("The site serves.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Serve the site.").await;
+    flow.settled().await;
+    let tmp = session_temp_dir(&flow.conversation, SessionTemp::Thread);
+    // The sweep the request's end started may still hold the thread: sweep again once free.
+    let mut swept = None;
+    for _ in 0..250 {
+        swept = flow
+            .manager
+            .sweep_thread_scratch(&flow.conversation)
+            .await
+            .unwrap();
+        if swept.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let swept = swept.expect("the session to be idle");
+    assert!(
+        swept
+            .kept
+            .iter()
+            .any(|kept| kept.contains("listens on a port")),
+        "{swept:?}"
+    );
+    let wrapper = children.lock().unwrap()[0].id();
+    let alive =
+        |pid: u32| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok();
+    assert!(alive(wrapper), "the wrapper was ended: {swept:?}");
+    assert!(tmp.join("index.html").exists(), "{swept:?}");
+    assert!(tmp.join("up").exists(), "{swept:?}");
+    // The wrapper's group holds the server too.
+    let group = nix::unistd::Pid::from_raw(-(wrapper as i32));
+    let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
+    end(&children);
+    let _ = std::fs::remove_file(tmp.join("index.html"));
+    let _ = std::fs::remove_file(tmp.join("up"));
+    flow.stop().await;
+}
+
+/// A temporary folder that became a link is left alone, and so is what it points to and what
+/// works there: the sweep would otherwise delete and end what isn't the thread's.
+#[tokio::test]
+async fn a_temp_folder_replaced_by_a_link_is_left_alone() {
+    let flow = Flow::start(
+        "scratch-link",
+        Options::default(),
+        script(|_| async { Reply::text("Done.") }),
+    )
+    .await;
+    flow.say("First.").await;
+    flow.settled().await;
+    let tmp = session_temp_dir(&flow.conversation, SessionTemp::Thread);
+    super::eventually("the first sweep", || {
+        std::fs::read_dir(&tmp).is_ok_and(|mut entries| entries.next().is_none())
+    })
+    .await;
+    let elsewhere =
+        std::env::temp_dir().join(format!("brigadier-scratch-link-{}", flow.conversation));
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(elsewhere.join("keep.txt"), b"not the thread's").unwrap();
+    std::fs::remove_dir(&tmp).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &tmp).unwrap();
+    let children: Arc<Mutex<Vec<Child>>> = Arc::new(Mutex::new(vec![spawn_in(
+        &elsewhere,
+        "/bin/sleep",
+        &["300"],
+    )]));
+    flow.manager.sweep_scratch_at_launch().await;
+    let swept = flow
+        .manager
+        .sweep_thread_scratch(&flow.conversation)
+        .await
+        .unwrap();
+    let kept = elsewhere.join("keep.txt").exists();
+    let running = children.lock().unwrap()[0].try_wait().unwrap().is_none();
+    end(&children);
+    let _ = std::fs::remove_file(&tmp);
+    let _ = std::fs::remove_dir_all(&elsewhere);
+    assert!(kept, "a file the link points to was deleted: {swept:?}");
+    assert!(
+        running,
+        "a process where the link points was ended: {swept:?}"
+    );
+    flow.stop().await;
+}

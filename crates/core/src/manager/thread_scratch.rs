@@ -11,14 +11,21 @@
 //!   detached helpers. A stopped one always goes (SIGKILL ends it). A running one that
 //!   listens on a TCP port stays, as a server the user may have asked to keep up; so does
 //!   anything another owner of the cleanup ledger records (a preview, a background run, the
-//!   full checks), and what still runs below the CLI (its MCP servers).
+//!   full checks), and what still runs below the CLI (its MCP servers). One whose tree or
+//!   process group holds such a server (an `npm run dev` above its listening node) keeps it:
+//!   ending it would end the server too.
 //! - **Its temporary folder** ([`super::workers::session_temp_dir`], its commands' and checks'
-//!   TMPDIR): what works inside it ends (but a listening server), then everything in it goes;
+//!   TMPDIR): what works inside it ends (but a listening server), then everything in it goes
+//!   (but where a kept server works: the whole folder, when it works in the folder itself);
 //!   the folder stays, as its CLI's TMPDIR.
 //! - **Its Claude commands' temp folder**: a sandboxed Claude command's TMPDIR is
 //!   `<CLAUDE_CODE_TMPDIR>/claude-<uid>`, beside Claude's own files there (a folder per
 //!   working directory, named from its path, so starting with `-`; `bash-edit-diff`;
 //!   `cache-break-state-…`), which stay. Everything else there goes.
+//!
+//! A sweep enters a folder only while it is a real folder of this user's, reached without a
+//! link at its own name ([`owned_root`]): a link put in its place would aim the sweep at
+//! whatever it points to.
 //!
 //! A sweep reserves the thread first ([`super::conversation::ConvLive::begin_scratch_sweep`]):
 //! no turn starts until it is done, and it looks for one then. The launch sweeps every
@@ -50,14 +57,15 @@ pub(crate) struct Swept {
     pub kept: Vec<String>,
 }
 
-/// One process a sweep looks at: its pid and start time, whether it is stopped, and whether
-/// it listens on a TCP port.
+/// One process a sweep looks at: its pid and start time, whether it is stopped, whether it
+/// listens on a TCP port, and a listening server its tree or process group holds.
 #[derive(Debug, Clone, Copy)]
 struct Candidate {
     pid: u32,
     started: Option<f64>,
     stopped: bool,
     listens: bool,
+    shelters: Option<u32>,
 }
 
 /// Claude's own entries in its commands' temp folder, which a sweep keeps.
@@ -192,10 +200,10 @@ impl SessionManager {
             let processes = platform.processes();
             let mut pids: Vec<(u32, Option<f64>)> = left;
             for dir in std::iter::once(&tmp_in).chain(&folders) {
-                if !dir.is_dir() {
+                let Some(root) = owned_root(dir) else {
                     continue;
-                }
-                for pid in processes.in_dir(dir).unwrap_or_default() {
+                };
+                for pid in processes.in_dir(&root).unwrap_or_default() {
                     if !pids.iter().any(|(seen, _)| *seen == pid) {
                         pids.push((pid, processes.start_time_ms(pid).ok()));
                     }
@@ -204,25 +212,62 @@ impl SessionManager {
             Ok(pids
                 .into_iter()
                 .filter(|(pid, _)| !others.contains(pid))
-                .map(|(pid, started)| Candidate {
-                    pid,
-                    started,
-                    stopped: processes.is_stopped(pid),
-                    listens: false,
+                .map(|(pid, started)| {
+                    let below: Vec<u32> = processes
+                        .descendants(pid)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|&child| !processes.is_stopped(child))
+                        .collect();
+                    let candidate = Candidate {
+                        pid,
+                        started,
+                        stopped: processes.is_stopped(pid),
+                        listens: false,
+                        shelters: None,
+                    };
+                    (candidate, below)
                 })
                 .collect::<Vec<_>>())
         })
         .await?;
-        let mut candidates = Vec::with_capacity(looked.len());
-        for mut candidate in looked {
-            if !candidate.stopped {
-                candidate.listens = !super::preview_ready::process_listening_ports(candidate.pid)
-                    .await
-                    .is_empty();
+        // What listens on a port: the candidates that run, and what runs below them.
+        let mut asked = HashSet::new();
+        let mut listeners = Vec::new();
+        for (candidate, below) in &looked {
+            let running = (!candidate.stopped).then_some(candidate.pid);
+            for pid in running.into_iter().chain(below.iter().copied()) {
+                if asked.insert(pid)
+                    && !super::preview_ready::process_listening_ports(pid)
+                        .await
+                        .is_empty()
+                {
+                    listeners.push(pid);
+                }
             }
-            candidates.push(candidate);
         }
         let platform = self.runtime.platform().clone();
+        let processes = platform.processes();
+        let groups: Vec<(u32, Option<u32>)> = listeners
+            .iter()
+            .map(|&pid| (pid, processes.group_of(pid)))
+            .collect();
+        let candidates: Vec<Candidate> = looked
+            .into_iter()
+            .map(|(mut candidate, below)| {
+                candidate.listens = listeners.contains(&candidate.pid);
+                // Ending a candidate ends its tree and the process groups its members lead.
+                let in_tree = |pid: u32| pid == candidate.pid || below.contains(&pid);
+                candidate.shelters = groups
+                    .iter()
+                    .find(|(server, group)| {
+                        *server != candidate.pid
+                            && (below.contains(server) || group.is_some_and(in_tree))
+                    })
+                    .map(|(server, _)| *server);
+                candidate
+            })
+            .collect();
         blocking(move || {
             Ok(sweep_blocking(
                 &*platform,
@@ -303,11 +348,32 @@ pub(crate) fn leftovers(tmp: &Path, command_temps: &[PathBuf]) -> Vec<PathBuf> {
             })
             .unwrap_or_default()
     };
-    let mut found = entries(tmp, |_| false);
-    for dir in command_temps {
-        found.extend(entries(dir, claude_own));
+    let mut found = owned_root(tmp)
+        .map(|root| entries(&root, |_| false))
+        .unwrap_or_default();
+    for root in command_temps.iter().filter_map(|dir| owned_root(dir)) {
+        found.extend(entries(&root, claude_own));
     }
     found
+}
+
+/// `dir` as a sweep may enter it: a real folder (not a link) of this user's, its parent's
+/// links resolved (`/tmp` is one on macOS). `None` for anything else, which a sweep leaves
+/// alone: a link put in its place would aim the sweep at whatever it points to.
+pub(crate) fn owned_root(dir: &Path) -> Option<PathBuf> {
+    let meta = std::fs::symlink_metadata(dir).ok()?;
+    if !meta.file_type().is_dir() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if meta.uid() != nix::unistd::getuid().as_raw() {
+            return None;
+        }
+    }
+    let root = dir.parent()?.canonicalize().ok()?.join(dir.file_name()?);
+    (root.canonicalize().ok()? == root).then_some(root)
 }
 
 /// Ends the candidates that may go (stopped, or not listening), then empties `tmp` and the
@@ -330,6 +396,28 @@ fn sweep_blocking(
                     .is_ok_and(|now| (now - started).abs() < 1_000.0)
             });
         if !same {
+            continue;
+        }
+        if let Some(server) = candidate.shelters {
+            // Ending its tree would end the server: a stopped one is ended alone (its
+            // SIGTERM lands once it goes on), a running one stays.
+            if candidate.stopped {
+                match processes
+                    .terminate(candidate.pid)
+                    .and_then(|()| processes.resume(candidate.pid))
+                {
+                    Ok(()) => swept.ended += 1,
+                    Err(err) => swept.kept.push(format!("process {}: {err}", candidate.pid)),
+                }
+            } else {
+                swept.kept.push(format!(
+                    "process {}: process {server} below it listens on a port",
+                    candidate.pid
+                ));
+            }
+            if let Some(cwd) = working_dir(server) {
+                kept_dirs.push(cwd);
+            }
             continue;
         }
         if candidate.listens && !candidate.stopped {
@@ -358,12 +446,27 @@ fn sweep_blocking(
     swept
 }
 
-/// Removes every entry of `dir` but those `keep` names and those a kept process works in.
+/// Removes every entry of `dir` but those `keep` names and those a kept process works in, or
+/// none when a kept process works in `dir` itself. Only a folder [`owned_root`] passes.
 fn empty(dir: &Path, keep: impl Fn(&str) -> bool, kept_dirs: &[PathBuf], swept: &mut Swept) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Some(root) = owned_root(dir) else {
+        if std::fs::symlink_metadata(dir).is_ok() {
+            swept.kept.push(format!(
+                "{}: not a folder of this user's own",
+                dir.display()
+            ));
+        }
         return;
     };
-    let root = dir.canonicalize().unwrap_or_else(|_| dir.to_owned());
+    if kept_dirs.contains(&root) {
+        swept
+            .kept
+            .push(format!("{}: a kept process works there", root.display()));
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if keep(&name) {
@@ -377,7 +480,15 @@ fn empty(dir: &Path, keep: impl Fn(&str) -> bool, kept_dirs: &[PathBuf], swept: 
             continue;
         }
         let bytes = removal::allocated_size(&path);
-        match removal::bind(&root, &path).and_then(|bound| removal::delete(&bound)) {
+        // The root is bound again: a link put at its name since is refused.
+        let bound = removal::bind(&root, &path).and_then(|bound| {
+            if bound.root() == root {
+                Ok(bound)
+            } else {
+                Err(removal::RemovalError::Symlink(root.clone()))
+            }
+        });
+        match bound.and_then(|bound| removal::delete(&bound)) {
             Ok(()) => swept.bytes += bytes,
             Err(err) => swept.kept.push(format!("{}: {err}", path.display())),
         }
