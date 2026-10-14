@@ -774,6 +774,8 @@ mod tests {
                 quota_wait: false,
                 waiting_for: Vec::new(),
                 from_peer: None,
+                held_by: None,
+                background_jobs: None,
             },
         }
     }
@@ -853,6 +855,7 @@ mod tests {
             answers: Vec::new(),
             created_at_ms: 0,
             answered_at_ms: None,
+            words_id: None,
         };
         let asked = DomainEvent::QuestionUpdated {
             question: question.clone(),

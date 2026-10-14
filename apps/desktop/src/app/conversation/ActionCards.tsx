@@ -973,7 +973,8 @@ function QuestionAction({
       onChoose={(index) => answer(item.options[index]?.label ?? "")}
       onText={answer}
       onTyped={draft}
-      onSkip={() => answer(SKIPPED)}
+      // A merge card's Skip is its "Not yet": words typed there are a new request instead.
+      onSkip={() => answer(question.kind.type === "merge" ? (item.options.at(-1)?.label ?? SKIPPED) : SKIPPED)}
       onDismiss={onDismiss}
       busy={action.busy}
       error={action.error}

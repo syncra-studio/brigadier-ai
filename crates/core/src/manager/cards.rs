@@ -13,7 +13,7 @@ use brigadier_providers::{ApprovalDecision, ApprovalRequest, Decider, ProviderEv
 use tokio::sync::oneshot;
 
 use super::SessionManager;
-use super::conversation::Envelope;
+use super::conversation::{Envelope, SendOutcome};
 use crate::model::{ConversationId, DomainEvent, Setup};
 use crate::work::{
     Approval, ApprovalSubject, CardId, CardState, InjectionKind, Plan, PlanApprover, PlanState,
@@ -396,6 +396,7 @@ impl SessionManager {
             answers: Vec::new(),
             created_at_ms: now_ms(),
             answered_at_ms: None,
+            words_id: None,
         };
         let rx = self.waiters.register(question.id.clone());
         self.core
@@ -427,7 +428,7 @@ impl SessionManager {
             return Err(Error::Invalid("this question was already answered".into()));
         }
         let round = question.round();
-        let answers: Vec<String> = answers.iter().map(|a| a.trim().to_owned()).collect();
+        let mut answers: Vec<String> = answers.iter().map(|a| a.trim().to_owned()).collect();
         if answers.len() != round.len() {
             return Err(Error::Invalid(format!(
                 "this card asks {} questions, and {} answers came",
@@ -438,6 +439,24 @@ impl SessionManager {
         if answers.iter().any(String::is_empty) {
             return Err(Error::Invalid("an answer is empty".into()));
         }
+        // A merge card answered in the user's own words is never their consent: the card
+        // records "Not yet", and their words are a new request, which carries that decision.
+        let typed = match &question.kind {
+            QuestionKind::Merge { base, .. }
+                if !round[0]
+                    .options
+                    .iter()
+                    .any(|option| option.label == answers[0]) =>
+            {
+                let not_yet = round[0]
+                    .options
+                    .iter()
+                    .find(|option| !merge_chosen(&option.label, base))
+                    .map_or_else(|| "Not yet".to_owned(), |option| option.label.clone());
+                Some(std::mem::replace(&mut answers[0], not_yet))
+            }
+            _ => None,
+        };
         // A single question's answer is the answer itself; a round's lists each question.
         let answer = match answers.as_slice() {
             [only] => only.clone(),
@@ -448,13 +467,18 @@ impl SessionManager {
             question.answers = answers.clone();
         }
         question.answered_at_ms = Some(now_ms());
+        // Until its words are sent, the card's own id marks them on their way.
+        question.words_id = typed.as_ref().map(|_| card_id.to_string());
         // Recorded before it is delivered: until the answer is in the inbox, the request
         // counts as carried, or a settle in between would end it (its card answered, nothing
         // queued) and open its time again with the answer's turn.
-        let delivers = matches!(
-            question.kind,
-            QuestionKind::Orchestrator | QuestionKind::Merge { .. }
-        );
+        // Only "Merge into main" starts work on the asking request: "Not yet" leaves its
+        // finished block closed, and the decision rides on the thread's next turn.
+        let delivers = match &question.kind {
+            QuestionKind::Orchestrator => true,
+            QuestionKind::Merge { base, .. } => merge_chosen(&answers[0], base),
+            _ => false,
+        };
         if delivers {
             self.answering(&conversation_id, &card_id, question.request_id.clone())
                 .await;
@@ -505,24 +529,62 @@ impl SessionManager {
                 )
                 .await;
             }
+            QuestionKind::Merge { branch, base, .. } if let Some(typed) = typed => {
+                self.conv(&conversation_id)?
+                    .note(format!(
+                        "[answer] The user doesn't want `{branch}` merged into `{base}` yet: they answered the merge card with the message below instead. Don't merge, and don't ask again until they bring it up."
+                    ))
+                    .await;
+                self.waiters.answer(&card_id, CardAnswer::Answered);
+                self.settle_requests(&conversation_id).await;
+                let sent = self
+                    .send_message(
+                        conversation_id.clone(),
+                        typed,
+                        Vec::new(),
+                        Vec::new(),
+                        false,
+                        None,
+                    )
+                    .await?;
+                // The card points at the message its words went as: that message is neither
+                // consent nor the user writing since they declined.
+                question.words_id = Some(match sent {
+                    SendOutcome::Sent(message) => message.id,
+                    SendOutcome::Queued(item) => item.id,
+                });
+                self.core
+                    .record_conversation(
+                        &conversation_id,
+                        vec![DomainEvent::QuestionUpdated { question }],
+                    )
+                    .await?;
+                return Ok(());
+            }
             QuestionKind::Merge {
                 branch,
                 base,
                 conflicted,
                 ..
             } => {
-                let text = if merge_chosen(&answers[0], base) && *conflicted {
+                if !delivers {
+                    self.conv(&conversation_id)?
+                        .note(format!(
+                            "[answer] The user doesn't want `{branch}` merged into `{base}` yet: they answered the merge card \"{}\". Don't merge, and don't ask again until they bring it up.",
+                            answers[0]
+                        ))
+                        .await;
+                    self.waiters.answer(&card_id, CardAnswer::Answered);
+                    self.settle_requests(&conversation_id).await;
+                    return Ok(());
+                }
+                let text = if *conflicted {
                     format!(
                         "[answer] The user chose to merge `{branch}` into `{base}` and have its conflicts resolved. Call finish_session now, without user_words: it names the merge task that resolves them, and the merge goes through on this answer once that lands."
                     )
-                } else if merge_chosen(&answers[0], base) {
-                    format!(
-                        "[answer] The user chose to merge `{branch}` into `{base}`. Call finish_session now, without user_words."
-                    )
                 } else {
                     format!(
-                        "[answer] The user doesn't want `{branch}` merged into `{base}` yet: \"{}\". Don't merge, and don't ask again until they bring it up.",
-                        answers[0]
+                        "[answer] The user chose to merge `{branch}` into `{base}`. Call finish_session now, without user_words."
                     )
                 };
                 self.deliver_for(

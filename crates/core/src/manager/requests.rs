@@ -167,6 +167,12 @@ impl SessionManager {
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
+            // The CLI's background jobs it started, until the turn their end starts is over.
+            let jobs = activity
+                .background
+                .as_ref()
+                .filter(|(of, _)| of == id)
+                .map(|(_, running)| *running);
             let mut wait = None;
             // Peer waits remain outstanding while the thread works or streams its answer.
             let awaited = self.awaited_peers(&board, id);
@@ -177,6 +183,7 @@ impl SessionManager {
             } else if activity.running.as_deref() == Some(id)
                 || (activity.carried.contains(id) && outcome.is_none())
                 || runs_in(&board, id)
+                || (jobs.is_some() && outcome.is_none())
             {
                 // A fix Brigadier checks and lands once its worker's turn is over still works.
                 RequestState::Working
@@ -218,6 +225,7 @@ impl SessionManager {
             };
             let over = !matches!(state, RequestState::Working | RequestState::Waiting);
             let done = state == RequestState::Done;
+            let jobs = jobs.filter(|running| *running > 0 && state == RequestState::Working);
             if let Err(err) = self
                 .core
                 .update_request(
@@ -227,6 +235,7 @@ impl SessionManager {
                     wait == Some(Wait::Quota),
                     wait == Some(Wait::Card),
                     if over { Vec::new() } else { awaited },
+                    jobs,
                 )
                 .await
             {
@@ -643,6 +652,7 @@ mod tests {
             waiting_for: Vec::new(),
             from_peer: None,
             held_by: None,
+            background_jobs: None,
         }
     }
 

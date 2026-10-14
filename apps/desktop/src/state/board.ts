@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import { createStore, type StoreApi, useStore } from "zustand";
 
 import { liveActivity, toolName } from "@/app/conversation/activity/words";
+import { previewActive } from "@/app/conversation/previewStatus";
 import { showConversationNotice, shownNotice } from "@/state/notices";
 
 import type {
@@ -582,7 +583,7 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, previews: { ...board.previews, [event.preview.id]: event.preview } };
     case "previewsCleared":
       return { ...board, previews: Object.fromEntries(Object.entries(board.previews).filter(([id, preview]) =>
-        preview.state.type === "running" || preview.state.type === "paused" || !event.ids.includes(id),
+        previewActive(preview.state) || !event.ids.includes(id),
       )) };
     case "overnightUpdated":
       return { ...board, overnight: { ...board.overnight, [event.run.id]: event.run } };

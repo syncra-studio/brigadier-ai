@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
+import { ChevronDown, ChevronRight, X } from "@openai/apps-sdk-ui/components/Icon";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import {
   type FC, type KeyboardEvent, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
@@ -16,7 +16,7 @@ import { tokenPx } from "@/lib/tokens";
 import { useApp } from "@/state/store";
 import { onWorkspaceChanged, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import {
-  clearSearch, EMPTY_FORM, replaceResults, runSearch, sameQuery, searchId, searchQuery, type SearchForm,
+  clearSearch, dismissSearchFile, EMPTY_FORM, replaceResults, runSearch, sameQuery, searchId, searchQuery, type SearchForm,
   setSearchForm, stopSearch, useWorkspaceSearch,
 } from "@/state/workspaceSearch";
 
@@ -59,6 +59,7 @@ export function SearchPanel({ target, onOpen, readOnly }: {
   const id = searchId(target);
   const checkout = useCheckoutKey(target);
   const form = useWorkspaceSearch((s) => s.entries[id]?.form ?? EMPTY_FORM);
+  const dismissFile = useCallback((path: string) => dismissSearchFile(target, path), [target]);
   const stored = useWorkspaceSearch((s) => s.entries[id]?.results ?? null);
   // Results for another checkout of the same session (its copy made since) don't show.
   const results = stored?.checkout === checkout ? stored : null;
@@ -138,7 +139,7 @@ export function SearchPanel({ target, onOpen, readOnly }: {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-border flex shrink-0 flex-col gap-1.5 border-b p-2">
         <Field label="Search" value={form.text} onChange={(text) => { set({ text }); setOutcome(null); }}
-          onEnter={() => query && runSearch(target, query)}>
+          onEnter={() => query && runSearch(target, query, true)}>
           <Toggle label="Match case" pressed={form.matchCase} onChange={(matchCase) => set({ matchCase })}><MatchCaseGlyph /></Toggle>
           <Toggle label="Whole word" pressed={form.wholeWord} onChange={(wholeWord) => set({ wholeWord })}><WholeWordGlyph /></Toggle>
           <Toggle label="Regular expression" pressed={form.regex} onChange={(regex) => set({ regex })}><RegexGlyph /></Toggle>
@@ -176,7 +177,7 @@ export function SearchPanel({ target, onOpen, readOnly }: {
             <div className="flex h-control-sm items-center gap-1 px-1">
               <p data-slot="search-summary" className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
                 {results.files.length === 0
-                  ? results.done ? "No results" : "Searching…"
+                  ? !results.done ? "Searching…" : results.filteredFiles ? "All results dismissed. Press Enter in Search to show them again." : "No results"
                   : `${plural(matches, "result")} in ${plural(results.files.length, "file")}${searching ? "…" : ""}`}
               </p>
               {results.files.length > 0 && (
@@ -194,7 +195,7 @@ export function SearchPanel({ target, onOpen, readOnly }: {
             )}
           </div>
           <ResultList files={results.files} collapsed={collapsed} onToggle={toggle} onOpen={onOpen}
-            onReplace={canReplace ? (path) => setConfirming({ file: path }) : null} />
+            onDismiss={dismissFile} onReplace={canReplace ? (path) => setConfirming({ file: path }) : null} />
         </>
       )}
       <Dialog open={confirming !== null} onOpenChange={(open) => { if (!open) setConfirming(null); }}>
@@ -286,12 +287,13 @@ type Row = { type: "file"; file: SearchFile } | { type: "line"; file: SearchFile
  * the arrow keys move it, Left closes a file or goes up to it, Right opens a file, Home and End
  * go to either end, Enter opens a line or a file's group as a click does.
  */
-function ResultList({ files, collapsed, onToggle, onOpen, onReplace }: {
+function ResultList({ files, collapsed, onToggle, onOpen, onReplace, onDismiss }: {
   files: SearchFile[];
   collapsed: ReadonlySet<string>;
   onToggle: (path: string) => void;
   onOpen: OnOpen;
   onReplace: ((path: string) => void) | null;
+  onDismiss: (path: string) => void;
 }) {
   const rows = useMemo(() => {
     const list: Row[] = [];
@@ -328,7 +330,9 @@ function ResultList({ files, collapsed, onToggle, onOpen, onReplace }: {
   useLayoutEffect(() => {
     if (!focusing.current) return;
     focusing.current = false;
-    scrollRef.current?.querySelector<HTMLElement>(`[data-index="${current}"] [data-row-button]`)?.focus();
+    if (rows.length) virtualizer.scrollToIndex(current);
+    const next = scrollRef.current?.querySelector<HTMLElement>(`[data-index="${current}"] [data-row-button]`);
+    (next ?? scrollRef.current?.querySelector<HTMLElement>('[role="tree"]'))?.focus();
   });
   const move = (index: number) => {
     const next = Math.max(0, Math.min(index, rows.length - 1));
@@ -336,9 +340,24 @@ function ResultList({ files, collapsed, onToggle, onOpen, onReplace }: {
     setActive(next);
     virtualizer.scrollToIndex(next);
   };
+  const latestRows = useRef(rows);
+  useLayoutEffect(() => { latestRows.current = rows; }, [rows]);
+  const dismiss = useCallback((path: string) => {
+    const visible = latestRows.current;
+    const index = visible.findIndex((row) => row.type === "file" && row.file.path === path);
+    focusing.current = true;
+    setActive(Math.max(0, Math.min(index, visible.filter((row) => row.file.path !== path).length - 1)));
+    onDismiss(path);
+  }, [onDismiss]);
   const onKeyDown = (event: KeyboardEvent) => {
     const row = rows[current];
-    if (!row || event.altKey || event.metaKey || event.ctrlKey) return;
+    if (!row || event.altKey || event.ctrlKey) return;
+    if (row.type === "file" && (event.key === "Backspace" || (event.key === "Delete" && !event.metaKey))) {
+      event.preventDefault();
+      dismiss(row.file.path);
+      return;
+    }
+    if (event.metaKey) return;
     let handled = true;
     if (event.key === "ArrowDown") move(current + 1);
     else if (event.key === "ArrowUp") move(current - 1);
@@ -355,7 +374,7 @@ function ResultList({ files, collapsed, onToggle, onOpen, onReplace }: {
   };
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-      <ul role="tree" aria-label="Search results" onKeyDown={onKeyDown} className="relative w-full"
+      <ul role="tree" tabIndex={-1} aria-label="Search results" onKeyDown={onKeyDown} className="relative w-full"
         onFocus={(event) => {
           const index = Number((event.target as HTMLElement).closest("[data-index]")?.getAttribute("data-index"));
           if (Number.isInteger(index)) setActive(index);
@@ -368,7 +387,7 @@ function ResultList({ files, collapsed, onToggle, onOpen, onReplace }: {
               data-row={row.type} className="absolute inset-x-0 top-0" style={{ transform: `translateY(${item.start}px)` }}>
               {row.type === "file" ? (
                 <FileRow file={row.file} open={!collapsed.has(row.file.path)} tabbable={item.index === current}
-                  onToggle={onToggle} onReplace={onReplace} />
+                  onToggle={onToggle} onReplace={onReplace} onDismiss={dismiss} />
               ) : (
                 <LineRow file={row.file} line={row.line} tabbable={item.index === current} onOpen={onOpen} />
               )}
@@ -384,12 +403,13 @@ function rowKey(row: Row): string {
   return row.type === "file" ? row.file.path : `${row.file.path}:${row.line.line}`;
 }
 
-const FileRow = memo(function FileRow({ file, open, tabbable, onToggle, onReplace }: {
+const FileRow = memo(function FileRow({ file, open, tabbable, onToggle, onReplace, onDismiss }: {
   file: SearchFile;
   open: boolean;
   tabbable: boolean;
   onToggle: (path: string) => void;
   onReplace: ((path: string) => void) | null;
+  onDismiss: (path: string) => void;
 }) {
   return (
     <div className="group/file hover:bg-muted rounded-control flex h-control-sm items-center">
@@ -409,6 +429,11 @@ const FileRow = memo(function FileRow({ file, open, tabbable, onToggle, onReplac
           <ReplaceAllGlyph />
         </TooltipIconButton>
       )}
+      <TooltipIconButton tooltip="Dismiss" size="icon-xs" tabIndex={tabbable ? 0 : -1}
+        onClick={() => onDismiss(file.path)}
+        className="hidden group-focus-within/file:inline-flex group-hover/file:inline-flex">
+        <X />
+      </TooltipIconButton>
       <span className="bg-muted text-muted-foreground me-1 shrink-0 rounded-full px-1.5 text-xs tabular-nums">{file.matches}</span>
     </div>
   );

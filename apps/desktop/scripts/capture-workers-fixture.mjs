@@ -109,8 +109,7 @@ try {
   assert.match(await detail.innerText(), /Inspect every project file/);
   await shot("10-detail-previous", "e-detail-expanded.png");
   await detail.getByRole("button", { name: "6 previous messages", exact: true }).click();
-  await page.getByRole("button", { name: "Worker actions", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Details", exact: true }).click();
+  await page.getByRole("button", { name: /^Worker details:/ }).click();
   const more = page.locator('[data-slot="worker-details"]');
   assert.match(await more.innerText(), /Decisions/);
   assert.match(await more.innerText(), /Verification/);

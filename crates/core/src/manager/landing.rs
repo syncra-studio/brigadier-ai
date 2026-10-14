@@ -1283,12 +1283,30 @@ impl SessionManager {
             )));
         }
         let board = self.core.board(id).await?;
-        let latest = self.latest_user_message_at(id, &board).await?;
         let cards: Vec<_> = board
             .questions
             .values()
             .filter(|question| matches!(&question.kind, QuestionKind::Merge { .. }))
             .collect();
+        // The message a card's own words went as is no writing since that card's "Not yet".
+        let messages = match &board.head {
+            Some((head, _)) => self.core.branch(id, head).await?,
+            None => self.core.all_messages(id).await?,
+        };
+        let latest = messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.role == MessageRole::User
+                    && !cards.iter().any(|card| {
+                        card.words_id.as_ref().is_some_and(|words| {
+                            *words == message.id
+                                || (*words == card.id.to_string()
+                                    && message.created_at_ms >= card.answered_at_ms.unwrap_or(0))
+                        })
+                    })
+            })
+            .map(|message| message.created_at_ms);
         if cards.iter().any(|card| card.is_open()) {
             return Err(Error::Invalid(
                 "A merge card is already open: wait for the user's answer, which arrives as a message.".into(),
@@ -1761,7 +1779,7 @@ impl SessionManager {
         drop(landing_lock);
         // The session's work is merged: what showed it stops, and its worktree and branch go
         // (THREAD-PLAN.md Q9).
-        self.stop_previews(id, "the session was merged").await;
+        let _ = self.stop_previews(id, "the session was merged").await;
         // The landed workers kept for their reviews' findings are done with too, and the
         // checkout its full checks ran in.
         self.settle_all_holds(id).await;
@@ -2108,6 +2126,18 @@ impl SessionManager {
                     && question.answer.is_some()
             })
             .max_by_key(|question| question.answered_at_ms);
+        // Words the user answered that card with instead of its Merge are no consent either.
+        if let (Some(card), Some(latest)) = (card, latest)
+            && card.words_id.as_ref().is_some_and(|words| {
+                *words == latest.id
+                    || (*words == card.id.to_string()
+                        && latest.created_at_ms >= card.answered_at_ms.unwrap_or(0))
+            })
+        {
+            return Err(refuse(
+                "the user's latest message is what they answered the merge card with instead of Merge, which isn't consent; don't ask again until they bring it up".into(),
+            ));
+        }
         if let Some(card) = card
             && let Some(answered) = card.answered_at_ms
             && latest.is_none_or(|latest| answered >= latest.created_at_ms)

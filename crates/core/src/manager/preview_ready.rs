@@ -1,0 +1,319 @@
+//! When a starting preview is ready to look at ([`super::preview`]): a web preview once the
+//! local URL it printed, or a TCP port a process of its process group listens on, answers an
+//! HTTP request; any preview once a process of its group owns an on-screen window. Members are
+//! found by process group, so one a launcher left behind (reparented) still counts. Every probe
+//! is cheap and bounded, and one that can't run (no `lsof`, no window server) reads as "not
+//! ready", never as an error.
+
+use std::time::Duration;
+
+use crate::work::PreviewKind;
+
+/// How long one connection or HTTP answer may take.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long `lsof` may take.
+#[cfg(target_os = "macos")]
+const LSOF_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The kind of preview `command` starts: an app for the dev commands of Tauri and Electron,
+/// which open their own window (whatever frontend address they print is not the app), a web
+/// preview for anything else.
+pub(super) fn infer_kind(command: &str) -> PreviewKind {
+    let lower = command.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'))
+        .map(|word| word.trim_matches(['\'', '"']))
+        .filter(|word| !word.is_empty() && *word != "--")
+        .collect();
+    let program = |word: &str, name: &str| word == name || word.ends_with(&format!("/{name}"));
+    let app = words.iter().enumerate().any(|(at, word)| {
+        let next = words.get(at + 1).copied().unwrap_or_default();
+        word.contains("tauri:dev")
+            || (program(word, "tauri") && next == "dev")
+            || program(word, "electron")
+            || (program(word, "electron-forge") && next == "start")
+            || (program(word, "electron-vite") && next == "dev")
+    });
+    if app {
+        PreviewKind::App
+    } else {
+        PreviewKind::Web
+    }
+}
+
+/// Whether [`window_owners`] can see windows here. Where it can't, an app preview has no
+/// readiness signal and reads as running once started, as every preview did before.
+pub(super) const SEES_WINDOWS: bool = cfg!(target_os = "macos");
+
+/// The processes that own an on-screen window. The owner of a window is readable without the
+/// Screen Recording permission.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+pub(super) fn window_owners() -> Vec<u32> {
+    use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
+    use objc2_core_graphics::{
+        CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowLayer, kCGWindowOwnerPID,
+    };
+
+    let Some(list) = CGWindowListCopyWindowInfo(
+        CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements,
+        0,
+    ) else {
+        return Vec::new();
+    };
+    // SAFETY: the window list is an array of dictionaries with string keys.
+    let list: CFRetained<CFArray<CFDictionary<CFString, CFType>>> =
+        unsafe { CFRetained::cast_unchecked(list) };
+    // SAFETY: reading the system's constant keys.
+    let (k_layer, k_pid) = unsafe { (kCGWindowLayer, kCGWindowOwnerPID) };
+    let num = |d: &CFDictionary<CFString, CFType>, k: &CFString| -> Option<i64> {
+        d.get(k)
+            .and_then(|v| v.downcast::<CFNumber>().ok())
+            .and_then(|n| n.as_i64())
+    };
+    let mut owners: Vec<u32> = list
+        .iter()
+        .filter(|window| num(window, k_layer) == Some(0))
+        .filter_map(|window| u32::try_from(num(&window, k_pid)?).ok())
+        .collect();
+    owners.sort_unstable();
+    owners.dedup();
+    owners
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn window_owners() -> Vec<u32> {
+    Vec::new()
+}
+
+/// The TCP ports the processes of process group `group` listen on, per `lsof`; none when it
+/// is missing or fails.
+#[cfg(target_os = "macos")]
+pub(super) async fn listening_ports(group: u32) -> Vec<u16> {
+    let group = group.to_string();
+    let output = tokio::process::Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-Fn", "-g", &group])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    match tokio::time::timeout(LSOF_TIMEOUT, output).await {
+        Ok(Ok(output)) => lsof_ports(&String::from_utf8_lossy(&output.stdout)),
+        _ => Vec::new(),
+    }
+}
+
+/// The ports of `lsof -Fn` lines such as `n*:3000`, `n127.0.0.1:5173` and `n[::1]:8080`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn lsof_ports(output: &str) -> Vec<u16> {
+    let mut ports: Vec<u16> = output
+        .lines()
+        .filter_map(|line| line.strip_prefix('n'))
+        .filter_map(|name| name.rsplit_once(':')?.1.parse().ok())
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+/// The TCP ports the processes of process group `group` listen on: the listening sockets of
+/// `/proc/net/tcp{,6}` that one of their open files is.
+#[cfg(target_os = "linux")]
+pub(super) async fn listening_ports(group: u32) -> Vec<u16> {
+    tokio::task::spawn_blocking(move || {
+        let mut listening = std::collections::HashMap::new();
+        for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
+            let Ok(text) = std::fs::read_to_string(table) else {
+                continue;
+            };
+            for line in text.lines().skip(1) {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                if fields.get(3) != Some(&"0A") {
+                    continue;
+                }
+                let port = fields
+                    .get(1)
+                    .and_then(|local| local.rsplit_once(':'))
+                    .and_then(|(_, port)| u16::from_str_radix(port, 16).ok());
+                if let (Some(port), Some(inode)) = (port, fields.get(9)) {
+                    listening.insert(format!("socket:[{inode}]"), port);
+                }
+            }
+        }
+        let mut ports = Vec::new();
+        let Ok(processes) = std::fs::read_dir("/proc") else {
+            return ports;
+        };
+        // The process group is the fifth field of `stat`, the third after the command's `)`.
+        let in_group = |pid: &str| {
+            std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                stat.rsplit_once(')')
+                    .and_then(|(_, rest)| rest.split_whitespace().nth(2))
+                    .and_then(|pgrp| pgrp.parse::<u32>().ok())
+                    == Some(group)
+            })
+        };
+        for process in processes.flatten() {
+            let pid = process.file_name().to_string_lossy().into_owned();
+            if !pid.bytes().all(|b| b.is_ascii_digit()) || !in_group(&pid) {
+                continue;
+            }
+            let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+                continue;
+            };
+            for fd in fds.flatten() {
+                if let Ok(target) = std::fs::read_link(fd.path())
+                    && let Some(port) = listening.get(&*target.to_string_lossy())
+                {
+                    ports.push(*port);
+                }
+            }
+        }
+        ports.sort_unstable();
+        ports.dedup();
+        ports
+    })
+    .await
+    .unwrap_or_default()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(super) async fn listening_ports(_group: u32) -> Vec<u16> {
+    Vec::new()
+}
+
+/// Whether an HTTP server on `port` of this machine answers (a TCP connect alone isn't enough:
+/// a dev server may accept before it can serve).
+pub(super) async fn port_answers(port: u16) -> bool {
+    url_answers(&format!("http://127.0.0.1:{port}/")).await
+        || url_answers(&format!("http://[::1]:{port}/")).await
+}
+
+/// Whether a local `url` (as [`super::preview`] finds them: http or https, on localhost or
+/// 127.0.0.1) answers: any HTTP response to a GET for http. Brigadier has no TLS client, so for
+/// https an accepted connection counts.
+pub(super) async fn url_answers(url: &str) -> bool {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let (https, rest) = match (url.strip_prefix("http://"), url.strip_prefix("https://")) {
+        (Some(rest), _) => (false, rest),
+        (_, Some(rest)) => (true, rest),
+        _ => return false,
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, path) = (&rest[..end], &rest[end..]);
+    let path = if path.starts_with('/') { path } else { "/" };
+    let address = if authority.contains(':') {
+        authority.to_owned()
+    } else {
+        format!("{authority}:{}", if https { 443 } else { 80 })
+    };
+    let probe = async {
+        let mut stream = tokio::net::TcpStream::connect(address).await.ok()?;
+        if https {
+            return Some(true);
+        }
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.ok()?;
+        let mut start = [0; 5];
+        stream.read_exact(&mut start).await.ok()?;
+        Some(&start == b"HTTP/")
+    };
+    matches!(
+        tokio::time::timeout(PROBE_TIMEOUT, probe).await,
+        Ok(Some(true))
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tauri_and_electron_dev_commands_are_apps_and_the_rest_web() {
+        for app in [
+            "pnpm tauri dev",
+            "cargo tauri dev --config '{\"identifier\":\"ai.brigadier.x\"}'",
+            "npm run tauri -- dev",
+            "pnpm tauri:dev",
+            "BRIGADIER_DATA_DIR=/tmp/x pnpm run tauri:dev",
+            "electron .",
+            "./node_modules/.bin/electron main.js --no-sandbox",
+            "npx electron-forge start",
+            "pnpm exec electron-vite dev",
+        ] {
+            assert_eq!(infer_kind(app), PreviewKind::App, "{app}");
+        }
+        for web in [
+            "pnpm dev",
+            "npm run dev -- --port 3000",
+            "vite",
+            "pnpm tauri build",
+            "pnpm tauri:debug-app",
+            "python3 -m http.server",
+            "electron-builder --dir",
+            "electron-vite build",
+        ] {
+            assert_eq!(infer_kind(web), PreviewKind::Web, "{web}");
+        }
+    }
+
+    #[test]
+    fn lsof_names_give_their_ports() {
+        assert_eq!(
+            lsof_ports("p12\nf5\nn*:3000\nf6\nn127.0.0.1:5173\np13\nf7\nn[::1]:5173\n"),
+            vec![3000, 5173]
+        );
+        assert_eq!(lsof_ports(""), Vec::<u16>::new());
+    }
+
+    #[tokio::test]
+    async fn a_url_answers_once_a_server_responds_and_a_port_once_it_accepts() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}/app");
+        let server = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 1024];
+            let read = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&request[..read]).into_owned()
+        });
+        assert!(url_answers(&url).await);
+        assert!(server.await.unwrap().starts_with("GET /app HTTP/1.1\r\n"));
+        assert!(!port_answers(port).await);
+        // Nothing listens there any more.
+        assert!(!url_answers(&url).await);
+        assert!(!url_answers("ftp://localhost/").await);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_accepts_but_does_not_answer_yet_is_not_ready() {
+        use tokio::io::AsyncWriteExt as _;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (answer_tx, mut answer_rx) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                if *answer_rx.borrow_and_update() {
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
+                } else {
+                    // Accepted, never answered: held until the probe gives up.
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        drop(stream);
+                    });
+                }
+            }
+        });
+        assert!(!port_answers(port).await);
+        answer_tx.send(true).unwrap();
+        assert!(port_answers(port).await);
+    }
+}

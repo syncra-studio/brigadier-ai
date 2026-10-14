@@ -1,3 +1,4 @@
+import { revealNewPreviews } from "@/app/conversation/summaryState";
 import { subscribe } from "@/ipc/client";
 import type { BridgeEvent, EventEnvelope } from "@/ipc/generated";
 import { markApplied, noteFlush, setSamplingPaused } from "@/lib/perf";
@@ -37,6 +38,7 @@ function flush() {
   queued = [];
   const started = performance.now();
   applyEvents(batch);
+  revealNewPreviews(batch);
   applyBoardEvents(batch);
   applyActivityEvents(batch);
   applyBrainEvents(batch);

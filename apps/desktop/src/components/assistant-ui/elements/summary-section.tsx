@@ -20,6 +20,7 @@ export function SummarySection({
   summary,
   action,
   defaultFolded = false,
+  unfoldOnIncrease = 0,
   className,
   children,
   ...props
@@ -35,9 +36,16 @@ export function SummarySection({
   action?: ReactNode;
   /** Folded until the user opens it (a plan whose steps are all done). */
   defaultFolded?: boolean;
+  /** Reveal new items locally, without changing the fold saved by hand. */
+  unfoldOnIncrease?: number;
 }) {
   const bodyId = useId();
   const [kept, setKept] = useState(() => folds.get(foldKey));
+  const [previousCount, setPreviousCount] = useState(0);
+  if (previousCount !== unfoldOnIncrease) {
+    setPreviousCount(unfoldOnIncrease);
+    if (unfoldOnIncrease > previousCount) setKept(false);
+  }
   const folded = kept ?? defaultFolded;
   const toggle = () => {
     folds.set(foldKey, !folded);

@@ -144,6 +144,7 @@ impl SessionManager {
                             waiting_for: Vec::new(),
                             from_peer: None,
                             held_by: None,
+                            background_jobs: None,
                         },
                     }],
                 )

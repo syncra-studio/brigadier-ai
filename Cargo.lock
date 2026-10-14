@@ -475,6 +475,8 @@ dependencies = [
  "memchr",
  "nix 0.31.3",
  "notify",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "regex",
  "rusqlite",
  "rusqlite_migration",

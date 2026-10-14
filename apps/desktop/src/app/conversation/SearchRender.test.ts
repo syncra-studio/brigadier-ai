@@ -16,12 +16,23 @@ test("Search streams grouped results, opens a line, asks again on its options, r
   assert.equal(seen.replaceTypingSearched, false, "typing a replacement doesn't search");
   assert.equal(seen.fileConfirm, "Replace 2 matches in 1 file?");
   assert.equal(seen.noReplaceBeforeConfirm, true);
-  assert.equal(seen.confirm, "Replace 3 matches in 2 files?");
+  assert.equal(seen.dismissTabIndex, 0);
+  assert.equal(seen.dismissedSummary, "1 result in 1 file");
+  assert.equal(seen.dismissedFocus, "README.md");
+  assert.deepEqual(seen.dismissedRows, ["README.md", "README.md:1"]);
+  assert.equal(seen.refreshDismissed, true);
+  assert.match(String(seen.emptySummary), /^All results dismissed/);
+  assert.equal(seen.emptyFocus, "Search results");
+  assert.equal(seen.dismissedStreaming, "Searching…");
+  assert.equal(seen.filteredStreaming, "Searching…");
+  assert.match(String(seen.filteredDone), /^All results dismissed/);
+  assert.equal(seen.emptyRefresh, "No results");
+  assert.equal(seen.confirm, "Replace 1 match in 1 file?");
   assert.deepEqual(seen.replace, {
     replacement: "bar", matchCase: true,
-    files: [{ path: "src/app.ts", hash: "h-app", matches: 2 }, { path: "README.md", hash: "h-readme", matches: 1 }],
+    files: [{ path: "README.md", hash: "h-readme", matches: 1 }],
   }, "the files go with the search's hashes and counts");
-  assert.equal(seen.outcome, "Replaced 3 matches in 2 files.");
+  assert.equal(seen.outcome, "Replaced 1 match in 1 file.");
   assert.equal(seen.reconnected, false, "after reconnecting, the search shown is asked again");
   assert.match(String(seen.patternError), /valid regular expression/);
   assert.equal(seen.cleared, true, "a cleared query clears the results");
@@ -41,6 +52,10 @@ test("Search streams grouped results, opens a line, asks again on its options, r
   assert.match(String(seen.manyOutcome), /^Nothing was replaced: many-7\.ts \(it changed while the files were being replaced\)\. Search again, then replace\./);
   assert.match(String(seen.manyOutcome), /Couldn’t put back: many-3\.ts \(.*its text from before is in src\/\.many-3\.ts\.replaced-1\)/);
   assert.equal(seen.collapsedSummary, "1,500 results in 300 files");
-  assert.equal(seen.manyConfirm, "Replace 1,500 matches in 300 files?");
-  assert.equal(seen.manyReplaced, 300, "Replace all takes every file, drawn or not");
+  assert.equal(seen.deleteFocus, "src/many-1.ts");
+  assert.equal(seen.deleteSummary, "1,495 results in 299 files");
+  assert.equal(seen.backspaceFocus, "src/many-298.ts");
+  assert.equal(seen.metaBackspaceFocus, "src/many-297.ts");
+  assert.equal(seen.manyConfirm, "Replace 1,485 matches in 297 files?");
+  assert.equal(seen.manyReplaced, 297, "Replace all takes every file, drawn or not");
 });

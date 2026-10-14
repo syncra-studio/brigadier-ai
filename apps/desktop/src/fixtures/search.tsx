@@ -14,7 +14,7 @@ import { createRoot } from "react-dom/client";
 import { SearchPanel } from "@/app/conversation/SearchPanel";
 import type { Request, SearchFile } from "@/ipc/generated";
 import { useApp } from "@/state/store";
-import { emitSearchUpdate } from "@/state/workspaceSearch";
+import { emitSearchUpdate, runSearch } from "@/state/workspaceSearch";
 
 const files: SearchFile[] = [
   { path: "src/app.ts", matches: 2, hash: "h-app", lines: [
@@ -60,7 +60,7 @@ mockIPC((command, args) => {
   if (req.method === "replaceInFiles") {
     // The first replace goes through; the second meets a file changed meanwhile, and one it
     // couldn't put back.
-    if (req.files.length < 10) return { method: req.method, outcome: { files: req.files.length, matches: 3, skipped: [], unrestored: [] } };
+    if (req.files.length < 10) return { method: req.method, outcome: { files: req.files.length, matches: req.files.reduce((sum, file) => sum + file.matches, 0), skipped: [], unrestored: [] } };
     return {
       method: req.method,
       outcome: {
@@ -146,6 +146,15 @@ function Fixture() {
       [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Cancel")!.click();
       await until(() => !document.querySelector('[role="dialog"][data-state="open"]'));
       await sleep(100);
+      const dismiss = button("session", "Dismiss")!;
+      inPanel("session").querySelector<HTMLButtonElement>('button[title="src/app.ts"]')!.focus();
+      await sleep(50);
+      seen.dismissTabIndex = dismiss.tabIndex;
+      dismiss.click();
+      await until(() => summary() === "1 result in 1 file");
+      seen.dismissedSummary = summary();
+      seen.dismissedFocus = document.activeElement?.getAttribute("title");
+      seen.dismissedRows = drawn("session").map((row) => row.querySelector("[data-row-button]")?.getAttribute("title"));
       button("session", "Replace all")!.click();
       await until(() => !!document.querySelector('[role="dialog"]'));
       seen.confirm = document.querySelector('[role="dialog"] h2')?.textContent;
@@ -157,17 +166,39 @@ function Fixture() {
       seen.outcome = inPanel("session").querySelector('[role="status"]')?.textContent;
       // The replace changed the checkout: the search runs again.
       await until(() => starts().length === 3);
-      await until(() => summary() === "3 results in 2 files");
+      await until(() => summary() === "1 result in 1 file");
+      seen.refreshDismissed = !inPanel("session").querySelector('[title="src/app.ts"]');
+      button("session", "Dismiss")!.click();
+      await sleep(80);
+      seen.emptySummary = summary();
+      seen.emptyFocus = document.activeElement?.getAttribute("aria-label");
+      // An automatic refresh must distinguish hidden matches from no matches.
+      silent = true;
+      const refreshQuery = (starts().at(-1) as Extract<Request, { method: "startSearch" }>).query;
+      runSearch(session, refreshQuery);
+      await until(() => summary() === "Searching…");
+      seen.dismissedStreaming = summary();
+      emitSearchUpdate(ids, { type: "files", files });
+      await sleep(50);
+      seen.filteredStreaming = summary();
+      emitSearchUpdate(ids, { type: "done", files: 2, matches: 3, capped: false });
+      await until(() => summary()?.startsWith("All results dismissed") === true);
+      seen.filteredDone = summary();
+      runSearch(session, refreshQuery);
+      await until(() => summary() === "Searching…");
+      emitSearchUpdate(ids, { type: "done", files: 0, matches: 0, capped: false });
+      await until(() => summary() === "No results");
+      seen.emptyRefresh = summary();
       // The connection drops mid-search, which the new one doesn't carry on: it is asked again.
       silent = true;
       button("session", "Match case")!.click();
-      await until(() => starts().length === 4);
+      await until(() => starts().length === 6);
       connection("disconnected");
       await sleep(50);
       silent = false;
       connection("connected");
-      await until(() => starts().length === 5 && summary() === "3 results in 2 files");
-      seen.reconnected = (starts()[4] as Extract<Request, { method: "startSearch" }>).query.matchCase;
+      await until(() => starts().length === 7 && summary() === "3 results in 2 files");
+      seen.reconnected = (starts()[6] as Extract<Request, { method: "startSearch" }>).query.matchCase;
       button("session", "Regular expression")!.click();
       type(field("session", "Search"), "(");
       await until(() => !!inPanel("session").querySelector('[role="alert"]'));
@@ -196,6 +227,15 @@ function Fixture() {
       await sleep(80);
       seen.collapsedRows = drawn("many").every((row) => row.dataset.row === "file");
       seen.collapsedSummary = summary("many");
+      drawn("many")[0]!.querySelector<HTMLElement>("[data-row-button]")!.focus();
+      await sleep(50);
+      seen.deleteFocus = await key("Delete");
+      seen.deleteSummary = summary("many");
+      await key("End");
+      seen.backspaceFocus = await key("Backspace");
+      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", metaKey: true, bubbles: true, cancelable: true }));
+      await sleep(80);
+      seen.metaBackspaceFocus = document.activeElement?.getAttribute("title");
       // Replace all takes every file found, drawn or not.
       type(field("many", "Replace"), "few");
       button("many", "Replace all")!.click();

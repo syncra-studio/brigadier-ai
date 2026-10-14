@@ -36,6 +36,7 @@ import {
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
 import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
+import { PreviewChip } from "@/app/conversation/PreviewChip";
 import { ChecksRow, ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
@@ -53,6 +54,7 @@ import {
   SummarySection,
 } from "@/components/assistant-ui/elements/summary-section";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TitlebarButton } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -502,7 +504,7 @@ export function SummaryPane({
       useSummary.setState((state) =>
         state.layout === layout
           ? state
-          : { layout, floating: state.floating && layout === "float" },
+          : { layout, floating: state.floating && layout === "float", automatic: state.automatic && layout === "float" },
       );
     });
     observer.observe(element);
@@ -511,7 +513,7 @@ export function SummaryPane({
       cancelAnimationFrame(frame);
       delete element.dataset.summary;
       delete element.dataset.settled;
-      useSummary.setState({ layout: "beside", floating: false });
+      useSummary.setState({ layout: "beside", floating: false, automatic: false });
     };
   }, [summary]);
   return (
@@ -609,6 +611,7 @@ function SummaryCard({
   return (
     <div
       data-slot="summary-card"
+      tabIndex={-1}
       style={
         height === null
           ? undefined
@@ -694,11 +697,13 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
   const shownPanel = useRef(panel);
   const shownTab = useRef(mainTab);
   const movedOn = useRef(false);
+  const automaticOpen = useRef(false);
+  const focusEntered = useRef(false);
   useEffect(() => {
     const away = panel !== shownPanel.current || (mainTab !== shownTab.current && mainTab !== CHAT_TAB);
     if (away && useSummary.getState().floating) {
       movedOn.current = true;
-      useSummary.setState({ floating: false });
+      useSummary.setState({ floating: false, automatic: false });
     }
     shownPanel.current = panel;
     shownTab.current = mainTab;
@@ -713,15 +718,22 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
         sideOffset={0}
         aria-label="Context"
         onScroll={onScroll}
+        onFocusCapture={() => { focusEntered.current = true; }}
         // Focus the summary itself, not its first button (whose tip would open with it).
         onOpenAutoFocus={(event) => {
           event.preventDefault();
+          automaticOpen.current = useSummary.getState().automatic;
+          focusEntered.current = false;
+          if (automaticOpen.current) {
+            useSummary.setState({ automatic: false });
+            return;
+          }
           if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
         }}
         onCloseAutoFocus={(event) => {
-          if (!movedOn.current) return;
+          if (movedOn.current || (automaticOpen.current && !focusEntered.current)) event.preventDefault();
           movedOn.current = false;
-          event.preventDefault();
+          automaticOpen.current = false;
         }}
         className={cn(
           STACK,
@@ -741,7 +753,7 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
 export function SummaryFloat({ children }: { children: ReactNode }) {
   const floating = useSummary((s) => s.floating);
   return (
-    <Popover open={floating} onOpenChange={(open) => useSummary.setState({ floating: open })}>
+    <Popover open={floating} onOpenChange={(open) => useSummary.setState({ floating: open, automatic: false })}>
       {children}
     </Popover>
   );
@@ -866,6 +878,7 @@ function SessionSummaryContent({
     <>
       <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
         <div className="flex flex-col py-2.5">
+          <PreviewChip conversationId={conversation.id} />
           <SummarySection
             foldKey="project"
             title={<span title={checkout}>{project ?? setup.repo}</span>}
@@ -924,29 +937,25 @@ export function PinnedSummaryToggle() {
   const floating = useSummary((s) => s.floating);
   if (!float) {
     return (
-      <TooltipIconButton
+      <TitlebarButton
         tooltip="Context"
         aria-label="Context"
-        size="icon-md"
         aria-pressed={pinned}
-        className={cn(pinned && "bg-muted")}
         onClick={() => setPinnedSummary(!pinned)}
       >
         <Tasks />
-      </TooltipIconButton>
+      </TitlebarButton>
     );
   }
   return (
     <PopoverTrigger asChild>
-      <TooltipIconButton
+      <TitlebarButton
         tooltip="Context"
         aria-label="Context"
-        size="icon-md"
         aria-pressed={floating}
-        className={cn(floating && "bg-muted")}
       >
         <Tasks />
-      </TooltipIconButton>
+      </TitlebarButton>
     </PopoverTrigger>
   );
 }

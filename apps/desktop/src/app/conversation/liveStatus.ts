@@ -22,7 +22,7 @@ export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number };
 export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
-  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages" | "backgroundRuns" | "integratedChecks">;
+  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages" | "backgroundRuns" | "integratedChecks">;
   requestIds: readonly string[];
   state: BlockState;
   /** A live thinking snippet shows at the end of the work. */
@@ -146,6 +146,13 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
   }
   const running = runningHead(input);
   if (running) return { head: running };
+  // The lead's turn ended while a command it runs in the background goes on: that command's end
+  // starts the turn that answers.
+  const jobs = requestIds.reduce((sum, id) => sum + (board.requests[id]?.backgroundJobs ?? 0), 0);
+  if (jobs > 0) {
+    const text = jobs === 1 ? "Waiting for a command" : `Waiting for ${jobs} commands`;
+    return { head: { text, tone: "still" } };
+  }
   // It rests until other sessions reply: "Waiting for API work to reply".
   if (state === "waiting" && input.waitingFor?.length) return { head: { text: waitingWords(input.waitingFor), tone: "still" } };
   // Waiting with nothing above to show (an overnight run's list): no line. A question in the

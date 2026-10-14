@@ -615,10 +615,27 @@ pub struct Preview {
     /// The latest snapshot of its log (`out-<id>`, read with `read_artifact`).
     #[serde(default)]
     pub log: Option<String>,
-    /// A local HTTP URL printed by this preview.
+    /// A local HTTP URL printed by this preview; never for an app preview, whose window is
+    /// what the user looks at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub url: Option<String>,
+    #[serde(default)]
+    pub kind: PreviewKind,
+}
+
+/// What a preview shows the user, which decides when it is ready and whether it has a URL.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum PreviewKind {
+    /// A web page (a dev server, a docs site): ready once its URL or a port it listens on
+    /// answers, or once it opens a window.
+    #[default]
+    Web,
+    /// A desktop app that opens its own window (`tauri dev`, Electron): ready once it does.
+    App,
 }
 
 /// Where a preview stands.
@@ -629,6 +646,8 @@ pub struct Preview {
     rename_all_fields = "camelCase"
 )]
 pub enum PreviewState {
+    /// Its process runs but what it shows isn't ready yet (still building, no window yet).
+    Starting,
     Running,
     /// The user suspended its process group; it still belongs to the session.
     Paused,
@@ -645,11 +664,12 @@ pub enum PreviewState {
 
 impl PreviewState {
     pub fn is_live(&self) -> bool {
-        matches!(self, Self::Running | Self::Paused)
+        matches!(self, Self::Starting | Self::Running | Self::Paused)
     }
 
+    /// Its process runs (starting or ready), not paused or ended.
     pub fn is_running(&self) -> bool {
-        matches!(self, Self::Running)
+        matches!(self, Self::Starting | Self::Running)
     }
 }
 
@@ -1116,6 +1136,13 @@ pub struct Question {
     pub answers: Vec<String>,
     pub created_at_ms: i64,
     pub answered_at_ms: Option<i64>,
+    /// A merge card the user answered in their own words: the user message they went as (a
+    /// new request), its queued message while it waits, or the card's own id while they are on
+    /// their way. Its answer is "Not yet", and that message is never consent to merge nor the user
+    /// writing since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub words_id: Option<String>,
 }
 
 impl Question {
@@ -2166,6 +2193,11 @@ pub struct UserRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub held_by: Option<HeldBy>,
+    /// While it works: how many of the orchestrator's own background jobs (a command it runs
+    /// in the background) still run for it. Their end starts the turn that answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub background_jobs: Option<u32>,
 }
 
 /// A stretch of time a request worked.

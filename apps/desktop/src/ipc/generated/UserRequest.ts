@@ -59,4 +59,9 @@ fromPeer?: ConversationId,
  * Steered into a turn while the thread's command runs: the thread reads it once that
  * command ends.
  */
-heldBy?: HeldBy, };
+heldBy?: HeldBy, 
+/**
+ * While it works: how many of the orchestrator's own background jobs (a command it runs
+ * in the background) still run for it. Their end starts the turn that answers.
+ */
+backgroundJobs?: number, };

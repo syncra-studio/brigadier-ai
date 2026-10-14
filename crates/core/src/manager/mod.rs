@@ -60,6 +60,7 @@ mod peer_wait;
 mod peers;
 mod phases;
 mod preview;
+mod preview_ready;
 mod prewarm;
 mod project_removal;
 mod prompts;

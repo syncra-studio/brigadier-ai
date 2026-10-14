@@ -651,6 +651,30 @@ impl Core {
             .await
     }
 
+    /// Sends queued message `item` as the user's message. A merge card answered in the words
+    /// it carries points at the message from now on.
+    pub async fn append_queued(&self, id: ConversationId, item: QueuedMessage) -> Result<Message> {
+        let message = self
+            .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
+            .await?;
+        let board = self.board(&id).await?;
+        let events: Vec<_> = board
+            .questions
+            .values()
+            .filter(|question| question.words_id.as_deref() == Some(item.id.as_str()))
+            .map(|question| DomainEvent::QuestionUpdated {
+                question: crate::work::Question {
+                    words_id: Some(message.id.clone()),
+                    ..question.clone()
+                },
+            })
+            .collect();
+        if !events.is_empty() {
+            self.record_conversation(&id, events).await?;
+        }
+        Ok(message)
+    }
+
     /// Appends a user message after `parent` (a message id, or [`ROOT`] for a new first
     /// message) instead of after the branch shown: an edit starts a branch beside the
     /// message it edits.
@@ -722,6 +746,7 @@ impl Core {
                         waiting_for: Vec::new(),
                         from_peer: None,
                         held_by: None,
+                        background_jobs: None,
                     },
                 },
             ),
@@ -1523,6 +1548,7 @@ impl Core {
     }
 
     /// Records a request's new state, unless it already has it. Returns whether it changed.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn update_request(
         &self,
         id: &ConversationId,
@@ -1531,6 +1557,7 @@ impl Core {
         quota_wait: bool,
         card_wait: bool,
         waiting_for: Vec<ConversationId>,
+        background_jobs: Option<u32>,
     ) -> Result<bool> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
@@ -1547,6 +1574,7 @@ impl Core {
         let before = request.clone();
         request.moved_to(state, quota_wait, card_wait, now_ms());
         request.waiting_for = waiting_for;
+        request.background_jobs = background_jobs;
         if request == before {
             return Ok(false);
         }
