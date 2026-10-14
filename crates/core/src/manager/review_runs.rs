@@ -1600,6 +1600,15 @@ impl SessionManager {
             None => None,
         };
         let of = number.map_or_else(|| "the session".to_owned(), |n| format!("task-{n}"));
+        // A worker's own review whose worker reported before it ended: its work may not have
+        // landed yet.
+        let unlanded = match &review.task_id {
+            Some(task_id) => self
+                .task_by_id(&review.conversation_id, task_id)
+                .await
+                .is_ok_and(|task| task.landed.is_none() && task.state == TaskState::Reported),
+            None => false,
+        };
         let range = format!("{}..{}", short(&review.base), short(&review.tip));
         let text = match (review.kind, &review.state, text) {
             // The thread's own commits and plans.
@@ -1631,8 +1640,13 @@ impl SessionManager {
                 )
             }
             (ReviewKind::Code, ReviewState::Findings { count }, Some(text)) => format!(
-                "[review {of} · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of what landed. Fix what you agree with (delegate a fix, or a tiny fix of your own), or tell the user why not. A fix commit of yours names what it fixes, `--trailer \"{FIXES_TRAILER}: <their ids>\"`: it gets no review of its own, and a held merge still covers it. There are no review rounds.\n{}",
+                "[review {of} · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of what landed{}. Fix what you agree with (delegate a fix, or a tiny fix of your own), or tell the user why not. A fix commit of yours names what it fixes, `--trailer \"{FIXES_TRAILER}: <their ids>\"`: it gets no review of its own, and a held merge still covers it. There are no review rounds.\n{}",
                 clipped(text),
+                if unlanded {
+                    " (its worker reported before it ended: land the work as usual, and its fixes come after)"
+                } else {
+                    ""
+                },
                 record_line(&review.items)
             ),
             (ReviewKind::Plan, ReviewState::Findings { count }, Some(text)) => format!(
