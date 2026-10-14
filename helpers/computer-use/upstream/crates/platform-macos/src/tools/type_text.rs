@@ -1530,7 +1530,9 @@ fn type_text_blocking(
             && target_in_web_area(pid, Some((element as usize, idx_opt)), window_id);
         // An AX insert bypasses NSTextView's edit model, so a document is
         // not marked edited and would never save the new text (DS-07).
-        let document = if ax_progress == Some(TypedProgress::Complete) {
+        let document = if ax_progress == Some(TypedProgress::Complete)
+            && crate::document_edit::key_edit_after_insert()
+        {
             unsafe { crate::document_edit::ensure_marked_after_ax_write(pid, element, false) }
         } else {
             crate::document_edit::DocumentEdited::NotADocument

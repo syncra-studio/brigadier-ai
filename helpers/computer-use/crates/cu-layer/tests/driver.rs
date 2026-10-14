@@ -62,6 +62,14 @@ fn every_driver_tool_is_classified() {
     );
 }
 
+/// Text typed into a document stays one undo step: no key edit is added
+/// after the insert, which ⌘Z would undo instead of the agent's text.
+#[test]
+fn typed_text_is_not_followed_by_a_key_edit() {
+    let _registry = brigadier_registry();
+    assert!(!platform_macos::document_edit::key_edit_after_insert());
+}
+
 /// What agents see: tool names and their arguments, and no word of the
 /// foreground anywhere in the list.
 #[test]

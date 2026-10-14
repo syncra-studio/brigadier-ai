@@ -24,7 +24,9 @@ pub struct Options {
 /// Build the registry. Call [`crate::configure_environment`] first.
 ///
 /// Installs the focus policy (once per process), the recording hooks and
-/// Brigadier's cursor motion as the saved default, then
+/// Brigadier's cursor motion as the saved default, and leaves out the key
+/// edit after a text insert (an insert into a document's text already marks
+/// it edited, and the key edit would make ⌘Z undo only itself), then
 /// builds the driver's tools under the driver's own runtime scope, so
 /// element tokens taken in one call resolve in the next. Brigadier's
 /// `page`, `scroll`, `hotkey`, `type_text`, `get_window_state` and
@@ -36,6 +38,7 @@ pub fn build(options: Options) -> Result<Arc<ToolRegistry>, String> {
     crate::offspace::install();
     install_recording_hooks();
     crate::cursor_motion::seed_default();
+    platform_macos::document_edit::set_key_edit_after_insert(false);
     let scope = cua_driver_core::session_authorization::configured_registry()?
         .legacy_context()?
         .runtime_scope_key();

@@ -14,8 +14,27 @@
 //! stays false for autosave-in-place documents even after a typed edit (VM
 //! check, TextEdit, 11 Oct 2026); TextEdit's autosave writing the new text is
 //! the evidence.
+//!
+//! An embedding app can turn the key edit off for `AXSelectedText` inserts
+//! ([`set_key_edit_after_insert`]) where it finds the insert already goes
+//! through the text view's edit model: the key edit is then a second undo
+//! step on top of the insert, and ⌘Z undoes only the key edit.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+static KEY_EDIT_AFTER_INSERT: AtomicBool = AtomicBool::new(true);
+
+/// Whether an `AXSelectedText` insert into a document window is followed by
+/// the net-zero key edit. On by default; whole-value writes always get it.
+pub fn set_key_edit_after_insert(on: bool) {
+    KEY_EDIT_AFTER_INSERT.store(on, Ordering::Relaxed);
+}
+
+/// See [`set_key_edit_after_insert`].
+pub fn key_edit_after_insert() -> bool {
+    KEY_EDIT_AFTER_INSERT.load(Ordering::Relaxed)
+}
 
 use crate::ax::bindings::{
     copy_element_attr, copy_string_attr, AXUIElementRef, AXUIElementSetAttributeValue,
