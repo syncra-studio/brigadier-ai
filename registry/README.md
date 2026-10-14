@@ -72,7 +72,7 @@ the CLI itself reports: efforts are the intersection of both lists, and so is im
    read, so an invalid document fails at startup in development.
 
 Installed apps fetch
-`https://raw.githubusercontent.com/stephen-golban/brigadier-ai/main/registry/models.json`
+`https://raw.githubusercontent.com/syncra-studio/brigadier-ai/main/registry/models.json`
 over HTTPS, at most once a day, with `If-None-Match`. They keep a copy in their data
 directory. The copy is **not signed yet**: its integrity rests on HTTPS from GitHub plus the
 checks above. Signing arrives in Phase 10 and will use the same minisign key as the app

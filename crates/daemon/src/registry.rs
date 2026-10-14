@@ -19,7 +19,7 @@ use crate::server::Daemon;
 
 /// The published registry.
 const REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/stephen-golban/brigadier-ai/main/registry/models.json";
+    "https://raw.githubusercontent.com/syncra-studio/brigadier-ai/main/registry/models.json";
 /// The first check after launch, then how often.
 const FIRST_CHECK: Duration = Duration::from_secs(60);
 const CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
