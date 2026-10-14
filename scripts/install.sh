@@ -18,7 +18,11 @@ install_alpha() {
   [ "$major" -ge 14 ] || fail 'macOS 14 or later is required.'
   case "$(uname -m)" in
     arm64) arch=aarch64 ;;
-    x86_64) arch=x64 ;;
+    x86_64)
+      arch=x64
+      # A Terminal running through Rosetta reports x86_64 on Apple Silicon.
+      if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then arch=aarch64; fi
+      ;;
     *) fail 'Unsupported processor architecture.' ;;
   esac
   release=https://github.com/syncra-studio/brigadier-ai/releases/download/v0.1.0-alpha
