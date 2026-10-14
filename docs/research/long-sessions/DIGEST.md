@@ -10,7 +10,9 @@ run. Applicability to Brigadier, which drives the user's unmodified CLIs on subs
 on the installed CLI (help output, binary, protocol schema or our probe), **CLI?** documented for the CLI but not
 verified here, **API** API-only (no use to Brigadier), **Prompt** works through instructions alone.
 
-Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-in. Adapters:
+Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-in. (Claude Code auto-updated to
+2.1.300 on 2026-10-14 after the research; the CLI✓ flags were re-checked in 2.1.300's help and the binary strings in
+2.1.299 and 2.1.300.) Adapters:
 `crates/providers/src/claude/mod.rs` (stream-json `claude -p`) and `crates/providers/src/codex/mod.rs`
 (`codex app-server`).
 
@@ -26,12 +28,13 @@ Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-
    conversations). Grade C, strong. This supports Brigadier's rebirth over CLI compaction.
 3. **Free-text summaries drop standing rules, and the loss compounds every round.** Compactors kept 17% of injected
    constraints (Wang 2026). One CLI's built-in compact prompt kept 53% of safety rules after one round and 10% after
-   five (Zerhoudi, CIKM 2026). Carrying constraints as a separate, verbatim block restored more than 90% retention,
-   and 0% violations (Chen 2026). Repeated full rewrites erode detail; incremental itemised updates are better (ACE,
+   five (Zerhoudi, CIKM 2026). Extracting constraints separately and appending them after the summary kept over 90%
+   (Wang 2026; the abstract doesn't say word for word), and pinning them outside the summary brought violations back
+   to 0% (Chen 2026). Repeated full rewrites erode detail; incremental itemised updates are better (ACE,
    ICLR 2026). Grade C. **For Brigadier:** the decisions ledger, carried whole, already is such a block. The weak
    part is anything that reaches the next session only through the model's own prose note (WEAK-SPOTS C4, C5, C8).
-4. **Hiding old tool output is the cheapest, best-evidenced saving.** Masking old observations cut cost by about 50%
-   and matched or beat LLM summaries on solve rate. Summaries made runs 13–15% longer, and an untuned hybrid lost
+4. **Hiding old tool output is the cheapest, best-evidenced saving.** Masking old observations cut cost by about half
+   against the raw agent and matched or beat LLM summaries on solve rate. Summaries made runs 13–15% longer, and an untuned hybrid lost
    money to cache invalidation (Complexity Trap, NeurIPS 2025 workshop, SWE-bench Verified 500, 5 configurations).
    Trajectory reduction saved 21–36% of cost at equal success (AgentDiet, FSE 2026). Goal-directed trimming of tool
    output saved 23–54% (SWE-Pruner 2026). Grade C. **For Brigadier:** it can't edit a CLI's history, so masking
@@ -42,24 +45,26 @@ Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-
    in tokens between runs (Bai et al. 2026). Grade C. **For Brigadier:** single runs can't show a saving. This
    repeats §7's rule: judge per completed task, with several runs.
 6. **"Done" claims and LLM judges that read transcripts are unreliable; checks of the real state work.** 75.8% of
-   failed coding-agent runs that stated a status claimed success. LLM judges reading the transcript scored AUROC ≤
+   failed coding-agent runs that stated a status claimed success (AppWorld, where agents write code against app
+   APIs). LLM judges reading the transcript scored AUROC ≤
    0.65 (Advani 2026). Self-correction without outside feedback often makes answers worse; a sound external
    verifier helps (Huang, ICLR 2024; Stechly, ICLR 2025). Capable models game contradictory tests (ImpossibleBench,
    ICLR 2026). Grade C. **For Brigadier:** integrated checks on the real tree and the "[not checked], never [met]"
    rule are right. Turning worker claims into Brain facts (G1) and accepting an overnight phase on a summary (G2) go
    against this evidence.
-7. **Storing an agent's own claims as memory spreads its errors** (Xiong, ACL 2026: ~10% absolute gain from adding
-   only evaluator-approved memories; HaluMem 2025). Grade C. This bears directly on G1.
+7. **Storing an agent's own claims as memory spreads its errors** (Xiong 2025, arXiv preprint: adding only
+   evaluator-approved memories gained 15–26 points absolute over adding everything, across four agents; HaluMem 2025). Grade C. This bears directly on G1.
 8. **Effort: moderate is usually the frontier, and the top setting mostly adds cost.** Opus 5 at low effort
    resolved 17/25 hard tasks against 18 at high and 16 at xhigh, at $0.75 against $1.89 and $3.62 per resolved
-   task. Sonnet 5 needed high (12 at low against 19 at high, p = 0.016). "Think deeply" and "try several approaches"
-   wording multiplied reasoning cost 1.6–7.4× for the same success (Weinberger 2026, inside Claude Code; small n,
-   grade A/C). Vendors: Opus 5.5 at medium is at least Opus 5 at high, and "low comes close" (V). **For Brigadier:**
+   task. Sonnet 5 needed high (12 at low against 19 at high, p = 0.016). The effort runs used Claude Code 2.1.220
+   (Weinberger 2026; small n, grade A/C). In the same paper, "think very deeply" and "try multiple approaches"
+   wording multiplied reasoning tokens 1.6–7.4× at comparable success, measured on six open models, not in Claude
+   Code. Vendors: Opus 5.5 at medium is at least Opus 5 at high, and "low comes close" (V). **For Brigadier:**
    the effort to use depends on the model (see WEAK-SPOTS E1). Lower effort is not assumed to keep quality; it is a
    thing to measure.
 9. **Multi-agent pays only for truly parallel work.** Every multi-agent variant lost 39–70% on sequential planning,
-   and independent agents amplified errors 17× against 4× with a coordinator (Kim et al. 2025, 180
-   configurations). Five of six multi-agent workflows trailed one agent while using 1.4–4.3× the tokens (Fu 2026).
+   and independent agents amplified errors 17× against 4× with a coordinator (Kim et al. 2025, v1: 180
+   configurations; the April 2026 revision reports 260 configurations and a worst case of −70% on sequential planning). Five of six multi-agent workflows trailed one agent while using 1.4–4.3× the tokens (Fu 2026).
    Vendor: multi-agent ≈ 15× chat tokens, a poor fit for most coding (Anthropic 2025). Grade C. **For Brigadier:**
    delegation is right for context isolation and parallel parts, wrong as a default for a small, sequential ask
    (WEAK-SPOTS S1).
@@ -111,7 +116,7 @@ Installed: Claude Code 2.1.299 and codex-cli 0.162.1, both on subscription sign-
 | Hallucination comes from grading that rewards guessing; abstaining should beat a wrong answer | openai.com/index/why-language-models-hallucinate (2025-09-05) | M | Prompt (reward "unknown") |
 | Output tokens dominate latency: halving output can halve latency; halving input gives 1–5% | OpenAI latency guide | V | Prompt (short answers), routing |
 | Opus 5.5 at medium ≥ Opus 5 at high; removing "think carefully" lines makes replies start sooner; "treat earlier answers as settled" cuts follow-up thinking; time budgets make teams finish sooner | prompting Claude Opus 5.5 | V | CLI✓ (`--effort`) + Prompt |
-| Agent teams use about 7× the tokens; keep CLAUDE.md under 200 lines, move detail to on-demand skills | code.claude.com/docs/en/costs | V/M | Prompt, layout |
+| Agent teams use about 7× the tokens of a standard session when teammates run in plan mode; keep CLAUDE.md under 200 lines, move detail to on-demand skills | code.claude.com/docs/en/costs | V/M | Prompt, layout |
 
 ## 3. Research literature
 
@@ -159,7 +164,7 @@ are marked **M**.
 | Replace compaction with a goal-directed hand-off the user can edit: a new thread gets only the context relevant to the stated goal | ampcode.com/news/handoff (2025-10-23) | D | Yes. This is close to Brigadier's design |
 | Claude Code already writes large Bash output to `<session>/tool-results/<id>.txt` and shows the model a ~2 KB preview with the path | Claude Code issues (2026) | D/A | Built in. Brigadier's Claude workers get it already; Brigadier's own transcript still clips at 8 KiB (C9) |
 | A dropped constraint after auto-compaction (a `varchar(128)` rule from turn 8, lost around turn 28) cost 10 turns of wrong work and a 15-turn undo; many independent reports of CLAUDE.md rules dropped after compaction | zivtech.com "Economics of Claude Code, Part 3" (2026-04/06); claude-code issues | M/A | The case for pinned constraints (PLAN A1) |
-| The built-in LSP tool against grep on a 149k-LOC repo: 31–33% fewer tool-output tokens, and grep missed references (9/11, 249/260) where LSP missed none, when the model was told to trust the result without re-reading | circleci.com/blog/claude-code-lsp (2026-06-24) | M (small n) | Yes, a built-in tool switched on by config. Brigadier doesn't enable it (PLAN B2) |
+| The built-in LSP tool against grep on a 149k-LOC repo: 31–33% fewer tool-output tokens, and grep alone missed references on Sonnet 4.6 (9/11, 249/260; Opus found all with either) where LSP missed none, when the model was told to trust the result without re-reading | circleci.com/blog/claude-code-lsp (2026-06-24) | M (small n) | Yes, a built-in tool switched on by config. Brigadier doesn't enable it (PLAN B2) |
 | Test and build output as "failures only, passes counted" is the largest single output saving; full output kept by id is the safe form | RTK (self-reported 60–90%); Context Mode (self-reported); Carlini's logging rules | A | Yes |
 | A new Claude Code session's preamble is ~33k tokens, ~75k with instruction files, MCP and plugins. Splitting one task across two subagents took input from ~121k to ~513k | Systima capture via secondary sources (2026-07) | M (secondary) | Applies: each worker start pays a preamble. Brigadier's lean start measured 15–30k |
 | A worktree takes 5–15 s on a non-trivial repo, often more than a ~30 s task | Bernstein docs | A | Brigadier already prewarms (`M/prewarm.rs`) |
@@ -179,3 +184,33 @@ are marked **M**.
 | Lossy proxies (headroom), RTK, Graft, graphify, cognee | No. RTK's public claims (60–90%) are still self-reported bytes÷4 estimates, against our measured 0.21%. The research supports trimming tool output, but the lossless store Brigadier already has for the thread is the compatible form |
 | Concise wording to save output | Partly new: wording that asks for more thinking ("think deeply", "try several approaches") multiplies reasoning cost 1.6–7.4× (Weinberger 2026). This is about removing cost-raising phrases, not terse output. Checked: `M/prompts.rs` contains none of them |
 | `--bare` | Still unusable: help says OAuth and keychain are never read |
+
+## 6. Citation spot-check (2026-10-14)
+
+Sixteen citations the plan leans on most were fetched again and compared with the text above.
+- **Confirmed as stated:**
+  - Laban et al. (39% drop, 200,000+ conversations, Concat at 95.1% of Full; ICLR 2026 per OpenReview);
+  - Zerhoudi (53% → 10%);
+  - Wang (17%; over 90% with extraction);
+  - Chen (0% → 30%, up to 59%; 0% with pinning);
+  - Advani (75.8%, AUROC ≤ 0.65);
+  - Weinberger's effort table (17/18/16, 12/19/17, $0.75/$1.89/$3.62, p = 0.016);
+  - Complexity Trap (about half the cost of the raw agent; summaries 13–15% longer);
+  - Kim et al. v1 (39–70%, 17.2× against 4.4×);
+  - Scrouting (159 against 158 of 266, about a fifth of the cost, a ~4 KB hand-off with replayed reproductions);
+  - Bai et al. (input drives cost; up to 30×);
+  - Don't Break the Cache (41–80%);
+  - Chroma (18 models; focused prompts beat full ones for every model);
+  - CircleCI (31% and 33%);
+  - the Claude Code prompt-caching and costs pages (TTL buckets, override names, effort keeping the cache on the 5.5
+    models, cache breakers, "clearing old tool results" as an expected rebuild);
+  - the Opus 5.5 prompting guide (medium ≥ Opus 5 at high).
+- **Corrected:**
+  - Xiong's gain (15–26 points, not ~10%; no venue listed);
+  - Weinberger's wording multipliers (open models, not Claude Code);
+  - which study the over-90% figure comes from (Wang, not Chen);
+  - AppWorld as the setting of the 75.8%;
+  - Kim et al.'s later revision;
+  - the plan-mode condition on the 7× agent-team figure;
+  - which model missed references with grep.
+- **Not confirmed:** whether Wang's extractor keeps the constraints word for word.

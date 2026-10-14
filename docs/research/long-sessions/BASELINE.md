@@ -9,7 +9,7 @@ Claude Code 2.1.299, codex-cli 0.162.1, both on subscription sign-in.
 | §7 says | Superseded by | Today (code) |
 |---|---|---|
 | A pure orchestrator that only talks (also PLAN §1, §2 principle 1) | THREAD-PLAN Q1: the main session is one long-lived CLI "thread" with tools (`Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch`), tiny edits itself, delegates the rest | `THREAD_TOOLS` at `P/claude/mod.rs:76` |
-| Orchestrator rebirth at `min(150k, 75% window)` | SESSION-FIXES Q5: prepare at 400k, swap at 450k when the window is ≥ 500k; old shares otherwise | `crates/core/src/knowledge.rs:279-295` |
+| Orchestrator rebirth at `min(150k, 75% window)` | SESSION-FIXES Q5: a **Claude** thread on a window ≥ 500k prepares at 400k and swaps at 450k. Otherwise, and always for Codex: Claude `min(150k, 75%)` / `min(190k, 90%)`, Codex `min(150k, 65%)` / `min(190k, 80%)` of the window | `crates/core/src/knowledge.rs:279-295` |
 | Cold-cache rebirth floor 60k | SESSION-FIXES Q5.4: 150k | `knowledge.rs:204` |
 | Worker hand-off at 160k, then 300k / 70% (§7 item 2, Q9) | SESSION-FIXES Q6.4: 200k or 70% of the window, whichever first; the hand-off writes `checks.md` so the fresh session reruns only affected checks (`e0653432`) | `knowledge.rs:222-238`; `M/prompts.rs:1148` |
 | Rebirth briefing caps decisions (`DECISIONS_BUDGET`) | Q5.3: decisions exempt from every cut; transcript excerpts shrink first, to `MIN_EXCHANGES_OVERFLOW` = 3 | `M/rebirth.rs:55-61`, `:1215` |
@@ -28,8 +28,10 @@ completed task.
 - Thread with tools, lean start (`--strict-mcp-config`, `--setting-sources project`), Brigadier's MCP server only.
 - **Compaction is off only for the thread.** The thread (orchestrator session) launches with `auto_compact: false`
   (`M/conversation.rs:2830`; also `M/rebirth.rs:360`, `M/escalation.rs:273`), which turns off Claude's
-  auto-compaction (`P/claude/mod.rs:399`) and pushes Codex's `model_auto_compact_token_limit` out of reach
-  (`P/codex/mod.rs:64`, `:1180`). Brigadier rebirths the thread instead.
+  auto-compaction (`P/claude/mod.rs:399`) and sets Codex's `model_auto_compact_token_limit` far above any window
+  (`P/codex/mod.rs:64`, `:1180`). Codex clamps that limit to about 90% of the window, so a Codex thread would still
+  compact there. Brigadier rebirths the thread instead, a Codex one well below that ceiling (65% / 80%). A plain
+  chat (not a session) launches with compaction on (`M/conversation.rs:2830`).
 - **Workers, reviews, research, Brain jobs and git-text jobs launch with `auto_compact: true`** (`M/workers.rs:1870`,
   `M/review_runs.rs:1226`, `M/research.rs:263`, `M/brain_jobs.rs:568`, `M/git_actions.rs:521`). A worker is meant
   to be handed off at 200k / 70% before the CLI compacts, but nothing stops the CLI compacting first (WEAK-SPOTS L2).
@@ -37,11 +39,14 @@ completed task.
 - Orchestrator/thread rebirth with a briefing (handoff 3k, state 2k, Brain 5k tokens; decisions whole), cold-cache
   rebirth from a warm-time checkpoint above 150k (`M/cold.rs`).
 - Worker hand-off at 200k / 70% with note, last messages, `<scratch>/handoff/` and `checks.md`.
-- Lossless output store for the **thread's** command output only: Claude through a `PostToolUse` hook, Codex through
-  Brigadier's `run` tool; the model gets a digest plus `read_artifact` (`M/tool_output.rs`). Workers have no output
+- Lossless output store for the **thread's** commands: Claude through a `PostToolUse` hook, Codex through
+  Brigadier's `run` tool; the model gets a digest plus `read_artifact` (`M/tool_output.rs`). Every `run_check` call,
+  the thread's and the workers', is stored whole too, and a worker gets a copy of a long output in its scratch `checks/` folder
+  (`M/checks.rs:763-807`). Workers' own Bash and tool output has no store: workers have no output
   hook (`only_a_thread_gets_the_output_hook`, `P/claude/mod.rs:2335`; `M/workers.rs:1874`).
-- Code index tools `code_search`, `code_refs`, `project_map` (TypeScript definitions fixed 10-02). No outline,
-  single-symbol or line-range read tool.
+- Code index tools `code_search`, `code_refs`, `project_map` (TypeScript definitions fixed 10-02). No outline or
+  single-symbol read tool; ranged reads use Claude's `Read` offset/limit or `sed -n` on Codex, as the worker prompt
+  asks (`M/prompts.rs:1140-1144`).
 - Effort is chosen per task by the thread (`M/prompts.rs:103`: low / medium / high), not per step.
 - Per-turn usage in `routing.sqlite` `turn_usage` (input, cached, cache writes, output, step kind, duration, context);
   quota readings in `quota_samples`; thread context growth per request (`M/thread_metrics.rs`); per-worker Brain
@@ -52,7 +57,7 @@ completed task.
 **Proposed, not built:**
 - Keep-warm fork to keep the cache alive on purpose (§7 item 3 proposal; needs the user's view on background calls).
 - Cache writes split by cause; a per-task usage report in the Inspector.
-- Lossless output store for workers / heavy build output.
+- Lossless store for workers' own CLI tool output (their `run_check` output is already stored).
 - Precise, batched reads from the code index.
 - Effort per step.
 
@@ -78,6 +83,6 @@ completed task.
 | §7 item | Status at `d669bca0` | What is unmeasured | Needs research |
 |---|---|---|---|
 | 1. Per-task usage in the Inspector, cache writes by cause | **Partial.** `turn_usage` rows per turn with step kind; thread context growth and worker tokens/Brain counters shown. No per-task report; cache writes are not attributed to a cause (fresh start, expiry, tool-list change, rebirth, hand-off, resume after close) | How much of the 25% cache-write share each cause makes | Which cache-write causes the CLIs expose (see DIGEST) |
-| 2. Lossless command-output store | **Thread only** (`M/tool_output.rs`). Workers' Bash output reaches the model untrimmed | Worker share of build/test output after §11 moved full suites off workers (was < 1% overall) | Whether worker output is still worth it after §11 |
-| 3. Precise, batched code-index reads | **Not built.** Search and refs return locations; reading is still `sed`/`Read` | Share of worker tokens from whole-file reads today | Outline/symbol/line-range read tools and their measured effect elsewhere |
+| 2. Lossless command-output store | **Thread commands and every `run_check`** (`M/tool_output.rs`, `M/checks.rs:763-807`). Workers' own Bash output reaches the model untrimmed by Brigadier | Worker share of build/test output after §11 moved full suites off workers (was < 1% overall) | Whether worker output is still worth it after §11 |
+| 3. Precise, batched code-index reads | **Not built.** Search and refs return locations; reading is ranged `Read`/`sed`, with no symbol or outline read | Share of worker tokens from whole-file reads today | Outline/symbol/line-range read tools and their measured effect elsewhere |
 | 4. Thinking / effort per step | **Per task only** (`M/prompts.rs:103`). §7 notes Opus 5.5 keeps the cache across an effort switch (measured once) | Quality at lower effort on our tasks; Codex cache across effort changes | Vendor statements on cache and effort; whether lower effort keeps quality (not assumed) |
