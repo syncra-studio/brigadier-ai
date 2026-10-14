@@ -1116,8 +1116,8 @@ pub struct SubmitReport {
     /// What was done and what you found, in a few sentences. It must hold your findings (or
     /// name the artifact that does): never say they are below or in a message.
     pub summary: String,
-    /// Repo-relative paths changed, created or deleted (every new file you want kept must be
-    /// listed).
+    /// Repo-relative paths changed, created or deleted. Every new file must be listed (or its
+    /// folder): a report that leaves one out is refused until you list or delete it.
     #[serde(default, deserialize_with = "paths")]
     pub changes: Vec<String>,
     /// Decisions made and why, one per line.

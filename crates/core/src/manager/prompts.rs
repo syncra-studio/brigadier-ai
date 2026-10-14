@@ -1324,7 +1324,7 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: 
         } else {
             (
                 "What you leave uncommitted is committed for you when your work lands.",
-                "\n- List every file you changed, created or deleted in the report's `changes`: new files that aren't listed are left out when your work lands.",
+                "\n- List every file you changed, created or deleted in the report's `changes`: a report that leaves out a new file is refused until you list it or delete it.",
             )
         };
         format!(

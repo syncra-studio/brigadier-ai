@@ -965,7 +965,8 @@ async fn restart_while_winding_down(
                 let reply = turn
                     .call(
                         "submit_report",
-                        json!({"summary": "Goal and where it stands: half done. Done: p1.txt. Next steps: finish p1b.txt."}),
+                        json!({"summary": "Goal and where it stands: half done. Done: p1.txt. Next steps: finish p1b.txt.",
+                               "changes": ["p1.txt", "p1b.txt"]}),
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);

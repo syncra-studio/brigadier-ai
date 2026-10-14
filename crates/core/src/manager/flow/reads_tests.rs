@@ -200,7 +200,8 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
                     let reply = turn
                         .call(
                             "submit_report",
-                            json!({"summary": "Added hello.txt.", "changes": ["hello.txt"]}),
+                            json!({"summary": "Added hello.txt.",
+                                   "changes": ["hello.txt", "worker-only.txt"]}),
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);

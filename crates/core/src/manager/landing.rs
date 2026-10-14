@@ -615,6 +615,48 @@ impl SessionManager {
         .await
     }
 
+    /// The new files in an implement task's worktree (committed, staged or untracked) that
+    /// no report of its phase names, nor `extra` (the report being submitted): the landing
+    /// would leave them out, so the worker must list or delete them first. Litter is not
+    /// among them.
+    pub(crate) async fn unreported_files(
+        &self,
+        task: &Task,
+        extra: &[String],
+    ) -> Result<Vec<String>> {
+        if task.kind != crate::work::TaskKind::Implement {
+            return Ok(Vec::new());
+        }
+        let Some(workspace) = task.workspace.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let (Some(worktree), Some(base)) = (workspace.worktree.clone(), workspace.base.clone())
+        else {
+            return Ok(Vec::new());
+        };
+        let mut reported = self.phase_reported(task).await;
+        reported.extend(extra.iter().map(|p| normalize(p)));
+        let git = self.git.clone();
+        blocking(move || {
+            let worktree = git.open_worktree(Path::new(&worktree)).map_err(git_error)?;
+            // A new file needs a report whether it is committed, staged or untracked, as at
+            // landing.
+            let changes: Vec<_> = worktree
+                .changes(&Oid(base))
+                .map_err(git_error)?
+                .into_iter()
+                .map(|mut change| {
+                    if change.kind == ChangeKind::Added {
+                        change.untracked = true;
+                    }
+                    change
+                })
+                .collect();
+            Ok(litter::unreported(&changes, &reported))
+        })
+        .await
+    }
+
     /// Every file a report of `task`'s phase names: the provenance a new file needs to land.
     async fn phase_reported(&self, task: &Task) -> Vec<String> {
         let mut reported: Vec<String> = Vec::new();
@@ -2756,9 +2798,25 @@ pub(super) fn diff_stat_of(stat: &brigadier_git::DiffStat) -> DiffStat {
     }
 }
 
-/// A repo-relative path as reported (`./a/b`, `a/b/`) → `a/b`.
+/// A repo-relative path as reported (`./a/b`, `a/b/`, `a/b: what it is`) → `a/b`.
 fn normalize(path: &str) -> String {
-    let path = path.trim().trim_start_matches("./").trim_end_matches('/');
+    // What a line says about its file follows the path ("- `src/a.ts` (new)").
+    let mut path = path.trim();
+    path = path
+        .strip_prefix("- ")
+        .or_else(|| path.strip_prefix("* "))
+        .unwrap_or(path);
+    for note in [": ", " (", " \u{2014} ", " \u{2013} "] {
+        if let Some((head, _)) = path.split_once(note) {
+            path = head;
+        }
+    }
+    let path = path
+        .trim()
+        .trim_end_matches(':')
+        .trim_matches('`')
+        .trim_start_matches("./")
+        .trim_end_matches('/');
     Path::new(path).to_string_lossy().into_owned()
 }
 
@@ -2923,6 +2981,22 @@ fn keep_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reported_path_is_read_without_what_the_line_says_about_it() {
+        for line in [
+            "src/a.ts",
+            "./src/a.ts",
+            "src/a.ts: the parser",
+            "- `src/a.ts` (new)",
+            "src/a.ts \u{2014} added",
+            "`src/a.ts`:",
+        ] {
+            assert_eq!(normalize(line), "src/a.ts", "{line}");
+        }
+        assert_eq!(normalize("docs/my notes.md"), "docs/my notes.md");
+        assert_eq!(normalize("src/"), "src");
+    }
 
     #[test]
     fn a_held_tip_follows_landings_told_out_of_order() {

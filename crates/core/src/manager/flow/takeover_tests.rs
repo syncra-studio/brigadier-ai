@@ -145,7 +145,10 @@ async fn start_as(
                     std::future::pending::<()>().await;
                 }
                 let reply = turn
-                    .call("submit_report", json!({"summary": "notes.txt is in."}))
+                    .call(
+                        "submit_report",
+                        json!({"summary": "notes.txt is in.", "changes": ["notes.txt"]}),
+                    )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
                 Reply::text("Reported.")

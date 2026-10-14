@@ -122,7 +122,11 @@ async fn a_pre_warm_whose_base_moved_on_is_moved_to_the_new_tip_and_still_used()
         .prewarm_made(&flow.conversation)
         .await
         .expect("a pre-warm");
-    // What the pre-warm copied in (untracked, like a build cache) stays through the move.
+    // What the pre-warm copied in (git-ignored, like a build cache) stays through the move.
+    let exclude = git(&worktree, &["rev-parse", "--git-path", "info/exclude"]);
+    let exclude = worktree.join(exclude.trim());
+    std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+    std::fs::write(&exclude, "warm-cache/\n").unwrap();
     std::fs::create_dir_all(worktree.join("warm-cache")).unwrap();
     std::fs::write(worktree.join("warm-cache/built"), "built\n").unwrap();
     // The session's branch moves on after the pre-warm was made.

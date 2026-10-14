@@ -1855,6 +1855,8 @@ mod trim_tests;
 #[cfg(test)]
 mod trust_tests;
 #[cfg(test)]
+mod unreported_tests;
+#[cfg(test)]
 mod usage_tests;
 #[cfg(test)]
 mod workspace_tests;

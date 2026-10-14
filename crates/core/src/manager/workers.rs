@@ -3539,6 +3539,25 @@ impl SessionManager {
                 "The report is {size} bytes; the limit is about {REPORT_MAX_BYTES} (≈800 tokens). Move the details into a file in your outputs folder, name it under `artifacts`, and submit a shorter report."
             )));
         }
+        // A new file no report names would be left out of the landing: the worker decides
+        // whether it belongs to the work, before anything of the report is stored.
+        let unreported = self
+            .unreported_files(&task, &input.changes)
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!(error = %err, "could not look for new files the report leaves out");
+                Vec::new()
+            });
+        if !unreported.is_empty() {
+            return Err(Error::Invalid(format!(
+                "These new files are not in your report: {}. Nothing was reported. List each one that belongs to the work under `changes` by its path (or its folder's), or delete it (`git rm` it if you committed it), then call submit_report again.",
+                unreported
+                    .iter()
+                    .map(|path| format!("`{path}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
         // Everything it names is stored now, before its folders can go.
         let texts: Vec<String> = std::iter::once(&input.summary)
             .chain(&input.decisions)

@@ -4,7 +4,8 @@
 //! exclude anything under `__pycache__`, `node_modules`, `.pytest_cache` or `target` at any
 //! depth, and `scratch*`, `notes*.md`, `NOTES*.md`, `TODO*.md`, `debug_*`, `tmp_*` and
 //! `test_output*` unless the report lists that very file (a `NOTES.md` the task asked for).
-//! Other untracked files are kept only when the report lists that file or an ancestor directory.
+//! Other untracked files are kept only when the report lists that file or an ancestor directory;
+//! [`unreported`] names them, so a caller can hand them back to the worker instead.
 //! Tracked changes are kept unless an always-excluded pattern matches. The fixed Keep/Exclude
 //! API has no warning variant: callers should flag unreported tracked changes to the reviewer
 //! by comparing retained changes with the report, without excluding them.
@@ -38,6 +39,22 @@ pub fn classify(changes: &[Change], reported: &[String]) -> Vec<(Change, Verdict
         } else { Verdict::Keep };
         (change.clone(), verdict)
     }).collect()
+}
+
+/// The new files of `changes` left out only because no report names them (or a parent
+/// directory): not litter, not a scratch name. Unlike litter, these can be real work, so
+/// callers hand them back to the worker rather than drop them unseen.
+pub fn unreported(changes: &[Change], reported: &[String]) -> Vec<String> {
+    changes
+        .iter()
+        .filter(|change| {
+            change.untracked
+                && litter_pattern(change).is_none()
+                && scratch_name(change).is_none()
+                && !reported.iter().any(|p| reported_contains(p, &change.path))
+        })
+        .map(|change| change.path.clone())
+        .collect()
 }
 
 fn lists_file(reported: &str, path: &str) -> bool {
@@ -159,6 +176,36 @@ mod tests {
             &["node_modules/x/index.js"]
         ));
         assert!(!kept("target/out.txt", &["target/out.txt"]));
+    }
+
+    #[test]
+    fn only_unlisted_real_files_count_as_unreported() {
+        let changes: Vec<Change> = [
+            "src/discounts.ts",
+            "src/discounts.test.ts",
+            "src/cart.ts",
+            "lib/util.ts",
+            "debug.log",
+            "NOTES.md",
+            "node_modules/x/index.js",
+            "src/debug_dump.ts",
+        ]
+        .into_iter()
+        .map(new_file)
+        .collect();
+        let reported = vec!["src/cart.ts".to_owned(), "lib".to_owned()];
+        assert_eq!(
+            unreported(&changes, &reported),
+            ["src/discounts.ts", "src/discounts.test.ts"]
+        );
+        // A tracked change needs no report to be kept.
+        let tracked = Change {
+            path: "src/app.ts".into(),
+            kind: ChangeKind::Modified,
+            untracked: false,
+        };
+        assert!(unreported(&[tracked], &[]).is_empty());
+        assert!(unreported(&changes, &[".".to_owned()]).is_empty());
     }
 
     #[test]
