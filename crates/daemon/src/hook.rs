@@ -59,8 +59,9 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     if std::io::stdin().read_to_string(&mut stdin).is_err() {
         return ExitCode::SUCCESS;
     }
+    let grant = std::env::var(HOOK_GRANT_ENV).ok();
     let printed = handle(&stdin, |output, bytes| {
-        send(data_dir.clone(), output, bytes)
+        send(grant.as_deref(), data_dir.clone(), output, bytes)
     });
     if let Some(printed) = printed {
         let mut stdout = std::io::stdout().lock();
@@ -213,10 +214,13 @@ fn capped(mut bytes: Vec<u8>, size: u64) -> Vec<u8> {
 
 /// Sends `output` to the daemon for `data_dir` with the grant from the environment, and reads
 /// its answer; `None` on any failure.
-fn send(data_dir: Option<PathBuf>, header: &HookOutput, output: &[u8]) -> Option<HookReply> {
-    let grant = std::env::var(HOOK_GRANT_ENV)
-        .ok()
-        .filter(|grant| !grant.is_empty())?;
+fn send(
+    grant: Option<&str>,
+    data_dir: Option<PathBuf>,
+    header: &HookOutput,
+    output: &[u8],
+) -> Option<HookReply> {
+    let grant = grant.filter(|grant| !grant.is_empty())?.to_owned();
     let platform = brigadier_sandbox::native(PlatformOptions { data_dir }).ok()?;
     let mut stream = brigadier_ipc::connect_blocking(
         platform.paths(),
@@ -397,19 +401,13 @@ mod tests {
         });
         assert_eq!(handle(&read.to_string(), |_, _| panic!("not Bash")), None);
         assert_eq!(handle("not json", |_, _| panic!("no event")), None);
-        // No grant in the environment: nothing is sent, nothing printed.
-        assert!(std::env::var(HOOK_GRANT_ENV).is_err());
-        assert_eq!(
-            send(
-                None,
-                &HookOutput {
-                    excerpt: false,
-                    status: String::new(),
-                    bytes: 0
-                },
-                b""
-            ),
-            None
-        );
+        // No grant (or an empty one): nothing is sent, nothing printed.
+        let header = HookOutput {
+            excerpt: false,
+            status: String::new(),
+            bytes: 0,
+        };
+        assert_eq!(send(None, None, &header, b""), None);
+        assert_eq!(send(Some(""), None, &header, b""), None);
     }
 }
