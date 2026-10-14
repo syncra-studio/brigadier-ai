@@ -202,6 +202,50 @@ async fn a_check_waiting_for_the_same_check_goes_to_the_background_and_answers_f
     flow.stop().await;
 }
 
+/// The user's Stop of a check waiting in the background for the same check ends it at once,
+/// not when the check it waits for ends.
+#[tokio::test]
+async fn the_users_stop_ends_a_check_waiting_for_the_same_check() {
+    let (inputs, replies): (Log, Log) = Default::default();
+    let flow = Flow::start(
+        "background-same-check-stop",
+        Options::default(),
+        checking(
+            vec![
+                ("run_check", "sleep 30; echo once"),
+                ("run_check", "sleep 30; echo once"),
+            ],
+            inputs.clone(),
+            replies.clone(),
+        ),
+    )
+    .await;
+    flow.say("Check twice.").await;
+    flow.until("the second check to wait in the background", |board| {
+        run_state(board, "run-2") == Some(BackgroundRunState::Running)
+    })
+    .await;
+    flow.manager
+        .stop_background_run(flow.conversation.clone(), "run-2".into())
+        .await
+        .unwrap();
+    let board = flow
+        .until("the waiting check to stop", |board| {
+            run_state(board, "run-2") == Some(BackgroundRunState::Stopped)
+        })
+        .await;
+    assert_eq!(
+        run_state(&board, "run-1"),
+        Some(BackgroundRunState::Running),
+        "the waiting check stopped only once the first ended"
+    );
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.stop().await;
+}
+
 /// A heavy check waiting for another build's lease past the foreground goes to the
 /// background, and runs once the lease is free.
 #[tokio::test]

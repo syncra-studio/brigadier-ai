@@ -271,7 +271,14 @@ impl SessionManager {
         let key = self.check_key(caller, workdir, command).await;
         // One run of a key at a time: a caller that waited answers from what the other kept.
         let _running = match &key {
-            Ok(key) => check_lock(&key.hash, timeout).await,
+            Ok(key) => tokio::select! {
+                running = check_lock(&key.hash, timeout) => running,
+                () = caller.ended.cancelled() => {
+                    return Err(Error::Invalid(
+                        "stopped: the thread's session ended while the check waited for the same check".into(),
+                    ));
+                }
+            },
             Err(_) => None,
         };
         if let (Ok(key), false) = (&key, rerun)
@@ -378,7 +385,14 @@ impl SessionManager {
             Err("an install isn't kept".to_owned())
         };
         let _running = match &key {
-            Ok(key) => check_lock(&key.hash, timeout).await,
+            Ok(key) => tokio::select! {
+                running = check_lock(&key.hash, timeout) => running,
+                () = caller.ended.cancelled() => {
+                    return Err(Error::Invalid(
+                        "stopped: the thread's session ended while the check waited for the same check".into(),
+                    ));
+                }
+            },
             Err(_) => None,
         };
         if let (Ok(key), false) = (&key, rerun)
