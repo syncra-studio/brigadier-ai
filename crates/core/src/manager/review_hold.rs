@@ -19,7 +19,7 @@ use brigadier_providers::Artifact;
 use super::workers::Workspace;
 use super::{SessionManager, blocking, git_error, secrets};
 use crate::model::{ConversationId, Setup, TaskId};
-use crate::work::{Task, TaskKind, WorkerRole};
+use crate::work::{FindingStatus, ReviewFor, ReviewKind, ReviewState, Task, TaskKind, WorkerRole};
 use crate::{Error, Result};
 
 /// The ledger owner of a landed task's CLI session files while its review's findings settle.
@@ -135,6 +135,22 @@ impl SessionManager {
         let Ok(board) = self.core.board(conversation_id).await else {
             return;
         };
+        // A landing reviewed in parts (its worker's own review, then the commits after it)
+        // settles once each part has: none still running, none whose findings the thread
+        // hasn't recorded yet.
+        let pending = board.reviews.values().any(|review| {
+            review.kind == ReviewKind::Code
+                && super::review_runs::batch_tip(review) == tip
+                && (review.state == ReviewState::Running
+                    || (review.notify == ReviewFor::Orchestrator
+                        && review
+                            .items
+                            .iter()
+                            .any(|item| item.status == FindingStatus::New)))
+        });
+        if pending {
+            return;
+        }
         for task in batch(&board, |task| task.landed.as_deref() == Some(tip)) {
             if self.landing_checked(&task).await {
                 self.release_hold(&task).await;

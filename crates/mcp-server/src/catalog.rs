@@ -140,9 +140,10 @@ inside the session. Returns at once; the decision arrives later as a message.";
 const REVIEW_CODE: &str = "Start one review of your committed work by a model from the other \
 vendor, from where your work started to your last commit (uncommitted changes are committed for \
 you first). Returns at once: keep working, and the findings arrive later as a message from \
-Brigadier (if you have nothing left to do before them, end your turn; they start your next \
-one). Fix what you agree with and commit; for a finding you don't, say why in your report. It is \
-advisory and there are no rounds: call it once.";
+Brigadier. Don't wait for them unless your task says so: report once your checks pass and your \
+evidence is in, and findings that arrive after your report go to the orchestrator. Fix what you \
+agree with and commit; for a finding you don't, say why in your report. It is advisory and there \
+are no rounds: call it once.";
 
 const REVIEW_PLAN: &str = "Your call, for a plan of your own that is big or risky: start one \
 review of it by a model from the other vendor, against the brief you give. Returns at once: \

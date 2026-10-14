@@ -51,4 +51,11 @@ number: number,
  * What it found, one item per finding (SESSION-FIXES-PLAN.md Q7): split from its text by
  * the engine; each one's status is the thread's (`record_findings`).
  */
-items: Array<Finding>, };
+items: Array<Finding>, 
+/**
+ * The landed tip whose review it is part of, when that isn't its own `tip`: a worker's
+ * own review that hadn't reached it when it reported, of work that landed with commits
+ * after it (those get a review of their own). The landing's hold settles once every
+ * review of it has.
+ */
+landing?: string, };

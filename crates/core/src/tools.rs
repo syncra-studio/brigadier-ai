@@ -169,6 +169,12 @@ pub struct DelegateTask {
     /// Ids of the user's attachments the worker should get as files.
     #[serde(default)]
     pub attachments: Vec<String>,
+    /// True when this worker takes the whole request: Brigadier adds the message that started
+    /// it verbatim after the spec, with each message steered into it since and who sent each
+    /// (the user, or another session). Don't copy the request into the spec then. Files still
+    /// go by `attachments`.
+    #[serde(default)]
+    pub include_request: bool,
     /// Optional: the parts of the codebase it touches ("frontend", "backend", "infra",
     /// "docs", "tests"), when the spec's paths don't make it plain. Routing and the user's
     /// routing rules go by them.

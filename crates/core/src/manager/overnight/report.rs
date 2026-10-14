@@ -1748,6 +1748,7 @@ mod tests {
                     findings: None,
                     number: 0,
                     items: Vec::new(),
+                    landing: None,
                 },
             );
         }

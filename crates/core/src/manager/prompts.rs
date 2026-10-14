@@ -104,19 +104,19 @@ Your workspace: {workspace}
 You are this session's one long-lived thread, with your own tools: you read, search, run commands and edit in your workspace. You run a team of workers as a lead engineer does: you brief them, answer them, judge their reports and land their work.
 
 How to work:
-- Delegate by default: anything beyond a tiny edit goes to a worker (delegate_task), so you stay free to talk while it runs. Delegate early: at most a quick query_brain or code_search for pointers, then delegate_task; the worker reads the code. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
+- Make a small change yourself: one bounded change in one area (a bug, a small feature, about 100 changed lines or fewer in a few files), with no part worth running in parallel and no worker writing those files. Delegate everything bigger, multi-area, risky or unclear, parts that can run at once, work needing long builds, app runs or visual checks, and anything while other work needs you, so you stay free to talk while it runs. Delegate early: at most a quick query_brain or code_search for pointers, then delegate_task; the worker reads the code. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
 - Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
 - Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak or small feature, copy, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
-- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part by its own checks only, never the full suite or an app build (screenshots in the chat only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task. A job that only uses apps on screen, changing no code, is an operate task, which Brigadier gives to a fast GUI model; one that changes code and shows in an app stays one implementation task.{computer}
+- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words (when one worker takes the whole request, set include_request and Brigadier adds it verbatim, with what was added to it since and who sent it: don't copy it into the spec), the constraints and settled decisions, what "done" means and how to check each part by its own checks only, never the full suite or an app build (screenshots in the chat only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task. A job that only uses apps on screen, changing no code, is an operate task, which Brigadier gives to a fast GUI model; one that changes code and shows in an app stays one implementation task.{computer}
 {MOCKUPS}
 - Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
-- Run checks (tests, lint, typecheck, build) with run_check rather than your shell, a worker's landed work's too: on the same files it answers at once with the worker's own result. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
+- Run checks (tests, lint, typecheck, build) with run_check rather than your shell. Never rerun a worker's checks after you land its work: its report covers its change, and the session's full checks run on their own after each landing, in a checkout of their own; a failure comes back as [checks failed …]. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
 - {LONG_COMMANDS}
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
-- Land finished work with land_phase (no phase needed), each report at once. Each landing and commit of yours queues the session's full checks, run once in the background on everyone's work; never run them yourself or ask the user how much to check. [checks failed …]: one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix the cause, then rerun_checks. Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. Record one fixed only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
+- Land finished work with land_phase (no phase needed), each report at once. Each landing and commit of yours queues the session's full checks, run once in the background on everyone's work; never run them yourself or ask the user how much to check. [checks failed …]: one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix the cause, then rerun_checks. Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. A worker never waits for its own review: land a report whose review still runs, and its findings come to you. A finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason (mention it to the user if it matters). Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. Record one fixed only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
 - "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). Offer propose_merge only once no worker writes. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
-- Your own edits stay tiny: a few lines, only in files you have already read, then a quick check of them. Anything else goes to a worker. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`. One fixing only findings adds `--trailer "{FIXES_TRAILER}: R2.2, R2.3"`; a held merge covers it.
+- Your own changes stay small (the size above): read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`. One fixing only findings adds `--trailer "{FIXES_TRAILER}: R2.2, R2.3"`; a held merge covers it.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with @remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
 - Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
@@ -461,6 +461,11 @@ pub(crate) const THREAD_HONESTY_REVISION: u32 = 24;
 pub(crate) const THREAD_CLEANUP_REVISION: u32 = 25;
 /// The thread has no computer tools of its own any more: a look at an app goes to a worker.
 pub(crate) const THREAD_NO_COMPUTER_REVISION: u32 = 26;
+/// Less overhead on small and medium work: the thread makes a small change itself, never
+/// reruns a landed worker's checks, attaches the request verbatim (include_request) and
+/// dismisses out-of-scope findings; a worker never waits for its own review (a verifier
+/// still does) and builds only what its task asks.
+pub(crate) const LEAN_WORK_REVISION: u32 = 27;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -607,6 +612,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
             ""
         },
         worker: "",
+    },
+    Revision {
+        number: LEAN_WORK_REVISION,
+        thread: "From now on, make a small change yourself instead of delegating it: one bounded change in one area (a bug, a small feature, about 100 changed lines or fewer in a few files), with no part worth running in parallel and no worker writing those files; read the code it touches, run the checks of what you changed, then commit with the trailer. Everything bigger still goes to workers. Never rerun a worker's checks after you land its work: the session's full checks run on their own after each landing. When one worker takes the whole request, set delegate_task's include_request and Brigadier adds the request verbatim (with what was added to it since and who sent it): don't copy it into the spec. A worker no longer waits for its own review: land a report whose review still runs, and its findings come to you. A finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason.",
+        worker: "From now on, unless you verify a phase: never wait for your own review (review_code). Once your checks pass and your evidence is in, call submit_report; findings that arrive before your report are yours, later ones go to the orchestrator. Do exactly what your task asks: no extra feature, sample data, docs or refactor it didn't ask for, and a finding that asks for something your task didn't, or contradicts it, is no bug: note it in your report, don't build it.",
     },
 ];
 
@@ -1119,7 +1129,7 @@ const WORKER_VOICE: &str = "
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
 /// What a lead does besides building: its outline when the work is big, and its own review.
-const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks, and its findings arrive as a message. Fix each finding you agree with and say why for those you don't. Once your checks pass and the review is clean, or its findings are fixed and the checks they touch rerun, call submit_report at once: no more verifying, re-reading or screenshots after that.\n- After your work lands, the findings of its review that the orchestrator keeps open may come back to you in this same session, as a new task.";
+const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it: once your checks pass and your evidence is in, call submit_report at once: no more verifying, re-reading or screenshots after that. Findings that arrive before your report are yours: fix each bug you agree with and say why for those you don't; one that asks for something your task didn't, or contradicts it, is no bug, so note it in your report and don't build it. Findings that arrive after your report go to the orchestrator.\n- After your work lands, the findings of its review that the orchestrator keeps open may come back to you in this same session, as a new task.";
 
 /// What a worker that builds a mockup does instead of the change (SESSION-FIXES-PLAN.md Q10):
 /// a static preview from the real components with fake data, shown as screenshots.
@@ -1164,6 +1174,7 @@ const WORKER_CODE_RULES: &str = "
 How to write code:
 - First read the task and the code it touches, and trace the real flow. The smallest change in the wrong place is a second bug.
 - Reuse what the repository already has (a helper, type or pattern), then the standard library, then a dependency already installed. Add a dependency only when the task needs it.
+- Do exactly what the task asks: no extra feature, sample data, docs or refactor it didn't ask for. An idea beyond it goes in your report, not in the code.
 - Write the least code that does the job: no abstraction, option, layer or scaffolding the task didn't ask for. Prefer deleting to adding and plain code to clever code. Between two options of the same size, take the one that is correct on edge cases.
 - Fix bugs at their root. When you change a shared function, type or contract, find all its callers and keep them correct.
 - Never simplify away validation, error handling, security checks or anything the task asks for.";
@@ -1949,7 +1960,9 @@ mod tests {
             "call submit_report at once: no more verifying, re-reading or screenshots after that"
         ));
         // Its review runs while it gathers its evidence and runs its checks: no idle wait.
-        assert!(brief.contains("As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks"));
+        assert!(brief.contains("As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it"));
+        assert!(brief.contains("Findings that arrive after your report go to the orchestrator."));
+        assert!(brief.contains("Do exactly what the task asks"));
     }
 
     /// SESSION-FIXES-PLAN.md "Computer use" and §11: the one live look at the landed work, and
@@ -2045,9 +2058,11 @@ mod tests {
         }
         assert!(replaced.worker.contains("(this replaces revision 6)"));
         assert!(revision() >= MERGE_FAST_REVISION);
-        assert_eq!(
-            revision_note(MERGE_FAST_REVISION - 1, true),
-            Some(format!("[instructions] {}", replaced.worker))
+        // Later revisions' worker notes follow it.
+        assert!(
+            revision_note(MERGE_FAST_REVISION - 1, true)
+                .unwrap()
+                .starts_with(&format!("[instructions] {}\n", replaced.worker))
         );
         assert!(
             revision_note(MERGE_FAST_REVISION - 1, false)
@@ -2310,7 +2325,7 @@ mod environment_tests {
     }
 
     #[test]
-    fn the_thread_delegates_by_default_and_decides_the_extra_care_itself() {
+    fn the_thread_does_small_changes_itself_and_decides_the_extra_care_itself() {
         for permission in ["askForApproval", "approveForMe", "fullAccess"] {
             for provider in [ProviderKind::Claude, ProviderKind::Codex] {
                 for run in [None, Some(&workspace())] {
@@ -2324,10 +2339,20 @@ mod environment_tests {
                         true,
                     );
                     assert!(prompt.starts_with(THREAD_OPENING));
-                    assert!(prompt.contains("Delegate by default"));
+                    assert!(
+                        prompt.contains(
+                            "Make a small change yourself: one bounded change in one area"
+                        )
+                    );
+                    assert!(prompt.contains("about 100 changed lines or fewer"));
+                    assert!(
+                        prompt.contains("Never rerun a worker's checks after you land its work")
+                    );
+                    assert!(prompt.contains("A worker never waits for its own review"));
+                    assert!(prompt.contains("set include_request"));
                     assert!(prompt.contains(&callable(MOCKUPS, provider)));
                     assert!(prompt.contains("Never answer \"I can't\""));
-                    assert!(prompt.contains("only in files you have already read"));
+                    assert!(prompt.contains("Your own changes stay small (the size above)"));
                     assert!(prompt.contains(&format!("--trailer \"{THREAD_TRAILER}\"")));
                     assert!(prompt.contains("How to write code:"));
                     assert!(prompt.contains("a tip already reviewed isn't reviewed again"));
@@ -2475,8 +2500,9 @@ mod environment_tests {
         // the tour's CI fix through the merge and finding-fix trailer, messages between
         // sessions, §11's landing at once with the full checks run once, and the long-step
         // line, the readiness answer first and long commands through Brigadier's runs, and
-        // findings fixed only once checked and the thread's scratch in its temp folder).
-        assert!(codex.len() < 17_700, "{}", codex.len());
+        // findings fixed only once checked and the thread's scratch in its temp folder, and
+        // the small change it makes itself, include_request and the review nobody waits for).
+        assert!(codex.len() < 18_800, "{}", codex.len());
     }
 
     #[test]
@@ -2926,7 +2952,11 @@ mod environment_tests {
                 .unwrap()
                 .starts_with(&format!("[instructions] {}", added.thread))
         );
-        assert_eq!(revision_note(THREAD_HONESTY_REVISION - 1, true), None);
+        // A worker hears nothing of it: only later revisions' notes.
+        assert_eq!(
+            revision_note(THREAD_HONESTY_REVISION - 1, true),
+            revision_note(THREAD_HONESTY_REVISION, true)
+        );
         let prompt = |provider| {
             thread(
                 &session("fullAccess"),
@@ -2974,7 +3004,11 @@ mod environment_tests {
                 .unwrap()
                 .starts_with(&format!("[instructions] {}", added.thread))
         );
-        assert_eq!(revision_note(THREAD_CLEANUP_REVISION - 1, true), None);
+        // A worker hears nothing of it: only later revisions' notes.
+        assert_eq!(
+            revision_note(THREAD_CLEANUP_REVISION - 1, true),
+            revision_note(THREAD_CLEANUP_REVISION, true)
+        );
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
             let prompt = thread(
                 &session("fullAccess"),
@@ -3006,19 +3040,27 @@ mod environment_tests {
         let added = &REVISIONS[THREAD_NO_COMPUTER_REVISION as usize - 1];
         assert_eq!(added.number, THREAD_NO_COMPUTER_REVISION);
         assert!(added.worker.is_empty());
-        assert_eq!(revision_note(THREAD_NO_COMPUTER_REVISION - 1, true), None);
+        // A worker hears nothing of it: only later revisions' notes.
+        assert_eq!(
+            revision_note(THREAD_NO_COMPUTER_REVISION - 1, true),
+            revision_note(THREAD_NO_COMPUTER_REVISION, true)
+        );
         if cfg!(target_os = "macos") {
             assert!(
                 added
                     .thread
                     .contains("you have no computer tools of your own")
             );
-            assert_eq!(
-                revision_note(THREAD_NO_COMPUTER_REVISION - 1, false).unwrap(),
-                format!("[instructions] {}", added.thread)
+            assert!(
+                revision_note(THREAD_NO_COMPUTER_REVISION - 1, false)
+                    .unwrap()
+                    .starts_with(&format!("[instructions] {}\n", added.thread))
             );
         } else {
-            assert_eq!(revision_note(THREAD_NO_COMPUTER_REVISION - 1, false), None);
+            assert_eq!(
+                revision_note(THREAD_NO_COMPUTER_REVISION - 1, false),
+                revision_note(THREAD_NO_COMPUTER_REVISION, false)
+            );
         }
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
             let prompt = thread(

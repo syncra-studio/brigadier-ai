@@ -158,12 +158,18 @@ async fn switching_reviews_off_releases_a_worker_waiting_for_its_review() {
             async move {
                 log.lock().unwrap().push(turn.input.clone());
                 if turn.is_orchestrator() {
+                    // Only a verifier waits for its own review: the lead's work gets one.
+                    if reports_in(&turn.input).first() == Some(&1) {
+                        let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("[quiet]");
+                    }
                     return lead_and_land(&turn).await;
                 }
-                if turn
-                    .input
-                    .contains("[settings] The user turned reviews off")
-                {
+                if !turn.prompt.contains("You verify this phase") {
+                    turn.write("hello.txt", "hello\n");
+                    turn.git(&["add", "-A"]);
+                    turn.git(&["commit", "-q", "-m", "Add hello.txt"]);
                     let reply = turn
                         .call(
                             "submit_report",
@@ -173,9 +179,19 @@ async fn switching_reviews_off_releases_a_worker_waiting_for_its_review() {
                     assert!(!reply.is_error, "{}", reply.text);
                     return Reply::text("Reported.");
                 }
-                turn.write("hello.txt", "hello\n");
-                turn.git(&["add", "-A"]);
-                turn.git(&["commit", "-q", "-m", "Add hello.txt"]);
+                if turn
+                    .input
+                    .contains("[settings] The user turned reviews off")
+                {
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "Verified hello.txt.", "changes": ["hello.txt"]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reported.");
+                }
                 let started = turn.call("review_code", json!({})).await;
                 assert!(
                     started.text.starts_with("Started a review"),
@@ -188,7 +204,7 @@ async fn switching_reviews_off_releases_a_worker_waiting_for_its_review() {
     )
     .await;
     flow.say("Add a greeting file and merge it.").await;
-    flow.until("the lead to wait for its review", |board| {
+    flow.until("the verifier to wait for its review", |board| {
         board
             .tasks
             .values()

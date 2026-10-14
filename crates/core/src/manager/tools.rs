@@ -274,12 +274,28 @@ impl SessionManager {
                         provider: s.route.choice.provider,
                         model: s.route.choice.model.clone(),
                     });
+                // The request it takes whole, bound by its identity: the task belongs to it.
+                let (spec, request) = match args.include_request {
+                    true => {
+                        let request = crate::heap(|| self.request_for(id, None))
+                            .await
+                            .ok_or_else(|| {
+                                Error::Invalid(
+                                    "include_request: no request is running; write it into the spec"
+                                        .into(),
+                                )
+                            })?;
+                        let verbatim = crate::heap(|| self.request_verbatim(id, &request)).await?;
+                        (format!("{}{verbatim}", args.spec), Some(request))
+                    }
+                    false => (args.spec, None),
+                };
                 let task = crate::heap(|| {
                     self.create_task_as(
                         id,
                         args.title,
                         args.kind,
-                        args.spec,
+                        spec,
                         pin,
                         avoid,
                         Vec::new(),
@@ -296,6 +312,7 @@ impl SessionManager {
                             end_state,
                             mockup,
                             live_look: args.live_look,
+                            request,
                             ..Default::default()
                         },
                     )

@@ -67,6 +67,16 @@ struct NewReview {
     recheck: Option<String>,
 }
 
+/// What of a landing a worker's own review read that it didn't see the end of
+/// (`SessionManager::pass_own_review`).
+enum Passed {
+    /// All of it: it is the landing's review.
+    Whole,
+    /// Up to this commit: what came after is reviewed alone.
+    Upto(Oid),
+    No,
+}
+
 /// How much of a landing its worker's own review covers.
 enum Covers {
     /// All of it: no review of its own.
@@ -128,6 +138,20 @@ fn review_of<'a>(
             && review.tip == tip
             && !matches!(review.state, ReviewState::Failed { .. })
     })
+}
+
+/// The landed tip whose batch `review` belongs to: the landing it is part of, else its own tip.
+pub(crate) fn batch_tip(review: &ReviewRun) -> &str {
+    review.landing.as_deref().unwrap_or(&review.tip)
+}
+
+/// Whether the thread still owes `review`'s findings a decision: none recorded, or one kept
+/// open for a fix to come.
+fn findings_unsettled(review: &ReviewRun) -> bool {
+    review
+        .items
+        .iter()
+        .any(|item| matches!(item.status, FindingStatus::New | FindingStatus::Open { .. }))
 }
 
 fn short(commit: &str) -> &str {
@@ -305,6 +329,13 @@ impl SessionManager {
             }
         };
         let landed = tip.0.clone();
+        // Its worker's own review that hadn't reached it when it reported belongs to this
+        // landing: the thread gets its findings, and only the commits after it are reviewed.
+        let from = match self.pass_own_review(task, &repo, &from, &tip).await {
+            Passed::Whole => return,
+            Passed::Upto(reviewed) => reviewed,
+            Passed::No => from,
+        };
         // Its worker's own review is the change's one review (SESSION-FIXES-PLAN.md Q6.1).
         let from = match self.own_review_covers(task, &repo, &from, &tip).await {
             Covers::All => {
@@ -357,6 +388,77 @@ impl SessionManager {
                 self.settle_review_batch(&task.conversation_id, &landed)
                     .await;
             }
+        }
+    }
+
+    /// The review of `task`'s own committed work, from `from`, that hadn't reached its worker
+    /// when it reported (still running, or its outcome went to the thread), made part of the
+    /// landing at `tip`: its findings are the thread's. `Whole` when it read all of the
+    /// landing, `Upto` the commit it read up to, after which the rest gets a review of its
+    /// own; `No` when there is none, or its commits were rewritten.
+    async fn pass_own_review(&self, task: &Task, repo: &Path, from: &Oid, tip: &Oid) -> Passed {
+        let own = ReviewFor::Worker {
+            task_id: task.id.clone(),
+        };
+        let held = self.reviews.lock().await;
+        let Ok(board) = self.core.board(&task.conversation_id).await else {
+            return Passed::No;
+        };
+        let Some(mut review) = board
+            .reviews
+            .values()
+            .filter(|review| {
+                review.kind == ReviewKind::Code
+                    && review.task_id.as_ref() == Some(&task.id)
+                    && review.base == from.0
+                    && review.landing.is_none()
+                    && match &review.state {
+                        ReviewState::Running => review.notify == own,
+                        ReviewState::Failed { .. } => false,
+                        // Passed to the thread when it ended after the worker's report.
+                        _ => review.notify == ReviewFor::Orchestrator,
+                    }
+            })
+            .max_by_key(|review| review.number)
+            .cloned()
+        else {
+            return Passed::No;
+        };
+        let reviewed = Oid(review.tip.clone());
+        if reviewed != *tip {
+            let (git, repo, at, landed) = (
+                self.git.clone(),
+                repo.to_owned(),
+                reviewed.clone(),
+                tip.clone(),
+            );
+            let after = blocking(move || {
+                git.open(&repo)
+                    .map_err(git_error)?
+                    .ancestor(&at, &landed)
+                    .map_err(git_error)
+            })
+            .await;
+            if !matches!(after, Ok(true)) {
+                return Passed::No;
+            }
+            review.landing = Some(tip.0.clone());
+        }
+        review.notify = ReviewFor::Orchestrator;
+        if let Err(err) = self.store_review(&review).await {
+            tracing::warn!(review = %review.id, error = %err, "a worker's own review could not pass to its landing");
+            return Passed::No;
+        }
+        drop(held);
+        // One that ended already, with nothing left to decide, has nothing to come back for.
+        if review.state != ReviewState::Running && !findings_unsettled(&review) {
+            self.settle_review_batch(&task.conversation_id, &tip.0)
+                .await;
+        }
+        if reviewed == *tip {
+            Passed::Whole
+        } else {
+            Passed::Upto(reviewed)
         }
     }
 
@@ -537,7 +639,8 @@ impl SessionManager {
             .reviews
             .values()
             .filter(|review| {
-                review.kind == ReviewKind::Code && Some(&review.tip) == subject.landed.as_ref()
+                review.kind == ReviewKind::Code
+                    && subject.landed.as_deref() == Some(batch_tip(review))
             })
             .flat_map(|review| &review.items)
             .filter(|item| item.high && !matches!(item.status, FindingStatus::Dismissed { .. }))
@@ -842,12 +945,20 @@ impl SessionManager {
             return Ok(REVIEWS_OFF_CODE.to_owned());
         };
         let reviewer = review.reviewer.label();
+        let waits = task.role == Some(WorkerRole::Verifier);
         Ok(match (&review.state, started) {
-            (ReviewState::Running, true) => format!(
+            (ReviewState::Running, true) if waits => format!(
                 "Started a review of your committed work by {reviewer}. It returns now: gather your evidence and run your checks meanwhile. Its findings arrive as a message from Brigadier; if you finish everything else first, end your turn and they start your next one. Fix what you agree with and commit, then report."
             ),
-            (ReviewState::Running, false) if review.notify == ReviewFor::Worker { task_id: task.id.clone() } => {
+            (ReviewState::Running, true) => format!(
+                "Started a review of your committed work by {reviewer}. It returns now: gather your evidence and run your checks meanwhile, and don't wait for it. Findings that arrive before your report come as a message from Brigadier: fix what you agree with and commit. Once your checks pass and your evidence is in, report; later findings go to the orchestrator."
+            ),
+            (ReviewState::Running, false) if review.notify == ReviewFor::Worker { task_id: task.id.clone() } && waits => {
                 "This exact work is being reviewed already; the findings arrive as a message."
+                    .to_owned()
+            }
+            (ReviewState::Running, false) if review.notify == ReviewFor::Worker { task_id: task.id.clone() } => {
+                "This exact work is being reviewed already; findings that arrive before your report come as a message. Don't wait for them."
                     .to_owned()
             }
             (ReviewState::Running, false) => {
@@ -923,6 +1034,7 @@ impl SessionManager {
             findings: None,
             number: next_number(board.reviews.values()),
             items: Vec::new(),
+            landing: None,
         };
         let picked = self.reviewer_model(&new, reviewer).await;
         // Picking the reviewer took time: the switch may have been turned off meanwhile, and
@@ -1379,6 +1491,15 @@ impl SessionManager {
                 && let Some(now) = board.reviews.get(&ended.id)
             {
                 ended.notify = now.notify.clone();
+                ended.landing = now.landing.clone();
+            }
+            // A worker that reported before its review ended never reads the findings: the
+            // thread gets them, as it gets a landing review's.
+            if let ReviewFor::Worker { task_id } = &ended.notify
+                && ended.kind == ReviewKind::Code
+                && !self.still_works(&ended.conversation_id, task_id).await
+            {
+                ended.notify = ReviewFor::Orchestrator;
             }
             if let Err(err) = self.store_review(&ended).await {
                 tracing::warn!(review = %ended.id, error = %err, "could not record a review's end");
@@ -1400,7 +1521,7 @@ impl SessionManager {
         if ended.kind == ReviewKind::Code
             && matches!(ended.state, ReviewState::Clean | ReviewState::Failed { .. })
         {
-            self.settle_review_batch(&ended.conversation_id, &ended.tip)
+            self.settle_review_batch(&ended.conversation_id, batch_tip(&ended))
                 .await;
         }
     }
@@ -1434,7 +1555,7 @@ impl SessionManager {
         {
             let message = match (&review.state, text) {
                 (ReviewState::Findings { count }, Some(text)) => format!(
-                    "[review of your work · {reviewer} found {count}]\n{}\n[/review]\nFix each finding you agree with and commit; for one you don't, say why in your report. There are no review rounds: once your fixes are committed, your evidence is in and the checks they touch pass, report at once; don't verify again.",
+                    "[review of your work · {reviewer} found {count}]\n{}\n[/review]\nFix each finding you agree with and commit; for one you don't, say why in your report. One that asks for something your task didn't, or contradicts it, is no bug: note it in your report, don't build it. There are no review rounds: once your fixes are committed, your evidence is in and the checks they touch pass, report at once; don't verify again.",
                     clipped(text)
                 ),
                 (ReviewState::Failed { reason }, _) => format!(
@@ -1650,7 +1771,8 @@ impl SessionManager {
                     !matches!(item.status, FindingStatus::New | FindingStatus::Open { .. })
                 })
             {
-                self.settle_review_batch(conversation_id, &review.tip).await;
+                self.settle_review_batch(conversation_id, batch_tip(review))
+                    .await;
             }
         }
         let unrecorded: Vec<String> = changed
@@ -1814,7 +1936,8 @@ impl SessionManager {
             review.notify = ReviewFor::Orchestrator;
             self.tell_review(&review, None).await;
             if review.kind == ReviewKind::Code {
-                self.settle_review_batch(conversation_id, &review.tip).await;
+                self.settle_review_batch(conversation_id, batch_tip(&review))
+                    .await;
             }
         }
     }
@@ -1868,6 +1991,7 @@ mod tests {
             findings: None,
             number: 0,
             items: Vec::new(),
+            landing: None,
         }
     }
 

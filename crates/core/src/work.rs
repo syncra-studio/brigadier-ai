@@ -1383,6 +1383,13 @@ pub struct ReviewRun {
     /// the engine; each one's status is the thread's (`record_findings`).
     #[serde(default)]
     pub items: Vec<Finding>,
+    /// The landed tip whose review it is part of, when that isn't its own `tip`: a worker's
+    /// own review that hadn't reached it when it reported, of work that landed with commits
+    /// after it (those get a review of their own). The landing's hold settles once every
+    /// review of it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub landing: Option<String>,
 }
 
 /// One finding of a review. Brigadier splits it from the review's text; the thread decides

@@ -3078,11 +3078,16 @@ impl SessionManager {
         if Self::waits_for_go_ahead(&task) {
             return;
         }
-        // A worker whose own review still runs (`review_code`) waits for its findings: they
-        // start its next turn. Not while the user has reviews off: nothing waits on one. The
-        // lock orders this with the switch, which releases those already waiting.
+        // A verifier whose own review still runs (`review_code`) waits for its findings: they
+        // start its next turn, and it triages them before it reports. Any other worker never
+        // waits for its review: findings after its report go to the thread. Not while the
+        // user has reviews off: nothing waits on one. The lock orders this with the switch,
+        // which releases those already waiting.
         let switch = self.reviews.lock().await;
-        if self.reviews_on() && self.review_pending(&task).await {
+        if task.role == Some(WorkerRole::Verifier)
+            && self.reviews_on()
+            && self.review_pending(&task).await
+        {
             self.set_task_blocked(
                 &task.id,
                 Some(super::review_runs::WAITING_FOR_REVIEW.into()),

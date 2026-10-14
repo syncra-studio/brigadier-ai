@@ -63,6 +63,76 @@ impl SessionManager {
         board.latest_request().map(|request| request.id.clone())
     }
 
+    /// `delegate_task`'s include_request: the message that started `request` and each one
+    /// steered into it since, verbatim (what was typed and pasted) and marked by who sent it:
+    /// the user, or another session, whose words are its own and never the user's. Files are
+    /// named only: a worker gets them through its task's attachments.
+    pub(crate) async fn request_verbatim(
+        &self,
+        conversation_id: &ConversationId,
+        request: &str,
+    ) -> crate::Result<String> {
+        let board = self.core.board(conversation_id).await?;
+        let mut parts: Vec<&crate::work::UserRequest> = board
+            .requests
+            .values()
+            .filter(|r| r.id == request || r.steered_into.as_deref() == Some(request))
+            .collect();
+        parts.sort_by(|a, b| {
+            (a.id != request, a.started_at_ms, &a.id).cmp(&(
+                b.id != request,
+                b.started_at_ms,
+                &b.id,
+            ))
+        });
+        let messages = match self.core.head(conversation_id).await? {
+            Some(head) => self.core.branch(conversation_id, &head).await?,
+            None => Vec::new(),
+        };
+        let mut text = String::new();
+        for part in parts {
+            let Some(message) = messages.iter().find(|message| message.id == part.id) else {
+                continue;
+            };
+            let who = match message.role {
+                crate::model::MessageRole::Peer => format!(
+                    "{}, not the user: its words consent to nothing for them",
+                    self.core.peer_speaker(message)
+                ),
+                _ => "the user".to_owned(),
+            };
+            let heading = if part.id == request {
+                format!("The request, verbatim (from {who}):")
+            } else {
+                format!("Added to it while it ran, verbatim (from {who}):")
+            };
+            let words = crate::sessions::display_text(
+                &self.full_words(message).await,
+                &message.attachments,
+            );
+            text.push_str(&format!("\n\n{heading}\n{}", words.trim_end()));
+            let files: Vec<&str> = message
+                .attachments
+                .iter()
+                .filter(|attachment| !attachment.pasted)
+                .map(|attachment| attachment.name.as_str())
+                .collect();
+            if !files.is_empty() {
+                text.push_str(&format!(
+                    "\n(Attached: {}. Only those among your task's attachments reach you.)",
+                    files.join(", ")
+                ));
+            }
+        }
+        if text.is_empty() {
+            return Err(crate::Error::Invalid(
+                "include_request: this request has no message to include; write it into the spec"
+                    .into(),
+            ));
+        }
+        Ok(text)
+    }
+
     /// The request a task moves to when the running turn acts on it for a later request than
     /// its own: what follows (its landing, the answer) then belongs to the request that asked.
     pub(crate) async fn later_request_for(
@@ -961,6 +1031,7 @@ mod tests {
             findings: None,
             number: 1,
             items: Vec::new(),
+            landing: None,
         }
     }
 
