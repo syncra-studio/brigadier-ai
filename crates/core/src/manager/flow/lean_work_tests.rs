@@ -503,3 +503,202 @@ async fn include_request_keeps_a_peer_request_the_senders() {
     flow.settled_in(&docs).await;
     flow.stop().await;
 }
+
+/// A report over the inline size is taken, not bounced: the task keeps every field whole, the
+/// thread reads a bounded envelope, and the whole report is kept as a file.
+#[tokio::test]
+async fn a_long_report_is_taken_whole_and_reaches_the_thread_shortened() {
+    let summary = format!(
+        "Done. {}",
+        "The notes cover every case. ".repeat(400).trim_end()
+    );
+    let verification: Vec<String> = (0..60)
+        .map(|n| {
+            format!(
+                "check {n}: {}",
+                "passed with the expected output ".repeat(10).trim_end()
+            )
+        })
+        .collect();
+    let changes: Vec<String> = (0..200).map(|n| format!("notes/part-{n}.md")).collect();
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let (s, v, c) = (summary.clone(), verification.clone(), changes.clone());
+    let flow = Flow::start(
+        "lean-long-report",
+        Options::default(),
+        script(move |turn| {
+            let (log, s, v, c) = (log.clone(), s.clone(), v.clone(), c.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    log.lock().unwrap().push(turn.input.clone());
+                    if turn.input.contains("[report task-1") {
+                        return Reply::text("Done.");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "medium", "title": "Survey the notes",
+                                   "kind": "research", "spec": "Survey the notes."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": s, "verification": v, "changes": c}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Survey the notes.").await;
+    let board = flow.settled().await;
+    let task = Flow::task(&board, 1);
+    let report = task.report.clone().unwrap();
+    assert_eq!(report.summary, summary);
+    assert_eq!(report.verification, verification);
+    assert_eq!(report.changes, changes);
+    let full = &report.artifacts[0];
+    assert_eq!(full.title, crate::manager::prompts::FULL_REPORT_TITLE);
+    let kept = flow
+        .core
+        .store()
+        .blobs()
+        .get(full.id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let kept = String::from_utf8(kept).unwrap();
+    assert!(
+        kept.contains(&summary) && kept.contains(&verification[59]),
+        "kept whole"
+    );
+    let envelope = inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|input| input.contains("[report task-1"))
+        .cloned()
+        .unwrap();
+    let start = envelope.find("[report task-1").unwrap();
+    let end = envelope[start..].find("[/report]").unwrap() + start;
+    let shown = &envelope[start..end];
+    assert!(shown.len() < 8_000, "{}", shown.len());
+    assert!(
+        shown.contains("read_report task-1 gives it whole"),
+        "{shown}"
+    );
+    assert!(shown.contains(&full.id), "{shown}");
+    assert!(shown.contains("more"), "{shown}");
+    flow.stop().await;
+}
+
+/// What a worker writes after its report: folded into the report while the thread hasn't read
+/// it (one turn reads both), its own wake once the thread has.
+async fn addendum_flow(name: &str, busy: bool) -> Vec<String> {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let open = gate.clone();
+    let read = Arc::new(tokio::sync::Notify::new());
+    let flow = Flow::start(
+        name,
+        Options::default(),
+        script(move |turn| {
+            let (log, open, read) = (log.clone(), open.clone(), read.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    log.lock().unwrap().push(turn.input.clone());
+                    if turn.input.contains("[report task-1") {
+                        read.notify_one();
+                        return Reply::text("Surveyed.");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "medium", "title": "Survey the notes",
+                                   "kind": "research", "spec": "Survey the notes."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    if busy {
+                        // Still in this turn when the report and what follows it arrive.
+                        open.notified().await;
+                    }
+                    return Reply::text("[quiet]");
+                }
+                let reply = turn
+                    .call("submit_report", json!({"summary": "Surveyed the notes."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                if !busy {
+                    // The thread has read the report before this is written.
+                    read.notified().await;
+                }
+                Reply::text(format!(
+                    "The details: {}",
+                    "every note is current. ".repeat(40)
+                ))
+            }
+        }),
+    )
+    .await;
+    flow.say("Survey the notes.").await;
+    flow.until("the addendum to be kept", |board| {
+        board.tasks.values().any(|task| {
+            task.report.as_ref().is_some_and(|report| {
+                report
+                    .artifacts
+                    .iter()
+                    .any(|artifact| artifact.file_name.as_deref() == Some("task-1-after-report.md"))
+            })
+        })
+    })
+    .await;
+    gate.notify_one();
+    flow.settled().await;
+    flow.stop().await;
+    std::mem::take(&mut *inputs.lock().unwrap())
+}
+
+#[tokio::test]
+async fn an_addendum_is_folded_into_a_report_not_read_yet() {
+    let inputs = addendum_flow("lean-addendum-folded", true).await;
+    let reading: Vec<&String> = inputs
+        .iter()
+        .filter(|input| input.contains("[report task-1"))
+        .collect();
+    assert_eq!(reading.len(), 1, "one turn reads both: {inputs:#?}");
+    assert!(
+        reading[0].contains("[report task-1 · addendum]"),
+        "{}",
+        reading[0]
+    );
+    assert!(
+        reading[0].contains("every note is current"),
+        "{}",
+        reading[0]
+    );
+}
+
+#[tokio::test]
+async fn an_addendum_after_the_report_was_read_wakes_the_thread() {
+    let inputs = addendum_flow("lean-addendum-late", false).await;
+    let addenda: Vec<&String> = inputs
+        .iter()
+        .filter(|input| input.contains("[report task-1 · addendum]"))
+        .collect();
+    assert_eq!(addenda.len(), 1, "{inputs:#?}");
+    assert!(
+        inputs
+            .iter()
+            .any(|input| input.contains("[report task-1 ·") && !input.contains("addendum")),
+        "{inputs:#?}"
+    );
+}

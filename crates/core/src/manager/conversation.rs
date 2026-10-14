@@ -2156,6 +2156,27 @@ impl SessionManager {
         Some(conv)
     }
 
+    /// Adds `text` to `task`'s report still waiting in the orchestrator's inbox, so one turn
+    /// reads both. False once the report was read (or never queued): then `text` needs a
+    /// delivery of its own.
+    pub(crate) async fn fold_into_queued_report(&self, task: &Task, text: &str) -> bool {
+        let Ok(conv) = self.conv(&task.conversation_id) else {
+            return false;
+        };
+        let label = format!("report task-{}", task.number);
+        let mut state = conv.state.lock().await;
+        let Some((queued, _)) = state.inbox.iter_mut().find(|(queued, _)| {
+            queued.kind == InjectionKind::Report
+                && queued.task_id.as_ref() == Some(&task.id)
+                && queued.label == label
+        }) else {
+            return false;
+        };
+        queued.text.push('\n');
+        queued.text.push_str(text);
+        true
+    }
+
     /// Marks `task` as having news for the orchestrator on its way: call it before the task's
     /// state changes, when an envelope about that change follows ([`Self::deliver`]). A turn
     /// that starts in between then does not tell the orchestrator that nothing else runs.

@@ -1559,6 +1559,165 @@ pub(crate) fn chat(memories: &[String]) -> String {
 
 /// A report as the orchestrator reads it.
 pub(crate) fn report_envelope(task: &Task, report: &Report, route: &str) -> String {
+    if report_size(report) <= super::workers::REPORT_MAX_BYTES {
+        return report_text(task, report, route);
+    }
+    short_report(task, report, route)
+}
+
+/// What a report's own words weigh against [`super::workers::REPORT_MAX_BYTES`]: its summary
+/// and every list item.
+pub(crate) fn report_size(report: &Report) -> usize {
+    report.summary.len()
+        + [
+            &report.changes,
+            &report.decisions,
+            &report.learned,
+            &report.verification,
+            &report.done_when,
+            &report.open_questions,
+            &report.risks,
+            &report.needs_user,
+        ]
+        .iter()
+        .flat_map(|items| items.iter())
+        .map(|item| item.len() + 3)
+        .sum::<usize>()
+}
+
+/// The title of the file that keeps a long report whole.
+pub(crate) const FULL_REPORT_TITLE: &str = "The full report";
+
+/// The most of a long report's summary its envelope shows.
+const SHORT_SUMMARY: usize = 1_200;
+/// The most of one list item a long report's envelope shows.
+const SHORT_ITEM: usize = 240;
+/// What all of a long report's list items may take in its envelope.
+const SHORT_LISTS: usize = 2_000;
+/// The most files, artifacts or outputs a long report's envelope names.
+const SHORT_NAMES: usize = 6;
+
+/// `text` cut to at most `max` bytes at a character boundary, marked when cut.
+fn cut(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
+/// A report over the size the thread reads inline, bounded however long its parts are: the
+/// start of its summary, as many list items as fit (each cut), a few names of each list of
+/// files, and where it is whole. The task keeps it whole for everything else.
+fn short_report(task: &Task, report: &Report, route: &str) -> String {
+    let mut text = format!(
+        "[report task-{} · {:?} · \"{}\" · {}]\n{}",
+        task.number,
+        task.kind,
+        task.title,
+        route,
+        cut(&report.summary, SHORT_SUMMARY)
+    );
+    let mut budget = SHORT_LISTS;
+    let mut list = |title: &str, items: &[String], names: bool, text: &mut String| {
+        if items.is_empty() {
+            return;
+        }
+        text.push_str(&format!("\n{title}:"));
+        let mut shown = 0;
+        for item in items {
+            let item = cut(item, SHORT_ITEM);
+            if (names && shown == SHORT_NAMES) || item.len() + 3 > budget {
+                break;
+            }
+            budget -= item.len() + 3;
+            text.push_str(&format!("\n- {item}"));
+            shown += 1;
+        }
+        if shown < items.len() {
+            text.push_str(&format!("\n- … +{} more", items.len() - shown));
+        }
+    };
+    list(needs_user_title(task), &report.needs_user, false, &mut text);
+    list("Open questions", &report.open_questions, false, &mut text);
+    list("Done when", &report.done_when, false, &mut text);
+    list("Verification", &report.verification, false, &mut text);
+    list("Changes", &report.changes, true, &mut text);
+    list("Risks", &report.risks, false, &mut text);
+    list("Decisions", &report.decisions, false, &mut text);
+    if let Some(verdict) = report.verdict {
+        text.push_str(&format!("\nVerdict: {verdict:?}"));
+    }
+    let named = |title: &str, lines: Vec<String>, text: &mut String| {
+        if lines.is_empty() {
+            return;
+        }
+        text.push_str(&format!("\n{title}:"));
+        for line in lines.iter().take(SHORT_NAMES) {
+            text.push_str(&format!("\n- {line}"));
+        }
+        if lines.len() > SHORT_NAMES {
+            text.push_str(&format!("\n- … +{} more", lines.len() - SHORT_NAMES));
+        }
+    };
+    named(
+        "Artifacts",
+        report
+            .artifacts
+            .iter()
+            .map(|a| {
+                format!(
+                    "{} ({:?}, {} bytes): {}",
+                    a.id,
+                    a.kind,
+                    a.bytes,
+                    cut(&a.title, 120)
+                )
+            })
+            .collect(),
+        &mut text,
+    );
+    named(
+        "Outputs (the user saves them from the task card; read_artifact reads them)",
+        task.outputs
+            .iter()
+            .map(|o| {
+                format!(
+                    "{} ({}, {} bytes): {}",
+                    o.id,
+                    o.mime,
+                    o.bytes,
+                    cut(&o.title, 120)
+                )
+            })
+            .collect(),
+        &mut text,
+    );
+    text.push_str(&format!(
+        "\n[shortened: the report is {} bytes; read_report task-{} gives it whole]\n[/report]",
+        report_size(report),
+        task.number
+    ));
+    text
+}
+
+/// How a report's "needs the user" list is headed: an overnight run's are listed for the user
+/// (a gate member's go to its gate); in a session the thread says them in its answer.
+fn needs_user_title(task: &Task) -> &'static str {
+    if task.gate_link.is_some() {
+        "Needs the user"
+    } else if task.run.is_some() {
+        "Needs the user (already listed for them under Waiting on you)"
+    } else {
+        "Needs the user (say it in your answer)"
+    }
+}
+
+/// A report as the thread reads it whole (read_report), however long.
+pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
     let mut text = format!(
         "[report task-{} · {:?} · \"{}\" · {}]\n{}",
         task.number, task.kind, task.title, route, report.summary
@@ -1579,14 +1738,7 @@ pub(crate) fn report_envelope(task: &Task, report: &Report, route: &str) -> Stri
     list("Risks", &report.risks, &mut text);
     // An overnight run's are listed for the user (a gate member's go to its gate); in a
     // session the thread says them in its answer.
-    let needs_user = if task.gate_link.is_some() {
-        "Needs the user"
-    } else if task.run.is_some() {
-        "Needs the user (already listed for them under Waiting on you)"
-    } else {
-        "Needs the user (say it in your answer)"
-    };
-    list(needs_user, &report.needs_user, &mut text);
+    list(needs_user_title(task), &report.needs_user, &mut text);
     // What it taught the Brain: its decisions and what it learned, by count only
     // (SESSION-FIXES-PLAN.md Q6.6). A review's report isn't kept.
     let facts = report
@@ -1678,6 +1830,15 @@ pub(crate) fn late_findings_envelope(task: &Task, shown: &str) -> String {
          it is kept with the report:\n{shown}\n[/report] If it changes nothing you told the user \
          or the work still to do, reply exactly {QUIET}. If your answer is already written: \
          {LATE_EVENT}",
+        task.number
+    )
+}
+
+/// [`late_findings_envelope`] added to its report while that still waits to be read.
+pub(crate) fn late_findings_folded(task: &Task, shown: &str) -> String {
+    format!(
+        "[report task-{} · addendum] The worker wrote this after its report, which left it out; \
+         it is kept with the report:\n{shown}\n[/report]",
         task.number
     )
 }
@@ -1844,6 +2005,43 @@ mod tests {
         let mut review = task("claude", None);
         review.kind = TaskKind::Review;
         assert!(!report_envelope(&review, &report, "Codex").contains("Brain:"));
+    }
+
+    /// A report within the inline size reads as it is; a longer one is bounded however long
+    /// its summary and lists are, and says where it is whole.
+    #[test]
+    fn a_long_report_reaches_the_thread_bounded() {
+        let empty: Report = serde_json::from_value(serde_json::json!({
+            "summary": "", "changes": [], "decisions": [], "verification": [],
+            "openQuestions": [], "verdict": null, "artifacts": [], "submittedAtMs": 0
+        }))
+        .unwrap();
+        let short = Report {
+            summary: "Done.".into(),
+            changes: vec!["src/a.rs".into()],
+            ..empty.clone()
+        };
+        let task = task("claude", None);
+        assert_eq!(
+            report_envelope(&task, &short, "Claude"),
+            report_text(&task, &short, "Claude")
+        );
+        let long = Report {
+            summary: "word ".repeat(20_000),
+            changes: (0..5_000).map(|n| format!("src/file-{n}.rs")).collect(),
+            verification: (0..500).map(|_| "ran ".repeat(500)).collect(),
+            needs_user: vec!["A key for the payments sandbox.".into()],
+            ..empty
+        };
+        let envelope = report_envelope(&task, &long, "Claude");
+        assert!(envelope.len() < 6_000, "{}", envelope.len());
+        assert!(envelope.contains("A key for the payments sandbox."));
+        assert!(envelope.contains("- … +"), "{envelope}");
+        assert!(
+            envelope.contains("read_report task-1 gives it whole"),
+            "{envelope}"
+        );
+        assert!(report_text(&task, &long, "Claude").len() > 100_000);
     }
 
     /// SESSION-FIXES-PLAN.md Q6.2, Q6.3 and §11: only the checks of the worker's own change,

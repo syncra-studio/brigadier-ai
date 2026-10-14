@@ -90,7 +90,8 @@ const BACKGROUND_SILENCE: Duration = Duration::from_secs(2);
 const BACKGROUND_CHECK: Duration = Duration::from_secs(60);
 #[cfg(test)]
 const BACKGROUND_CHECK: Duration = Duration::from_millis(200);
-/// Report size cap: about 800 tokens.
+/// What of a report the thread reads inline, about 800 tokens: a longer one is taken whole
+/// and reaches it shortened ([`prompts::report_envelope`]).
 pub(crate) const REPORT_MAX_BYTES: usize = 3_600;
 /// A worker's message at least this long, left out of its report, is kept as an artifact.
 const KEEP_MESSAGE_MIN_BYTES: usize = 400;
@@ -3524,26 +3525,6 @@ impl SessionManager {
         if self.held_by_plan_mode(&task).await {
             return Err(Error::Invalid(super::phases::PLAN_MODE_HOLD.into()));
         }
-        let size = input.summary.len()
-            + [
-                &input.changes,
-                &input.decisions,
-                &input.learned,
-                &input.verification,
-                &input.done_when,
-                &input.open_questions,
-                &input.risks,
-                &input.needs_user,
-            ]
-            .iter()
-            .flat_map(|items| items.iter())
-            .map(|item| item.len() + 3)
-            .sum::<usize>();
-        if size > REPORT_MAX_BYTES {
-            return Err(Error::Invalid(format!(
-                "The report is {size} bytes; the limit is about {REPORT_MAX_BYTES} (≈800 tokens). Move the details into a file in your outputs folder, name it under `artifacts`, and submit a shorter report."
-            )));
-        }
         // A new file no report names would be left out of the landing: the worker decides
         // whether it belongs to the work, before anything of the report is stored.
         let unreported = self
@@ -3615,7 +3596,7 @@ impl SessionManager {
                 )));
             }
         }
-        let report = Report {
+        let mut report = Report {
             summary: self.redact_for(&live, &input.summary).await,
             changes: input.changes.clone(),
             decisions: self.redact_all(&live, &input.decisions).await,
@@ -3631,6 +3612,14 @@ impl SessionManager {
             artifacts,
             submitted_at_ms: now_ms(),
         };
+        // A report over what the thread reads inline is taken whole: every field stays for
+        // what reads it (landing, relanding, the Brain), the thread's envelope is bounded, and
+        // the whole of it is kept as a file for read_artifact and the user.
+        if prompts::report_size(&report) > REPORT_MAX_BYTES
+            && let Some(full) = self.full_report_artifact(&task, &report).await
+        {
+            report.artifacts.insert(0, full);
+        }
         let reported = |task: &mut Task| {
             task.report = Some(report.clone());
             // It reached a report: a later crash resumes it again.
@@ -3843,6 +3832,27 @@ impl SessionManager {
         Some(artifact)
     }
 
+    /// A long report kept whole as a file, from its fields as stored (already redacted).
+    async fn full_report_artifact(&self, task: &Task, report: &Report) -> Option<ArtifactRef> {
+        let text = prompts::report_text(task, report, &route_label(task));
+        let bytes = text.into_bytes();
+        let size = bytes.len() as u64;
+        match self.core.store().blobs().put(bytes).await {
+            Ok(hash) => Some(ArtifactRef {
+                id: hash.to_string(),
+                title: prompts::FULL_REPORT_TITLE.into(),
+                kind: ArtifactKind::Note,
+                mime: "text/markdown".into(),
+                bytes: size,
+                file_name: Some(format!("task-{}-report.md", task.number)),
+            }),
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "could not keep a long report whole");
+                None
+            }
+        }
+    }
+
     /// What the worker wrote after its report, in the turn that reported: kept as an artifact
     /// of the report and sent to the orchestrator, when it is long enough to be findings or
     /// the report points at it ("the findings are below"). A review's or check's is left
@@ -3889,6 +3899,18 @@ impl SessionManager {
             return task;
         };
         tracing::info!(task = %task.id, bytes = size, "kept what the worker wrote after its report");
+        // Its report not read yet: the thread reads both in one turn, with no wake of its own.
+        if self
+            .fold_into_queued_report(&updated, &prompts::late_findings_folded(&updated, &shown))
+            .await
+        {
+            if !updated.kind.writes()
+                && let Some(report) = &updated.report
+            {
+                self.learn_report(&updated, report, Some(live.learning.clone()));
+            }
+            return updated;
+        }
         let envelope = Envelope {
             kind: InjectionKind::Report,
             label: addendum_label(task.number),

@@ -449,7 +449,7 @@ impl SessionManager {
                 let report = task.report.as_ref().ok_or_else(|| {
                     Error::Invalid(format!("task-{} has not reported yet", task.number))
                 })?;
-                let mut text = prompts::report_envelope(&task, report, &route_label(&task));
+                let mut text = prompts::report_text(&task, report, &route_label(&task));
                 let step = if here {
                     OrchestratorStepKind::ReadReport { task_id: task.id }
                 } else {

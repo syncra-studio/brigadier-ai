@@ -372,8 +372,9 @@ it. Small work needs no outline: just do it.";
 const SUBMIT_REPORT: &str = "Submit your final structured report. Call it exactly once, as \
 your last action, when the task is done or cannot be done. The orchestrator reads only this \
 report, never your messages: the summary must hold your findings (or name the artifact that \
-does), never point to text below or in a message. It is final and capped at about 800 tokens: \
-keep every field short, and put long material (full findings, logs, command output, notes) in \
+does), never point to text below or in a message. It is final, and the orchestrator reads \
+about 800 tokens of it inline (a longer one reaches it shortened): keep every field short, and \
+put long material (full findings, logs, command output, notes) in \
 files in your outputs folder, listed under `artifacts`. List every file you changed, created or \
 deleted under `changes`: new files that are not listed are not kept.";
 
