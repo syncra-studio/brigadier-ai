@@ -68,8 +68,8 @@ test("a ready row counts profiles and cookies, or says what the last import brou
     "51 skipped (accounts.google.com and mail.google.com)",
   ]);
   assert.deepEqual(
-    rowView(source({ record: record({ profiles: ["Work", "HostPapa"], skipped: 0 }) })).details,
-    [`Work, HostPapa · ${n(2790)} cookies imported`],
+    rowView(source({ record: record({ profiles: ["Work", "Personal"], skipped: 0 }) })).details,
+    [`Work, Personal · ${n(2790)} cookies imported`],
   );
 });
 

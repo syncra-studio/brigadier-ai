@@ -25,7 +25,7 @@ const tab = (cwd: string | null, shellTitle: string | null = null) => ({
 
 test("shell tabs use the project folder across platforms and number only the repeats", () => {
   assert.deepEqual(
-    tabNames([tab("/tmp/session-4f2d486d")], "/Users/stephen/Development/brigadier-ai"),
+    tabNames([tab("/tmp/session-4f2d486d")], "/Users/me/Development/brigadier-ai"),
     ["brigadier-ai"],
   );
   assert.deepEqual(

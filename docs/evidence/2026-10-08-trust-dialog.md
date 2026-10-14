@@ -4,8 +4,8 @@ Branch `trust-dialog` from `thread-build` `fef7b14a`. Follows up the phase 4 fin
 (`2026-10-08-thread-phase4.md`, "Both CLIs ask whether to trust the folder the first time"):
 Claude's trust dialog defaults to "No, exit", which broke "Open in terminal".
 
-Installed CLIs: Claude Code 2.1.294 (`/Users/stephen/.local/bin/claude`), codex-cli 0.160.1
-(`/Users/stephen/.local/bin/codex`). Every probe and live check ran with a scratch `HOME`
+Installed CLIs: Claude Code 2.1.294 (`~/.local/bin/claude`), codex-cli 0.160.1
+(`~/.local/bin/codex`). Every probe and live check ran with a scratch `HOME`
 (`/private/tmp/w25/exp/home` for the probes, `/private/tmp/w25/live/home` for the live app). The
 user's real `~/.claude.json` and `~/.codex/config.toml` were never read or written. In the
 scratch HOMEs neither CLI is logged in: Claude says "Not logged in", and Codex has a fake API key.

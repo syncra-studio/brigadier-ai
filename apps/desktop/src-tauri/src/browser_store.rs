@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(store.imports().unwrap()["dia"], (None, true));
         let record = ImportRecord {
             at_ms: 1_000,
-            profiles: vec!["Work".into(), "HostPapa".into()],
+            profiles: vec!["Work".into(), "Personal".into()],
             imported: 2_790,
             skipped: 51,
             skipped_domains: vec!["a.com".into(), "b.com".into()],

@@ -5,7 +5,7 @@ session, hand it to an interactive terminal, and take it back afterwards, for Cl
 Codex?
 
 Checked live on the user's own unmodified binaries: Claude Code 2.1.292
-(`/Users/stephen/.local/bin/claude`) and codex-cli 0.160.1 (`/Users/stephen/.local/bin/codex`).
+(`~/.local/bin/claude`) and codex-cli 0.160.1 (`~/.local/bin/codex`).
 Models: Sonnet for Claude (`--model sonnet --effort low`); Codex's default model with
 `model_reasoning_effort="low"`. Scratch folder `/tmp/w07-spike` (two git repos), removed
 afterwards, with the sessions it made.
