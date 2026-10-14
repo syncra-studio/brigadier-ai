@@ -254,18 +254,22 @@ async function driveTurn(): Promise<object> {
   out.commentary = seen();
   // A peer reply stays outstanding while the final answer streams.
   request("r1", { waitingFor: [PEER] });
-  // The final answer starts: the work folds at once, the time stops there.
+  // The final answer starts: the work folds at once, the time stops there. The fold is timed from
+  // the first frame that shows the answer starting, by the frames' own clock: a slow machine
+  // takes its time drawing that frame, which is not the fold's.
   const answerAtMs = Date.now() - 1000;
   const answerText = "Fixed the rounding: `round` now rounds half-up, and the tests pass.";
-  const folding = performance.now();
   change(() => ({ streaming: { messageId: "a1", text: answerText.slice(0, 20), requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
+  await frame();
+  const folding = Number(document.timeline.currentTime);
+  out.foldFirst = one("[data-slot=request-fold]", turn() ?? document)?.getAttribute("data-fold") ?? "gone";
   let foldMs = -1;
   for (const end = performance.now() + 2000; performance.now() < end; ) {
-    await frame();
     if (!one("[data-slot=request-fold]", turn() ?? document)) {
-      foldMs = Math.round(performance.now() - folding);
+      foldMs = Math.round(Number(document.timeline.currentTime) - folding);
       break;
     }
+    await frame();
   }
   out.foldMs = foldMs;
   await settle();
@@ -346,6 +350,11 @@ async function driveSteer(): Promise<object> {
 
 async function driveQueue(): Promise<object> {
   await settle(600);
+  // The composer's editor comes in its own chunk after a plain field and takes the focus a beat
+  // after it shows, which closes a menu open by then: on a slow machine that comes after the turn
+  // holds still, so the menu waits for the editor to hold the focus.
+  const editing = () => one("[contenteditable=true][aria-label='Message input']:focus");
+  for (const end = Date.now() + 8000; Date.now() < end && !editing(); ) await frame();
   const trigger = one<HTMLButtonElement>("[aria-label='Queued message actions']");
   trigger?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
   await settle();

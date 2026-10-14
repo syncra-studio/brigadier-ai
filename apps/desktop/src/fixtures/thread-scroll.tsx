@@ -295,16 +295,24 @@ function turnLine(): number {
   return round(visible - roomFor(visible));
 }
 
+/** The share of the way still to go at the last frame before a time, and at the first frame from it on. */
+type Around = { before: number; after: number };
+
 /**
  * Samples scrollTop each frame until the returned call: how the view moved, as the share of the
- * way still to go at 100ms and 200ms after it began, how long it took to come within a pixel,
- * and whether it ever went past where it ended.
+ * way still to go around 100ms and 200ms after it began, how long it took to come within a
+ * pixel, and whether it ever went past where it ended. Each place is timed by the frame that
+ * put it there: a frame's callbacks run in the order they were asked for, so this one, asked for
+ * before the move's, reads where the frame before left the view. A slow machine's frames can
+ * come far apart, so a time is read as the frames on either side of it.
  */
-function trace(): () => { moved: number; at100: number; at200: number; settledMs: number; overshoot: boolean } {
+function trace(): () => { moved: number; at100: Around; at200: Around; settledMs: number; overshoot: boolean } {
   const samples: { t: number; top: number }[] = [];
   let on = true;
+  let previous: number | null = null;
   const tick = (now: number) => {
-    samples.push({ t: now, top: viewport().scrollTop });
+    if (previous !== null) samples.push({ t: previous, top: viewport().scrollTop });
+    previous = now;
     if (on) requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
@@ -314,15 +322,16 @@ function trace(): () => { moved: number; at100: number; at200: number; settledMs
     const at = samples.findIndex((sample, index) => index > 0 && sample.top !== samples[index - 1]!.top);
     const from = samples[Math.max(0, at - 1)]!;
     const span = end - from.top;
-    const left = (ms: number) => {
-      const sample = samples.find((candidate) => candidate.t - from.t >= ms) ?? samples.at(-1)!;
-      return round((end - sample.top) / span);
-    };
+    const left = (sample: { top: number }) => round((end - sample.top) / span);
+    const around = (ms: number): Around => ({
+      before: left(samples.findLast((sample) => sample.t - from.t < ms) ?? from),
+      after: left(samples.find((sample) => sample.t - from.t >= ms) ?? samples.at(-1)!),
+    });
     const settled = samples.find((sample) => sample.t > from.t && Math.abs(end - sample.top) < 1)!;
     return {
       moved: round(span),
-      at100: left(100),
-      at200: left(200),
+      at100: around(100),
+      at200: around(200),
       settledMs: Math.round(settled.t - from.t),
       overshoot: samples.some((sample) => (sample.top - end) * Math.sign(span) > 0.5),
     };

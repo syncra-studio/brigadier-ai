@@ -17,7 +17,7 @@ async function drive<T>(t: test.TestContext, query: string): Promise<T> {
 
 test("a turn has one live line, folds the moment its final answer starts, and keeps that time through the end and a reload", { timeout: 120000 }, async (t) => {
   const seen = await drive<Record<"thinking" | "thought" | "question" | "running" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
-    foldMs: number; actions: string[];
+    foldFirst: string; foldMs: number; actions: string[];
   }>(t, "drive=turn");
   // Nothing runs: the newest group's own row says "Thinking"; no line of its own under it.
   assert.deepEqual(
@@ -35,7 +35,9 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
     [seen.commentary.newest, seen.commentary.newestShimmers, seen.commentary.groupRow, seen.commentary.status, seen.commentary.header?.startsWith("Working for")],
     ["I’ll fix the rounding next.", true, "Read files, ran commands", null, true],
   );
-  // The final answer starts: the work folds within the 150ms close and a frame or two.
+  // The final answer starts: the frame that shows it closes the work, gone within the 150ms
+  // close and a frame or two.
+  assert.equal(seen.foldFirst, "closed");
   assert.ok(seen.foldMs >= 0 && seen.foldMs <= 250, `folded in ${seen.foldMs} ms`);
   const header = seen.answering.header;
   assert.match(header ?? "", /^Worked for \d+s$/);

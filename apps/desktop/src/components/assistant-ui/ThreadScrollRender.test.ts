@@ -5,14 +5,16 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Button = { shown: boolean; tabbable: boolean; size: number[]; aboveStack: number; offCentre: number; dots: boolean };
 type Toggle = { before: number; after: number; distance: number };
+/** The share of the way still to go at the last frame before a time, and at the first frame from it on. */
+type Around = { before: number; after: number };
 
 /** Within half a pixel: rows lay out on fractions, the view scrolls by whole pixels. */
 function near(actual: number | null, expected: number, label: string): void {
   assert.ok(actual !== null && Math.abs(actual - expected) <= 0.5, `${label}: ${actual}, not ${expected}`);
 }
 
-test("the thread keeps its place, follows from the bottom and places a sent turn in the conversation view", { timeout: 120000 }, async (t) => {
-  const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1", "thread-scroll-result", 90000)) as {
+test("the thread keeps its place, follows from the bottom and places a sent turn in the conversation view", { timeout: 180000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1", "thread-scroll-result", 150000)) as {
     error?: string;
     firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; bottomFade: number };
     button: { at8: Button; at9: Button };
@@ -33,7 +35,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     };
     send: {
       topPadding: number;
-      spring: { moved: number; at100: number; at200: number; settledMs: number; overshoot: boolean };
+      spring: { moved: number; at100: Around; at200: Around; settledMs: number; overshoot: boolean };
       placed: { turnEnd: number; line: number; distance: number; room: number; userTop: number; viewHeight: number };
       overflowed: { top: number; grew: number; distances: number[]; lastGap: number; button: Button; room: number };
       unfollowed: { top: number; tops: number[]; distance: number; button: Button };
@@ -125,8 +127,12 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   near(send.topPadding, 32, "the list's top padding");
   assert.ok(send.spring.moved > 100, `the spring moved ${send.spring.moved}px`);
   assert.equal(send.spring.overshoot, false);
-  assert.ok(send.spring.at100 > 0.35 && send.spring.at100 < 0.75, `left at 100ms: ${send.spring.at100}`);
-  assert.ok(send.spring.at200 > 0.04 && send.spring.at200 < 0.25, `left at 200ms: ${send.spring.at200}`);
+  // Between 0.35 and 0.75 of the way left at 100ms, 0.04 and 0.25 at 200ms: no frame before the
+  // time is already past the lower share, none from it on still short of the higher one (a slow
+  // machine's frames come far apart, so the time itself can fall between two).
+  const { at100, at200 } = send.spring;
+  assert.ok(at100.before > 0.35 && at100.after < 0.75, `left around 100ms: ${at100.before} before, ${at100.after} from it on`);
+  assert.ok(at200.before > 0.04 && at200.after < 0.25, `left around 200ms: ${at200.before} before, ${at200.after} from it on`);
   assert.ok(send.spring.settledMs >= 300 && send.spring.settledMs <= 700, `settled in ${send.spring.settledMs}ms`);
   near(send.placed.turnEnd, send.placed.line, "sent turn's end");
   assert.ok(send.placed.line >= Math.max(240, send.placed.viewHeight / 4), `line at ${send.placed.line}`);
