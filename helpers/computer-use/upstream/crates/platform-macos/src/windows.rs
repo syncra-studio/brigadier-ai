@@ -107,7 +107,50 @@ enum LayerFilter {
     AnyLayer,
 }
 
+/// Which windows of a layer-0 enumeration get their Space fields. The window
+/// server answers that one window at a time, so each costs a round trip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpacesOf {
+    Every,
+    One(u32),
+    NoWindow,
+}
+
 fn enumerate_windows(options: u32, layers: LayerFilter) -> WindowEnumeration {
+    enumerate_windows_with_spaces_of(options, layers, SpacesOf::Every)
+}
+
+/// [`all_windows`] without the Space fields (`None`), for callers that read
+/// only ids, owners, bounds and on-screen state.
+pub(crate) fn all_windows_without_spaces() -> Vec<WindowInfo> {
+    enumerate_windows_with_spaces_of(
+        kCGWindowListExcludeDesktopElements,
+        LayerFilter::ZeroOnly,
+        SpacesOf::NoWindow,
+    )
+    .windows
+}
+
+/// The layer-0 window `window_id` with its Space fields, looked up for that
+/// window only.
+fn layer0_window_with_spaces(window_id: u32) -> Option<WindowInfo> {
+    enumerate_windows_with_spaces_of(
+        kCGWindowListExcludeDesktopElements,
+        LayerFilter::ZeroOnly,
+        SpacesOf::One(window_id),
+    )
+    .windows
+    .into_iter()
+    .find(|w| w.window_id == window_id)
+}
+
+/// [`enumerate_windows`] where only the windows `spaces_of` names get their
+/// Space fields (the others keep `None`).
+fn enumerate_windows_with_spaces_of(
+    options: u32,
+    layers: LayerFilter,
+    spaces_of: SpacesOf,
+) -> WindowEnumeration {
     use core_foundation::{
         array::CFArray,
         base::{CFGetTypeID, CFTypeRef, TCFType},
@@ -118,7 +161,7 @@ fn enumerate_windows(options: u32, layers: LayerFilter) -> WindowEnumeration {
     };
     use std::os::raw::c_void;
 
-    let space_query = (layers == LayerFilter::ZeroOnly)
+    let space_query = (layers == LayerFilter::ZeroOnly && spaces_of != SpacesOf::NoWindow)
         .then(crate::input::skylight::SpaceQuery::new)
         .flatten();
     let current_space_id = space_query
@@ -260,6 +303,9 @@ fn enumerate_windows(options: u32, layers: LayerFilter) -> WindowEnumeration {
             };
         };
         for window in &mut results {
+            if matches!(spaces_of, SpacesOf::One(id) if id != window.window_id) {
+                continue;
+            }
             let space_ids = query.window_space_ids(window.window_id);
             let display_space_id = space_ids
                 .as_ref()
@@ -377,10 +423,7 @@ pub fn window_info_by_id(window_id: u32) -> Option<WindowInfo> {
 /// Whether `window_id` is on the current Space of its display. `None` when
 /// WindowServer does not know the window or Space membership is unreadable.
 pub fn window_on_current_space_by_id(window_id: u32) -> Option<bool> {
-    all_windows()
-        .into_iter()
-        .find(|w| w.window_id == window_id)?
-        .on_current_space
+    layer0_window_with_spaces(window_id)?.on_current_space
 }
 
 /// WindowServer's Space and on-screen view of one layer-0 window.
@@ -395,13 +438,10 @@ pub(crate) struct WindowSpaceView {
 /// [`WindowSpaceView`] of `window_id`, or `None` when WindowServer does not
 /// list it as a layer-0 window.
 pub(crate) fn window_space_view_by_id(window_id: u32) -> Option<WindowSpaceView> {
-    all_windows()
-        .into_iter()
-        .find(|w| w.window_id == window_id)
-        .map(|w| WindowSpaceView {
-            on_current_space: w.on_current_space,
-            is_on_screen: w.is_on_screen,
-        })
+    layer0_window_with_spaces(window_id).map(|w| WindowSpaceView {
+        on_current_space: w.on_current_space,
+        is_on_screen: w.is_on_screen,
+    })
 }
 
 /// Look up a window's bounds by its CGWindowID.

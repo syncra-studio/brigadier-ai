@@ -219,7 +219,7 @@ fn list_running_apps_from_process_table() -> Vec<AppInfo> {
             .map(|w| w.pid)
             .find(|p| live.contains(p))
     });
-    let windowed: std::collections::HashSet<i32> = crate::windows::all_windows()
+    let windowed: std::collections::HashSet<i32> = crate::windows::all_windows_without_spaces()
         .into_iter()
         .map(|w| w.pid)
         .collect();

@@ -53,6 +53,7 @@ Patches applied, in order:
 - `patches/0006-window-change-report.diff`: a host setting (CUA_DRIVER_WINDOW_CHANGE_REPORT_MS) for how long an action's result waits for a window change, so an embedding app whose agents read the window again after each action gets results back sooner while the focus-steal protection keeps its whole timeout.
 - `patches/0007-in-process-info-plist.diff`: Info.plist values are read in process instead of by a plutil process per key, so list_apps and the running-app snapshot the registry takes before each launch_app take tens of milliseconds instead of most of a second.
 - `patches/0008-web-content-off-space.diff`: the Chromium/Electron accessibility wait also looks for web content in the app's windows on another Space, so the first read of such an app whose windows are all off-Space returns at once instead of waiting out the 4 s timeout (up to three times per app lifetime).
+- `patches/0009-space-lookups-where-needed.diff`: Space lookups only where they are read: a one-window Space check asks about that window only, and the exact-target check and the running-app list skip them, so typing into an app takes about 0.1 s less with a hundred windows open.
 <!-- sync:end -->
 
 ## Where the driver keeps state

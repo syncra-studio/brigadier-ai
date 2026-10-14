@@ -161,12 +161,13 @@ unsafe fn front_windows(pid: i32) -> Vec<AXUIElementRef> {
 }
 
 /// The app's real windows (not zero-sized) from the window server, on any
-/// Space.
+/// Space. One window-list call: which Space each one is on isn't needed, and
+/// asking costs a round trip to the window server per window on screen.
 fn server_windows(pid: i32) -> Vec<u32> {
-    platform_macos::windows::all_windows()
+    crate::window_list::windows(Some(pid))
         .into_iter()
-        .filter(|w| w.pid == pid && w.layer == 0 && w.bounds.width > 1.0 && w.bounds.height > 1.0)
-        .map(|w| w.window_id)
+        .filter(|w| w.width > 1.0 && w.height > 1.0)
+        .map(|w| w.id)
         .collect()
 }
 
