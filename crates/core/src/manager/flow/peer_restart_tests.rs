@@ -6,15 +6,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use brigadier_providers::ProviderKind;
+use brigadier_providers::{ItemStatus, ProviderEvent, ProviderKind};
 use serde_json::json;
 use tokio::sync::Notify;
 
-use super::peer_kit::{Peers, Sent, message_id, only, send};
+use super::peer_kit::{Peers, Sent, is_reply, message_id, only, send, wait};
 use super::{FakeBehavior, Flow, Options, Reply};
 use crate::board::Board;
 use crate::manager::peers::PeerFault;
 use crate::model::{ConversationId, PeerState};
+use crate::work::OrchestratorStepKind;
 
 fn stands(board: &Board, id: &str, state: &PeerState) -> bool {
     board
@@ -233,8 +234,22 @@ async fn a_message_sent_on_after_a_restart_stays_in_its_chain() {
     flow.stop().await;
 }
 
-/// The daemon dies while the receiver's turn works on a message: nothing resumes that turn,
-/// so the sender's reply says the restart cut it off, and the sender can ask again.
+/// Whether a call of `board`'s thread still shows as running.
+fn runs_a_call(board: &Board) -> bool {
+    board.orchestrator_steps.iter().any(|step| {
+        matches!(
+            step.kind,
+            OrchestratorStepKind::Tool {
+                status: ItemStatus::InProgress,
+                ..
+            }
+        )
+    })
+}
+
+/// The daemon dies while the receiver's turn works on a message and the sender's waits for
+/// its reply: nothing resumes the receiver's turn, so the reply says the restart cut it off,
+/// and the sender can ask again. Neither side's calls show as running any more.
 #[tokio::test]
 async fn a_receiver_a_crash_cut_off_replies_that_it_was_cut_off() {
     let peers = Peers::new();
@@ -242,31 +257,51 @@ async fn a_receiver_a_crash_cut_off_replies_that_it_was_cut_off() {
     let api = flow
         .add_session("API work", None, ProviderKind::Codex)
         .await;
-    let sent = peers.sends(&flow.conversation, &api, "Please add a `name` column.");
-    // The receiver's turn never ends before the crash.
+    let (asked, to) = (Sent::default(), api.clone());
+    let kept = asked.clone();
+    peers.on(&flow.conversation, move |turn| {
+        let (kept, to) = (kept.clone(), to.clone());
+        async move {
+            if is_reply(&turn.input) {
+                return Reply::text("Noted.");
+            }
+            let sent = send(&turn, &to, "Please add a `name` column.", None).await;
+            kept.lock().unwrap().push(sent);
+            wait(&turn, json!({})).await;
+            Reply::text("Added.")
+        }
+    });
+    // The receiver's turn, in a command, never ends before the crash.
     let hold = Arc::new(Notify::new());
     let held = hold.clone();
-    peers.on(&api, move |_| {
+    peers.on(&api, move |turn| {
         let held = held.clone();
         async move {
+            turn.emit(ProviderEvent::Command {
+                item_id: "cmd-1".into(),
+                command: "sleep 40".into(),
+                cwd: None,
+                status: ItemStatus::InProgress,
+                exit_code: None,
+                output: None,
+                duration_ms: None,
+            })
+            .await;
             held.notified().await;
             Reply::text("Added.")
         }
     });
     flow.say("Ask the API session for a name column.").await;
-    while sent.lock().unwrap().is_empty() {
+    while asked.lock().unwrap().is_empty() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let id = message_id(&only(&sent).0);
-    flow.until_in(&api, "the message seen", |board| {
-        stands(board, &id, &PeerState::Seen)
+    let id = message_id(&only(&asked).0);
+    flow.until_in(&api, "the command running", |board| {
+        stands(board, &id, &PeerState::Seen) && runs_a_call(board)
     })
     .await;
+    flow.until("the wait running", runs_a_call).await;
     flow.crash().await;
-    flow.until_in(&api, "the message replied", |board| {
-        stands(board, &id, &PeerState::Replied)
-    })
-    .await;
     flow.until("the reply received", |board| {
         board
             .peer_messages
@@ -274,12 +309,19 @@ async fn a_receiver_a_crash_cut_off_replies_that_it_was_cut_off() {
             .any(|record| !record.outgoing && record.reply_to.as_deref() == Some(id.as_str()))
     })
     .await;
-    flow.settled().await;
+    let board = flow.settled().await;
     let reply = "[\"API work\" was cut off by a restart before it answered]";
     assert_eq!(peers.count_in(&flow.conversation, reply), 1);
     assert_eq!(
         peers.count_in(&flow.conversation, "finished without an answer"),
         0
+    );
+    assert!(!runs_a_call(&board), "{:#?}", board.orchestrator_steps);
+    let receiver = flow.settled_in(&api).await;
+    assert!(
+        !runs_a_call(&receiver),
+        "{:#?}",
+        receiver.orchestrator_steps
     );
     hold.notify_waiters();
     flow.stop().await;

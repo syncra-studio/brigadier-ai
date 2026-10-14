@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use brigadier_providers::{Artifact, BoxFuture};
+use brigadier_providers::{Artifact, BoxFuture, ItemStatus};
 
 use super::conversation::Envelope;
 use super::prompts;
@@ -30,7 +30,7 @@ use crate::model::{
     Conversation, ConversationId, ConversationKind, Environment, Lifecycle, Setup, streams,
 };
 use crate::overnight::OvernightRun;
-use crate::work::{InjectionKind, Task, TaskState};
+use crate::work::{InjectionKind, OrchestratorStepKind, Task, TaskState};
 use crate::{Error, Result, now_ms};
 
 /// How often idle conversations are checked for hibernation.
@@ -93,6 +93,8 @@ impl SessionManager {
             if conversation.deleting {
                 continue;
             }
+            // The thread's turn the restart cut off ran its calls no further.
+            self.end_cut_off_calls(&conversation.id).await;
             // Messages that waited for quota keep waiting (an archived conversation's never go).
             if conversation.quota_wait.is_some() && conversation.lifecycle != Lifecycle::Archived {
                 self.keep_conversation_wait(&conversation).await;
@@ -213,6 +215,38 @@ impl SessionManager {
             }
         }
         self.sweep_test_data().await;
+    }
+
+    /// Ends the thread's calls a restart cut off: no turn of the thread runs at startup, so
+    /// a call still running (a command, a wait for replies) failed with its turn, as a Stop
+    /// ends it, rather than showing as running in a turn that is over.
+    async fn end_cut_off_calls(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        for step in &board.orchestrator_steps {
+            if let OrchestratorStepKind::Tool {
+                item_id,
+                name,
+                detail,
+                status: ItemStatus::InProgress,
+                ..
+            } = &step.kind
+            {
+                let kind = OrchestratorStepKind::Tool {
+                    item_id: item_id.clone(),
+                    name: name.clone(),
+                    detail: detail.clone(),
+                    status: ItemStatus::Failed,
+                    through_position: 0,
+                    // When it ended isn't known: it ran no further than it is recorded.
+                    ended_at_ms: Some(step.at_ms),
+                    exit: None,
+                };
+                self.orchestrator_step_in(id, step.request_id.clone(), kind)
+                    .await;
+            }
+        }
     }
 
     /// Removes the test data folders no task needs any more (PLAN.md §10.13): a task's own
