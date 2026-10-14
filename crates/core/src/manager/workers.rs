@@ -5043,17 +5043,8 @@ pub(crate) fn session_temp_dir(id: &ConversationId, role: SessionTemp) -> PathBu
         SessionTemp::Thread => 't',
         SessionTemp::Checks => 'k',
     };
-    let tail: String =
-        id.0.chars()
-            .filter(char::is_ascii_alphanumeric)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .take(7)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
+    let letters: Vec<char> = id.0.chars().filter(char::is_ascii_alphanumeric).collect();
+    let tail: String = letters[letters.len().saturating_sub(7)..].iter().collect();
     test_data_root().join(format!("brigadier-test-{tag}{tail:0>7}"))
 }
 
