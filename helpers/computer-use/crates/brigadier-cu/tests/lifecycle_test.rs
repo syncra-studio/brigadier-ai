@@ -130,14 +130,22 @@ struct Cleanup(std::process::Child, std::path::PathBuf);
 
 impl Cleanup {
     fn kill_daemon(&mut self) {
-        if let Some(pid) = std::fs::read_to_string(self.1.join("cu.pid"))
+        let serving = std::fs::read_to_string(self.1.join("cu.pid"))
             .ok()
-            .and_then(|pid| pid.trim().parse::<libc::pid_t>().ok())
-        {
+            .and_then(|pid| pid.trim().parse::<libc::pid_t>().ok());
+        if let Some(pid) = serving {
             unsafe { libc::kill(pid, libc::SIGKILL) };
         }
         let _ = self.0.kill();
         let _ = self.0.wait();
+        // The serving process isn't this test's child: until it is gone, a probe can still
+        // reach it instead of the daemon started next.
+        if let Some(pid) = serving {
+            let started = std::time::Instant::now();
+            while unsafe { libc::kill(pid, 0) } == 0 && started.elapsed().as_secs() < 5 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
     }
 
     /// Kills the daemon and starts a fresh one on the same home, as a
