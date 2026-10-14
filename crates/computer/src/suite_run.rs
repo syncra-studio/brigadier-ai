@@ -137,12 +137,7 @@ pub(crate) fn wait_pid_file(pid_file: &Path, name: &str) -> Result<i32> {
 
 /// The executable a process runs, as `ps` names it.
 pub(crate) fn executable(pid: i32) -> Option<String> {
-    let out = Command::new("/bin/ps")
-        .args(["-o", "comm=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    let comm = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    (!comm.is_empty()).then_some(comm)
+    crate::macos::process_name(pid)
 }
 
 /// The app's window titled `title`; the app is ended when it doesn't show one in time.
