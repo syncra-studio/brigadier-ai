@@ -110,6 +110,7 @@ fn merge_one(
         registry_key: None,
         family: None,
         tier: QualityTier::Unrated,
+        only: None,
         strengths: unrated_strengths(),
         area_strengths: BTreeMap::new(),
         efforts,
@@ -186,6 +187,7 @@ fn apply_entry(
     model.default_effort = entry.default_effort.clone();
     model.registry_key = Some(entry.key.clone());
     model.tier = entry.tier;
+    model.only = entry.only.clone();
     for (category, strength) in &entry.strengths {
         model.strengths.insert(*category, *strength);
     }
@@ -367,6 +369,7 @@ pub(crate) fn from_entry(entry: &RegistryModel, provider: ProviderKind) -> Optio
         registry_key: None,
         family: entry.matches.family.clone(),
         tier: QualityTier::Unrated,
+        only: None,
         strengths: unrated_strengths(),
         area_strengths: BTreeMap::new(),
         efforts: entry.efforts.clone(),

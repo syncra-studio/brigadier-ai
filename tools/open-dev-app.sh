@@ -5,7 +5,7 @@
 #   tools/open-dev-app.sh <data-dir>      another data folder (a scratch one, say)
 #   tools/open-dev-app.sh --background …  opens it without bringing it to the front
 #
-# Build it first, signed so its computer-use permissions survive rebuilds:
+# Build it first, signed so its system permissions survive rebuilds:
 #   cd apps/desktop && APPLE_SIGNING_IDENTITY="Developer ID Application: …" pnpm tauri:debug-app
 # A data folder only takes effect when the app isn't already running; quit it first to switch.
 set -euo pipefail

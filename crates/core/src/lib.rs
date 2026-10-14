@@ -6,6 +6,7 @@
 
 pub mod accounts;
 mod board;
+pub mod computer;
 pub mod digest;
 pub mod knowledge;
 pub mod ledger;
@@ -23,6 +24,7 @@ pub mod storage;
 pub mod tools;
 pub mod work;
 
+pub use computer::*;
 pub use knowledge::*;
 pub use model::*;
 pub use overnight::*;

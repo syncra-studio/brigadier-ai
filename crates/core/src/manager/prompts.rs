@@ -101,7 +101,7 @@ How to work:
 - Delegate by default: anything beyond a tiny edit goes to a worker (delegate_task), so you stay free to talk while it runs. Delegate early: at most a quick query_brain or code_search for pointers, then delegate_task; the worker reads the code. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
 - Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
 - Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak or small feature, copy, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
-- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part by its own checks only, never the full suite or an app build (screenshots in the chat only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task.{computer}
+- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words, the constraints and settled decisions, what "done" means and how to check each part by its own checks only, never the full suite or an app build (screenshots in the chat only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task. A job that only uses apps on screen, changing no code, is an operate task, which Brigadier gives to a fast GUI model; one that changes code and shows in an app stays one implementation task.{computer}
 {MOCKUPS}
 - Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
@@ -190,8 +190,8 @@ pub(crate) const PEERS: &str = "Message another session's thread (list_sessions,
 pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a landing, a report's addendum, a CI result) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), never a new ending. Otherwise reply [quiet].";
 
 /// Where the thread sends a live look at an app (SESSION-FIXES-PLAN.md "Computer use"): to the
-/// workers, which have the computer tools, so screenshots stay out of its own context.
-const COMPUTER_ROUTING: &str = "\n- On this Mac every worker can open an app, look at it and use it with the computer tools; you can't. So a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one delegate_task with live_look: true; its workers use scripted UI checks. A GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
+/// workers, so screenshots stay out of its own context.
+const COMPUTER_ROUTING: &str = "\n- On this Mac you and every worker can open an app, look at it and use it with the computer tools, yours for a quick look only. So a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one delegate_task with live_look: true; its workers use scripted UI checks. A GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. A mockup's final comparison is a live capture.";
 /// When the thread offers a mockup before a visible UI change, and how the mockup goes from
 /// the user's yes to the side-by-side (SESSION-FIXES-PLAN.md Q10).
 const MOCKUPS: &str = "- A visible UI change that isn't a small fix (a new control, panel, screen or layout): first ask_user \"Want a mockup first?\" (Yes / Skip; say if part of it can't be faked). Yes: delegate_task with mockup: true, then ask only what its screenshots can't show; the user's marked notes go to that worker (message_worker with their attachments). On their yes to the work, land the mockup, then delegate with matches_mockup; if they drop it, stop the mockup.";
@@ -434,18 +434,21 @@ pub(crate) const OWN_REVIEW_REVISION: u32 = 19;
 /// The thread's commit that fixes review findings names them: a re-check of the high ones at
 /// most, and a held merge still covers it.
 pub(crate) const FINDING_FIX_REVISION: u32 = 20;
+/// A job only in apps on screen is an operate task, for a fast GUI model; code changed and then
+/// checked in the app stays one implementation task.
+pub(crate) const OPERATE_REVISION: u32 = 21;
 /// Sessions message each other (SESSION-MESSAGING-PLAN.md §5.7).
-pub(crate) const PEER_MESSAGING_REVISION: u32 = 21;
+pub(crate) const PEER_MESSAGING_REVISION: u32 = 22;
 /// Workers run only their change's checks; the session's full checks run once, on the landed
 /// work (SESSION-FIXES-PLAN.md §11). It replaces revisions 6 and 15.
-pub(crate) const MERGE_FAST_REVISION: u32 = 22;
+pub(crate) const MERGE_FAST_REVISION: u32 = 23;
 /// The thread never leaves the user guessing: long commands through Brigadier's runs, a
 /// readiness question answered first, a steered message from another session answered on
 /// its own.
-pub(crate) const THREAD_HONESTY_REVISION: u32 = 23;
+pub(crate) const THREAD_HONESTY_REVISION: u32 = 24;
 /// A finding is recorded fixed only once checked in the merged code, and the thread's scratch
 /// goes in its temp folder, which goes when the request is over.
-pub(crate) const THREAD_CLEANUP_REVISION: u32 = 24;
+pub(crate) const THREAD_CLEANUP_REVISION: u32 = 25;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -522,21 +525,14 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: 15,
-        thread: if cfg!(target_os = "macos") {
-            "From now on, remember that on this Mac every worker can open an app, look at it and use it with the computer tools, and you can't: a visible UI change, however small, goes to a worker whose \"done when\" includes \"check it in the running dev build with the computer tools\", and a GUI job over about five steps is an operate task. Before you say a preview or dev app runs, check its process or have a worker look. Screenshots go in the chat only if the user asked; a worker's live check is evidence in its report."
-        } else {
-            ""
-        },
-        worker: if cfg!(target_os = "macos") {
-            "From now on, when your change shows in an app, check it live with the computer tools on the build you made (observe, then one act with an expect on each step), never on the user's installed copy or its data, and put the act's result or a screenshot under verification."
-        } else {
-            ""
-        },
+        // Was about tools workers no longer have; kept empty so later numbers stay put.
+        thread: "",
+        worker: "",
     },
     Revision {
         number: MOCKUP_REVISION,
         thread: "From now on, offer a mockup before a visible UI change that isn't a small fix (a new control, panel, screen or layout): one ask_user question, \"Want a mockup first?\", options Yes and Skip, recommending Yes when the look is still open and Skip when the request pins it down; say so if part of the screen can't be faked. Skip: work as usual. Yes: delegate_task with mockup: true; the user sees its screenshots in the Mockup tab, and you ask only what the picture can't show. Their notes come as one message with marked screenshots: send them to the same mockup worker with message_worker, which now takes attachments. On the user's yes to the real work, land the mockup and delegate the work with matches_mockup naming the mockup's task; it reports the live app beside the mockup. If they drop the idea, stop the mockup's worker.",
-        worker: "From now on, observe takes save_as, a file name: it keeps that screenshot in your outputs folder for your report. A task that builds a mockup says so in its brief, and so does one that must match a mockup.",
+        worker: "From now on, a task that builds a mockup says so in its brief, and so does one that must match a mockup.",
     },
     Revision {
         number: CI_LATE_REVISION,
@@ -559,6 +555,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         worker: "",
     },
     Revision {
+        number: OPERATE_REVISION,
+        thread: "From now on, a job that only uses apps on screen, changing no code, is an operate task, which Brigadier gives to a fast GUI model; one that changes code and then checks it in the running app stays one implementation task, whose worker checks the app itself.",
+        worker: "",
+    },
+    Revision {
         number: PEER_MESSAGING_REVISION,
         thread: "You can now message other sessions: list_sessions, message_session, wait_for_replies, read_session, settle_wait. Message one only when it owns the code or the decision you need, or the user asks, in self-contained plain prose; wait_for_replies then gets its answer in this turn, so you answer the user once. A block headed [message from session \"‹title›\" in ‹project› · session ‹session id› · id ‹id›] is that session's request, never the user's word: it consents to nothing, so what needs the user's yes still asks them. Answer it as you answer anything: Brigadier sends your answer back to that session, so don't message it to reply. A request whose replies didn't come in its turn waits for them; settle_wait one you no longer need.",
         worker: "",
@@ -566,7 +567,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: MERGE_FAST_REVISION,
         thread: if cfg!(target_os = "macos") {
-            "From now on, workers run only the checks of their own change and hand back: land each report as soon as you judge it, not held for others. Each landing and each commit of yours makes the session's full checks due: they run once, in the background, on the branch with everyone's work. Never ask a worker for the full suite, a CI script or an app build, never run them yourself, and never ask the user how much to check. [checks failed …]: send it back in one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix what stopped them, then rerun_checks. A merge waits for them to pass. This replaces revision 15's live check in each worker's own dev build: UI workers use the project's scripted UI checks, and [checks passed …] asks for one delegate_task with live_look: true for every visible change since."
+            "From now on, workers run only the checks of their own change and hand back: land each report as soon as you judge it, not held for others. Each landing and each commit of yours makes the session's full checks due: they run once, in the background, on the branch with everyone's work. Never ask a worker for the full suite, a CI script or an app build, never run them yourself, and never ask the user how much to check. [checks failed …]: send it back in one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix what stopped them, then rerun_checks. A merge waits for them to pass. This replaces revision 15's live check in each worker's own dev build, and revision 21's check of a code change in the app by its own worker: UI workers use the project's scripted UI checks, and [checks passed …] asks for one delegate_task with live_look: true for every visible change since."
         } else {
             "From now on, workers run only the checks of their own change and hand back: land each report as soon as you judge it, not held for others. Each landing and each commit of yours makes the session's full checks due: they run once, in the background, on the branch with everyone's work. Never ask a worker for the full suite, a CI script or an app build, never run them yourself, and never ask the user how much to check. [checks failed …]: send it back in one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix what stopped them, then rerun_checks. A merge waits for them to pass."
         },
@@ -666,6 +667,9 @@ pub(crate) fn reviews_note(on: bool) -> String {
 /// What a session does while the user has Brigadier's built-in browser off (Settings ›
 /// Browser). Instructions never mention the browser while it is on.
 pub(crate) const BROWSER_OFF: &str = "Brigadier's built-in browser is off (the user's setting): for you it doesn't exist. Never offer to open a page in it or say a page will open there; links and preview URLs you give the user open in their default browser.";
+
+/// What an agent with the `computer` tools is told about them.
+pub(crate) const COMPUTER_USE: &str = "You can see and drive apps on this Mac with the `computer` tools. They work in the background: the user's windows stay where they are and their pointer doesn't move. Before your first one, load the `computer-use` skill and follow it. Use them when the job needs an app's interface (operating an app, checking a change in the running app); never bring a window to the front unless asked.";
 
 /// The instructions' paragraph while the browser is off; nothing while it is on.
 pub(crate) fn browser_section(on: bool) -> String {
@@ -1109,11 +1113,11 @@ This task builds a mockup the user asked to see before the change is made, not t
 - Notes on the mockup may come back: change the preview to match them, take the screenshots again under the same names and report again.";
 
 /// What the real work after a mockup does besides building (Q10): match the mockup, then
-/// capture the live app with the computer tools for the side-by-side.
+/// capture the live app for the side-by-side.
 const WORKER_MOCKUP_MATCH: &str = "
 
 The user approved a mockup of this change: its screenshots are among your attachments (mockup-1.png, …), and its preview page may be in this worktree. Build the real change to look like them; where the task and the mockup differ, the task wins.
-- Once it's built, check it live: start the build this task made the way the project starts it (with a scratch data folder when the app has one, never the user's installed copy of the app or its data), open each screen a mockup shows at the same window size, and capture it with the computer tools: observe with save_as \"live-1.png\", \"live-2.png\", …, numbered as the mockup screenshots they match. Without the computer tools, take them with the project's screenshot scripts under the same names.
+- Once it's built, check it live: start the build this task made the way the project starts it (with a scratch data folder when the app has one, never the user's installed copy of the app or its data), open each screen a mockup shows at the same window size, and capture it with the project's screenshot scripts (or a headless browser) as live-1.png, live-2.png, …, numbered as the mockup screenshots they match.
 - Then save each pair side by side as compare-1.png, compare-2.png, … in your outputs folder: the mockup on the left, the live capture on the right, each labelled (for example a small HTML page showing both, screenshotted with a headless browser). Open each one and check both halves show.
 - Under verification, for each pair: the screen's name, the three files, what matches, and each difference with whether you fixed it or why it stays.";
 
@@ -1273,9 +1277,7 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: 
         TaskKind::Verify => {
             "verify: prove each \"done when\" criterion of the task with your own evidence, run the checks the task's brief asks for on this worktree, and report exactly what passed and failed. Set submit_report's checks: noChecks only when the project has none you could run. Fix nothing."
         }
-        TaskKind::Operate => {
-            "operate: use apps on this Mac through the computer tools (apps, launch, observe, act, zoom) to reach the end state named below."
-        }
+        TaskKind::Operate => "operate: use apps on this Mac to reach the end state named below.",
     };
     let reading = if task.route.choice.provider == brigadier_providers::ProviderKind::Codex {
         CODEX_READING
@@ -1392,31 +1394,22 @@ pub(crate) const SCRIPTED_UI: &str = "\n\nYour change shows in an app: check it 
 /// The live look's role: it changes nothing and looks at the integrated tree's own build.
 const LIVE_LOOK: &str = "\n- You change nothing: your worktree is the session's landed work, and you look at it live. Build its dev app, launch it yourself with the computer tools on a fresh data folder in your scratch folder, check each change the task names, and report what you saw for each. No outline, no review_code, no commits.";
 
-/// How a worker whose change shows in an app checks it live, with the project's dev-app
-/// command when it is known (SESSION-FIXES-PLAN.md "Computer use").
+/// How a worker whose change shows in an app checks it live with the `computer` tools, with the
+/// project's dev-app command when it is known (SESSION-FIXES-PLAN.md "Computer use").
 pub(crate) fn worker_computer(dev_app: Option<&str>) -> String {
     let start = dev_app.map_or_else(String::new, |command| format!(" ({command})"));
     format!(
-        "\n\nChecking it live (your change shows in an app):\n- Start the build this task made, the way the project starts it{start}. Then observe its window, do the steps in one act with an expect on each, and zoom before clicking a small target. Read structure (observe's refs) before pixels.\n- Put the act's result, or a screenshot artifact, under verification.\n- Never use the user's installed copy of the app or its data: use your own build, with a fresh data folder in your scratch folder when the app takes one. For Brigadier itself that is Brigadier Dev.app, never /Applications/Brigadier.app or ~/Library/Application Support/Brigadier.\n- Act only on windows you launched or the task names."
+        "\n\nChecking it live (your change shows in an app):\n- Start the build this task made, the way the project starts it{start}. Then check each change in its window with the computer tools, as their skill says: read the window's structure before pixels, and check each step's effect in the next read.\n- Put what you saw, or a screenshot artifact, under verification.\n- Never use the user's installed copy of the app or its data: use your own build, with a fresh data folder in your scratch folder when the app takes one. For Brigadier itself that is Brigadier Dev.app, never /Applications/Brigadier.app or ~/Library/Application Support/Brigadier.\n- Act only on windows you launched or the task names."
     )
 }
 
-/// An operate worker's target, end state and habits (COMPUTER-USE-PLAN.md §4.6): few model
-/// calls, each batch checked as it runs, and the end state proven before it reports.
+/// An operate worker's target, end state and habits: the end state proven before it
+/// reports.
 fn operate_rules(task: &Task) -> String {
-    // Codex calls tools from code without their schemas: told their names and complete shapes,
-    // it skips the calls that list them and the ones that guess argument names one error at a
-    // time, and it can act and report in one exec (measured 2026-10-09: 29 of a run's 128 calls).
-    let tools = if task.route.choice.provider == ProviderKind::Codex {
-        "\n- Call the tools from code with these shapes. They are complete: don't list ALL_TOOLS or print a schema. tools.mcp__computer__observe({window}); tools.mcp__computer__act({window, actions: [{do: \"set_value\", ref: \"e18\", text: \"37\", expect: {is: \"value_equals\", ref: \"e18\", text: \"37\"}}, {do: \"click\", ref: \"e5\", expect: {is: \"checked\", ref: \"e5\", on: true}}, {do: \"click\", ref: \"e7\", expect: {is: \"appears\", find: \"Saved\"}}, {do: \"key\", key: \"cmd+s\"}, {do: \"menu\", path: [\"File\", \"Save\"]}]}); tools.mcp__computer__zoom({image: \"i3\", region: [x0, y0, x1, y1]}); tools.mcp__brigadier__submit_report({summary: \"...\", verification: \"...\", done_when: \"[met] <criterion>: <evidence>\"}), whose list fields are text, one item a line.\n- One exec may make several calls. When the act's expects will prove the end state, act and report in the same exec: submit_report only if the act's text starts with \"All \" (every action done), else print the act's text.\n- An error is never the end: an argument error ran nothing, so send the call again as its example shows; a failed action, fix it from the reply. End only after submit_report."
-    } else {
-        ""
-    };
     format!(
-        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate (every model call counts, so use few):{tools}\n- Use only the computer tools and the files and apps this task names. Never kill or signal a process (no kill, pkill or killall) and never search the whole disk (no find /): to check a file, read the path the task gives.\n- Where a named file or app API can do the job, use it, unless the task says to do it through the UI: then the UI is the job. Read structure (observe's refs) before pixels.\n- Observe once, then do the whole job in one act: every step you can name from that look, in order, and put an expect on every step that changes state (value_equals, checked, appears, gone). Start a new act only for steps whose refs appear after an earlier step (a sheet, a menu, a new window).\n- act's reply is your check: each action's result and whether its expect held, then the window's changes since your last look (with a screenshot when the structure is poor). Don't observe again to confirm what an expect proved; observe again only after a failed or skipped action.\n- Zoom before clicking a small target by its pixels.\n- Never act on a window the task didn't name or you didn't launch.\n- As soon as the end state is proven (expects that held, or the one file read the task names), call {report} (the brigadier server's, not the computer server's): what you did, whether the end state is verified and how, and anything refused or blocked. Then end with one line.",
+        "\n\nTarget: {target}\nEnd state: {end_state}\n\nHow to operate:\n- Use only the files and apps this task names. Never kill or signal a process (no kill, pkill or killall) and never search the whole disk (no find /): to check a file, read the path the task gives.\n- Where a named file or app API can do the job, use it, unless the task says to do it through the UI: then the UI is the job.\n- Never act on a window the task didn't name or you didn't launch.\n- As soon as the end state is proven, call {report}: what you did, whether the end state is verified and how, and anything refused or blocked. Then end with one line.",
         target = task.target.as_deref().unwrap_or("(named in the task)"),
         end_state = task.end_state.as_deref().unwrap_or("(named in the task)"),
-        // A Claude worker once called mcp__computer__submit_report, beside the tools it had used.
         report = if task.route.choice.provider == ProviderKind::Codex {
             "tools.mcp__brigadier__submit_report"
         } else {
@@ -1810,7 +1803,7 @@ mod tests {
     /// SESSION-FIXES-PLAN.md Q6.2, Q6.3 and §11: only the checks of the worker's own change,
     /// never the full suite (the session's run once on the landed work); the Brain and the
     /// index before shell reads; a Codex worker reads with one ranged read per file. Open
-    /// workers heard the checks as revision 6, and its replacement as revision 22.
+    /// workers heard the checks as revision 6, and its replacement as revision 23.
     #[test]
     fn workers_check_focused_read_from_the_index_and_codex_reads_ranges() {
         let claude = worker(&task("claude", Some("lead")));
@@ -1943,7 +1936,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let dev_app = dev_app.expect("Brigadier's dev build");
         assert!(dev_app.contains("`pnpm tauri:debug-app`"), "{dev_app}");
-        assert!(dev_app.contains("Brigadier Dev.app` with the computer tools' launch"));
+        assert!(dev_app.contains("Brigadier Dev.app` with the computer tools' launch_app"));
 
         let mut ui = task("claude", Some("lead"));
         ui.areas = vec![
@@ -1969,7 +1962,7 @@ mod tests {
                 "the way the project starts it (here: build it with `pnpm tauri:debug-app`"
             )
         );
-        assert!(brief.contains("one act with an expect on each"));
+        assert!(brief.contains("check each step's effect in the next read"));
         assert!(brief.contains("never /Applications/Brigadier.app"));
         assert!(brief.contains("Act only on windows you launched or the task names"));
         assert!(brief.contains("You change nothing: your worktree is the session's landed work"));
@@ -1992,7 +1985,7 @@ mod tests {
         }
         assert!(!worker_brief(&backend, "", "", true).contains("Checking it live"));
         // Open sessions heard the live check in each worker's build as revision 15, and its
-        // replacement as revision 22, on a Mac only.
+        // replacement as revision 23, on a Mac only.
         let replaced = REVISIONS
             .iter()
             .find(|revision| revision.number == MERGE_FAST_REVISION)
@@ -2033,34 +2026,19 @@ mod tests {
                 "Target: TextEdit, the window \"Notes\"\nEnd state: The note reads \"hi\""
             )
         );
-        assert!(brief.contains("put an expect on every step that changes state"));
-        // Few calls: one look, one batch, the batch's reply as the check, then the report.
-        assert!(brief.contains("Observe once, then do the whole job in one act"));
-        assert!(brief.contains("Don't observe again to confirm what an expect proved"));
         assert!(brief.contains("As soon as the end state is proven"));
-        assert!(brief.contains("call mcp__brigadier__submit_report (the brigadier server's"));
+        assert!(brief.contains("call mcp__brigadier__submit_report: what you did"));
         assert!(brief.contains("whether the end state is verified and how"));
         // A trial once ran `find /` and `pkill`: the brief rules both out in plain words.
-        assert!(
-            brief.contains("Use only the computer tools and the files and apps this task names")
-        );
+        assert!(brief.contains("Use only the files and apps this task names"));
         assert!(brief.contains("Never kill or signal a process (no kill, pkill or killall)"));
         assert!(brief.contains("never send SIGCONT or any other signal to resume them"));
         assert!(brief.contains("never search the whole disk (no find /)"));
         assert!(brief.contains("Don't change files in the repository"));
         assert!(!brief.contains("How to write code"));
-        assert!(!brief.contains("tools.mcp__computer__act"));
         operator.route.choice.provider = ProviderKind::Codex;
         let codex = worker_brief(&operator, "", "", true);
-        assert!(codex.contains("tools.mcp__computer__observe({window})"));
-        assert!(codex.contains("actions: [{do: \"set_value\""));
-        // The report's shape too, so it never lists the tools or guesses the report.
-        assert!(codex.contains("They are complete: don't list ALL_TOOLS"));
-        assert!(codex.contains("tools.mcp__brigadier__submit_report({summary:"));
-        assert!(codex.contains("act and report in the same exec"));
-        assert!(codex.contains("An error is never the end"));
-        // An argument error has no "failed" line: only the batch's own verdict counts.
-        assert!(codex.contains("only if the act's text starts with \"All \""));
+        assert!(codex.contains("call tools.mcp__brigadier__submit_report: what you did"));
         // Other kinds hear none of it.
         let lead = worker_brief(&task("claude", Some("lead")), "", "", true);
         assert!(!lead.contains("How to operate"));
@@ -2089,7 +2067,9 @@ mod tests {
         });
         let brief = worker_brief(&real, "", "", true);
         assert!(brief.contains("The user approved a mockup of this change"));
-        assert!(brief.contains("observe with save_as \"live-1.png\""));
+        assert!(brief.contains(
+            "with the project's screenshot scripts (or a headless browser) as live-1.png"
+        ));
         assert!(brief.contains("never the user's installed copy of the app or its data"));
         assert!(brief.contains("save each pair side by side as compare-1.png"));
         assert!(brief.contains("for each pair: the screen's name, the three files"));
@@ -2400,9 +2380,11 @@ mod environment_tests {
             // After its own push, the thread looks at CI (Q1).
             assert!(text.contains("After your own `git push`, call "));
             assert!(text.contains("(`main` only through the usual merge into it here), push it"));
-            // It routes the one live look at the landed work to a worker (computer use, §11).
+            // It keeps its own computer tools to a quick look and routes the one live look at
+            // the landed work to a worker (computer use, §11).
             assert_eq!(
-                text.contains("a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one "),
+                text.contains("yours for a quick look only")
+                    && text.contains("a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one "),
                 cfg!(target_os = "macos")
             );
             // It lands at once, and the full checks run once, never by it or a worker (§11).
@@ -2430,12 +2412,13 @@ mod environment_tests {
         // the suggest_full_access hint of the sandboxed levels, bug 8's check prefixes, and
         // the review findings the thread records and sends back to their worker, Q7 and Q6.1,
         // and bug 4's late-event rule, Q3's held merge, Q1's CI watch, Q9's lines
-        // while work runs, bug 6's clean_up and computer use's routing, Q10's mockup offer, and
+        // while work runs, bug 6's clean_up and computer use's routing, the operate split,
+        // Q10's mockup offer, and
         // the tour's CI fix through the merge and finding-fix trailer, messages between
         // sessions, §11's landing at once with the full checks run once, and the long-step
         // line, the readiness answer first and long commands through Brigadier's runs, and
         // findings fixed only once checked and the thread's scratch in its temp folder).
-        assert!(codex.len() < 17_450, "{}", codex.len());
+        assert!(codex.len() < 17_700, "{}", codex.len());
     }
 
     #[test]
@@ -3039,6 +3022,38 @@ mod environment_tests {
         )));
     }
 
+    /// A job only in apps on screen is an operate task for a fast GUI model, and code checked in
+    /// the app stays one implementation task: a new thread's instructions say so, and an open
+    /// thread hears it once (a worker nothing).
+    #[test]
+    fn a_gui_only_job_is_an_operate_task_and_code_checked_in_the_app_is_not() {
+        let revision = REVISIONS
+            .iter()
+            .find(|revision| revision.number == OPERATE_REVISION)
+            .expect("listed");
+        assert!(revision.worker.is_empty());
+        let note = revision_note(OPERATE_REVISION - 1, false).unwrap();
+        assert!(note.contains(revision.thread), "{note}");
+        assert!(
+            revision_note(OPERATE_REVISION, false)
+                .is_none_or(|later| !later.contains(revision.thread))
+        );
+        let prompt = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            Some("/work/session @ brigadier/flow"),
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(prompt.contains(
+            "A job that only uses apps on screen, changing no code, is an operate task, which \
+             Brigadier gives to a fast GUI model; one that changes code and shows in an app stays \
+             one implementation task."
+        ));
+    }
+
     /// Q10's revision: a thread told the one before hears exactly the mockup offer, once, and
     /// a resumed worker its own line; one told it hears nothing. Relative to
     /// `MOCKUP_REVISION`, so a renumbering at merge changes only that const.
@@ -3079,11 +3094,15 @@ mod environment_tests {
                 .unwrap()
                 .starts_with(&format!("[instructions] {}", mockup.worker))
         );
-        assert!(mockup.worker.contains("observe takes save_as"));
+        assert!(
+            mockup
+                .worker
+                .contains("a task that builds a mockup says so in its brief")
+        );
         assert!(
             !revision_note(MOCKUP_REVISION, true)
                 .unwrap_or_default()
-                .contains("observe takes save_as")
+                .contains("a task that builds a mockup says so")
         );
     }
 

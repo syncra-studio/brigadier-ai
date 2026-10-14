@@ -29,27 +29,20 @@ const CONNECT_WAIT: std::time::Duration = std::time::Duration::from_secs(25);
 /// Runs the bridge with the arguments after `mcp`.
 pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     let mut data_dir: Option<PathBuf> = None;
-    let mut grant_env = GRANT_ENV.to_owned();
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--data-dir") => match args.next() {
                 Some(dir) => data_dir = Some(dir.into()),
                 None => return usage("--data-dir needs a path"),
             },
-            // The computer server's grant has its own variable (Claude merges every server's
-            // environment into one).
-            Some("--grant-env") => match args.next().and_then(|n| n.into_string().ok()) {
-                Some(name) if name.starts_with("BRIGADIER_") => grant_env = name,
-                _ => return usage("--grant-env needs a BRIGADIER_ variable name"),
-            },
             _ => return usage(&format!("unknown argument {arg:?}")),
         }
     }
-    let Some(grant) = std::env::var(&grant_env)
+    let Some(grant) = std::env::var(GRANT_ENV)
         .ok()
         .filter(|grant| !grant.is_empty())
     else {
-        eprintln!("brigadierd mcp: {grant_env} is not set");
+        eprintln!("brigadierd mcp: {GRANT_ENV} is not set");
         return ExitCode::from(2);
     };
     let platform = match brigadier_sandbox::native(PlatformOptions { data_dir }) {

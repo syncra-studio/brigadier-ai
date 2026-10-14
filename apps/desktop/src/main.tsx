@@ -16,7 +16,25 @@ import { useApp } from "@/state/store";
 markStartup("script");
 // Before anything is awaited, so a hang anywhere below still ends in something to do.
 watchStartup();
-try {
+// Not awaited at the top level: the setup window's chunk imports from this one, and would wait
+// forever for a module that is itself waiting for it.
+void start();
+
+async function start(): Promise<void> {
+  try {
+    if (new URLSearchParams(location.search).get("window") === "computer-setup") {
+      const { startComputerSetup } = await import("@/app/computerSetup/start");
+      await startComputerSetup();
+    } else {
+      await startApp();
+    }
+  } catch (error) {
+    console.error("startup failed", error);
+    showStartupError();
+  }
+}
+
+async function startApp(): Promise<void> {
   // Density and platform are known before the first React paint, so nothing jumps.
   applyDensity(cachedDensity());
   trackFocusInput();
@@ -39,7 +57,4 @@ try {
       <App />
     </StrictMode>,
   );
-} catch (error) {
-  console.error("startup failed", error);
-  showStartupError();
 }

@@ -905,6 +905,12 @@ pub struct Settings {
     /// Brigadier's built-in browser exists (Settings › Browser). Off, there is no Browser tab,
     /// shortcut or menu item, links open in the default browser, and sessions are told.
     pub browser_enabled: bool,
+    /// Agents can see and drive apps on this Mac (Settings › Computer use): every worker and
+    /// thread gets the `computer` tools and the `computer-use` skill. macOS only.
+    pub computer_use: bool,
+    /// While computer use is on, a menu-bar item lists the agents using apps on this Mac, with
+    /// a way to stop each.
+    pub computer_use_menu_bar: bool,
     /// Where web links open while the browser is on.
     pub web_links_in: LinkTarget,
     /// Where local development URLs (localhost and loopback addresses) open while the browser
@@ -1046,6 +1052,8 @@ impl Default for Settings {
             dictation_words: Vec::new(),
             dictation_microphone: String::new(),
             browser_enabled: true,
+            computer_use: true,
+            computer_use_menu_bar: true,
             web_links_in: LinkTarget::System,
             local_links_in: LinkTarget::Brigadier,
             browser_full_url: false,
@@ -1354,15 +1362,6 @@ pub enum FolderCheck {
 pub struct WorkerPage {
     pub entries: Vec<RawEntry>,
     pub has_more: bool,
-}
-
-/// A page of a worker's computer actions (its action log), oldest first.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ComputerPage {
-    pub actions: Vec<crate::work::ComputerAction>,
-    /// Where the next older page starts (`before`), when there is one.
-    pub earlier: Option<i64>,
 }
 
 /// A page of the orchestrator log, oldest first.
@@ -2106,12 +2105,6 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         output: crate::work::StoredOutput,
     },
-    /// A worker acted on the desktop (computer use's action log).
-    ComputerActed {
-        conversation_id: ConversationId,
-        task_id: TaskId,
-        action: crate::work::ComputerAction,
-    },
     /// A `run_check` call ran its command, or answered from the check cache (THREAD-PLAN.md
     /// Q8 lever 3, [`crate::manager::checks`]).
     CheckRan {
@@ -2282,6 +2275,11 @@ pub enum DomainEvent {
         index: u32,
         count: u32,
     },
+    /// A stored event of a kind Brigadier no longer has (a removed feature's): read back as
+    /// this and ignored, so old data still loads. Never written.
+    #[serde(other)]
+    #[ts(skip)]
+    Retired,
 }
 
 impl DomainEvent {
@@ -2339,7 +2337,6 @@ impl DomainEvent {
             Self::BackgroundRunUpdated { .. } => "background_run.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::OutputStored { .. } => "output.stored",
-            Self::ComputerActed { .. } => "computer.acted",
             Self::CheckRan { .. } => "check.ran",
             Self::ThreadLooked { .. } => "thread.looked",
             Self::PreviewUpdated { .. } => "preview.updated",
@@ -2362,6 +2359,7 @@ impl DomainEvent {
             Self::PeerAnswered { .. } => "peer.answered",
             Self::RequestFinished { .. } => "request.finished",
             Self::Probe { .. } => "diag.probe",
+            Self::Retired => "retired",
         }
     }
 }

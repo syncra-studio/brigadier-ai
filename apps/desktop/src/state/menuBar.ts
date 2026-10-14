@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+
 import { setRunningChats } from "@/ipc/client";
 import type { Conversation, RunningChat } from "@/ipc/generated";
 import { runningConversations, useActivity } from "@/state/activity";
@@ -28,10 +30,26 @@ function sync(): void {
   });
 }
 
+/** Whether the computer-use item shows, as last told to the shell. */
+let computerMenu: boolean | null = null;
+
+/** Shows the computer-use menu-bar item while computer use and "Show in menu bar" are on. */
+function syncComputerMenu(): void {
+  const { settings, info } = useApp.getState();
+  const shown = info?.platform === "macos" && settings.computerUse && settings.computerUseMenuBar;
+  if (shown === computerMenu) return;
+  computerMenu = shown;
+  invoke("set_computer_menu", { shown }).catch((error: unknown) => {
+    console.error("updating the computer-use menu-bar item failed", error);
+  });
+}
+
 export function startMenuBar(): void {
   useActivity.subscribe(sync);
   useApp.subscribe((state, previous) => {
     if (state.conversations !== previous.conversations) sync();
+    if (state.settings !== previous.settings) syncComputerMenu();
   });
   sync();
+  syncComputerMenu();
 }

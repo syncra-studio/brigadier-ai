@@ -116,6 +116,17 @@ jobs:
           pnpm --filter @brigadier/desktop stage-sidecar --debug
           cargo clippy --locked --workspace --all-targets -- -D warnings
 
+      - name: Computer-use helper (format, clippy, tests)
+        if: runner.os == 'macOS'
+        working-directory: helpers/computer-use
+        # Beside the main build's output, so the cache keeps it and stage-sidecar's build is reused.
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/computer-use
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
+
       - name: Build the app bundle
         # Signing and notarization use the APPLE_* secrets when they are configured; without
         # them the bundle is built unsigned. Empty variables must not be exported: the bundler

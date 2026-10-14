@@ -702,6 +702,82 @@ mod tests {
         assert!(!left_out.iter().any(|id| id.starts_with("claude-opus-5-5")));
     }
 
+    /// From what routing really allows: Haiku 5.5 is in a session's allowlist only for
+    /// operating apps; for any other work its id is outside.
+    #[test]
+    fn haiku_5_5_is_allowed_only_to_operate_tasks() {
+        use brigadier_router::{Decision, Needs, ProviderState, Query, TaskCategory};
+        let registry = Registry::bundled();
+        let models = brigadier_router::merge(
+            &registry,
+            &[(
+                ProviderKind::Claude,
+                [
+                    info("opus", Some("claude-opus-5-5")),
+                    info("sonnet", Some("claude-sonnet-5-5")),
+                    info("haiku", Some("claude-haiku-5-5")),
+                    info(
+                        "claude-haiku-4-5-20251001",
+                        Some("claude-haiku-4-5-20251001"),
+                    ),
+                ]
+                .as_slice(),
+            )],
+            &[],
+            &[],
+        );
+        let providers = [ProviderState {
+            provider: ProviderKind::Claude,
+            logged_in: true,
+            quota: None,
+        }];
+        for category in TaskCategory::ALL {
+            let query = Query {
+                category,
+                areas: &[],
+                floor: brigadier_router::default_floor(category),
+                needs: Needs::default(),
+                pin: None,
+                hold_pin: false,
+                avoid: None,
+                distinct_from: Vec::new(),
+                exclude: &[],
+                overrides: &[],
+                rankings: &[],
+                project_id: None,
+                running: &[],
+                trial_slot: false,
+                providers: &providers,
+                models: &models,
+                registry: &registry,
+                learned: &[],
+                now_ms: 0,
+            };
+            let Decision::Run(routed) = brigadier_router::decide(&query) else {
+                panic!("{category:?} waits");
+            };
+            let eligible = brigadier_router::eligible(&query);
+            let ids = allowed(
+                ProviderKind::Claude,
+                Some(&routed.model),
+                &eligible,
+                &models,
+                &registry,
+            );
+            let left_out = outside(&routed.model, &eligible, &models, &registry);
+            let haiku = "claude-haiku-5-5".to_owned();
+            if category == TaskCategory::Operate {
+                assert_eq!(routed.model, "haiku");
+                assert_eq!(ids.first(), Some(&haiku));
+                assert!(!left_out.contains(&haiku));
+            } else {
+                assert_ne!(routed.model, "haiku", "{category:?}");
+                assert!(!ids.contains(&haiku), "{category:?}: {ids:?}");
+                assert!(left_out.contains(&haiku), "{category:?}: {left_out:?}");
+            }
+        }
+    }
+
     #[test]
     fn a_context_variant_left_out_is_outside_beside_the_one_allowed() {
         let registry = Registry::bundled();

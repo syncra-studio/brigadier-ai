@@ -13,6 +13,9 @@
 //!   [`MIN_CONTEXT_WINDOW`]..=[`MAX_CONTEXT_WINDOW`] counts as unknown; a capability is kept only
 //!   if the CLI's adapter implements it (Claude: web search; Codex: web search and image
 //!   generation), and image output only with image generation.
+//! - **Roles:** an entry's `only` limits it to the categories it lists, at the tier given for
+//!   each. A category this app doesn't know is dropped from it, and an `only` left empty takes
+//!   nothing (never every category).
 //! - **Consistency:** entry keys are unique, no id is claimed by two entries, and at least one
 //!   entry is left; otherwise the document is refused.
 
@@ -227,7 +230,7 @@ fn drop_unknown_names(model: &mut Value, adjustments: &mut Vec<String>) {
         }
         retain_names::<Capability>(modalities, "tools", &key, adjustments);
     }
-    for field in ["strengths", "defaultEffort"] {
+    for field in ["strengths", "defaultEffort", "only"] {
         retain_keys::<TaskCategory>(model, field, &key, adjustments);
     }
     retain_keys::<Area>(model, "areaStrengths", &key, adjustments);
@@ -425,6 +428,10 @@ fn bound_model(
         model.released = None;
     }
 
+    if model.only.as_ref().is_some_and(|only| only.is_empty()) {
+        note("takes only categories this app doesn't know; never routed to".to_owned());
+    }
+
     let implemented = adapter_capabilities(provider);
     let mut tools: Vec<Capability> = Vec::new();
     for tool in &model.modalities.tools {
@@ -491,4 +498,56 @@ fn is_month(text: &str) -> bool {
         && text[..4].bytes().all(|b| b.is_ascii_digit())
         && text[5..].bytes().all(|b| b.is_ascii_digit())
         && (1..=12).contains(&text[5..].parse::<u32>().unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::QualityTier;
+
+    fn document(only: Option<serde_json::Value>) -> Vec<u8> {
+        let mut model = serde_json::json!({
+            "key": "small", "vendor": "anthropic", "cli": "claude",
+            "match": {"ids": ["claude-small-1"]}, "tier": "light"
+        });
+        if let Some(only) = only {
+            model["only"] = only;
+        }
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1, "revision": 1, "updated": "2026-10-13", "models": [model]
+        }))
+        .unwrap()
+    }
+
+    /// `only` keeps a model to the categories it names; a category this app doesn't know is
+    /// dropped from it, and one left empty takes nothing rather than everything.
+    #[test]
+    fn only_limits_categories_and_never_widens_when_its_names_are_unknown() {
+        let plain = Registry::parse(&document(None)).unwrap();
+        assert_eq!(plain.models[0].only, None);
+
+        let operate = Registry::parse(&document(Some(serde_json::json!({
+            "operate": "strong", "painting": "frontier"
+        }))))
+        .unwrap();
+        assert_eq!(
+            operate.models[0].only,
+            Some(BTreeMap::from([(
+                TaskCategory::Operate,
+                QualityTier::Strong
+            )]))
+        );
+
+        let unknown = Registry::parse_with_adjustments(&document(Some(serde_json::json!({
+            "painting": "strong"
+        }))))
+        .unwrap();
+        assert_eq!(unknown.registry.models[0].only, Some(BTreeMap::new()));
+        assert!(
+            unknown
+                .adjustments
+                .iter()
+                .any(|note| note.contains("never routed to"))
+        );
+    }
 }

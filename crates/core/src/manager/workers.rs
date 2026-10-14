@@ -1721,6 +1721,14 @@ impl SessionManager {
             extra.push_str("\n\n");
             extra.push_str(prompts::BROWSER_OFF);
         }
+        // Computer use (a GUI job has its tools loaded from the start).
+        let computer = self
+            .computer_use_kit(&task.id.to_string(), task.kind == TaskKind::Operate)
+            .await;
+        if computer.is_some() {
+            extra.push_str("\n\n");
+            extra.push_str(prompts::COMPUTER_USE);
+        }
         if self.held_by_plan_mode(task).await {
             extra.push_str("\n\n");
             extra.push_str(super::phases::PLAN_MODE_HOLD);
@@ -1776,35 +1784,13 @@ impl SessionManager {
         secret_values.push(worker_grant.clone());
         let mut mcp_servers =
             vec![self.brigadier_server(worker_grant.clone(), WORKER_TOOL_TIMEOUT_SECS, true)];
-        let mut env = worker_env(&workspace.scratch);
-        // Computer use (COMPUTER-USE-PLAN.md §4.6): its own grant, which can call the computer
-        // tools and nothing else, for the `computer` server and `brigadierd computer`.
-        if cfg!(target_os = "macos") {
-            let computer_grant = self.grants.issue(
-                grant_owner,
-                Role::Computer {
-                    conversation_id: conversation_id.clone(),
-                    task_id: task.id.clone(),
-                },
-            );
-            secret_values.push(computer_grant.clone());
-            env.push((super::computer::GRANT_ENV.into(), computer_grant.clone()));
-            env.extend([
-                (
-                    "BRIGADIER_COMPUTER_DATA_DIR".into(),
-                    self.data_dir.to_string_lossy().into_owned(),
-                ),
-                (
-                    "BRIGADIER_COMPUTER_CLI".into(),
-                    self.config.daemon_exe.to_string_lossy().into_owned(),
-                ),
-            ]);
-            mcp_servers.push(self.computer_server(
-                computer_grant,
-                WORKER_TOOL_TIMEOUT_SECS,
-                task.kind == TaskKind::Operate,
-            ));
+        let mut skill_plugins = Vec::new();
+        if let Some(kit) = computer {
+            secret_values.push(kit.token);
+            mcp_servers.push(kit.server);
+            skill_plugins.push(kit.plugin);
         }
+        let env = worker_env(&workspace.scratch);
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
         // Its own branch is the only ref it moves; the branch its work lands on is the engine's.
@@ -1856,6 +1842,7 @@ impl SessionManager {
             append_system_prompt: Some(prompt),
             mcp_servers,
             tools: ToolSet::Lean,
+            skill_plugins,
             add_dirs: match (&home, &workspace.worktree) {
                 (Some(_), Some(worktree)) => vec![worktree.clone()],
                 _ => Vec::new(),
@@ -3570,15 +3557,6 @@ impl SessionManager {
         if let Some(message) = self.keep_last_message(&live, task.number).await {
             artifacts.push(message);
         }
-        // An operate worker's actions on the desktop, read from the action log rather than
-        // its own account, and its last screenshot.
-        let computer = if task.kind == TaskKind::Operate {
-            let (line, screenshot) = self.computer_report(conversation_id, &task).await;
-            artifacts.extend(screenshot);
-            Some(line)
-        } else {
-            None
-        };
         let outputs = files.outputs;
         // A gate member's report goes to its gate, not to the orchestrator.
         let reviewing = task.gate_link.is_some();
@@ -3649,9 +3627,6 @@ impl SessionManager {
             let mut shown = task.clone();
             reported(&mut shown);
             let mut text = prompts::report_envelope(&shown, &report, &route_label(&shown));
-            if let Some(line) = &computer {
-                text.push_str(&format!("\n{line}"));
-            }
             if unchanged {
                 text.push_str(&format!(
                     "\n[nothing to land task-{}] It changed no files, so it is done; there is nothing to land.",
@@ -4694,7 +4669,6 @@ impl SessionManager {
         self.task_ended_waiting(task, state).await;
         let owner = format!("task:{}", task.id);
         self.grants.revoke_owner(&owner);
-        self.computer.end_worker(&task.id).await;
         let leftovers = self.runtime.ledger().dispose(&owner).await;
         if !leftovers.is_clean() {
             tracing::warn!(task = %task.id, ?leftovers, "some of the task's leftovers will be retried at the next launch");

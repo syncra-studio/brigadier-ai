@@ -151,7 +151,7 @@ impl Projection {
             | DomainEvent::BackgroundRunUpdated { .. }
             | DomainEvent::ThreadCommitsSeen { .. }
             | DomainEvent::OutputStored { .. }
-            | DomainEvent::ComputerActed { .. }
+            | DomainEvent::Retired
             | DomainEvent::CheckRan { .. }
             | DomainEvent::ThreadLooked { .. }
             | DomainEvent::PreviewUpdated { .. }

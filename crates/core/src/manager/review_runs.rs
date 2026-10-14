@@ -1214,6 +1214,7 @@ impl SessionManager {
             append_system_prompt: Some(brigadier_review::REVIEW_ROLE.to_owned()),
             mcp_servers: Vec::new(),
             tools: ToolSet::Review,
+            skill_plugins: Vec::new(),
             add_dirs: Vec::new(),
             env: Vec::new(),
             unset_env: Vec::new(),

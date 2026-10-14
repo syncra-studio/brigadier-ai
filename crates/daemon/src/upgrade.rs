@@ -28,13 +28,11 @@ fn role_name(role: &Role) -> &'static str {
         Role::Chat { .. } => "chat",
         Role::TabChat { .. } => "tab chat",
         Role::OutputHook { .. } => "output hook",
-        Role::Computer { .. } => "computer",
     }
 }
 
 /// Serves the Brigadier MCP tools on `stream` for an orchestrator, worker, Brain job or Chat
-/// grant, and the computer tools for a worker's computer grant; any other grant closes the
-/// connection at once.
+/// grant; any other grant closes the connection at once.
 pub async fn serve_mcp(daemon: Arc<Daemon>, grant: String, stream: RawStream) {
     let host: Arc<dyn ToolHost> = daemon.sessions.clone();
     let role = match host.role(&grant) {
@@ -43,8 +41,7 @@ pub async fn serve_mcp(daemon: Arc<Daemon>, grant: String, stream: RawStream) {
             | Role::Worker { .. }
             | Role::BrainJob { .. }
             | Role::Chat { .. }
-            | Role::TabChat { .. }
-            | Role::Computer { .. }),
+            | Role::TabChat { .. }),
         ) => role,
         other => {
             let role = other.as_ref().map_or("unknown", role_name);

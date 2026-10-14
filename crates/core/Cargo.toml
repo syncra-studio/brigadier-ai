@@ -9,7 +9,6 @@ publish.workspace = true
 
 [dependencies]
 brigadier-brain.workspace = true
-brigadier-computer.workspace = true
 brigadier-git.workspace = true
 brigadier-index.workspace = true
 brigadier-providers.workspace = true

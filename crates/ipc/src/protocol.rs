@@ -14,16 +14,16 @@ use brigadier_core::storage::{
 };
 use brigadier_core::{
     AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog,
-    CheckoutFile, CommitOutcome, ComputerPage, ConventionsExport, Conversation,
-    ConversationActivity, ConversationId, ConversationKind, ConversationStatus, ConversationView,
-    DiffStat, FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message,
-    MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, ProbeBurst, Project,
-    ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
-    QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile,
-    ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, SearchQuery,
-    SearchUpdate, Settings, Setup, SetupRequest, SourceChange, SourceScope, SourceState, TaskId,
-    ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff,
-    WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus, ConventionsExport,
+    Conversation, ConversationActivity, ConversationId, ConversationKind, ConversationStatus,
+    ConversationView, DiffStat, FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitState,
+    Mention, Message, MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId,
+    ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView,
+    PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
+    ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
+    SearchQuery, SearchUpdate, Settings, Setup, SetupRequest, SourceChange, SourceScope,
+    SourceState, TaskId, ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView, UsageActivity,
+    UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -362,21 +362,26 @@ pub enum Request {
     CloseTerminal {
         terminal_id: String,
     },
-    /// Whether computer use has the system permissions it needs (Settings → Computer use).
-    GetComputerAccess,
-    /// Asks the system for one of computer use's permissions: registers Brigadier Computer
-    /// Use with it and opens that pane of System Settings, where the user turns it on.
-    AllowComputerAccess {
-        grant: ComputerGrant,
-        /// Start over: first forget Brigadier Computer Use's own entry for this permission,
-        /// left by an older build that the system no longer matches.
-        #[serde(default)]
-        start_over: bool,
+    /// Computer use as Settings › Computer use shows it. Never starts the helper: permissions
+    /// come from a helper already running, or from what it last wrote.
+    GetComputerUse,
+    /// Asks macOS for `permission`, from the helper (it is the app that holds the grant).
+    /// Starts the helper if needed.
+    GrantComputerPermission {
+        permission: ComputerPermission,
     },
-    /// Opens the pane of System Settings that lists Brigadier Computer Use for one permission,
-    /// without asking for it (to check it there, or turn it off).
-    OpenComputerSettings {
-        grant: ComputerGrant,
+    /// Checks the permissions again, refreshing the helper only when macOS needs that to see a
+    /// new Screen Recording grant.
+    CheckComputerUse,
+    /// Takes one test picture, to confirm screen capture works end to end; setup is finished
+    /// once it does. macOS may ask the user about it the first time.
+    ConfirmComputerCapture,
+    /// Ends `session`'s control of `app`: its further actions there are refused, and the agent
+    /// is told the user stopped it.
+    StopComputerSession {
+        session: String,
+        bundle_id: Option<String>,
+        app: String,
     },
     /// Whether dictation (the composer's Dictate button) can run, and its speech model.
     GetDictation,
@@ -764,14 +769,6 @@ pub enum Request {
     ListWorkerEvents {
         task_id: TaskId,
         /// Only entries with a smaller `streamSeq` (for paging backwards).
-        before: Option<i64>,
-        limit: u32,
-    },
-    /// A page of a worker's computer actions, oldest first (its computer timeline).
-    ListComputerActions {
-        conversation_id: ConversationId,
-        task_id: TaskId,
-        /// Only actions with a smaller `streamSeq` (for paging backwards).
         before: Option<i64>,
         limit: u32,
     },
@@ -1192,13 +1189,19 @@ pub enum Response {
     ResizeTerminal,
     ClearTerminal,
     CloseTerminal,
-    GetComputerAccess {
-        access: ComputerAccess,
+    GetComputerUse {
+        computer_use: ComputerUseStatus,
     },
-    AllowComputerAccess {
-        access: ComputerAccess,
+    GrantComputerPermission,
+    CheckComputerUse {
+        computer_use: ComputerUseStatus,
     },
-    OpenComputerSettings,
+    ConfirmComputerCapture {
+        computer_use: ComputerUseStatus,
+        /// Why screen capture didn't work, when it didn't.
+        problem: Option<String>,
+    },
+    StopComputerSession,
     GetDictation {
         dictation: DictationStatus,
     },
@@ -1376,9 +1379,6 @@ pub enum Response {
     ResolveWaiting,
     ListWorkerEvents {
         page: WorkerPage,
-    },
-    ListComputerActions {
-        page: ComputerPage,
     },
     ListOrchestratorLog {
         page: OrchestratorPage,
@@ -1702,6 +1702,14 @@ pub enum ServerFrame {
         id: u32,
         update: SearchUpdate,
     },
+    /// Computer use changed: permissions, setup or the agents using apps. Sent to every
+    /// subscribed connection. Live only.
+    ComputerUse {
+        status: ComputerUseStatus,
+    },
+    /// An agent needs computer use and its setup isn't finished: the app opens the setup
+    /// window. Live only.
+    ComputerUseSetupNeeded,
     /// The daemon is shutting down; the connection closes next.
     Closing,
 }
@@ -1793,30 +1801,6 @@ pub enum TerminalOutput {
         terminal_id: String,
         code: Option<u32>,
     },
-}
-
-/// Computer use's system permissions, as Brigadier Computer Use holds them.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ComputerAccess {
-    /// This system has computer use (macOS for now).
-    pub available: bool,
-    /// Control apps (Accessibility).
-    pub accessibility: bool,
-    /// See the screen (Screen Recording).
-    pub screen_recording: bool,
-    /// Screen recording was just allowed and Brigadier Computer Use is restarting to use it.
-    pub restarting: bool,
-    /// Why the permissions couldn't be read, in plain words.
-    pub problem: Option<String>,
-}
-
-/// One of computer use's system permissions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum ComputerGrant {
-    Accessibility,
-    ScreenRecording,
 }
 
 /// Whether dictation can run here, as `getDictation` returns it.

@@ -3,33 +3,67 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-type Rendering = {
-  first: { status: string; buttons: string[] };
-  asked: { buttons: string[]; seeTheScreen: string };
-  checked: boolean;
-  ready: { status: string; buttons: string[] };
-  calls: string[];
-  focusable: boolean;
+type Look = {
+  accessibility: { state: string; buttons: string[]; grantDisabled: boolean | null };
+  screenRecording: { state: string; buttons: string[]; grantDisabled: boolean | null };
+  note: string;
+  setup: string;
+  setupButtons: string[];
+  menuBarDisabled: boolean | null;
 };
+type States = "unknown" | "cached" | "missingBoth" | "missingAccessibility" | "confirmCapture" | "ready" | "readyCached" | "restarting" | "failed" | "off";
+type Seen = Record<States, Look> & { sections: string[]; rows: string[]; listingCalls: string[]; calls: string[] };
 
-// The real page in Chromium over faked permissions: Allow… asks and adds the quiet controls,
-// Open System Settings only opens the list, Start over asks afresh, and Check again reads at once.
-test("computer use's page asks, opens System Settings, starts over and checks again", { timeout: 60000 }, async (t) => {
-  const rendering = JSON.parse(await renderFixturePage(t, "computer-use.html?drive=1", "computer-use-result", 8000)) as Rendering;
-  assert.equal(rendering.first.status, "Finish setup2 permissions needed");
-  assert.deepEqual(rendering.first.buttons, ["Check again", "Allow…", "Allow…", "Where to find it"]);
-  assert.deepEqual(rendering.asked.buttons, [
-    "Check again",
-    "Allow…",
-    "Open System Settings",
-    "Allow…",
-    "Start over",
-    "Where to find it",
+// The real page in Chromium over a faked daemon.
+test("computer use settings: enable, menu bar, permissions and setup, in every state", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "computer-use.html?drive=1", "computer-use-result", 15000)) as Seen;
+  assert.deepEqual(seen.sections, ["Enable", "Menu bar", "Permissions", "Setup"]);
+  assert.deepEqual(seen.rows, ["Let agents use apps on this Mac", "Show in menu bar", "Accessibility", "Screen Recording", "Setup"]);
+  // Listing the page only reads: it starts no helper.
+  assert.deepEqual(seen.listingCalls, ["getComputerUse"]);
+
+  const unknown = seen.unknown;
+  assert.equal(unknown.accessibility.state, "Unknown");
+  assert.equal(unknown.screenRecording.state, "Unknown");
+  assert.deepEqual(unknown.accessibility.buttons, ["Grant…", "Open System Settings"]);
+  assert.equal(unknown.setup, "Not set up yet. It starts the first time an agent needs it.");
+  assert.deepEqual(unknown.setupButtons, ["Finish setup…"]);
+  assert.equal(unknown.note, "");
+
+  // What the helper last wrote is marked as such.
+  assert.equal(seen.cached.accessibility.state, "Granted");
+  assert.deepEqual(seen.cached.accessibility.buttons, ["Open System Settings"]);
+  assert.equal(seen.cached.screenRecording.state, "Not granted");
+  assert.equal(seen.cached.note, "As the helper last saw them.");
+  assert.equal(seen.cached.setup, "Almost done: Screen Recording isn't allowed yet.");
+
+  assert.equal(seen.missingBoth.note, "");
+  assert.equal(seen.missingBoth.setup, "Almost done: Accessibility and Screen Recording aren't allowed yet.");
+  assert.equal(seen.missingAccessibility.setup, "Almost done: Accessibility isn't allowed yet.");
+  assert.deepEqual(seen.missingAccessibility.screenRecording.buttons, ["Open System Settings"]);
+
+  assert.equal(seen.confirmCapture.setup, "Almost done: Brigadier still needs to check that it can see app windows.");
+  assert.deepEqual(seen.confirmCapture.setupButtons, ["Finish setup…"]);
+
+  assert.equal(seen.ready.setup, "Ready. Agents can use apps on this Mac.");
+  assert.deepEqual(seen.ready.setupButtons, []);
+  assert.equal(seen.readyCached.setup, "Set up. It starts when an agent needs it.");
+  assert.equal(seen.restarting.setup, "The helper isn't responding. Brigadier is restarting it.");
+  assert.deepEqual(seen.restarting.setupButtons, []);
+  assert.equal(seen.failed.setup, "Computer use isn't working right now: the helper app is missing from this install");
+  assert.deepEqual(seen.failed.setupButtons, ["Finish setup…"]);
+
+  // Off: the menu-bar switch and Grant… wait for it, and setup has nothing to finish.
+  assert.equal(seen.ready.menuBarDisabled, false);
+  assert.equal(seen.off.menuBarDisabled, true);
+  assert.equal(seen.off.screenRecording.grantDisabled, true);
+  assert.equal(seen.off.setup, "Off. Agents can't use apps on this Mac.");
+  assert.deepEqual(seen.off.setupButtons, []);
+
+  assert.deepEqual(seen.calls.slice(1), [
+    "grantComputerPermission screenRecording",
+    "getComputerUse",
+    "open_privacy_settings accessibility",
+    "open_computer_setup",
   ]);
-  assert.match(rendering.asked.seeTheScreen, /Not allowed/);
-  assert.equal(rendering.checked, true);
-  assert.equal(rendering.ready.status, "ReadyWorkers can see and use apps on this Mac.");
-  assert.deepEqual(rendering.ready.buttons, ["Check again", "Open System Settings", "Open System Settings", "Where to find it"]);
-  assert.deepEqual(rendering.calls, ["allow screenRecording", "open screenRecording", "allow screenRecording startOver"]);
-  assert.ok(rendering.focusable);
 });

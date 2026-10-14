@@ -232,6 +232,8 @@ export const useApp = create<AppState>()(() => ({
     dictationWords: [],
     dictationMicrophone: "",
     browserEnabled: true,
+    computerUse: true,
+    computerUseMenuBar: true,
     webLinksIn: "system",
     localLinksIn: "brigadier",
     browserFullUrl: false,
@@ -678,7 +680,6 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "backgroundRunUpdated":
     case "threadCommitsSeen":
     case "outputStored":
-    case "computerActed":
     case "checkRan":
     case "threadLooked":
     case "previewUpdated":

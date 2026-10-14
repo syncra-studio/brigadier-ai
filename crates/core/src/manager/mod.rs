@@ -29,7 +29,9 @@ mod ci;
 mod clean_up;
 mod closing;
 mod cold;
-mod computer;
+mod computer_host;
+pub use computer_host::ComputerNews;
+mod computer_use;
 mod context_pack;
 mod conversation;
 pub(crate) mod decisions;
@@ -149,8 +151,6 @@ pub struct SessionManager {
     git: Git,
     data_dir: PathBuf,
     grants: Grants,
-    /// Workers' computer use: the helper, leases and approvals.
-    computer: computer::Computer,
     convs: Mutex<HashMap<ConversationId, Arc<ConvLive>>>,
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
@@ -213,6 +213,10 @@ pub struct SessionManager {
     machine: Arc<crate::machine::MachineWatch>,
     /// Conversations being archived or deleted: their fences and cleanups.
     closing: closing::Closing,
+    /// The computer-use helper's copy in the data folder ([`computer_use`]).
+    computer_use: computer_use::ComputerUse,
+    /// The helper as Settings, the menu bar and the watchdog tend it ([`computer_host`]).
+    computer_host: computer_host::ComputerHost,
     /// Where "Open in terminal" runs a worker's session (the daemon's terminals).
     terminal_host: std::sync::OnceLock<Arc<dyn takeover::TerminalHost>>,
     /// The user's pages, which a thread may read and change from the page's own composer.
@@ -277,7 +281,6 @@ impl SessionManager {
                 .guard
                 .fake(brigadier_sandbox::MachineLoad::default());
         }
-        let computer = computer::Computer::new(&config.daemon_exe, &data_dir);
         let manager = Arc::new_cyclic(|me| Self {
             me: me.clone(),
             core,
@@ -287,7 +290,6 @@ impl SessionManager {
             git,
             data_dir,
             grants: Grants::default(),
-            computer,
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             session_worktrees: tokio::sync::Mutex::new(()),
@@ -317,6 +319,8 @@ impl SessionManager {
             overnight: overnight::Runs::default(),
             machine,
             closing: closing::Closing::default(),
+            computer_use: computer_use::ComputerUse::default(),
+            computer_host: computer_host::ComputerHost::default(),
             terminal_host: std::sync::OnceLock::new(),
             pages: std::sync::OnceLock::new(),
             tab_chats: side_chat::TabChats::default(),
@@ -342,6 +346,7 @@ impl SessionManager {
         manager.open_brains().await;
         manager.start_hibernation_timer();
         manager.start_watchdog();
+        manager.start_computer_watchdog();
         manager.retry_waiting_on_provider_checks();
         manager.start_checkpoint_timer();
         manager.start_status_timer();
@@ -743,16 +748,6 @@ enum EventSource<'a> {
     Conversation(&'a ConversationId),
 }
 
-impl SessionManager {
-    /// The Brigadier app that connected to this daemon: computer use never drives its
-    /// windows, which hold the cards workers must not answer.
-    pub fn set_computer_host(&self, pid: u32) {
-        if let Ok(pid) = i32::try_from(pid) {
-            self.computer.set_host_pid(pid);
-        }
-    }
-}
-
 impl ToolHost for SessionManager {
     fn role(&self, grant: &str) -> Option<Role> {
         self.grants.resolve(grant)
@@ -761,7 +756,6 @@ impl ToolHost for SessionManager {
     fn call(&self, grant: &str, call: ToolCall) -> BoxFuture<'_, ToolReply> {
         let role = self.grants.resolve(grant);
         let manager = self.arc();
-        let grant = grant.to_owned();
         Box::pin(async move {
             let Some(role) = role else {
                 return ToolReply::error("This grant is not valid (the session ended).");
@@ -793,17 +787,6 @@ impl ToolHost for SessionManager {
                     },
                     ToolCall::TabChat(call),
                 ) => manager.tab_chat_call(conversation_id, call).await,
-                (
-                    Role::Computer {
-                        conversation_id,
-                        task_id,
-                    },
-                    ToolCall::Computer(call),
-                ) => {
-                    manager
-                        .computer_call(&grant, conversation_id, task_id, call)
-                        .await
-                }
                 _ => ToolReply::error("This tool is not available to this session."),
             }
         })

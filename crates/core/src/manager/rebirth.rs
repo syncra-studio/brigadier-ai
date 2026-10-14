@@ -345,6 +345,7 @@ impl SessionManager {
             append_system_prompt: Some(prompt),
             mcp_servers: Vec::new(),
             tools: ToolSet::None,
+            skill_plugins: Vec::new(),
             add_dirs: Vec::new(),
             env: Vec::new(),
             unset_env: Vec::new(),

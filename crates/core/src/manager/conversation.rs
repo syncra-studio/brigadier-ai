@@ -2761,7 +2761,20 @@ impl SessionManager {
             }
         };
 
-        let grant_redactor = super::secrets::redactor(grant_values.clone());
+        let (mut prompt, mut mcp) = (prompt, mcp);
+        // The thread drives apps itself only for a quick look; its skill and tools load when used.
+        let mut skill_plugins = Vec::new();
+        let mut redacted = grant_values.clone();
+        if conv.kind == ConversationKind::Session
+            && let Some(kit) = self.computer_use_kit(&conv.id.to_string(), false).await
+        {
+            prompt.push_str("\n\n");
+            prompt.push_str(prompts::COMPUTER_USE);
+            redacted.push(kit.token);
+            mcp.push(kit.server);
+            skill_plugins.push(kit.plugin);
+        }
+        let grant_redactor = super::secrets::redactor(redacted);
         let fresh = std::mem::take(&mut conv.state.lock().await.fresh);
         let mut resume = if fresh {
             None
@@ -2804,6 +2817,7 @@ impl SessionManager {
                 ConversationKind::Chat if tab_checkout.is_some() => ToolSet::Review,
                 ConversationKind::Chat => ToolSet::Web,
             },
+            skill_plugins,
             // The workspace is the thread's to work in, never its own to clean up: it is not
             // recorded under the thread's owner. A tab chat's checkout is read the same way.
             add_dirs: launch
@@ -2959,26 +2973,6 @@ impl SessionManager {
             always_load,
             prompt_tools: Vec::new(),
         }
-    }
-
-    /// The `computer` MCP server a worker gets (COMPUTER-USE-PLAN.md §4.6): behind the CLI's
-    /// tool search until a worker needs it, so one that never touches the desktop pays
-    /// almost nothing; `always_load` for an operate worker, which needs it from the start.
-    pub(crate) fn computer_server(
-        &self,
-        grant: String,
-        timeout_secs: u64,
-        always_load: bool,
-    ) -> McpServer {
-        let mut server = self.brigadier_server(grant.clone(), timeout_secs, always_load);
-        server.name = "computer".into();
-        // Claude puts every server's environment into its own, so each grant needs its own
-        // variable; the bridge is told which one to read.
-        server
-            .args
-            .extend(["--grant-env".into(), super::computer::GRANT_ENV.into()]);
-        server.env = vec![(super::computer::GRANT_ENV.into(), grant)];
-        server
     }
 
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`), with its grant.

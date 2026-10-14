@@ -1,0 +1,522 @@
+//! Brigadier's `page` tool, in place of the driver's: the macOS
+//! `PageBackend` behind the tool in [`crate::browser::page_core`].
+//!
+//! Routes by `bundle_id` / Electron-detection / WKWebView-detection to:
+//!   - **Apple Events** (Chromium-family + Safari) — zero-config, uses
+//!     `osascript do JavaScript`.
+//!   - **CDP** (Electron) — port discovered from the running process.
+//!   - **CDP** (any other Chromium browser launched with a debugging port,
+//!     e.g. one that isn't scriptable) — the tab the window shows, over the
+//!     backend's cached connections.
+//!   - **AX-tree fallback** (WKWebView / Tauri) — read-only, no JS.
+//!
+//! The MCP tool definition (name, schema, action dispatch) lives in
+//! `crate::browser::page_core` — this file implements the backend and
+//! [`install`]s the tool.
+
+use async_trait::async_trait;
+use cua_driver_core::tool::{Tool, ToolRegistry};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use crate::browser::page_core::{ClickElementResult, PageBackend, PageTool};
+use crate::browser::{
+    is_wk_web_view_app, AXPageReader, BrowserJs, CdpClient, CdpSessionCache, ElectronJs,
+};
+
+/// Replace the driver's `page` tool with Brigadier's. Call it before
+/// [`crate::guard::install`], so the guard wraps this one. The script
+/// actions are admitted by [`authorize`] and then by the guard's target
+/// rules, never by the driver's unrestricted mode, which stays off.
+pub fn install(registry: &mut ToolRegistry) {
+    registry.wrap_host_authorized("page", authorize, |_driver_page| {
+        Box::new(PageTool::new(Arc::new(MacOsPageBackend::new()))) as Box<dyn Tool>
+    });
+}
+
+/// A script action runs only in an app the call names, so the guard can
+/// hold it to the same target rules as any other action: a `pid` for the
+/// page actions, a `bundle_id` to switch on a browser's JavaScript.
+pub fn authorize(_tool: &str, args: &Value) -> Result<(), String> {
+    let action = args.get("action").and_then(Value::as_str).unwrap_or("");
+    let (key, named) = if action == "enable_javascript_apple_events" {
+        (
+            "bundle_id",
+            args.get("bundle_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.trim().is_empty()),
+        )
+    } else {
+        ("pid", args.get("pid").and_then(Value::as_i64).is_some())
+    };
+    if named {
+        Ok(())
+    } else {
+        Err(format!(
+            "page {action} needs `{key}` naming the app to act in."
+        ))
+    }
+}
+
+pub struct MacOsPageBackend {
+    cdp_sessions: Arc<CdpSessionCache>,
+}
+
+/// The debugging-port connections every caller shares: a browser asks the
+/// user before each new connection to a profile they opened it on, so one
+/// approved connection serves the `page` tool and typing alike.
+pub fn shared_cdp_sessions() -> Arc<CdpSessionCache> {
+    static SESSIONS: OnceLock<Arc<CdpSessionCache>> = OnceLock::new();
+    SESSIONS
+        .get_or_init(|| Arc::new(CdpSessionCache::new()))
+        .clone()
+}
+
+impl MacOsPageBackend {
+    pub fn new() -> Self {
+        Self {
+            cdp_sessions: shared_cdp_sessions(),
+        }
+    }
+
+    /// Resolve `bundle_id` for `pid` from the running app.
+    async fn bundle_id_for(pid: i32) -> String {
+        tokio::task::spawn_blocking(move || {
+            platform_macos::apps::bundle_id_for_pid(pid).unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default()
+    }
+}
+
+#[async_trait]
+impl PageBackend for MacOsPageBackend {
+    async fn get_text(&self, pid: i32, window_id: u32) -> anyhow::Result<String> {
+        let bundle_id = Self::bundle_id_for(pid).await;
+
+        let use_ax_fallback = !BrowserJs::supports(&bundle_id)
+            && tokio::task::spawn_blocking(move || is_wk_web_view_app(pid))
+                .await
+                .unwrap_or(false);
+
+        if use_ax_fallback {
+            return ax_text_fallback(pid, window_id).await;
+        }
+
+        // Try JS path first; on error, fall back to AX walk.
+        match execute_js(
+            "document.body.innerText",
+            &bundle_id,
+            pid,
+            window_id,
+            &self.cdp_sessions,
+        )
+        .await
+        {
+            Ok(result) => Ok(result),
+            Err(_) => ax_text_fallback(pid, window_id).await,
+        }
+    }
+
+    async fn query_dom(
+        &self,
+        pid: i32,
+        window_id: u32,
+        css_selector: &str,
+        attributes: &[String],
+    ) -> anyhow::Result<String> {
+        let bundle_id = Self::bundle_id_for(pid).await;
+
+        let use_ax_fallback = !BrowserJs::supports(&bundle_id)
+            && tokio::task::spawn_blocking(move || is_wk_web_view_app(pid))
+                .await
+                .unwrap_or(false);
+
+        if use_ax_fallback {
+            let results = ax_query_fallback(pid, window_id, css_selector).await?;
+            return Ok(format_ax_elements(&results));
+        }
+
+        let js = build_query_selector_js(css_selector, attributes);
+        match execute_js(&js, &bundle_id, pid, window_id, &self.cdp_sessions).await {
+            Ok(result) => Ok(result),
+            Err(_) => {
+                let results = ax_query_fallback(pid, window_id, css_selector).await?;
+                Ok(format_ax_elements(&results))
+            }
+        }
+    }
+
+    async fn execute_javascript(
+        &self,
+        pid: i32,
+        window_id: u32,
+        javascript: &str,
+    ) -> anyhow::Result<String> {
+        let bundle_id = Self::bundle_id_for(pid).await;
+        execute_js(javascript, &bundle_id, pid, window_id, &self.cdp_sessions).await
+    }
+
+    async fn execute_javascript_targeted(
+        &self,
+        pid: i32,
+        window_id: u32,
+        javascript: &str,
+        cdp_port: Option<u16>,
+        target_url_contains: Option<&str>,
+    ) -> anyhow::Result<String> {
+        if cdp_port.is_none() && target_url_contains.is_none() {
+            return self.execute_javascript(pid, window_id, javascript).await;
+        }
+        let port = resolve_cdp_port(pid, cdp_port, "execute_javascript").await?;
+        self.cdp_sessions
+            .evaluate(javascript, port, target_url_contains)
+            .await
+    }
+
+    async fn click_element(
+        &self,
+        pid: i32,
+        window_id: u32,
+        selector: &str,
+    ) -> anyhow::Result<ClickElementResult> {
+        let selector_js = json_string(selector);
+        let probe_js = format!(
+            r#"(function() {{
+  var selector = {selector_js};
+  var el = document.querySelector(selector);
+  if (!el) throw new Error("element_not_found:" + selector);
+  var r = el.getBoundingClientRect();
+  return JSON.stringify({{
+    vx: r.left + r.width / 2,
+    vy: r.top + r.height / 2,
+    sx: window.screenX + (window.outerWidth - window.innerWidth) / 2,
+    sy: window.screenY + (window.outerHeight - window.innerHeight),
+    dpr: window.devicePixelRatio || 1
+  }});
+}})();"#
+        );
+        let probe_raw = self.execute_javascript(pid, window_id, &probe_js).await?;
+        let parsed = parse_click_probe(&probe_raw)?;
+
+        let vx = required_finite(&parsed, "vx", &probe_raw)?;
+        let vy = required_finite(&parsed, "vy", &probe_raw)?;
+        let sx = required_finite(&parsed, "sx", &probe_raw)?;
+        let sy = required_finite(&parsed, "sy", &probe_raw)?;
+        let dpr = parsed
+            .get("dpr")
+            .and_then(serde_json::Value::as_f64)
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .unwrap_or(1.0);
+
+        let screen_x = sx + vx * dpr;
+        let screen_y = sy + vy * dpr;
+        let cursor_key = "default".to_owned();
+        platform_macos::cursor::overlay::send_command(
+            cursor_key.clone(),
+            cursor_overlay::OverlayCommand::PinAbove(window_id as u64),
+        );
+        platform_macos::cursor::overlay::animate_cursor_to(cursor_key.clone(), screen_x, screen_y)
+            .await;
+        platform_macos::cursor::overlay::send_command(
+            cursor_key,
+            cursor_overlay::OverlayCommand::ClickPulse {
+                x: screen_x,
+                y: screen_y,
+            },
+        );
+
+        let click_js = format!(
+            r#"(function() {{
+  var selector = {selector_js};
+  var el = document.querySelector(selector);
+  if (!el) throw new Error("element_not_found_on_click:" + selector);
+  el.click();
+  return "clicked:" + selector;
+}})();"#
+        );
+        let _ = self.execute_javascript(pid, window_id, &click_js).await?;
+
+        Ok(ClickElementResult {
+            screen_x,
+            screen_y,
+            viewport_x: vx,
+            viewport_y: vy,
+            message: format!(
+                "Clicked {selector} at screen ({screen_x:.0},{screen_y:.0}) on pid {pid}."
+            ),
+        })
+    }
+
+    async fn enable_javascript_apple_events(&self, bundle_id: &str) -> anyhow::Result<String> {
+        BrowserJs::enable_javascript_apple_events(bundle_id).await?;
+        Ok("JavaScript from Apple Events has been enabled. The browser is restarting.".to_owned())
+    }
+
+    async fn insert_text(
+        &self,
+        pid: i32,
+        _window_id: u32,
+        text: &str,
+        cdp_port: Option<u16>,
+        target_url_contains: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let port = resolve_cdp_port(pid, cdp_port, "insert_text").await?;
+        self.cdp_sessions
+            .insert_text(text, port, target_url_contains)
+            .await?;
+        Ok(format!(
+            "Inserted {} character(s) via CDP Input.insertText.",
+            text.chars().count()
+        ))
+    }
+
+    async fn type_keystrokes(
+        &self,
+        pid: i32,
+        _window_id: u32,
+        text: &str,
+        cdp_port: Option<u16>,
+        target_url_contains: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let port = resolve_cdp_port(pid, cdp_port, "type_keystrokes").await?;
+        self.cdp_sessions
+            .dispatch_keystrokes(text, port, target_url_contains)
+            .await?;
+        Ok(format!(
+            "Typed {} character(s) via CDP keystroke events.",
+            text.chars().count()
+        ))
+    }
+}
+
+/// Shared CDP-port lookup + actionable error for the `insert_text` /
+/// `type_keystrokes` actions. An explicit `cdp_port` skips auto-discovery
+/// entirely — needed when the port only answers the browser-level
+/// `devtools/browser` endpoint (see `CdpSession`), which auto-discovery
+/// can't confirm on its own.
+async fn resolve_cdp_port(pid: i32, cdp_port: Option<u16>, action: &str) -> anyhow::Result<u16> {
+    if let Some(port) = cdp_port {
+        return Ok(port);
+    }
+    CdpClient::find_port_for_pid(pid).await.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No Chrome DevTools Protocol port found for pid {pid}. {action} needs \
+             the browser to have been launched with a CDP port on a NON-default profile — \
+             Chrome refuses to open --remote-debugging-port on its default data directory \
+             (even if you pass --user-data-dir explicitly pointing at that same default \
+             path). Relaunch via launch_app with cdp_debugging_port AND \
+             additional_arguments: [\"--user-data-dir=<some other path>\"], e.g. a \
+             dedicated automation profile — this will not have the user's existing \
+             logins/session. Alternatively, if you already enabled Chrome's own \
+             remote-debugging toggle for this profile (chrome://inspect/#remote-debugging), \
+             pass that port explicitly via cdp_port — auto-discovery can't confirm it."
+        )
+    })
+}
+
+/// Route JavaScript execution to the appropriate backend.
+async fn execute_js(
+    js: &str,
+    bundle_id: &str,
+    pid: i32,
+    window_id: u32,
+    cdp_sessions: &CdpSessionCache,
+) -> anyhow::Result<String> {
+    if BrowserJs::supports(bundle_id) {
+        return BrowserJs::execute(js, bundle_id, window_id).await;
+    }
+    let is_electron = tokio::task::spawn_blocking(move || ElectronJs::is_electron(pid)).await?;
+    if is_electron {
+        return ElectronJs::execute(js, pid).await;
+    }
+    let is_wk = tokio::task::spawn_blocking(move || is_wk_web_view_app(pid)).await?;
+    if is_wk {
+        anyhow::bail!(
+            "execute_javascript is not available for WKWebView/Tauri apps. \
+             Use get_text or query_dom instead."
+        );
+    }
+    if let Some(result) = execute_js_over_cdp(js, pid, window_id, cdp_sessions).await {
+        return result;
+    }
+    anyhow::bail!("Unsupported browser: bundle_id={bundle_id}");
+}
+
+/// Evaluate `js` over the debugging port `pid` listens on, in the tab
+/// `window_id` shows. `None` when the process has no debugging port, so the
+/// caller keeps its unsupported-browser path. Reaches a window on another
+/// Space too, where the accessibility tree has no page to read.
+async fn execute_js_over_cdp(
+    js: &str,
+    pid: i32,
+    window_id: u32,
+    cdp_sessions: &CdpSessionCache,
+) -> Option<anyhow::Result<String>> {
+    let port = cdp_port_for_pid(pid).await?;
+    let window_title = tokio::task::spawn_blocking(move || {
+        platform_macos::windows::all_windows()
+            .into_iter()
+            .find(|window| window.window_id == window_id)
+            .map(|window| window.title)
+    })
+    .await
+    .ok()
+    .flatten();
+    let result = cdp_sessions
+        .evaluate_in_window(js, port, window_title.as_deref())
+        .await;
+    if result.is_err() {
+        // The browser may have quit or moved its port: look it up again
+        // next time.
+        cdp_ports().lock().map(|mut ports| ports.remove(&pid)).ok();
+    }
+    Some(result)
+}
+
+/// The debugging port each browser pid was last found on, so a repeat call
+/// skips the `lsof` scan `CdpClient::find_port_for_pid` runs.
+fn cdp_ports() -> &'static Mutex<HashMap<i32, u16>> {
+    static PORTS: OnceLock<Mutex<HashMap<i32, u16>>> = OnceLock::new();
+    PORTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub async fn cdp_port_for_pid(pid: i32) -> Option<u16> {
+    if let Some(port) = cdp_ports()
+        .lock()
+        .ok()
+        .and_then(|ports| ports.get(&pid).copied())
+    {
+        return Some(port);
+    }
+    let port = CdpClient::find_port_for_pid(pid).await?;
+    if let Ok(mut ports) = cdp_ports().lock() {
+        ports.insert(pid, port);
+    }
+    Some(port)
+}
+
+/// Extract page text via the AX tree.
+async fn ax_text_fallback(pid: i32, window_id: u32) -> anyhow::Result<String> {
+    let result = tokio::task::spawn_blocking(move || {
+        platform_macos::ax::tree::walk_tree(pid, Some(window_id), None)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("AX walk task failed: {e}"))?;
+    let text = AXPageReader::extract_text(&result.tree_markdown);
+    if result.tree_markdown.contains("AXWebArea") {
+        Ok(text)
+    } else {
+        // No page in the tree: a page shows its content to accessibility only
+        // once its window has been on screen.
+        Ok(format!(
+            "No page content is readable in this window through accessibility (the page has \
+             not been shown on screen yet, and the browser's scripting isn't available). The \
+             window's other text:\n{text}"
+        ))
+    }
+}
+
+/// Query AX tree by CSS selector.
+async fn ax_query_fallback(
+    pid: i32,
+    window_id: u32,
+    selector: &str,
+) -> anyhow::Result<Vec<crate::browser::ax_page_reader::AXElement>> {
+    let sel = selector.to_owned();
+    let result = tokio::task::spawn_blocking(move || {
+        platform_macos::ax::tree::walk_tree(pid, Some(window_id), None)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("AX walk task failed: {e}"))?;
+    Ok(AXPageReader::query(&sel, &result.tree_markdown))
+}
+
+fn format_ax_elements(elements: &[crate::browser::ax_page_reader::AXElement]) -> String {
+    if elements.is_empty() {
+        return "No elements found.".to_owned();
+    }
+    let mut lines = Vec::new();
+    for el in elements {
+        let index_str = el.index.map(|i| format!("[{i}] ")).unwrap_or_default();
+        let title = if !el.title.is_empty() {
+            format!(" \"{}\"", el.title)
+        } else {
+            String::new()
+        };
+        let value = if !el.value.is_empty() {
+            format!(" = \"{}\"", el.value)
+        } else {
+            String::new()
+        };
+        let desc = if !el.description.is_empty() {
+            format!(" ({})", el.description)
+        } else {
+            String::new()
+        };
+        lines.push(format!("- {index_str}{}{title}{value}{desc}", el.role));
+    }
+    lines.join("\n")
+}
+
+/// Build a querySelectorAll JS snippet.
+fn build_query_selector_js(selector: &str, attributes: &[String]) -> String {
+    let escaped_sel = json_string(selector);
+    let attrs_js = if attributes.is_empty() {
+        "['tagName','textContent','href','id','class','type','value','placeholder','name']"
+            .to_owned()
+    } else {
+        let parts: Vec<String> = attributes.iter().map(|a| json_string(a)).collect();
+        format!("[{}]", parts.join(","))
+    };
+    format!(
+        r#"(function(){{
+  var sel = {escaped_sel};
+  var attrs = {attrs_js};
+  var els = Array.from(document.querySelectorAll(sel));
+  return JSON.stringify(els.map(function(el){{
+    var obj = {{}};
+    attrs.forEach(function(a){{ obj[a] = el[a] !== undefined ? el[a] : el.getAttribute(a); }});
+    obj.textContent = (el.textContent||'').trim().substring(0,200);
+    return obj;
+  }}));
+}})();"#
+    )
+}
+
+fn json_string(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    format!("\"{escaped}\"")
+}
+
+fn parse_click_probe(raw: &str) -> anyhow::Result<serde_json::Value> {
+    let first = serde_json::from_str::<serde_json::Value>(raw.trim()).map_err(|error| {
+        anyhow::anyhow!("click_element: could not parse coord JSON from probe {raw:?}: {error}")
+    })?;
+    match first {
+        serde_json::Value::String(inner) => serde_json::from_str(&inner).map_err(|error| {
+            anyhow::anyhow!(
+                "click_element: could not parse inner coord JSON from probe {raw:?}: {error}"
+            )
+        }),
+        other => Ok(other),
+    }
+}
+
+fn required_finite(value: &serde_json::Value, key: &str, raw: &str) -> anyhow::Result<f64> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "click_element: probe JSON missing/invalid required field '{key}' (raw: {raw:?})"
+            )
+        })
+}

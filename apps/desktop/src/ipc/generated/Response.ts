@@ -10,8 +10,7 @@ import type { Catalog } from "./Catalog";
 import type { CheckoutFile } from "./CheckoutFile";
 import type { CleanReport } from "./CleanReport";
 import type { CommitOutcome } from "./CommitOutcome";
-import type { ComputerAccess } from "./ComputerAccess";
-import type { ComputerPage } from "./ComputerPage";
+import type { ComputerUseStatus } from "./ComputerUseStatus";
 import type { ConventionsExport } from "./ConventionsExport";
 import type { Conversation } from "./Conversation";
 import type { ConversationActivity } from "./ConversationActivity";
@@ -94,7 +93,11 @@ provider: ProviderKind,
  * The task's checkout when the terminal starts elsewhere (a read-only Codex worker
  * starts in its scratch folder).
  */
-checkout?: string, } | { "method": "openSideChat", conversation: Conversation, } | { "method": "openTabChat", conversation: Conversation, } | { "method": "keepTabChats" } | { "method": "setTabPage" } | { "method": "writeTerminal" } | { "method": "resizeTerminal" } | { "method": "clearTerminal" } | { "method": "closeTerminal" } | { "method": "getComputerAccess", access: ComputerAccess, } | { "method": "allowComputerAccess", access: ComputerAccess, } | { "method": "openComputerSettings" } | { "method": "getDictation", dictation: DictationStatus, } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation", dictationId: string, } | { "method": "appendDictation" } | { "method": "finishDictation" } | { "method": "cancelDictation" } | { "method": "rateMessage" } | { "method": "getSessionDiff", 
+checkout?: string, } | { "method": "openSideChat", conversation: Conversation, } | { "method": "openTabChat", conversation: Conversation, } | { "method": "keepTabChats" } | { "method": "setTabPage" } | { "method": "writeTerminal" } | { "method": "resizeTerminal" } | { "method": "clearTerminal" } | { "method": "closeTerminal" } | { "method": "getComputerUse", computerUse: ComputerUseStatus, } | { "method": "grantComputerPermission" } | { "method": "checkComputerUse", computerUse: ComputerUseStatus, } | { "method": "confirmComputerCapture", computerUse: ComputerUseStatus, 
+/**
+ * Why screen capture didn't work, when it didn't.
+ */
+problem: string | null, } | { "method": "stopComputerSession" } | { "method": "getDictation", dictation: DictationStatus, } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation", dictationId: string, } | { "method": "appendDictation" } | { "method": "finishDictation" } | { "method": "cancelDictation" } | { "method": "rateMessage" } | { "method": "getSessionDiff", 
 /**
  * Absent for Chats and local-checkout sessions.
  */
@@ -110,7 +113,7 @@ diff: DiffStat | null, } | { "method": "pendingOvernightNotifications", notifica
 /**
  * The tasks stopped, oldest first.
  */
-taskIds: Array<TaskId>, } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "resolveWaiting" } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listComputerActions", page: ComputerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadItem", item: ThreadItem, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
+taskIds: Array<TaskId>, } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "resolveWaiting" } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadItem", item: ThreadItem, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
 /**
  * The copy to open.
  */

@@ -57,6 +57,10 @@ pub enum BridgeEvent {
         id: u32,
         update: brigadier_core::SearchUpdate,
     },
+    /// Computer use changed: permissions, setup or the agents using apps.
+    ComputerUse {
+        status: brigadier_core::ComputerUseStatus,
+    },
     /// The window was hidden or shown; pause sampling while hidden.
     WindowVisibility {
         visible: bool,
@@ -72,6 +76,8 @@ pub enum BridgeEvent {
     OpenFolderMenu,
     /// Brigadier › Uninstall Brigadier… was chosen.
     UninstallMenu,
+    /// The computer-use menu-bar item's "Computer use settings…" was chosen.
+    OpenComputerUseSettings,
     /// Brigadier › Settings… (⌘,) was chosen: open Settings, or leave it when it is open.
     SettingsMenu,
 }

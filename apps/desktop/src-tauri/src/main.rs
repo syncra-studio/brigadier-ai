@@ -12,6 +12,8 @@ mod browser;
 mod browser_grants;
 mod browser_import;
 mod browser_store;
+mod computer_menu;
+mod computer_setup;
 mod documents;
 mod intro;
 // WebKit's narrow unsafe boundary (the workspace denies it): see its header and the README.
@@ -401,6 +403,11 @@ fn notifier(app: tauri::AppHandle) -> Notify {
     })
 }
 
+/// Opens computer use's setup window for an agent.
+fn open_setup(app: tauri::AppHandle) -> bridge::OpenSetup {
+    Box::new(move || computer_setup::open(&app, false))
+}
+
 /// Whether a Brigadier window is shown and focused, for the notifications that show only
 /// while it is in the background.
 fn in_front(app: tauri::AppHandle) -> bridge::InFront {
@@ -642,7 +649,9 @@ fn main() {
                 launcher,
                 notifier(app.handle().clone()),
                 in_front(app.handle().clone()),
+                open_setup(app.handle().clone()),
             );
+            computer_menu::install(app.handle());
             app.manage(documents::Documents::default());
             app.manage(AppState {
                 bridge,
@@ -705,6 +714,14 @@ fn main() {
                 // Closing the window keeps Brigadier running in the menu bar.
                 api.prevent_close();
                 shell::close_main(window.app_handle());
+            } else if let WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == computer_setup::SETUP_WINDOW
+                && !shell::is_quitting()
+            {
+                // Closed, the setup window is only hidden, and opens again from there: a closed
+                // one would stay behind as a hidden window each time.
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -740,6 +757,12 @@ fn main() {
             reveal_path,
             set_running_chats,
             set_key_capture,
+            computer_setup::open_privacy_settings,
+            computer_menu::set_computer_menu,
+            computer_setup::open_computer_setup,
+            computer_setup::computer_setup_subscribe,
+            computer_setup::computer_setup_drag,
+            computer_setup::reveal_computer_helper,
             browser::browser_configure,
             browser::browser_open,
             browser::browser_navigate,

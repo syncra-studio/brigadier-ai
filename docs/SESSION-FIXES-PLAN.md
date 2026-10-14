@@ -624,14 +624,18 @@ noticed.
 - "Fix the typo in Settings" → no offer.
 
 ### Computer use: every role knows it, and live checks use it (added 2026-10-11)
+> **Removed 2026-10-13:** Brigadier's old computer use (its helper crate, the `computer` MCP server and its docs) is
+> gone, and so is everything below that relied on it. **Replaced:** a new bundled helper (`helpers/computer-use`) gives
+> the thread and every worker a `computer` MCP server and a `computer-use` skill; the tools named below are the old ones.
+>
 > **Changed by §11 (2026-10-14):** a UI worker no longer builds and checks the dev app in its own worktree. It uses the
 > project's scripted UI checks, and one `live_look` task looks at the dev build of the integrated tree, once the
-> session's full checks pass. Its worker launches that build itself with the computer tools on scratch data (the
-> helper still refuses any Brigadier bundle a worker didn't launch). The routing, the safety limits and the operate
-> tasks below stay; a change matched to a mockup keeps its own live capture.
+> session's full checks pass. Its worker launches that build itself with the computer tools on scratch data. The
+> thread keeps its own computer tools to a quick look. The routing, the safety limits and the operate tasks below
+> stay; a change matched to a mockup keeps its own live capture.
 
-The user's ask: Brigadier's macOS computer use (`crates/computer`, the `computer` MCP server's `apps`, `launch`,
-`observe`, `act`, `zoom`; `docs/COMPUTER-USE.md`, `COMPUTER-USE-PLAN.md`) must be known to the thread, the workers and
+The user's ask: Brigadier's macOS computer use (its helper crate, the `computer` MCP server's `apps`, `launch`,
+`observe`, `act`, `zoom`, and its docs) must be known to the thread, the workers and
 Brigadier's own briefs, and used where a live look settles a question.
 
 **Today.**
@@ -673,7 +677,7 @@ Brigadier's own briefs, and used where a live look settles a question.
    - Never the user's installed copy of the app or its data. Use the build this task made, with a scratch data
      folder when the app has one. For Brigadier itself: the dev identity (`Brigadier Dev.app`), never
      `/Applications/Brigadier.app` or `~/Library/Application Support/Brigadier`.
-   - The helper already refuses the host Brigadier and the never-touched apps (`docs/COMPUTER-USE.md` §Safety). It
+   - The helper already refuses the host Brigadier and the never-touched apps (its docs' Safety section). It
      also gains a refusal for any Brigadier bundle the worker didn't launch.
    - Act only on windows the worker launched or the task names, as operate tasks already do.
 6. **Open sessions** hear the thread's change as a versioned note (§6).
@@ -1539,13 +1543,13 @@ count when the window is narrow.
     while it reviewed, it reviews again with the current ones; if they change again, there is no verdict (the
     user's card).
   - No thread or worker instruction changed, so there is no revision note; `CONTRACT` is unchanged.
-- **Live, on a dev build (W34) with Brigadier's own `brigadier-computer`** (cmux computer use was down all day):
+- **Live, on a dev build (W34) with Brigadier's own computer-use helper** (the other computer-use tool was down all day):
   - Phase 4's late "Update:" line was seen. A review that came in late found two findings; the user kept the code;
     the thread wrote an "Update:" row under its answer.
   - CI re-push: red → fix → re-push went through with no card. Once the watch passed, the next push raised a card.
   - The slot was seen in Normal, Compact, at 900 pt (both rows fit) and folded ("2 Merging… · 1 more") in the
     thread beside the side panel. Cancel was clicked in the app.
-- **`brigadier-computer run`:** a script may drive an app it opens itself, a Brigadier build included.
+- **The helper's `run`:** a script may drive an app it opens itself, a Brigadier build included.
 - **Dialogs in a hidden window** (`lib/pageHidden.ts`, found by the bold-header check):
   - A hidden or fully covered macOS window runs no animation frames. A Radix exit animation never ended there, so
     the window froze on the closed dialog's overlay until it came to the front. `backgroundThrottling: "disabled"`
@@ -1609,7 +1613,7 @@ the mockup in it, and of the final side-by-side. A thread open since phase 5 off
   - a send in flight is the session's, so a tab opened again mid-send can't resend or lose notes;
   - each write of a worker's file gets its own temporary name;
   - no Comment on a mockup whose worker has ended (its notes would have nowhere to go).
-- **Live, on dev builds driven by Brigadier's own `brigadier-computer`:**
+- **Live, on dev builds driven by Brigadier's own computer-use helper:**
   - **Continuity:** a session opened on a c4fa9116 build was told revision 15. Reopened on this tree, its next
     message went to the same native session with one `[instructions]` note (revision 16's text, no new role
     instructions), and the thread offered a mockup.
@@ -1774,7 +1778,7 @@ the project's scripted UI checks. Instruction changes: `WORKER_CHECKS`, the writ
 **Thread.** It lands each report as soon as it judges it; a clean rebase lands at once (the self-check round trip after
 a rebase is gone; a merge worker sent back still lands on its own after its next report). Briefs ask for the checks of
 each part only. `[checks failed …]` goes back as one fix task (role fix, subject the task that broke it), which resumes
-that worker's session; `[checks couldn't run …]` is fixed, then `rerun_checks`. Open sessions hear it as revision 22,
+that worker's session; `[checks couldn't run …]` is fixed, then `rerun_checks`. Open sessions hear it as revision 23,
 which replaces revisions 6 (the full suite before the report) and 15 (each UI worker's own live check).
 
 **Engine** (`M/integrated_checks.rs`, plumbing only; the thread judges who broke what):

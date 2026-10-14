@@ -72,7 +72,7 @@ pub enum TaskKind {
     Merge,
     /// Runs the project's checks.
     Verify,
-    /// Operates apps on the user's Mac through the computer tools; writes nothing that lands.
+    /// Operates apps on the user's Mac; writes nothing that lands.
     Operate,
 }
 
@@ -487,51 +487,6 @@ pub struct StoredOutput {
     #[serde(default)]
     pub shown_bytes: Option<u64>,
     pub at_ms: i64,
-}
-
-/// One computer-use action of a worker (COMPUTER-USE-PLAN.md §5): the session's action log.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ComputerAction {
-    /// The batch (one `act` call) it ran in; with `index`, the action's id.
-    #[serde(default)]
-    pub batch: String,
-    /// Its place in the batch, from 0. Every action of a batch has an event, the ones that
-    /// failed before acting and the ones skipped after a failure too.
-    #[serde(default)]
-    pub index: u32,
-    pub at_ms: i64,
-    /// `click`, `type`, `menu`…
-    pub kind: String,
-    /// The app's name.
-    #[serde(default)]
-    pub app: String,
-    /// The window's title when it acted.
-    pub app_window: String,
-    /// What it aimed at, in words: `button "Save"`, a menu path, a key chord; none for a
-    /// point (the image marks it).
-    #[serde(default)]
-    pub target: Option<String>,
-    pub pid: i32,
-    pub window: u32,
-    /// `done`, `failed` or `skipped`.
-    pub status: String,
-    /// How it was delivered: `element`, `background`, `background_activated`, `foreground`.
-    pub rung: Option<String>,
-    /// `confirmed`, `unverified`, `no_change`, `background_unavailable`.
-    pub effect: Option<String>,
-    /// The error code, when it failed or was skipped.
-    pub error: Option<String>,
-    /// The error's detail.
-    #[serde(default)]
-    pub detail: Option<String>,
-    pub dispatch_ms: f64,
-    /// The whole record as the engine wrote it (JSON), typed text left out.
-    pub record: String,
-    /// The batch's screenshot with every predicted point marked, in the blob store; on the
-    /// batch's first action.
-    #[serde(default)]
-    pub image: Option<String>,
 }
 
 /// A file the session's thread read with its own tools (THREAD-PLAN.md Q8 lever 1).
@@ -1017,15 +972,7 @@ pub enum ApprovalSubject {
         diff_stat: DiffStat,
     },
     /// An action the orchestrator asked the user to approve.
-    Action {
-        action: String,
-        details: String,
-        /// A running computer-use call waits on it: the answer goes to that call, and the
-        /// card expires with it.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        #[ts(skip)]
-        live: bool,
-    },
+    Action { action: String, details: String },
     /// Ask for approval: start a phase from its lead's outline ("Implement this plan?").
     Outline {
         task_id: TaskId,
@@ -2052,10 +1999,11 @@ pub enum WaitingSource {
         run_id: crate::model::OvernightRunId,
         task_id: Option<TaskId>,
     },
-    /// A worker's computer use found a system permission missing: one item per conversation,
-    /// over once Brigadier reads both permissions granted (computer use's Settings page, the
-    /// item's own card, or a worker's next call that works).
-    Computer,
+    /// A source Brigadier no longer has (a removed feature's): read back as this from old
+    /// data, and never listed.
+    #[serde(other)]
+    #[ts(skip)]
+    Retired,
 }
 
 /// Something only the user can do, on an overnight run's "Waiting on you" list until it is

@@ -58,6 +58,17 @@ run pnpm build
 run pnpm --filter @brigadier/desktop stage-sidecar --debug
 run cargo clippy --locked --workspace --all-targets -- -D warnings
 run cargo test --locked --workspace --lib --bins --tests
+if [ "$(uname)" = Darwin ]; then
+  # The computer-use helper is its own workspace (macOS only); its output sits beside the main
+  # build's, where stage-sidecar puts it.
+  (
+    export CARGO_TARGET_DIR="$PWD/target/computer-use"
+    cd helpers/computer-use
+    run cargo fmt --all --check
+    run cargo clippy --locked --workspace --all-targets -- -D warnings
+    run cargo test --locked --workspace
+  )
+fi
 run pnpm typecheck
 run pnpm lint
 run pnpm test
@@ -69,7 +80,7 @@ if $cross; then
     -p brigadier-core -p brigadier-store -p brigadier-ipc -p brigadier-providers
     -p brigadier-brain -p brigadier-index -p brigadier-router -p brigadier-review
     -p brigadier-git -p brigadier-registry -p brigadier-sandbox -p brigadier-mcp-server
-    -p brigadier-computer -p brigadier-browser-data
+    -p brigadier-browser-data
   )
   run cargo-zigbuild clippy --locked --target x86_64-unknown-linux-gnu "${crates[@]}" \
     --all-targets -- -D warnings

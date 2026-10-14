@@ -25,12 +25,12 @@ test("settings and its pages show on the first frame, data filling in where it g
   assert.deepEqual(seen.settings, { nav: true, backToApp: false, title: "General" });
   // The usage read made at idle: Usage opens filled in.
   assert.deepEqual(seen.usage, { title: "Usage", data: true, reading: false });
-  // The permissions read (which starts the helper) still on its way: the page and its rows
-  // show, saying it is checking; then the answer fills in.
+  // The permissions read still on its way: the page and its rows show, its setup line saying
+  // it is checking; then the answer fills in.
   assert.equal(seen.computerUse.title, "Computer use");
   assert.equal(seen.computerUse.readWaiting, true);
-  assert.match(seen.computerUse.status ?? "", /^Checking permissions/);
-  assert.match(seen.computerUseRead ?? "", /^Finish setup/);
+  assert.match(seen.computerUse.status ?? "", /^Checking/);
+  assert.match(seen.computerUseRead ?? "", /^Almost done: Screen Recording/);
   // The first listing on its way: rows holding the list's place, no loading line.
   assert.deepEqual(seen.importFirst, { title: "Import Browser Data", placeholder: true, loadingLine: false, rows: 0, listWaiting: true });
   // Opened again: the browsers as last listed at once, while it lists them again.

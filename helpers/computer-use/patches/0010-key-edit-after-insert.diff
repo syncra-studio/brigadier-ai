@@ -1,0 +1,59 @@
+Why: a host switch (document_edit::set_key_edit_after_insert) for the net-zero key edit after an AXSelectedText insert into a document window, so an embedding app whose inserts already mark the document edited can keep ⌘Z undoing the insert itself.
+
+After an AXSelectedText insert into a document window, type_text sends a
+space and a backspace so the document registers the change. In TextEdit on
+macOS 27 the insert already goes through the text view's edit model: the
+document is marked modified without the key edit, and ⌘Z reverts the insert.
+The key edit then becomes its own undo step on top, so ⌘Z undoes only the key
+edit and the agent's change can no longer be undone. The switch is on by
+default (upstream behaviour unchanged); whole-value writes (set_value) always
+keep the key edit. Upstreamable as is.
+
+diff --git a/crates/platform-macos/src/document_edit.rs b/crates/platform-macos/src/document_edit.rs
+index 674647e5..e6f4b456 100644
+--- a/crates/platform-macos/src/document_edit.rs
++++ b/crates/platform-macos/src/document_edit.rs
+@@ -14,9 +14,28 @@
+ //! stays false for autosave-in-place documents even after a typed edit (VM
+ //! check, TextEdit, 11 Oct 2026); TextEdit's autosave writing the new text is
+ //! the evidence.
++//!
++//! An embedding app can turn the key edit off for `AXSelectedText` inserts
++//! ([`set_key_edit_after_insert`]) where it finds the insert already goes
++//! through the text view's edit model: the key edit is then a second undo
++//! step on top of the insert, and ⌘Z undoes only the key edit.
+ 
++use std::sync::atomic::{AtomicBool, Ordering};
+ use std::time::Duration;
+ 
++static KEY_EDIT_AFTER_INSERT: AtomicBool = AtomicBool::new(true);
++
++/// Whether an `AXSelectedText` insert into a document window is followed by
++/// the net-zero key edit. On by default; whole-value writes always get it.
++pub fn set_key_edit_after_insert(on: bool) {
++    KEY_EDIT_AFTER_INSERT.store(on, Ordering::Relaxed);
++}
++
++/// See [`set_key_edit_after_insert`].
++pub fn key_edit_after_insert() -> bool {
++    KEY_EDIT_AFTER_INSERT.load(Ordering::Relaxed)
++}
++
+ use crate::ax::bindings::{
+     copy_element_attr, copy_string_attr, AXUIElementRef, AXUIElementSetAttributeValue,
+ };
+diff --git a/crates/platform-macos/src/tools/type_text.rs b/crates/platform-macos/src/tools/type_text.rs
+index fd2455e1..9efb46c6 100644
+--- a/crates/platform-macos/src/tools/type_text.rs
++++ b/crates/platform-macos/src/tools/type_text.rs
+@@ -1530,7 +1530,9 @@ fn type_text_blocking(
+             && target_in_web_area(pid, Some((element as usize, idx_opt)), window_id);
+         // An AX insert bypasses NSTextView's edit model, so a document is
+         // not marked edited and would never save the new text (DS-07).
+-        let document = if ax_progress == Some(TypedProgress::Complete) {
++        let document = if ax_progress == Some(TypedProgress::Complete)
++            && crate::document_edit::key_edit_after_insert()
++        {
+             unsafe { crate::document_edit::ensure_marked_after_ax_write(pid, element, false) }
+         } else {
+             crate::document_edit::DocumentEdited::NotADocument

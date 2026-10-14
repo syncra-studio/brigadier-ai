@@ -351,6 +351,12 @@ impl Claude {
                 args.push(real.display().to_string());
             }
         }
+        // Brigadier's own skills, as plugins: they load beside the project's settings without
+        // reading the user's.
+        for plugin in &spec.skill_plugins {
+            args.push("--plugin-dir".into());
+            args.push(plugin.display().to_string());
+        }
         if let Some(model) = &spec.model {
             args.push("--model".into());
             args.push(model.clone());
@@ -1969,6 +1975,7 @@ mod tests {
             append_system_prompt: None,
             mcp_servers: Vec::new(),
             tools: ToolSet::Lean,
+            skill_plugins: Vec::new(),
             add_dirs: Vec::new(),
             env: Vec::new(),
             unset_env: Vec::new(),
@@ -2163,6 +2170,7 @@ mod tests {
             access,
             auto_review,
             tools: ToolSet::Thread,
+            skill_plugins: Vec::new(),
             add_dirs: vec![ws.clone()],
             allowed_models: None,
             ..spec(cwd.path(), &[])
@@ -2441,6 +2449,7 @@ mod tests {
                 deny_read: Vec::new(),
                 unix_sockets: Vec::new(),
             },
+            skill_plugins: Vec::new(),
             add_dirs: vec![checkout.clone()],
             ..spec(cwd.path(), &["claude-sonnet-5"])
         };
@@ -2572,6 +2581,7 @@ mod tests {
                 deny_read: Vec::new(),
                 unix_sockets: Vec::new(),
             },
+            skill_plugins: Vec::new(),
             add_dirs: vec![checkout.clone()],
             ..spec(cwd.path(), &["claude-sonnet-5"])
         };

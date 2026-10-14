@@ -14,11 +14,12 @@ members = [
   "crates/sandbox",
   "crates/mcp-server",
   "crates/daemon",
-  "crates/computer",
   "crates/browser-data",
   "apps/desktop/src-tauri",
 ]
 default-members = ["crates/*"]
+# The computer-use helper is its own workspace, built by the desktop staging step.
+exclude = ["helpers/computer-use"]
 
 [workspace.package]
 version = "0.1.0"
@@ -40,7 +41,6 @@ brigadier-review = { path = "crates/review" }
 brigadier-mcp-server = { path = "crates/mcp-server" }
 brigadier-brain = { path = "crates/brain" }
 brigadier-index = { path = "crates/index" }
-brigadier-computer = { path = "crates/computer", default-features = false }
 brigadier-browser-data = { path = "crates/browser-data" }
 
 anyhow = "1.0.104"

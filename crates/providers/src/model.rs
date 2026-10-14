@@ -967,6 +967,10 @@ pub struct SessionSpec {
     /// Folders besides `cwd` the session works in (a thread's workspace): Claude gets each as
     /// `--add-dir`. They are writable where the working directory is ([`Self::access_with_dirs`]).
     pub add_dirs: Vec<PathBuf>,
+    /// Brigadier-owned skill plugins: each folder holds `skills/<name>/SKILL.md` (and a
+    /// `.claude-plugin/plugin.json`). Claude loads each with `--plugin-dir`; Codex adds each
+    /// one's `skills` folder as an extra skills root. The user's own skills are unaffected.
+    pub skill_plugins: Vec<PathBuf>,
     /// Extra environment for the CLI and everything it starts (the process tag, TMPDIR).
     pub env: Vec<(String, String)>,
     /// Variables taken out of the CLI's environment, and so out of everything it starts (an

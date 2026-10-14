@@ -1,0 +1,166 @@
+Why: Space lookups only where they are read: a one-window Space check asks about that window only, and the exact-target check and the running-app list skip them, so typing into an app takes about 0.1 s less with a hundred windows open.
+
+The window server answers "which Spaces is this window on" one window at a
+time (plus one more round trip for its display's current Space), so
+all_windows() costs two round trips per window open on the Mac: 15-25 ms
+with about a hundred windows. window_on_current_space_by_id and
+window_space_view_by_id ran a whole enumeration to read one window's fields,
+and gather_background_facts and list_running_apps enumerated with Space
+fields they never read. One type_text into an off-Space TextEdit window ran
+about five such enumerations. Results are unchanged: the one-window functions
+return the same fields for that window, and the two Space-blind callers read
+only ids, owners, bounds and on-screen state. Upstreamable as is.
+
+diff --git a/crates/platform-macos/src/apps/mod.rs b/crates/platform-macos/src/apps/mod.rs
+index c2af7f75..c62d09e9 100644
+--- a/crates/platform-macos/src/apps/mod.rs
++++ b/crates/platform-macos/src/apps/mod.rs
+@@ -219,7 +219,7 @@ fn list_running_apps_from_process_table() -> Vec<AppInfo> {
+             .map(|w| w.pid)
+             .find(|p| live.contains(p))
+     });
+-    let windowed: std::collections::HashSet<i32> = crate::windows::all_windows()
++    let windowed: std::collections::HashSet<i32> = crate::windows::all_windows_without_spaces()
+         .into_iter()
+         .map(|w| w.pid)
+         .collect();
+diff --git a/crates/platform-macos/src/ax/exact_target.rs b/crates/platform-macos/src/ax/exact_target.rs
+index 1b606063..7694412e 100644
+--- a/crates/platform-macos/src/ax/exact_target.rs
++++ b/crates/platform-macos/src/ax/exact_target.rs
+@@ -17,7 +17,7 @@ use super::bindings::{
+     copy_string_attr, focused_element_of_pid, AXUIElementCreateApplication, AXUIElementRef,
+ };
+ use super::snapshot::RetainedElement;
+-use crate::windows::{all_windows, resolve_window_owner, WindowOwner};
++use crate::windows::{all_windows_without_spaces, resolve_window_owner, WindowOwner};
+ 
+ /// Bounded `AXParent` ascent used when an element does not expose `AXWindow`.
+ const MAX_ANCESTRY_DEPTH: usize = 40;
+@@ -277,13 +277,15 @@ pub fn gather_background_facts(
+     let competing_keyboard_destinations = count_competing_keyboard_destinations(
+         pid,
+         window_id,
+-        all_windows().iter().map(|window| WindowServerRow {
+-            pid: window.pid,
+-            window_id: window.window_id,
+-            visible: window.is_on_screen
+-                && window.bounds.width >= 2.0
+-                && window.bounds.height >= 2.0,
+-        }),
++        all_windows_without_spaces()
++            .iter()
++            .map(|window| WindowServerRow {
++                pid: window.pid,
++                window_id: window.window_id,
++                visible: window.is_on_screen
++                    && window.bounds.width >= 2.0
++                    && window.bounds.height >= 2.0,
++            }),
+         &records,
+         target.is_some() && focused_window_id == Some(window_id),
+     );
+diff --git a/crates/platform-macos/src/windows.rs b/crates/platform-macos/src/windows.rs
+index 461228df..075fef9e 100644
+--- a/crates/platform-macos/src/windows.rs
++++ b/crates/platform-macos/src/windows.rs
+@@ -107,7 +107,50 @@ enum LayerFilter {
+     AnyLayer,
+ }
+ 
++/// Which windows of a layer-0 enumeration get their Space fields. The window
++/// server answers that one window at a time, so each costs a round trip.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum SpacesOf {
++    Every,
++    One(u32),
++    NoWindow,
++}
++
+ fn enumerate_windows(options: u32, layers: LayerFilter) -> WindowEnumeration {
++    enumerate_windows_with_spaces_of(options, layers, SpacesOf::Every)
++}
++
++/// [`all_windows`] without the Space fields (`None`), for callers that read
++/// only ids, owners, bounds and on-screen state.
++pub(crate) fn all_windows_without_spaces() -> Vec<WindowInfo> {
++    enumerate_windows_with_spaces_of(
++        kCGWindowListExcludeDesktopElements,
++        LayerFilter::ZeroOnly,
++        SpacesOf::NoWindow,
++    )
++    .windows
++}
++
++/// The layer-0 window `window_id` with its Space fields, looked up for that
++/// window only.
++fn layer0_window_with_spaces(window_id: u32) -> Option<WindowInfo> {
++    enumerate_windows_with_spaces_of(
++        kCGWindowListExcludeDesktopElements,
++        LayerFilter::ZeroOnly,
++        SpacesOf::One(window_id),
++    )
++    .windows
++    .into_iter()
++    .find(|w| w.window_id == window_id)
++}
++
++/// [`enumerate_windows`] where only the windows `spaces_of` names get their
++/// Space fields (the others keep `None`).
++fn enumerate_windows_with_spaces_of(
++    options: u32,
++    layers: LayerFilter,
++    spaces_of: SpacesOf,
++) -> WindowEnumeration {
+     use core_foundation::{
+         array::CFArray,
+         base::{CFGetTypeID, CFTypeRef, TCFType},
+@@ -118,7 +161,7 @@ fn enumerate_windows(options: u32, layers: LayerFilter) -> WindowEnumeration {
+     };
+     use std::os::raw::c_void;
+ 
+-    let space_query = (layers == LayerFilter::ZeroOnly)
++    let space_query = (layers == LayerFilter::ZeroOnly && spaces_of != SpacesOf::NoWindow)
+         .then(crate::input::skylight::SpaceQuery::new)
+         .flatten();
+     let current_space_id = space_query
+@@ -260,6 +303,9 @@ fn enumerate_windows(options: u32, layers: LayerFilter) -> WindowEnumeration {
+             };
+         };
+         for window in &mut results {
++            if matches!(spaces_of, SpacesOf::One(id) if id != window.window_id) {
++                continue;
++            }
+             let space_ids = query.window_space_ids(window.window_id);
+             let display_space_id = space_ids
+                 .as_ref()
+@@ -377,10 +423,7 @@ pub fn window_info_by_id(window_id: u32) -> Option<WindowInfo> {
+ /// Whether `window_id` is on the current Space of its display. `None` when
+ /// WindowServer does not know the window or Space membership is unreadable.
+ pub fn window_on_current_space_by_id(window_id: u32) -> Option<bool> {
+-    all_windows()
+-        .into_iter()
+-        .find(|w| w.window_id == window_id)?
+-        .on_current_space
++    layer0_window_with_spaces(window_id)?.on_current_space
+ }
+ 
+ /// WindowServer's Space and on-screen view of one layer-0 window.
+@@ -395,13 +438,10 @@ pub(crate) struct WindowSpaceView {
+ /// [`WindowSpaceView`] of `window_id`, or `None` when WindowServer does not
+ /// list it as a layer-0 window.
+ pub(crate) fn window_space_view_by_id(window_id: u32) -> Option<WindowSpaceView> {
+-    all_windows()
+-        .into_iter()
+-        .find(|w| w.window_id == window_id)
+-        .map(|w| WindowSpaceView {
+-            on_current_space: w.on_current_space,
+-            is_on_screen: w.is_on_screen,
+-        })
++    layer0_window_with_spaces(window_id).map(|w| WindowSpaceView {
++        on_current_space: w.on_current_space,
++        is_on_screen: w.is_on_screen,
++    })
+ }
+ 
+ /// Look up a window's bounds by its CGWindowID.

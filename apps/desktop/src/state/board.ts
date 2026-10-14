@@ -10,7 +10,6 @@ import type {
   ApprovalSubject,
   BackgroundRun,
   Compaction,
-  ComputerAction,
   ContextUsage,
   ConversationView,
   Decision,
@@ -132,19 +131,11 @@ export type Board = {
   diffs: Record<string, DiffStat>;
   /** Transcripts of the worker cards opened so far, by task id. */
   transcripts: Record<string, WorkerTranscript>;
-  /** The computer actions of the workers opened so far, by task id (their timelines). */
-  computer: Record<string, ComputerLog>;
   /** A Chat's Memory chips: the latest change per memory, in the order they were saved. */
   memories: MemoryChange[];
   /** Its messages to and from other sessions, by message id (SESSION-MESSAGING-PLAN.md §6). */
   peerMessages: Record<string, PeerMessage>;
 };
-
-/**
- * A worker's computer actions, oldest first, as read so far and kept up by live events.
- * `earlier`: where the older page starts, when there is one.
- */
-export type ComputerLog = { actions: ComputerAction[]; earlier: number | null; loading: boolean };
 
 /** A worker's latest reply, as its status line in the Workers panel. */
 export type WorkerSummary = { text: string; atMs: number };
@@ -296,7 +287,6 @@ export function emptyBoard(conversationId: string): Board {
     edits: {},
     diffs: {},
     transcripts: {},
-    computer: {},
     memories: [],
     peerMessages: {},
   };
@@ -334,7 +324,6 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "memoryUpdated",
   "decidedForYou",
   "waitingOnYou",
-  "computerActed",
   "waitingResolved",
   "peerMessageSent",
   "peerMessageReceived",
@@ -407,7 +396,6 @@ export function boardFromView(
     edits: keep?.edits ?? {},
     diffs: keep?.diffs ?? {},
     transcripts: keep?.transcripts ?? {},
-    computer: keep?.computer ?? {},
     memories: view.memories,
     // A daemon from before messages between sessions sends none.
     peerMessages: Object.fromEntries((view.peerMessages ?? []).map((message) => [message.messageId, message])),
@@ -448,17 +436,6 @@ function activityOf(event: ProviderEvent): string | null | undefined {
 function firstLine(text: string): string {
   const line = text.trimStart().split("\n", 1)[0] ?? "";
   return line.length > 120 ? `${line.slice(0, 120)}…` : line;
-}
-
-/** `actions` with `action` in its place (by time, then by index in its batch), once: its batch and index identify it. */
-export function withAction(actions: readonly ComputerAction[], action: ComputerAction): ComputerAction[] {
-  const same = (other: ComputerAction) => other.batch === action.batch && other.index === action.index && other.atMs === action.atMs;
-  if (actions.some(same)) return actions as ComputerAction[];
-  // A batch's failed and skipped actions can share a millisecond.
-  const before = (other: ComputerAction) =>
-    other.atMs < action.atMs || (other.atMs === action.atMs && (other.batch !== action.batch || other.index < action.index));
-  const at = actions.findLastIndex(before) + 1;
-  return [...actions.slice(0, at), action, ...actions.slice(at)];
 }
 
 function appendEntry(transcript: WorkerTranscript, entry: RawEntry): WorkerTranscript {
@@ -680,12 +657,6 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
           ? board.memories.map((entry) => (entry.nodeId === memory.nodeId ? memory : entry))
           : [...board.memories, memory],
       };
-    }
-    case "computerActed": {
-      const log = board.computer[event.taskId];
-      if (!log) return board;
-      const actions = withAction(log.actions, event.action);
-      return actions === log.actions ? board : { ...board, computer: { ...board.computer, [event.taskId]: { ...log, actions } } };
     }
     case "workerEvent": {
       const { taskId } = event;

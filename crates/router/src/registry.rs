@@ -86,6 +86,11 @@ pub struct RegistryModel {
     #[serde(rename = "match")]
     pub matches: ModelMatch,
     pub tier: QualityTier,
+    /// The only categories it takes, each with the tier it counts as there (for the quality
+    /// floor); absent: every category, at `tier`. So a small model kept for one job (operating
+    /// apps on screen) meets that job's floor and is never chosen for anything else.
+    #[serde(default)]
+    pub only: Option<BTreeMap<TaskCategory, QualityTier>>,
     /// Effort levels it accepts, lowest first. Clamped to `low`..`high` when read.
     #[serde(default)]
     pub efforts: Vec<String>,
@@ -214,6 +219,9 @@ pub struct MergedModel {
     /// a family names. Absent for a model of no known family.
     pub family: Option<String>,
     pub tier: QualityTier,
+    /// The only categories it takes, with the tier it counts as in each (the registry's
+    /// `only`); `None`: every category, at `tier`.
+    pub only: Option<BTreeMap<TaskCategory, QualityTier>>,
     pub strengths: BTreeMap<TaskCategory, f64>,
     pub area_strengths: BTreeMap<Area, f64>,
     pub efforts: Vec<String>,
@@ -239,6 +247,14 @@ pub enum RatingProvenance {
 }
 
 impl MergedModel {
+    /// The tier it counts as for `category`, or `None` when it doesn't take that category.
+    pub fn tier_for(&self, category: TaskCategory) -> Option<QualityTier> {
+        match &self.only {
+            Some(only) => only.get(&category).copied(),
+            None => Some(self.tier),
+        }
+    }
+
     /// Only the provider's verified resolution groups aliases. Family keys never identify
     /// a concrete model, and a later alias resolution cannot move an existing patch.
     pub fn rating_identity(&self) -> String {

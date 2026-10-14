@@ -14,8 +14,6 @@ import {
   useState,
 } from "react";
 
-import { ComputerTimeline } from "@/app/conversation/ComputerTimeline";
-import { foldComputer } from "@/app/conversation/computerSteps";
 import { FileList } from "@/app/conversation/FileList";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { workerDone, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
@@ -265,19 +263,14 @@ export function WorkerThread({ task }: { task: Task }) {
   const [folding] = useState(() => new IncrementalFold());
   const raw = transcript?.entries ?? NO_ENTRIES;
   const failed = task.state === "failed";
-  // Its computer calls fold into one disclosure, the computer timeline.
-  const { entries, calls } = useMemo(
+  const entries = useMemo(
     () =>
-      foldComputer(
-        threadEntries(folding.fold(raw)).filter(
-          (entry) => !(entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user") && !workerCliNotice(entry, failed),
-        ),
+      threadEntries(folding.fold(raw)).filter(
+        (entry) => !(entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user") && !workerCliNotice(entry, failed),
       ),
     [folding, raw, failed],
   );
   const working = workerWorking(task);
-  const computerLive = working && calls.some((call) => call.status === "inProgress");
-  const looks = calls.filter((call) => call.kind === "tool" && /(apps|observe|zoom)$/.test(call.name)).length;
   // The prompt and early steps belong to the same previous-messages disclosure.
   const tail = entries.at(-1);
   // The report is the answer when there is one; a message after it ("Reported.") stays a message.
@@ -326,7 +319,7 @@ export function WorkerThread({ task }: { task: Task }) {
     if (pinned.current) element.scrollTop = element.scrollHeight;
   }, [entries, working]);
 
-  const now = working && !computerLive ? liveLabel(entries) : null;
+  const now = working ? liveLabel(entries) : null;
   return (
     <div
       ref={scrollRef}
@@ -360,7 +353,6 @@ export function WorkerThread({ task }: { task: Task }) {
           </p>
         )}
         {recent.map((item, index) => show(item, previous.length + index))}
-        {calls.length > 0 && <ComputerTimeline conversationId={task.conversationId} taskId={task.id} live={computerLive} looks={looks} />}
         {thinking && <ThinkingRow text={thinking.text} live />}
         {now && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
         {!working && !workerDone(task) && <p className="text-foreground/65 text-sm">{workerPreview(task)}</p>}

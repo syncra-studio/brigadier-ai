@@ -23,7 +23,7 @@ import { account, OVERVIEWS, window as quotaWindow } from "@/fixtures/agents";
 import type {
   AccountRef,
   AccountUsage,
-  ComputerAccess,
+  ComputerUseStatus,
   Conversation,
   ImportSource,
   ProviderKind,
@@ -68,7 +68,7 @@ const conversations = Object.fromEntries(
 useApp.setState((state) => ({
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
-  settings: { ...state.settings, browserEnabled: true },
+  settings: { ...state.settings, browserEnabled: true, computerUse: true },
   providers: { ...state.providers, view: { providers: OVERVIEWS, sessions: [], fixtures: [] } },
   conversations,
   selection: { type: "conversation", id: "open" },
@@ -109,7 +109,7 @@ const USAGE: UsageView = {
   // The models' plain descriptions on Providers come from here.
   models: [{
     provider: "claude", id: "opus", resolved: null, displayName: "Opus 5.5", status: "curated",
-    ratingProvenance: "curated", defaultEffort: {}, registryKey: "opus", family: "opus", tier: "frontier",
+    ratingProvenance: "curated", defaultEffort: {}, registryKey: "opus", family: "opus", tier: "frontier", only: null,
     strengths: {}, areaStrengths: {}, efforts: [], contextWindow: null, knowledgeCutoff: null,
     modalities: { input: [], output: [], tools: [] }, legacy: false, excluded: false, trial: null, research: null,
   }],
@@ -118,7 +118,9 @@ const USAGE: UsageView = {
   registry: { revision: 1, updated: "2026-10-01", source: "bundled", models: 0, fetchedAtMs: null, checkedAtMs: null, error: null } as UsageView["registry"],
 };
 
-const ACCESS: ComputerAccess = { available: true, accessibility: true, screenRecording: false, restarting: false, problem: null };
+const COMPUTER_USE: ComputerUseStatus = {
+  available: true, accessibility: "granted", screenRecording: "notGranted", current: true, setup: { state: "missing" }, sessions: [],
+};
 
 const SOURCES: ImportSource[] = ["Safari", "Google Chrome", "Arc", "Firefox"].map((name) => ({
   key: name.toLowerCase().replace(/ /g, "-"),
@@ -149,7 +151,7 @@ const STORAGE: StorageReport = {
 
 /**
  * Each request's delay, in ms: a daemon round trip for most, longer where the work behind the
- * answer is (a usage read with its forecasts, the helper starting on its first permissions read,
+ * answer is (a usage read with its forecasts, the first permissions read asking the helper,
  * other browsers' profiles and icons, a walk of the data folder).
  */
 const base = Number(params.get("delay") ?? 25);
@@ -160,8 +162,8 @@ function delayOf(method: string): number {
       return 80;
     case "getUsageActivity":
       return 120;
-    case "getComputerAccess":
-      // The first read starts the helper.
+    case "getComputerUse":
+      // The first read asks the helper.
       return accessReads++ === 0 ? 400 : 40;
     case "browser_import_sources":
       return 250;
@@ -196,8 +198,8 @@ function answer(method: string, req: Request | null): unknown {
       return { method: req.method, routes: [] };
     case "listMemories":
       return { method: req.method, memories: [{ id: "m1" }, { id: "m2" }] };
-    case "getComputerAccess":
-      return { method: req.method, access: ACCESS };
+    case "getComputerUse":
+      return { method: req.method, computerUse: COMPUTER_USE };
     case "scanStorage":
       return { method: req.method, report: STORAGE };
     default:
@@ -271,11 +273,11 @@ async function drive(): Promise<string> {
   await sleep(1500);
   const usage = await open("Usage", () => ({ data: mainText().includes("% left"), reading: mainText().includes("Reading usage") }));
   const computerUse = await open("Computer use", () => ({
-    status: document.querySelector('[data-slot="computer-use-status"] [role="status"]')?.textContent ?? null,
-    readWaiting: waiting("getComputerAccess"),
+    status: document.querySelector('[data-slot="setup-line"]')?.textContent ?? null,
+    readWaiting: waiting("getComputerUse"),
   }));
   await sleep(1000);
-  const computerUseRead = document.querySelector('[data-slot="computer-use-status"] [role="status"]')?.textContent ?? null;
+  const computerUseRead = document.querySelector('[data-slot="setup-line"]')?.textContent ?? null;
   const importFirst = await open("Import Browser Data", () => ({
     placeholder: Boolean(document.querySelector('[data-slot="import-listing"]')),
     loadingLine: mainText().includes("Loading…"),

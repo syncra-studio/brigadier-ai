@@ -33,7 +33,12 @@ registryKey: string | null,
  * Its family word (`opus`, `sol`), the registry's `match.family`: what a user rule about
  * a family names. Absent for a model of no known family.
  */
-family: string | null, tier: QualityTier, strengths: { [key in TaskCategory]?: number }, areaStrengths: { [key in Area]?: number }, efforts: Array<string>, contextWindow: number | null, knowledgeCutoff: string | null, modalities: Modalities, 
+family: string | null, tier: QualityTier, 
+/**
+ * The only categories it takes, with the tier it counts as in each (the registry's
+ * `only`); `None`: every category, at `tier`.
+ */
+only: { [key in TaskCategory]?: QualityTier } | null, strengths: { [key in TaskCategory]?: number }, areaStrengths: { [key in Area]?: number }, efforts: Array<string>, contextWindow: number | null, knowledgeCutoff: string | null, modalities: Modalities, 
 /**
  * An older model the CLI still lists beside a newer one.
  */

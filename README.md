@@ -62,6 +62,12 @@ docs/          plan and design notes
   `overnight_notifications.rs::mac` is the shell's other narrowly scoped unsafe exception:
   its C strings live through each call, Objective-C copies them, and callback tickets carry
   no borrowed pointers. The desktop notification plugin handles the other platforms.
+- Computer use's setup window drags the helper app into a list in System Settings, which a web
+  page can't do: a small AppKit drag (`computer_setup.m`) starts from under the pointer. The
+  same file shows the window on the Space the user is on, also over a full-screen app, without
+  activating Brigadier. `computer_setup.rs::native` is a narrowly scoped unsafe exception for
+  those two calls: the window pointer is the setup window's own, on the main thread, and the
+  path's C string outlives the call.
 - `objc2-quartz-core` (macOS, the release wry is built on) with more of `objc2-app-kit`: the
   first launch's intro holds the window clear (shown, unseen, passing the mouse through) until
   the page is ready, then shows it with no title-bar buttons, shadow or background above a

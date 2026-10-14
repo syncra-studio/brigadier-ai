@@ -186,6 +186,16 @@ dictationMicrophone: string,
  */
 browserEnabled: boolean, 
 /**
+ * Agents can see and drive apps on this Mac (Settings › Computer use): every worker and
+ * thread gets the `computer` tools and the `computer-use` skill. macOS only.
+ */
+computerUse: boolean, 
+/**
+ * While computer use is on, a menu-bar item lists the agents using apps on this Mac, with
+ * a way to stop each.
+ */
+computerUseMenuBar: boolean, 
+/**
  * Where web links open while the browser is on.
  */
 webLinksIn: LinkTarget, 
