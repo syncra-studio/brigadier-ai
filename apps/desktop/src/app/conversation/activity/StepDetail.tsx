@@ -1,9 +1,12 @@
+import { Check, Copy } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useEffect, useState } from "react";
 
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { searchResults, WebSearch } from "@/components/assistant-ui/elements/web-search";
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { ItemStatus, ThreadItem } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { getThreadItem } from "@/state/actions";
@@ -44,13 +47,13 @@ function Output({ text }: { text: string }) {
   );
 }
 
-/** How a command ended, in the Shell box's last line. */
-function ending(status: ItemStatus, exit: number | null): string {
+/** How a command ended, in the Shell box's last line; nothing when it went well (its row says the rest). */
+function ending(status: ItemStatus, exit: number | null): string | null {
   if (status === "inProgress") return "Running";
   if (status === "declined") return "Declined";
-  if (exit !== null && exit !== 0) return `Exit ${exit}`;
+  if (exit !== null && exit !== 0) return `Exit code ${exit}`;
   if (status === "failed") return "Failed";
-  return "✓ Success";
+  return null;
 }
 
 /** A command's box: "Shell", `$ command` and what it printed, then how it ended. */
@@ -65,23 +68,43 @@ export function ShellBox({ command, output, status, exit }: {
   return (
     <div data-slot="shell-card" className={SHELL}>
       <span className="text-foreground/70 text-label px-3 py-1">Shell</span>
-      <pre data-slot="shell-command" className={cn(SHELL_TEXT, "text-foreground line-clamp-2 px-3 pt-2")}>
+      {/* One line, cut with "…"; the whole command in its tooltip. */}
+      <pre
+        data-slot="shell-command"
+        title={unwrapCommand(command)}
+        className="text-code text-foreground truncate px-3 pt-2 font-mono whitespace-pre"
+      >
         <span className="text-muted-foreground">$ </span>
         {unwrapCommand(command)}
       </pre>
-      {/* Its newest line in view, the older ones fading out above it. */}
-      <div data-slot="shell-output" className="max-h-shell-output scroll-edge-fade flex flex-col-reverse overflow-y-auto px-3 py-2 [--spacing-scroll-fade-bottom:0] [--spacing-scroll-fade-top:var(--spacing-shell-fade)]">
-        <pre className={cn(SHELL_TEXT, "text-foreground/70 font-medium")}>{printed ? <Output text={printed} /> : "No output"}</pre>
+      <div className="relative min-w-0">
+        {/* Its newest line in view, the older ones fading out above it. */}
+        <div data-slot="shell-output" className="max-h-shell-output scroll-edge-fade flex flex-col-reverse overflow-y-auto px-3 py-2 [--spacing-scroll-fade-bottom:0] [--spacing-scroll-fade-top:var(--spacing-shell-fade)]">
+          <pre className={cn(SHELL_TEXT, "text-foreground/70 font-medium")}>{printed ? <Output text={printed} /> : "No output"}</pre>
+        </div>
+        {printed && <CopyOutput text={printed} />}
       </div>
-      <span
-        className={cn(
-          "px-3 py-1.5 text-end text-xs",
-          end === "✓ Success" || end === "Declined" ? "text-muted-foreground" : end === "Running" ? "shimmer" : "text-destructive",
-        )}
-      >
-        {end}
-      </span>
+      {end && (
+        <span data-slot="shell-ending" className={cn("text-muted-foreground px-3 py-1.5 text-end text-sm", end === "Running" && "shimmer")}>
+          {end}
+        </span>
+      )}
     </div>
+  );
+}
+
+/** Copies a command's output, at the output's top right. */
+function CopyOutput({ text }: { text: string }) {
+  const { isCopied, copyToClipboard } = useCopyToClipboard();
+  return (
+    <TooltipIconButton
+      tooltip={isCopied ? "Copied" : "Copy output"}
+      size="xs"
+      className="text-muted-foreground absolute end-1 top-1"
+      onClick={() => copyToClipboard(text)}
+    >
+      {isCopied ? <Check /> : <Copy />}
+    </TooltipIconButton>
   );
 }
 
