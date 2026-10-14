@@ -317,8 +317,8 @@ struct ConvState {
     /// Requests the user saw a reply for.
     spoke: HashSet<String>,
     /// Messages of other sessions the thread was reminded to answer on their own (see
-    /// [`SessionManager::answer_owed`]): once each.
-    peers_reminded: HashSet<String>,
+    /// [`SessionManager::answer_owed`]): once each; whether the reminder is queued yet.
+    peers_reminded: HashMap<String, bool>,
     /// Per request: the last reply the user saw, and whether its turn went on working after
     /// it (a line like "Now the full suites…" followed by a command): if nothing is said
     /// after it, it is no answer.
@@ -399,6 +399,16 @@ impl ConvState {
     fn has_cli_jobs(&self) -> bool {
         self.cli_jobs > 0 || !self.lingering.is_empty() || self.jobs_request.is_some()
     }
+}
+
+/// Where the thread's one reminder to answer a message of another session stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PeerReminder {
+    /// Not given yet: the caller gives it now.
+    Due,
+    /// Another settling is giving it: its request works again once it is queued.
+    Underway,
+    Given,
 }
 
 /// Where a request the orchestrator sent a worker back in stands, while the user has seen no
@@ -569,14 +579,25 @@ impl ConvLive {
         state.cli.clone()
     }
 
-    /// Whether the thread is yet to be reminded to answer another session's message
-    /// `message_id` on its own; it counts as reminded from now on.
-    pub(super) async fn remind_peer_once(&self, message_id: &str) -> bool {
-        self.state
-            .lock()
-            .await
-            .peers_reminded
-            .insert(message_id.to_owned())
+    /// Where the thread's one reminder to answer another session's message `message_id` on
+    /// its own stands; one that was [`PeerReminder::Due`] is underway from now on.
+    pub(super) async fn remind_peer_once(&self, message_id: &str) -> PeerReminder {
+        let mut state = self.state.lock().await;
+        match state.peers_reminded.get(message_id) {
+            None => {
+                state.peers_reminded.insert(message_id.to_owned(), false);
+                PeerReminder::Due
+            }
+            Some(false) => PeerReminder::Underway,
+            Some(true) => PeerReminder::Given,
+        }
+    }
+
+    /// The reminder to answer `message_id` is queued.
+    pub(super) async fn peer_reminded(&self, message_id: &str) {
+        if let Some(queued) = self.state.lock().await.peers_reminded.get_mut(message_id) {
+            *queued = true;
+        }
     }
 
     /// The running turn started a call or command: the last reply its request showed was said

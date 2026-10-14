@@ -15,7 +15,7 @@
 //! once, then the sender hears it went unanswered, never the other work's answer.
 
 use super::SessionManager;
-use super::conversation::Envelope;
+use super::conversation::{Envelope, PeerReminder};
 use crate::board::{Board, PeerRecord};
 use crate::model::{ConversationId, Message, MessageRole, PeerState};
 use crate::sessions::PeerSend;
@@ -142,7 +142,11 @@ impl SessionManager {
             // final answer is that work's too, so the thread answers on its own, reminded once.
             let mixed = request != root || family.len() > 1;
             if mixed && matches!(over, Over::Answer(_) | Over::Silent) {
-                if self.remind_unanswered_peer(id, record, root).await {
+                if self.remind_unanswered_peer(id, record, root).await != PeerReminder::Given {
+                    continue;
+                }
+                // A settling that just reminded it may have its request working again.
+                if self.family_works(id, root).await {
                     continue;
                 }
                 over = Over::Unanswered;
@@ -151,19 +155,31 @@ impl SessionManager {
         }
     }
 
+    /// Whether a request of `root`'s family in session `id` still works or waits, as its board
+    /// has it now.
+    async fn family_works(&self, id: &ConversationId, root: &str) -> bool {
+        self.core.board(id).await.is_ok_and(|board| {
+            board.requests.values().any(|request| {
+                matches!(request.state, RequestState::Working | RequestState::Waiting)
+                    && root_of(&board, &request.id) == root
+            })
+        })
+    }
+
     /// Asks session `id`'s thread, once, to answer `record` on its own, in its request
-    /// `root`, which works again until then. Whether it was asked now.
+    /// `root`, which works again until then. [`PeerReminder::Due`] when it was asked now.
     async fn remind_unanswered_peer(
         &self,
         id: &ConversationId,
         record: &PeerRecord,
         root: &str,
-    ) -> bool {
+    ) -> PeerReminder {
         let Ok(conv) = self.conv(id) else {
-            return false;
+            return PeerReminder::Given;
         };
-        if !conv.remind_peer_once(&record.message_id).await {
-            return false;
+        let reminder = conv.remind_peer_once(&record.message_id).await;
+        if reminder != PeerReminder::Due {
+            return reminder;
         }
         let title = self
             .core
@@ -188,8 +204,17 @@ impl SessionManager {
                 quiet = super::prompts::QUIET,
             ),
         };
-        self.deliver_for(id, envelope, Some(root.to_owned())).await;
-        true
+        // Underway until queued: a settling meanwhile neither reminds again nor gives up on it.
+        let queued = self
+            .queue_envelope(id, envelope, Some(root.to_owned()))
+            .await;
+        conv.peer_reminded(&record.message_id).await;
+        // The request works again until the orchestrator has read it.
+        self.settle_requests(id).await;
+        if let Some(queued) = queued {
+            self.kick(&queued);
+        }
+        PeerReminder::Due
     }
 
     /// The requests of session `id` still working, as its board has them.
