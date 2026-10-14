@@ -130,7 +130,7 @@ async fn a_message_wakes_a_sleeping_session_in_the_same_project() {
 }
 
 /// A message for a session whose turn runs is steered into that turn: no turn of its own
-/// starts, and the rest of the turn answers it, inside the running request's block.
+/// starts, and the turn answers it on its own, inside the running request's block.
 #[tokio::test]
 async fn a_message_is_steered_into_a_busy_sessions_running_turn() {
     let peers = Peers::new();
@@ -144,6 +144,14 @@ async fn a_message_is_steered_into_a_busy_sessions_running_turn() {
         let kept = kept.clone();
         async move {
             let input = turn.steered().await;
+            if let Some(input) = &input {
+                let id = super::peer_kit::header_id(input).unwrap();
+                let from = super::peer_kit::header_session(input).unwrap();
+                let (_, failed) =
+                    super::peer_kit::send(&turn, &from, "Added the `name` column.", Some(&id))
+                        .await;
+                assert!(!failed);
+            }
             *kept.lock().unwrap() = input;
             Reply::text("Done, with the column.")
         }
@@ -180,7 +188,7 @@ async fn a_message_is_steered_into_a_busy_sessions_running_turn() {
         .expect("the turn read the steer");
     assert!(input.contains(&format!("· id {id}]\n{text}")), "{input}");
     assert_eq!(peers.inputs_of(&api).len(), 1, "no turn of its own");
-    // The turn's answer went back as the reply.
+    // The turn's own reply to it went back.
     assert!(stands(&board, &id, &PeerState::Replied));
     assert_eq!(
         board.requests[&id].steered_into.as_deref(),

@@ -163,6 +163,7 @@ impl SessionManager {
             return;
         };
         let activity = conv.request_activity().await;
+        let mut reminded = false;
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
@@ -205,6 +206,13 @@ impl SessionManager {
                 // Brigadier wakes the thread for it later: its answer isn't written yet, so it
                 // isn't over between turns. A stop or a failure above wins.
                 RequestState::Working
+            } else if request.steered_into.is_none()
+                && self.remind_narrated(&conv, &board, id).await
+            {
+                // Its user saw only a narration line: the thread is asked for its answer, and
+                // the request works until it has given one (or failed to).
+                reminded = true;
+                RequestState::Working
             } else {
                 RequestState::Done
             };
@@ -245,7 +253,7 @@ impl SessionManager {
             && activity.carried.is_empty()
             && !board.queue.paused
             && board.queue.items.first().is_some_and(|item| !item.deciding);
-        if waiting && !self.answer_working(conversation_id).await {
+        if (waiting && !self.answer_working(conversation_id).await) || reminded {
             self.kick(&conv);
         }
     }

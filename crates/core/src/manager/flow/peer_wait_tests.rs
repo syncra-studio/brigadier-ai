@@ -589,8 +589,8 @@ async fn an_explicit_reply_is_not_doubled() {
     flow.stop().await;
 }
 
-/// Two messages steered into one running turn: each gets its own reply, carrying the
-/// turn's answer, once the turn's request is over.
+/// Two messages steered into one running turn: told to, the thread answers each on its own,
+/// in the turn, and each sender gets that reply, not the turn's answer to the user.
 #[tokio::test]
 async fn each_message_steered_into_one_turn_gets_its_reply() {
     let peers = Peers::new();
@@ -611,9 +611,17 @@ async fn each_message_steered_into_one_turn_gets_its_reply() {
                 let Some(steer) = turn.steered().await else {
                     break;
                 };
+                assert!(
+                    steer.contains("answer it on its own now with message_session"),
+                    "{steer}"
+                );
+                let id = header_id(&steer).unwrap();
+                let from = super::peer_kit::header_session(&steer).unwrap();
+                let (_, failed) = send(&turn, &from, "Names are in `name`.", Some(&id)).await;
+                assert!(!failed);
                 kept.lock().unwrap().push(steer);
             }
-            Reply::text("Names are in `name`.")
+            Reply::text("The models are refactored.")
         }
     });
     let from_api = peers.sends(&api, &flow.conversation, "Where do names live?");
@@ -634,7 +642,7 @@ async fn each_message_steered_into_one_turn_gets_its_reply() {
             .into_iter()
             .find(|record| record.reply_to.as_deref() == Some(question.as_str()))
             .expect("its own reply");
-        assert!(back.automatic && back.peer == *from);
+        assert!(!back.automatic && back.peer == *from);
         assert_eq!(back.text, "Names are in `name`.");
     }
     flow.settled_in(&api).await;

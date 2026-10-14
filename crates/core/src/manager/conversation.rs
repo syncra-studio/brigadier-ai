@@ -299,6 +299,17 @@ struct ConvState {
     narration: HashMap<String, Narration>,
     /// Requests the user saw a reply for.
     spoke: HashSet<String>,
+    /// Messages of other sessions the thread was reminded to answer on their own (see
+    /// [`SessionManager::answer_owed`]): once each.
+    peers_reminded: HashSet<String>,
+    /// Per request: the last reply the user saw, and whether its turn went on working after
+    /// it (a line like "Now the full suites…" followed by a command): if nothing is said
+    /// after it, it is no answer.
+    last_said: HashMap<String, (String, bool)>,
+    /// Requests that were over with only a narration line said, whose thread was asked once
+    /// for its answer (see [`SessionManager::remind_narrated`]): a second end without one
+    /// closes them with a plain line, not the narration.
+    narrated: HashSet<String>,
     /// Requests in which the orchestrator sent a worker back and the user has seen nothing
     /// since: such a request must not end with nothing said.
     sent_back: HashMap<String, Unanswered>,
@@ -527,6 +538,27 @@ impl ConvLive {
             return None;
         }
         state.cli.clone()
+    }
+
+    /// Whether the thread is yet to be reminded to answer another session's message
+    /// `message_id` on its own; it counts as reminded from now on.
+    pub(super) async fn remind_peer_once(&self, message_id: &str) -> bool {
+        self.state
+            .lock()
+            .await
+            .peers_reminded
+            .insert(message_id.to_owned())
+    }
+
+    /// The running turn started a call or command: the last reply its request showed was said
+    /// mid-work (see `ConvState::last_said`).
+    async fn went_on_working(&self) {
+        let mut state = self.state.lock().await;
+        if let Some(request) = state.request.clone()
+            && let Some((_, followed)) = state.last_said.get_mut(&request)
+        {
+            *followed = true;
+        }
     }
 
     /// Whether its CLI's own jobs still run past their turn (see `ConvState::jobs_request`).
@@ -3302,8 +3334,25 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             let narration = state.narration.remove(request);
             let spoke = state.spoke.remove(request);
+            let reminded = state.narrated.remove(request);
+            let mid_work = state
+                .last_said
+                .remove(request)
+                .is_some_and(|(_, followed)| followed);
             if spoke || narration.is_some() || !done {
                 state.sent_back.remove(request);
+            }
+            // Asked for its answer once already and still none: a plain closing line, never
+            // the narration that only said what came next.
+            if reminded && done && (narration.is_some() || (spoke && mid_work)) {
+                drop(state);
+                self.notice(
+                    &conv.id,
+                    brigadier_providers::NoticeLevel::Warning,
+                    "The thread ended this request without an answer. Ask it again for one.",
+                )
+                .await;
+                return;
             }
             if spoke {
                 return;
@@ -3353,6 +3402,75 @@ impl SessionManager {
         {
             crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
         }
+    }
+
+    /// A request about to end done whose user saw no answer, only a line said before more
+    /// work ("Now the full suites…") or hidden narration: rather than end on that line, the
+    /// thread is asked once for its answer, naming the messages the user steered into it.
+    /// Whether it was asked: the request then works until that turn ends.
+    pub(super) async fn remind_narrated(
+        &self,
+        conv: &Arc<ConvLive>,
+        board: &crate::board::Board,
+        request: &str,
+    ) -> bool {
+        if conv.kind != ConversationKind::Session
+            || super::requests::run_of_request(board, request).is_some()
+        {
+            return false;
+        }
+        let mut steered: Vec<&crate::work::UserRequest> = board
+            .requests
+            .values()
+            .filter(|of| of.steered_into.as_deref() == Some(request))
+            .collect();
+        steered.sort_by_key(|of| of.started_at_ms);
+        let steered: Vec<String> = steered
+            .iter()
+            .map(|of| format!("\u{201c}{}\u{201d}", of.preview))
+            .collect();
+        let mut state = conv.state.lock().await;
+        if state.narrated.contains(request) {
+            return false;
+        }
+        // The line the user saw last went on with work (or they saw none, only hidden
+        // narration).
+        let last = if state.spoke.contains(request) {
+            match state.last_said.get(request) {
+                Some((text, true)) => text.trim().to_owned(),
+                _ => return false,
+            }
+        } else {
+            match state.narration.get(request) {
+                Some(narration) => narration.text.trim().to_owned(),
+                None => return false,
+            }
+        };
+        let also = if steered.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " The user also wrote, while you worked: {}. Answer those too.",
+                steered.join(", ")
+            )
+        };
+        state.narrated.insert(request.to_owned());
+        state.inbox.push((
+            Envelope {
+                kind: InjectionKind::Reminder,
+                label: "no answer".into(),
+                task_id: None,
+                text: format!(
+                    "[Nothing runs for this request any more, and the user has seen no answer to \
+                     it: your last words were \"{last}\", which only said what you were about to \
+                     do. Answer them now, in a few lines: what you did, what came of it, and what \
+                     is still pending, if anything.{also} Don't reply {}.]",
+                    prompts::QUIET
+                ),
+            },
+            Some(request.to_owned()),
+        ));
+        true
     }
 
     /// A request still over with nothing said a while after it ended (see
@@ -3471,6 +3589,9 @@ impl SessionManager {
                         let mut state = conv.state.lock().await;
                         state.spoke.insert(request.clone());
                         state.narration.remove(request);
+                        state
+                            .last_said
+                            .insert(request.clone(), (text.to_owned(), false));
                         conv.status.lock().unwrap().shown(request, now_ms());
                     }
                     if let Err(err) = self
@@ -3571,6 +3692,9 @@ impl SessionManager {
                 output,
             } => {
                 let name = crate::digest::bare_tool_name(name);
+                if *status == ItemStatus::InProgress {
+                    conv.went_on_working().await;
+                }
                 // The CLI has the wait's result: the replies handed to it are taken.
                 if name == "wait_for_replies" && *status == ItemStatus::Completed {
                     self.replies_taken(conv, item_id).await;
@@ -3635,6 +3759,9 @@ impl SessionManager {
                 ..
             } => {
                 conv.running_command(item_id, *status).await;
+                if *status == ItemStatus::InProgress {
+                    conv.went_on_working().await;
+                }
                 self.command_seen(
                     conv,
                     item_id,

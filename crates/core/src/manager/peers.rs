@@ -672,8 +672,25 @@ impl SessionManager {
                 .await?;
             return Ok(Delivery::Delivered);
         }
+        // Steered into other work, its answer would be mixed with that work's: the thread
+        // answers it on its own.
+        let steered = if reply {
+            envelope.clone()
+        } else {
+            Envelope {
+                text: format!(
+                    "{}\n[It came while you work on something else, so your answer to the user \
+                     doesn't reach it: answer it on its own now with message_session (to \
+                     {from}, reply_to {message_id}), carrying only what answers it, then carry \
+                     on.]",
+                    envelope.text,
+                    from = record.peer,
+                ),
+                ..envelope.clone()
+            }
+        };
         if self
-            .steer_peer(&conv, &envelope, &request, reply, chain)
+            .steer_peer(&conv, &steered, &request, reply, chain)
             .await
         {
             self.core
@@ -704,7 +721,7 @@ impl SessionManager {
 
     /// The whole text of a message `to` received from `from`: its sender's record, else
     /// (the sender deleted) the receiver's transcript message.
-    async fn peer_message_text(
+    pub(super) async fn peer_message_text(
         &self,
         to: &ConversationId,
         from: &ConversationId,

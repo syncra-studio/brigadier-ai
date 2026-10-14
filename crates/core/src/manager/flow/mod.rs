@@ -1797,6 +1797,8 @@ mod findings_tests;
 mod git_writing_tests;
 #[cfg(test)]
 mod held_merge_tests;
+#[cfg(test)]
+mod honesty_tests;
 #[cfg(all(test, unix))]
 mod integrated_checks_tests;
 #[cfg(test)]

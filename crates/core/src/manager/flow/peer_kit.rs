@@ -216,6 +216,15 @@ pub(super) fn header_id(input: &str) -> Option<String> {
     Some(rest.split([' ', ']']).next()?.to_owned())
 }
 
+/// The sending session a received message's header names: `… · session ‹id› · …`.
+pub(super) fn header_session(input: &str) -> Option<ConversationId> {
+    let header = input
+        .lines()
+        .find(|line| line.starts_with("[message from session"))?;
+    let rest = header.split(" · session ").nth(1)?;
+    Some(ConversationId(rest.split([' ', ']']).next()?.to_owned()))
+}
+
 /// Whether a turn's input is a reply from another session: its header says what it replies
 /// to.
 pub(super) fn is_reply(input: &str) -> bool {
