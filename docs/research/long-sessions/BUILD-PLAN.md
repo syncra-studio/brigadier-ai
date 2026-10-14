@@ -179,8 +179,19 @@ gpt-6.1-sol, both at high.
   only if CLI versions, models and machine are unchanged.
 - **Quality:** Brigadier passes the hidden tests in every run of every row it runs. Its median of high judge findings
   is no higher than the better plain arm's. A failed run counts as not completed, and its repairs count in its usage.
-- **Time and tokens:** medians against the phase's targets, with the cache regime stated. Claude raw is shown with and
-  without cache reads; the other vendor's review tokens are shown apart.
+- **Time:** medians against the phase's time targets, with the cache regime stated.
+- **Tokens: the token gates (Q44, confirmed by the user).** These are the only token targets in this plan:
+  - **the measure:** Brigadier's raw tokens through settlement, all vendors summed (the thread, workers, the other
+    vendor's review, fix tasks, checks and Brain jobs during the run), against plain Claude Code's raw tokens on the
+    same bench task. It is a ratio of medians, per task and per regime, cold and warm both. Claude raw, raw without
+    cache reads and the other vendor's share are also shown apart;
+  - **only at equal hidden-test quality:** a ratio counts only when Brigadier passes the hidden tests in every run
+    of that task, as plain Claude Code does. For T7L, which scores per feature, equal quality means Brigadier's
+    median of features passed is at least plain Claude Code's;
+  - **after phase B:** every small task (T1–T6) ≤ 1.5×;
+  - **after phase C:** every small task ≤ 1.15×, and the long task T7L ≤ 1.0×;
+  - **after C, every later phase** (D1, E, D2) must still meet C's gates on the rows it runs;
+  - **a phase that misses its gate doesn't ship:** nothing is pushed or installed, and the phase goes back.
 - **"No loss"** (for changes that must cost nothing, such as Q40): the median is inside the previous Brigadier build's
   min–max or better, on every row, in both regimes.
 
@@ -551,10 +562,11 @@ Scope: Q35 and Q39 in the engine and the prompts, the measurement B and C need, 
 **Validation:**
 - **V3** (cold and warm, seeded and empty): 12/12 exactly correct, 0 worker starts, model calls per ask ≤ plain Claude
   Code's + 1, time ≤ 1.25× its median.
-- **Bench T1, T2, T4 and T6** (§2.2, both regimes):
+- **Bench T1–T6** (§2.2, n = 3, cold and warm):
   - every run passes, with high findings ≤ the better plain arm;
-  - Claude raw ≤ 1.5× plain Claude Code's median (T1 is 2.6× on `launch`);
-  - wall time ≤ 1.25× its median;
+  - **token gate (Q44): every small task ≤ 1.5× plain Claude Code** (T1 is about 3.3× on `launch`, all vendors
+    summed: 341k Claude + 89k Codex against 131k);
+  - wall time ≤ 1.25× plain Claude Code's median;
   - T4: wall time ≤ plain Claude Code's.
 
 **Rollout (R):** B1–B3 are one revision note, and B4 a settings note. A session created before B must take the new
@@ -624,11 +636,13 @@ is built in D1.0.
 Each ships only if V1 or V3 shows a gain at equal quality.
 
 **Validation:**
-- **Bench T1–T4,** n = 3, cold and warm:
-  - every run passes, with high findings ≤ the better plain arm;
-  - Claude raw ≤ 1.15× plain Claude Code's median on T1, T2 and T4, and ≤ 1.0× on T3;
+- **Bench T1–T6 and T7L,** n = 3, cold and warm (T7L's plain-arm runs are made first, since it is frozen and not run
+  yet):
+  - every small-task run passes, and T7L passes at least as many features as plain Claude Code; high findings ≤ the
+    better plain arm;
+  - **token gates (Q44): every small task ≤ 1.15× plain Claude Code, and T7L ≤ 1.0×;**
   - wall time ≤ plain Claude Code's median on T1 and T4.
-- **V3:** tokens per ask ≤ 1.2× plain Claude Code's on the same asks.
+- **V3:** tokens per ask through settlement are reported against plain Claude Code's (no separate target).
 - **C2's own "no loss" gate.**
 
 **Risk:** a missing field doc leads to wrong calls (C1, counted); a deferred tool adds a hop (C2, gated); batching
@@ -714,8 +728,9 @@ delays non-urgent reactions by seconds (C3).
 
 **Validation:**
 - V2: all items pass on both providers, except D1.3's beyond-clip items, which wait for D2;
-- bench T7, n = 3: every feature plain Claude Code passes, Brigadier passes too, with tokens ≤ 1.2× its median. CLI
-  compaction events are reported; the guarantee that none happen is D2.3's.
+- bench T7, n = 3: every feature plain Claude Code passes, Brigadier passes too. CLI compaction events are reported;
+  the guarantee that none happen is D2.3's;
+- C's token gates still hold (Q44): the small tasks ≤ 1.15× and T7L ≤ 1.0×, rerun on this phase's candidate.
 
 **Risk:** a constraint wrongly superseded is a loss, so supersession is explicit only. D1.3 depends on the CLIs
 accepting a copied transcript, so it is probed first.
@@ -760,7 +775,7 @@ accepting a copied transcript, so it is probed first.
   "works".
 
 **Validation:** V2's false-claim item; V1 overnight-style; bench T3 and T5, n = 3, every run passing, with high
-findings ≤ the better plain arm.
+findings ≤ the better plain arm, and C's token gates still holding on them (Q44).
 
 **Risk:** more waiting overnight (E2), though a safe default counts as an answer; a hook loop, capped at 8 by the CLI.
 
@@ -846,8 +861,9 @@ findings ≤ the better plain arm.
 **Validation:**
 - V2, all items, on both providers, including D1.3's context-window seam with items beyond the clip (its lossless
   gate) and D2.3b's in-turn seam;
-- bench T7L, n = 2–3: Brigadier passes as many features as the better plain arm or more, with no CLI compaction and
-  no lost constraint. Tokens and time are reported per vendor, with the cache regime.
+- bench T7L, n = 3: Brigadier passes as many features as the better plain arm or more, with no CLI compaction and
+  no lost constraint. Tokens and time are reported per vendor, with the cache regime;
+- C's token gates still hold (Q44): T7L ≤ 1.0× and the small tasks ≤ 1.15×.
 
 **Risk:** disk growth from stored outputs and a file write per tool batch, both measured in V1. A mid-turn thread
 interrupt (D2.3b) may cut a step in half: the steer comes first, and the successor gets the last commit and the
@@ -876,7 +892,8 @@ In this order, on the phase's integrated candidate: a branch holding the phase's
    are fixed, and steps 1–2 rerun on the fixed tree.
 4. **The phase's V-tests and bench rows on the candidate, before anything is pushed** (§2.2 pass conditions, n
    stated, cold and warm apart, completion rate first). A failed condition sends the phase back, with nothing pushed
-   or installed. For C2 a failure is final: lazy tools don't ship.
+   or installed. This includes the token gates (Q44, §2.2): a phase that misses its gate doesn't ship. For C2 a
+   failure is final: lazy tools don't ship.
 5. **Push to `main`, watch CI until green, reinstall `/Applications/Brigadier.app`**, without asking (Q42). A red CI is
    fixed and pushed at once. The install follows the installed-app recipe and is checked to start.
 
@@ -905,7 +922,8 @@ Each item must be true at the end; how it is checked is in brackets.
 1. A code question is answered in the thread, with the file:line it relied on and no worker (V3, 4/4 exact, 0 worker
    starts).
 2. A tiny edit takes about as long as in plain Claude Code (V3, ≤ 1.25× time, ≤ +1 model call).
-3. A small bug fix costs about what plain Claude Code costs (bench T1: Claude raw ≤ 1.15×, every run passing).
+3. Small tasks cost about what plain Claude Code costs, at equal hidden-test quality: every small task (T1–T6)
+   ≤ 1.5× after phase B and ≤ 1.15× after phase C, all vendors summed (Q44 token gate; a miss stops the phase).
 4. A multi-file feature is as good as the plain CLIs' work or better (bench T2 and T3: every run passing, high findings
    ≤ the better plain arm).
 5. Parallel work beats the plain CLI on time (bench T4: wall time ≤ plain Claude Code's).
@@ -937,7 +955,8 @@ Each item must be true at the end; how it is checked is in brackets.
 23. A hung worker or a silent thread is caught in minutes, not 50 (D1.5 fault injection).
 24. No worker or thread is compacted by its CLI, even inside one long turn; workers hand off and threads are reborn
     mid-turn (D2.3 and D2.3b tests on both providers; no compaction in T7L).
-25. The 24-feature long task finishes at least as many features as the best plain CLI (bench T7L).
+25. The 24-feature long task finishes at least as many features as the best plain CLI, using no more tokens than
+    plain Claude Code (bench T7L ≤ 1.0× from phase C on: Q44 token gate).
 26. An idle long thread's note fork reads the cache instead of rewriting it (B5's `handoff` row).
 27. Settings has exactly two behaviour toggles, "Review the work" and "Start workers on its own", and no quality knobs
     (render test, §1.4).
