@@ -16,6 +16,7 @@ import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
 import planned from "@/fixtures/boards/thread-plan-2026-10-10.events.json";
+import { roomFor } from "@/components/assistant-ui/thread-scroll";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, Request } from "@/ipc/generated";
@@ -284,6 +285,49 @@ async function open(id: string): Promise<void> {
 /** The newest row's bottom to the floating footer's top. */
 const lastGap = () => round(stackTop() - rows().at(-1)!.getBoundingClientRect().bottom);
 
+/** The gap kept between the content's end and the floating footer. */
+const COMPOSER_GAP = 84;
+
+/** How far down the view a sent turn's end settles: the view's height above the gap, less the room. */
+function turnLine(): number {
+  const visible = stackTop() - COMPOSER_GAP - viewTop();
+  return round(visible - roomFor(visible));
+}
+
+/**
+ * Samples scrollTop each frame until the returned call: how the view moved, as the share of the
+ * way still to go at 100ms and 200ms after it began, how long it took to come within a pixel,
+ * and whether it ever went past where it ended.
+ */
+function trace(): () => { moved: number; at100: number; at200: number; settledMs: number; overshoot: boolean } {
+  const samples: { t: number; top: number }[] = [];
+  let on = true;
+  const tick = (now: number) => {
+    samples.push({ t: now, top: viewport().scrollTop });
+    if (on) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  return () => {
+    on = false;
+    const end = samples.at(-1)!.top;
+    const at = samples.findIndex((sample, index) => index > 0 && sample.top !== samples[index - 1]!.top);
+    const from = samples[Math.max(0, at - 1)]!;
+    const span = end - from.top;
+    const left = (ms: number) => {
+      const sample = samples.find((candidate) => candidate.t - from.t >= ms) ?? samples.at(-1)!;
+      return round((end - sample.top) / span);
+    };
+    const settled = samples.find((sample) => sample.t > from.t && Math.abs(end - sample.top) < 1)!;
+    return {
+      moved: round(span),
+      at100: left(100),
+      at200: left(200),
+      settledMs: Math.round(settled.t - from.t),
+      overshoot: samples.some((sample) => (sample.top - end) * Math.sign(span) > 0.5),
+    };
+  };
+}
+
 function buttonState() {
   const box = button().getBoundingClientRect();
   const column = $('[data-slot="aui_thread-footer-column"]')!.getBoundingClientRect();
@@ -433,6 +477,8 @@ const steps = {
   },
   /** A report's Details, a disclosure, opened and closed mid-scroll and at the bottom. */
   async expand() {
+    // Mid-thread, away from the bottom (within 24px of it the bottom would stay instead).
+    await userScroll(Math.round(max() / 2));
     const summaries = [...document.querySelectorAll<HTMLElement>('[data-slot="report-details"] > summary')];
     const middle = summaries.find((summary) => {
       const top = summary.getBoundingClientRect().top - viewTop();
@@ -444,12 +490,14 @@ const steps = {
     const showMore = [...document.querySelectorAll<HTMLButtonElement>("button")].find((element) => element.textContent === "Show more")!;
     await userScroll(viewport().scrollTop + showMore.getBoundingClientRect().top - viewTop() - 300);
     const userOpen = await toggleStays(showMore);
+    // At the bottom, following: the bottom stays, what opens shows above the composer.
     await userScroll(max());
     const last = summaries.at(-1)!;
     const bottomOpen = await toggleStays(last);
+    const gapOpen = lastGap();
     const buttonAfter = buttonState();
     const bottomClose = await toggleStays(last);
-    return { midOpen, midClose, userOpen, bottomOpen, buttonAfter, bottomClose };
+    return { midOpen, midClose, userOpen, bottomOpen, gapOpen, buttonAfter, bottomClose };
   },
   /** A notice above the composer: the view doesn't move; at the bottom the gaps are kept. */
   async composerGrows() {
@@ -459,35 +507,61 @@ const steps = {
     const notice = { level: "warning", text: "A notice above the composer, two lines long to make the footer taller than one row would.\nIts second line.", atMs: Date.now() };
     useBoard.setState(({ board }) => (board ? { board: { ...board, notices: [notice as never] } } : {}));
     await settle(300);
-    const grown = { top: Math.round(viewport().scrollTop), stackTop: round(stackTop()), distance: distance(), button: buttonState() };
+    const grown = { top: Math.round(viewport().scrollTop), stackTop: round(stackTop()), distance: distance(), lastGap: lastGap(), button: buttonState() };
+    // Scrolled up, the view stays still while it shrinks and grows again.
+    await userScroll(max() - 300);
+    const above = Math.round(viewport().scrollTop);
+    useBoard.setState(({ board }) => (board ? { board: { ...board, notices: [] } } : {}));
+    await settle(300);
+    useBoard.setState(({ board }) => (board ? { board: { ...board, notices: [notice as never] } } : {}));
+    await settle(300);
+    const scrolled = { before: above, after: Math.round(viewport().scrollTop) };
     await userScroll(max());
     await settle(250);
     const atBottom = { lastGap: lastGap(), button: buttonState() };
     useBoard.setState(({ board }) => (board ? { board: { ...board, notices: [] } } : {}));
     await settle(300);
     const shrunk = { distance: distance(), lastGap: lastGap() };
-    return { before, grown, atBottom, shrunk };
+    return { before, grown, scrolled, atBottom, shrunk };
   },
-  /** A send from the bottom of a conversation, its answer streaming, then followed from the bottom. */
+  /**
+   * A send from the bottom of a conversation: the spring to its place, its answer filling the
+   * room and then followed; scrolled away it isn't, until the user is back at the bottom.
+   */
   async send() {
     await open("other");
     await userScroll(0);
     const topPadding = round(rows()[0]!.getBoundingClientRect().top - viewTop());
     await userScroll(max());
+    const moving = trace();
     await send({ text: "A new question, sent from the bottom.", attachments: [], mentions: [] });
     await settle(600);
+    const spring = moving();
     const user = rows().findLast((row) => row.dataset["role"] === "user")!;
     const placed = {
-      userTop: round(user.getBoundingClientRect().top - viewTop()),
+      turnEnd: round(rows().at(-1)!.getBoundingClientRect().bottom - viewTop()),
+      line: turnLine(),
       distance: distance(),
       room: round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height),
-      belowUser: round(stackTop() - user.getBoundingClientRect().bottom),
+      userTop: round(user.getBoundingClientRect().top - viewTop()),
       viewHeight: viewport().clientHeight,
     };
     const requestId = stored["other"]!.at(-1)!.requestId!;
     const top = Math.round(viewport().scrollTop);
     const streamed = await stream("other-streaming", requestId, 260);
-    const unfollowed = { top, tops: [...new Set(streamed.tops)], distance: distance(), button: buttonState() };
+    // It filled the room without moving, then was followed: the view only ever went down.
+    const overflowed = {
+      top,
+      grew: streamed.tops.at(-1)! - top,
+      distances: [...new Set(streamed.distances)],
+      lastGap: lastGap(),
+      button: buttonState(),
+      room: round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height),
+    };
+    await userScroll(max() - 200);
+    const awayTop = Math.round(viewport().scrollTop);
+    const away = await stream("other-streaming", requestId, 120);
+    const unfollowed = { top: awayTop, tops: [...new Set(away.tops)], distance: distance(), button: buttonState() };
     await userScroll(max());
     const followed = await stream("other-streaming", requestId, 120);
     // At the bottom, a resize of the window keeps it there.
@@ -501,7 +575,9 @@ const steps = {
     await settle(200);
     return {
       topPadding,
+      spring,
       placed,
+      overflowed,
       unfollowed,
       followed: { distances: [...new Set(followed.distances)], grew: followed.tops.at(-1)! - followed.tops[0]! },
       shrunkWindow,
@@ -519,6 +595,23 @@ const steps = {
     $("#thread-scroll-main")!.style.paddingBottom = "";
     await settle(200);
     return { placed, shrunk, grown: distance() };
+  },
+  /** A send, then away to another conversation while it answers and back: at the bottom, without the room. */
+  async returnAfterSend() {
+    await open("other");
+    await userScroll(max());
+    await send({ text: "A question left while it answers.", attachments: [], mentions: [] });
+    await settle(600);
+    const room = round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height);
+    await open("long");
+    await open("other");
+    return {
+      room,
+      distance: distance(),
+      roomBack: round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height),
+      lastGap: lastGap(),
+      button: buttonState().shown,
+    };
   },
   /** The first message of a new chat, sent from the new-chat view. */
   async newChat() {

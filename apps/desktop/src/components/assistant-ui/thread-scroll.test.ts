@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 
 import {
-  AT_BOTTOM_PX,
+  BELOW_PX,
   expectSentTurn,
+  FOLLOW_PX,
+  roomFor,
   type RowBox,
   ThreadScroller,
 } from "@/components/assistant-ui/thread-scroll";
@@ -17,7 +19,6 @@ const VIEW_TOP = 100;
 const TOP_PAD = 32;
 const GAP = 24;
 const COMPOSER_GAP = 84;
-const TURN_TOP = 171;
 
 type Row = RowBox & { height: number; dataset: DOMStringMap; isConnected: boolean };
 
@@ -90,6 +91,21 @@ class Fake {
     return row.getBoundingClientRect().top - VIEW_TOP;
   }
 
+  /** The view's height above the composer's gap. */
+  get visible(): number {
+    return this.clientHeight - this.padding;
+  }
+
+  /** How far down the view a sent turn's end settles: above the room it is given. */
+  get turnLine(): number {
+    return this.visible - roomFor(this.visible);
+  }
+
+  /** Distance from the view's top of a row's bottom. */
+  end(row: Row): number {
+    return row.getBoundingClientRect().bottom - VIEW_TOP;
+  }
+
   layout() {
     return {
       viewport: this,
@@ -97,7 +113,6 @@ class Fake {
       content: () => this.content,
       padding: () => this.padding,
       footer: () => this.footer,
-      turnTop: () => TURN_TOP,
       setRoom: (px: number) => {
         this.room = px;
       },
@@ -237,14 +252,60 @@ test("following starts when the user scrolls to the bottom and stops when they s
   userScroll(fake, scroller, 1000);
   fake.rows.at(-1)!.height += 300;
   scroller.resized();
-  assert.ok(fake.max - fake.scrollTop > AT_BOTTOM_PX);
-  userScroll(fake, scroller, fake.max - AT_BOTTOM_PX + 2);
+  assert.ok(fake.max - fake.scrollTop > FOLLOW_PX);
+  userScroll(fake, scroller, fake.max - FOLLOW_PX);
   assert.equal(scroller.following, true);
   fake.rows.at(-1)!.height += 300;
   scroller.resized();
   assert.equal(fake.scrollTop, fake.max);
-  userScroll(fake, scroller, fake.max - 200);
+  // A nudge up within the threshold keeps following.
+  userScroll(fake, scroller, fake.max - FOLLOW_PX);
+  assert.equal(scroller.following, true);
+  userScroll(fake, scroller, fake.max - FOLLOW_PX - 1);
   assert.equal(scroller.following, false);
+  // Scrolling down short of the threshold doesn't follow yet.
+  userScroll(fake, scroller, fake.max - FOLLOW_PX - 1 + 0.5);
+  assert.equal(scroller.following, false);
+});
+
+test("the button's glide eases out over 260ms; while the thread works it jumps there without the room", () => {
+  const fake = new Fake();
+  conversation(fake, 10);
+  const scroller = open(fake);
+  userScroll(fake, scroller, 1000);
+  const from = fake.scrollTop;
+  reduced = false;
+  scroller.scrollToBottom();
+  const tops: number[] = [];
+  let now = performance.now();
+  frames.shift()!(now);
+  while (frames.length > 0) {
+    now += 20;
+    frames.shift()!(now);
+    tops.push(fake.scrollTop);
+  }
+  // 13 frames of 20ms: done at 260ms, a third of the way left at 60ms (1 - 60/260)³.
+  assert.equal(tops.length, 13);
+  assert.ok(Math.abs((fake.max - tops[2]!) / (fake.max - from) - (1 - 60 / 260) ** 3) < 0.01);
+  assert.ok(tops.every((top, index) => index === 0 || top >= tops[index - 1]!));
+  assert.equal(fake.scrollTop, fake.max);
+
+  // Running: a sent turn's room goes, and the view is at the bottom at once.
+  const working = new Fake();
+  conversation(working, 6);
+  const id = key();
+  const sending = open(working, id, true);
+  expectSentTurn(id, "sent");
+  working.rows.push(working.row("sent", 60, "user"), working.row("answer", 40));
+  sending.rowsChanged();
+  userScroll(working, sending, 600);
+  // The spring to the sent turn, cancelled by the scroll.
+  frames = [];
+  sending.scrollToBottom();
+  assert.equal(frames.length, 0);
+  assert.equal(working.room, 0);
+  assert.equal(working.scrollTop, working.max);
+  assert.equal(sending.following, true);
 });
 
 test("the button shows once the last row reaches under the composer, and glides to the bottom to follow", () => {
@@ -252,9 +313,9 @@ test("the button shows once the last row reaches under the composer, and glides 
   conversation(fake, 10);
   const scroller = open(fake);
   // Scrolled up through the gap above the composer, the last row is still in view.
-  userScroll(fake, scroller, fake.max - COMPOSER_GAP - AT_BOTTOM_PX);
+  userScroll(fake, scroller, fake.max - COMPOSER_GAP - BELOW_PX);
   assert.equal(scroller.contentBelow(), false);
-  userScroll(fake, scroller, fake.max - COMPOSER_GAP - AT_BOTTOM_PX - 1);
+  userScroll(fake, scroller, fake.max - COMPOSER_GAP - BELOW_PX - 1);
   assert.equal(scroller.contentBelow(), true);
   userScroll(fake, scroller, 500);
   reduced = false;
@@ -266,30 +327,32 @@ test("the button shows once the last row reaches under the composer, and glides 
   assert.equal(scroller.following, true);
 });
 
-test("the composer growing or shrinking never moves the view, even while following", () => {
+test("the composer growing or shrinking keeps a following view at its bottom, and a scrolled one still", () => {
   const fake = new Fake();
   conversation(fake, 10);
   const scroller = open(fake);
   assert.equal(scroller.following, true);
-  const top = fake.scrollTop;
+  const last = fake.rows.at(-1)!;
+  const gap = () => VIEW_TOP + fake.clientHeight - fake.footer - last.getBoundingClientRect().bottom;
   fake.footer = 320;
   scroller.resized();
-  assert.equal(fake.scrollTop, top);
-  assert.equal(scroller.contentBelow(), true);
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(gap(), COMPOSER_GAP);
+  assert.equal(scroller.contentBelow(), false);
   fake.footer = 120;
-  // The range shrinks back: the view clamps to the bottom again.
   scroller.resized();
   scroller.scrolled();
   assert.equal(fake.scrollTop, fake.max);
+  assert.equal(gap(), COMPOSER_GAP);
   assert.equal(scroller.following, true);
-  // Scrolled up, too.
+  // Scrolled up, what shows stays still.
   userScroll(fake, scroller, 1500);
   fake.footer = 320;
   scroller.resized();
   assert.equal(fake.scrollTop, 1500);
 });
 
-test("a clicked toggle stays in place while its fold opens, mid-scroll and at the bottom", () => {
+test("a clicked toggle stays in place while its fold opens mid-scroll; at the bottom, following, the bottom stays", () => {
   const fake = new Fake();
   conversation(fake, 10);
   const scroller = open(fake);
@@ -304,7 +367,8 @@ test("a clicked toggle stays in place while its fold opens, mid-scroll and at th
   scroller.resized();
   assert.equal(header.getBoundingClientRect().top, before);
 
-  // At the bottom, following: opening the last fold leaves the view above the new bottom.
+  // At the bottom, following: opening the last fold keeps the bottom where it is, so what it
+  // opens shows above the composer and the content above moves up.
   const end = new Fake();
   conversation(end, 10);
   const following = open(end);
@@ -312,55 +376,108 @@ test("a clicked toggle stays in place while its fold opens, mid-scroll and at th
   const lastHeader = toggle(last, 30);
   const at = lastHeader.getBoundingClientRect().top;
   following.clicked(lastHeader);
-  assert.equal(following.following, false);
   last.height += 400;
   following.resized();
-  assert.equal(lastHeader.getBoundingClientRect().top, at);
-  assert.equal(following.contentBelow(), true);
-  // Closing it again shrinks the range back to the bottom.
+  assert.equal(following.following, true);
+  assert.equal(end.scrollTop, end.max);
+  assert.equal(lastHeader.getBoundingClientRect().top, at - 400);
+  assert.equal(following.contentBelow(), false);
+  // Closing it again: still the bottom, the content above moving down.
   following.clicked(lastHeader);
   last.height -= 400;
   following.resized();
   following.scrolled();
   assert.equal(end.scrollTop, end.max);
+  assert.equal(lastHeader.getBoundingClientRect().top, at);
+  assert.equal(following.following, true);
 });
 
-test("a sent message settles at its place under the view's top, with room for its answer", () => {
+test("a sent turn springs up to end a third of the way down, with room its answer fills, then is followed", () => {
   const fake = new Fake();
   conversation(fake, 6);
   const id = key();
-  const scroller = open(fake, id);
+  const scroller = open(fake, id, true);
   expectSentTurn(id, "sent");
   const user = fake.row("sent", 60, "user");
   fake.rows.push(user);
   reduced = false;
   scroller.rowsChanged();
-  flushFrames(scroller);
-  assert.equal(fake.offset(user), TURN_TOP);
-  assert.equal(scroller.following, false);
-  // The room reaches down to the composer's gap: the view is at the bottom.
+  // The spring: critically damped, no overshoot, about half the way at 50ms, settled within a
+  // pixel by about half a second.
+  const from = fake.scrollTop;
+  const left: number[] = [];
+  let now = performance.now();
+  frames.shift()!(now);
+  while (frames.length > 0) {
+    now += 10;
+    frames.shift()!(now);
+    left.push((fake.max - fake.scrollTop) / (fake.max - from));
+  }
+  assert.ok(left.every((share, index) => share >= 0 && (index === 0 || share <= left[index - 1]!)));
+  assert.ok(Math.abs(left[4]! - (1 + 0.875) * Math.exp(-0.875)) < 0.01, `at 50ms: ${left[4]}`);
+  assert.ok(left.length <= 60, `settled after ${left.length * 10}ms`);
+  assert.ok(left[49]! * (fake.max - from) < 1, `at 500ms: ${left[49]! * (fake.max - from)}px left`);
+  // Its end sits a third of the view down; the room reaches down to the composer's gap.
+  assert.equal(fake.end(user), fake.turnLine);
+  assert.ok(Math.abs(fake.turnLine - Math.max(fake.visible / 3, 240)) <= 0.5);
+  assert.equal(fake.room, roomFor(fake.visible));
   assert.equal(fake.scrollTop, fake.max);
-  assert.equal(fake.room, fake.clientHeight - TURN_TOP - fake.padding - 60);
+  assert.equal(scroller.following, false);
   // The answer streams into the room: nothing moves.
   const answer = fake.row("answer", 40);
   fake.rows.push(answer);
   scroller.rowsChanged();
-  for (let grow = 0; grow < 30; grow++) {
+  const top = fake.offset(user);
+  while (fake.room > 0) {
     answer.height += 40;
     scroller.resized();
-    assert.equal(fake.offset(user), TURN_TOP);
+    if (fake.room > 0) assert.equal(fake.offset(user), top);
   }
-  // Past the room it goes on under the composer, unfollowed.
-  assert.equal(fake.room, 0);
-  assert.equal(scroller.contentBelow(), true);
-  // Going to the bottom follows it from there.
-  userScroll(fake, scroller, fake.max);
-  answer.height += 300;
-  scroller.resized();
-  assert.equal(fake.scrollTop, fake.max);
+  // Past the view's bottom it is followed: its end stays at the composer's gap.
+  for (let grow = 0; grow < 10; grow++) {
+    answer.height += 40;
+    scroller.resized();
+    assert.equal(fake.scrollTop, fake.max);
+  }
+  assert.equal(scroller.following, true);
+  assert.equal(scroller.contentBelow(), false);
 });
 
-test("a turn ending in the gap above a grown composer shows no button; one reaching under it does", () => {
+test("a placeholder under a sent message giving way mid-spring doesn't turn the spring back", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  expectSentTurn(id, "sent");
+  const user = fake.row("sent", 60, "user");
+  fake.rows.push(user, fake.row("placeholder", 90));
+  reduced = false;
+  scroller.rowsChanged();
+  const tops: number[] = [];
+  let now = performance.now();
+  frames.shift()!(now);
+  for (let frame = 0; frames.length > 0; frame++) {
+    now += 16;
+    if (frame === 5) {
+      fake.rows.pop();
+      scroller.rowsChanged();
+    }
+    frames.shift()!(now);
+    tops.push(fake.scrollTop);
+  }
+  assert.ok(tops.every((top, index) => index === 0 || top >= tops[index - 1]!), tops.join(", "));
+  assert.equal(fake.end(user), fake.turnLine);
+  // Once settled, the room only shrinks again.
+  const room = fake.room;
+  const answer = fake.row("answer", 40);
+  fake.rows.push(answer);
+  scroller.rowsChanged();
+  fake.rows.pop();
+  scroller.rowsChanged();
+  assert.equal(fake.room, room - 40 - GAP);
+});
+
+test("scrolled away from a sent turn, the room below the view goes and the turn is not followed", () => {
   const fake = new Fake();
   conversation(fake, 6);
   const id = key();
@@ -370,20 +487,107 @@ test("a turn ending in the gap above a grown composer shows no button; one reach
   const answer = fake.row("answer", 40);
   fake.rows.push(user, answer);
   scroller.rowsChanged();
-  flushFrames(scroller);
-  // A question docks over the composer: the footer grows and the turn's last line, still in
-  // view, ends inside the gap above it.
+  const room = fake.room;
+  // 100px up: the room under the view goes, so the view is at the new bottom without moving.
+  const top = fake.scrollTop - 100;
+  userScroll(fake, scroller, top);
+  assert.equal(fake.room, room - 100);
+  assert.equal(fake.scrollTop, top);
+  assert.equal(fake.scrollTop, fake.max);
+  // Its answer then fills the rest of the room and runs on under the composer, unfollowed.
+  for (let grow = 0; grow < 30; grow++) {
+    answer.height += 40;
+    scroller.resized();
+    assert.equal(fake.scrollTop, top);
+  }
+  assert.equal(scroller.following, false);
+  assert.equal(scroller.contentBelow(), true);
+  // Going back to the bottom follows it from there.
+  userScroll(fake, scroller, fake.max);
+  answer.height += 300;
+  scroller.resized();
+  assert.equal(fake.scrollTop, fake.max);
+});
+
+test("a sent turn's room only shrinks: a fold closing in it gives nothing back; a fold opened stops the watch", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  expectSentTurn(id, "sent");
+  const user = fake.row("sent", 60, "user");
+  const work = fake.row("work", 40);
+  fake.rows.push(user, work);
+  scroller.rowsChanged();
+  const header = toggle(work, 10);
+  scroller.clicked(header);
+  work.height += 100;
+  scroller.resized();
+  const room = fake.room;
+  scroller.interrupt();
+  scroller.clicked(header);
+  work.height -= 100;
+  scroller.resized();
+  scroller.scrolled();
+  assert.equal(fake.room, room);
+  // Growing again uses it up again.
+  work.height += 50;
+  scroller.resized();
+  assert.equal(fake.room, room - 50);
+  // A fold was clicked: growing past the view is not followed.
+  work.height += 1000;
+  scroller.resized();
+  assert.equal(scroller.following, false);
+  assert.equal(scroller.contentBelow(), true);
+});
+
+test("in a short view a sent turn ends at the view's end, with no room; a resized view refits the room", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  fake.clientHeight = fake.padding + 200;
+  const id = key();
+  const scroller = open(fake, id, true);
+  expectSentTurn(id, "sent");
+  const user = fake.row("sent", 60, "user");
+  fake.rows.push(user);
+  scroller.rowsChanged();
+  assert.equal(fake.room, 0);
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(fake.end(user), 200);
+
+  // A tall view shrinking: the room is fitted to it, and the turn's end moves to its line.
+  const tall = new Fake();
+  conversation(tall, 6);
+  const other = key();
+  const placing = open(tall, other, true);
+  expectSentTurn(other, "sent");
+  const sent = tall.row("sent", 60, "user");
+  tall.rows.push(sent);
+  placing.rowsChanged();
+  tall.clientHeight -= 300;
+  placing.resized();
+  assert.equal(tall.room, roomFor(tall.visible));
+  assert.equal(tall.scrollTop, tall.max);
+  assert.equal(tall.end(sent), tall.turnLine);
+});
+
+test("a row ending in the gap above a grown composer shows no button; one reaching under it does", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const scroller = open(fake);
+  // A question docks over the composer: the footer grows, the bottom stays.
   fake.footer += 220;
   scroller.resized();
   const footerTop = () => VIEW_TOP + fake.clientHeight - fake.footer;
-  answer.height += footerTop() - 40 - answer.getBoundingClientRect().bottom;
-  scroller.resized();
-  assert.equal(footerTop() - answer.getBoundingClientRect().bottom, 40);
+  const last = fake.rows.at(-1)!;
+  assert.equal(footerTop() - last.getBoundingClientRect().bottom, COMPOSER_GAP);
+  // Scrolled up so the last line, still in view, ends inside the gap above it.
+  userScroll(fake, scroller, fake.max - (COMPOSER_GAP - 40));
+  assert.equal(footerTop() - last.getBoundingClientRect().bottom, 40);
   assert.equal(scroller.contentBelow(), false);
   // Reaching under the footer, it is hidden: the button shows.
-  answer.height += 60;
-  scroller.resized();
-  assert.ok(answer.getBoundingClientRect().bottom > footerTop() + AT_BOTTOM_PX);
+  userScroll(fake, scroller, fake.scrollTop - 60);
+  assert.ok(last.getBoundingClientRect().bottom > footerTop() + BELOW_PX);
   assert.equal(scroller.contentBelow(), true);
 });
 
@@ -409,7 +613,7 @@ test("the first message sent from the new-chat view is placed in the conversatio
   const scroller = open(fake, id);
   assert.equal(scroller.following, false);
   assert.ok(fake.room > 0);
-  assert.equal(fake.offset(fake.rows.at(-1)!), TURN_TOP);
+  assert.equal(fake.end(fake.rows.at(-1)!), fake.turnLine);
 });
 
 test("an unseen conversation with a running turn opens at the bottom", () => {
@@ -440,7 +644,7 @@ test("a sent edit's new message is placed", () => {
   const edited = fake.row("edited", 60, "user");
   fake.rows.splice(-2, 2, edited);
   scroller.rowsChanged();
-  assert.equal(fake.offset(edited), TURN_TOP);
+  assert.equal(fake.end(edited), fake.turnLine);
 });
 
 test("a conversation reopens exactly where it was left, by row id", () => {
@@ -567,7 +771,7 @@ test("a kept row that is gone falls back to the nearest one before it, or the bo
   assert.equal(reopened.following, true);
 });
 
-test("a conversation left at the bottom reopens at the bottom, its room kept while its turn runs", () => {
+test("a conversation left at its sent turn's room reopens at the bottom, following, without the room", () => {
   const id = key();
   const first = new Fake();
   conversation(first, 6);
@@ -575,57 +779,103 @@ test("a conversation left at the bottom reopens at the bottom, its room kept whi
   expectSentTurn(id, "sent");
   first.rows.push(first.row("sent", 60, "user"), first.row("answer", 120));
   scroller.rowsChanged();
-  const top = first.scrollTop;
-  const room = first.room;
-  assert.ok(room > 0);
+  assert.ok(first.room > 0);
+  assert.equal(scroller.following, false);
 
+  // Its turn still runs: back at the bottom, following what it adds.
   const again = new Fake();
   conversation(again, 6);
-  again.rows.push(again.row("sent", 60, "user"), again.row("answer", 120));
-  open(again, id, true);
-  assert.equal(again.room, room);
-  assert.equal(again.scrollTop, top);
+  again.rows.push(again.row("sent", 60, "user"), again.row("answer", 400));
+  const reopened = open(again, id, true);
+  assert.equal(again.room, 0);
+  assert.equal(again.scrollTop, again.max);
+  assert.equal(reopened.following, true);
+  again.rows.at(-1)!.height += 500;
+  reopened.resized();
+  assert.equal(again.scrollTop, again.max);
 
-  // Its turn ended while it was away: the room is gone, and nothing below shows the button.
+  // Its turn ended while it was away: the bottom too, and nothing below shows the button.
   const ended = new Fake();
   conversation(ended, 6);
   ended.rows.push(ended.row("sent", 60, "user"), ended.row("answer", 120));
-  const reopened = open(ended, id, false);
+  const back = open(ended, id, false);
   assert.equal(ended.room, 0);
-  assert.equal(reopened.contentBelow(), false);
+  assert.equal(ended.scrollTop, ended.max);
+  assert.equal(back.contentBelow(), false);
 });
 
-test("a sent turn's room lasts while it runs, never shows the button alone, and goes when it ends", () => {
+test("a conversation left scrolled away above a sent turn's room reopens at the same place, its room less what grew", () => {
+  const id = key();
+  const first = new Fake();
+  conversation(first, 6);
+  const scroller = open(first, id, true);
+  expectSentTurn(id, "sent");
+  first.rows.push(first.row("sent", 60, "user"), first.row("answer", 120));
+  scroller.rowsChanged();
+  userScroll(first, scroller, first.scrollTop - 100);
+  userScroll(first, scroller, first.scrollTop - 100);
+  const room = first.room;
+  assert.ok(room > 0);
+  const shown = first.rows.find((row) => row.getBoundingClientRect().bottom > VIEW_TOP)!;
+  const offset = first.offset(shown);
+  const top = first.scrollTop;
+
+  // The same content: the same place, the room kept so it can be reached.
+  const again = new Fake();
+  conversation(again, 6);
+  again.rows.push(again.row("sent", 60, "user"), again.row("answer", 120));
+  const reopened = open(again, id, true);
+  assert.equal(again.room, room);
+  assert.equal(again.scrollTop, top);
+  assert.equal(reopened.following, false);
+
+  // Its answer grew by 50px while away: that much of the room is gone, the place is the same.
+  const grown = new Fake();
+  conversation(grown, 6);
+  grown.rows.push(grown.row("sent", 60, "user"), grown.row("answer", 170));
+  open(grown, id, true);
+  assert.equal(grown.room, room - 50);
+  const same = grown.rows.find((row) => row.dataset["messageId"] === shown.dataset["messageId"])!;
+  assert.equal(grown.offset(same), offset);
+});
+
+test("a sent turn's room never shows the button alone, and what of it shows stays when the turn ends", () => {
   const fake = new Fake();
   conversation(fake, 6);
   const id = key();
   const scroller = open(fake, id, true);
   expectSentTurn(id, "sent");
-  fake.rows.push(fake.row("sent", 60, "user"), fake.row("answer", 40));
+  const user = fake.row("sent", 60, "user");
+  fake.rows.push(user, fake.row("answer", 40));
   scroller.rowsChanged();
   // Streaming: room under the short answer, and no button for the empty room.
-  assert.ok(fake.room > 0);
+  const room = fake.room;
+  assert.ok(room > 0);
   assert.equal(scroller.contentBelow(), false);
-  // The turn ends watched from its end: the room goes, the view stays at the end.
+  // The turn ends: nothing moves, and its answer folding shorter keeps the bottom.
+  const top = fake.offset(user);
   scroller.setRunning(false);
   scroller.rowsChanged();
-  assert.equal(fake.room, 0);
-  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(fake.room, room);
+  assert.equal(fake.offset(user), top);
   assert.equal(scroller.contentBelow(), false);
+  fake.rows.at(-1)!.height -= 20;
+  scroller.scrolled();
+  scroller.resized();
+  assert.equal(fake.room, room);
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(fake.offset(user), top + 20);
 });
 
 test("at the bottom, a resize of the view keeps it at the bottom", () => {
   const fake = new Fake();
   conversation(fake, 10);
   const id = key();
-  const scroller = open(fake, id);
-  // Not following (a sent turn), yet at the bottom.
+  const scroller = open(fake, id, true);
+  // Not following (a sent turn in its room), yet at the bottom.
   expectSentTurn(id, "sent");
-  fake.rows.push(fake.row("sent", 60, "user"), fake.row("answer", 900));
+  fake.rows.push(fake.row("sent", 60, "user"), fake.row("answer", 100));
   scroller.rowsChanged();
-  userScroll(fake, scroller, fake.max);
-  scroller.clicked(toggle(fake.rows.at(-1)!, 10));
-  scroller.interrupt();
   assert.equal(scroller.following, false);
   fake.clientHeight = 700;
   scroller.resized();
@@ -657,14 +907,11 @@ test("hidden at the bottom, then shown, the thread stays at the bottom", () => {
   const fake = new Fake();
   conversation(fake, 10);
   const id = key();
-  const scroller = open(fake, id);
-  // Not following (a sent turn), yet at the bottom.
+  const scroller = open(fake, id, true);
+  // Not following (a sent turn in its room), yet at the bottom.
   expectSentTurn(id, "sent");
-  fake.rows.push(fake.row("sent", 60, "user"), fake.row("answer", 900));
+  fake.rows.push(fake.row("sent", 60, "user"), fake.row("answer", 100));
   scroller.rowsChanged();
-  userScroll(fake, scroller, fake.max);
-  scroller.clicked(toggle(fake.rows.at(-1)!, 10));
-  scroller.interrupt();
   assert.equal(scroller.following, false);
   const show = hide(fake, scroller);
   fake.clientWidth = 600;

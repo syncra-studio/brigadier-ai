@@ -43,7 +43,7 @@
  *               min-h-composer                composer input minimum height
  *               max-h-composer-max            composer input maximum height (then it scrolls)
  *               max-h-queue-max               the queue card's maximum height (then it scrolls)
- *               scroll-mt-thread-turn         where a sent message settles under the thread's top;
+ *               scroll-mt-thread-turn         where a message row stops under the thread's top when scrolled to;
  *                                             thread-composer-gap, thread-fade-{bottom,top} (globals.css)
  *               size-attachment-thumb, w-attachment-card  an image attachment, a file attachment
  *               mx-rail-inset, -mb-rail-tuck  the composer rail: its side inset, the tuck under the card
