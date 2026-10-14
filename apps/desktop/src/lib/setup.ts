@@ -45,7 +45,7 @@ export const UNTRUSTED_NOTE =
 
 /** The README's section on permission levels ("Learn more"). */
 export const PERMISSIONS_HELP_URL =
-  "https://github.com/stephen-golban/brigadier-ai#permission-levels";
+  "https://github.com/syncra-studio/brigadier-ai#permission-levels";
 
 /** At every level workers leave pushes, deploys and publishing to the user. */
 export const NEVER_PUSHES_NOTE = "Workers never push, deploy or publish; you start those.";

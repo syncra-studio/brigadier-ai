@@ -26,7 +26,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
-repository = "https://github.com/stephen-golban/brigadier-ai"
+repository = "https://github.com/syncra-studio/brigadier-ai"
 publish = false
 
 [workspace.dependencies]
