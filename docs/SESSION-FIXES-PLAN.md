@@ -376,7 +376,8 @@ Everything else in THREAD-PLAN and THREAD-PARITY-PLAN stands.
    - The thread's prompt (`M/prompts.rs:94`, "Every landing … gets one review …") and `LEAD_STEPS` (`:678`, the
      lead's own `review_code`) change to match. A lead that already ran `review_code` on its range gets no second
      landing review: the range rule in `review_runs.rs` exists and is kept.
-2. **Tests: focused while working, the full suite once.**
+2. **Tests: focused while working, the full suite once.** Superseded by §11 (2026-10-14): a worker runs only the
+   checks of its own change and never the full suite; the session's full checks run once, on the landed work.
    - `WORKER_CHECKS` (`M/prompts.rs:685`): while working, run only the affected checks (`run_check` with no command
      lists them). Run the full suite once, right before `submit_report`.
    - Results stay cached per tree (bug 8 makes the cache hit).
@@ -623,6 +624,12 @@ noticed.
 - "Fix the typo in Settings" → no offer.
 
 ### Computer use: every role knows it, and live checks use it (added 2026-10-11)
+> **Changed by §11 (2026-10-14):** a UI worker no longer builds and checks the dev app in its own worktree. It uses the
+> project's scripted UI checks, and one `live_look` task looks at the dev build of the integrated tree, once the
+> session's full checks pass. Its worker launches that build itself with the computer tools on scratch data (the
+> helper still refuses any Brigadier bundle a worker didn't launch). The routing, the safety limits and the operate
+> tasks below stay; a change matched to a mockup keeps its own live capture.
+
 The user's ask: Brigadier's macOS computer use (`crates/computer`, the `computer` MCP server's `apps`, `launch`,
 `observe`, `act`, `zoom`; `docs/COMPUTER-USE.md`, `COMPUTER-USE-PLAN.md`) must be known to the thread, the workers and
 Brigadier's own briefs, and used where a live look settles a question.
@@ -1752,3 +1759,54 @@ rejected. Two adoptions are narrower than the review's wording, for the reasons 
 | 6 | No recovery when the target advances | Today's landing keeps an expected tip and retries on `LandBlock::TipMoved` (`M/landing.rs:453-466`); the plan's fast-forward had no such path | Q2 step 3: the expected-tip check kept; on a moved target nothing lands and the same merge worker is resumed against the new tip, then re-validated; a concurrent-landing test and done-when case |
 | 7 | Cache normalization can equate different commands | Bug 8 stripped any `TMPDIR=…` and `ulimit -n N` before keying | Bug 8 step 3: only prefixes proven redundant with what `run_check` already sets (TMPDIR equal to the task's test folder; a `ulimit -n` that leaves both the soft and the hard limit unchanged, per the outline review) are dropped, and the command runs without them, so the key is the command executed; everything else stays in the key |
 | 8 | REA's install isn't fully pinned | Only the top-level package and tarball were pinned; about 148 transitive dependencies weren't | REA step 2: a reviewed manifest and lockfile with integrity values, `npm ci --ignore-scripts` (npm v11 `npm ci` docs), the install exposed only after its checks pass. Built in phase 3 |
+
+## 11. Workers merge fast, the integrated tree is checked once (added 2026-10-14)
+The user's ask: workers working in parallel each ran the full suites, CI scripts and a debug app build in their own
+worktree before handing back, which kept the machine busy and delayed every result. Merge first, let the user see
+results sooner, run the full checks once on the integrated work, and send a failure back to the worker that made it.
+No card or setting asks how much to check: this is the default, always (no quality knobs).
+
+**Worker.** It runs only the checks of its own change: `run_check` with no command lists the changed packages' own
+checks and names what it leaves to the full checks (the packages that depend on them, the workspace's own files, paths
+no package holds, builds), never a workspace-wide command. Then it commits and reports. A UI change is checked with
+the project's scripted UI checks. Instruction changes: `WORKER_CHECKS`, the write rules, `SCRIPTED_UI`.
+
+**Thread.** It lands each report as soon as it judges it; a clean rebase lands at once (the self-check round trip after
+a rebase is gone; a merge worker sent back still lands on its own after its next report). Briefs ask for the checks of
+each part only. `[checks failed …]` goes back as one fix task (role fix, subject the task that broke it), which resumes
+that worker's session; `[checks couldn't run …]` is fixed, then `rerun_checks`. Open sessions hear it as revision 22,
+which replaces revisions 6 (the full suite before the report) and 15 (each UI worker's own live check).
+
+**Engine** (`M/integrated_checks.rs`, plumbing only; the thread judges who broke what):
+- **Due.** A landing, and the thread's own commits, make the branch's new tip due, recorded as an `IntegratedCheck`
+  from that moment. Landings close together make one due check whose tip moves; it starts once they settle (15 s), or
+  after the run before it. One runner per session; a tip already checked, or being checked, is not made due again.
+- **Run.** In the session's own check checkout (`checks/<id>/tree`, owner `checks:<id>`): made warm once, then moved
+  to each tip, so its build output stays and no landing changes files under a running build. Its Node dependencies are
+  installed again, with the lockfile's package manager, when the files that pin them change. The commands are the
+  project's documented recipe: its `tools/full-checks.sh` (or a similar script), else a root `verify` or `ci` script,
+  else every package's checks and the workspace-wide ones. Each runs through `run_check`'s keyed cache (full identity:
+  files, ignored config, secret inputs, toolchain) at low priority with the build lease, at the session's access.
+- **Result.** A failure reaches the thread with its command, its last lines, a `read_artifact` reference and the
+  tasks landed since the checks last passed, with the files each changed. A pass is told only when the thread left
+  the request's answer to it (`[quiet]`), or when visible changes landed: then it asks for one `live_look` task. A run
+  that couldn't finish is no verdict: its tip stays unchecked.
+- **Holds.** A landed worker's session is kept until both its review's part and a passing check covering its landing
+  settle (a fix's landing for the checks alone), so a fix task can resume it.
+- **Merge.** `finish_session` needs a pass at the exact tip it merges. A tip not checked yet starts its check at once
+  and waits up to 30 s in the call; otherwise the merge is held on the user's consent and `[merge due]` comes once
+  they pass (`[merge waiting]` names a failure). An overnight phase settles done only with a pass at the run's tip,
+  and the run's merge needs one at its verified tip.
+- **Requests.** A request whose last turn ended on `[quiet]` stays open while its checks are due or run.
+- **Restart and cleanup.** A check the restart cut off is due again and runs. Archive and delete cancel the runner,
+  dispose its checkout and processes, and tell nothing after; a merge disposes the checkout; `clean_up` removes it
+  between runs.
+
+**UI.** One quiet line on the context card under the reviews: "Checks running…", "Checks passed", "Checks failed:
+<command>" or "Checks couldn't run".
+
+**Verify.** Flow tests (`flow/integrated_checks_tests.rs`, scripted CLIs): parallel workers don't run the full script
+in their worktrees and it runs once in the check checkout; landings come before the first full check, a rebased
+worker lands with no self-check; landings close together make one run at the final tip; a failure names the right
+task and its fix task resumes that worker's session; no ask_user card; a merge waits for a pass at its tip; a restart
+mid-run runs it again; an archive cancels it and removes its checkout.
