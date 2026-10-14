@@ -211,7 +211,7 @@ mod tests {
         );
         // A quoted URL isn't a name.
         assert_eq!(
-            names("implement `https://github.com/OpenWhispr/openwhispr` in our Brigadier?"),
+            names("implement `https://github.com/example/dictation` in our Brigadier?"),
             Vec::<String>::new()
         );
     }
