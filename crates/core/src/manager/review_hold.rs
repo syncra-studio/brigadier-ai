@@ -137,21 +137,38 @@ impl SessionManager {
         };
         // A landing reviewed in parts (its worker's own review, then the commits after it)
         // settles once each part has: none still running, none whose findings the thread
-        // hasn't recorded yet.
-        let pending = board.reviews.values().any(|review| {
-            review.kind == ReviewKind::Code
-                && super::review_runs::batch_tip(review) == tip
-                && (review.state == ReviewState::Running
-                    || (review.notify == ReviewFor::Orchestrator
-                        && review
-                            .items
-                            .iter()
-                            .any(|item| item.status == FindingStatus::New)))
-        });
+        // hasn't recorded yet, and none it kept open unless their fix has ended.
+        let parts: Vec<_> = board
+            .reviews
+            .values()
+            .filter(|review| {
+                review.kind == ReviewKind::Code && super::review_runs::batch_tip(review) == tip
+            })
+            .collect();
+        let findings = |open: fn(&FindingStatus) -> bool| {
+            parts.iter().any(|review| {
+                review.notify == ReviewFor::Orchestrator
+                    && review.items.iter().any(|item| open(&item.status))
+            })
+        };
+        let pending = parts
+            .iter()
+            .any(|review| review.state == ReviewState::Running)
+            || findings(|status| *status == FindingStatus::New);
         if pending {
             return;
         }
+        let kept_open = findings(|status| matches!(status, FindingStatus::Open { .. }));
         for task in batch(&board, |task| task.landed.as_deref() == Some(tip)) {
+            // Another part's clean end doesn't settle findings kept open for a fix to come.
+            if kept_open
+                && !board
+                    .tasks
+                    .values()
+                    .any(|fix| fix.state.is_final() && fixes_held(fix, &task))
+            {
+                continue;
+            }
             if self.landing_checked(&task).await {
                 self.release_hold(&task).await;
             } else if !task.review_settled {

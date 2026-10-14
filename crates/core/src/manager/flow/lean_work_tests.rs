@@ -32,6 +32,17 @@ enum First {
     Prefix,
 }
 
+/// What the thread does with the findings of the worker's own review.
+#[derive(Clone, Copy, PartialEq)]
+enum Answer {
+    /// Dismisses both.
+    Dismiss,
+    /// Records them open (the first high) and sends them back as a fix.
+    Fix,
+    /// Records them open and starts no fix yet.
+    KeepOpen,
+}
+
 /// What the scripted sessions saw.
 #[derive(Default)]
 struct Seen {
@@ -50,9 +61,9 @@ struct Gates {
 
 /// A worker commits NOTES.md, asks for its review, commits README.md, and reports while that
 /// review still runs; the thread lands it. Its own review (the prefix) and the review of
-/// README.md (the suffix) wait for their gates. With `fix`, the thread records the prefix's
-/// findings open (the first high) and sends them back; otherwise it dismisses them.
-async fn landed_in_parts(name: &str, fix: bool) -> (Flow, Arc<Mutex<Seen>>, Gates) {
+/// README.md (the suffix) wait for their gates. The thread answers the prefix's findings as
+/// `answer` says.
+async fn landed_in_parts(name: &str, answer: Answer) -> (Flow, Arc<Mutex<Seen>>, Gates) {
     let seen: Arc<Mutex<Seen>> = Arc::default();
     let (log, reviews_log) = (seen.clone(), seen.clone());
     let gates = Gates {
@@ -115,7 +126,7 @@ async fn landed_in_parts(name: &str, fix: bool) -> (Flow, Arc<Mutex<Seen>>, Gate
                         return Reply::text("Landed.");
                     }
                     if turn.input.contains("[review task-1 · ") && turn.input.contains("R1.1") {
-                        let items = if fix {
+                        let items = if answer != Answer::Dismiss {
                             json!([{"id": "R1.1", "status": "open", "high": true},
                                    {"id": "R1.2", "status": "open"}])
                         } else {
@@ -124,7 +135,7 @@ async fn landed_in_parts(name: &str, fix: bool) -> (Flow, Arc<Mutex<Seen>>, Gate
                         };
                         let reply = turn.call("record_findings", json!({"items": items})).await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        if fix {
+                        if answer == Answer::Fix {
                             let reply = turn
                                 .call(
                                     "delegate_task",
@@ -211,7 +222,7 @@ async fn held(flow: &Flow) -> bool {
 /// it, and its landing re-checks the high one.
 #[tokio::test]
 async fn a_clean_suffix_waits_for_the_prefix_and_the_fix_rechecks_its_high_finding() {
-    let (flow, seen, gates) = landed_in_parts("lean-suffix-first", true).await;
+    let (flow, seen, gates) = landed_in_parts("lean-suffix-first", Answer::Fix).await;
     let board = flow.core.board(&flow.conversation).await.unwrap();
     parts(&board);
     let asked = seen.lock().unwrap().asked.clone().unwrap();
@@ -275,7 +286,7 @@ async fn a_clean_suffix_waits_for_the_prefix_and_the_fix_rechecks_its_high_findi
 /// stays held while the review of the commits after it runs, and lets go once it ends.
 #[tokio::test]
 async fn a_settled_prefix_waits_for_the_suffix() {
-    let (flow, seen, gates) = landed_in_parts("lean-prefix-first", false).await;
+    let (flow, seen, gates) = landed_in_parts("lean-prefix-first", Answer::Dismiss).await;
     let board = flow.core.board(&flow.conversation).await.unwrap();
     parts(&board);
     gates.prefix.notify_one();
@@ -303,11 +314,53 @@ async fn a_settled_prefix_waits_for_the_suffix() {
     flow.stop().await;
 }
 
+/// The worker's own review ends first and the thread keeps its findings open for a fix it
+/// hasn't started: the clean review of the commits after it doesn't let go of the landed
+/// worker, whose session that fix will resume.
+#[tokio::test]
+async fn findings_kept_open_hold_the_landing_past_a_clean_suffix() {
+    let (flow, _seen, gates) = landed_in_parts("lean-kept-open", Answer::KeepOpen).await;
+    let board = flow.core.board(&flow.conversation).await.unwrap();
+    parts(&board);
+    gates.prefix.notify_one();
+    flow.until("the prefix's findings to be kept open", |board| {
+        board
+            .reviews
+            .values()
+            .flat_map(|review| &review.items)
+            .filter(|item| matches!(item.status, crate::work::FindingStatus::Open { .. }))
+            .count()
+            == 2
+    })
+    .await;
+    gates.suffix.notify_one();
+    flow.until("the suffix review to end", |board| {
+        board
+            .reviews
+            .values()
+            .any(|review| review.state == ReviewState::Clean)
+    })
+    .await;
+    flow.settled().await;
+    // The suffix's end settles its batch; settling it again makes sure that has happened.
+    let landed = Flow::task(&board, 1).landed.clone().unwrap();
+    flow.manager
+        .settle_review_batch(&flow.conversation, &landed)
+        .await;
+    let board = flow.core.board(&flow.conversation).await.unwrap();
+    let task = Flow::task(&board, 1);
+    assert!(
+        task.review_hold.is_some() && !task.review_settled,
+        "the open findings' fix will resume task-1: it stays held, its review part unsettled"
+    );
+    flow.stop().await;
+}
+
 /// A restart cuts both reviews of the landing off: each is recorded as failed, the thread
 /// hears it, and the landed worker lets go.
 #[tokio::test]
 async fn a_restart_during_both_reviews_settles_the_landing() {
-    let (mut flow, _seen, _gates) = landed_in_parts("lean-restart", true).await;
+    let (mut flow, _seen, _gates) = landed_in_parts("lean-restart", Answer::Fix).await;
     let board = flow.core.board(&flow.conversation).await.unwrap();
     parts(&board);
     assert!(held(&flow).await);
