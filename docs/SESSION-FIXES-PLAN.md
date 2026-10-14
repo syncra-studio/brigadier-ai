@@ -1805,6 +1805,14 @@ which replaces revisions 6 (the full suite before the report) and 15 (each UI wo
 **UI.** One quiet line on the context card under the reviews: "Checks running…", "Checks passed", "Checks failed:
 <command>" or "Checks couldn't run".
 
+**This repository's merges (added 2026-10-14).** Before a merge of Brigadier itself, the integrated tree also passes
+`tools/full-checks.sh --live` once: the full checks, then the live smoke (`tools/live-smoke`), which runs the
+integrated daemon headless with the real Claude and Codex CLIs through a long command with a follow-up and a steer, a
+background job outliving its turn, messages with a wait both ways, Stop during a wait, and a real final answer for
+every request. The bugs it was made for were all real-CLI behaviour the scripted flow tests can't produce. It spends
+tokens, so it runs once per merge, never in a worker's checks or in the background full checks above, and is skipped
+with a note when a CLI isn't signed in.
+
 **Verify.** Flow tests (`flow/integrated_checks_tests.rs`, scripted CLIs): parallel workers don't run the full script
 in their worktrees and it runs once in the check checkout; landings come before the first full check, a rebased
 worker lands with no self-check; landings close together make one run at the final tip; a failure names the right

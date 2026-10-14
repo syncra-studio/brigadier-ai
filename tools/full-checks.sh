@@ -4,6 +4,8 @@
 #   tools/full-checks.sh            fmt, generated types, build, clippy, tests, typecheck, lint, app tests
 #   tools/full-checks.sh --cross    also Linux and Windows clippy of the cross-buildable crates,
 #                                   and Linux and Windows clippy of the desktop crate
+#   tools/full-checks.sh --live     then the live smoke with the real Claude and Codex CLIs
+#                                   (tools/live-smoke): once, on the integrated tree, before a merge
 #
 # Safe inside a Brigadier worker: it installs dependencies only when the checkout has none
 # (a worker's are already copied in), runs `nice` only when the process isn't low priority
@@ -18,10 +20,12 @@ export PATH="$HOME/.cargo/bin:$PATH"
 export TMPDIR=/tmp
 
 cross=false
+live=false
 for arg in "$@"; do
   case "$arg" in
     --cross) cross=true ;;
-    *) echo "usage: tools/full-checks.sh [--cross]" >&2; exit 2 ;;
+    --live) live=true ;;
+    *) echo "usage: tools/full-checks.sh [--cross] [--live]" >&2; exit 2 ;;
   esac
 done
 
@@ -96,6 +100,12 @@ if $cross; then
   run env PKG_CONFIG="$PWD/target/linux-pkg-config/pkg-config" PKG_CONFIG_ALLOW_CROSS=1 \
     cargo-zigbuild clippy --locked --target x86_64-unknown-linux-gnu -p brigadier-desktop \
     --all-targets -- -D warnings
+fi
+
+# Last, as it spends tokens: only once everything else passed. It writes only under /tmp and
+# removes what it made there.
+if $live; then
+  run tools/live-smoke/run.sh
 fi
 
 echo "full checks passed"
