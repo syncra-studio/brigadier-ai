@@ -27,7 +27,7 @@ import {
 } from "@/app/conversation/blocks";
 import { splitReport } from "@/app/conversation/phaseView";
 import { checkersOf, checkResult, checksCount, machineWords, taskRowDetail, taskState } from "@/app/conversation/rowWords";
-import type { Decision, EventEnvelope, MachineStep, Message, OrchestratorStep, OvernightRun, PeerMessage, Plan, Task, UserRequest } from "@/ipc/generated";
+import type { Decision, EventEnvelope, MachineStep, Message, OrchestratorStep, OvernightRun, PeerMessage, Plan, Task, UserRequest, WorkerStep } from "@/ipc/generated";
 import { applyToBoard, emptyBoard } from "@/state/board";
 
 // The board of the first real overnight run (2026-10-03), from its stored events
@@ -425,21 +425,22 @@ test("workers started together are one row, which says they finished once they a
   const user = { ...messages[0]!, id: "life", requestId: "life", seq: 1 };
   const one = { ...byNumber(1), id: "one", requestId: "life", position: 2 };
   const two = { ...byNumber(1), id: "two", requestId: "life", position: 3 };
-  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two },
-    orchestratorSteps: [], requests: {}, workerSteps: [
-      { taskId: "one", requestId: "life", kind: "started", position: 2, atMs: 10 },
-      { taskId: "two", requestId: "life", kind: "started", position: 3, atMs: 20 },
-      { taskId: "two", requestId: "life", kind: "finished", position: 4, atMs: 30 },
-      { taskId: "one", requestId: "life", kind: "finished", position: 5, atMs: 40 },
-      { taskId: "one", requestId: "life", kind: "landed", position: 6, atMs: 50 },
-    ] };
-  const rows = (steps: BoardDigest["workerSteps"]) =>
-    sequence(buildBlocks([user], {}, false, { ...replay, workerSteps: steps }, [])[0]!).flatMap((entry) => entry.kind === "row" ? [entry.row] : []);
-  const all = rows(replay.workerSteps);
+  const steps: WorkerStep[] = [
+    { taskId: "one", requestId: "life", kind: "started", position: 2, atMs: 10 },
+    { taskId: "two", requestId: "life", kind: "started", position: 3, atMs: 20 },
+    { taskId: "two", requestId: "life", kind: "finished", position: 4, atMs: 30 },
+    { taskId: "one", requestId: "life", kind: "finished", position: 5, atMs: 40 },
+    { taskId: "one", requestId: "life", kind: "landed", position: 6, atMs: 50 },
+  ];
+  const rows = (workerSteps: WorkerStep[]) => {
+    const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two }, orchestratorSteps: [], requests: {}, workerSteps };
+    return sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) => entry.kind === "row" ? [entry.row] : []);
+  };
+  const all = rows(steps);
   assert.equal(all.length, 1);
   assert.deepEqual([all[0]?.taskIds, all[0]?.kind, all[0]?.position, all[0]?.wave], [["one", "two"], "finished", 2, true]);
   // One of them finished so far: the start's row stands, and the finish has its own.
-  const half = rows(replay.workerSteps.slice(0, 3));
+  const half = rows(steps.slice(0, 3));
   assert.deepEqual(half.map((row) => [row.kind, row.taskIds ?? [row.taskId]]), [["started", ["one", "two"]], ["finished", ["two"]]]);
 });
 
