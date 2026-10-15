@@ -1,6 +1,6 @@
 import { useAuiState, type TextMessagePartProps, type Unstable_TriggerItem } from "@assistant-ui/react";
 import { Chat, File } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { type FC, useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { WorkerChip, WorkerGlyph } from "@/app/conversation/WorkerChip";
@@ -44,32 +44,6 @@ function label(mention: Mention, targets: readonly MentionTarget[]): string | nu
       return null;
   }
 }
-
-/**
- * A message's text with the workers it @-mentions as their chips; a `@task-N` the session has
- * no worker for stays text.
- */
-export const MentionText: FC<{ text: string }> = ({ text }) => {
-  const pieces = text.split(TASK);
-  // Odd pieces are the numbers `split` captured; each is its worker's id, or "" for none.
-  const ids = useBoard(
-    useShallow((s) => {
-      if (pieces.length === 1) return [];
-      const byNumber = new Map(Object.values(s.board?.tasks ?? {}).map((task) => [task.number, task.id]));
-      return pieces.map((piece, index) => (index % 2 === 1 ? (byNumber.get(Number(piece)) ?? "") : ""));
-    }),
-  );
-  if (pieces.length === 1) return <>{text}</>;
-  return (
-    <>
-      {pieces.map((piece, index) => {
-        if (index % 2 === 0) return <Fragment key={index}>{piece}</Fragment>;
-        const id = ids[index];
-        return id ? <WorkerChip key={index} taskId={id} /> : <Fragment key={index}>@task-{piece}</Fragment>;
-      })}
-    </>
-  );
-};
 
 /** A worker the user @-mentioned, by its number: its chip, else the mention as written. */
 function TaskByNumber({ number }: { number: number }) {
