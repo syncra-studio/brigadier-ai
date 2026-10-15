@@ -15,6 +15,7 @@ mod browser_store;
 mod computer_menu;
 mod computer_setup;
 mod documents;
+mod downloads;
 mod intro;
 // WebKit's narrow unsafe boundary (the workspace denies it): see its header and the README.
 #[cfg(target_os = "macos")]
@@ -744,6 +745,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             documents::save_document,
+            downloads::save_copy,
             documents::forget_document,
             app_info,
             uninstall_app,

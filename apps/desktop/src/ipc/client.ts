@@ -370,12 +370,17 @@ export function forgetDocument(id: string): Promise<void> {
   return invoke("forget_document", { id });
 }
 
-/** Asks where to save a copy of `text` (suggesting `name`) and writes it there; the path, or
- * null when the dialog was cancelled. Nothing is remembered for the next save. */
-export async function saveCopy(text: string, name: string): Promise<string | null> {
+/** Save image bytes or a local file through the native shell. */
+export function saveCopy(input: { name: string; ask: boolean } & ({ bytes: number[] | Uint8Array; path?: never } | { path: string; bytes?: never })): Promise<string | null>;
+/** Save a text document through its existing native save grant. */
+export function saveCopy(text: string, name: string): Promise<string | null>;
+export async function saveCopy(input: string | ({ name: string; ask: boolean; bytes?: number[] | Uint8Array; path?: string }), name?: string): Promise<string | null> {
+  if (typeof input !== "string") {
+    return invoke("save_copy", { ...input, ...(input.bytes ? { bytes: Array.from(input.bytes) } : {}) });
+  }
   const id = `copy:${crypto.randomUUID()}`;
   try {
-    return await saveDocument(id, text, null, name, true);
+    return await saveDocument(id, input, null, name ?? "Untitled", true);
   } finally {
     forgetDocument(id).catch(console.error);
   }
