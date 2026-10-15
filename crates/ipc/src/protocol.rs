@@ -835,6 +835,11 @@ pub enum Request {
         #[ts(optional)]
         at_ms: Option<i64>,
     },
+    /// The icon of a web site an answer links to (`https://host`), fetched by the daemon from
+    /// the site itself and kept in a small cache; `None` when it has none or can't be reached.
+    SiteIcon {
+        origin: String,
+    },
     /// Stops its CLI processes and removes temp files now; the next message continues it.
     Hibernate {
         id: ConversationId,
@@ -1438,6 +1443,10 @@ pub enum Response {
         /// The file at the link's path exists.
         exists: bool,
         stored: Option<StoredCopy>,
+    },
+    SiteIcon {
+        /// The icon as a `data:` URL.
+        icon: Option<String>,
     },
     Hibernate {
         conversation: Box<Conversation>,

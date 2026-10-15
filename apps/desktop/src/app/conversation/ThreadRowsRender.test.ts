@@ -26,6 +26,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     viewer: { first: { open: boolean; count: string | null; alt: string | null }; second: { count: string | null; alt: string | null }; closed: boolean };
     boundary: { fallback: boolean; neighbour: string | null };
     mended: string | null;
+    links: { before: string[]; after: string[]; asked: string[] };
     user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string };
   } & Record<"diff-patch" | "diff-edit" | "diff-empty" | "diff-missing", {
     name: string | null; counts: string | null; numbers: string[]; kinds: string[]; gaps: string[]; marks: string[]; empty: string | null; coloured: boolean;
@@ -77,6 +78,13 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     first: { open: true, count: "1 of 3", alt: "image-1.png" },
     second: { count: "2 of 3", alt: "image-2.png" },
     closed: true,
+  });
+  // Web links: a globe until the site's icon comes, kept when the site has none, none for a
+  // plain-HTTP link; a site is asked once however many links it has.
+  assert.deepEqual(seen.links, {
+    before: ["globe", "globe", "globe", "none"],
+    after: ["icon", "icon", "globe", "none"],
+    asked: ["https://nodejs.org", "https://none.example"],
   });
   // A turn that fails to render says so in its place, the rest stays; Try again renders it afresh.
   assert.deepEqual(seen.boundary, { fallback: true, neighbour: "The next turn" });

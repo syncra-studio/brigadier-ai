@@ -35,6 +35,7 @@ use crate::awake::Awake;
 use crate::dictation::{Dictation, Started};
 use crate::idle;
 use crate::metrics::Metrics;
+use crate::site_icons::SiteIcons;
 use crate::storage::Storage;
 use crate::supervisor::Supervisor;
 use crate::terminals::Terminals;
@@ -87,6 +88,8 @@ pub struct Daemon {
     pub updates: Updates,
     /// The user's pages: local Markdown documents in the data folder.
     pub pages: Arc<Pages>,
+    /// Web sites' icons for the links in answers.
+    pub site_icons: Arc<SiteIcons>,
     next_connection: AtomicU64,
 }
 
@@ -106,6 +109,7 @@ impl Daemon {
         dictation: Arc<Dictation>,
         awake: Arc<Awake>,
         pages: Arc<Pages>,
+        site_icons: Arc<SiteIcons>,
     ) -> Self {
         let terminals = Arc::new(Terminals::with_platform(runtime.platform().clone()));
         Self {
@@ -127,6 +131,7 @@ impl Daemon {
             uninstall: Uninstall::default(),
             updates: Updates::default(),
             pages,
+            site_icons,
             next_connection: AtomicU64::new(1),
         }
     }
@@ -1417,6 +1422,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             exists: std::path::Path::new(&path).is_absolute()
                 && tokio::fs::try_exists(&path).await.unwrap_or(false),
             stored: heap(|| sessions.stored_output(&conversation_id, &link, at_ms)).await?,
+        },
+        Request::SiteIcon { origin } => Response::SiteIcon {
+            icon: daemon.site_icons.icon(&origin).await,
         },
         Request::GetBrain { project_id } => Response::GetBrain {
             overview: Box::new(heap(|| sessions.brain_overview(project_id)).await?),

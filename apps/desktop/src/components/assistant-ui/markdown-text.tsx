@@ -14,7 +14,7 @@ import {
   useState,
 } from "react";
 import type { TextMessagePartProps } from "@assistant-ui/react";
-import { Check, Copy, ExpandLg } from "@openai/apps-sdk-ui/components/Icon";
+import { Check, Copy, ExpandLg, Globe } from "@openai/apps-sdk-ui/components/Icon";
 
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
 import {
@@ -27,6 +27,7 @@ import {
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { codePath, type CodePath, underRoot, useCodePathExists } from "@/components/assistant-ui/code-paths";
+import { httpsOrigin, useSiteIcon } from "@/components/assistant-ui/site-icons";
 import { createWordFade } from "@/components/assistant-ui/word-fade";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -269,14 +270,28 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
         }
       }}
       className={cn(
-        "aui-md-a text-link hover:text-link/80 underline-offset-2 hover:underline",
+        "aui-md-a text-link hover:text-link/80 font-medium underline-offset-2 hover:underline",
         className,
       )}
     >
+      {href && httpsOrigin(href) && <SiteIcon href={href} />}
       {children}
     </a>
   );
 };
+
+/**
+ * A web link's site icon, 16px before its words: a globe until the daemon has the icon, and when
+ * the site has none. Left out of copied text.
+ */
+function SiteIcon({ href }: { href: string }) {
+  const icon = useSiteIcon(href);
+  return icon ? (
+    <img data-slot="site-icon" src={icon} alt="" referrerPolicy="no-referrer" className="me-0.75 inline-block size-icon-sm rounded-xs object-contain align-text-bottom select-none" />
+  ) : (
+    <Globe data-slot="site-icon" aria-hidden className="me-0.75 inline-block size-icon-sm align-text-bottom select-none" />
+  );
+}
 
 /**
  * Inline code that names a file of the session's checkout (`src/cli.ts:64`): a file chip

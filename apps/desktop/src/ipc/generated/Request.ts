@@ -105,7 +105,7 @@ path: string, } | { "method": "openArtifact", id: string, fileName: string, } | 
  * When the message holding the link was written: a link to `outputs/<name>` opens the
  * copy of the newest task made by then, not a later task's file of the same name.
  */
-atMs?: number, } | { "method": "hibernate", id: ConversationId, } | { "method": "archive", ids: Array<ConversationId>, } | { "method": "restore", ids: Array<ConversationId>, } | { "method": "previewRemoveProject", id: ProjectId, } | { "method": "removeProject", id: ProjectId, 
+atMs?: number, } | { "method": "siteIcon", origin: string, } | { "method": "hibernate", id: ConversationId, } | { "method": "archive", ids: Array<ConversationId>, } | { "method": "restore", ids: Array<ConversationId>, } | { "method": "previewRemoveProject", id: ProjectId, } | { "method": "removeProject", id: ProjectId, 
 /**
  * Brigadier branches to delete, at the tips the preview showed.
  */

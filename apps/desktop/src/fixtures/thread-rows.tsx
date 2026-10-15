@@ -22,6 +22,7 @@
  *   on the backdrop.
  * - An answer's inline code: a file of the checkout is a chip (from the file list, or asked by
  *   its exact path when the list is cut short), anything else stays code.
+ * - An answer's web links: a globe until the daemon has the site's icon, and when it has none.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { ReactNode } from "react";
@@ -45,6 +46,10 @@ const query = new URLSearchParams(location.search);
 const CHAT = "thread-rows";
 const ROOT = "/repo";
 const asked: string[] = [];
+const siteAsks: string[] = [];
+const NODE_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/eL9GtQAAAABJRU5ErkJggg==";
+let letIconsCome = () => {};
+const iconsCome = new Promise<void>((resolve) => (letIconsCome = resolve));
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
@@ -52,6 +57,10 @@ mockIPC((command, payload) => {
   if (req.method === "resolveFileLink") {
     asked.push(req.path);
     return { method: req.method, exists: req.path === `${ROOT}/src/made-later.ts`, stored: null };
+  }
+  if (req.method === "siteIcon") {
+    siteAsks.push(req.origin);
+    return iconsCome.then(() => ({ method: req.method, icon: req.origin === "https://nodejs.org" ? NODE_ICON : null }));
   }
   return { method: req.method };
 });
@@ -68,6 +77,7 @@ useApp.setState((state) => ({
 }));
 
 const patch = "--- a/src/math.js\n+++ b/src/math.js\n@@ -1,4 +1,4 @@\n export function round(value) {\n-  return Math.round(value * 100) / 100;\n+  return Math.round((value + Number.EPSILON) * 100) / 100;\n }\n \n@@ -20,2 +20,3 @@\n const a = 1;\n+const b = 2;\n const c = 3;\n";
+const links = "See [the release](https://nodejs.org/en/about) and [its schedule](https://nodejs.org/en/about/previous-releases), [a page](https://none.example/x) and [the dev server](http://localhost:3000).";
 const answer = "The CLI parses it in `src/cli.ts:64`, the new helper is `src/made-later.ts`, rounding uses `Math.round`, and `src/gone.ts` was removed.";
 
 const now = Date.now();
@@ -179,6 +189,9 @@ function Page() {
         <Case id="chips">
           <MarkdownBlock text={answer} />
         </Case>
+        <Case id="links">
+          <MarkdownBlock text={links} />
+        </Case>
       </main>
     </TooltipProvider>
   );
@@ -275,6 +288,16 @@ async function measure(): Promise<object> {
     code: all("code", user).map((node) => text(node)),
     text: text(user),
   };
+  // Web links: a globe until the daemon has the site's icon, kept when it has none; each site asked once.
+  const icons = () => all("a", at("links")).map((link) => {
+    const icon = one("[data-slot=site-icon]", link);
+    return icon ? (icon.tagName === "IMG" ? icon.getAttribute("src") === NODE_ICON ? "icon" : "img" : "globe") : "none";
+  });
+  const before = icons();
+  letIconsCome();
+  for (const end = performance.now() + 3000; performance.now() < end && !icons().includes("icon"); ) await frame();
+  await wait(100);
+  out.links = { before, after: icons(), asked: siteAsks.toSorted() };
   const searchRow = at("search").firstElementChild;
   out.search = { row: text(searchRow), opens: !!one("[aria-expanded]", at("search")) || searchRow?.getAttribute("role") === "button" };
   return out;

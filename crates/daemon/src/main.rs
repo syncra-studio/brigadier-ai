@@ -31,6 +31,7 @@ mod overnight_supervisor;
 mod quit;
 mod registry;
 mod server;
+mod site_icons;
 mod storage;
 mod supervisor;
 mod terminals;
@@ -346,6 +347,9 @@ async fn run(
         )),
         awake.clone(),
         Arc::new(Pages::open(platform.paths().data_dir.join(PAGES_DIR))),
+        Arc::new(site_icons::SiteIcons::new(
+            platform.paths().data_dir.join("site-icons"),
+        )),
     ));
     // "Open in terminal" runs a worker's session in the daemon's terminals.
     daemon.sessions.set_terminal_host(daemon.terminals.clone());
