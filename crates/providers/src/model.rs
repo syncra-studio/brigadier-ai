@@ -451,6 +451,51 @@ pub struct FileChange {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub diff: Option<String>,
+    /// Lines in and out, counted from the whole diff before it was clipped
+    /// ([`FileChange::counted`]); `None` when the CLI gave no diff, and in events stored
+    /// before they were counted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub added: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub removed: Option<u32>,
+}
+
+impl FileChange {
+    /// A change whose lines in and out are counted from `diff`, the whole diff as the CLI gave
+    /// it; the diff kept is `diff` cut to `clip` bytes.
+    pub fn counted(path: String, kind: FileChangeKind, diff: Option<&str>, clip: usize) -> Self {
+        let (added, removed) = diff.map(|diff| diff_counts(kind, diff)).unzip();
+        Self {
+            path,
+            kind,
+            diff: diff.map(|diff| crate::clip(diff, clip)),
+            added,
+            removed,
+        }
+    }
+}
+
+/// Lines in and out of a file change's diff. A new file's diff is all lines in and a deleted
+/// one's all lines out, whether the CLI marks them (`+`/`-`, as Claude's `Write` does) or gives
+/// the bare content. An update's are its `+` and `-` lines, past a unified diff's `---`/`+++`
+/// header and its `@@` hunk lines.
+pub fn diff_counts(kind: FileChangeKind, diff: &str) -> (u32, u32) {
+    let mut lines: Vec<&str> = diff.lines().collect();
+    if lines.len() >= 2 && lines[0].starts_with("--- ") && lines[1].starts_with("+++ ") {
+        lines.drain(..2);
+    }
+    lines.retain(|line| !line.starts_with("@@"));
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    match kind {
+        FileChangeKind::Add => (count(lines.len()), 0),
+        FileChangeKind::Delete => (0, count(lines.len())),
+        FileChangeKind::Update => (
+            count(lines.iter().filter(|line| line.starts_with('+')).count()),
+            count(lines.iter().filter(|line| line.starts_with('-')).count()),
+        ),
+    }
 }
 
 /// Lines `start..=end` of a file, counted from 1. `end: None` runs to the end of the file.
@@ -1312,5 +1357,33 @@ mod input_tests {
         assert!(TurnInput::default().is_empty());
         assert!(TurnInput::text(" \n").is_empty());
         assert!(!input.is_empty());
+    }
+
+    /// Lines in and out for each shape a CLI gives a change in: a unified diff with its header
+    /// and hunks (Codex's update), a new or deleted file's bare content (Codex) or marked lines
+    /// (Claude's `Write`), an edit's marked lines with `@@` between edits (Claude's `MultiEdit`).
+    #[test]
+    fn a_diff_counts_its_lines_in_and_out_in_every_shape() {
+        let unified = "--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,3 +1,4 @@\n fn a() {\n-    1\n+    2\n+    3\n }\n";
+        assert_eq!(diff_counts(FileChangeKind::Update, unified), (2, 1));
+        assert_eq!(diff_counts(FileChangeKind::Add, "one\ntwo\n"), (2, 0));
+        assert_eq!(diff_counts(FileChangeKind::Add, "+one\n+two"), (2, 0));
+        assert_eq!(diff_counts(FileChangeKind::Delete, "gone\n"), (0, 1));
+        assert_eq!(
+            diff_counts(FileChangeKind::Update, "-x\n+y\n@@\n+z\n"),
+            (2, 1)
+        );
+        // A removed line that reads like a header is still a line out.
+        assert_eq!(
+            diff_counts(FileChangeKind::Update, "--- old\n+new\n"),
+            (1, 1)
+        );
+        // Counted before the clip, which keeps only the start.
+        let long = "+line\n".repeat(5_000);
+        let change = FileChange::counted("f".into(), FileChangeKind::Add, Some(&long), 1024);
+        assert_eq!((change.added, change.removed), (Some(5_000), Some(0)));
+        assert!(change.diff.unwrap().len() < 1100);
+        let none = FileChange::counted("f".into(), FileChangeKind::Update, None, 1024);
+        assert_eq!((none.diff, none.added, none.removed), (None, None, None));
     }
 }

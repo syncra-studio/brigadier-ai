@@ -74,6 +74,8 @@ mod tests {
             path: "a".into(),
             kind: FileChangeKind::Update,
             diff: Some(diff),
+            added: None,
+            removed: None,
         };
         let event = ProviderEvent::FileChanges {
             item_id: "i".into(),

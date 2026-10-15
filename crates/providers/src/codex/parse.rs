@@ -466,15 +466,14 @@ impl Parser {
                     .collect();
                 let changes: Vec<FileChange> = changes
                     .into_iter()
-                    .map(|change| FileChange {
-                        diff: (!change.diff.is_empty())
-                            .then(|| clip(&change.diff, crate::DIFF_RAW_CLIP)),
-                        path: change.path,
-                        kind: match change.kind {
+                    .map(|change| {
+                        let kind = match change.kind {
                             p::PatchChangeKind::Add => FileChangeKind::Add,
                             p::PatchChangeKind::Delete => FileChangeKind::Delete,
                             p::PatchChangeKind::Update { .. } => FileChangeKind::Update,
-                        },
+                        };
+                        let diff = (!change.diff.is_empty()).then_some(change.diff.as_str());
+                        FileChange::counted(change.path, kind, diff, crate::DIFF_RAW_CLIP)
                     })
                     .collect();
                 self.file_items.insert(id.clone(), paths);
@@ -1589,6 +1588,39 @@ mod tests {
             Some(&workspace)
         ));
         std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    /// A patch's files carry their lines in and out, counted from the whole diff before it is
+    /// clipped: an update's unified diff, a new file's content.
+    #[test]
+    fn a_patch_counts_each_files_lines_in_and_out() {
+        let mut parser = Parser::live();
+        let long = "line\n".repeat(20_000);
+        let completed = json!({ "method": "item/completed", "params": {
+            "item": { "id": "f1", "type": "fileChange", "status": "completed", "changes": [
+                { "path": "/w/a.rs", "kind": { "type": "update", "move_path": null },
+                  "diff": "--- a/a.rs\n+++ b/a.rs\n@@ -1,2 +1,2 @@\n-old\n+new\n same\n" },
+                { "path": "/w/big.txt", "kind": { "type": "add" }, "diff": long },
+                { "path": "/w/c.rs", "kind": { "type": "update", "move_path": null }, "diff": "" },
+            ]},
+            "completedAtMs": 1, "threadId": "t1", "turnId": "u1",
+        }});
+        let changes = events(&mut parser, &completed)
+            .into_iter()
+            .find_map(|event| match event {
+                ProviderEvent::FileChanges { changes, .. } => Some(changes),
+                _ => None,
+            })
+            .expect("a patch");
+        let counts: Vec<(Option<u32>, Option<u32>)> = changes
+            .iter()
+            .map(|change| (change.added, change.removed))
+            .collect();
+        assert_eq!(
+            counts,
+            [(Some(1), Some(1)), (Some(20_000), Some(0)), (None, None)]
+        );
+        assert!(changes[1].diff.as_ref().unwrap().len() < long.len());
     }
 
     #[test]

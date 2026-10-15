@@ -555,6 +555,11 @@ impl Parser {
             };
             let output = clip(&content_text(block), OUTPUT_CLIP);
             let event = match tool_kind(&tool.name) {
+                // Claude's command output arrives at completion; Codex streams. A running
+                // `Bash` gets no output on the way (claude 2.1.300, measured 2026-10-15): a
+                // `task_started` line, a `tool_progress` heartbeat every 30 s with only the
+                // time elapsed, a `task_notification`, then this result with all of it. So a
+                // Claude command has no `CommandOutputDelta`: its output is here, once.
                 ToolKind::Command => ProviderEvent::Command {
                     item_id: id.to_owned(),
                     command: str_of(&tool.input, "command")
@@ -566,11 +571,20 @@ impl Parser {
                     output: Some(output),
                     duration_ms: None,
                 },
-                ToolKind::FileChange => ProviderEvent::FileChanges {
-                    item_id: id.to_owned(),
-                    changes: file_changes(&tool.name, &tool.input),
-                    status,
-                },
+                ToolKind::FileChange => {
+                    let mut changes = file_changes(&tool.name, &tool.input);
+                    if let (Some((added, removed)), [change]) =
+                        (patch_counts(structured), changes.as_mut_slice())
+                    {
+                        change.added = Some(added);
+                        change.removed = Some(removed);
+                    }
+                    ProviderEvent::FileChanges {
+                        item_id: id.to_owned(),
+                        changes,
+                        status,
+                    }
+                }
                 ToolKind::Other => ProviderEvent::ToolCall {
                     item_id: id.to_owned(),
                     name: tool.name.clone(),
@@ -1172,13 +1186,38 @@ fn file_changes(tool: &str, input: &Value) -> Vec<FileChange> {
         _ => return Vec::new(),
     };
     path.map(|path| {
-        vec![FileChange {
-            path: path.to_owned(),
+        vec![FileChange::counted(
+            path.to_owned(),
             kind,
-            diff: edit_diff(tool, input),
-        }]
+            edit_diff(tool, input).as_deref(),
+            crate::DIFF_RAW_CLIP,
+        )]
     })
     .unwrap_or_default()
+}
+
+/// A finished edit's lines in and out as Claude applied it: its result's `structuredPatch`
+/// (hunks of ` `, `-` and `+` lines), which leaves out the unchanged lines an `Edit`'s old and
+/// new text repeat. `None` without one (a new file's `Write` has none: its content is all in).
+fn patch_counts(result: Option<&Value>) -> Option<(u32, u32)> {
+    let hunks = result?.get("structuredPatch")?.as_array()?;
+    if hunks.is_empty() {
+        return None;
+    }
+    let lines = hunks
+        .iter()
+        .filter_map(|hunk| hunk.get("lines")?.as_array())
+        .flatten()
+        .filter_map(Value::as_str);
+    let (mut added, mut removed) = (0u32, 0u32);
+    for line in lines {
+        if line.starts_with('+') {
+            added = added.saturating_add(1);
+        } else if line.starts_with('-') {
+            removed = removed.saturating_add(1);
+        }
+    }
+    Some((added, removed))
 }
 
 /// An edit's lines out and in, from its input: `Edit`'s old and new text, each of `MultiEdit`'s
@@ -1215,7 +1254,7 @@ fn edit_diff(tool: &str, input: &Value) -> Option<String> {
         "Write" => lines(str_of(input, "content").unwrap_or_default(), '+', &mut out),
         _ => return None,
     }
-    (!out.is_empty()).then(|| clip(&out, crate::DIFF_RAW_CLIP))
+    (!out.is_empty()).then_some(out)
 }
 
 /// Claude reports a failed command's status as `Exit code N` at the top of its output.
@@ -1516,6 +1555,132 @@ mod tests {
             Some("+hi\n")
         );
         assert_eq!(edit_diff("Read", &json!({"file_path": "n"})), None);
+        // Counted from the edit while it runs.
+        assert_eq!((change.added, change.removed), (Some(2), Some(2)));
+    }
+
+    /// A finished edit's lines in and out are its result's patch, without the unchanged lines
+    /// its old and new text repeat; a new file's (no patch) are all of its lines in.
+    #[test]
+    fn a_finished_edit_counts_the_lines_its_patch_changed() {
+        let mut parser = Parser::live();
+        let changes = |outputs: Vec<Output>| -> Vec<FileChange> {
+            outputs
+                .into_iter()
+                .find_map(|output| match output {
+                    Output::Event(ProviderEvent::FileChanges { changes, .. }) => Some(changes),
+                    _ => None,
+                })
+                .expect("a file change")
+        };
+        let edit = json!({"file_path": "/w/a.rs", "old_string": "fn a() {\n    1\n}", "new_string": "fn a() {\n    2\n}"});
+        let write = json!({"file_path": "/w/new.rs", "content": "one\ntwo\nthree\n"});
+        let started = parser.feed(
+            &json!({"type": "assistant", "message": {"id": "m1", "content": [
+                {"type": "tool_use", "id": "toolu_e", "name": "Edit", "input": edit},
+                {"type": "tool_use", "id": "toolu_w", "name": "Write", "input": write},
+            ]}})
+            .to_string(),
+        );
+        let running: Vec<(Option<u32>, Option<u32>)> = started
+            .into_iter()
+            .filter_map(|output| match output {
+                Output::Event(ProviderEvent::FileChanges { changes, .. }) => {
+                    Some((changes[0].added, changes[0].removed))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(running, [(Some(3), Some(3)), (Some(3), Some(0))]);
+        let edited = changes(parser.feed(
+            &json!({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "toolu_e", "content": "The file was updated"},
+            ]}, "tool_use_result": {"filePath": "/w/a.rs", "structuredPatch": [
+                {"oldStart": 1, "oldLines": 3, "newStart": 1, "newLines": 3,
+                 "lines": [" fn a() {", "-    1", "+    2", " }"]},
+            ]}})
+            .to_string(),
+        ));
+        assert_eq!((edited[0].added, edited[0].removed), (Some(1), Some(1)));
+        assert_eq!(
+            edited[0].diff.as_deref(),
+            Some("-fn a() {\n-    1\n-}\n+fn a() {\n+    2\n+}\n")
+        );
+        let written = changes(parser.feed(
+            &json!({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "toolu_w", "content": "File created"},
+            ]}, "tool_use_result": {"type": "create", "filePath": "/w/new.rs", "structuredPatch": []}})
+            .to_string(),
+        ));
+        assert_eq!((written[0].added, written[0].removed), (Some(3), Some(0)));
+    }
+
+    /// Claude's command output arrives at completion; Codex streams (C5). The lines a real
+    /// foreground `Bash` of 40 s printed (claude 2.1.300, 2026-10-15): it started, a heartbeat
+    /// came at 30 s with the time elapsed and no output, it ended, and the result held all ten
+    /// lines. No output comes on the way, so the command's one output is its result's.
+    #[test]
+    fn a_claude_commands_output_arrives_at_completion() {
+        let lines = [
+            json!({"type": "assistant", "message": {"id": "msg_1", "content": [
+                {"type": "tool_use", "id": "toolu_01Vk", "name": "Bash", "input": {
+                    "command": "for i in 1 2 3 4 5 6 7 8 9 10; do echo line$i; sleep 4; done",
+                    "description": "Print ten lines with pauses", "run_in_background": false}},
+            ]}}),
+            json!({"type": "system", "subtype": "task_started", "task_id": "btbhmgdpp",
+                "tool_use_id": "toolu_01Vk", "description": "Print ten lines with pauses",
+                "is_backgrounded": false, "task_type": "local_bash"}),
+            json!({"type": "tool_progress", "tool_use_id": "toolu_01Vk-heartbeat-0",
+                "tool_name": "Bash", "parent_tool_use_id": "toolu_01Vk",
+                "elapsed_time_seconds": 30, "heartbeat": true}),
+            json!({"type": "system", "subtype": "task_notification", "task_id": "btbhmgdpp",
+                "tool_use_id": "toolu_01Vk", "status": "completed", "output_file": "",
+                "summary": "Print ten lines with pauses"}),
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"tool_use_id": "toolu_01Vk", "type": "tool_result",
+                 "content": "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10",
+                 "is_error": false}]},
+             "tool_use_result": {"stdout": "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10",
+                 "stderr": "", "interrupted": false, "isImage": false}}),
+        ];
+        let mut parser = Parser::live();
+        let events: Vec<ProviderEvent> = lines
+            .iter()
+            .flat_map(|line| parser.feed(&line.to_string()))
+            .filter_map(|output| match output {
+                Output::Event(event) => Some(event),
+                Output::Control(_) => None,
+            })
+            .collect();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ProviderEvent::CommandOutputDelta { .. })),
+            "{events:?}"
+        );
+        let commands: Vec<(ItemStatus, Option<&str>, Option<i32>)> = events
+            .iter()
+            .filter_map(|event| match event {
+                ProviderEvent::Command {
+                    status,
+                    output,
+                    exit_code,
+                    ..
+                } => Some((*status, output.as_deref(), *exit_code)),
+                _ => None,
+            })
+            .collect();
+        let whole = (1..=10)
+            .map(|n| format!("line{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            commands,
+            [
+                (ItemStatus::InProgress, None, None),
+                (ItemStatus::Completed, Some(whole.as_str()), Some(0)),
+            ]
+        );
     }
 
     /// The `Looked` events a recording's output makes.
