@@ -3,6 +3,7 @@ import { type ReactNode, useContext, useEffect, useState } from "react";
 
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
+import { OWN_RUNS, ownRunOutput } from "@/app/conversation/activity/ownRun";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
@@ -217,6 +218,7 @@ function searchQuery(input: string | null): string | null {
 }
 
 const SHELLS = new Set(["Bash", "run", "run_unsandboxed", "shell", "exec_command", "run_check"]);
+
 const EDITS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"]);
 
 /** A call's detail from what it was given and what it gave back. */
@@ -225,6 +227,10 @@ function callDetail(name: string, status: ItemStatus, call: { input: string | nu
   if (SHELLS.has(short)) {
     const given = parsedInput(call.input)?.["command"];
     const command = call.command ?? (typeof given === "string" ? given : "");
+    if (command && OWN_RUNS.has(short)) {
+      const own = ownRunOutput(call.output);
+      return <ShellBox command={command} output={own.output} status={status} exit={call.exit ?? own.exit} />;
+    }
     if (command) return <ShellBox command={command} output={call.output} status={status} exit={call.exit} />;
   }
   if (EDITS.has(short)) {
