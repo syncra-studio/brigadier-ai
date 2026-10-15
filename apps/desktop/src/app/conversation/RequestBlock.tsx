@@ -83,6 +83,7 @@ import { formatDuration, formatSentAt } from "@/lib/format";
 import { VENDOR_LABELS } from "@/lib/routing";
 import { modelName, sameModel, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { openConversation, resume, send } from "@/state/actions";
 import { readAloud, stopReading, useReading } from "@/state/readAloud";
 import { RETRYING, useBoard } from "@/state/board";
@@ -934,8 +935,16 @@ const ModelChanged: FC<{ model: ModelChoice | null; picked: ModelChoice | null }
   const groups = useModelGroups();
   if (!model || !picked || sameModel(groups, picked, model)) return null;
   return (
-    <p className="text-muted-foreground text-sm">
+    <p data-slot="model-changed" className="text-muted-foreground flex items-center gap-1.5 text-sm">
       Model changed from {modelName(groups, picked)} to {modelName(groups, model)}.
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" aria-label="Why the model changed" className="hover:text-foreground shrink-0">
+            <Info aria-hidden className="size-icon-sm" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>The model you picked couldn’t take this turn, so another one answered it.</TooltipContent>
+      </Tooltip>
     </p>
   );
 };
