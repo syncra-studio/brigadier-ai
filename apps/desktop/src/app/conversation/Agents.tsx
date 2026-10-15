@@ -3,6 +3,7 @@ import { type ReactNode, memo, useContext, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { workerDone, workerWorking, workerState, workerPreview } from "@/app/conversation/workerPresentation";
+import { StopWorker } from "@/app/conversation/activity/StopWorker";
 import { TaskDetails } from "@/app/conversation/TaskDetails";
 import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
@@ -265,6 +266,7 @@ function WorkerDetail({ task, headerActions }: { task: Task; headerActions?: Rea
           </TooltipTrigger>
           <TooltipContent>Worker details · {model}</TooltipContent>
         </Tooltip>
+        <StopWorker taskId={task.id} name={name ?? task.title} />
         {headerActions}
       </header>
       {details ? <div data-slot="worker-details" data-selectable className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-5 wrap-anywhere">

@@ -43,7 +43,7 @@ function chromium(): string {
   throw new Error("Worker activity rendering test needs Chromium. Set CHROME_BIN to an installed Chrome/Chromium.");
 }
 
-type Rendering = { thread: Record<string, string>; summary: string; list: string; strip: string; stripRows: number; avatars: number[] };
+type Rendering = { thread: Record<string, string>; summary: string; list: string; strip: string; stripRows: number; avatars: number[]; stripStops: string[]; headerStop?: string; doneHeaderStop: boolean; sent: string[] };
 
 // Vite serves the real React components, and Chromium clicks the real Collapsible trigger.
 // Disposable profiles and Vite's cache use the system temporary folder, never the app's data.
@@ -133,6 +133,13 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
   assert.match(rendering.strip, /1 worker working · 2 waiting · 1 done · 1 stopped/);
   assert.match(rendering.strip, /Stop all/);
   assert.equal(rendering.stripRows, 5);
+  // Each worker that runs or waits has its own Stop, on its row and in its view's header; a
+  // click sends that worker's stop (UI audit M4).
+  assert.deepEqual(rendering.stripStops, ["Stop Check active", "Stop Check blocked", "Stop Check queued"]);
+  assert.equal(rendering.headerStop, "Stop Check active");
+  assert.equal(rendering.doneHeaderStop, false);
+  assert.equal(rendering.sent.length, 1, JSON.stringify(rendering.sent));
+  assert.match(rendering.sent[0]!, /"method":"stopTask","taskId":"active"/);
   assert.match(rendering.thread.active!, /Check active started working/);
   assert.match(rendering.thread.blocked!, /Check blocked is waiting/);
   assert.match(rendering.thread.completed!, /Check completed finished/);

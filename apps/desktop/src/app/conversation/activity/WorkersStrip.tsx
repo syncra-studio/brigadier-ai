@@ -2,6 +2,7 @@ import { ChevronRight, StopCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, memo, useContext, useMemo, useState } from "react";
 
 import { lastReplies, type StripView, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
+import { StopWorker } from "@/app/conversation/activity/StopWorker";
 import { useAction } from "@/app/conversation/useAction";
 import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
@@ -27,7 +28,7 @@ function Elapsed({ taskId }: { taskId: string }) {
   return <span className="text-foreground/50 shrink-0 tabular-nums">{formatDuration(Math.max(0, now - start))}</span>;
 }
 
-/** One worker: `[g] Name · what it is at · 1m 2s · +12 −3`. Opens its thread. */
+/** One worker: `[g] Name · what it is at · 1m 2s · +12 −3`, and its Stop while it runs. Opens its thread. */
 const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
   const name = useWorkerName(taskId);
   const { setPanel } = useContext(AgentsPanelContext);
@@ -42,12 +43,12 @@ const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
   });
   return (
     <li>
-      <div ref={ref}>
+      <div ref={ref} className="flex min-w-0 items-center">
       <button
         type="button"
         data-slot="workers-strip-row"
         onClick={() => setPanel(taskId)}
-        className="hover:bg-foreground/5 rounded-control min-h-row flex w-full min-w-0 items-center gap-1.5 px-2 text-start text-sm"
+        className="hover:bg-foreground/5 rounded-control min-h-row flex min-w-0 flex-1 items-center gap-1.5 px-2 text-start text-sm"
       >
         <WorkerGlyph taskId={taskId} className="size-4 shrink-0" />
         <span className="text-foreground/80 max-w-1/3 shrink-0 truncate">{name}</span>
@@ -58,6 +59,7 @@ const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
         <Elapsed taskId={taskId} />
         {stat && <Changes insertions={stat.insertions} deletions={stat.deletions} />}
       </button>
+      <StopWorker taskId={taskId} name={name ?? "this worker"} />
       </div>
     </li>
   );

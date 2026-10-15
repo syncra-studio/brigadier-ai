@@ -24,23 +24,35 @@ const tasks = { active: task("active", 1, "running"), blocked: task("blocked", 2
   // Stopped before it landed: it counts as stopped, never as done (BUILD-PLAN A7).
   stopped: task("stopped", 5, "stopped") };
 useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, tasks } });
-mockIPC(() => null);
+// What the page asked the daemon (a worker's Stop sends `stopTask`).
+const sent: string[] = [];
+mockIPC((cmd, args) => {
+  sent.push(JSON.stringify({ cmd, args }));
+  return null;
+});
 function Fixture() {
   const [result, setResult] = useState("");
   const [panel, setPanel] = useState<string | null | undefined>();
   useEffect(() => {
     // Open the strip, as a click on its count does.
     const open = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-expanded]')?.click(), 100);
+    // The running worker's own Stop, on its strip row (UI audit M4).
+    const stop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-label="Stop Check active"]')?.click(), 250);
     const timer = setTimeout(() => setResult(JSON.stringify({
       thread: Object.fromEntries([...document.querySelectorAll('main > section[data-task]')].map((row) => [row.getAttribute("data-task"), row.textContent])),
       summary: document.querySelector('[data-slot="workers-summary"]')?.textContent,
       list: document.querySelector('[data-slot="worker-list"]')?.textContent,
       strip: document.querySelector('[data-slot="workers-strip"]')?.textContent,
       stripRows: document.querySelectorAll('[data-slot="workers-strip-row"]').length,
+      stripStops: [...document.querySelectorAll<HTMLButtonElement>('[data-slot="workers-strip"] [data-slot="worker-stop"]')].map((button) => button.getAttribute("aria-label")),
+      headerStop: document.querySelector('[data-slot="worker-view"] [data-slot="worker-header"] [data-slot="worker-stop"]')?.getAttribute("aria-label"),
+      doneHeaderStop: !!document.querySelector('[data-slot="worker-view-done"] [data-slot="worker-stop"]'),
+      sent: sent.filter((call) => call.includes("stopTask")),
       avatars: [...document.querySelectorAll('[data-slot="task-row"] span[aria-hidden] svg')].map((svg) => svg.getBoundingClientRect().width),
     })), 400);
     return () => {
       clearTimeout(open);
+      clearTimeout(stop);
       clearTimeout(timer);
     };
   }, []);
@@ -50,6 +62,12 @@ function Fixture() {
       <WorkersSummary conversationId={conversationId} />
       <div data-slot="worker-list"><WorkersTab conversationId={conversationId} /></div>
       <StripOf conversationId={conversationId} />
+      <AgentsPanelContext.Provider value={{ panel: "active", setPanel }}>
+        <div data-slot="worker-view"><WorkersTab conversationId={conversationId} /></div>
+      </AgentsPanelContext.Provider>
+      <AgentsPanelContext.Provider value={{ panel: "completed", setPanel }}>
+        <div data-slot="worker-view-done"><WorkersTab conversationId={conversationId} /></div>
+      </AgentsPanelContext.Provider>
       <pre id="worker-activity-result">{result}</pre>
     </main>
   </AgentsPanelContext.Provider></TooltipProvider>;
