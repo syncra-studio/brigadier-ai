@@ -1089,6 +1089,7 @@ mod tests {
             number: 1,
             items: Vec::new(),
             landing: None,
+            answer_waits: false,
         }
     }
 

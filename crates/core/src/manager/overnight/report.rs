@@ -1753,6 +1753,7 @@ mod tests {
                     number: 0,
                     items: Vec::new(),
                     landing: None,
+                    answer_waits: false,
                 },
             );
         }

@@ -1433,6 +1433,12 @@ pub struct ReviewRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub landing: Option<String>,
+    /// The thread's answer waits for it: `run_check` told the thread to end its turn and wait
+    /// for this review of its own change (BUILD-PLAN B2), so a clean end is news too. Recorded,
+    /// so a restart still tells it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub answer_waits: bool,
 }
 
 /// One finding of a review. Brigadier splits it from the review's text; the thread decides

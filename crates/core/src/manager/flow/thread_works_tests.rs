@@ -229,7 +229,7 @@ async fn a_session_from_before_hears_the_change_once_and_does_the_work_itself() 
                     for (file, text) in [
                         ("greet.rs", "pub fn greet() -> &'static str { \"hi\" }\n"),
                         ("lib.rs", "pub mod greet;\n"),
-                        ("greet_test.rs", "#[test] fn greets() {}\n"),
+                        ("main.rs", "fn main() { greet::greet(); }\n"),
                     ] {
                         std::fs::write(workspace.join(file), text).unwrap();
                     }

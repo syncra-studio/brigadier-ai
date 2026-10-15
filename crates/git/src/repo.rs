@@ -377,21 +377,29 @@ impl Repo {
         if tree == self.tree_of(&head.0)? {
             return Ok(head);
         }
-        let date: std::ffi::OsString = "2000-01-01T00:00:00+0000".into();
-        let env: Environment = ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"]
-            .map(|key| (key.into(), "Brigadier".into()))
-            .into_iter()
-            .chain(
-                ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"]
-                    .map(|key| (key.into(), "brigadier@localhost".into())),
-            )
-            .chain(["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"].map(|key| (key.into(), date.clone())))
-            .collect();
         self.commit_tree_with(
             &tree,
             &[&head],
             "Brigadier snapshot of the checkout's files",
-            &env,
+            &fixed_identity(),
+        )
+    }
+
+    /// A commit holding `tip`'s files whose parent is `base`, so `base...it` (a diff from the
+    /// merge base, as reviewers read one) shows exactly what changed from `base` to `tip`:
+    /// `tip` itself when `base` is its ancestor. Two snapshots of a checkout are siblings on
+    /// its HEAD, and the later one's own merge-base diff would show changes the earlier one
+    /// already held. No ref names it; the same pair gives the same commit.
+    pub fn on_base(&self, base: &Oid, tip: &Oid) -> Result<Oid> {
+        if self.ancestor(base, tip)? {
+            return Ok(tip.clone());
+        }
+        let tree = self.tree_of(&tip.0)?;
+        self.commit_tree_with(
+            &tree,
+            &[base],
+            "Brigadier change from one snapshot to the next",
+            &fixed_identity(),
         )
     }
 
@@ -1722,6 +1730,21 @@ fn absolute(path: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// The author, committer and date of a commit Brigadier makes for itself and no ref names, so
+/// the same files on the same parent always give the same commit.
+fn fixed_identity() -> Environment {
+    let date: std::ffi::OsString = "2000-01-01T00:00:00+0000".into();
+    ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"]
+        .map(|key| (key.into(), "Brigadier".into()))
+        .into_iter()
+        .chain(
+            ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"]
+                .map(|key| (key.into(), "brigadier@localhost".into())),
+        )
+        .chain(["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"].map(|key| (key.into(), date.clone())))
+        .collect()
+}
+
 /// What of either side's changes since their merge base is missing from a merge's tree
 /// (`present`): a path one side added or changed and the other left alone must be there; one
 /// side changed and the other deleted is contested, and may go only with a reason; a path one
@@ -1849,6 +1872,46 @@ mod tests {
         assert_ne!(tree(&first), tree(&changed));
         // A tree is not a commit.
         assert!(repo.tree_of(&tree(&first).0).is_err());
+    }
+
+    #[test]
+    fn a_later_snapshot_on_the_earlier_one_shows_only_what_changed_between_them() {
+        let (dir, git) = test_git("on-base");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        fs::write(root.join("a.txt"), "a\n").unwrap();
+        fs::write(root.join("b.txt"), "b\n").unwrap();
+        let head = repo.commit_changes("Base", true).unwrap();
+        // The checkout was dirty before: a.txt changed. Then b.txt changes, and a.txt goes
+        // back to HEAD's.
+        fs::write(root.join("a.txt"), "user\n").unwrap();
+        let before = repo.snapshot_files().unwrap();
+        fs::write(root.join("a.txt"), "a\n").unwrap();
+        fs::write(root.join("b.txt"), "b2\n").unwrap();
+        let after = repo.snapshot_files().unwrap();
+        assert!(!repo.ancestor(&before, &after).unwrap());
+        let linked = repo.on_base(&before, &after).unwrap();
+        assert!(repo.ancestor(&before, &linked).unwrap());
+        assert_eq!(
+            repo.tree_of(&linked.0).unwrap(),
+            repo.tree_of(&after.0).unwrap()
+        );
+        let diff = |range: &str| {
+            String::from_utf8_lossy(&repo.cmd(&["diff", "--name-only", range], true).unwrap())
+                .into_owned()
+        };
+        // From the merge base: the sibling shows the user's old edit as gone and misses
+        // nothing else; the linked commit shows both real changes and nothing more.
+        assert_eq!(diff(&format!("{}...{}", before.0, after.0)), "b.txt\n");
+        assert_eq!(
+            diff(&format!("{}...{}", before.0, linked.0)),
+            "a.txt\nb.txt\n"
+        );
+        // The same pair gives the same commit; an ancestor base keeps the tip itself.
+        assert_eq!(repo.on_base(&before, &after).unwrap(), linked);
+        assert_eq!(repo.on_base(&head, &after).unwrap(), after);
+        assert_eq!(repo.resolve("HEAD").unwrap(), head);
     }
 
     #[test]

@@ -10,8 +10,9 @@
 //!   ([`brigadier_git::Repo::snapshot_files`]: a commit no ref names, written without the
 //!   user's index, HEAD, refs or files). It is recorded, so a restart keeps it.
 //! - **The size line** ([`REVIEW_LINE`]): once the range changes that many lines, or more than
-//!   that many files, one review of the whole range starts in the background, and the range
-//!   starts again after it. A smaller range gets none: the thread's own checks cover it.
+//!   that many files besides tests and docs ([`counts_as_a_file`]), one review of the whole
+//!   range starts in the background, and the range starts again after it. A smaller range gets
+//!   none: the thread's own checks cover it.
 //! - **The risky mark**: `run_check`'s `risky` makes the range owe a review whatever its size.
 //! - **Before the final answer** (C2): `run_check`, which the thread calls before it answers,
 //!   brings the range up to date first, its uncommitted changes in a worktree included (from
@@ -32,7 +33,8 @@ use crate::model::{ConversationId, DomainEvent, Environment, Setup};
 use crate::work::{ReviewFor, ReviewKind, ReviewRun, ReviewState, UnreviewedRange};
 
 /// Where an unreviewed range gets its review: this many changed lines (added and removed) or
-/// more, or more than this many files. A cheap rule, tuned from measurements (V1).
+/// more, or more than this many files besides tests and docs. A cheap rule, tuned from
+/// measurements (V1).
 pub(crate) const REVIEW_LINE: SizeLine = SizeLine {
     lines: 30,
     files: 2,
@@ -55,8 +57,32 @@ impl SizeLine {
 /// How big a range is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Size {
+    /// Every changed line, tests and docs included.
     lines: u32,
+    /// The files changed, tests and docs aside.
     files: usize,
+}
+
+/// Whether a changed file counts toward the size line's files. A test or a doc that goes with
+/// a small change doesn't make it big enough for a review (its lines still count): a file
+/// under a `test`, `tests`, `__tests__` or `docs` folder, a `*_test(s).rs`, a
+/// `*.test.{ts,tsx,js,jsx}` or a `*.md`.
+pub(crate) fn counts_as_a_file(path: &str) -> bool {
+    let mut parts: Vec<&str> = path.split('/').collect();
+    let name = parts.pop().unwrap_or_default();
+    if parts
+        .iter()
+        .any(|dir| matches!(*dir, "test" | "tests" | "__tests__" | "docs"))
+    {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    !(lower.ends_with(".md")
+        || lower.ends_with("_test.rs")
+        || lower.ends_with("_tests.rs")
+        || [".test.ts", ".test.tsx", ".test.js", ".test.jsx"]
+            .iter()
+            .any(|end| lower.ends_with(end)))
 }
 
 /// A review of the thread's own work for `request` that still runs.
@@ -129,7 +155,11 @@ impl SessionManager {
         .ok()?;
         Some(Size {
             lines: stat.insertions.saturating_add(stat.deletions),
-            files: stat.files.len(),
+            files: stat
+                .files
+                .iter()
+                .filter(|file| counts_as_a_file(&file.path))
+                .count(),
         })
     }
 
@@ -555,11 +585,17 @@ impl SessionManager {
         let request = self.request_for(id, None).await?;
         let board = self.core.board(id).await.ok()?;
         let review = running_review(&board, &request)?;
-        if let Ok(conv) = self.conv(id) {
-            conv.awaited_reviews
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(review.id.clone());
+        // One that ended since is told as any review is: its findings come as a message, still
+        // to wait for, and a clean one leaves nothing to wait for.
+        if !self.await_review(id, &review.id).await
+            && !self.core.board(id).await.is_ok_and(|board| {
+                board
+                    .reviews
+                    .get(&review.id)
+                    .is_some_and(|ended| matches!(ended.state, ReviewState::Findings { .. }))
+            })
+        {
+            return None;
         }
         Some(format!(
             "[review running] {} reviews your change for this request ({}..{}) in the background: it is over the review line, or you marked it risky. Don't give your final answer yet: end this turn with exactly {} and nothing else. Its findings come as a [review of your commits …] message (or word that it found nothing); fix the valid ones, then answer.",
@@ -582,5 +618,30 @@ mod tests {
         assert!(REVIEW_LINE.crossed(30, 1));
         assert!(REVIEW_LINE.crossed(3, 3));
         assert!(REVIEW_LINE.crossed(40, 3));
+    }
+
+    #[test]
+    fn tests_and_docs_dont_count_toward_the_files() {
+        for path in [
+            "src/tax.ts",
+            "crates/core/src/lib.rs",
+            "README",
+            "testing.rs",
+        ] {
+            assert!(counts_as_a_file(path), "{path}");
+        }
+        for path in [
+            "src/tax.test.ts",
+            "src/App.test.tsx",
+            "crates/core/src/manager/flow/review_tiers_tests.rs",
+            "crates/git/tests/repo.rs",
+            "src/__tests__/a.js",
+            "test/fixture.json",
+            "docs/rates.html",
+            "rates.md",
+            "docs/research/PLAN.MD",
+        ] {
+            assert!(!counts_as_a_file(path), "{path}");
+        }
     }
 }

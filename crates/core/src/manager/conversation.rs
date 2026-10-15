@@ -538,9 +538,6 @@ pub(crate) struct ConvLive {
     /// Reviews that ended and whose findings aren't queued for the thread yet: the session's
     /// full checks wait for these as for a running review (BUILD-PLAN C3).
     pub(super) reviews_telling: std::sync::atomic::AtomicUsize,
-    /// The reviews `run_check` told the thread to wait for before it answers (BUILD-PLAN C2):
-    /// one that ends clean is told too, so the answer comes.
-    pub(super) awaited_reviews: std::sync::Mutex<HashSet<String>>,
     /// A turn ran since the thread's scratch was last swept: the next time its requests are
     /// all over, it is swept ([`super::thread_scratch`]).
     pub(super) scratch_used: std::sync::atomic::AtomicBool,
@@ -600,7 +597,6 @@ impl ConvLive {
             merge_told: std::sync::Mutex::new(None),
             reviews_due: std::sync::atomic::AtomicUsize::new(0),
             reviews_telling: std::sync::atomic::AtomicUsize::new(0),
-            awaited_reviews: std::sync::Mutex::default(),
             scratch_used: std::sync::atomic::AtomicBool::new(false),
             held_moves: tokio::sync::Mutex::new(HashMap::new()),
             ci_watches: std::sync::Mutex::new(Vec::new()),
@@ -1060,6 +1056,12 @@ impl ConvLive {
         state
             .inbox
             .retain(|(_, request)| !request.as_deref().is_some_and(|r| r.starts_with(prefix)));
+    }
+
+    /// Whether the last turn for `request` was stopped or failed, a Stop that had no turn to
+    /// interrupt included.
+    pub(super) async fn request_ended(&self, request: &str) -> bool {
+        self.state.lock().await.outcomes.contains_key(request)
     }
 
     /// What the driver holds for each request right now.

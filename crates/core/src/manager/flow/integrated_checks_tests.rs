@@ -13,7 +13,7 @@ use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::model::DomainEvent;
-use crate::work::{IntegratedCheckState, OrchestratorStepKind, TaskState};
+use crate::work::{IntegratedCheckState, OrchestratorStepKind, ReviewState, TaskState};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -1207,5 +1207,93 @@ async fn a_local_checkouts_uncommitted_change_is_reviewed_and_checked_from_a_sna
     // The user's checkout is as the thread left it.
     assert_eq!(checkout_state(&flow.repo), left.lock().unwrap().clone());
     assert_eq!(git(&flow.repo, &["rev-parse", "HEAD"]), start);
+    flow.stop().await;
+}
+
+/// The user's checkout already held a change of theirs when the request started, and the
+/// thread's work removes it: the review reads exactly the request's change, from the start's
+/// snapshot to the end's, whose commit goes on the start's (two snapshots are siblings on
+/// HEAD, and a reviewer's diff from the merge base would show the old change as the thread's
+/// and miss its removal).
+#[tokio::test]
+async fn a_dirty_local_checkouts_review_reads_only_the_requests_change() {
+    let mut flow = Flow::start(
+        "integrated-local-dirty",
+        options(),
+        script(|turn| async move {
+            if turn.input.contains("Change three files.") {
+                let workspace = turn.add_dirs[0].clone();
+                for file in ["b.txt", "c.txt", "d.txt"] {
+                    std::fs::write(workspace.join(file), format!("{file}\n")).unwrap();
+                }
+                std::fs::remove_file(workspace.join("user.txt")).unwrap();
+                return Reply::text("Changed three files; not committed.");
+            }
+            Reply::text("Noted.")
+        }),
+    )
+    .await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id;
+    flow.conversation = flow
+        .manager
+        .create_conversation(
+            crate::model::ConversationKind::Session,
+            project,
+            Some("Local".into()),
+            Some(crate::model::SetupRequest::Session {
+                repo: flow.repo.display().to_string(),
+                environment: crate::model::EnvironmentRequest::LocalCheckout {
+                    branch: "main".into(),
+                    create_from: None,
+                },
+                permission: crate::model::PermissionLevel::FullAccess,
+                orchestrator: crate::model::ModelChoice {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    model: Some("claude-opus-5-5".into()),
+                    effort: None,
+                    fast: None,
+                    account: None,
+                },
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+    std::fs::write(flow.repo.join("user.txt"), "the user's own\n").unwrap();
+    flow.say("Change three files.").await;
+    flow.until("the review's end", |board| {
+        !board.reviews.is_empty()
+            && board
+                .reviews
+                .values()
+                .all(|review| review.state != ReviewState::Running)
+    })
+    .await;
+    let board = flow.settled().await;
+    let reviews: Vec<_> = board.reviews.values().collect();
+    assert_eq!(reviews.len(), 1, "{reviews:#?}");
+    let review = reviews[0];
+    let ancestor = std::process::Command::new("git")
+        .args(["merge-base", "--is-ancestor", &review.base, &review.tip])
+        .current_dir(&flow.repo)
+        .status()
+        .unwrap();
+    assert!(ancestor.success(), "the reviewed tip goes on its base");
+    assert_eq!(
+        git(
+            &flow.repo,
+            &[
+                "diff",
+                "--name-status",
+                &format!("{}...{}", review.base, review.tip)
+            ]
+        ),
+        "A\tb.txt\nA\tc.txt\nA\td.txt\nD\tuser.txt"
+    );
     flow.stop().await;
 }

@@ -29,6 +29,7 @@ fn lines(tag: &str, lines: usize) -> String {
 fn commit(turn: &Turn, file: &str, text: &str, message: &str) -> String {
     let workspace = &turn.add_dirs[0];
     let path = workspace.join(file);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let before = std::fs::read_to_string(&path).unwrap_or_default();
     std::fs::write(&path, format!("{before}{text}")).unwrap();
     git(workspace, &["add", file]);
@@ -172,6 +173,47 @@ async fn small_commits_of_one_request_get_one_review_of_their_combined_range() {
         "{:#?}",
         log.turns
     );
+    flow.stop().await;
+}
+
+/// A tiny edit with its test and a line in the docs gets no review: tests and docs don't count
+/// toward the size line's files, and its 6 lines are under 30.
+#[tokio::test]
+async fn a_tiny_edit_with_its_test_and_docs_gets_no_review() {
+    let checks: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = checks.clone();
+    let flow = Flow::start(
+        "review-tiers-tests-docs",
+        Options {
+            reviews: Some(script(|turn| async move {
+                panic!(
+                    "no review of a tiny edit with its test and docs: {}",
+                    turn.input
+                )
+            })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                if turn.input.starts_with("Add the region") {
+                    commit(&turn, "tax.ts", &lines("rate", 2), "Add the region");
+                    commit(&turn, "tax.test.ts", &lines("test", 2), "Test it");
+                    commit(&turn, "docs/rates.md", &lines("row", 2), "List it");
+                    let check = turn.call("run_check", json!({"command": "true"})).await;
+                    seen.lock().unwrap().push(check.text);
+                    return Reply::text("Added the region.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add the region.").await;
+    let board = flow.settled().await;
+    assert!(board.reviews.is_empty(), "{:#?}", board.reviews);
+    let checks = checks.lock().unwrap().clone();
+    assert!(!checks[0].contains("[review running]"), "{}", checks[0]);
     flow.stop().await;
 }
 
@@ -448,7 +490,7 @@ async fn a_change_checked_before_its_commit_is_reviewed_before_the_answer() {
                 }
                 let reply = if turn.input.starts_with("Add the region") {
                     let workspace = turn.add_dirs[0].clone();
-                    for file in ["tax.ts", "tax.test.ts", "rates.md"] {
+                    for file in ["tax.ts", "rates.ts", "region.ts"] {
                         std::fs::write(workspace.join(file), lines(file, 2)).unwrap();
                     }
                     let check = turn.call("run_check", json!({"command": "true"})).await;
@@ -513,5 +555,139 @@ async fn a_change_checked_before_its_commit_is_reviewed_before_the_answer() {
         shown.last().map(|message| message.text.as_str()),
         Some("Added the region; the review found nothing.")
     );
+    flow.stop().await;
+}
+
+/// A thread that ran `run_check` on a change over the line and waits, with [quiet], for the
+/// review it started.
+fn waiting_thread(answered: Arc<Mutex<Vec<String>>>) -> Script {
+    script(move |turn| {
+        let answered = answered.clone();
+        async move {
+            if turn.input.starts_with("Build the feature") {
+                commit(&turn, "a.txt", &lines("a", 40), "Build the feature");
+                let check = turn.call("run_check", json!({"command": "true"})).await;
+                assert!(check.text.contains("[review running]"), "{}", check.text);
+                return Reply::text("[quiet]");
+            }
+            if turn.input.contains("found nothing") {
+                answered.lock().unwrap().push(turn.input.clone());
+                return Reply::text("Built the feature; the review found nothing.");
+            }
+            Reply::text("[quiet]")
+        }
+    })
+}
+
+/// The review `run_check` told the thread to wait for is recorded so: it ended clean, but
+/// Brigadier stopped before its word reached a turn. After the restart the word goes again
+/// and the request gets its answer, instead of ending with none.
+#[tokio::test]
+async fn an_awaited_review_that_ended_before_a_restart_still_brings_the_answer() {
+    let answered: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut flow = Flow::start(
+        "review-tiers-awaited-restart",
+        Options {
+            reviews: Some(script(|_| std::future::pending())),
+            ..Options::default()
+        },
+        waiting_thread(answered.clone()),
+    )
+    .await;
+    flow.say("Build the feature.").await;
+    let board = flow
+        .until("the review to run, with the thread idle", |board| {
+            board.run == crate::work::RunState::Idle
+                && board
+                    .reviews
+                    .values()
+                    .any(|review| review.state == ReviewState::Running)
+        })
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    let mut review = board.reviews.values().next().unwrap().clone();
+    assert!(
+        review.answer_waits,
+        "run_check records that the answer waits"
+    );
+    // Its end is recorded; the daemon dies before the thread hears it.
+    review.state = ReviewState::Clean;
+    review.ended_at_ms = Some(crate::now_ms());
+    flow.core
+        .record_conversation(
+            &flow.conversation,
+            vec![crate::model::DomainEvent::ReviewUpdated { review }],
+        )
+        .await
+        .unwrap();
+    flow.crash().await;
+    let board = flow
+        .until("the answer", |board| {
+            board.requests[&request].state == RequestState::Done
+        })
+        .await;
+    assert_eq!(answered.lock().unwrap().len(), 1);
+    let shown = answers(&flow).await;
+    assert_eq!(
+        shown.last().map(|message| message.text.as_str()),
+        Some("Built the feature; the review found nothing.")
+    );
+    assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
+    flow.stop().await;
+}
+
+/// The user stops a request whose answer waits for its review: when the review then ends
+/// clean, nothing wakes the thread to answer, and the request stays stopped.
+#[tokio::test]
+async fn a_stopped_request_is_not_woken_by_its_clean_review() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let held = release.clone();
+    let answered: Arc<Mutex<Vec<String>>> = Arc::default();
+    let flow = Flow::start(
+        "review-tiers-awaited-stop",
+        Options {
+            reviews: Some(script(move |_| {
+                let held = held.clone();
+                async move {
+                    held.notified().await;
+                    Reply::text("No findings.")
+                }
+            })),
+            ..Options::default()
+        },
+        waiting_thread(answered.clone()),
+    )
+    .await;
+    flow.say("Build the feature.").await;
+    let board = flow
+        .until("the review to run, with the thread idle", |board| {
+            board.run == crate::work::RunState::Idle
+                && board
+                    .reviews
+                    .values()
+                    .any(|review| review.state == ReviewState::Running)
+        })
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.until("the request stopped", |board| {
+        board.requests[&request].state == RequestState::Stopped
+    })
+    .await;
+    release.notify_one();
+    flow.until("the review's end", |board| {
+        board
+            .reviews
+            .values()
+            .all(|review| review.state == ReviewState::Clean)
+    })
+    .await;
+    let board = flow.settled().await;
+    assert_eq!(board.requests[&request].state, RequestState::Stopped);
+    assert!(answered.lock().unwrap().is_empty());
+    assert!(answers(&flow).await.is_empty());
     flow.stop().await;
 }

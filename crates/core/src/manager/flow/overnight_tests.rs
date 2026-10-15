@@ -1474,6 +1474,7 @@ async fn findings_after_the_runs_report_reach_the_thread() {
         number: 0,
         items: Vec::new(),
         landing: None,
+        answer_waits: false,
     };
     flow.manager
         .tell_review(&late, Some("- [P1] p1.txt is empty — p1.txt:1"))

@@ -723,6 +723,25 @@ impl SessionManager {
             Some(request) => Some(request),
             None => self.request_for(conversation_id, None).await,
         };
+        // A reviewer reads the diff from the merge base: two snapshots of a local checkout are
+        // siblings on its HEAD, so the later one goes on the earlier one first.
+        let tip = {
+            let (git, at, from, to) = (self.git.clone(), repo.clone(), base.clone(), tip.clone());
+            match blocking(move || {
+                git.open(&at)
+                    .map_err(git_error)?
+                    .on_base(&from, &to)
+                    .map_err(git_error)
+            })
+            .await
+            {
+                Ok(linked) => linked,
+                Err(err) => {
+                    tracing::warn!(conversation = %conversation_id, error = %err, "could not put a change on its base for its review");
+                    tip
+                }
+            }
+        };
         let started = self
             .start_review(NewReview {
                 conversation_id: conversation_id.clone(),
@@ -1062,6 +1081,7 @@ impl SessionManager {
             number: next_number(board.reviews.values()),
             items: Vec::new(),
             landing: None,
+            answer_waits: false,
         };
         let picked = self.reviewer_model(&new, reviewer).await;
         // Picking the reviewer took time: the switch may have been turned off meanwhile, and
@@ -1533,6 +1553,7 @@ impl SessionManager {
             {
                 ended.notify = now.notify.clone();
                 ended.landing = now.landing.clone();
+                ended.answer_waits = now.answer_waits;
             }
             // A worker that reported before its review ended never reads the findings: the
             // thread gets them, as it gets a landing review's.
@@ -1703,7 +1724,7 @@ impl SessionManager {
             // A clean review of the thread's own changes is news only when its answer waits
             // for it (BUILD-PLAN B2: `run_check` told it to).
             (ReviewKind::Code, ReviewState::Clean, _)
-                if review.task_id.is_none() && self.answer_waits_for(review) =>
+                if review.task_id.is_none() && self.answer_waits_for(review).await =>
             {
                 format!(
                     "[review of your commits · {reviewer} found nothing in {range}] The background review of your change found nothing. Give your answer now."
@@ -1763,15 +1784,56 @@ impl SessionManager {
         .await;
     }
 
-    /// Whether `run_check` told the thread to wait for `review` before it answers: then its
-    /// clean end is news too.
-    fn answer_waits_for(&self, review: &ReviewRun) -> bool {
-        self.conv(&review.conversation_id).is_ok_and(|conv| {
-            conv.awaited_reviews
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&review.id)
-        })
+    /// Whether `run_check` told the thread to wait for `review` before it answers, and its
+    /// request still works: then its clean end is news too. One the user stopped meanwhile
+    /// stays stopped, rather than being woken to answer.
+    async fn answer_waits_for(&self, review: &ReviewRun) -> bool {
+        let (true, Some(request)) = (review.answer_waits, review.request_id.as_deref()) else {
+            return false;
+        };
+        let working = self
+            .core
+            .board(&review.conversation_id)
+            .await
+            .is_ok_and(|board| {
+                board
+                    .requests
+                    .get(request)
+                    .is_some_and(|of| of.state == crate::work::RequestState::Working)
+            });
+        working
+            && match self.conv(&review.conversation_id) {
+                Ok(conv) => !conv.request_ended(request).await,
+                Err(_) => false,
+            }
+    }
+
+    /// `run_check` tells the thread to wait for `review`, a review of its own change for its
+    /// running request: recorded on the review, under the lock its end is stored under, so
+    /// the end sees it whenever it comes, and after a restart too. False when the review is
+    /// no longer running.
+    pub(crate) async fn await_review(&self, id: &ConversationId, review: &str) -> bool {
+        let _held = self.reviews.lock().await;
+        let Some(mut running) = self.core.board(id).await.ok().and_then(|board| {
+            board
+                .reviews
+                .get(review)
+                .filter(|review| review.state == ReviewState::Running)
+                .cloned()
+        }) else {
+            return false;
+        };
+        if running.answer_waits {
+            return true;
+        }
+        running.answer_waits = true;
+        match self.store_review(&running).await {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::warn!(review = %running.id, error = %err, "could not record that the answer waits for a review");
+                false
+            }
+        }
     }
 
     /// `record_findings`: the thread's word on what became of review findings. Every id must
@@ -1990,6 +2052,27 @@ impl SessionManager {
         let Ok(board) = self.core.board(conversation_id).await else {
             return;
         };
+        // A clean review the thread's answer waited for, whose word was still on its way to
+        // the thread when Brigadier stopped: it goes again, so the request gets its answer
+        // instead of ending with none. (A request whose turn the stop cut off reads
+        // interrupted by now, and isn't working.)
+        if let Some(clean) = board.latest_request().and_then(|latest| {
+            let newest = board
+                .reviews
+                .values()
+                .filter(|review| {
+                    review.kind == ReviewKind::Code
+                        && review.task_id.is_none()
+                        && review.request_id.as_deref() == Some(latest.id.as_str())
+                })
+                .max_by_key(|review| (review.started_at_ms, review.number))?;
+            (latest.state == crate::work::RequestState::Working
+                && newest.answer_waits
+                && newest.state == ReviewState::Clean)
+                .then(|| newest.clone())
+        }) {
+            self.tell_review(&clean, None).await;
+        }
         let running: Vec<ReviewRun> = board
             .reviews
             .values()
@@ -2070,6 +2153,7 @@ mod tests {
             number: 0,
             items: Vec::new(),
             landing: None,
+            answer_waits: false,
         }
     }
 
