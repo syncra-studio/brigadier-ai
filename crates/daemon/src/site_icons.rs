@@ -179,15 +179,18 @@ fn agent() -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
         .https_only(true)
-        .max_redirects(3)
+        // Followed by `fetch`, which checks each hop first.
+        .max_redirects(0)
         .http_status_as_error(false)
         .build();
     ureq::Agent::with_parts(config, DefaultConnector::default(), PublicSites::default())
 }
 
-/// The agent's name lookups: every connection it makes, a redirect's or an icon link's too, goes
-/// only to a site by name (`host_of`) whose addresses are all public. Checked at connect time, so a
-/// name that changes its address between two lookups can't slip through either.
+/// The agent's name lookups: every site it connects to directly goes only to a site by name
+/// (`host_of`) whose addresses are all public. Checked at connect time, so a name that changes its
+/// address between two lookups can't slip through either. A proxy the user configured
+/// (`HTTPS_PROXY`) is theirs to reach, wherever it is; through it the proxy resolves the site, and
+/// `fetch` has checked its name.
 #[derive(Debug, Default)]
 struct PublicSites(DefaultResolver);
 
@@ -198,6 +201,9 @@ impl Resolver for PublicSites {
         config: &Config,
         timeout: NextTimeout,
     ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        if config.proxy().is_some_and(|proxy| proxy.uri() == uri) {
+            return self.0.resolve(uri, config, timeout);
+        }
         if !named(uri) {
             return Err(ureq::Error::HostNotFound);
         }
@@ -261,9 +267,30 @@ fn fetch_icon(host: &str) -> Option<String> {
     fetch_image(&agent, &resolve(host, &href)?)
 }
 
-/// A GET's body and its content type, when it answered 200 within `limit` bytes.
+/// Redirects a fetch follows.
+const REDIRECTS: usize = 3;
+
+/// A GET's body and its content type, when it answered 200 within `limit` bytes. Each address on
+/// the way, the first and every redirect's, must be a site by name.
 fn fetch(agent: &ureq::Agent, url: &str, limit: u64) -> Option<(Vec<u8>, String)> {
-    let response = agent.get(url).call().ok()?;
+    let mut url = url.to_owned();
+    let mut hops = 0;
+    let response = loop {
+        let uri: Uri = url.parse().ok()?;
+        if !named(&uri) {
+            return None;
+        }
+        let response = agent.get(&url).call().ok()?;
+        if !response.status().is_redirection() {
+            break response;
+        }
+        hops += 1;
+        let location = response.headers().get("location")?.to_str().ok()?;
+        if hops > REDIRECTS {
+            return None;
+        }
+        url = resolve(uri.host()?, location)?;
+    };
     if response.status().as_u16() != 200 {
         return None;
     }
@@ -483,6 +510,22 @@ mod tests {
         ] {
             assert!(!named(&url.parse().unwrap()), "{url}");
         }
+        // The user's own proxy is reached wherever it is.
+        let config = Config::builder()
+            .proxy(Some(ureq::Proxy::new("http://127.0.0.1:9").unwrap()))
+            .build();
+        let proxy = config.proxy().unwrap().uri().clone();
+        let resolved = PublicSites::default()
+            .resolve(
+                &proxy,
+                &config,
+                NextTimeout {
+                    after: ureq::unversioned::transport::time::Duration::NotHappening,
+                    reason: ureq::Timeout::Resolve,
+                },
+            )
+            .unwrap();
+        assert!(resolved.iter().all(|address| address.ip().is_loopback()));
     }
 
     /// Over the network: `cargo test -p brigadier-daemon site_icons -- --ignored`.
@@ -491,6 +534,8 @@ mod tests {
     fn a_real_site_s_icon_comes_through_the_checks() {
         assert!(fetch_icon("nodejs.org").is_some_and(|url| url.starts_with("data:image/")));
         assert!(fetch_icon("www.rust-lang.org").is_some());
+        // Its /favicon.ico redirects to www., a hop `fetch` checks and follows.
+        assert!(fetch_icon("python.org").is_some());
     }
 
     #[test]
