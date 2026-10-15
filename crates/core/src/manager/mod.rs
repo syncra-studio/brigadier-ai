@@ -93,6 +93,7 @@ mod tools;
 mod trust;
 mod undo;
 mod uninstall;
+mod unreviewed;
 mod usage;
 mod usage_view;
 pub mod warm;

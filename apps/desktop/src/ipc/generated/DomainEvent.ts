@@ -46,6 +46,7 @@ import type { TaskId } from "./TaskId";
 import type { TextPhase } from "./TextPhase";
 import type { ThreadRead } from "./ThreadRead";
 import type { ThreadSearch } from "./ThreadSearch";
+import type { UnreviewedRange } from "./UnreviewedRange";
 import type { UpdatesView } from "./UpdatesView";
 import type { UserRequest } from "./UserRequest";
 import type { WaitingItem } from "./WaitingItem";
@@ -72,7 +73,7 @@ subject: string, rating: Rating, } | { "type": "branchSwitched", conversationId:
  * trailer): the record of who wrote them, since a commit it makes on the user's own
  * checkout carries no trailer (UI audit M6).
  */
-authoredFrom?: string | null, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "checkRan", conversationId: ConversationId, 
+authoredFrom?: string | null, } | { "type": "unreviewedChanged", conversationId: ConversationId, range: UnreviewedRange | null, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "checkRan", conversationId: ConversationId, 
 /**
  * The worker's task; none for the thread.
  */

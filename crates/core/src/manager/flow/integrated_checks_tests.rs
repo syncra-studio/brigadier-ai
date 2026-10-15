@@ -667,6 +667,15 @@ async fn pass_during_a_later_turn(quiet: bool) {
             && board.requests[&request].state == crate::work::RequestState::Working
     })
     .await;
+    // A check of a commit starts once its request settles (BUILD-PLAN B1): it runs before
+    // the later turn of the same request starts.
+    flow.until("the check to run", |board| {
+        board
+            .integrated_checks
+            .values()
+            .any(|check| matches!(check.state, IntegratedCheckState::Running { .. }))
+    })
+    .await;
     flow.manager
         .deliver_for(
             &flow.conversation,
@@ -811,5 +820,392 @@ async fn one_check_delivers_its_pass_to_each_waiting_request_once() {
         );
     }
     assert_eq!(started_in(&flow.repo).len(), 1);
+    flow.stop().await;
+}
+
+/// Commits `file` in the thread's workspace, as the thread's own edit; its new tip.
+fn thread_commit(turn: &Turn, file: &str, text: &str) -> String {
+    let workspace = &turn.add_dirs[0];
+    std::fs::write(workspace.join(file), text).unwrap();
+    git(workspace, &["add", file]);
+    git(workspace, &["commit", "-q", "-m", &format!("Add {file}")]);
+    git(workspace, &["rev-parse", "HEAD"])
+}
+
+/// BUILD-PLAN B1: one request makes three commits of the thread's own and lands a worker's
+/// change; the session's full checks run exactly once, at the tip after the last of them, and
+/// only once nothing of the request runs any more (no turn, worker or review).
+#[tokio::test]
+async fn full_checks_run_once_per_request_after_its_last_commit_and_landing() {
+    let tips: Arc<Mutex<Vec<String>>> = Arc::default();
+    let made = tips.clone();
+    let flow = Flow::start(
+        "integrated-once-per-request",
+        options(),
+        script(move |turn| {
+            let made = made.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return worker(&turn, "w.txt", &Mutex::default()).await;
+                }
+                if turn.input.starts_with("Build it") {
+                    made.lock()
+                        .unwrap()
+                        .push(thread_commit(&turn, "one.txt", "one\n"));
+                    delegate(&turn, "Add w", "Create w.txt.").await;
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[report task-1 ") {
+                    made.lock()
+                        .unwrap()
+                        .push(thread_commit(&turn, "two.txt", "two\n"));
+                    let landed = turn.call("land_phase", json!({"task": "task-1"})).await;
+                    assert!(!landed.is_error, "{}", landed.text);
+                    made.lock()
+                        .unwrap()
+                        .push(thread_commit(&turn, "three.txt", "three\n"));
+                    return Reply::text("Built: one, two, three and w.");
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    flow.say("Build it.").await;
+    flow.until("the full checks to end", |board| {
+        board
+            .integrated_checks
+            .values()
+            .any(|check| check.state.is_final())
+    })
+    .await;
+    let board = flow.settled().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let (_, tip) = session_tip(&flow).await;
+    assert_eq!(tips.lock().unwrap().last(), Some(&tip));
+    assert_eq!(started_in(&flow.repo).len(), 1, "{:#?}", runs(&flow.repo));
+    let checks: Vec<_> = board.integrated_checks.values().collect();
+    assert_eq!(checks.len(), 1, "{checks:#?}");
+    assert_eq!(checks[0].tip, tip);
+    assert!(matches!(
+        checks[0].state,
+        IntegratedCheckState::Passed { .. }
+    ));
+    // It started after the request's last turn, its landing and every review of its work.
+    let events = flow.events().await;
+    let running = events
+        .iter()
+        .position(|event| {
+            matches!(event, DomainEvent::IntegratedCheckUpdated { check }
+                if matches!(check.state, IntegratedCheckState::Running { .. }))
+        })
+        .unwrap();
+    let last_of = |matches: &dyn Fn(&DomainEvent) -> bool| events.iter().rposition(matches);
+    let landed = last_of(&|event| {
+        matches!(event, DomainEvent::OrchestratorStepped { step }
+            if matches!(step.kind, OrchestratorStepKind::Landed { .. }))
+    })
+    .unwrap();
+    let reviewed = last_of(&|event| {
+        matches!(event, DomainEvent::ReviewUpdated { review }
+            if review.state != crate::work::ReviewState::Running)
+    })
+    .unwrap();
+    let idle = events[..running]
+        .iter()
+        .rposition(|event| {
+            matches!(
+                event,
+                DomainEvent::RunStateChanged {
+                    state: crate::work::RunState::Idle,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let busy = events[..running].iter().rposition(|event| {
+        matches!(event, DomainEvent::RunStateChanged { state, .. }
+            if *state != crate::work::RunState::Idle)
+    });
+    assert!(
+        landed < running && reviewed < running,
+        "{landed} {reviewed} {running}"
+    );
+    assert!(
+        busy.is_none_or(|busy| busy < idle),
+        "the thread was idle when it started"
+    );
+    flow.stop().await;
+}
+
+/// A thread whose 40-line change gets a review held until `release`, which then finds one
+/// thing; on the findings it fixes them (`fix`) or ignores them. The tips it made go to `tips`.
+fn reviewed_thread(
+    fix: bool,
+    tips: Arc<Mutex<Vec<String>>>,
+) -> (Options, Script, Arc<tokio::sync::Notify>) {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let held = release.clone();
+    let options = Options {
+        reviews: Some(script(move |_| {
+            let held = held.clone();
+            async move {
+                held.notified().await;
+                Reply::text("- [P2] a.txt has no title — a.txt:1\n  Add one.")
+            }
+        })),
+        ..options()
+    };
+    let thread = script(move |turn| {
+        let tips = tips.clone();
+        async move {
+            if turn.input.starts_with("Build it") {
+                let text: String = (1..=40).map(|n| format!("a {n}\n")).collect();
+                tips.lock()
+                    .unwrap()
+                    .push(thread_commit(&turn, "a.txt", &text));
+                // It answers at once: the end of its turn starts the review (the backstop).
+                return Reply::text("Built it.");
+            }
+            if turn
+                .input
+                .contains("[review of your commits · Codex found 1")
+            {
+                if !fix {
+                    return Reply::text("Leaving the finding: a.txt needs no title.");
+                }
+                let workspace = &turn.add_dirs[0];
+                std::fs::write(workspace.join("a.txt"), "# Title\n").unwrap();
+                git(workspace, &["add", "a.txt"]);
+                git(
+                    workspace,
+                    &[
+                        "commit",
+                        "-q",
+                        "-m",
+                        "Give a.txt a title\n\nBrigadier-Fixes: R1.1",
+                    ],
+                );
+                tips.lock()
+                    .unwrap()
+                    .push(git(workspace, &["rev-parse", "HEAD"]));
+                let recorded = turn
+                    .call(
+                        "record_findings",
+                        json!({"items": [{"id": "R1.1", "status": "fixed", "checked": "re-read a.txt:1"}]}),
+                    )
+                    .await;
+                assert!(!recorded.is_error, "{}", recorded.text);
+                return Reply::text("Fixed R1.1.");
+            }
+            Reply::text("[quiet]")
+        }
+    });
+    (options, thread, release)
+}
+
+/// BUILD-PLAN C3: the review of the thread's change finds one thing late; the thread fixes it,
+/// and only then do the session's full checks run, once, at the fix's tip: none ran while the
+/// review ran, nor between its findings and the fix.
+#[tokio::test]
+async fn the_full_checks_run_once_after_a_late_findings_fix() {
+    let tips: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (options, thread, release) = reviewed_thread(true, tips.clone());
+    let flow = Flow::start("integrated-after-fix", options, thread).await;
+    flow.say("Build it.").await;
+    flow.until("the review to run, with the thread idle", |board| {
+        board.run == crate::work::RunState::Idle
+            && board
+                .reviews
+                .values()
+                .any(|review| review.state == crate::work::ReviewState::Running)
+    })
+    .await;
+    release.notify_one();
+    flow.until("the full checks to end", |board| {
+        board
+            .integrated_checks
+            .values()
+            .any(|check| check.state.is_final())
+    })
+    .await;
+    let board = flow.settled().await;
+    let tips = tips.lock().unwrap().clone();
+    assert_eq!(tips.len(), 2, "the change, then its fix");
+    assert_eq!(started_in(&flow.repo).len(), 1, "{:#?}", runs(&flow.repo));
+    let checks: Vec<_> = board.integrated_checks.values().collect();
+    assert_eq!(checks.len(), 1, "{checks:#?}");
+    assert_eq!(checks[0].tip, tips[1], "at the fix's tip");
+    assert!(matches!(
+        checks[0].state,
+        IntegratedCheckState::Passed { .. }
+    ));
+    flow.stop().await;
+}
+
+/// The Delegator's rule: findings hold the full checks back only until the end of the turn
+/// that heard them. A thread that ignores a finding (no record, no fix) still gets its checks,
+/// exactly once, after that turn.
+#[tokio::test]
+async fn ignored_findings_hold_the_full_checks_only_until_the_turn_that_heard_them_ends() {
+    let tips: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (options, thread, release) = reviewed_thread(false, tips.clone());
+    let flow = Flow::start("integrated-ignored-finding", options, thread).await;
+    flow.say("Build it.").await;
+    flow.until("the review to run, with the thread idle", |board| {
+        board.run == crate::work::RunState::Idle
+            && board
+                .reviews
+                .values()
+                .any(|review| review.state == crate::work::ReviewState::Running)
+    })
+    .await;
+    release.notify_one();
+    flow.until("the full checks to end", |board| {
+        board
+            .integrated_checks
+            .values()
+            .any(|check| check.state.is_final())
+    })
+    .await;
+    let board = flow.settled().await;
+    assert_eq!(started_in(&flow.repo).len(), 1, "{:#?}", runs(&flow.repo));
+    let checks: Vec<_> = board.integrated_checks.values().collect();
+    assert_eq!(checks.len(), 1, "{checks:#?}");
+    assert_eq!(checks[0].tip, tips.lock().unwrap()[0]);
+    // It started after the turn that heard the finding had answered.
+    let events = flow.events().await;
+    let running = events
+        .iter()
+        .position(|event| {
+            matches!(event, DomainEvent::IntegratedCheckUpdated { check }
+                if matches!(check.state, IntegratedCheckState::Running { .. }))
+        })
+        .unwrap();
+    let heard = events
+        .iter()
+        .position(|event| {
+            matches!(event, DomainEvent::MessageAppended { message }
+                if message.text.starts_with("Leaving the finding"))
+        })
+        .unwrap();
+    assert!(heard < running, "{heard} {running}");
+    flow.stop().await;
+}
+
+/// What the user's checkout holds that Brigadier must never touch: HEAD, the refs, the index's
+/// entries and the working files' changes.
+fn checkout_state(repo: &Path) -> Vec<String> {
+    [
+        &["rev-parse", "HEAD"][..],
+        &["for-each-ref"],
+        &["ls-files", "-s"],
+        &["status", "--porcelain", "--untracked-files=all"],
+        &["diff"],
+    ]
+    .iter()
+    .map(|args| git(repo, args))
+    .collect()
+}
+
+/// BUILD-PLAN B2 on a local checkout, where the thread leaves its changes uncommitted: a
+/// request's 3-file change gets its review from a snapshot of the checkout's files against the
+/// request's start, and the full checks run once on that snapshot in their own checkout; the
+/// user's HEAD, refs, index and working files are just as the thread left them.
+#[tokio::test]
+async fn a_local_checkouts_uncommitted_change_is_reviewed_and_checked_from_a_snapshot() {
+    let left: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = left.clone();
+    let mut flow = Flow::start(
+        "integrated-local-snapshot",
+        options(),
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                if turn.input.contains("Change three files.") {
+                    let workspace = turn.add_dirs[0].clone();
+                    for file in ["a.txt", "b.txt", "c.txt"] {
+                        std::fs::write(workspace.join(file), format!("{file}\n")).unwrap();
+                    }
+                    // One of them staged by hand, as a user might have.
+                    git(&workspace, &["add", "b.txt"]);
+                    *seen.lock().unwrap() = checkout_state(&workspace);
+                    return Reply::text("Changed three files; not committed.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id;
+    flow.conversation = flow
+        .manager
+        .create_conversation(
+            crate::model::ConversationKind::Session,
+            project,
+            Some("Local".into()),
+            Some(crate::model::SetupRequest::Session {
+                repo: flow.repo.display().to_string(),
+                environment: crate::model::EnvironmentRequest::LocalCheckout {
+                    branch: "main".into(),
+                    create_from: None,
+                },
+                permission: crate::model::PermissionLevel::FullAccess,
+                orchestrator: crate::model::ModelChoice {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    model: Some("claude-opus-5-5".into()),
+                    effort: None,
+                    fast: None,
+                    account: None,
+                },
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+    let start = git(&flow.repo, &["rev-parse", "HEAD"]);
+    flow.say("Change three files.").await;
+    flow.until("the full checks to end", |board| {
+        board
+            .integrated_checks
+            .values()
+            .any(|check| check.state.is_final())
+    })
+    .await;
+    let board = flow.settled().await;
+    // One review, of the request's change: from its start to a snapshot of the files.
+    let reviews: Vec<_> = board.reviews.values().collect();
+    assert_eq!(reviews.len(), 1, "{reviews:#?}");
+    let review = reviews[0];
+    assert!(review.task_id.is_none());
+    assert_eq!(
+        review.base, start,
+        "nothing had changed when the request started"
+    );
+    for file in ["a.txt", "b.txt", "c.txt"] {
+        assert_eq!(
+            git(&flow.repo, &["show", &format!("{}:{file}", review.tip)]),
+            file
+        );
+    }
+    // One full-check run, on that same snapshot, in the check checkout.
+    let dirs = started_in(&flow.repo);
+    assert_eq!(dirs.len(), 1, "{:#?}", runs(&flow.repo));
+    assert!(dirs[0].contains("/checks/"), "{dirs:#?}");
+    let checks: Vec<_> = board.integrated_checks.values().collect();
+    assert_eq!(checks.len(), 1, "{checks:#?}");
+    assert_eq!(checks[0].tip, review.tip);
+    assert!(matches!(
+        checks[0].state,
+        IntegratedCheckState::Passed { .. }
+    ));
+    // The user's checkout is as the thread left it.
+    assert_eq!(checkout_state(&flow.repo), left.lock().unwrap().clone());
+    assert_eq!(git(&flow.repo, &["rev-parse", "HEAD"]), start);
     flow.stop().await;
 }

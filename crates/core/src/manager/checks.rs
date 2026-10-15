@@ -203,6 +203,27 @@ struct Kept {
 }
 
 impl SessionManager {
+    /// The thread's `run_check`: its risky mark first, then its change's review when it is
+    /// due (over the line, or marked risky) and the check itself, its reply ending with the
+    /// review that runs, if one does (BUILD-PLAN B2, C2).
+    pub(crate) async fn thread_run_check(
+        &self,
+        id: &ConversationId,
+        args: crate::tools::ThreadRunCheck,
+    ) -> Result<String> {
+        let (args, risky) = args.split();
+        if let Some(why) = &risky {
+            self.mark_risky(id, why).await;
+        }
+        let review = self.review_before_answer(id).await;
+        let reply = self.run_check_tool(id, None, args).await;
+        match (reply, review) {
+            (Ok(reply), Some(review)) => Ok(format!("{reply}\n\n{review}")),
+            (Err(err), Some(review)) => Err(Error::Invalid(format!("{err}\n\n{review}"))),
+            (reply, None) => reply,
+        }
+    }
+
     /// `run_check` for the thread of `id` (`task`: none) or the worker of `task`. The
     /// thread's goes to the background when it holds the call too long, its waits for the
     /// same check and for the build lease included ([`super::background_runs`]).

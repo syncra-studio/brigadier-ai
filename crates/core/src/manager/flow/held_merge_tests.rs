@@ -824,7 +824,15 @@ async fn fixed_by_the_thread(
                         }
                         OwnFix::Unnamed => "Title note B\n\nBrigadier-Author: thread",
                     };
-                    commit_in_workspace(&turn, "B.md", "# B\nnote\n", message);
+                    // Unnamed, it is other work: big enough for a review of its own
+                    // (BUILD-PLAN B2).
+                    let text = match fix {
+                        OwnFix::Named { .. } => "# B\nnote\n".to_owned(),
+                        OwnFix::Unnamed => {
+                            format!("# B\n{}", super::thread_tests::reviewed_notes())
+                        }
+                    };
+                    commit_in_workspace(&turn, "B.md", &text, message);
                     let high = fix == OwnFix::Named { high: true };
                     let reply = turn
                         .call(
@@ -915,7 +923,8 @@ async fn a_held_merge_covers_the_threads_own_fix_of_a_finding_and_asks_nothing_a
 }
 
 /// The rule's other side: a commit of the thread's that doesn't name the findings it fixes is
-/// other work, with a full review of its own, and the held consent doesn't cover it.
+/// other work, with a full review of its own (it crosses the review line), and the held
+/// consent doesn't cover it.
 #[tokio::test]
 async fn a_threads_commit_that_names_no_finding_gets_a_full_review_and_needs_a_fresh_yes() {
     let (flow, log, reviews) = fixed_by_the_thread("held-merge-own-commit", OwnFix::Unnamed).await;

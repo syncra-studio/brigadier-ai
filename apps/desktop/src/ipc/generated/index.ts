@@ -425,6 +425,7 @@ export type { UninstallPlan } from "./UninstallPlan";
 export type { UninstallReport } from "./UninstallReport";
 export type { UninstallStep } from "./UninstallStep";
 export type { UnlandedBranch } from "./UnlandedBranch";
+export type { UnreviewedRange } from "./UnreviewedRange";
 export type { UpdateAction } from "./UpdateAction";
 export type { UpdateItem } from "./UpdateItem";
 export type { UpdateProgress } from "./UpdateProgress";

@@ -11,7 +11,7 @@ use brigadier_core::tools::{
     Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand,
     RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, SettleWait, StartPreview,
     StopPreview, StopWorker, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools,
-    TaskRef, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
+    TaskRef, ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -541,7 +541,7 @@ fn orchestrator_tools() -> Vec<Tool> {
         ),
         tool("stop_preview", STOP_PREVIEW, input_schema::<StopPreview>()),
         tool("preview_log", PREVIEW_LOG, input_schema::<PreviewLog>()),
-        tool("run_check", RUN_CHECK, input_schema::<RunCheck>()),
+        tool("run_check", RUN_CHECK, input_schema::<ThreadRunCheck>()),
         tool(
             "list_sessions",
             LIST_SESSIONS,
@@ -1106,6 +1106,15 @@ mod tests {
             };
             assert_eq!(args.timeout_secs, Some(120));
             assert!(args.rerun);
+            // The thread marks its change risky (BUILD-PLAN B2); a worker has no such argument.
+            let risky = serde_json::json!({"command": "true", "risky": "a migration"});
+            let Ok(ToolCall::Orchestrator(OrchestratorCall::RunCheck(args))) =
+                parse_call(&thread, "run_check", risky.as_object().cloned())
+            else {
+                panic!("run_check parses with risky for {run:?}");
+            };
+            assert_eq!(args.risky.as_deref(), Some("a migration"));
+            assert!(parse_call(&worker(false), "run_check", risky.as_object().cloned()).is_err());
         }
         for checks in [false, true] {
             assert!(

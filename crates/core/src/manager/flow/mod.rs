@@ -1858,6 +1858,8 @@ mod review_hold_tests;
 #[cfg(test)]
 mod review_switch_tests;
 #[cfg(test)]
+mod review_tiers_tests;
+#[cfg(test)]
 mod search_tests;
 mod settings_toggles_tests;
 #[cfg(test)]
@@ -1876,6 +1878,8 @@ mod thread_items_tests;
 mod thread_scratch_tests;
 #[cfg(test)]
 mod thread_tests;
+#[cfg(test)]
+mod thread_works_tests;
 #[cfg(test)]
 mod trim_tests;
 #[cfg(test)]

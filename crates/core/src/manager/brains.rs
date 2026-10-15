@@ -674,7 +674,6 @@ impl SessionManager {
         text: String,
         history: bool,
         page: Option<u32>,
-        worker: bool,
     ) -> Result<String> {
         let started = Instant::now();
         let project = match self.project_of(id) {
@@ -775,11 +774,10 @@ impl SessionManager {
                 reply.push_str(&answer.text);
             }
             _ if !code.is_empty() => reply.push_str("[Project Brain]\nNothing more on this."),
-            _ if worker => reply.push_str(
-                "The Project Brain has nothing on this yet: look in the code (code_search, code_refs, project_map).",
-            ),
+            // The thread reads the code itself too (BUILD-PLAN B3): a scout is for a big look
+            // around, not a missing Brain line.
             _ => reply.push_str(
-                "The Project Brain has nothing on this yet. Delegate a scout (or research) task; its report is kept in the Brain for next time.",
+                "The Project Brain has nothing on this yet: read the code yourself (code_search, code_refs, project_map, then the lines you need).",
             ),
         }
         if let Some(preferences) = preferences.filter(|found| !found.hits.is_empty()) {

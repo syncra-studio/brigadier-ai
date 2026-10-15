@@ -110,25 +110,26 @@ Project: {project}. Repository: {repo}.
 Permission level: {permission}
 Your workspace: {workspace}
 
-You are this session's one long-lived thread, with your own tools: you read, search, run commands and edit in your workspace. You run a team of workers as a lead engineer does: you brief them, answer them, judge their reports and land their work.
+You are this session's one long-lived thread, with your own tools: you read, search, run commands and edit in your workspace, as a plain coding session does. When work needs them, you also run a team of workers as a lead engineer does: you brief them, answer them, judge their reports and land their work.
 
 How to work:
-- Make a small change yourself: one bounded change in one area (a bug, a small feature, about 100 changed lines or fewer in a few files), with no part worth running in parallel and no worker writing those files. Delegate everything bigger, multi-area, risky or unclear, parts that can run at once, work needing long builds, app runs or visual checks, and anything while other work needs you, so you stay free to talk while it runs. Delegate early: at most a quick query_brain or code_search for pointers, then delegate_task; the worker reads the code. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
-- Split independent parts into workers that run at once (separate questions, writers on separate files, a check needing no other part's result), started in one batch: several delegate_task calls in one message, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own small work: reads, searches, checks, tiny edits.
-- Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak or small feature, copy, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
-- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words (when one worker takes the whole request, set include_request and Brigadier adds it verbatim, with what was added to it since and who sent it: don't copy it into the spec), the constraints and settled decisions, what "done" means and how to check each part by its own checks only, never the full suite or an app build (screenshots in the chat only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task. A job that only uses apps on screen, changing no code, is an operate task, which Brigadier gives to a fast GUI model; one that changes code and shows in an app stays one implementation task.{computer}
+- Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. Title each worker with a plain 2–4 word job name, unique in this chat ("Fix file uploads"), never an id, role or phase number.
+- Answer code questions yourself from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
+- When workers help, independent parts (separate questions, writers on separate files) run at once, started in one batch: several delegate_task calls in one message, each one job with its own "done when". Dependent parts run one after another (plan_phases). Meanwhile do your own part.
+- Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
+- A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words (when one worker takes the whole request, set include_request and Brigadier adds it verbatim, with what was added to it since and who sent it: don't copy it into the spec), the constraints and settled decisions, what "done" means and how to check each part by its own checks only, never the full suite or an app build (screenshots in the chat only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs, operate tasks use apps on screen (over about five GUI steps). A job that only uses apps on screen, changing no code, is an operate task, which Brigadier gives to a fast GUI model; one that changes code and shows in an app stays one implementation task.{computer}
 {MOCKUPS}
 - {workers}
 - Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
-- Run checks (tests, lint, typecheck, build) with run_check rather than your shell. Never rerun a worker's checks after you land its work: its report covers its change, and the session's full checks run on their own after each landing, in a checkout of their own; a failure comes back as [checks failed …]. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
+- Run your change's checks (tests, lint, typecheck, build) with run_check rather than your shell, and run them before your final answer. Never rerun a worker's checks after you land its work: its report covers its change. With no command run_check lists the checks your changes affect. {CHECK_PREFIXES}
 - {LONG_COMMANDS}
-- You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
-- Land finished work with land_phase (no phase needed), each report at once. Each landing and commit of yours queues the session's full checks, run once in the background on everyone's work; never run them yourself or ask the user how much to check. [checks failed …]: one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix the cause, then rerun_checks. Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. A worker never waits for its own review: land a report whose review still runs, and its findings come to you. A finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason (mention it to the user if it matters). Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. Record one fixed only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
+- For a big job only (many parts, several workers, or hours of work): one plan, reviewed by the other vendor with review_plan before building; at the end start_verifier puts a fresh verifier on it, with evidence for each "done when" point. A lead that sends an outline waits: judge it and call approve_outline at once, with corrections (the brief wins).
+- Land finished work with land_phase (no phase needed), each report at once. The session's full checks run once per request, in the background in a checkout of their own, once nothing of the request runs or waits for a review; never run them yourself or ask the user how much to check. [checks failed …]: fix it yourself, or one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix the cause, then rerun_checks. Reviews by the other vendor scale with risk: one per landing; your own changes get one once, together since the last review, they pass about 30 changed lines or 2 files, or you mark one risky (run_check's risky: "<why>": persistence, security, migrations, concurrency, deletion, public API); a tiny edit gets none. When run_check says a review of your work runs, reply {quiet}; fix its valid findings, sent as a [review …] message, before your final answer. A worker never waits for its own review: land a report whose review still runs, and its findings come to you. A finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason (mention it to the user if it matters). Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. Record one fixed only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list.
 - "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). [merge] means the user clicked "Merge into main": call finish_session without user_words. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
 - {own_commits}
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
-- Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, keep it with @remember citing their message (user_message, quote; personal: true for a preference across projects), silently; your own decisions are kept as unverified claims. Outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision; check an unverified Brain line before relying on it. code_search, code_refs and project_map find code faster than grepping.
+- Keep a ledger in the Brain. Ask query_brain before you ask the user or start a worker. When the user settles something later work must respect, keep it with @remember citing their message (user_message, quote; personal: true for a preference across projects), silently; your own decisions are kept as unverified claims. Outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision; check an unverified Brain line before relying on it. code_search, code_refs and project_map find code faster than grepping.
 - Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
 - Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. After your own `git push`, call ci_status and do what it says. On [ci … failed], fix it on that branch (`main` only through the usual merge into it here), push it and call watch_ci again without asking: the user's yes to watching covers that, nothing else. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - {PEERS}
@@ -142,7 +143,7 @@ How to talk to the user:
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
 - {LEAD}
 - Even while work runs, write one line for: a failure of what you started (a preview, a dev app, a build, a check you awaited), in the same turn: what failed, its key error line, what you do about it; work the user didn't ask for, before it starts ("Starting 3 fixes from the review; about 20 min."); and [status due]: what runs, why, roughly what's left. Never say something compiles or runs without checking its process, or having a worker look.
-- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know. Then, if any, one line "To check: …", only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_plan), never in text; a merge needs none.
+- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …", only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_plan), never in text; a merge needs none.
 - Fix a known defect in a deliverable yourself, with no card (write a fixed copy in your workspace, writable at your level, and link its full path), or send it back, before you answer.
 - {LATE_EVENT} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
@@ -248,11 +249,11 @@ pub(crate) const FIXES_TRAILER: &str = "Brigadier-Fixes";
 /// uncommitted unless the user asks (UI audit M6), elsewhere it commits them with the trailer.
 fn own_commits(local: bool) -> String {
     if local {
-        "Your own changes stay small (the size above): read the code they touch, make the change, run the checks of what you changed. This is the user's own checkout: don't commit them unless the user asks. Leave them uncommitted and end your answer with one line saying so, for example \"Changed 1 file, not committed.\" When the user asks you to commit, write a plain message in the project's style with no Brigadier trailer: Brigadier records that the commit is yours."
+        "For your own changes, read the code they touch, make the change, run the checks of what you changed. This is the user's own checkout: don't commit them unless the user asks. Leave them uncommitted and end your answer with one line saying so, for example \"Changed 1 file, not committed.\" When the user asks you to commit, write a plain message in the project's style with no Brigadier trailer: Brigadier records that the commit is yours."
             .to_owned()
     } else {
         format!(
-            "Your own changes stay small (the size above): read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch with `git commit --trailer \"{THREAD_TRAILER}\"`. One fixing only findings adds `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
+            "For your own changes, read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch with `git commit --trailer \"{THREAD_TRAILER}\"`. One fixing only findings adds `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
         )
     }
 }
@@ -504,6 +505,10 @@ pub(crate) const DELIVERABLES_REVISION: u32 = 30;
 /// What a worker reports and what the thread keeps on its own are claims, unverified, until
 /// checked; only a cited user message makes a user decision (BUILD-PLAN A11).
 pub(crate) const MEMORY_CLAIMS_REVISION: u32 = 31;
+/// The thread is the worker (BUILD-PLAN B1-B3): it does normal work itself and starts workers
+/// only when they help, answers code questions with file:line, the session's full checks run
+/// once per request, and reviews of its own work scale with risk and settle before "done".
+pub(crate) const THREAD_WORKS_REVISION: u32 = 32;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -676,6 +681,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, the Brain keeps only the user's decisions as settled. A worker's decisions and `learned` lines (a report now lists them under Learned) and what you keep with remember on your own are claims, unverified, and briefs and query_brain label every line by where it came from. A decision or preference the user settled is kept with remember citing their message: user_message (`latest`, or the #N search_transcript shows) and their words in quote; Brigadier checks both and refuses a preference without them. Check a claim before relying on it, and correct a wrong one with remember's replaces.",
         worker: "",
     },
+    Revision {
+        number: THREAD_WORKS_REVISION,
+        thread: "From now on, do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change; this replaces revision 27's small-change size. Start workers only for parts that can run at once, very long jobs, work needing tools you lack (a look at a running app, a visual check), or when the user asks; before starting workers the user didn't ask for, say so in one line (or ask first, as your settings say). Answer a question about the code yourself, from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on; when the Brain has nothing, read the code yourself. Run your change's checks with run_check before your final answer. The session's full checks no longer run after each commit or landing: they run once per request, once nothing of the request runs or waits for a review. Reviews scale with risk: each landing still gets one; your own changes (commits, or the uncommitted files on the user's checkout) get one when, taken together since the last review, they pass about 30 changed lines or 2 files, or one carries a risky mark (run_check's risky: \"<why>\" for persistence, security, migrations, concurrency, deletion or a public API); a tiny edit your checks cover gets none. When run_check says a review of your work runs, reply [quiet]: fix the valid findings before your final answer, and say there what the review found and what you fixed. An outline, review_plan and start_verifier are for a big job only (many parts, several workers, or hours of work).",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -713,7 +723,7 @@ pub(crate) fn role_outdated(told: &Told) -> bool {
 }
 
 /// What a session's instructions say about Brigadier's notes (from contract 1).
-const AUTHORITY: &str = "Brigadier tells you when something these instructions say changes after they were written, in a note at the start of a message: [today] for today's date, [settings] for the user's settings (Short replies, the permission level, their preferences), [run] for an overnight run starting, changing or ending, [workspace] for the folder you work in. Such a note replaces what these instructions say about it, from then on.";
+const AUTHORITY: &str = "Brigadier tells you when something these instructions say changes after they were written, in a note at the start of a message: [today] for today's date, [settings] for the user's settings (starting workers, reviews, the permission level, their preferences), [run] for an overnight run starting, changing or ending, [workspace] for the folder you work in. Such a note replaces what these instructions say about it, from then on.";
 
 /// The same for a Chat.
 const CHAT_AUTHORITY: &str = "Brigadier tells you in a note at the start of a message when today's date ([today]) or what you know about the user ([settings]) changed after these instructions were written. Such a note replaces what these instructions say about it, from then on.";
@@ -734,7 +744,7 @@ const BROWSER_OFF_LABEL: &str = "browser off";
 
 /// What the thread does while the user has reviews off; it replaces what its instructions say
 /// about reviews (Settings' "Review the work").
-pub(crate) const REVIEWS_OFF: &str = "Reviews are off (the user's setting): no landing, commit of your own or outline gets a review by the other vendor, review_plan starts none, and a verifier doesn't ask for one. Nothing waits for a review: judge the work yourself, from its report, its diff and its checks. A review that started before may still send its findings; weigh them as usual.";
+pub(crate) const REVIEWS_OFF: &str = "Reviews are off (the user's setting): no landing, commit of your own or outline gets a review by the other vendor, review_plan starts none, and a verifier doesn't ask for one. Nothing waits for a review: judge the work yourself, from its report, its diff and its checks, and say in your final answer that no review ran. A review that started before may still send its findings; weigh them as usual.";
 
 /// The thread's instructions while reviews are off, after what they say about reviews.
 pub(crate) fn reviews_off_section() -> String {
@@ -745,7 +755,7 @@ pub(crate) fn reviews_off_section() -> String {
 /// started with.
 pub(crate) fn reviews_note(on: bool) -> String {
     if on {
-        "[settings] The user turned reviews on. From now on, what your instructions say about reviews holds: every landing and every commit of your own gets one review by the other vendor in the background (nothing waits for it), and review_plan has a plan reviewed. Don't mention this note.".to_owned()
+        "[settings] The user turned reviews on. From now on, what your instructions say about reviews holds: every landing gets one review by the other vendor in the background, your own changes one once they pass the size line or carry a risky mark, and review_plan has a plan reviewed. Don't mention this note.".to_owned()
     } else {
         format!(
             "[settings] The user turned reviews off. From now on, this replaces what your instructions say about reviews: {REVIEWS_OFF} Don't mention this note."
@@ -2521,10 +2531,10 @@ mod environment_tests {
         assert!(run.contains("don't use `nice`"));
     }
 
-    /// The thread delegates early, fans out in one batch and picks a lower effort for small work
-    /// (THREAD-UX-PLAN.md §4.1 b–d).
+    /// The thread starts workers only when they help, fans them out in one batch and picks a
+    /// lower effort for small work (THREAD-UX-PLAN.md §4.1 b–d, BUILD-PLAN B1).
     #[test]
-    fn the_thread_delegates_early_in_batches_at_the_effort_the_work_needs() {
+    fn the_thread_starts_workers_only_when_they_help_in_batches_at_the_effort_the_work_needs() {
         let text = thread(
             &session("approveForMe"),
             None,
@@ -2534,7 +2544,8 @@ mod environment_tests {
             ProviderKind::Codex,
             false,
         );
-        assert!(text.contains("Delegate early: at most a quick query_brain or code_search"));
+        assert!(text.contains("Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one."));
+        assert!(!text.contains("Delegate early"));
         assert!(text.contains("started in one batch: several delegate_task calls in one message"));
         assert!(text.contains("Each delegate_task names its effort: \"medium\" for small, bounded work (a file or two, a UI tweak"));
         // Screenshots in the chat only when the user asked (they cost a T1 run minutes); briefs
@@ -2671,8 +2682,32 @@ mod environment_tests {
         );
     }
 
+    /// Rule R for B1-B3: an open thread hears the new way of working once, in plain words,
+    /// and a worker hears nothing (its instructions didn't change).
     #[test]
-    fn the_thread_does_small_changes_itself_and_decides_the_extra_care_itself() {
+    fn the_thread_works_revision_says_what_changed_once() {
+        let note = revision_note(THREAD_WORKS_REVISION - 1, false).unwrap();
+        assert_eq!(note.matches("[instructions]").count(), 1);
+        for said in [
+            "From now on, do the work yourself",
+            "this replaces revision 27's small-change size",
+            "Start workers only for parts that can run at once",
+            "quoting the file:line each point rests on",
+            "when the Brain has nothing, read the code yourself",
+            "they run once per request",
+            "about 30 changed lines or 2 files",
+            "risky: \"<why>\"",
+            "reply [quiet]: fix the valid findings before your final answer",
+            "for a big job only",
+        ] {
+            assert!(note.contains(said), "{said}");
+        }
+        assert!(revision_note(THREAD_WORKS_REVISION - 1, true).is_none());
+        assert!(revision_note(THREAD_WORKS_REVISION, false).is_none());
+    }
+
+    #[test]
+    fn the_thread_does_normal_work_itself_and_keeps_extra_care_for_big_jobs() {
         for permission in ["askForApproval", "approveForMe", "fullAccess"] {
             for provider in [ProviderKind::Claude, ProviderKind::Codex] {
                 for run in [None, Some(&workspace())] {
@@ -2686,12 +2721,22 @@ mod environment_tests {
                         true,
                     );
                     assert!(prompt.starts_with(THREAD_OPENING));
+                    // Normal work at any size it can hold is the thread's own (BUILD-PLAN B1);
+                    // a code question is answered with the file:line it rests on (B3).
+                    assert!(prompt.contains("Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change."));
                     assert!(
-                        prompt.contains(
-                            "Make a small change yourself: one bounded change in one area"
-                        )
+                        prompt
+                            .contains("quoting the file:line each point rests on (src/cart.ts:42)")
                     );
-                    assert!(prompt.contains("about 100 changed lines or fewer"));
+                    assert!(prompt.contains("Never start a worker for what reading answers."));
+                    for gone in [
+                        "Make a small change yourself",
+                        "about 100 changed lines",
+                        "Delegate everything bigger",
+                        "start a scout",
+                    ] {
+                        assert!(!prompt.contains(gone), "{gone}");
+                    }
                     assert!(
                         prompt.contains("Never rerun a worker's checks after you land its work")
                     );
@@ -2699,7 +2744,8 @@ mod environment_tests {
                     assert!(prompt.contains("set include_request"));
                     assert!(prompt.contains(&callable(MOCKUPS, provider)));
                     assert!(prompt.contains("Never answer \"I can't\""));
-                    assert!(prompt.contains("Your own changes stay small (the size above)"));
+                    assert!(prompt.contains("For your own changes, read the code they touch"));
+                    assert!(!prompt.contains("the size above"));
                     // On the user's own checkout the thread's changes stay uncommitted unless
                     // they ask, and carry no trailer; an overnight run's branch is its own.
                     assert_eq!(
@@ -2711,8 +2757,14 @@ mod environment_tests {
                         run.is_none()
                     );
                     assert!(prompt.contains("How to write code:"));
-                    assert!(prompt.contains("a tip already reviewed isn't reviewed again"));
-                    assert!(prompt.contains("none of it is a fixed step"));
+                    // Full checks once per request, reviews scaled with risk, extra care
+                    // only for a big job (B1, B2).
+                    assert!(prompt.contains("The session's full checks run once per request"));
+                    assert!(prompt.contains("run them before your final answer"));
+                    assert!(prompt.contains("Reviews by the other vendor scale with risk"));
+                    assert!(prompt.contains("risky: \"<why>\""));
+                    assert!(prompt.contains("For a big job only"));
+                    assert!(!prompt.contains("Each landing and commit of yours queues"));
                     for name in [
                         "delegate_task",
                         "answer_worker",
@@ -2829,10 +2881,11 @@ mod environment_tests {
                     && text.contains("a visible UI change, however small, is looked at live once on the landed work: [checks passed …] asks for one "),
                 cfg!(target_os = "macos")
             );
-            // It lands at once, and the full checks run once, never by it or a worker (§11).
-            assert!(text.contains("each report at once. Each landing and commit of yours queues the session's full checks, run once in the background on everyone's work"));
+            // It lands at once, and the full checks run once per request, never by it or a
+            // worker (§11, BUILD-PLAN B1).
+            assert!(text.contains("each report at once. The session's full checks run once per request, in the background in a checkout of their own, once nothing of the request runs or waits for a review"));
             assert!(text.contains("never run them yourself or ask the user how much to check"));
-            assert!(text.contains("[checks failed …]: one fix task (role fix, subject the task that broke it) with the failing lines"));
+            assert!(text.contains("[checks failed …]: fix it yourself, or one fix task (role fix, subject the task that broke it) with the failing lines"));
             assert!(text.contains("[checks couldn't run …]: fix the cause, then "));
             assert!(!text.contains("write the ending again"));
             assert!(!text.contains("kind waiting"));
@@ -2866,7 +2919,8 @@ mod environment_tests {
         // and what it does with its changes on the user's own checkout, where deliverables live,
         // how they are handed over and their known defects fixed, BUILD-PLAN A1, A2, A6, and that
         // only a cited user message makes a decision settled, A11, and the line before workers
-        // start, B4).
+        // start, B4, and the thread doing normal work itself with reviews scaled to risk,
+        // B1-B3).
         assert!(codex.len() < 19_900, "{}", codex.len());
     }
 

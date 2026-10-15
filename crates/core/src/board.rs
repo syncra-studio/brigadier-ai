@@ -32,6 +32,7 @@ pub(crate) const KINDS: &[&str] = &[
     "integrated_check.updated",
     "background_run.updated",
     "thread.seen",
+    "thread.unreviewed",
     "output.stored",
     "thread.looked",
     "preview.updated",
@@ -152,6 +153,9 @@ pub(crate) struct Board {
     /// Per branch: where the thread's commits were first looked for, which its self-edit
     /// metric counts from (THREAD-PLAN.md Q13).
     pub(crate) thread_starts: HashMap<String, String>,
+    /// The thread's changes for its newest request that no review covered yet (BUILD-PLAN B2).
+    /// Boxed: a board is cloned on deep stacks, and every byte of it counts there.
+    pub(crate) unreviewed: Option<Box<crate::work::UnreviewedRange>>,
     /// The thread's command outputs stored whole, by alias (`out-<id>`).
     pub(crate) outputs: HashMap<String, crate::work::StoredOutput>,
     /// What the thread read and searched, bounded ([`crate::manager::reads::ReadLog`]);
@@ -276,6 +280,9 @@ impl Board {
                     .entry(branch.clone())
                     .or_insert_with(|| tip.clone());
                 self.thread_tips.insert(branch.clone(), tip.clone());
+            }
+            DomainEvent::UnreviewedChanged { range, .. } => {
+                self.unreviewed = range.clone().map(Box::new);
             }
             DomainEvent::OutputStored { output, .. } => {
                 self.outputs.insert(output.alias.clone(), output.clone());

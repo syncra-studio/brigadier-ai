@@ -10,7 +10,7 @@ use std::time::Duration;
 use brigadier_providers::{ProviderEvent, Role};
 use serde_json::json;
 
-use super::thread_tests::commit_in_workspace;
+use super::thread_tests::{commit_in_workspace, reviewed_notes};
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::manager::conversation::Envelope;
 use crate::manager::landing::pending_merge;
@@ -343,7 +343,7 @@ async fn a_review_of_the_threads_commit_keeps_a_quiet_request_working_until_it_e
         },
         script(|turn| async move {
             if turn.input.contains("Add notes.") {
-                commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                commit_in_workspace(&turn, "NOTES.md", &reviewed_notes(), "Add notes");
                 return Reply::text("[quiet]");
             }
             if turn.input.starts_with("[checks passed") {
@@ -384,16 +384,18 @@ async fn a_review_of_the_threads_commit_keeps_a_quiet_request_working_until_it_e
     flow.stop().await;
 }
 
-/// The thread commits and answers, so the review of its commit runs on as a late event. A late
-/// addendum for the request then gets a [quiet] turn while that review still runs: the request
-/// was answered already, so it is done again after that turn, not working until the review ends.
+/// The thread commits and answers; the review of its commit runs on, and keeps the request
+/// working until it ends (BUILD-PLAN B2). A late addendum for the request then gets a [quiet]
+/// turn while that review still runs: the request was answered already, so that turn defers
+/// nothing, and the clean review ends it done without waking the thread again.
 #[tokio::test]
-async fn a_quiet_late_turn_keeps_an_answered_request_done_while_its_review_runs() {
+async fn a_quiet_late_turn_leaves_an_answered_request_answered_while_its_review_runs() {
     let (review, late) = (
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicBool::new(false)),
     );
-    let (gate, heard) = (review.clone(), late.clone());
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (gate, heard, log) = (review.clone(), late.clone(), inputs.clone());
     let flow = Flow::start(
         "owed-late-quiet",
         Options {
@@ -407,10 +409,11 @@ async fn a_quiet_late_turn_keeps_an_answered_request_done_while_its_review_runs(
             ..Options::default()
         },
         script(move |turn| {
-            let heard = heard.clone();
+            let (heard, log) = (heard.clone(), log.clone());
             async move {
+                log.lock().unwrap().push(turn.input.clone());
                 if turn.input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    commit_in_workspace(&turn, "NOTES.md", &reviewed_notes(), "Add notes");
                     return Reply::text("Added the notes.");
                 }
                 if turn.input.contains("late addendum") {
@@ -423,24 +426,21 @@ async fn a_quiet_late_turn_keeps_an_answered_request_done_while_its_review_runs(
     )
     .await;
     flow.say("Add notes.").await;
-    // The request settles just after the run goes idle: its answer is seen once it has.
     let board = flow
-        .until(
-            "the review running, the thread idle, the request answered",
-            |board| {
-                board.run == RunState::Idle
-                    && board
-                        .reviews
-                        .values()
-                        .any(|review| review.state == ReviewState::Running)
-                    && board
-                        .latest_request()
-                        .is_some_and(|request| request.state == RequestState::Done)
-            },
-        )
+        .until("the review running, the thread idle", |board| {
+            board.run == RunState::Idle
+                && board
+                    .reviews
+                    .values()
+                    .any(|review| review.state == ReviewState::Running)
+        })
         .await;
     let request = board.latest_request().unwrap().id.clone();
-    assert_eq!(stays(&flow, &request).await, RequestState::Done, "answered");
+    assert_eq!(
+        stays(&flow, &request).await,
+        RequestState::Working,
+        "its review runs"
+    );
     flow.manager
         .deliver_for(
             &flow.conversation,
@@ -464,9 +464,18 @@ async fn a_quiet_late_turn_keeps_an_answered_request_done_while_its_review_runs(
             .any(|review| review.state == ReviewState::Running),
         "the review still runs"
     );
-    assert_eq!(stays(&flow, &request).await, RequestState::Done);
+    assert_eq!(stays(&flow, &request).await, RequestState::Working);
     review.store(true, Ordering::SeqCst);
-    flow.settled().await;
+    let board = flow.settled().await;
+    assert_eq!(board.requests[&request].state, RequestState::Done);
+    assert!(
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|input| !input.contains("found nothing")),
+        "an answered request isn't woken by its clean review"
+    );
     flow.stop().await;
 }
 
@@ -496,7 +505,7 @@ async fn a_regenerated_quiet_turn_waits_for_its_review_despite_the_earlier_answe
                     if !answered.swap(true, Ordering::SeqCst) {
                         return Reply::text("Ready to add the notes.");
                     }
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    commit_in_workspace(&turn, "NOTES.md", &reviewed_notes(), "Add notes");
                     return Reply::text("[quiet]");
                 }
                 if turn.input.starts_with("[checks passed") {

@@ -117,6 +117,10 @@ function summary(event: DomainEvent): string {
       return `${event.run.id} ${event.run.state.type}: ${event.run.command}`;
     case "threadCommitsSeen":
       return `${event.branch} seen at ${event.tip.slice(0, 10)}`;
+    case "unreviewedChanged":
+      return event.range === null
+        ? "nothing unreviewed"
+        : `unreviewed ${event.range.base.slice(0, 10)}..${event.range.tip.slice(0, 10)}${event.range.risky === null ? "" : " (risky)"}`;
     case "outputStored":
       return `${event.output.alias} ${event.output.source} ${event.output.bytes} B`;
     case "checkRan":

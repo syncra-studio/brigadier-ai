@@ -2181,6 +2181,12 @@ pub enum DomainEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authored_from: Option<String>,
     },
+    /// The thread's changes no review covered yet moved on, or a review covered them
+    /// (BUILD-PLAN B2; full snapshot, `None`: there are none).
+    UnreviewedChanged {
+        conversation_id: ConversationId,
+        range: Option<crate::work::UnreviewedRange>,
+    },
     /// A command output of the thread's was stored whole; the model got a digest of it, or
     /// (a failing Claude `Bash` call) the CLI's excerpt (THREAD-PLAN.md Q4).
     OutputStored {
@@ -2418,6 +2424,7 @@ impl DomainEvent {
             Self::IntegratedCheckUpdated { .. } => "integrated_check.updated",
             Self::BackgroundRunUpdated { .. } => "background_run.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
+            Self::UnreviewedChanged { .. } => "thread.unreviewed",
             Self::OutputStored { .. } => "output.stored",
             Self::CheckRan { .. } => "check.ran",
             Self::ThreadLooked { .. } => "thread.looked",

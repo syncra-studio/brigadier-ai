@@ -363,6 +363,38 @@ impl Repo {
         }))
     }
 
+    /// The checkout's files as they stand (HEAD plus every non-ignored change, staged or not),
+    /// as a commit no ref names: HEAD itself when nothing differs from it. The same files on
+    /// the same HEAD give the same commit, so a snapshot can be compared with an earlier one.
+    /// The real index, working tree, stash and refs remain untouched.
+    pub fn snapshot_files(&self) -> Result<Oid> {
+        let head = self.resolve("HEAD")?;
+        let tree = match self.capture() {
+            Ok((_, tree)) => tree,
+            // Unresolved entries or a dirty submodule: the files as they stand all the same.
+            Err(_) => self.files_tree()?,
+        };
+        if tree == self.tree_of(&head.0)? {
+            return Ok(head);
+        }
+        let date: std::ffi::OsString = "2000-01-01T00:00:00+0000".into();
+        let env: Environment = ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"]
+            .map(|key| (key.into(), "Brigadier".into()))
+            .into_iter()
+            .chain(
+                ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"]
+                    .map(|key| (key.into(), "brigadier@localhost".into())),
+            )
+            .chain(["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"].map(|key| (key.into(), date.clone())))
+            .collect();
+        self.commit_tree_with(
+            &tree,
+            &[&head],
+            "Brigadier snapshot of the checkout's files",
+            &env,
+        )
+    }
+
     pub(crate) fn git_path(&self, name: &str) -> Result<PathBuf> {
         parse::path_line(&self.cmd(
             &["rev-parse", "--path-format=absolute", "--git-path", name],

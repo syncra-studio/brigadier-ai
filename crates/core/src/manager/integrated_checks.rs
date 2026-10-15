@@ -9,6 +9,11 @@
 //!   ([`SessionManager::checks_due`]). Landings close together make one due check: its tip
 //!   moves with each, and it starts once they settle for [`SETTLE`], or after the run before
 //!   it. A tip a check already ran on, or runs on, is not made due again.
+//! - **Once per request** (BUILD-PLAN B1, C3). A check made due by a commit or a landing starts
+//!   only once its requests have settled ([`super::requests::request_settled`]): no turn of
+//!   theirs runs or waits, no worker of theirs runs or lands, no review of their work runs or
+//!   is about to tell its findings, and no landing is under way. Then one run checks the
+//!   branch's tip at that moment. A merge's check and `rerun_checks` start at once.
 //! - **One run at a time per session**, in a checkout of its own (`checks/<id>/tree`, owned by
 //!   [`checks_owner`]): made warm once, then moved to each tip, so its build output stays and
 //!   no landing changes files under a running build. Its dependency installs are made again
@@ -46,6 +51,9 @@ use crate::{Error, Result, now_ms};
 /// How long landings must settle before a due check starts.
 #[cfg_attr(test, allow(dead_code))]
 const SETTLE: Duration = Duration::from_secs(15);
+/// How often a check waiting for its requests to settle looks again, besides being woken when
+/// a turn, a worker, a landing or a review ends.
+const SETTLED_POLL: Duration = Duration::from_secs(2);
 /// How long a merge (or a phase settled done) waits in its call for the checks of its tip,
 /// started at once: a project's quick or kept checks answer it there, others hold it.
 /// Tests wait less for a check they hold on purpose.
@@ -196,7 +204,9 @@ pub(crate) fn standing_lines(board: &crate::board::Board, now_ms: i64) -> Vec<St
             let at = format!("`{}` at {}", check.branch, short(&check.tip));
             match &check.state {
                 IntegratedCheckState::Due => {
-                    format!("Full checks: due on {at}; they start once landings settle.")
+                    format!(
+                        "Full checks: due on {at}; they start once the request's work settles (no turn, worker, landing or review of it runs)."
+                    )
                 }
                 IntegratedCheckState::Running { .. } => format!(
                     "Full checks: running on {at} for {}, in the background; their result comes as a message.",
@@ -371,6 +381,64 @@ impl SessionManager {
         ))
     }
 
+    /// Wakes the session's queue, when it has one: a check waiting for its requests to settle
+    /// looks again. It never waits itself: while the queue holds its lock, the wake goes apart.
+    pub(crate) fn wake_checks(&self, id: &ConversationId) {
+        match self.integrated.jobs.try_lock() {
+            Ok(jobs) => {
+                if let Some(job) = jobs.get(id) {
+                    job.wake.notify_one();
+                }
+            }
+            Err(_) => {
+                let (manager, id) = (self.arc(), id.clone());
+                self.spawn(async move {
+                    if let Some(job) = manager.integrated.jobs.lock().await.get(&id) {
+                        job.wake.notify_one();
+                    }
+                });
+            }
+        }
+    }
+
+    /// Whether the requests `check` was made due for have settled, so it may start: nothing
+    /// of theirs is under way that could still change the branch, and no review of their work
+    /// runs or is about to tell its findings (they may need a fix first). One with no request
+    /// waits for the thread to be idle.
+    async fn requests_settled(&self, id: &ConversationId, check: &IntegratedCheck) -> bool {
+        let Ok(conv) = self.conv(id) else {
+            return true;
+        };
+        if conv
+            .reviews_telling
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0
+        {
+            return false;
+        }
+        let activity = conv.request_activity().await;
+        if activity.reviews_due {
+            return false;
+        }
+        let Ok(board) = self.core.board(id).await else {
+            return true;
+        };
+        if board
+            .tasks
+            .values()
+            .any(|task| task.state == crate::work::TaskState::Landing)
+        {
+            return false;
+        }
+        if check.requests.is_empty() {
+            return activity.running.is_none() && activity.carried.is_empty();
+        }
+        check
+            .requests
+            .iter()
+            .all(|request| super::requests::request_settled(&board, &activity, request))
+    }
+
     /// Records `tip` of `branch` as due: the branch's due check moves to it, else a new one
     /// is due, unless a check already ran or runs there (a rerun: always one).
     async fn make_due(
@@ -398,7 +466,12 @@ impl SessionManager {
             Some(mut due) => {
                 due.tip = tip.0.clone();
                 due.repo = repo.to_string_lossy().into_owned();
-                due.due_at_ms = if at_once { now - i64::MAX / 4 } else { now };
+                // A merge's check stays at once: a landing after it doesn't hold it back.
+                due.due_at_ms = if at_once || !waits_for_requests(&due) {
+                    now - AT_ONCE
+                } else {
+                    now
+                };
                 due.rerun |= rerun;
                 if let Some(request) = request
                     && !due.requests.contains(&request)
@@ -437,7 +510,7 @@ impl SessionManager {
                     branch: branch.to_owned(),
                     tip: tip.0.clone(),
                     state: IntegratedCheckState::Due,
-                    due_at_ms: if at_once { now - i64::MAX / 4 } else { now },
+                    due_at_ms: if at_once { now - AT_ONCE } else { now },
                     started_at_ms: None,
                     ended_at_ms: None,
                     requests: request.into_iter().collect(),
@@ -561,6 +634,16 @@ impl SessionManager {
                 }
                 continue;
             }
+            // A check of a commit or a landing waits for its requests to settle: one run once
+            // their work is done, not one per commit (BUILD-PLAN B1).
+            if waits_for_requests(&due) && !crate::heap(|| self.requests_settled(id, &due)).await {
+                tokio::select! {
+                    () = tokio::time::sleep(SETTLED_POLL) => {}
+                    () = job.wake.notified() => {}
+                    () = job.cancel.cancelled() => break,
+                }
+                continue;
+            }
             Box::pin(self.run_integrated_check(id, due, &job.cancel)).await;
         }
         let mut jobs = self.integrated.jobs.lock().await;
@@ -580,14 +663,23 @@ impl SessionManager {
             return;
         };
         let repo = PathBuf::from(&due.repo);
-        let (git, at, branch) = (self.git.clone(), repo.clone(), due.branch.clone());
-        let tip = blocking(move || {
-            git.open(&at)
-                .map_err(git_error)?
-                .branch_tip(&branch)
-                .map_err(git_error)
-        })
-        .await;
+        // A local checkout's changes stay uncommitted: its checks run on a snapshot of its
+        // files as they stand now, never in the user's checkout (BUILD-PLAN B2).
+        let local = self.local_checkout(id).is_some_and(|(_, branch)| {
+            branch == due.branch && (due.rerun || waits_for_requests(&due))
+        });
+        let tip = if local {
+            crate::heap(|| self.snapshot_local(&repo)).await.map(Some)
+        } else {
+            let (git, at, branch) = (self.git.clone(), repo.clone(), due.branch.clone());
+            blocking(move || {
+                git.open(&at)
+                    .map_err(git_error)?
+                    .branch_tip(&branch)
+                    .map_err(git_error)
+            })
+            .await
+        };
         let mut check = {
             let _records = self.integrated.records.lock().await;
             let Ok(board) = self.core.board(id).await else {
@@ -1165,6 +1257,16 @@ impl SessionManager {
             tracing::warn!(conversation = %id, ?leftovers, "some of the check checkout will be removed at the next launch");
         }
     }
+}
+
+/// When a due check is made due at once (a merge waits for it), its due time is set this far
+/// back.
+const AT_ONCE: i64 = i64::MAX / 4;
+
+/// Whether `due` waits for its requests to settle before it starts: made due by a commit or a
+/// landing, not by a merge or `rerun_checks`, which start at once.
+fn waits_for_requests(due: &IntegratedCheck) -> bool {
+    !due.rerun && due.due_at_ms > -AT_ONCE / 2
 }
 
 /// A session's queue runner, as a future of a named type: its end looks at a held merge,

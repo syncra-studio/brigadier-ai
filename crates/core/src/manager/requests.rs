@@ -15,7 +15,7 @@
 use std::collections::HashSet;
 
 use super::SessionManager;
-use super::conversation::{ConvLive, Envelope};
+use super::conversation::{ConvLive, Envelope, RequestActivity};
 use super::decisions::waiting_run;
 use super::landing::{findings_now, pending_merge};
 use super::prompts;
@@ -24,8 +24,8 @@ use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind};
 use crate::overnight::{OvernightRun, OvernightState};
 use crate::work::{
-    CardState, OrchestratorStepKind, PlanState, QuestionKind, RequestState, ReviewRun, ReviewState,
-    Task, TaskId, TaskState,
+    CardState, OrchestratorStepKind, PlanState, QuestionKind, RequestState, ReviewKind, ReviewRun,
+    ReviewState, Task, TaskId, TaskState,
 };
 
 impl SessionManager {
@@ -233,6 +233,7 @@ impl SessionManager {
             return;
         };
         let activity = conv.request_activity().await;
+        let reviews_on = self.reviews_on();
         let mut reminded = false;
         for request in board.requests.values() {
             let id = request.id.as_str();
@@ -279,7 +280,8 @@ impl SessionManager {
                 id,
                 activity.deferred.contains(id),
                 activity.reviews_due,
-            ) {
+            ) || (reviews_on && reviewing_own_work(&board, id))
+            {
                 // Brigadier wakes the thread for it later: its answer isn't written yet, so it
                 // isn't over between turns. A stop or a failure above wins.
                 RequestState::Working
@@ -337,6 +339,8 @@ impl SessionManager {
         }
         // Requests all over: what the thread's commands left goes.
         self.sweep_scratch_when_over(&conv);
+        // Full checks waiting for their requests to settle look again.
+        self.wake_checks(conversation_id);
     }
 
     /// The newest answer, when nothing but what Brigadier owes it keeps it working (or only
@@ -365,12 +369,12 @@ impl SessionManager {
             || runs_in(&board, id)
             || blocked_on_the_thread(&board, id);
         (!under_way
-            && owed_a_turn(
+            && (owed_a_turn(
                 &board,
                 id,
                 activity.deferred.contains(id),
                 activity.reviews_due,
-            ))
+            ) || (self.reviews_on() && reviewing_own_work(&board, id))))
         .then(|| latest.id.clone())
     }
 
@@ -534,6 +538,25 @@ fn runs_in(board: &Board, request: &str) -> bool {
         })
 }
 
+/// Whether nothing of `request` is under way any more, as far as its full checks wait for
+/// (BUILD-PLAN B1, C3): no turn of it runs or waits to start, no worker of it is queued,
+/// starts, runs or lands, no command of it runs in the background, and no code review of its
+/// work runs.
+pub(super) fn request_settled(board: &Board, activity: &RequestActivity, request: &str) -> bool {
+    let turn = activity.running.as_deref() == Some(request)
+        || activity.carried.contains(request)
+        || activity
+            .background
+            .as_ref()
+            .is_some_and(|(of, _)| of == request);
+    let reviewed = board.reviews.values().any(|review| {
+        review.kind == ReviewKind::Code
+            && review.state == ReviewState::Running
+            && review_request(board, review).as_deref() == Some(request)
+    });
+    !turn && !runs_in(board, request) && !reviewed
+}
+
 /// Whether Brigadier still owes the request a turn: something under way will wake the thread
 /// for it with what its answer needs (w43 bug 2). Between turns such a request isn't over, so
 /// its block doesn't fold on a line written mid-way. It is owed one for:
@@ -579,6 +602,18 @@ pub(super) fn owed_a_turn(board: &Board, request: &str, deferred: bool, reviews_
         }) || (reviews_due && tasks_in(board, request, |state| state == TaskState::Landed)));
     let checking = deferred && super::integrated_checks::checking_for(board, request);
     watched || held || reviewed || checking
+}
+
+/// Whether a review of the thread's own changes for the request runs (BUILD-PLAN B2): the
+/// request isn't done while it does, whether or not the thread answered already. Its findings
+/// come as a message, the valid ones get fixed, and then the answer stands.
+pub(super) fn reviewing_own_work(board: &Board, request: &str) -> bool {
+    board.reviews.values().any(|review| {
+        review.kind == ReviewKind::Code
+            && review.task_id.is_none()
+            && review.state == ReviewState::Running
+            && review.request_id.as_deref() == Some(request)
+    })
 }
 
 /// The request a review belongs to: its own, else its task's.
@@ -1156,12 +1191,15 @@ mod tests {
         assert!(owed_a_turn(&board, "r1", true, true));
         assert!(!owed_a_turn(&board, "r2", true, true));
 
-        // A review of the thread's own commits, by its request.
+        // A review of the thread's own commits, by its request: owed a turn either way
+        // (BUILD-PLAN B2), since its findings get fixed before the answer stands.
         let mut board = Board::default();
         let review = review_of("rv2", Some("r1"), None);
         board.reviews.insert(review.id.clone(), review);
         assert!(owed(&board, "r1", true));
         assert!(!owed(&board, "r1", false));
+        assert!(reviewing_own_work(&board, "r1"));
+        assert!(!reviewing_own_work(&board, "r2"));
     }
 
     #[test]

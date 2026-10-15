@@ -138,6 +138,9 @@ pub enum SendOutcome {
     Queued(QueuedMessage),
 }
 
+/// The label of a clean review of the thread's own changes, told only while its answer waits.
+pub(crate) const CLEAN_REVIEW: &str = "review of your commits · clean";
+
 /// Something for the orchestrator's next turn.
 #[derive(Debug, Clone)]
 pub(crate) struct Envelope {
@@ -154,6 +157,12 @@ impl Envelope {
     /// Passes that require more work use the ordinary decision label instead.
     fn optional_check_pass(&self) -> bool {
         self.kind == InjectionKind::Decision && self.label.starts_with("checks passed ")
+    }
+
+    /// A clean review of the thread's own changes only wakes a request whose answer waits for
+    /// it (BUILD-PLAN B2): an answer given meanwhile makes it moot.
+    fn optional_clean_review(&self) -> bool {
+        self.kind == InjectionKind::Report && self.label == CLEAN_REVIEW
     }
 
     /// The message of another session's it carries.
@@ -526,6 +535,12 @@ pub(crate) struct ConvLive {
     /// Landings whose review isn't stored yet: the landed task is final before its review
     /// starts, so a held merge waits for these as for a running review.
     pub(super) reviews_due: std::sync::atomic::AtomicUsize,
+    /// Reviews that ended and whose findings aren't queued for the thread yet: the session's
+    /// full checks wait for these as for a running review (BUILD-PLAN C3).
+    pub(super) reviews_telling: std::sync::atomic::AtomicUsize,
+    /// The reviews `run_check` told the thread to wait for before it answers (BUILD-PLAN C2):
+    /// one that ends clean is told too, so the answer comes.
+    pub(super) awaited_reviews: std::sync::Mutex<HashSet<String>>,
     /// A turn ran since the thread's scratch was last swept: the next time its requests are
     /// all over, it is swept ([`super::thread_scratch`]).
     pub(super) scratch_used: std::sync::atomic::AtomicBool,
@@ -584,6 +599,8 @@ impl ConvLive {
             merge_lock: tokio::sync::Mutex::new(()),
             merge_told: std::sync::Mutex::new(None),
             reviews_due: std::sync::atomic::AtomicUsize::new(0),
+            reviews_telling: std::sync::atomic::AtomicUsize::new(0),
+            awaited_reviews: std::sync::Mutex::default(),
             scratch_used: std::sync::atomic::AtomicBool::new(false),
             held_moves: tokio::sync::Mutex::new(HashMap::new()),
             ci_watches: std::sync::Mutex::new(Vec::new()),
@@ -2533,6 +2550,8 @@ impl SessionManager {
             // Where the branch stands before the turn: what came since the last turn is the
             // thread's only if marked so.
             self.scan_thread_commits(&conv.id, false).await;
+            // On a local checkout, where the request's changes start (BUILD-PLAN B2).
+            crate::heap(|| self.note_request_start(&conv.id, request.as_deref())).await;
         }
         let (reseed, briefing) = {
             let mut state = conv.state.lock().await;
@@ -4652,6 +4671,9 @@ impl SessionManager {
             // What the thread committed in this turn gets its review, before a next turn can
             // take its commits for the user's.
             self.scan_thread_commits(&conv.id, true).await;
+            // Its changes so far are measured again: a range over the line or marked risky
+            // gets its review now, if `run_check` didn't start it (BUILD-PLAN B2, C2).
+            crate::heap(|| self.unreviewed_at_turn_end(&conv.id)).await;
             // The ref check, for the thread: its own commits are recorded, what it broke of
             // others' is put back (PLAN bug 6). Beside the turn's ending, which it doesn't hold
             // up: what it finds starts a turn of its own.
@@ -4793,7 +4815,9 @@ impl SessionManager {
                         // A pass arriving during this turn was queued against its previous
                         // [quiet]. This answer settles it without another turn.
                         state.inbox.retain(|(envelope, queued)| {
-                            queued.as_ref() != Some(request) || !envelope.optional_check_pass()
+                            queued.as_ref() != Some(request)
+                                || !(envelope.optional_check_pass()
+                                    || envelope.optional_clean_review())
                         });
                     }
                 }

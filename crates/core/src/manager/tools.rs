@@ -515,13 +515,7 @@ impl SessionManager {
             }
             OrchestratorCall::QueryBrain(args) => {
                 crate::heap(|| {
-                    self.query_brain_tool(
-                        id,
-                        args.query,
-                        args.history.unwrap_or(false),
-                        args.page,
-                        false,
-                    )
+                    self.query_brain_tool(id, args.query, args.history.unwrap_or(false), args.page)
                 })
                 .await
             }
@@ -654,7 +648,7 @@ impl SessionManager {
                 .await
             }
             OrchestratorCall::RunCheck(args) => {
-                crate::heap(|| self.run_check_tool(id, None, args)).await
+                crate::heap(|| self.thread_run_check(id, args)).await
             }
             OrchestratorCall::StartPreview(args) => {
                 crate::heap(|| self.start_preview(id, args)).await
@@ -891,7 +885,6 @@ impl SessionManager {
                     args.query,
                     args.history.unwrap_or(false),
                     args.page,
-                    true,
                 )
                 .await
             }

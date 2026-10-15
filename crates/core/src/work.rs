@@ -1565,6 +1565,32 @@ pub enum BackgroundRunState {
     },
 }
 
+/// The thread's own changes for a request that no review covered yet, taken together
+/// (BUILD-PLAN B2): one review of all of them starts once they cross the size line, or once
+/// the thread marks them risky, and the range starts again after what it covered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnreviewedRange {
+    /// The request the changes were made for.
+    pub request_id: String,
+    /// The branch they are on (the session's, or a local checkout's).
+    pub branch: String,
+    /// The commit they start after.
+    pub base: String,
+    /// The last of them looked at (`base` while there are none).
+    pub tip: String,
+    /// A local checkout, whose changes stay uncommitted: `base` and `tip` are snapshot commits
+    /// of its files, which no ref names.
+    #[serde(default)]
+    pub local: bool,
+    /// On a local checkout, the snapshot of its files when the request started.
+    #[serde(default)]
+    pub start: Option<String>,
+    /// Why the thread marked them risky (`run_check`'s `risky`), when it did.
+    #[serde(default)]
+    pub risky: Option<String>,
+}
+
 /// What the user's consent to the session's merge waits for (SESSION-FIXES-PLAN.md Q3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

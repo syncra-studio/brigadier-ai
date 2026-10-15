@@ -612,6 +612,8 @@ impl SessionManager {
         self.scan_branch(id, repo, branch, Some(from.clone()), in_turn)
             .await;
         self.record_thread_tip(id, branch, tip, None).await;
+        // The landing has its own review: the thread's range goes on after it.
+        crate::heap(|| self.unreviewed_moved(id, branch, None, tip)).await;
     }
 
     /// Looks at `branch` from its recorded tip to `upto` (its tip now by default), with
@@ -658,6 +660,11 @@ impl SessionManager {
             Ok(Some((tip, theirs.then_some(seen))))
         })
         .await;
+        // A local checkout's changes are measured from snapshots of its files, its commits
+        // included ([`SessionManager::local_changes`]).
+        let local = self
+            .local_checkout(id)
+            .is_some_and(|(_, local)| local == branch);
         match found {
             Ok(Some((tip, base))) => {
                 let theirs = base.is_some();
@@ -672,18 +679,31 @@ impl SessionManager {
                             }
                             self.recheck_thread_fix(
                                 id,
-                                base,
+                                base.clone(),
                                 tip.clone(),
                                 repo.to_owned(),
                                 &fix.fixed,
                             )
                             .await;
-                        }
-                        None => {
-                            self.review_thread_commits(id, base, tip.clone(), repo.to_owned())
+                            if !local {
+                                crate::heap(|| {
+                                    self.unreviewed_moved(id, branch, Some(&base), &tip)
+                                })
                                 .await;
+                            }
                         }
+                        // Measured with the request's other unreviewed changes: one review
+                        // once they are big enough or marked risky (BUILD-PLAN B2).
+                        None if !local => {
+                            crate::heap(|| {
+                                self.thread_commits_unreviewed(id, repo, branch, &base, &tip)
+                            })
+                            .await;
+                        }
+                        None => {}
                     }
+                } else if !local {
+                    crate::heap(|| self.unreviewed_moved(id, branch, None, &tip)).await;
                 }
                 self.record_thread_tip(id, branch, &tip, base.as_ref())
                     .await;

@@ -34,10 +34,11 @@ async fn a_reviews_findings_are_items_the_thread_records_and_the_merge_lists_the
             let seen = seen.clone();
             async move {
                 if turn.input.contains("Add notes.") {
+                    // Big enough for an other-vendor review (BUILD-PLAN B2).
                     commit_in_workspace(
                         &turn,
                         "NOTES.md",
-                        "notes \n",
+                        &format!("notes \n{}", super::thread_tests::reviewed_notes()),
                         "Add notes\n\nBrigadier-Author: thread",
                     );
                     return Reply::text("Added NOTES.md.");

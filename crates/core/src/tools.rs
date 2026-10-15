@@ -386,6 +386,45 @@ pub struct RunCheck {
     pub rerun: bool,
 }
 
+/// The thread's `run_check`: a worker's, and its change's risk (BUILD-PLAN B2).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadRunCheck {
+    /// The check, as you would type it in a shell (`/bin/sh -c`). Leave it out to get the
+    /// checks your changes affect (nothing runs then).
+    #[serde(default)]
+    pub command: Option<String>,
+    /// The folder it runs in, relative to your checkout's root (the root by default).
+    #[serde(default)]
+    pub workdir: Option<String>,
+    /// How long it may run, in seconds (default 600, at most 1800); it is stopped then.
+    #[serde(default, alias = "timeout")]
+    pub timeout_secs: Option<u64>,
+    /// Run it even when it already ran on the same files, and keep the new result.
+    #[serde(default)]
+    pub rerun: bool,
+    /// Why your change for this request is risky, when it is (persistence, security,
+    /// migrations, concurrency, deletion, public API): it then gets an other-vendor review
+    /// whatever its size.
+    #[serde(default)]
+    pub risky: Option<String>,
+}
+
+impl ThreadRunCheck {
+    /// The check to run, and the risk the thread marked.
+    pub fn split(self) -> (RunCheck, Option<String>) {
+        (
+            RunCheck {
+                command: self.command,
+                workdir: self.workdir,
+                timeout_secs: self.timeout_secs,
+                rerun: self.rerun,
+            },
+            self.risky,
+        )
+    }
+}
+
 /// `run_unsandboxed`: the same, outside the sandbox, once approved.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -983,7 +1022,7 @@ pub enum OrchestratorCall {
     WritePage(WritePage),
     Run(RunCommand),
     RunUnsandboxed(RunUnsandboxed),
-    RunCheck(RunCheck),
+    RunCheck(ThreadRunCheck),
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),

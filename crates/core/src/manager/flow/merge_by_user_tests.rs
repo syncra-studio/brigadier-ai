@@ -15,7 +15,9 @@ use crate::manager::landing::pending_merge;
 use crate::manager::prompts::{MERGE_BY_USER_REVISION, revision_note};
 use crate::model::{CardId, DomainEvent, Environment, Lifecycle, MessageRole, Setup};
 use crate::now_ms;
-use crate::work::{AnswerInput, MergeCondition, OrchestratorStepKind, Question, QuestionKind};
+use crate::work::{
+    AnswerInput, MergeCondition, OrchestratorStepKind, Question, QuestionKind, RunState,
+};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -356,6 +358,13 @@ async fn an_upgrade_closes_merge_cards_and_cancels_a_merge_held_on_one() {
     assert!(board.orchestrator_steps.iter().any(|step| matches!(&step.kind, OrchestratorStepKind::MergeCancelled { asked_in } if *asked_in == answered.id.to_string())));
     assert!(pending_merge(&board).is_none());
     flow.say("Anything new?").await;
+    // The note has no request of its own: its turn may follow the user's after that request
+    // is done.
+    let heard = log.clone();
+    flow.until("the note's turn", move |board| {
+        board.run == RunState::Idle && !logged(&heard, "[merge cards retired]").is_empty()
+    })
+    .await;
     flow.settled().await;
     assert_eq!(logged(&log, "[merge cards retired]").len(), 1);
     assert_eq!(merged(&flow.board().await), 0);

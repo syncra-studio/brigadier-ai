@@ -568,12 +568,13 @@ async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
             "notes.txt",
         ],
     );
+    // A tiny edit gets the thread's own checks only: no other-vendor review (BUILD-PLAN B2).
     assert!(
-        board
+        !board
             .reviews
             .values()
             .any(|review| review.kind == ReviewKind::Code && review.tip == notes.trim()),
-        "the thread's commit gets its review: {:#?}",
+        "the thread's tiny commit gets no review: {:#?}",
         board.reviews
     );
 

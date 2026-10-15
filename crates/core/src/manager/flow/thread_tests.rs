@@ -623,6 +623,14 @@ async fn the_threads_plan_review_runs_in_the_background() {
     flow.stop().await;
 }
 
+/// Notes big enough to cross the review line (BUILD-PLAN B2): the thread's change that gets
+/// an other-vendor review.
+pub(super) fn reviewed_notes() -> String {
+    (1..=crate::manager::unreviewed::REVIEW_LINE.lines)
+        .map(|n| format!("note {n}\n"))
+        .collect()
+}
+
 /// Commits a file in the thread's workspace, as the thread's own tiny edit would.
 pub(super) fn commit_in_workspace(turn: &Turn, file: &str, text: &str, message: &str) -> String {
     let workspace = &turn.add_dirs[0];
@@ -671,7 +679,8 @@ async fn a_thread_commit_is_reviewed_once() {
                 log.lock().unwrap().push(turn.input.clone());
                 if turn.input.contains("Add notes.") {
                     let start = git(&turn.add_dirs[0], &["rev-parse", "HEAD"]);
-                    let tip = commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    let tip =
+                        commit_in_workspace(&turn, "NOTES.md", &reviewed_notes(), "Add notes");
                     made.lock().unwrap().extend([start, tip]);
                     return Reply::text("Added NOTES.md.");
                 }
@@ -739,7 +748,7 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
                         let tip = commit_in_workspace(
                             &turn,
                             "NOTES.md",
-                            "notes\n",
+                            &reviewed_notes(),
                             "Add notes\n\nBrigadier-Author: thread",
                         );
                         made.lock().unwrap().extend([start, tip]);
@@ -816,7 +825,7 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
         .thread_metrics(&flow.conversation)
         .await
         .unwrap();
-    assert_eq!(edits(metrics), (1, 1, 0, false));
+    assert_eq!(edits(metrics), (1, 30, 0, false));
     // Once the branch is merged and removed, the last count stands.
     git(
         &flow.repo,
@@ -833,7 +842,7 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
         .thread_metrics(&flow.conversation)
         .await
         .unwrap();
-    assert_eq!(edits(metrics), (1, 1, 0, true));
+    assert_eq!(edits(metrics), (1, 30, 0, true));
     flow.stop().await;
 }
 
@@ -861,7 +870,7 @@ async fn a_merge_counts_the_review_of_the_threads_own_commit() {
                 commit_in_workspace(
                     &turn,
                     "NOTES.md",
-                    "notes\n",
+                    &reviewed_notes(),
                     "Add notes\n\nBrigadier-Author: thread",
                 );
                 let reply = turn
@@ -1229,12 +1238,11 @@ async fn a_stop_during_a_command_ends_it_and_the_next_message_resumes() {
     flow.stop().await;
 }
 
-/// A preview left running and a review still under way after the thread answered don't keep
-/// the request working: its block is done and "Worked for" stops, and neither shows as a
-/// worker. The review's findings start a turn for the same request, which works (and shows its
-/// live line) until that turn ends.
+/// A preview the thread started holds nothing up: its answer is done while the preview runs.
+/// A review of its own change does (BUILD-PLAN B2): the request keeps working until the
+/// findings came and the thread took them in, in the same request.
 #[tokio::test]
-async fn a_running_preview_or_review_leaves_the_answer_done_and_findings_work_again() {
+async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_working() {
     let review_gate = Arc::new(tokio::sync::Notify::new());
     let findings_gate = Arc::new(tokio::sync::Notify::new());
     let (review_wait, findings_wait) = (review_gate.clone(), findings_gate.clone());
@@ -1253,8 +1261,7 @@ async fn a_running_preview_or_review_leaves_the_answer_done_and_findings_work_ag
         script(move |turn| {
             let gate = findings_wait.clone();
             async move {
-                if turn.input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                if turn.input.contains("Start the site.") {
                     let reply = turn
                         .call(
                             "start_preview",
@@ -1262,7 +1269,11 @@ async fn a_running_preview_or_review_leaves_the_answer_done_and_findings_work_ag
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Added NOTES.md; the site runs.");
+                    return Reply::text("The site runs.");
+                }
+                if turn.input.contains("Add notes.") {
+                    commit_in_workspace(&turn, "NOTES.md", &reviewed_notes(), "Add notes");
+                    return Reply::text("Added NOTES.md.");
                 }
                 if turn.input.contains("[review of your commits") {
                     gate.notified().await;
@@ -1273,9 +1284,9 @@ async fn a_running_preview_or_review_leaves_the_answer_done_and_findings_work_ag
         }),
     )
     .await;
-    flow.say("Add notes.").await;
+    flow.say("Start the site.").await;
     let board = flow
-        .until("the answer done, the preview and review running", |board| {
+        .until("the answer done, the preview running", |board| {
             board
                 .requests
                 .values()
@@ -1284,27 +1295,34 @@ async fn a_running_preview_or_review_leaves_the_answer_done_and_findings_work_ag
                     .previews
                     .values()
                     .any(|preview| preview.state.is_running())
+        })
+        .await;
+    let first = board.requests.values().next().unwrap().clone();
+    assert!(
+        first.worked.iter().all(|span| span.to_ms.is_some()),
+        "Worked for stops: {:?}",
+        first.worked
+    );
+    assert!(board.tasks.is_empty(), "no worker: {:?}", board.tasks);
+
+    // A change over the review line: its request works while the review runs.
+    flow.say("Add notes.").await;
+    let board = flow
+        .until("the review running, the thread idle", |board| {
+            board.requests.len() == 2
+                && board.run == crate::work::RunState::Idle
                 && board
                     .reviews
                     .values()
                     .any(|review| review.state == crate::work::ReviewState::Running)
         })
         .await;
-    let request = board.requests.values().next().unwrap().clone();
-    assert!(
-        request.worked.iter().all(|span| span.to_ms.is_some()),
-        "Worked for stops: {:?}",
-        request.worked
-    );
-    assert!(board.tasks.is_empty(), "no worker: {:?}", board.tasks);
-    // Still done a moment later, while both run.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    let board = flow.board().await;
+    let request = board.latest_request().unwrap().clone();
+    assert_eq!(request.state, crate::work::RequestState::Working);
     assert_eq!(
-        board.requests[&request.id].state,
+        board.requests[&first.id].state,
         crate::work::RequestState::Done
     );
-    assert_eq!(board.run, crate::work::RunState::Idle);
 
     // The findings arrive: the same request works while the thread takes them in.
     review_gate.notify_one();
@@ -1314,15 +1332,7 @@ async fn a_running_preview_or_review_leaves_the_answer_done_and_findings_work_ag
                 && board.run == crate::work::RunState::Running
         })
         .await;
-    assert_eq!(board.requests.len(), 1, "the same request");
-    assert!(
-        board.requests[&request.id]
-            .worked
-            .last()
-            .is_some_and(|span| span.to_ms.is_none()),
-        "a new span: {:?}",
-        board.requests[&request.id].worked
-    );
+    assert_eq!(board.requests.len(), 2, "the same request");
     findings_gate.notify_one();
     let board = flow
         .until("the findings turn to end", |board| {

@@ -94,6 +94,25 @@ pub(crate) struct ThreadFix {
     pub since_merge: bool,
 }
 
+/// A review whose end isn't told yet, counted on its conversation until dropped.
+struct Telling(std::sync::Arc<super::conversation::ConvLive>);
+
+impl Telling {
+    fn new(conv: std::sync::Arc<super::conversation::ConvLive>) -> Self {
+        conv.reviews_telling
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(conv)
+    }
+}
+
+impl Drop for Telling {
+    fn drop(&mut self) {
+        self.0
+            .reviews_telling
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// The cleanup-ledger owner of a review's checkout and processes; also the task its tokens
 /// are counted under.
 fn review_owner(id: &str) -> String {
@@ -689,20 +708,25 @@ impl SessionManager {
         }
     }
 
-    /// The review of commits the thread made itself, `base..tip`, by the vendor other than
-    /// the thread's. None when that range has one already.
+    /// The review of changes the thread made itself for `request`, `base..tip`, by the vendor
+    /// other than the thread's. None when that range has one already.
     pub(crate) async fn review_thread_commits(
         &self,
         conversation_id: &ConversationId,
         base: Oid,
         tip: Oid,
         repo: PathBuf,
+        request: Option<String>,
     ) {
         let author = self.thread_author(conversation_id).await;
+        let request = match request {
+            Some(request) => Some(request),
+            None => self.request_for(conversation_id, None).await,
+        };
         let started = self
             .start_review(NewReview {
                 conversation_id: conversation_id.clone(),
-                request_id: self.request_for(conversation_id, None).await,
+                request_id: request,
                 task_id: None,
                 kind: ReviewKind::Code,
                 base,
@@ -1453,6 +1477,16 @@ impl SessionManager {
 
     /// Records how `review` ended and tells whoever asked.
     async fn finish_review(&self, review: ReviewRun, outcome: std::result::Result<Review, String>) {
+        let id = review.conversation_id.clone();
+        // From before its end is stored until its findings are queued for the thread, the
+        // session's full checks wait as for a running review (BUILD-PLAN C3).
+        let telling = self.conv(&id).ok().map(Telling::new);
+        crate::heap(|| self.end_review(review, outcome)).await;
+        drop(telling);
+        self.wake_checks(&id);
+    }
+
+    async fn end_review(&self, review: ReviewRun, outcome: std::result::Result<Review, String>) {
         let mut ended = review;
         ended.ended_at_ms = Some(now_ms());
         let text = match outcome {
@@ -1666,6 +1700,15 @@ impl SessionManager {
             (ReviewKind::Plan, ReviewState::Failed { reason }, _) => format!(
                 "[plan review {of} · could not run] The plan review could not run: {reason}. Judge the outline yourself."
             ),
+            // A clean review of the thread's own changes is news only when its answer waits
+            // for it (BUILD-PLAN B2: `run_check` told it to).
+            (ReviewKind::Code, ReviewState::Clean, _)
+                if review.task_id.is_none() && self.answer_waits_for(review) =>
+            {
+                format!(
+                    "[review of your commits · {reviewer} found nothing in {range}] The background review of your change found nothing. Give your answer now."
+                )
+            }
             // Clean, or still running: nothing to say.
             _ => return,
         };
@@ -1706,6 +1749,9 @@ impl SessionManager {
                 label: match (review.kind, review.task_id.is_some()) {
                     (ReviewKind::Code, true) => format!("review {of}"),
                     (ReviewKind::Plan, true) => format!("plan review {of}"),
+                    (ReviewKind::Code, false) if review.state == ReviewState::Clean => {
+                        super::conversation::CLEAN_REVIEW.to_owned()
+                    }
                     (ReviewKind::Code, false) => "review of your commits".to_owned(),
                     (ReviewKind::Plan, false) => "plan review of your plan".to_owned(),
                 },
@@ -1715,6 +1761,17 @@ impl SessionManager {
             request,
         )
         .await;
+    }
+
+    /// Whether `run_check` told the thread to wait for `review` before it answers: then its
+    /// clean end is news too.
+    fn answer_waits_for(&self, review: &ReviewRun) -> bool {
+        self.conv(&review.conversation_id).is_ok_and(|conv| {
+            conv.awaited_reviews
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&review.id)
+        })
     }
 
     /// `record_findings`: the thread's word on what became of review findings. Every id must
