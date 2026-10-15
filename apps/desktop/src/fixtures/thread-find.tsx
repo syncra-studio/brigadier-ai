@@ -461,6 +461,20 @@ const steps = {
       emptied: kept.map((highlight) => highlight?.size ?? null),
     };
   },
+  /** Esc gives the keyboard back to what had it, out of view, without scrolling the thread to it. */
+  async keepsPlace() {
+    const away = viewport().querySelector<HTMLElement>("button")!;
+    viewport().scrollTop = viewport().scrollHeight;
+    away.focus({ preventScroll: true });
+    press(away, "KeyF", { meta: true });
+    await until(() => label() !== null);
+    await settle(600);
+    const top = viewport().scrollTop;
+    press(field()!, "Escape");
+    await until(() => bar() === null);
+    await settle(300);
+    return { focusBack: document.activeElement === away, moved: Math.round(viewport().scrollTop - top) };
+  },
   /** A selection over two lines gives an empty text. */
   async multiline() {
     const first = textHolding("Second paragraph of answer 50")!;

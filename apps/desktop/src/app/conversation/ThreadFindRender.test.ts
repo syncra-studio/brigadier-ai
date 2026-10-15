@@ -35,6 +35,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
     inner: { label: string | null; inBox: boolean; inView: boolean };
     inButton: { label: string | null; ringed: boolean; left: boolean };
     closed: { bar: boolean; finding: boolean; matches: boolean; active: boolean; emptied: (number | null)[] };
+    keepsPlace: { focusBack: boolean; moved: number };
     multiline: { value: string | null; label: string | null; size: number; closedByButton: boolean };
   };
   assert.equal(seen.error, undefined);
@@ -128,6 +129,8 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   // taken off when no match in it is gone to.
   assert.deepEqual(seen.inButton, { label: "1 / 1 result", ringed: true, left: false });
   assert.deepEqual(seen.closed, { bar: false, finding: false, matches: false, active: false, emptied: [0, 0] });
+  // Esc gives the keyboard back to what had it before, without scrolling the thread to it.
+  assert.deepEqual(seen.keepsPlace, { focusBack: true, moved: 0 });
 
   // A selection over two lines opens the bar with no text; × closes it.
   assert.deepEqual(seen.multiline, { value: "", label: null, size: 0, closedByButton: true });

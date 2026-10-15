@@ -375,7 +375,8 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     unpaint(viewport);
     const back = before.current;
     before.current = null;
-    if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus();
+    // Where it is, without scrolling the thread there: the reader keeps their place.
+    if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus({ preventScroll: true });
   }, [viewport]);
 
   /** ⌘F: opens the bar (or takes the focus back to it), with a single line selected in the thread as its text. */
