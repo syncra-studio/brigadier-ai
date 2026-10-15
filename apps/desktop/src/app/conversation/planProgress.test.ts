@@ -36,7 +36,9 @@ test("task states have distinct pending, running, landed and failed marks", () =
   assert.equal(planStepStatus("queued"), "pending");
   for (const state of ["starting", "running", "blocked", "paused", "reported", "landing", "readyToLand"] as const) assert.equal(planStepStatus(state), "active");
   for (const state of ["landed", "done"] as const) assert.equal(planStepStatus(state), "done");
-  for (const state of ["failed", "rejected", "stopped"] as const) assert.equal(planStepStatus(state), "failed");
+  assert.equal(planStepStatus("failed"), "failed");
+  // A stop is no failure (UI audit M3).
+  for (const state of ["rejected", "stopped"] as const) assert.equal(planStepStatus(state), "stopped");
 });
 
 test("progress names the real running index, simultaneous workers and failures", () => {
@@ -44,8 +46,11 @@ test("progress names the real running index, simultaneous workers and failures",
   assert.equal(label(["queued", "running", undefined]), "Step 2 of 3: Second");
   assert.equal(label(["landed", "running", "starting"]), "Step 2 of 3: Second · 2 running");
   assert.equal(label(["landed", "failed", "running"]), "Step 2 failed");
-  assert.equal(label(["done", "rejected", undefined]), "Step 2 failed");
-  assert.equal(label(["done", "stopped", undefined]), "Step 2 failed");
+  assert.equal(label(["done", "rejected", undefined]), "Step 2 stopped");
+  assert.equal(label(["done", "stopped", undefined]), "Step 2 stopped");
+  assert.deepEqual(planProgress(approved, ["done", "stopped", undefined]), { label: "Step 2 stopped", status: "stopped", tone: "quiet" });
+  // One stopped while another works: the work in hand is what it reads.
+  assert.equal(label(["stopped", "running", undefined]), "Step 2 of 3: Second");
   assert.equal(label(["landed", "queued", undefined]), "1 of 3 done");
   assert.equal(label(["landed", "done", "landed"]), "3 of 3 done");
   assert.equal(planProgress(approved, ["landed", "done", "landed"]).status, "done");

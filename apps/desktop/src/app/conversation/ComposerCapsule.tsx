@@ -1,4 +1,4 @@
-import { Check, Clock, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Check, Clock, StopCircle, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useContext, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -125,7 +125,7 @@ const StepList: FC<{ steps: readonly { title: string; status: ReturnType<typeof 
           {step.title}
         </span>
         <span className="sr-only">
-          {step.status === "pending" ? "Not started" : step.status === "active" ? "Running" : step.status === "done" ? "Done" : "Failed"}
+          {step.status === "pending" ? "Not started" : step.status === "active" ? "Running" : step.status === "done" ? "Done" : step.status === "stopped" ? "Stopped" : "Failed"}
         </span>
       </li>
     ))}
@@ -165,6 +165,8 @@ const StepGlyph: FC<{ status: ReturnType<typeof planStepStatus> }> = ({ status }
       return <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" />;
     case "failed":
       return <X className="text-destructive size-icon-xs" />;
+    case "stopped":
+      return <StopCircle className="text-muted-foreground size-icon-xs" />;
     case "pending":
       return <span className="border-foreground/35 size-icon-xs rounded-full border" />;
   }
@@ -262,6 +264,11 @@ const RequestCapsule: FC<{ conversationId: string }> = ({ conversationId }) => {
             <>
               <X aria-hidden className="text-destructive size-icon-xs shrink-0" />
               <span className="text-foreground min-w-0 truncate">{progress.label}</span>
+            </>
+          ) : progress.status === "stopped" ? (
+            <>
+              <StopCircle aria-hidden className="text-muted-foreground size-icon-xs shrink-0" />
+              <span className="text-muted-foreground min-w-0 truncate">{progress.label}</span>
             </>
           ) : (
             <>

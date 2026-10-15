@@ -25,6 +25,7 @@ const STEP_WORDS: Record<AgentPlanStepStatus, string> = {
   done: "Done",
   partial: "Partly done",
   failed: "Failed",
+  stopped: "Stopped",
   skipped: "Skipped",
 };
 
@@ -94,14 +95,17 @@ function statusLine(plan: Plan, statuses: readonly AgentPlanStepStatus[]): strin
   if (failed !== -1) return `Phase ${failed + 1} failed`;
   const running = statuses.indexOf("active");
   if (running !== -1) return `Phase ${running + 1} of ${statuses.length}`;
+  const stopped = statuses.indexOf("stopped");
+  if (stopped !== -1) return `Phase ${stopped + 1} stopped`;
   const done = statuses.filter((status) => status === "done").length;
   return done > 0 ? `${done} of ${statuses.length} done` : "Not started";
 }
 
 /**
  * The session's plan, a section of the summary's context card: its title and state, one row per
- * phase marked Pending, In progress or Done (each opening to its worker and description), and
- * the approval while it is proposed. It folds itself once every phase is done. `planIds` are the
+ * phase marked Pending, In progress, Done or Stopped (each opening to its worker and description),
+ * and the approval while it is proposed. It folds itself to one quiet line once every phase is
+ * done or its request has ended, so an old plan never stands over later requests. `planIds` are the
  * session's own plans, oldest first; `currentPlanId` selects the plan to show, and
  * `onShowCurrent`, given while that is an earlier plan, goes back to the current one.
  */
@@ -145,6 +149,8 @@ export const PlanSection = memo(function PlanSection({
   const proposed = plan.state.type === "proposed";
   const allDone =
     plan.state.type === "approved" && statuses.length > 0 && statuses.every((status) => status === "done");
+  // Its request is over: the plan is history, not the work at hand.
+  const ended = !proposed && request !== undefined && request !== "working" && request !== "waiting";
   // A plan written as a document is one row that opens it; a single phase of it is the plan
   // itself, not a row of its own.
   const phaseRows = !plan.body || plan.steps.length > 1;
@@ -154,7 +160,8 @@ export const PlanSection = memo(function PlanSection({
       foldKey="plan"
       title="Plan"
       count={phaseRows ? plan.steps.length : undefined}
-      defaultFolded={allDone && !plan.body}
+      summary={ended && !plan.body ? statusLine(plan, statuses) : undefined}
+      defaultFolded={(allDone || ended) && !plan.body}
       data-card="plan"
       id={`plan-${plan.id}`}
       tabIndex={-1}

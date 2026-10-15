@@ -1,7 +1,8 @@
 import { isRunRequest } from "@/app/conversation/blocks";
 import type { Plan, RequestState, TaskState, UserRequest } from "@/ipc/generated";
 
-export type PlanStepStatus = "pending" | "active" | "done" | "failed";
+/** A stopped step (the user or the thread stopped it, or its work was turned down) is no failure. */
+export type PlanStepStatus = "pending" | "active" | "done" | "failed" | "stopped";
 export type PlanProgress = {
   label: string;
   status: "review" | PlanStepStatus;
@@ -17,9 +18,10 @@ export function planStepStatus(state: TaskState | undefined): PlanStepStatus {
     case "done":
       return "done";
     case "failed":
+      return "failed";
     case "rejected":
     case "stopped":
-      return "failed";
+      return "stopped";
     default:
       return "active";
   }
@@ -63,6 +65,8 @@ export function planProgress(plan: Plan, states: readonly (TaskState | undefined
           tone: "live",
         };
       }
+      const stopped = steps.indexOf("stopped");
+      if (stopped !== -1) return { label: `Step ${stopped + 1} stopped`, status: "stopped", tone: "quiet" };
       const done = steps.filter((status) => status === "done").length;
       if (done > 0) {
         const complete = done === steps.length;

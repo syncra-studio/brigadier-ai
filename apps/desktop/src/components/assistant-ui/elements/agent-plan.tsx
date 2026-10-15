@@ -1,11 +1,11 @@
-import { Check, ChevronRight, Minus, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Check, ChevronRight, Minus, StopCircle, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, type ReactNode, useId, useState } from "react";
 
 import { disclosureRow, paper } from "@/components/assistant-ui/elements/surfaces";
 import { Spinner } from "@/components/glyphs/spinner";
 import { cn } from "@/lib/utils";
 
-export type AgentPlanStepStatus = "pending" | "active" | "done" | "partial" | "failed" | "skipped";
+export type AgentPlanStepStatus = "pending" | "active" | "done" | "partial" | "failed" | "skipped" | "stopped";
 
 export type AgentPlanStep = {
   key: string;
@@ -167,7 +167,7 @@ function StepRow({ step }: { step: AgentPlanStep }) {
   );
 }
 
-/** A step's mark: done, at work, failed, skipped, partly done, or still to come. */
+/** A step's mark: done, at work, failed, stopped, skipped, partly done, or still to come. */
 export function StepMark({ status, className }: { status: AgentPlanStepStatus; className?: string }) {
   return (
     <span className={cn("flex h-(--text-sm--line-height) w-icon-md shrink-0 items-center justify-center", className)}>
@@ -177,6 +177,8 @@ export function StepMark({ status, className }: { status: AgentPlanStepStatus; c
         <Spinner className="text-foreground size-icon-sm animate-spin motion-reduce:animate-none" />
       ) : status === "failed" ? (
         <X className="text-destructive size-icon-sm" />
+      ) : status === "stopped" ? (
+        <StopCircle className="text-muted-foreground size-icon-sm" />
       ) : status === "skipped" ? (
         <Minus className="text-muted-foreground size-icon-sm" />
       ) : status === "partial" ? (
