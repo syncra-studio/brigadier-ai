@@ -7,6 +7,8 @@ import { OWN_RUNS, ownRunOutput } from "@/app/conversation/activity/ownRun";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
+import { MarkdownBlock } from "@/components/assistant-ui/thread";
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { searchResults, WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
@@ -17,8 +19,8 @@ import { getThreadItem } from "@/state/actions";
 
 /**
  * What a step of the thread opens to (THREAD-UX-PLAN.md §3.2), the same for the lead's row and a
- * worker's: a Shell box for a command, a small diff for an edit, the results of a search, and the
- * call's input and output for any other tool.
+ * worker's: a Shell box for a command, a small diff for an edit, the results of a search, and
+ * what any other tool gave back.
  */
 
 const BOX = "border-border bg-code-surface rounded-control mt-1 flex flex-col border text-sm";
@@ -195,6 +197,60 @@ export function ToolBox({ title, body }: { title: string; body: string }) {
   );
 }
 
+/** A tool's output as structured data: pretty-printed, or `null` when it is plain text. */
+export function structuredOutput(output: string): string | null {
+  const text = output.trim();
+  if (!text.startsWith("{") && !text.startsWith("[")) return null;
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a tool gave back, its arguments left to the raw view: structured data as a JSON code
+ * block, text up to 192px then scrolling, a failure in the error callout, or "Tool returned no
+ * content"; under it, "Show raw tool call output" opens what it was given and gave back as is.
+ */
+export function ToolResult({ name, status, input, output }: { name: string; status: ItemStatus; input: string | null; output: string | null }) {
+  const text = output?.trim() ?? "";
+  const json = text ? structuredOutput(text) : null;
+  return (
+    <div data-slot="tool-result" className="flex min-w-0 flex-col gap-1 pt-1">
+      {status === "failed" ? (
+        <ErrorState summary={`${name} failed.`} details={text || null} />
+      ) : !text ? (
+        <p data-slot="tool-empty" className="text-muted-foreground text-sm">Tool returned no content</p>
+      ) : json ? (
+        <div data-slot="tool-json" className="max-h-48 min-w-0 overflow-auto [&_.aui-md>:first-child]:mt-0 [&_.aui-md>:last-child]:mb-0">
+          <MarkdownBlock text={`\`\`\`json\n${json}\n\`\`\``} />
+        </div>
+      ) : (
+        <pre data-slot="tool-text" className="text-code text-foreground/80 max-h-48 overflow-auto font-mono whitespace-pre-wrap wrap-anywhere">
+          {text}
+        </pre>
+      )}
+      {(input || text) && (
+        <Dialog>
+          <DialogTrigger asChild>
+            <button type="button" data-slot="tool-raw" className="text-muted-foreground hover:text-foreground self-start text-xs transition-colors">
+              Show raw tool call output
+            </button>
+          </DialogTrigger>
+          <DialogContent aria-describedby={undefined} className="max-w-thread flex max-h-full flex-col gap-3">
+            <DialogTitle>{name}</DialogTitle>
+            <div className="flex min-h-0 flex-col gap-3 overflow-auto">
+              {input && <ToolBox title="Input" body={input} />}
+              {text && <ToolBox title="Output" body={output ?? ""} />}
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
 /**
  * Several files' changes, each its own card; an edit's several places in one file are one card,
  * "⋯" between them.
@@ -253,7 +309,7 @@ function callDetail(name: string, status: ItemStatus, call: { input: string | nu
     return results.length > 0 ? <WebSearch className="pt-1" query={query} results={results} /> : null;
   }
   if (!call.input && !call.output) return null;
-  return <ToolBox title={short} body={[call.input, call.output].filter(Boolean).join("\n\n")} />;
+  return <ToolResult name={short} status={status} input={call.input} output={call.output} />;
 }
 
 /** What a worker's action row opens to. */

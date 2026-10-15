@@ -30,7 +30,7 @@ import { createRoot } from "react-dom/client";
 
 import { ActivityGroup, type Described, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { describeLeadStep } from "@/app/conversation/activity/LeadStep";
-import { ShellBox } from "@/app/conversation/activity/StepDetail";
+import { ShellBox, ToolResult } from "@/app/conversation/activity/StepDetail";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { stepWords } from "@/app/conversation/activity/words";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
@@ -220,6 +220,18 @@ function Page() {
         <Case id="search">
           <StepRow {...describeLeadStep(search)} />
         </Case>
+        <Case id="tool-json">
+          <ToolResult name="lookup" status="completed" input={'{"id":7}'} output={'{"ok":true,"items":[1,2]}'} />
+        </Case>
+        <Case id="tool-text">
+          <ToolResult name="lookup" status="completed" input={'{"id":7}'} output="Found it." />
+        </Case>
+        <Case id="tool-empty">
+          <ToolResult name="lookup" status="completed" input={'{"id":7}'} output="" />
+        </Case>
+        <Case id="tool-failed">
+          <ToolResult name="lookup" status="failed" input={'{"id":7}'} output="Not found: 7" />
+        </Case>
         <Case id="edit-row">
           <StepRow
             words={stepWords({ name: "Edit", detail: "src/math.js", status: "completed" })}
@@ -322,6 +334,23 @@ async function measure(): Promise<object> {
   trigger?.click();
   await wait(400);
   out.children = all("[data-slot=child]", at("group")).map((row) => text(row));
+  // A tool's result: JSON as a code block, text, nothing, a failure; never its arguments inline.
+  for (const end = performance.now() + 8000; performance.now() < end && !one("[data-slot=tool-json] code", at("tool-json")); ) await frame();
+  const tool = (id: string) => ({
+    json: text(one("[data-slot=tool-json] code", at(id))),
+    text: text(one("[data-slot=tool-text]", at(id))),
+    empty: text(one("[data-slot=tool-empty]", at(id))),
+    error: !!one("[data-slot=error-state]", at(id)),
+    argumentsShown: (at(id).textContent ?? "").includes('"id"'),
+    raw: text(one("[data-slot=tool-raw]", at(id))),
+  });
+  out.tools = Object.fromEntries(["tool-json", "tool-text", "tool-empty", "tool-failed"].map((id) => [id, tool(id)]));
+  one<HTMLButtonElement>("[data-slot=tool-raw]", at("tool-json"))?.click();
+  await wait(300);
+  out.toolRaw = text(one("[role=dialog]"));
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  one("[role=dialog]")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await wait(300);
   // An edit row opened to its diff reads "Edited file": the diff names the file.
   const editRow = one<HTMLElement>("[role=button]", at("edit-row"));
   const editClosed = text(editRow);

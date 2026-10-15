@@ -35,6 +35,8 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     kindIcons: Record<string, string | null>;
     diffDialog: { fits: boolean; files: number; scrolls: boolean; whole: boolean };
     editRow: { closed: string | null; open: string | null };
+    tools: Record<string, { json: string | null; text: string | null; empty: string | null; error: boolean; argumentsShown: boolean; raw: string | null }>;
+    toolRaw: string | null;
     turnDiff: Record<"many" | "one", { title: string | null; counts: string | null; buttons: (string | null)[]; files: (string | null)[][]; more: string | null }> & {
       all: { files: number; more: string | null }; opened: { name: string | null; counts: string | null }; asks: string[];
     };
@@ -85,6 +87,15 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // An edit rebuilt from its call: no numbers, its changed word marked on both sides.
   assert.deepEqual([seen["diff-edit"].numbers, seen["diff-edit"].marks, seen["diff-edit"].counts], [[], ["1", "2"], "+1 −1"]);
   assert.equal(seen["diff-empty"].empty, "No changes");
+  // A tool's result: structured data as a JSON code block, text as it is, nothing said so, a
+  // failure in the error callout; its arguments only in the raw view.
+  const { tools } = seen;
+  assert.match(tools["tool-json"]?.json ?? "", /"ok": true/);
+  assert.equal(tools["tool-text"]?.text, "Found it.");
+  assert.equal(tools["tool-empty"]?.empty, "Tool returned no content");
+  assert.equal(tools["tool-failed"]?.error, true);
+  for (const each of Object.values(tools)) assert.deepEqual([each.argumentsShown, each.raw], [false, "Show raw tool call output"]);
+  assert.match(seen.toolRaw ?? "", /lookup.*Input.*"id":7.*Output/);
   // An edit row opened to its diff reads "Edited file".
   assert.deepEqual(seen.editRow, { closed: "Edited math.js", open: "Edited file" });
   // The turn's diff card: "Edited 5 files +5 −5", Undo and View changes; the first three files, a
