@@ -18,7 +18,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     error?: string;
     firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; bottomFade: number; buttonOnSolid: number };
     button: { at8: Button; at9: Button };
-    switchBack: { top: number; restored: number; offset: number; restoredOffset: number | null; early: number[] };
+    switchBack: { top: number; restored: number; offset: number; restoredOffset: number | null; early: number[]; loading: boolean; placeholders: number };
     revealedBack: { offset: number; restoredOffset: number | null };
     fullscreen: {
       hiddenHeight: number;
@@ -80,6 +80,8 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(switchBack.restoredOffset, switchBack.offset);
   assert.ok(switchBack.early.every((top) => top <= switchBack.top), `no overshoot: ${switchBack.early.join(", ")}`);
   assert.equal(switchBack.early.at(-1), switchBack.top);
+  // While its history loads the column stays empty, saying so only to a screen reader.
+  assert.deepEqual([switchBack.loading, switchBack.placeholders], [true, 0]);
   // Earlier turns, once shown, stay shown: their row is found again.
   assert.equal(seen.revealedBack.restoredOffset, seen.revealedBack.offset);
 

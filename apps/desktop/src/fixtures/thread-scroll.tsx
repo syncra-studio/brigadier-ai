@@ -441,15 +441,22 @@ const steps = {
     useApp.setState((state) => ({ threads: { ...state.threads, long: emptyThread } }));
     select({ type: "conversation", id: "long" });
     const early: number[] = [];
+    // While its history loads the column is empty: a screen reader's "Loading conversation", no placeholder lines.
+    let loading = false;
+    let placeholders = 0;
     for (let at = 0; at < 12; at++) {
       await wait(100);
       early.push(Math.round(viewport().scrollTop));
+      if (rows().length === 0) {
+        loading ||= $('[data-slot="aui_thread-history-loading"]')?.textContent === "Loading conversation";
+        placeholders += document.querySelectorAll('[data-slot="aui_thread-column"] [data-slot="skeleton"]').length;
+      }
     }
     // A slower machine loads it later: the last sample is once it has.
     await settle(0);
     early.push(Math.round(viewport().scrollTop));
     const back = rows().find((row) => row.dataset["messageId"] === id);
-    return { top: Math.round(top), restored: Math.round(viewport().scrollTop), offset, restoredOffset: back ? round(back.getBoundingClientRect().top - viewTop()) : null, early };
+    return { top: Math.round(top), restored: Math.round(viewport().scrollTop), offset, restoredOffset: back ? round(back.getBoundingClientRect().top - viewTop()) : null, early, loading, placeholders };
   },
   /** Earlier turns shown, then a switch and back: the same older row at the same place. */
   async revealedBack() {

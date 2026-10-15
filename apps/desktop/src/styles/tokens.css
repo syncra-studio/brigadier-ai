@@ -713,7 +713,7 @@
   /* Live words ("Thinking", a running step): dim, with a brighter band sweeping across. */
   --live-text: color-mix(in oklab, var(--foreground) 38.5%, transparent);
   --live-text-highlight: color-mix(in oklab, var(--foreground) 75%, transparent);
-  /* "Awaiting approval": live, at the reference's 30%. */
+  /* "Awaiting approval": live words, fainter than the work's. */
   --live-text-quiet: color-mix(in oklab, var(--foreground) 30%, transparent);
   /* The titlebar's icon buttons: the glyph at rest, and the wash while hovered, held down,
      switched on (aria-pressed) and switched on and hovered. All follow the foreground, so a
