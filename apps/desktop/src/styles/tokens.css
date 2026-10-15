@@ -200,7 +200,7 @@
   /* A plan's card in the thread: its header, the height it shows before it clips, and the fade
      over its clipped end. */
   --spacing-plan-header: 2.5rem;
-  --spacing-plan-clip: 12.5rem;
+  --spacing-plan-clip: 10rem;
   --spacing-plan-fade: 4rem;
   /* A turn's work folding: the slide it opens from and closes to. */
   --spacing-fold-slide: 0.5rem;

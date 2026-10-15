@@ -11,7 +11,7 @@ import { emptyBoard, type ShownApproval, useBoard } from "@/state/board";
 const conversationId = "approval-fixture";
 const variants: [string, Partial<ApprovalRequest>][] = [
   ["command", { command: "git push origin main", grant: "git push", escalation: true }],
-  ["network", { kind: "tool", tool: "SandboxNetworkAccess", command: null, grant: "example.com" }],
+  ["network", { kind: "tool", tool: "SandboxNetworkAccess", command: null, grant: "example.com", input: '{"host":"example.com"}' }],
   ["files", { kind: "fileChange", tool: "Edit", command: null, paths: ["/work/session/src/main.rs"], grant: "/work/session" }],
   ["outside", { kind: "fileChange", tool: "Edit", command: null, paths: ["/elsewhere/file.txt"], grant: null }],
   ["permissions", { kind: "permissions", tool: "permissions", command: null, grant: null }],
@@ -58,6 +58,9 @@ function Fixture() {
         const rect = button.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       });
+      // The network card names the host it asks to reach.
+      seen.network = card("network").querySelector("[role=alert]")?.textContent ?? null;
+      seen.networkBody = card("network").querySelector("p")?.textContent ?? null;
       seen.overflow = variants.filter(([id]) => card(id).scrollWidth > card(id).clientWidth).map(([id]) => id);
       session("command")?.click();
     });

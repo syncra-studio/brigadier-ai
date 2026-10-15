@@ -302,6 +302,17 @@ function CardProse({ children }: { children: ReactNode }) {
   );
 }
 
+/** The host a network approval asks to reach, from its input (`{"host": "example.com"}`). */
+function hostAsked(input: string | null): string | null {
+  try {
+    const value: unknown = JSON.parse(input ?? "");
+    const host = value && typeof value === "object" ? (value as Record<string, unknown>)["host"] : null;
+    return typeof host === "string" && host.trim() ? host.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * What a card asks, compactly: its kind ("Terminal", "Edit files", "Internet access", "Ask
  * permission", "Plan"), the asker's one-line reason as the title, and the exact thing asked
@@ -335,6 +346,16 @@ function describe(
             ? "Allow connecting to the internet?"
             : `Allow ${request.tool}?`;
       const cwd = request.cwd && !inSession(request.cwd) ? request.cwd : null;
+      // A host the sandbox doesn't let the session reach: the question names it, nothing else to show.
+      const host = !request.command && web ? hostAsked(request.input) : null;
+      if (host) {
+        return {
+          icon,
+          kind,
+          title: request.reason || `Allow connecting to https://${host}?`,
+          body: <p className="text-foreground/60 px-4 text-sm">{host} isn’t on this session’s list of allowed sites.</p>,
+        };
+      }
       return {
         icon,
         kind,

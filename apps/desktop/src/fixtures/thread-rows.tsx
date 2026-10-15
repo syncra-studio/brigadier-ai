@@ -16,6 +16,8 @@
  *   unnumbered; an empty and a missing diff's placeholders.
  * - The user's own message: its Markdown rendered, each line break kept, an unknown worker's
  *   mention left as written.
+ * - A turn that throws while rendering: "This turn couldn't render" with Try again, its
+ *   neighbour unharmed; Try again renders it afresh.
  * - An answer's inline code: a file of the checkout is a chip (from the file list, or asked by
  *   its exact path when the list is cut short), anything else stays code.
  */
@@ -30,6 +32,7 @@ import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { stepWords } from "@/app/conversation/activity/words";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
+import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, OrchestratorStep, Request } from "@/ipc/generated";
@@ -73,6 +76,13 @@ const command = (line: string, status: Described["status"], more: Partial<Descri
   status,
   ...more,
 });
+
+/** A turn that fails to render until `broken` is cleared. */
+let broken = true;
+function Breaks() {
+  if (broken) throw new Error("render failed");
+  return <p data-slot="mended">Rendered again</p>;
+}
 
 /** One labelled case on the page. */
 function Case({ id, children }: { id: string; children: ReactNode }) {
@@ -147,6 +157,12 @@ function Page() {
         <Case id="user">
           <UserMarkdownText text={"**1. CSV** — first *line*\nsecond line\n\nAsk @task-9 about `round`"} />
         </Case>
+        <Case id="boundary">
+          <TurnBoundary>
+            <Breaks />
+          </TurnBoundary>
+          <p data-slot="neighbour">The next turn</p>
+        </Case>
         <Case id="chips">
           <MarkdownBlock text={answer} />
         </Case>
@@ -219,6 +235,12 @@ async function measure(): Promise<object> {
   out.chips = all("[data-slot=file-chip]", at("chips")).map((chip) => [text(chip), chip.getAttribute("href")]);
   out.code = all("code", at("chips")).map((code) => text(code));
   out.asked = asked.toSorted();
+  const boundary = at("boundary");
+  out.boundary = { fallback: text(one("[data-slot=turn-render-error] [data-slot=error-state]", boundary))?.startsWith("This turn couldn’t render.") ?? false, neighbour: text(one("[data-slot=neighbour]", boundary)) };
+  broken = false;
+  all<HTMLButtonElement>("button", boundary).find((button) => text(button) === "Try again")?.click();
+  await wait(100);
+  out.mended = text(one("[data-slot=mended]", boundary));
   const user = at("user");
   out.user = {
     strong: all("strong", user).map((node) => text(node)),

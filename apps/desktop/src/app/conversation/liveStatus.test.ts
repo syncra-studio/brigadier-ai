@@ -37,8 +37,8 @@ const call = (name: string) => ({ requestId: "r1", atMs: 0, position: 1,
 /** What the lead's live line says once its CLI starts the call `name`. */
 const sending = (name: string) =>
   doingOf({ type: "toolCall", itemId: "s", name, input: null, status: "inProgress", output: null } as unknown as ProviderEvent, null);
-const error = (kind: string, willRetry = true) =>
-  ({ type: "error", error: { kind, message: "", willRetry, limit: null, code: null } }) as unknown as ProviderEvent;
+const error = (kind: string, willRetry = true, message = "") =>
+  ({ type: "error", error: { kind, message, willRetry, limit: null, code: null } }) as unknown as ProviderEvent;
 
 test("a plain chat: Thinking until its own rows show, then nothing extra", () => {
   assert.deepEqual(head(input(leading)), { text: "Thinking", tone: "busy" });
@@ -144,7 +144,11 @@ test("a landing change reads as landing", () => {
 
 test("the lead's retries show while its CLI retries, and clear when it goes on", () => {
   assert.equal(doingOf(error("network"), "Thinking"), "Reconnecting");
-  assert.equal(doingOf(error("overloaded"), null), "The model is busy, retrying");
+  assert.equal(doingOf(error("overloaded"), null), "The model is busy, reconnecting");
+  // The attempt, when the provider says it.
+  assert.equal(doingOf(error("network", true, "API request failed (unknown); retry 2 of 10 in 1200 ms"), null), "Reconnecting 2/10");
+  assert.equal(doingOf(error("overloaded", true, "Reconnecting... 3/5"), null), "The model is busy, reconnecting 3/5");
+  assert.equal(doingOf({ type: "reasoningDelta" } as unknown as ProviderEvent, "Reconnecting 2/10"), null);
   assert.equal(doingOf(error("network", false), "Searching the web"), "Searching the web");
   assert.equal(doingOf({ type: "reasoningDelta" } as unknown as ProviderEvent, "Reconnecting"), null);
   assert.equal(doingOf({ type: "reasoningDelta" } as unknown as ProviderEvent, "Searching the web"), "Searching the web");

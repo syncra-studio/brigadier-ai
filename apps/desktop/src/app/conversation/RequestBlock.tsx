@@ -10,6 +10,7 @@ import {
   Check,
   ChevronRight,
   Copy,
+  Info,
   Regenerate,
   SoundOnReadOutLoudSpeaker,
   Stop,
@@ -559,7 +560,7 @@ const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
   const action = useAction();
   if (error === null) return null;
   const model = meta.texts.at(-1)?.model ?? meta.picked;
-  const { summary } = describeTurnError(error, model ? VENDOR_LABELS[model.provider] : undefined);
+  const { summary, limit } = describeTurnError(error, model ? VENDOR_LABELS[model.provider] : undefined);
   // Brigadier quit while it ran: Continue picks the request up (UI audit H1).
   const interrupted = interruptedByQuit(error);
   const again = (() => {
@@ -574,6 +575,22 @@ const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
     const to = conversation.id;
     return () => action.run(() => send({ text: TRY_AGAIN, attachments: [], mentions: [] }, undefined, { to }));
   })();
+  // A usage limit is no error of the turn: a divider says it, with Try again for later.
+  if (limit) {
+    return (
+      <div data-slot="usage-limit" role="status" className="text-muted-foreground flex items-center gap-3 py-1 text-sm">
+        <span aria-hidden className="bg-border h-px flex-1" />
+        <Info aria-hidden className="size-icon-sm shrink-0" />
+        <span className="min-w-0 text-center">{summary}</span>
+        {again && (
+          <button type="button" onClick={again} className="text-link hover:text-link/80 shrink-0">
+            Try again
+          </button>
+        )}
+        <span aria-hidden className="bg-border h-px flex-1" />
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-1">
       <ErrorState summary={summary} details={interrupted ? null : error} onRetry={again} retryLabel={interrupted ? "Continue" : undefined} />

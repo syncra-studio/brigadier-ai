@@ -8,7 +8,11 @@ test("approval cards show safe session scopes, dispatch decisions and stack on n
     narrow: { x: number; y: number; width: number; height: number }[];
     overflow: string[];
     calls: { id: string; decision: string }[];
+    network: string | null;
+    networkBody: string | null;
   };
+  assert.equal(seen.network, "Allow connecting to https://example.com?");
+  assert.equal(seen.networkBody, "example.com isn’t on this session’s list of allowed sites.");
   for (const [id, label] of [
     ["command", "Allow git push for this session"],
     ["network", "Allow example.com for this session"],

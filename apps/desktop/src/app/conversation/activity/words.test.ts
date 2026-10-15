@@ -215,8 +215,10 @@ test("a lead's call its denied approval stopped reads as declined, other failure
   assert.equal(denies([]), false);
 });
 
+const doneWords = (name: string) => stepWords({ name: `mcp__brigadier__${name}`, detail: null, status: "completed" }).done;
+
 test("Brigadier's own tools read in plain words, never as their internal names", () => {
-  const done = (name: string) => stepWords({ name: `mcp__brigadier__${name}`, detail: null, status: "completed" }).done;
+  const done = doneWords;
   assert.equal(done("record_findings"), "Noted what it found");
   assert.equal(done("approve_outline"), "Checked a worker’s outline");
   assert.equal(done("watch_ci"), "Watched CI");

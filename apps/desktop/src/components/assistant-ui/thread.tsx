@@ -40,6 +40,7 @@ import {
 import { LinkTimeContext } from "@/components/assistant-ui/file-links";
 import { ThreadScroller } from "@/components/assistant-ui/thread-scroll";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
@@ -390,9 +391,14 @@ const ThreadMessage: FC = () => {
   const role = useAuiState((s) => s.message.role);
   const editing = useAuiState((s) => s.message.composer.isEditing);
 
-  if (role === "user") return editing ? <EditComposer /> : <UserMessage />;
+  // A message that fails to render takes nothing else down.
+  if (role === "user") return <TurnBoundary>{editing ? <EditComposer /> : <UserMessage />}</TurnBoundary>;
   if (role === "system") return <SystemMessage />;
-  return <AssistantMessageComponent />;
+  return (
+    <TurnBoundary>
+      <AssistantMessageComponent />
+    </TurnBoundary>
+  );
 };
 
 /** A line from Brigadier itself (an environment problem, a fallback), not from a model. */

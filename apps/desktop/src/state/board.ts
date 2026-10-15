@@ -722,8 +722,17 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
   WebFetch: "Reading a web page",
 };
 
-/** What the orchestrator shows while its CLI retries a failed request on its own. */
-export const RETRYING: ReadonlySet<string | null> = new Set(["Reconnecting", "The model is busy, retrying"]);
+/** What the orchestrator shows while its CLI retries a failed request on its own: "Reconnecting 2/5". */
+const RETRY_WORDS = /^(Reconnecting|The model is busy, reconnecting)( \d+\/\d+)?$/;
+
+/** Whether the orchestrator's activity is its CLI retrying on its own. */
+export const RETRYING = { has: (doing: string | null): boolean => doing !== null && RETRY_WORDS.test(doing) };
+
+/** The attempt a retry is on, from the provider's words ("retry 2 of 5", "2/5"): " 2/5", else "". */
+function attemptOf(message: string): string {
+  const found = /(?:retry|attempt|reconnecting)\D{0,12}?(\d+)\s*(?:of|\/)\s*(\d+)/i.exec(message);
+  return found ? ` ${found[1]}/${found[2]}` : "";
+}
 
 /** The orchestrator's current activity after one of its provider events. */
 export function doingOf(event: ProviderEvent, current: string | null): string | null {
@@ -731,8 +740,8 @@ export function doingOf(event: ProviderEvent, current: string | null): string | 
     case "error":
       if (!event.error.willRetry) return current;
       return ["rateLimit", "overloaded", "usageLimit"].includes(event.error.kind)
-        ? "The model is busy, retrying"
-        : "Reconnecting";
+        ? `The model is busy, reconnecting${attemptOf(event.error.message)}`
+        : `Reconnecting${attemptOf(event.error.message)}`;
     case "toolCall": {
       if (event.status !== "inProgress") return null;
       // MCP tools arrive namespaced (`mcp__brigadier__delegate_task`, `brigadier.delegate_task`,

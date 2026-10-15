@@ -20,9 +20,10 @@ export function interruptedByQuit(raw: string | null | undefined): boolean {
   return raw?.trim() === INTERRUPTED;
 }
 
-export function describeTurnError(raw: string, provider = "Claude"): { summary: string } {
+/** `limit`: the provider's usage limit stopped it, which the thread shows as a divider, not an error. */
+export function describeTurnError(raw: string, provider = "Claude"): { summary: string; limit?: true } {
   if (interruptedByQuit(raw)) return { summary: "Interrupted: Brigadier quit while this was running. Continue picks it up where it stands." };
-  if (LIMIT.test(raw)) return { summary: `${provider}'s usage limit was reached.` };
+  if (LIMIT.test(raw)) return { summary: `${provider}'s usage limit was reached.`, limit: true };
   if (ENDED_UNEXPECTEDLY.test(raw)) return { summary: `${provider} stopped unexpectedly.` };
   if (NETWORK.test(raw)) return { summary: `Lost the connection to ${provider}.` };
   if (API.test(raw)) return { summary: `This turn stopped because of an error on ${provider}'s side.` };
