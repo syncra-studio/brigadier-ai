@@ -214,6 +214,8 @@ function seen() {
     groupRow: text(one("button", group ?? document.createElement("div"))),
     // Its row's icons: a step's icon and the chevron, or the chevron alone.
     groupIcons: all("svg", one("button", group ?? document.createElement("div")) ?? document.createElement("div")).length,
+    // What its words animate: the shimmer's sweep, never a fade that starts them invisible.
+    groupAnimations: (one("button > span", group ?? document.createElement("div"))?.getAnimations() ?? []).map((animation) => (animation as CSSAnimation).animationName),
     groupLine: text(one("[data-slot=group-live-line]", block ?? document)),
     groupTone: one("[data-slot=group-live-line]", block ?? document)?.getAttribute("data-tone") ?? null,
     shimmer: !!group?.querySelector(".shimmer"),

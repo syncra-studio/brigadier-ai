@@ -182,7 +182,9 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
       <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
         {/* The live line ("Thinking") is no step's: it shows without a step's icon. */}
         {head && !(line && calm.shown === line.text) && <StepIcon words={head.words} />}
-        {/* A live group's step changes in place: its words cross-fade, with no jump. */}
+        {/* A live group's step changes in place, with no jump and no fade: a fade-in's first
+            frame is invisible, and WebKit can leave it there, and the fade's animation would
+            replace the shimmer's. Keyed, a new label's sweep starts over. */}
         <span
           key={live ? calm.shown : undefined}
           data-slot={line ? "group-live-line" : undefined}
@@ -191,7 +193,6 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
           data-lingers={(naming && current.status !== "inProgress") || undefined}
           className={cn(
             "min-w-0 truncate",
-            live && "animate-in fade-in duration-160 motion-reduce:animate-none",
             (naming || (line && line.tone !== "still")) && "shimmer",
           )}
         >

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
 type Seen = {
-  header: string | null; newest: string | null; newestShimmers: boolean; fold: string; groupRow: string | null; groupIcons: number;
+  header: string | null; newest: string | null; newestShimmers: boolean; fold: string; groupRow: string | null; groupIcons: number; groupAnimations: string[];
   groupLine: string | null; groupTone: string | null; shimmer: boolean; status: string | null; thinkingLive: number;
   commentary: string | null; commentaryShimmers: boolean; answer: string | null; answerInWork: boolean; statusAfterAnswer: boolean; statusInWork: boolean;
 };
@@ -37,6 +37,9 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
   assert.deepEqual([seen.ended.groupLine, seen.ended.groupTone], ["Thinking", "busy"]);
   // A step's row has the step's icon; "Thinking" is no step's, so only the chevron is left.
   assert.deepEqual([seen.running.groupIcons, seen.ended.groupIcons], [2, 1]);
+  // A live label's words show at once and sweep: no fade-in, which would start them invisible and
+  // replace the sweep.
+  assert.deepEqual([seen.running.groupAnimations, seen.ended.groupAnimations], [["shimmer"], ["shimmer"]]);
   // A line between steps streams as prose under the header, never shimmering, each piece shown
   // the frame it arrives (never paced like the answer); the group above sums up.
   assert.equal(seen.commentaryAtOnce, "I’ll fix the rounding next. Then run the tests again.");
