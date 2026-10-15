@@ -97,6 +97,9 @@
  *               w-browser-menu, h-browser-menu-item, rounded-browser-menu  its ⋯ menu
  *               browser-{pane,tab-min,tab-max,composer}  the Browser tab's pane, its tabs' least
  *                                             and most, its composer
+ *               w-thread-find, max-w-thread-find-max  Find in the chat's bar (384px, at most 70% of
+ *                                             the window); its marks --find-match and
+ *                                             --find-match-active (`::highlight`, globals.css)
  *               max-w-new-tab-tools           the New tab page's tool grid (--container-new-tab-tools)
  *               max-h-user-message            a long user message, clipped (20 lines)
  *               max-h-peer-message            a message between sessions, folded (six lines)
@@ -370,6 +373,9 @@
   /* The page's find bar: 340 wide, a 44 high row. */
   --spacing-browser-find: 21.25rem;
   --spacing-browser-find-row: 2.75rem;
+  /* Find in the chat's bar: 384 wide, never more than 70% of the window. */
+  --spacing-thread-find: 24rem;
+  --container-thread-find-max: 70vw;
   --browser-address-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
   /* Bottom shell sessions keep the native terminal's measurements at either density. */
   --spacing-terminal-header: 2.5rem;
@@ -731,6 +737,9 @@
   --live-text-highlight: color-mix(in oklab, var(--foreground) 75%, transparent);
   /* Answer text the user added to the chat stays marked, a translucent blue. */
   --annotation-highlight: oklch(0.62 0.2 255 / 40%);
+  /* Find in the chat: every match washed yellow, the one gone to orange; the text keeps its colour. */
+  --find-match: oklch(0.86 0.17 95 / 38%);
+  --find-match-active: oklch(0.66 0.18 50 / 85%);
   /* "Awaiting approval": live words, fainter than the work's. */
   --live-text-quiet: color-mix(in oklab, var(--foreground) 30%, transparent);
   /* The titlebar's icon buttons: the glyph at rest, and the wash while hovered, held down,

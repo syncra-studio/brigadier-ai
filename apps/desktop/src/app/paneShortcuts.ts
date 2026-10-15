@@ -28,7 +28,8 @@ export const MENU_KEYS: Record<string, { code: string; shift?: boolean; control?
   next: { code: "BracketRight", shift: true },
   "previous-tab": { code: "ArrowLeft", alt: true },
   "next-tab": { code: "ArrowRight", alt: true },
-  // The Browser menu's, for the web page in front.
+  // The Browser menu's, for the web page in front; find, find-next and find-previous find in
+  // the chat, too, while it is in front (ThreadFind.tsx).
   "page-back": { code: "ArrowLeft" },
   "page-forward": { code: "ArrowRight" },
   reload: { code: "KeyR" },

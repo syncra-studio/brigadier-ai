@@ -176,8 +176,6 @@ const BROWSER_ONLY = [
   "page-forward",
   "reload",
   "force-reload",
-  "find-next",
-  "find-previous",
   "zoom-in",
   "zoom-out",
   "zoom-reset",
@@ -188,8 +186,8 @@ test("off, the built-in browser's shortcuts are gone", () => {
     assert.ok(shortcutIds(true).includes(id), id);
     assert.ok(!shortcutIds(false).includes(id), id);
   }
-  // ⌘F still finds in a file.
-  assert.ok(shortcutIds(false).includes("find"));
+  // ⌘F still finds in a file, and ⌘F, ⌘G and ⇧⌘G in the chat.
+  for (const id of ["find", "find-next", "find-previous"]) assert.ok(shortcutIds(false).includes(id), id);
   assert.equal(shortcutIds(true).length - shortcutIds(false).length, BROWSER_ONLY.length);
 });
 
@@ -197,7 +195,7 @@ test("the Browser menu holds the browser's items, which leave with it", () => {
   const shell = readFileSync(new URL("../../src-tauri/src/shell.rs", import.meta.url), "utf8");
   const menu = shell.slice(shell.indexOf("const BROWSER_ITEMS"), shell.indexOf("const BROWSER_MENU"));
   const items = [...menu.matchAll(/\(\s*"([a-z-]+)",/g)].map(([, id]) => id);
-  assert.deepEqual(items.toSorted(), [...BROWSER_ONLY, "find"].toSorted());
+  assert.deepEqual(items.toSorted(), [...BROWSER_ONLY, "find", "find-next", "find-previous"].toSorted());
   // Each reaches the page's tab as its key, and the Panes menu no longer has them.
   const panes = shell.slice(shell.indexOf('Submenu::new(app, "Panes"'), shell.indexOf("menu.append(&panes)"));
   for (const id of items) {

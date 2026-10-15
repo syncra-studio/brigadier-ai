@@ -72,7 +72,12 @@ export type ThreadComponents = {
   /** Floats centred just above the composer, over the thread (the capsule). */
   Capsule?: ComponentType | undefined;
   Composer?: ComponentType<ComposerProps> | undefined;
+  /** Over the thread's top end: the app's find bar (⌘F). */
+  Find?: ComponentType<ThreadOverlayProps> | undefined;
 };
+
+/** What an overlay of the thread works with: its scroll element and its scroll controller. */
+export type ThreadOverlayProps = { viewport: HTMLDivElement | null; scroller: ThreadScroller };
 
 export type ComposerProps = { autoFocus: boolean; placeholder: string };
 
@@ -279,6 +284,7 @@ const ThreadRoot: FC<{
     AboveComposer,
     Capsule,
     Composer: ComposerComponent = Composer,
+    Find,
   } = useContext(ThreadComponentsContext);
   const [scroller] = useState(() => new ThreadScroller());
   const { viewport, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter } = useThreadScroll(
@@ -350,6 +356,7 @@ const ThreadRoot: FC<{
           </div>
           {/* The user's messages, beside the column (see `message-rail.tsx`). */}
           <MessageRail viewport={viewport} scroller={scroller} />
+          {Find && <Find viewport={viewport} scroller={scroller} />}
 
           {/* The composer, with what sits above it, floats over the thread's bottom; its height
               and a gap are the thread's bottom padding. */}
@@ -686,8 +693,9 @@ const UserMessage: FC = () => {
       <div className="aui-user-message-content-wrapper flex max-w-7/10 min-w-0 flex-col items-end gap-y-1">
         <UserAttachments />
         <UserMessageText />
-        {/* Flush under the bubble: with the turn's gap, its work header starts 48px below the bubble. */}
-        <div className="aui-user-action-bar-wrapper peer-empty:hidden -mt-1 opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100">
+        {/* Flush under the bubble: with the turn's gap, its work header starts 48px below the bubble.
+            Shown only on hover, so Find in the chat leaves its time out. */}
+        <div data-thread-find-skip className="aui-user-action-bar-wrapper peer-empty:hidden -mt-1 opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100">
           <UserActionBar />
         </div>
       </div>

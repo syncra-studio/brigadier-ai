@@ -140,9 +140,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // Files and browser
   { id: "save", name: "Save file", line: "Save the file in front", area: "Files and browser", keys: ["⌘S"], menu: "save" },
   { id: "save-as", name: "Save file as", line: "Save the file in front under a new name", area: "Files and browser", keys: ["⇧⌘S"], menu: "save-as" },
-  { id: "find", name: "Find", line: "Find text in the file or web page in front", area: "Files and browser", keys: ["⌘F"], menu: "find" },
-  { id: "find-next", name: "Find next", line: "Go to the web page's next match", area: "Files and browser", keys: ["⌘G"], menu: "find-next" },
-  { id: "find-previous", name: "Find previous", line: "Go to the web page's previous match", area: "Files and browser", keys: ["⇧⌘G"], menu: "find-previous" },
+  { id: "find", name: "Find", line: "Find text in the chat, or in the file or web page in front", area: "Files and browser", keys: ["⌘F"], menu: "find" },
+  { id: "find-next", name: "Find next", line: "Go to the next match in the chat or web page", area: "Files and browser", keys: ["⌘G"], menu: "find-next" },
+  { id: "find-previous", name: "Find previous", line: "Go to the previous match in the chat or web page", area: "Files and browser", keys: ["⇧⌘G"], menu: "find-previous" },
   { id: "go-to-line", name: "Go to line", line: "Jump to a line of the file in front", area: "Files and browser", keys: ["⌃G"] },
   { id: "address", name: "Browser address", line: "Type an address in the browser tab", area: "Files and browser", keys: ["⌘L"], menu: "address" },
   { id: "page-back", name: "Page back", line: "Go back a page in the browser tab", area: "Files and browser", keys: ["⌘←"], menu: "page-back" },
@@ -162,7 +162,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "commit", name: "Commit", line: "Commit with the message typed", area: "Files and browser", keys: ["⌘⏎"] },
 ];
 
-/** The built-in browser's shortcuts, gone while it is off (Settings › Browser). */
+/**
+ * The built-in browser's shortcuts, gone while it is off (Settings › Browser). Finding stays: ⌘F,
+ * ⌘G and ⇧⌘G find in the chat as well.
+ */
 export const BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
   "new-browser",
   "address",
@@ -170,8 +173,6 @@ export const BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
   "page-forward",
   "reload",
   "force-reload",
-  "find-next",
-  "find-previous",
   "zoom-in",
   "zoom-out",
   "zoom-reset",

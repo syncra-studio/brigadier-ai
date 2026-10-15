@@ -60,6 +60,7 @@ import { useResolvedDraft } from "@/app/conversation/draftSetup";
 import { workerName } from "@/app/conversation/rowWords";
 import { type BlockMeta, RequestBlock } from "@/app/conversation/RequestBlock";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
+import { ThreadFind } from "@/app/conversation/ThreadFind";
 import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
 import { useAction } from "@/app/conversation/useAction";
 import { ViewContext } from "@/app/conversation/viewContext";
@@ -1189,4 +1190,5 @@ const THREAD_COMPONENTS: ThreadComponents = {
   Composer: ConversationComposer,
   UserText: UserMessageText,
   PeerMessage: PeerUserMessage,
+  Find: ThreadFind,
 };
