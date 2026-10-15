@@ -22,6 +22,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
       foldedBefore: string | null; foldedAfter: boolean; bar: { top: number; right: number } | null; maxWidth: string | null;
       placeholder: string | null; value: string | null; focused: boolean; selected: number[] | null; label: string | null;
       size: number; active: string | null; buttons: (string | null)[]; matchColour: number[]; activeColour: number[];
+      selectable: (string | null)[];
     };
     composer: { typed: string | null; label: string | null; size: number; focused: boolean; selected: number[] | null };
     keys: { found: Found; enters: (string | null)[]; shiftEnter: string | null; commandG: string | null; shiftCommandG: string | null };
@@ -32,7 +33,8 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
     folded: Found;
     clipped: Found & { before: string | null; after: string | null };
     inner: { label: string | null; inBox: boolean; inView: boolean };
-    closed: { bar: boolean; matches: boolean; active: boolean; emptied: (number | null)[] };
+    inButton: { label: string | null; ringed: boolean; left: boolean };
+    closed: { bar: boolean; finding: boolean; matches: boolean; active: boolean; emptied: (number | null)[] };
     multiline: { value: string | null; label: string | null; size: number; closedByButton: boolean };
   };
   assert.equal(seen.error, undefined);
@@ -58,6 +60,9 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   assert.ok(mr > mb + 80 && mg > mb + 80 && ma > 60 && ma < 140, `yellow: ${opened.matchColour.join(",")}`);
   const [ar = 0, ag = 0, ab = 0, aa = 0] = opened.activeColour;
   assert.ok(ar > ag + 40 && ag > ab && aa > 180, `orange: ${opened.activeColour.join(",")}`);
+  // WebKit marks only selectable text (and puts a mark on other text onto the next selectable
+  // text): while the thread holds marks, its text is selectable, the app's select-none rows too.
+  assert.deepEqual(opened.selectable, ["none", "text"]);
 
   // The composer's text is never searched; ⌘F from it takes the focus back to the bar's text.
   const { composer } = seen;
@@ -119,7 +124,10 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   // Esc closes the bar and clears the marks.
   // A match in a box that scrolls on its own, out of its sight: the box and the thread bring it into view.
   assert.deepEqual(seen.inner, { label: "1 / 1 result", inBox: true, inView: true });
-  assert.deepEqual(seen.closed, { bar: false, matches: false, active: false, emptied: [0, 0] });
+  // Text in a button is never marked in WebKit: the button holding the match gone to has a ring,
+  // taken off when no match in it is gone to.
+  assert.deepEqual(seen.inButton, { label: "1 / 1 result", ringed: true, left: false });
+  assert.deepEqual(seen.closed, { bar: false, finding: false, matches: false, active: false, emptied: [0, 0] });
 
   // A selection over two lines opens the bar with no text; × closes it.
   assert.deepEqual(seen.multiline, { value: "", label: null, size: 0, closedByButton: true });

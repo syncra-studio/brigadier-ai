@@ -424,6 +424,16 @@
 ::highlight(thread-find-active) {
   background-color: var(--find-match-active);
 }
+/* WebKit marks only selectable text, and moves a mark on other text onto the next selectable
+   text: the thread's text is selectable while Find marks it. Text in a button never is, so the
+   button holding the match gone to gets a ring. */
+[data-thread-finding] * {
+  user-select: text !important;
+}
+[data-thread-find-active] {
+  outline: 2px solid var(--find-match-active);
+  outline-offset: 2px;
+}
 
 /* A wait on the user's approval: the same sweep over fainter words. */
 @utility shimmer-quiet {

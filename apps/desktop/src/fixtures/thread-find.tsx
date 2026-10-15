@@ -15,7 +15,7 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
-import { ACTIVE_MATCH, MATCHES } from "@/app/conversation/ThreadFind";
+import { ACTIVE_BUTTON, ACTIVE_MATCH, FINDING, MATCHES } from "@/app/conversation/ThreadFind";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, Request } from "@/ipc/generated";
@@ -309,6 +309,8 @@ const steps = {
     range.setStart(word.node, word.at);
     range.setEnd(word.node, word.at + "solitary".length);
     selectRange(range);
+    const row = viewport().firstElementChild!;
+    const selectableBefore = getComputedStyle(row).userSelect;
     press(document.body, "KeyF", { meta: true });
     await until(() => label() !== null);
     await settle(100);
@@ -330,6 +332,8 @@ const steps = {
       buttons: ["previous", "next", "close"].map((name) => button(name)?.textContent ?? null),
       matchColour: channels("--find-match"),
       activeColour: channels("--find-match-active"),
+      // WebKit marks only selectable text: the thread's text is, while it holds marks.
+      selectable: [selectableBefore, viewport().hasAttribute(FINDING) ? getComputedStyle(row).userSelect : null],
     };
   },
   /** The same word typed into the composer is not counted; ⌘F there takes the focus back to the bar's text, selected. */
@@ -428,6 +432,21 @@ const steps = {
     await settle(300);
     return { label: found.label, inBox, inView: found.place?.inView ?? false };
   },
+  /** A match in a button's text, which WebKit never marks: the button gets a ring, gone when another match is gone to. */
+  async inButton() {
+    const answers = [...document.querySelectorAll('[data-slot="aui_assistant-message-content"]')];
+    const pangolin = document.createElement("button");
+    pangolin.textContent = "Ran the pangolin check";
+    answers.at(-2)?.append(pangolin);
+    await settle(300);
+    const found = await find("pangolin");
+    const ringed = pangolin.hasAttribute(ACTIVE_BUTTON);
+    await find("walrus pangolin quokka");
+    const left = pangolin.hasAttribute(ACTIVE_BUTTON);
+    pangolin.remove();
+    await settle(300);
+    return { label: found.label, ringed, left };
+  },
   /** Esc closes the bar and clears the marks: the sets it drops are emptied first, which is what repaints them. */
   async closed() {
     const kept = [matches(), CSS.highlights.get(ACTIVE_MATCH)];
@@ -436,6 +455,7 @@ const steps = {
     await settle(50);
     return {
       bar: bar() !== null,
+      finding: viewport().hasAttribute(FINDING),
       matches: CSS.highlights.has(MATCHES),
       active: CSS.highlights.has(ACTIVE_MATCH),
       emptied: kept.map((highlight) => highlight?.size ?? null),

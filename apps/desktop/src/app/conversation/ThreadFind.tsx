@@ -23,6 +23,10 @@ export const MAX_RESULTS = 250;
 /** The highlights the matches are drawn with (globals.css). */
 export const MATCHES = "thread-find";
 export const ACTIVE_MATCH = "thread-find-active";
+/** On the thread while it holds marks: its text is selectable (globals.css). */
+export const FINDING = "data-thread-finding";
+/** On a button holding the match gone to, whose text WebKit never marks. */
+export const ACTIVE_BUTTON = "data-thread-find-active";
 /** How soon after the thread changes the search runs again, while the bar is open. */
 const RERUN_MS = 150;
 /** A match gone to clears the bar and the composer by this much. */
@@ -152,9 +156,16 @@ function marks(highlights: HighlightRegistry, name: string, priority: number): H
   return highlight;
 }
 
-function paint(ranges: readonly Range[], active: Range | null): void {
+/**
+ * Marks `ranges` in `viewport`'s thread, `active` over them. WebKit paints a mark only on text
+ * that can be selected, and puts one on unselectable text (a Shell box's output, a row) onto the
+ * next selectable text instead, so the thread's text is selectable while it holds marks. Text in a
+ * button never is: the button holding the match gone to gets a ring.
+ */
+function paint(viewport: HTMLElement, ranges: readonly Range[], active: Range | null): void {
   const highlights = registry();
   if (!highlights) return;
+  viewport.setAttribute(FINDING, "");
   const all = marks(highlights, MATCHES, 0);
   all.clear();
   for (const range of ranges) all.add(range);
@@ -162,15 +173,23 @@ function paint(ranges: readonly Range[], active: Range | null): void {
   const current = marks(highlights, ACTIVE_MATCH, 1);
   current.clear();
   if (active) current.add(active);
+  const ringed = active?.startContainer.parentElement?.closest("button") ?? null;
+  for (const button of viewport.querySelectorAll(`[${ACTIVE_BUTTON}]`)) {
+    if (button !== ringed) button.removeAttribute(ACTIVE_BUTTON);
+  }
+  if (ringed && viewport.contains(ringed)) ringed.setAttribute(ACTIVE_BUTTON, "");
 }
 
-function unpaint(): void {
+/** Takes the marks off, then the thread's text back to what it was. */
+function unpaint(viewport: HTMLElement | null): void {
   const highlights = registry();
-  if (!highlights) return;
   for (const name of [MATCHES, ACTIVE_MATCH]) {
-    highlights.get(name)?.clear();
-    highlights.delete(name);
+    highlights?.get(name)?.clear();
+    highlights?.delete(name);
   }
+  if (!viewport) return;
+  for (const button of viewport.querySelectorAll(`[${ACTIVE_BUTTON}]`)) button.removeAttribute(ACTIVE_BUTTON);
+  viewport.removeAttribute(FINDING);
 }
 
 /**
@@ -353,11 +372,11 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     setOpen(false);
     setResult(NONE);
     setActive(-1);
-    unpaint();
+    unpaint(viewport);
     const back = before.current;
     before.current = null;
     if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus();
-  }, []);
+  }, [viewport]);
 
   /** ⌘F: opens the bar (or takes the focus back to it), with a single line selected in the thread as its text. */
   const openFind = useCallback(() => {
@@ -422,11 +441,11 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   }, [open, viewport]);
 
   useLayoutEffect(() => {
-    if (open) paint(result.ranges, result.ranges[active] ?? null);
-  }, [open, result, active]);
+    if (open && viewport) paint(viewport, result.ranges, result.ranges[active] ?? null);
+  }, [open, viewport, result, active]);
 
   // Gone with the thread: so are its marks.
-  useEffect(() => () => unpaint(), []);
+  useEffect(() => () => unpaint(viewport), [viewport]);
 
   if (!open) return null;
 
