@@ -19,6 +19,7 @@ import {
   useContext,
   useEffect,
   useEffectEvent,
+  useId,
   useRef,
   useState,
 } from "react";
@@ -65,7 +66,14 @@ import { answerCard, answerQuestion, decidePlan } from "@/state/actions";
 import { type ShownApproval, useBoard } from "@/state/board";
 import { type PlanDocRef, planDoc } from "@/state/planDoc";
 import { useApp } from "@/state/store";
-import { cancelDictation, registerInserter, startDictation, stopDictation, useDictation } from "@/state/dictation";
+import {
+  cancelDictation,
+  dictationOwner,
+  registerInserter,
+  startDictation,
+  stopDictation,
+  useDictation,
+} from "@/state/dictation";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Spinner } from "@/components/glyphs/spinner";
 
@@ -756,15 +764,23 @@ function ChoiceCard({
   );
   const [chosen, setChosen] = useState<number | null>(null);
   const [typed, setTyped] = useState(initialText);
-  // Dictated words go after what is typed.
-  const owner = `card:${name}`;
+  // Dictated words go after what is typed, into this card alone: each mounted card (one per
+  // question of a round, in each chat open) owns its own dictation.
+  const owner = `card:${name}:${useId()}`;
   const dictated = useEffectEvent((words: string) => {
     const next = typed.trim() ? `${typed.trimEnd()} ${words}` : words;
     setTyped(next);
     onTyped?.(next);
     setHighlight(-1);
   });
-  useEffect(() => registerInserter(owner, async (words) => dictated(words)), [owner]);
+  useEffect(() => {
+    const unregister = registerInserter(owner, async (words) => dictated(words));
+    return () => {
+      unregister();
+      // Paged away or answered while dictating: the words go nowhere rather than into another card.
+      if (dictationOwner() === owner) cancelDictation();
+    };
+  }, [owner]);
   const card = useRef<HTMLElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);

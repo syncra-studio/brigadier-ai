@@ -69,6 +69,11 @@ export function registerInserter(owner: string, insert: Insert): () => void {
   };
 }
 
+/** The composer or card the dictation under way is for, if any. */
+export function dictationOwner(): string | null {
+  return snapshot.owner;
+}
+
 /** The recording under way. */
 type Capture = {
   stream: MediaStream;
