@@ -81,4 +81,7 @@ test("a request's summary reads its times and its tokens per provider and step, 
   // The thread's turns and the model calls per step (BUILD-PLAN A0).
   assert.match(oldest!.steps, /^worker 1M \(3 calls\) · thread 300K \(2 turns, 9 calls\) · review 20$/);
   assert.equal(summaryRows([done, working], 1).length, 1);
+  // A request cut off by a quit says so instead of "answer" (UI audit H1).
+  const [interrupted] = summaryRows([{ ...done, ended: "interrupted", landedMs: null }], 1);
+  assert.equal(interrupted!.times, "first 1.2 s · interrupted 6m 40s · settled 7m 1s");
 });

@@ -1582,6 +1582,11 @@ pub struct RequestSummary {
     pub first_event_ms: Option<i64>,
     /// Its answer: when it last stopped working (absent while it works).
     pub answer_ms: Option<i64>,
+    /// How it ended when that wasn't an answer: stopped by the user, failed, or cut off by a
+    /// quit (absent when it answered, and while it works).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ended: Option<RequestEnd>,
     /// Its last landing.
     pub landed_ms: Option<i64>,
     /// The last use of a model by anything it started, reviews after the answer included
@@ -1591,6 +1596,16 @@ pub struct RequestSummary {
     pub providers: Vec<ProviderTokens>,
     /// Tokens per kind of step (thread, worker, review…), most first.
     pub steps: Vec<StepTokens>,
+}
+
+/// How a request ended without an answer (the Inspector's request report).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum RequestEnd {
+    Stopped,
+    Failed,
+    /// Brigadier quit while its turn ran (UI audit H1).
+    Interrupted,
 }
 
 /// What one provider's models read and wrote for a request.

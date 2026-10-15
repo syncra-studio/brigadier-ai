@@ -72,7 +72,8 @@ export function summaryRows(summaries: readonly RequestSummary[], limit: number)
     .map((summary) => {
       const times = [
         summary.firstEventMs !== null && `first ${formatSince(summary.firstEventMs)}`,
-        summary.answerMs !== null ? `answer ${formatSince(summary.answerMs)}` : "working",
+        // A stop, a failure or a quit mid-turn never reads as an answer (UI audit H1).
+        summary.answerMs !== null ? `${summary.ended ?? "answer"} ${formatSince(summary.answerMs)}` : "working",
         summary.landedMs !== null && `landed ${formatSince(summary.landedMs)}`,
         summary.settledMs !== null && `settled ${formatSince(summary.settledMs)}`,
       ].filter(Boolean);

@@ -321,6 +321,7 @@ export type { RepoInfo } from "./RepoInfo";
 export type { Report } from "./Report";
 export type { Request } from "./Request";
 export type { RequestContext } from "./RequestContext";
+export type { RequestEnd } from "./RequestEnd";
 export type { RequestState } from "./RequestState";
 export type { RequestSummary } from "./RequestSummary";
 export type { RequestUndo } from "./RequestUndo";

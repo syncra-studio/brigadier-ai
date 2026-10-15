@@ -17,8 +17,8 @@ use brigadier_git::Oid;
 use super::{SessionManager, blocking, git_error};
 use crate::board::Board;
 use crate::model::{
-    ConversationId, ConversationKind, Environment, ProviderTokens, RequestContext, RequestSummary,
-    Setup, StepTokens, ThreadEdits, ThreadMetrics,
+    ConversationId, ConversationKind, Environment, ProviderTokens, RequestContext, RequestEnd,
+    RequestSummary, Setup, StepTokens, ThreadEdits, ThreadMetrics,
 };
 use crate::routing::{StepKind, StoredEdits, TurnUsage};
 use crate::work::{OrchestratorStepKind, RequestState, UserRequest};
@@ -243,6 +243,14 @@ pub(crate) fn request_summaries(rows: &[TurnUsage], board: &Board) -> Vec<Reques
             let first_event_ms = [first_step, first_thread_call].into_iter().flatten().min();
             let working = matches!(request.state, RequestState::Working);
             let answer_ms = request.ended_at_ms.filter(|_| !working);
+            let ended = match &request.state {
+                RequestState::Stopped => Some(RequestEnd::Stopped),
+                state if super::conversation::interrupted_by_quit(state) => {
+                    Some(RequestEnd::Interrupted)
+                }
+                RequestState::Failed { .. } => Some(RequestEnd::Failed),
+                _ => None,
+            };
             let landed_ms = steps
                 .iter()
                 .filter(|step| matches!(step.kind, OrchestratorStepKind::Landed { .. }))
@@ -260,6 +268,7 @@ pub(crate) fn request_summaries(rows: &[TurnUsage], board: &Board) -> Vec<Reques
                 started_at_ms: start,
                 first_event_ms: first_event_ms.map(after),
                 answer_ms: answer_ms.map(after),
+                ended,
                 landed_ms: landed_ms.map(after),
                 settled_ms: settled_ms.map(after),
                 providers: provider_tokens(&ours),
@@ -582,6 +591,45 @@ mod tests {
         assert_eq!(
             (still.answer_ms, still.settled_ms, still.landed_ms),
             (None, None, None)
+        );
+        assert_eq!((done.ended, still.ended), (None, None));
+    }
+
+    /// A request that didn't answer says how it ended, so the Inspector never reads a stop, a
+    /// failure or a quit mid-turn as an answer (UI audit H1, phase A verify).
+    #[test]
+    fn a_request_that_did_not_answer_says_how_it_ended() {
+        let ended = |state: serde_json::Value| {
+            let request: UserRequest = serde_json::from_value(serde_json::json!({
+                "id": "r1",
+                "conversationId": "c",
+                "preview": "Add a test",
+                "state": state,
+                "startedAtMs": 1_000,
+                "endedAtMs": 14_000,
+            }))
+            .expect("a request");
+            let mut board = Board::default();
+            board.requests.insert("r1".into(), request);
+            let summary = &request_summaries(&[], &board)[0];
+            assert_eq!(summary.answer_ms, Some(13_000));
+            summary.ended
+        };
+        assert_eq!(ended(serde_json::json!({ "type": "done" })), None);
+        assert_eq!(
+            ended(serde_json::json!({ "type": "stopped" })),
+            Some(RequestEnd::Stopped)
+        );
+        assert_eq!(
+            ended(serde_json::json!({ "type": "failed", "error": "The CLI crashed." })),
+            Some(RequestEnd::Failed)
+        );
+        assert_eq!(
+            ended(serde_json::json!({
+                "type": "failed",
+                "error": super::super::conversation::INTERRUPTED_BY_QUIT,
+            })),
+            Some(RequestEnd::Interrupted)
         );
     }
 }
