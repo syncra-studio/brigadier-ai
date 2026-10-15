@@ -3,7 +3,7 @@ import { type CSSProperties, createContext, lazy, Suspense, useCallback, useCont
 
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
-import { workerDone } from "@/app/conversation/workerPresentation";
+import { outcomeWords } from "@/app/conversation/workerPresentation";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { SidebarReveal, SidebarResizeHandle, useSidebarChoice, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -92,8 +92,9 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
   const column = useRef<HTMLDivElement>(null);
   const tabs: readonly (typeof WITH_PLAN)[number][] = usePlanTab((s) => s.shown[conversationId] !== undefined) ? WITH_PLAN : TABS;
   // Finished workers leave the composer's strip once answered; they stay here, counted.
-  const done = useBoard((s) =>
-    s.board?.conversationId === conversationId ? Object.values(s.board.tasks).filter(workerDone).length : 0);
+  // "1 done · 1 stopped": a stopped worker never counts as done (BUILD-PLAN A7).
+  const finished = useBoard((s) =>
+    s.board?.conversationId === conversationId ? outcomeWords(Object.values(s.board.tasks)) : "");
   // The left column and the docked pane leave room for where this column ends up, as this one
   // does for the left column: its full width while open, none while closed. That width is read
   // off the contents, which keep it while the column's width animates, so opening and closing
@@ -146,7 +147,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
                   aria-selected={panel.active === id}
                   className={cn("aria-selected:bg-toolbar-pressed aria-selected:text-foreground", id === "workers" && "w-auto px-2 text-label")}
                   tabIndex={panel.active === id ? 0 : -1}
-                  tooltip={id === "workers" && done > 0 ? `${title} · ${done} done` : title}
+                  tooltip={id === "workers" && finished ? `${title} · ${finished}` : title}
                   onClick={() => selectTab(id)}
                   onKeyDown={(event) => {
                     const next = event.key === "ArrowRight" ? (index + 1) % tabs.length

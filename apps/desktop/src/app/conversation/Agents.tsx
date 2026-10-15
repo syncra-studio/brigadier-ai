@@ -218,7 +218,7 @@ function WorkerList({ conversationId }: { conversationId: string }) {
           empty={`No ${WORKERS_LABEL.toLowerCase()} working`}
         />
         <AgentSection
-          title="Done"
+          title="Finished"
           ids={lists.finished}
           page={DONE_PAGE}
           counted

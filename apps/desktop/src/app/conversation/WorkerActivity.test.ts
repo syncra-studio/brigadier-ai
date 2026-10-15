@@ -147,7 +147,7 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
   assert.match(rendering.summary, /3 working/);
   assert.match(rendering.summary, /1 done · 1 stopped/);
   assert.match(rendering.list, /Working · 3/);
-  assert.match(rendering.list, /Done · 2/);
+  assert.match(rendering.list, /Finished · 2/);
   assert.match(rendering.list, /Waiting for its plan to be reviewed/);
   assert.match(rendering.list, /Waiting for a free slot/);
   assert.match(rendering.list, /3m 12s/);
