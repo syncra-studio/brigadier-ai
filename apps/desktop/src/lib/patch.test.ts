@@ -40,3 +40,12 @@ test("a whole file's rows give both of its sides", () => {
   const rows = parseDiff("@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n").rows;
   assert.deepEqual(fileSides(rows), { before: "a\nb\nc\n", after: "a\nB\nc\n" });
 });
+
+test("a change of only the final newline keeps it on the side that lacks one", () => {
+  const added = parseDiff("@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+b\n").rows;
+  assert.deepEqual(fileSides(added), { before: "a\nb", after: "a\nb\n" });
+  const removed = parseDiff("@@ -1,2 +1,2 @@\n a\n-b\n+b\n\\ No newline at end of file\n").rows;
+  assert.deepEqual(fileSides(removed), { before: "a\nb\n", after: "a\nb" });
+  const neither = parseDiff("@@ -1,2 +1,2 @@\n a\n-b\n+B\n\\ No newline at end of file\n").rows;
+  assert.deepEqual(fileSides(neither), { before: "a\nb\n", after: "a\nB" });
+});

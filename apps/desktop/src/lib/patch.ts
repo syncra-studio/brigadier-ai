@@ -10,6 +10,8 @@ export type DiffLine = {
   /** Its number in the new file (absent for a deleted line). */
   new: number | null;
   text: string;
+  /** Git's "\\ No newline at end of file" follows it: its side's file ends without one. */
+  noEol?: true;
 };
 
 export type DiffRow =
@@ -132,6 +134,10 @@ function readFiles(patch: string): Map<string, { binary: boolean; hunks: Hunk[] 
     if (sign === " ") hunk.lines.push({ kind: "context", old: oldLine++, new: newLine++, text });
     else if (sign === "-") hunk.lines.push({ kind: "del", old: oldLine++, new: null, text });
     else if (sign === "+") hunk.lines.push({ kind: "add", old: null, new: newLine++, text });
+    else if (sign === "\\") {
+      const last = hunk.lines.at(-1);
+      if (last) last.noEol = true;
+    }
   }
   return files;
 }
@@ -282,15 +288,19 @@ export function deletesFile(diff: string): boolean {
  * file and of the new one, or `null` when a stretch was only counted.
  */
 export function fileSides(rows: readonly DiffRow[]): { before: string; after: string } | null {
-  const before: string[] = [];
-  const after: string[] = [];
+  const before: DiffLine[] = [];
+  const after: DiffLine[] = [];
   for (const row of rows) {
     const shown = row.kind === "gap" ? row.lines : [row];
     if (!shown) return null;
     for (const line of shown) {
-      if (line.kind !== "add") before.push(line.text);
-      if (line.kind !== "del") after.push(line.text);
+      if (line.kind !== "add") before.push(line);
+      if (line.kind !== "del") after.push(line);
     }
   }
-  return { before: before.length ? `${before.join("\n")}\n` : "", after: after.length ? `${after.join("\n")}\n` : "" };
+  // A side whose last line git marked keeps its missing final newline, so a change of only that
+  // newline still differs.
+  const side = (lines: DiffLine[]) =>
+    lines.length ? `${lines.map((line) => line.text).join("\n")}${lines.at(-1)?.noEol ? "" : "\n"}` : "";
+  return { before: side(before), after: side(after) };
 }
