@@ -30,34 +30,16 @@ export function answerWords(item: QuestionItem, answer: string): string {
   return recommended?.label === answer ? `${answer} (Recommended)` : answer;
 }
 
-/** A question in one line: its first line, cut after its first question mark. */
-export function shortQuestion(text: string): string {
-  const first = text.trim().split("\n")[0]?.trim() ?? "";
-  return /^.*?\?(?=\s|$)/.exec(first)?.[0] ?? first;
-}
-
-/**
- * An answered question card's row: the first question in one line, how many more the round
- * asked, and the answer to the first. Null for a card the user hasn't answered (or that was
- * withdrawn), and for the merge and uncommitted-changes cards, which say what they asked.
- */
-export function askedRow(question: Question): { asked: string; more: number; answer: string } | null {
-  if (question.kind.type !== "orchestrator") return null;
-  const [answer] = questionAnswers(question);
-  const round = questionRound(question);
-  if (answer === undefined || round.length === 0) return null;
-  return { asked: shortQuestion(round[0]?.text ?? ""), more: round.length - 1, answer: answer.split("\n")[0] ?? answer };
-}
-
 /** Text with its `code` spans' backticks left out, for where it can't show code (a tooltip, a label). */
 export function plainCode(text: string): string {
   return codeParts(text).map((part) => part.text).join("");
 }
 
-/** The thread's row for a card: what it asks while open, what it asked once answered. */
+/**
+ * The thread's row for a card: what it asks while open ("Asking questions"), how many it asked
+ * once answered ("Asked 3 questions"), each question and its answer under the row.
+ */
 export function questionRowWords(question: Question): string {
-  const row = askedRow(question);
-  if (row) return plainCode(`Asked: ${row.asked}${row.more > 0 ? ` +${row.more} more` : ""} → ${row.answer}`);
   const open = questionOpen(question);
   switch (question.kind.type) {
     case "merge":
@@ -65,9 +47,9 @@ export function questionRowWords(question: Question): string {
     case "uncommittedChanges":
       return open ? "Asking about your uncommitted changes" : "Asked about your uncommitted changes";
     case "orchestrator": {
-      if (open) return "Asking questions";
       const count = questionRound(question).length;
-      const asked = count === 1 ? "Asked a question" : `Asked ${count} questions`;
+      if (open) return count === 1 ? "Asking a question" : "Asking questions";
+      const asked = `Asked ${count} ${count === 1 ? "question" : "questions"}`;
       return question.answer === null ? `${asked} · withdrawn` : asked;
     }
   }

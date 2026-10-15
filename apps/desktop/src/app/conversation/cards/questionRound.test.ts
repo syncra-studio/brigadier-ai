@@ -6,12 +6,10 @@ import { createServer } from "vite";
 import { createStore } from "zustand/vanilla";
 
 import {
-  askedRow,
   codeParts,
   questionAnswers,
   questionRound,
   questionRowWords,
-  shortQuestion,
 } from "@/app/conversation/cards/questionRound";
 import type { Question } from "@/ipc/generated";
 
@@ -59,30 +57,22 @@ const watch: Question = {
   answer: null, answers: [], createdAtMs: 1, answeredAtMs: null,
 };
 
-test("an answered question reads as what it asked, in one line, and the answer", () => {
-  assert.equal(shortQuestion(watch.text), "Watch CI for `d177d69`?");
-  assert.equal(shortQuestion("Which format\nJSON or YAML?"), "Which format");
-  assert.equal(shortQuestion("Is `a?b` right? Or not"), "Is `a?b` right?");
-  // Pending: the wording stays.
-  assert.equal(askedRow(watch), null);
-  assert.equal(questionRowWords(watch), "Asking questions");
+test("a question's row says it asks while open, and how many it asked once answered", () => {
+  assert.equal(questionRowWords(watch), "Asking a question");
   const answered = { ...watch, answer: "Watch", answeredAtMs: 2 };
-  assert.deepEqual(askedRow(answered), { asked: "Watch CI for `d177d69`?", more: 0, answer: "Watch" });
-  // Its one-line words (the row's label) leave the backticks out; the row shows them as code.
-  assert.equal(questionRowWords(answered), "Asked: Watch CI for d177d69? → Watch");
-  // A round: its first question, and how many more.
+  assert.equal(questionRowWords(answered), "Asked 1 question");
   const round: Question = {
     ...watch, text: "First?\nSecond?\nThird?", options: [], recommended: null,
     items: ["First?", "Second?", "Third?"].map((text) => ({ text, options: [], recommended: null })),
     answer: "Yes\nNo\nYes", answers: ["Yes", "No", "Yes"], answeredAtMs: 2,
   };
-  assert.equal(questionRowWords(round), "Asked: First? +2 more → Yes");
+  assert.equal(questionRowWords(round), "Asked 3 questions");
+  assert.equal(questionRowWords({ ...round, answer: null, answers: [], answeredAtMs: null }), "Asking questions");
   // Withdrawn, and the merge card, keep their words.
-  assert.equal(questionRowWords({ ...watch, answeredAtMs: 2 }), "Asked a question · withdrawn");
-  assert.equal(askedRow({ ...answered, kind: { type: "uncommittedChanges" } as Question["kind"] }), null);
+  assert.equal(questionRowWords({ ...watch, answeredAtMs: 2 }), "Asked 1 question · withdrawn");
 });
 
-test("the answered question's row shows the question, its code, and the answer as a chip", async () => {
+test("the answered question's row says how many it asked and opens to each with its answer; asking, it shimmers", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { QuestionCardView } = await server.ssrLoadModule("/src/app/conversation/cards/QuestionCardView.tsx");
@@ -95,16 +85,13 @@ test("the answered question's row shows the question, its code, and the answer a
       );
     };
     const html = render({ ...watch, answer: "Watch", answeredAtMs: 2 });
-    assert.match(html.replace(/<[^>]+>|<!-- -->/g, ""), /Asked: Watch CI for d177d69\?→Watch/);
-    assert.match(html, /<code[^>]*>d177d69<\/code>/);
-    assert.match(html, /data-slot="question-answer"[^>]*><span class="truncate">Watch<\/span><\/span>/);
+    assert.match(html, /<span class="truncate">Asked 1 question<\/span>/);
+    assert.doesNotMatch(html, /question-answer|→/);
     // The whole question waits in the row's tooltip; the rest opens under it.
     assert.match(html, /title="Watch CI for d177d69\? It will probably fail/);
-    assert.doesNotMatch(html, />Asked a question</);
-    // Pending, it still says it asks.
+    // Pending, it says it asks, its words sweeping.
     const pending = render(watch);
-    assert.match(pending, />Asking questions</);
-    assert.doesNotMatch(pending, /question-answer/);
+    assert.match(pending, /<span class="truncate shimmer">Asking a question<\/span>/);
   } finally {
     await server.close();
   }
