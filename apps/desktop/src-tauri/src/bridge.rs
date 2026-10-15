@@ -801,6 +801,7 @@ mod tests {
                 steered_after: None,
                 undo: None,
                 worked: Vec::new(),
+                waited: Vec::new(),
                 quota_wait: false,
                 waiting_for: Vec::new(),
                 from_peer: None,
@@ -885,6 +886,7 @@ mod tests {
             answers: Vec::new(),
             created_at_ms: 0,
             answered_at_ms: None,
+            answered_by: None,
             words_id: None,
         };
         let asked = DomainEvent::QuestionUpdated {
