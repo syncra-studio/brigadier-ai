@@ -508,6 +508,10 @@ pub struct TokenUsage {
     pub reasoning_tokens: i64,
     /// Cost reported by the CLI, when it reports one.
     pub cost_usd: Option<f64>,
+    /// The model calls behind it: Claude's assistant messages (a subagent's included), each
+    /// Codex request. 0 where the CLI's reports don't show them.
+    #[serde(default)]
+    pub model_calls: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

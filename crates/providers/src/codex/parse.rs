@@ -70,6 +70,10 @@ pub enum Output {
 #[derive(Default)]
 pub struct Parser {
     private_logs: bool,
+    /// The thread's total tokens as last reported, and the model requests counted since this
+    /// process started.
+    reported_tokens: i64,
+    model_calls: i64,
     /// A session reported its own start; `thread/started` is then not a start.
     started: bool,
     turn_id: Option<String>,
@@ -281,9 +285,20 @@ impl Parser {
                     return;
                 };
                 let usage = update.token_usage;
+                // One report per model request: a total that grew is one more call.
+                if usage.total.total_tokens > self.reported_tokens {
+                    self.model_calls += 1;
+                }
+                self.reported_tokens = usage.total.total_tokens;
                 out.push(Output::Event(ProviderEvent::Usage {
-                    total: token_usage(&usage.total),
-                    last: Some(token_usage(&usage.last)),
+                    total: TokenUsage {
+                        model_calls: self.model_calls,
+                        ..token_usage(&usage.total)
+                    },
+                    last: Some(TokenUsage {
+                        model_calls: 1,
+                        ..token_usage(&usage.last)
+                    }),
                 }));
                 // The last request is what the model saw: the context in use. (What a
                 // compaction left counts only in its total.)
@@ -1115,6 +1130,7 @@ fn token_usage(usage: &p::TokenUsageBreakdown) -> TokenUsage {
         output_tokens: usage.output_tokens,
         reasoning_tokens: usage.reasoning_output_tokens,
         cost_usd: None,
+        model_calls: 0,
     }
 }
 
@@ -1342,6 +1358,36 @@ mod tests {
             [ProviderEvent::Command { .. }, ProviderEvent::Looked { searches, .. }]
                 if searches.len() == 1 && searches[0].hits.is_empty()
         ));
+    }
+
+    /// BUILD-PLAN A0: each model request reports the thread's use once; a report whose total
+    /// grew is one more call, and the latest request is one call.
+    #[test]
+    fn each_request_that_used_tokens_counts_one_model_call() {
+        let mut parser = Parser::live();
+        let breakdown = |total: i64| {
+            json!({ "cachedInputTokens": 0, "inputTokens": total, "outputTokens": 0,
+                    "reasoningOutputTokens": 0, "totalTokens": total })
+        };
+        let report = |total: i64, last: i64| {
+            json!({ "method": "thread/tokenUsage/updated", "params": { "threadId": "t1", "turnId": "u1",
+                "tokenUsage": { "total": breakdown(total), "last": breakdown(last) } } })
+        };
+        let calls = |events: Vec<ProviderEvent>| {
+            events
+                .into_iter()
+                .find_map(|event| match event {
+                    ProviderEvent::Usage { total, last } => {
+                        Some((total.model_calls, last.map(|last| last.model_calls)))
+                    }
+                    _ => None,
+                })
+                .expect("a usage report")
+        };
+        assert_eq!(calls(events(&mut parser, &report(100, 100))), (1, Some(1)));
+        assert_eq!(calls(events(&mut parser, &report(250, 150))), (2, Some(1)));
+        // The same total again is no new request.
+        assert_eq!(calls(events(&mut parser, &report(250, 150))).0, 2);
     }
 
     fn events(parser: &mut Parser, line: &Value) -> Vec<ProviderEvent> {

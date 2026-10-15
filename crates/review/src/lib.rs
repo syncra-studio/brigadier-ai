@@ -293,6 +293,7 @@ fn codex_usage(usage: &Value) -> TokenUsage {
         output_tokens: count("output_tokens"),
         reasoning_tokens: count("reasoning_output_tokens"),
         cost_usd: None,
+        model_calls: 0,
     }
 }
 
@@ -780,6 +781,7 @@ exit 1"#
                 output_tokens: 5,
                 reasoning_tokens: 0,
                 cost_usd: None,
+                model_calls: 0,
             })
         );
     }
@@ -839,6 +841,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_token
                 output_tokens: 162,
                 reasoning_tokens: 40,
                 cost_usd: None,
+                model_calls: 0,
             })
         );
         assert_eq!(
@@ -932,6 +935,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_token
                 output_tokens: 1023,
                 reasoning_tokens: 121,
                 cost_usd: None,
+                model_calls: 0,
             })
         );
         assert_eq!(

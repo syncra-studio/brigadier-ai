@@ -307,15 +307,21 @@ fn step_tokens(rows: &[&TurnUsage]) -> Vec<StepTokens> {
     let mut by: Vec<StepTokens> = Vec::new();
     for row in rows {
         let step = row.step.map_or("unknown", StepKind::as_str);
+        let calls = row
+            .model_calls
+            .map_or(1, |calls| u32::try_from(calls).unwrap_or(u32::MAX));
+        let turns = u32::from(row.opens_turn);
         match by.iter_mut().find(|known| known.step == step) {
             Some(known) => {
                 known.raw += row.total();
-                known.calls += 1;
+                known.calls += calls;
+                known.turns += turns;
             }
             None => by.push(StepTokens {
                 step: step.to_owned(),
                 raw: row.total(),
-                calls: 1,
+                calls,
+                turns,
             }),
         }
     }
@@ -347,6 +353,8 @@ mod tests {
             child_thread: None,
             cost_usd: None,
             account: None,
+            model_calls: None,
+            opens_turn: false,
         }
     }
 
@@ -452,13 +460,23 @@ mod tests {
             row.cost_usd = cost;
             row
         };
+        // The calls behind each use and the turns' first uses, as the CLIs reported them.
+        let counted = |mut row: TurnUsage, calls, opens_turn| {
+            row.model_calls = Some(calls);
+            row.opens_turn = opens_turn;
+            row
+        };
         let rows = [
-            at(
-                row(Some("r1"), None, 100, 1_000),
-                3_000,
-                StepKind::Thread,
-                ProviderKind::Claude,
-                Some(0.25),
+            counted(
+                at(
+                    row(Some("r1"), None, 100, 1_000),
+                    3_000,
+                    StepKind::Thread,
+                    ProviderKind::Claude,
+                    Some(0.25),
+                ),
+                4,
+                true,
             ),
             at(
                 row(Some("r1"), None, 200, 2_000),
@@ -467,12 +485,16 @@ mod tests {
                 ProviderKind::Codex,
                 None,
             ),
-            at(
-                row(Some("r1"), None, 10, 100),
-                20_000,
-                StepKind::Thread,
-                ProviderKind::Claude,
-                Some(0.5),
+            counted(
+                at(
+                    row(Some("r1"), None, 10, 100),
+                    20_000,
+                    StepKind::Thread,
+                    ProviderKind::Claude,
+                    Some(0.5),
+                ),
+                3,
+                true,
             ),
             // A review that finished after the answer.
             at(
@@ -529,20 +551,32 @@ mod tests {
                 StepTokens {
                     step: "worker".into(),
                     raw: 2_250,
-                    calls: 1
+                    calls: 1,
+                    turns: 0
                 },
                 StepTokens {
                     step: "thread".into(),
                     raw: 1_310,
-                    calls: 2
+                    calls: 7,
+                    turns: 2
                 },
                 StepTokens {
                     step: "review".into(),
                     raw: 55,
-                    calls: 1
+                    calls: 1,
+                    turns: 0
                 },
             ]
         );
+        // BUILD-PLAN A0: the report sums to the request's turn_usage rows, through settlement.
+        let stored: i64 = rows
+            .iter()
+            .filter(|row| row.request_id.as_deref() == Some("r1"))
+            .map(TurnUsage::total)
+            .sum();
+        let by_provider: i64 = done.providers.iter().map(|tokens| tokens.raw).sum();
+        let by_step: i64 = done.steps.iter().map(|step| step.raw).sum();
+        assert_eq!((by_provider, by_step), (stored, stored));
         let still = &summaries[1];
         assert_eq!(still.first_event_ms, Some(1_000));
         assert_eq!(

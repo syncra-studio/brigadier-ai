@@ -92,6 +92,9 @@ pub struct Parser {
     subagent_usage: HashMap<String, TokenUsage>,
     /// Subagent messages already added to a turn: a line repeated after its result adds nothing.
     subagent_counted: HashSet<String>,
+    /// The model calls since the last result: its assistant messages' ids, a subagent's
+    /// included.
+    turn_calls: HashSet<String>,
     interrupting: bool,
     turn_active: bool,
     /// Messages written to Claude that it has not taken yet (echoed back).
@@ -348,12 +351,16 @@ impl Parser {
             {
                 self.subagent_usage
                     .insert(id.to_owned(), token_usage(usage));
+                self.turn_calls.insert(id.to_owned());
             }
             progress(value, out);
             return;
         }
         // A turn Claude started on its own, without partial messages.
         self.begin_turn(out);
+        if let Some(id) = str_of(&message, "id") {
+            self.turn_calls.insert(id.to_owned());
+        }
         let message_id = str_of(&message, "id").unwrap_or("message").to_owned();
         let Some(blocks) = message.get("content").and_then(Value::as_array) else {
             return;
@@ -792,9 +799,11 @@ impl Parser {
                 }));
             }
         }
+        let calls = i64::try_from(std::mem::take(&mut self.turn_calls).len()).unwrap_or(i64::MAX);
         let usage = value.get("usage").map(|usage| {
             let mut turn = token_usage(usage);
             turn.cost_usd = value.get("total_cost_usd").and_then(Value::as_f64);
+            turn.model_calls = calls;
             for (id, sub) in self.subagent_usage.drain() {
                 turn.input_tokens += sub.input_tokens;
                 turn.cached_input_tokens += sub.cached_input_tokens;
@@ -811,6 +820,7 @@ impl Parser {
             self.totals.cache_write_tokens += turn.cache_write_tokens;
             self.totals.output_tokens += turn.output_tokens;
             self.totals.reasoning_tokens += turn.reasoning_tokens;
+            self.totals.model_calls += turn.model_calls;
             // `total_cost_usd` is cumulative for the session.
             self.totals.cost_usd = turn.cost_usd.or(self.totals.cost_usd);
             out.push(Output::Event(ProviderEvent::Usage {
@@ -1180,6 +1190,7 @@ fn token_usage(usage: &Value) -> TokenUsage {
             .and_then(Value::as_i64)
             .unwrap_or_default(),
         cost_usd: None,
+        model_calls: 0,
     }
 }
 
@@ -1788,6 +1799,12 @@ mod tests {
         // The same message again, as each of its blocks streams it.
         parser.feed(&sub("m1", usage(2, 0, 13_171, 16)));
         parser.feed(&sub("m2", usage(2, 13_171, 2_455, 2)));
+        // The main agent's own call, its blocks streamed as two lines (BUILD-PLAN A0: calls).
+        let main = json!({ "type": "assistant", "parent_tool_use_id": null,
+                           "message": { "id": "a1", "content": [{ "type": "text", "text": "Done." }] } })
+        .to_string();
+        parser.feed(&main);
+        parser.feed(&main);
         let result = |main: Value| {
             json!({ "type": "result", "subtype": "success", "is_error": false, "usage": main })
                 .to_string()
@@ -1802,6 +1819,7 @@ mod tests {
             ),
             (4 + 4, 36_377 + 13_171, 14_851 + 13_171 + 2_455, 318 + 18)
         );
+        assert_eq!(first.model_calls, 3);
         // A line of a counted message after its result adds nothing; a new one counts next.
         parser.feed(&sub("m2", usage(2, 13_171, 2_455, 2)));
         parser.feed(&sub("m3", usage(2, 15_626, 160, 4)));
@@ -1810,5 +1828,6 @@ mod tests {
             (second.cached_input_tokens, second.output_tokens),
             (25_905 + 15_626, 4 + 4)
         );
+        assert_eq!(second.model_calls, 1);
     }
 }

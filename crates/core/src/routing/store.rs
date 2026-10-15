@@ -112,6 +112,12 @@ fn migrations() -> Migrations<'static> {
             "ALTER TABLE quota_samples ADD COLUMN account TEXT NOT NULL DEFAULT '';
             ALTER TABLE turn_usage ADD COLUMN account TEXT NOT NULL DEFAULT '';",
         ),
+        // BUILD-PLAN A0: the model calls behind a turn's use, and whether it is a turn's first
+        // report (the Inspector's thread turns and model calls per request).
+        M::up(
+            "ALTER TABLE turn_usage ADD COLUMN model_calls INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN opens_turn INTEGER NOT NULL DEFAULT 0;",
+        ),
     ])
 }
 
@@ -210,6 +216,10 @@ pub struct TurnUsage {
     pub cost_usd: Option<f64>,
     /// The extra account whose quota it used; absent: the user's own login.
     pub account: Option<String>,
+    /// The model calls behind it, when its CLI's reports showed them.
+    pub model_calls: Option<i64>,
+    /// It is the first use reported in its turn (counted for a thread's or a review's turns).
+    pub opens_turn: bool,
 }
 
 impl TurnUsage {
@@ -237,7 +247,7 @@ pub struct StoredEdits {
 /// The columns [`turn_of`] reads, after `provider`.
 const TURN_COLUMNS: &str = "at_ms, model, conversation_id, project_id, task_id, input, \
      cached_input, cache_write, output, step, duration_ms, request_id, context, child_thread, \
-     cost_usd, account";
+     cost_usd, account, model_calls, opens_turn";
 
 fn turn_of(provider: ProviderKind, row: &rusqlite::Row<'_>) -> rusqlite::Result<TurnUsage> {
     Ok(TurnUsage {
@@ -261,6 +271,8 @@ fn turn_of(provider: ProviderKind, row: &rusqlite::Row<'_>) -> rusqlite::Result<
         child_thread: row.get(14)?,
         cost_usd: row.get(15)?,
         account: Some(row.get::<_, String>(16)?).filter(|account| !account.is_empty()),
+        model_calls: row.get(17)?,
+        opens_turn: row.get(18)?,
     })
 }
 
@@ -268,8 +280,9 @@ fn insert_turn(conn: &Connection, turn: &TurnUsage) -> rusqlite::Result<()> {
     conn.prepare_cached(
         "INSERT INTO turn_usage (at_ms, provider, model, conversation_id, project_id, task_id,
              input, cached_input, cache_write, output, step, duration_ms, request_id, context,
-             child_thread, cost_usd, account)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+             child_thread, cost_usd, account, model_calls, opens_turn)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                 ?19)",
     )?
     .execute(params![
         turn.at_ms,
@@ -289,6 +302,8 @@ fn insert_turn(conn: &Connection, turn: &TurnUsage) -> rusqlite::Result<()> {
         turn.child_thread,
         turn.cost_usd,
         turn.account.as_deref().unwrap_or(""),
+        turn.model_calls,
+        turn.opens_turn,
     ])?;
     Ok(())
 }
@@ -770,6 +785,8 @@ mod tests {
             child_thread: None,
             cost_usd: None,
             account: None,
+            model_calls: None,
+            opens_turn: false,
         }
     }
 
@@ -895,5 +912,23 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["t3"]
         );
+    }
+
+    /// BUILD-PLAN A0: a turn's model calls and whether it opens its turn are kept.
+    #[tokio::test]
+    async fn a_turns_calls_and_its_first_use_read_back() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&*dir).unwrap();
+        let store = RoutingStore::open(&dir.join("routing.sqlite")).unwrap();
+        let counted = TurnUsage {
+            model_calls: Some(3),
+            opens_turn: true,
+            ..turn(Some("c1"), None)
+        };
+        store.add_turn(counted.clone()).await.unwrap();
+        store.add_turn(turn(Some("c1"), None)).await.unwrap();
+        let read = store.conversation_turns("c1".into()).await.unwrap();
+        assert_eq!(read, vec![counted, turn(Some("c1"), None)]);
     }
 }

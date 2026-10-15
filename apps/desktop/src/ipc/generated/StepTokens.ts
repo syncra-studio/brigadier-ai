@@ -9,6 +9,10 @@ export type StepTokens = {
  */
 step: string, raw: number, 
 /**
- * Its model calls (Claude: turns).
+ * Its model calls (a use stored before they were counted counts as one).
  */
-calls: number, };
+calls: number, 
+/**
+ * Its turns, where they are counted (the thread's, a review's).
+ */
+turns: number, };

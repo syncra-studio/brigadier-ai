@@ -1617,8 +1617,10 @@ pub struct StepTokens {
     /// `thread`, `worker`, `review`, `guardian`…
     pub step: String,
     pub raw: i64,
-    /// Its model calls (Claude: turns).
+    /// Its model calls (a use stored before they were counted counts as one).
     pub calls: u32,
+    /// Its turns, where they are counted (the thread's, a review's).
+    pub turns: u32,
 }
 
 /// The commits on a session's branch marked `Brigadier-Author: thread`, from where the thread

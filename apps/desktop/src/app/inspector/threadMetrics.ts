@@ -86,8 +86,12 @@ export function summaryRows(summaries: readonly RequestSummary[], limit: number)
         }),
         steps: summary.steps
           .map((step) => {
-            const calls = step.calls === 1 ? "" : ` (${step.calls} calls)`;
-            return `${step.step} ${formatTokens(step.raw)}${calls}`;
+            // Its turns where they are counted (the thread's), and the model calls behind them.
+            const counts = [
+              step.turns > 0 && `${step.turns} ${step.turns === 1 ? "turn" : "turns"}`,
+              (step.turns > 0 || step.calls !== 1) && `${step.calls} ${step.calls === 1 ? "call" : "calls"}`,
+            ].filter(Boolean);
+            return `${step.step} ${formatTokens(step.raw)}${counts.length > 0 ? ` (${counts.join(", ")})` : ""}`;
           })
           .join(" · "),
       };

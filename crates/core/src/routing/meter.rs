@@ -12,6 +12,8 @@ pub struct TokenMeter {
     last: Mutex<Baseline>,
     /// When the running turn started, or last reported: what the next report's use took.
     mark: Mutex<Option<i64>>,
+    /// A turn started and hasn't reported its use yet.
+    opened: Mutex<bool>,
     /// When the session's Codex child threads were last looked for.
     children: Mutex<Option<i64>>,
     /// The extra account the session runs on (its use counts against that account's quota);
@@ -42,6 +44,7 @@ impl TokenMeter {
                 Baseline::Fresh
             }),
             mark: Mutex::new(None),
+            opened: Mutex::new(false),
             children: Mutex::new(None),
             account: None,
         }
@@ -61,6 +64,12 @@ impl TokenMeter {
     /// A turn started at `at_ms`: its first report's use took from here.
     pub fn turn_started(&self, at_ms: i64) {
         *self.mark.lock().unwrap_or_else(PoisonError::into_inner) = Some(at_ms);
+        *self.opened.lock().unwrap_or_else(PoisonError::into_inner) = true;
+    }
+
+    /// Whether the use reported now is its turn's first; later reports of the turn aren't.
+    pub fn opens_turn(&self) -> bool {
+        std::mem::take(&mut *self.opened.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// When the session's child threads were last looked for (never: `None`); now is
@@ -103,6 +112,7 @@ impl TokenMeter {
                 cache_write_tokens: (total.cache_write_tokens - previous.cache_write_tokens).max(0),
                 output_tokens: (total.output_tokens - previous.output_tokens).max(0),
                 reasoning_tokens: (total.reasoning_tokens - previous.reasoning_tokens).max(0),
+                model_calls: (total.model_calls - previous.model_calls).max(0),
             },
             Baseline::Fresh | Baseline::Seen(_) => total.clone(),
         };
@@ -148,5 +158,21 @@ mod tests {
                 .cost_usd,
             None
         );
+    }
+
+    /// BUILD-PLAN A0: a turn's model calls are what the session's count grew by, and a turn
+    /// started reports as its turn's first use once.
+    #[test]
+    fn a_turns_calls_are_what_the_count_grew_by_and_its_first_use_opens_it() {
+        let meter = TokenMeter::new(false);
+        let calls = |input: i64, calls: i64| TokenUsage {
+            model_calls: calls,
+            ..usage(input, None)
+        };
+        assert_eq!(meter.delta(&calls(10, 2), None).unwrap().model_calls, 2);
+        assert_eq!(meter.delta(&calls(30, 5), None).unwrap().model_calls, 3);
+        meter.turn_started(0);
+        assert!(meter.opens_turn());
+        assert!(!meter.opens_turn());
     }
 }

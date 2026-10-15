@@ -7,4 +7,9 @@ export type TokenUsage = { inputTokens: number, cachedInputTokens: number, cache
 /**
  * Cost reported by the CLI, when it reports one.
  */
-costUsd: number | null, };
+costUsd: number | null, 
+/**
+ * The model calls behind it: Claude's assistant messages (a subagent's included), each
+ * Codex request. 0 where the CLI's reports don't show them.
+ */
+modelCalls: number, };

@@ -75,6 +75,8 @@ impl SessionManager {
         turn.cost_usd = used.cost_usd;
         turn.duration_ms = duration_ms;
         turn.context = last.map(context_of).or(context);
+        turn.model_calls = (used.model_calls > 0).then_some(used.model_calls);
+        turn.opens_turn = meter.opens_turn();
         if let Err(err) = store.add_turn(turn).await {
             crate::logging::private_trace!(
                 matches!(&owner, TokenOwner::Conversation(id) | TokenOwner::Handoff(id) | TokenOwner::Task(id, _) if self.tab_chat_logs(id)),
@@ -163,6 +165,8 @@ impl SessionManager {
             child_thread: None,
             cost_usd: None,
             account: None,
+            model_calls: None,
+            opens_turn: false,
         }
     }
 
@@ -314,6 +318,8 @@ mod tests {
             child_thread: None,
             cost_usd: None,
             account: None,
+            model_calls: None,
+            opens_turn: false,
         };
         let sessions = dir.join("sessions");
         let turn_end = || async {

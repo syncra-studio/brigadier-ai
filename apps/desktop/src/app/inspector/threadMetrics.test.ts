@@ -55,8 +55,9 @@ test("a request's summary reads its times and its tokens per provider and step, 
       { provider: "codex", input: 5, cachedInput: 0, cacheWrite: 0, output: 5, raw: 10, rawWithoutCacheReads: 10, costUsd: null },
     ],
     steps: [
-      { step: "worker", raw: 1_000_000, calls: 3 },
-      { step: "thread", raw: 300_020, calls: 1 },
+      { step: "worker", raw: 1_000_000, calls: 3, turns: 0 },
+      { step: "thread", raw: 300_020, calls: 9, turns: 2 },
+      { step: "review", raw: 20, calls: 1, turns: 0 },
     ],
   };
   const working: RequestSummary = {
@@ -77,6 +78,7 @@ test("a request's summary reads its times and its tokens per provider and step, 
   assert.equal(oldest!.times, "first 1.2 s · answer 6m 40s · landed 6m 2s · settled 7m 1s");
   assert.match(oldest!.providers[0]!, /^Claude 1\.3M raw, 300K without cache reads, \$0\.75$/);
   assert.match(oldest!.providers[1]!, /^Codex 10 raw, 10 without cache reads$/);
-  assert.match(oldest!.steps, /^worker 1M \(3 calls\) · thread 300K$/);
+  // The thread's turns and the model calls per step (BUILD-PLAN A0).
+  assert.match(oldest!.steps, /^worker 1M \(3 calls\) · thread 300K \(2 turns, 9 calls\) · review 20$/);
   assert.equal(summaryRows([done, working], 1).length, 1);
 });
