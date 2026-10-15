@@ -740,6 +740,12 @@ been missed. The line is settled from those numbers, and the phase report says w
   - nothing is committed on the user's checkout;
   - a session from before hears the note once;
   - V3 e1–e4 keep their exact correctness with fewer calls. It ships only then.
+- **As measured** (V3 e1–e4, warm, seeded, n=2 each, at `0de12840`):
+  - all 8 runs are exactly correct;
+  - every run committed through `run_check`'s `commit`, with no separate `git commit` call;
+  - model calls went from 8–9 (phase B, `1da10ace`) to 5–7 (median 6), against plain Claude Code's 4–5;
+  - tokens per ask went from 285–340k to 95–153k (median 121k), against plain's 71–97k;
+  - no tool call was refused for its input.
 
 **Validation:**
 - **Bench T1–T6 and T7L,** n = 3, cold and warm (T7L's plain-arm runs are made first, since it is frozen and not run
