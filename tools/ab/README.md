@@ -61,6 +61,34 @@ Then the independent checks on the result, identical for every arm:
     ...behaviour probes, by the steps in the task file...
     tools/ab/probe-app.sh $AB/<arm> --clean
 
+## V3 small asks and V1 accounting (`v3/`)
+
+BUILD-PLAN A0 / PLAN P0.2. 12 frozen asks (4 code questions, 4 tiny edits, 2 status, 2 "explain this error") and
+the deliverable cases A1, A2, A6, in `v3/asks/*.md` (request verbatim, then the exact scoring rule as JSON), on the
+frozen fixture `v3/fixture/` (the bench's tally at `11a0770a:bench/fixture`, plus planted state; `build.sh` makes
+the same commits every time, `EXPECTED`). Edits are judged by hidden checks (`v3/checks/`) on the session
+workspace as the run left it.
+
+    export BRIGD=<dev brigadierd> BRIG_SRC=<its source tree>
+    v3/run.py template --root /tmp/v3-X --tag X --seed tools/ab/v3/seed/brain.sqlite   # frozen Brain seed
+    v3/run.py ask --root /tmp/v3-X --ask q1 --regime warm --brain seeded               # one attempt
+    v3/run.py set --root /tmp/v3-X --asks q1,e1,s2,x2 --regime warm --brain seeded --reruns 3
+    v3/run.py ab --roots A=/tmp/v3-A,B=/tmp/v3-B --asks ... --regime cold --brain empty --reruns 3
+    v3/summary.py /tmp/v3-X [/tmp/v3-Y]                # rescored; one table per regime x Brain, completion first
+    v3/selftest.py /tmp/v3-X                            # scorer rules, and rescoring is byte-identical
+    v3/run.py cleanup --root /tmp/v3-X [--export DIR]   # stops, deletes its Codex threads and Claude folders
+
+- **One arm per root**, its own daemon (its IPC protocol pinned in the root's `build-src/`) and data dir, restored from the template before every attempt (same
+  absolute paths, same Brain). `--brain empty` uses the template with the project's Brain emptied (one inert
+  skeleton-origin node stays so the daemon doesn't rerun its skeleton pass). Brain enrichment is off.
+- **V1 regimes:** `warm` runs one warm-up session (same flags) just before the attempt; `cold` waits until no
+  session of these roots ended within the last hour. `ab` alternates the builds' order per ask and rerun.
+- **Every attempt is kept** (`runs/<id>/`, `results.jsonl`); a harness error counts as not completed.
+- **Measured** (`v3/score.py`, from the run dir alone): completion, pass and why, model calls (Claude assistant
+  message ids, Codex token_count steps; per role), thread turns, worker starts, time to the final answer, usage
+  through settlement (`v3/v3tokens.py`: `brig_tokens.py` + `tokens.py` over the conversation's own sessions,
+  reconciled as `armtokens.sh` does; all vendors, cache reads apart), interventions and background work.
+
 ## Boundaries (both arms)
 
 - **t0**: the request is submitted.

@@ -1,0 +1,112 @@
+{
+  "products": [
+    {
+      "sku": "BOOK-010",
+      "name": "Field Guide to Ledgers",
+      "unitPrice": 34.5,
+      "taxCategory": "reduced"
+    },
+    {
+      "sku": "CBL-030",
+      "name": "USB-C Cable 2m",
+      "unitPrice": 12.4,
+      "taxCategory": "standard"
+    },
+    {
+      "sku": "GAD-002",
+      "name": "Gadget Pro",
+      "unitPrice": 49,
+      "taxCategory": "standard"
+    },
+    {
+      "sku": "STK-005",
+      "name": "Sticker Pack",
+      "unitPrice": 3.1,
+      "taxCategory": "reduced"
+    },
+    {
+      "sku": "TEA-200",
+      "name": "Loose Leaf Tea 250g",
+      "unitPrice": 8.75,
+      "taxCategory": "exempt"
+    },
+    {
+      "sku": "WID-001",
+      "name": "Widget",
+      "unitPrice": 19.99,
+      "taxCategory": "standard"
+    }
+  ],
+  "invoices": [
+    {
+      "number": "INV-0001",
+      "issueDate": "2024-01-15",
+      "dueDate": "2024-02-14",
+      "region": "ON",
+      "lines": [
+        {
+          "sku": "WID-001",
+          "name": "Widget",
+          "qty": 3,
+          "unitPrice": 19.99,
+          "lineTotal": 59.97,
+          "tax": 7.8
+        },
+        {
+          "sku": "BOOK-010",
+          "name": "Field Guide to Ledgers",
+          "qty": 1,
+          "unitPrice": 34.5,
+          "lineTotal": 34.5,
+          "tax": 1.73
+        },
+        {
+          "sku": "TEA-200",
+          "name": "Loose Leaf Tea 250g",
+          "qty": 2,
+          "unitPrice": 8.75,
+          "lineTotal": 17.5,
+          "tax": 0
+        }
+      ],
+      "subtotal": 111.97,
+      "tax": 9.53,
+      "total": 121.5
+    },
+    {
+      "number": "INV-0002",
+      "issueDate": "2024-02-03",
+      "dueDate": "2024-02-17",
+      "region": "BC",
+      "lines": [
+        {
+          "sku": "GAD-002",
+          "name": "Gadget Pro",
+          "qty": 1,
+          "unitPrice": 49,
+          "lineTotal": 49,
+          "tax": 5.88
+        },
+        {
+          "sku": "CBL-030",
+          "name": "USB-C Cable 2m",
+          "qty": 2,
+          "unitPrice": 12.4,
+          "lineTotal": 24.8,
+          "tax": 2.98
+        },
+        {
+          "sku": "STK-005",
+          "name": "Sticker Pack",
+          "qty": 4,
+          "unitPrice": 3.1,
+          "lineTotal": 12.4,
+          "tax": 0.87
+        }
+      ],
+      "subtotal": 86.2,
+      "tax": 9.73,
+      "total": 95.93
+    }
+  ]
+}

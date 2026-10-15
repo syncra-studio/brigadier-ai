@@ -1,0 +1,19 @@
+{
+  "name": "tally",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Small invoicing and inventory library with a command-line interface",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "typescript": "6.0.3"
+  }
+}

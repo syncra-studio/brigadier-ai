@@ -1,0 +1,14 @@
+{
+ "nodes": 27,
+ "kinds": {
+  "contract": 3,
+  "convention": 5,
+  "fileSummary": 6,
+  "module": 13
+ },
+ "origins": {
+  "index": 1,
+  "skeleton": 26
+ },
+ "content_sha256": "fe4199dc8a3a1d90efbbb55d90ac5782dc553abaaea5403627b41182e7d6abd7"
+}
