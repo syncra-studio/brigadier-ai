@@ -5,6 +5,7 @@ import {
   Dock,
   Globe,
   Key,
+  Mic,
   PencilSquare,
   QuestionMarkCircle,
   Reply,
@@ -64,6 +65,9 @@ import { answerCard, answerQuestion, decidePlan } from "@/state/actions";
 import { type ShownApproval, useBoard } from "@/state/board";
 import { type PlanDocRef, planDoc } from "@/state/planDoc";
 import { useApp } from "@/state/store";
+import { cancelDictation, registerInserter, startDictation, stopDictation, useDictation } from "@/state/dictation";
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Spinner } from "@/components/glyphs/spinner";
 
 /* Pending decisions sit on the rail above the full composer. Their shortcuts leave
  * text fields, focused controls and open overlays to handle their own keys. */
@@ -664,6 +668,32 @@ function clickInput(event: MouseEvent): AnswerInput {
  * light one (the pointer passing over lights nothing), and Enter picks the lit answer only from
  * the focused card, never from elsewhere in the window. A click on an answer picks it.
  */
+/**
+ * The free-text row's microphone: dictates into the row, as the composer's does into the
+ * composer; it stops (the words going into the row) or cancels while busy.
+ */
+function CardDictate({ owner, disabled }: { owner: string; disabled: boolean }) {
+  const { available, phase } = useDictation(owner);
+  if (!available) return null;
+  const recording = phase.type === "recording";
+  const busy = phase.type === "downloading" || phase.type === "starting" || phase.type === "transcribing";
+  return (
+    <TooltipIconButton
+      tooltip={recording ? "Stop dictation" : busy ? "Cancel dictation" : "Dictate"}
+      side="top"
+      type="button"
+      size="icon-md"
+      data-card-dictate={phase.type}
+      className="rounded-capsule"
+      disabled={disabled || phase.type === "transcribing"}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => (recording ? void stopDictation() : busy ? cancelDictation() : void startDictation(owner))}
+    >
+      {busy ? <Spinner className="size-icon-sm animate-spin motion-reduce:animate-none" /> : <Mic className={recording ? "size-icon-sm text-destructive" : "size-icon-sm"} />}
+    </TooltipIconButton>
+  );
+}
+
 function ChoiceCard({
   name,
   title,
@@ -726,6 +756,15 @@ function ChoiceCard({
   );
   const [chosen, setChosen] = useState<number | null>(null);
   const [typed, setTyped] = useState(initialText);
+  // Dictated words go after what is typed.
+  const owner = `card:${name}`;
+  const dictated = useEffectEvent((words: string) => {
+    const next = typed.trim() ? `${typed.trimEnd()} ${words}` : words;
+    setTyped(next);
+    onTyped?.(next);
+    setHighlight(-1);
+  });
+  useEffect(() => registerInserter(owner, async (words) => dictated(words)), [owner]);
   const card = useRef<HTMLElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -830,7 +869,8 @@ function ChoiceCard({
                   key={choice.label}
                   role="radio"
                   aria-checked={index === highlight}
-                  number={index + 1}
+                  // "Yes, implement this plan" alone: an empty square.
+                  number={name === "plan" ? null : index + 1}
                   label={choice.label}
                   description={choice.description ?? undefined}
                   recommended={choice.recommended}
@@ -875,6 +915,7 @@ function ChoiceCard({
             }}
             {...row(choices.length + 2)}
           >
+            <CardDictate owner={owner} disabled={busy} />
             <button
               type="button"
               className={actionButton(

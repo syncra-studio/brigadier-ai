@@ -49,6 +49,9 @@ mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "answerQuestion") calls.push({ method: req.method, cardId: req.cardId, answers: req.answers, input: req.input });
+  if (req.method === "getDictation") {
+    return { method: req.method, dictation: { available: true, model: "speech.bin", modelBytes: 1, installed: true, downloading: false, languages: [] } };
+  }
   if (req.method === "decidePlan") calls.push({ method: req.method, cardId: req.cardId, approve: req.approve, message: req.message });
   return { method: req.method };
 });
@@ -100,6 +103,13 @@ const focused = () =>
     : document.activeElement?.closest("[data-slot=action-card]") ? "card"
       : document.activeElement?.getAttribute("data-fixture") ?? document.activeElement?.tagName ?? null;
 const key = (name: string) => fixtureInput({ type: "key", key: name });
+/** Each answer's marker: its text, size and corners (a 20px square, outlined). */
+const markers = () =>
+  [...document.querySelectorAll<HTMLElement>("[data-slot=action-option] [data-slot=action-marker]")].map((marker) => {
+    const box = marker.getBoundingClientRect();
+    const style = getComputedStyle(marker);
+    return { text: marker.textContent, size: [Math.round(box.width), Math.round(box.height)], radius: Number.parseFloat(style.borderTopLeftRadius), border: Number.parseFloat(style.borderTopWidth) };
+  });
 
 /** Mounts a question or plan card, waits for it to take focus and finish opening. */
 async function mountCard(action: PendingAction) {
@@ -127,6 +137,10 @@ const results = {
   mountEnter: await run(async (seen) => {
     await mountCard(question);
     seen.focused = focused();
+    seen.markers = markers();
+    // The free-text row has a microphone where dictation can run.
+    await until("the microphone", () => document.querySelector("[data-card-dictate]") !== null).catch(() => {});
+    seen.mic = document.querySelector("[data-card-dictate]")?.textContent ?? null;
     seen.lit = lit();
     // The pointer passing over an answer lights nothing either.
     const first = document.querySelector("[data-slot=action-option]")!.getBoundingClientRect();
@@ -194,6 +208,7 @@ const results = {
   implementPlan: await run(async (seen, since) => {
     await mountCard({ type: "plan", id: "document" });
     seen.lit = lit();
+    seen.markers = markers();
     await key("Enter");
     await settle();
     seen.afterEnter = since();

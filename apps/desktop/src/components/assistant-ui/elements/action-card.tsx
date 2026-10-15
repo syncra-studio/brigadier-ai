@@ -250,16 +250,18 @@ export function ActionFileList({ files }: { files: { path: string; trailing?: Re
   );
 }
 
-/** The marker disc of a question row: its number, a dot once chosen, or ✎. */
-function Marker({ chosen, children }: { chosen?: boolean | undefined; children: ReactNode }) {
+/**
+ * The marker of a question row: a 20px outlined square with its number (empty for a lone
+ * answer), a dot once chosen; it stays outlined while its row is lit.
+ */
+function Marker({ chosen, children }: { chosen?: boolean | undefined; children?: ReactNode }) {
   return (
     <span
       aria-hidden
+      data-slot="action-marker"
       className={cn(
-        "rounded-capsule size-icon-button-md flex shrink-0 items-center justify-center self-start border text-xs leading-none font-medium",
-        chosen
-          ? "border-foreground bg-primary text-primary-foreground"
-          : "border-border bg-foreground/5 text-foreground/50",
+        "border-foreground/20 text-foreground/70 flex size-5 shrink-0 items-center justify-center self-start rounded-sm border text-xs leading-none font-medium",
+        chosen && "border-foreground text-foreground",
       )}
     >
       {chosen ? <span className="size-1.5 rounded-full bg-current" /> : children}
@@ -268,8 +270,8 @@ function Marker({ chosen, children }: { chosen?: boolean | undefined; children: 
 }
 
 /**
- * A numbered answer: its disc (a dot while it commits), label, "Recommended", a
- * description, → while highlighted or hovered.
+ * A numbered answer: its square (a dot while it commits; empty with no `number`), label,
+ * "Recommended", a description, → while highlighted or hovered.
  */
 export function ActionOption({
   number,
@@ -281,7 +283,8 @@ export function ActionOption({
   className,
   ...props
 }: Omit<ComponentProps<"button">, "children"> & {
-  number: number;
+  /** `null`: the card's only answer, its square left empty. */
+  number: number | null;
   label: string;
   description?: ReactNode;
   recommended?: boolean | undefined;
@@ -341,7 +344,7 @@ export function ActionFreeText({
 }: ComponentProps<"input"> & {
   children?: ReactNode;
   highlighted?: boolean;
-  /** The ✎ disc, for the row under numbered answers; a bare field has none. */
+  /** The ✎, for the row under numbered answers; a bare field has none. */
   marker?: boolean;
 }) {
   return (
@@ -356,9 +359,9 @@ export function ActionFreeText({
       )}
     >
       {marker && (
-        <Marker>
+        <span aria-hidden className="text-foreground/50 flex size-5 shrink-0 items-center justify-center">
           <Pencil className="size-icon-sm" />
-        </Marker>
+        </span>
       )}
       <input
         className="placeholder:text-foreground/50 min-w-0 flex-1 self-center bg-transparent outline-none"
