@@ -83,11 +83,10 @@ went wrong. Nothing of it lands. `reason` is required: one plain line on why, wh
 reads on the thread's \"Stopped\" row (e.g. \"No longer needed: the user dropped the export\").";
 
 const ASK_USER: &str = "Ask the user what only they can decide (a product choice, an unclear \
-requirement), as one card they answer at once: a round of 1 to 6 questions, each with 2 to 4 \
-options and the one you recommend (`recommended`). The user can always type their own answer \
-instead. This is the only way to ask the user anything: never ask in your reply's text. Returns \
-at once; reply with exactly [quiet] after it. The answers arrive as an [answer] message in the \
-same request. Name the task that waits for them in `task` so other work continues.";
+requirement) on one card: 1 to 6 questions, each with 2 to 4 options and the one you recommend; \
+they can always type their own answer. The only way to ask the user anything, never in your \
+text. Returns at once: reply with exactly [quiet]; the answers come as an [answer] message in \
+this request. `task`: the task that waits for them, so other work continues.";
 
 const READ_REPORT: &str = "Read a task's final report again: summary, changes, decisions, \
 verification, open questions and artifact ids. A report from another session of this project \
@@ -98,12 +97,11 @@ transcript, diff, command output, note), from any session of this project, by it
 reply gives the total size so you can page. Read only what you need: everything you read enters \
 your context.";
 
-const QUERY_BRAIN: &str = "Ask the Project Brain: what Brigadier knows about this project \
-(its modules and services, earlier scout and research findings, decisions, conventions, \
-contracts) and the user's preferences, each with where it came from. Fast and cheap: ask it \
-first, and delegate a scout only when it has no answer or marks its answer stale. It answers with \
-what holds now; set `history` to also see earlier versions and why they changed. When it says \
-there are more results, ask again with `page`.";
+const QUERY_BRAIN: &str = "Ask the Project Brain what Brigadier knows about this project (modules, \
+earlier findings, decisions, conventions, contracts) and the user's preferences, each with \
+where it came from. Fast and cheap: ask it first; when it has nothing or marks a line stale, \
+read the code yourself. It answers with what holds now (`history` adds earlier versions; `page` \
+the next results).";
 
 const REMEMBER: &str = "Keep something that later work must respect: a decision the user \
 settled or you made, a convention of this project, a contract between parts, or (personal) a \
@@ -230,13 +228,11 @@ refuses on a question, a condition, a \"no\" or a \"wait\", or consent already u
 tells you [merge due] once they land: call it again then, without asking. Never merge on \
 silence. The session keeps its worktree and branch after the merge. Returns when merged.";
 
-const NOTE_FOR_USER: &str = "Keep the user's session summary current. kind \"decided\": a \
-judgement call you made on the user's behalf that they would want to know (a product or scope \
-choice they didn't settle), with why; it shows under \"Decided for you\". kind \"waiting\": \
-during an overnight run only, something only the user can do (a key, a sign-in, an account, a \
-push), in one line, for the run's \"Waiting on you\" list; outside a run it is refused: say it \
-in your answer instead. Brigadier lists its own decisions and, in a run, the workers' needs_user \
-items itself: don't repeat them. Returns at once.";
+const NOTE_FOR_USER: &str = "Keep the user's session summary current: kind \"decided\" for a \
+judgement call you made on their behalf that they'd want to know, with why (\"Decided for \
+you\"); kind \"waiting\", during an overnight run only, for what only the user can do (a key, \
+a sign-in), in one line. Brigadier lists its own decisions and the workers' needs itself: don't \
+repeat them. Returns at once.";
 
 const CI_STATUS: &str = "After a push of yours (`git push`), say which commit and branch went \
 to which remote: it answers at once whether this repository's CI can be watched from here \
@@ -309,27 +305,21 @@ would let you do. Not for what Full access wouldn't fix (a missing key, a failin
 outward step only the user takes). Refused when the session already has Full access. Returns at \
 once; the user's switch, if they make it, arrives as a change of this session's setting.";
 
-const RUN: &str = "Run a shell command and get its result: use it for builds, tests, logs and \
-long listings, anything that prints a lot. It runs with this session's access, in the same \
-sandbox as your own shell, in `workdir` (the workspace by default; it must be inside the \
-workspace or your scratch folder). The whole output is kept: up to 8 KB comes back as it is, \
-longer output as a digest (the exit status, the error and warning lines, the first and last \
-lines) with an out-… id; page through the rest with read_artifact. `timeout_secs` defaults to \
-600 (at most 1800); the command is stopped then. A command still going after a minute goes on \
-in the background: the call returns its run-N id, and its result comes to you as a message in \
-the same request, so you never wait on it or run it again.";
+const RUN: &str = "Run a shell command and get its result: builds, tests, logs, long \
+listings. It runs with this session's access and sandbox, in `workdir` (the workspace, a folder \
+in it, or your scratch folder). Up to 8 KB of output comes back as it is, more as a digest (the \
+exit status, the error and warning lines, the first and last lines) with an out-… id for \
+read_artifact. A command still going after a minute goes on in the background: the call \
+returns its run-N id and the result comes as a message in this request; never wait for it or \
+run it again.";
 
 const RUN_CHECK: &str = "Run a check (tests, lint, typecheck, build, formatting) in your \
-checkout and get its result: use it for every check rather than your shell. A check that \
-already ran on the same files (committed or not) answers at once from the cache, and says so; \
-`rerun: true` runs it again. Call it first with no `command`: it answers with the checks your \
-changes call for (the changed packages and those that depend on them) and runs nothing. It runs \
-with your access in `workdir` (relative to your checkout's root, the root by default). Up to 8 KB \
-of output comes back as it is, longer output as a digest (the exit status, the error and warning \
-lines, the first and last lines) with where to read the whole of it. `timeout_secs` defaults to \
-600 (at most 1800); the command is stopped then. The thread's check still going after a minute \
-goes on in the background: the call returns its run-N id, and its result comes as a message in \
-the same request.";
+checkout, rather than in your shell. One that already ran on the same files answers from the \
+cache and says so (`rerun` runs it again). With no `command` it lists the checks your changes \
+call for and runs nothing. A pass with a long output comes back as its warnings and last lines, \
+a failure over 8 KB as a digest of its errors, each with where the whole output is. The \
+thread's check still going after a minute goes on in the background: the call returns its \
+run-N id and the result comes as a message in this request.";
 
 const RUN_UNSANDBOXED: &str = "Like run, but outside the sandbox, for a command the sandbox \
 blocked (the network, files outside the workspace): it waits for approval first, decided on \
