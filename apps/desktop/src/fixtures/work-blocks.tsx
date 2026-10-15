@@ -448,6 +448,29 @@ async function drivePlan(): Promise<object> {
   return { ended, closed, remounted: seen() };
 }
 
+/** A finished turn with a call the user denied: "1 denied action" in its header shows it. */
+async function driveDenied(): Promise<object> {
+  await settle(600);
+  const push = { ...tool("push", 1.3, "Bash", "git push origin main", "completed"), kind: { type: "tool", itemId: "push", name: "Bash", status: "failed", detail: "git push origin main", throughPosition: 1.3 } } as OrchestratorStep;
+  steps([...daemon.steps, push]);
+  const deny = { ...approval, id: "deny", state: { type: "denied" }, resolvedAtMs: begun + 1500 } as unknown as ShownApproval;
+  const answer: Message = {
+    id: "a1", conversationId: ID, seq: 2, role: "assistant", blob: null, createdAtMs: begun + 5000, attachments: [], mentions: [],
+    text: "I left the push to you.", model: null, requestId: "r1", parentId: "r1", answerAtMs: begun + 5000,
+  };
+  daemon.messages = [...daemon.messages, answer];
+  daemon.run = "idle";
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change(() => ({ run: "idle", runRequest: null, approvals: { deny } }));
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 5000, worked: [{ fromMs: begun, toMs: begun + 5000 }] });
+  await settle();
+  const before = { denied: text(one("[data-slot=request-denied]", turn() ?? document)), fold: seen().fold };
+  one<HTMLButtonElement>("[data-slot=request-denied]", turn() ?? document)?.click();
+  await settle(600);
+  const row = one("[data-step-state=declined]", turn() ?? document);
+  return { before, fold: seen().fold, row: text(row) };
+}
+
 async function driveQueue(): Promise<object> {
   await settle(600);
   // The composer's editor comes in its own chunk after a plain field and takes the focus a beat
@@ -529,7 +552,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

@@ -96,7 +96,7 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, detail,
     <ThreadActivity
       data-slot={slot}
       data-kind={words.kind}
-      data-step-state={stopped ? "stopped" : running ? "running" : undefined}
+      data-step-state={stopped ? "stopped" : running ? "running" : status === "declined" ? "declined" : undefined}
       detail={detail}
       onOpenChange={setOpen}
       detailClassName={cn(ROW_DETAIL, "ps-0")}

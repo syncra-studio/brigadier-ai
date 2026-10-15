@@ -98,6 +98,13 @@ test("a turn that ends in a plan keeps its work open, and the user's choice outl
   assert.deepEqual([seen.ended.fold, seen.closed.fold, seen.remounted.fold], ["open", "gone", "gone"]);
 });
 
+test("a turn's denied calls are counted in its header, which opens the work to the first", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ before: { denied: string | null; fold: string }; fold: string; row: string | null }>(t, "drive=denied");
+  assert.deepEqual(seen.before, { denied: "1 denied action", fold: "gone" });
+  assert.equal(seen.fold, "open");
+  assert.match(seen.row ?? "", /git push origin main/);
+});
+
 test("a message steered in before the turn did anything sits under the first, above its header", { timeout: 120000 }, async (t) => {
   const seen = await drive<{ bubble: string | null; above: boolean; header: string | null; status: string | null; stillAbove: boolean }>(t, "drive=early");
   assert.match(seen.bubble ?? "", /Use banker's rounding instead/);

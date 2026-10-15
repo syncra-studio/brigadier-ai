@@ -16,7 +16,7 @@ import {
   Stop,
   TextShorterConcise,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { type ComponentProps, type ComponentType, type FC, Fragment, lazy, type MouseEvent, Suspense, useCallback, useEffect, useState } from "react";
+import { type ComponentProps, type ComponentType, type FC, Fragment, lazy, type MouseEvent, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { ThinkingLine } from "@/app/conversation/ThinkingLine";
@@ -224,7 +224,10 @@ const WorkHeader: FC<{
   /** When its final answer started, where its time stops. */
   answerAtMs: number | undefined;
   onToggle: () => void;
-}> = ({ meta, phase, open, foldable, quota, waitingFor, answering, answerAtMs, onToggle }) => {
+  /** Its calls the user denied: "{n} denied actions" on the right, which shows the first. */
+  denied: number;
+  onDenied: () => void;
+}> = ({ meta, phase, open, foldable, quota, waitingFor, answering, answerAtMs, onToggle, denied, onDenied }) => {
   const phaseElapsed = useElapsed(phase?.startedAtMs ?? 0, phase?.endedAtMs ?? null, !!phase && !phase.settled);
   const now = useTicking(!phase && isLive(meta.state));
   const elapsed = phase ? phaseElapsed : turnTime(meta, now, answerAtMs);
@@ -250,20 +253,31 @@ const WorkHeader: FC<{
   );
   // The label, 8px, then a hairline rule across the column.
   const rule = "border-work-rule flex items-center border-b pb-2";
+  const deniedButton = denied > 0 && (
+    <button
+      type="button"
+      data-slot="request-denied"
+      onClick={onDenied}
+      className="text-foreground/50 hover:text-foreground focus-visible:text-foreground ms-auto shrink-0 text-sm leading-(--spacing-activity-row) tabular-nums transition-colors"
+    >
+      {denied === 1 ? "1 denied action" : `${denied} denied actions`}
+    </button>
+  );
   if (!foldable) {
     return (
       <div data-slot="request-work-header" className={rule}>
         {text}
+        {deniedButton}
       </div>
     );
   }
-  return (
+  const toggle = (
     <button
       type="button"
       data-slot="request-work-header"
       aria-expanded={open}
       onClick={onToggle}
-      className={cn(rule, "group gap-1 text-start")}
+      className={cn(deniedButton ? "flex items-center" : rule, "group gap-1 text-start")}
     >
       {text}
       <ChevronRightAlt
@@ -274,6 +288,13 @@ const WorkHeader: FC<{
         )}
       />
     </button>
+  );
+  if (!deniedButton) return toggle;
+  return (
+    <div className={cn(rule, "gap-3")}>
+      {toggle}
+      {deniedButton}
+    </div>
   );
 };
 
@@ -479,7 +500,9 @@ const ActivityItems: FC<{
   requestIds: readonly string[];
   /** A follow-up was steered in after this work: its groups sum up at once. */
   summary: boolean;
-}> = ({ activity, live, thought, streaming, commentary, requestIds, summary }) => {
+  /** The header's "{n} denied actions" was clicked: the groups holding them open. */
+  revealDenied: boolean;
+}> = ({ activity, live, thought, streaming, commentary, requestIds, summary, revealDenied }) => {
   const head = useThreadStatusHead(live);
   // Under a message just steered in, with what ran before it summed up, it thinks: even while that still runs.
   const line: (StatusHead & { thought?: boolean }) | null = !live
@@ -511,10 +534,10 @@ const ActivityItems: FC<{
   // What waits on the user, or a retry stalling the turn, still shows.
   const shownLine = going && line?.tone !== "needsYou" && !RETRYING.has(line?.text ?? null) ? null : line;
   // A call the user's Deny stopped reads as declined, not failed.
+  const denied = (step: LeadStep) =>
+    !!approvals && step.kind.type === "tool" && deniedCall(step.kind, step.atMs, requestIds, Object.values(approvals));
   const shown = (step: LeadStep): LeadStep =>
-    approvals && step.kind.type === "tool" && deniedCall(step.kind, step.atMs, requestIds, Object.values(approvals))
-      ? { ...step, kind: { ...step.kind, status: "declined" } }
-      : step;
+    denied(step) && step.kind.type === "tool" ? { ...step, kind: { ...step.kind, status: "declined" } } : step;
   return (
     <>
       {activity.map((item, index) =>
@@ -527,7 +550,10 @@ const ActivityItems: FC<{
             summary={summary}
             describe={(step) => describePeerStep(step, peers, step === going) ?? describeLeadStep(shown(step), tasks)}
             renderStep={(step, key) => <Fragment key={key}>{peerStepRow(step, step === going) ?? <LeadStepRow step={shown(step)} />}</Fragment>}
-            reveal={revealing ? (step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing) : undefined}
+            reveal={revealing || revealDenied
+              ? (step) => (!!revealing && step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing))
+                || (revealDenied && denied(step))
+              : undefined}
           />
         ) : (
           <SequenceEntry key={entryKey(item.entry)} entry={item.entry} streaming={streaming(item.entry)} commentary={commentary(item.entry)} />
@@ -612,6 +638,23 @@ const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
 export const RequestBlock: FC = () => {
   const meta = useAuiState((s) => s.message.metadata.custom["block"]) as BlockMeta | undefined;
   const fold = useFold(meta?.requestId ?? null);
+  const body = useRef<HTMLDivElement>(null);
+  // The calls of its own the user denied, and the header's ask to show them.
+  const deniedCount = useBoard((s) => {
+    const approvals = Object.values(s.board?.approvals ?? {});
+    if (!meta || approvals.length === 0) return 0;
+    return meta.orchestratorSteps.filter((step) => step.kind.type === "tool" && deniedCall(step.kind, step.atMs, meta.requestIds, approvals)).length;
+  });
+  const [revealDenied, setRevealDenied] = useState(false);
+  useEffect(() => {
+    if (!revealDenied) return;
+    // Once the work and the groups holding them have opened: the first in view, then ready for another click.
+    const timer = window.setTimeout(() => {
+      body.current?.querySelector("[data-step-state=declined]")?.scrollIntoView({ block: "center" });
+      setRevealDenied(false);
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [revealDenied]);
   // A jump to a message this turn sent opens its work.
   const revealing = useRevealing(useViewConversation()?.id ?? null);
   const holds = !!revealing && !!meta?.orchestratorSteps.some((step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing));
@@ -709,7 +752,7 @@ export const RequestBlock: FC = () => {
       {!phase && <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />}
       {/* A step still running when the user stopped the turn reads "Stopped …". */}
       <StoppedBy.Provider value={meta.state === "stopped" ? { atMs: meta.endedAtMs } : null}>
-      <div data-slot="request-body" className="flex min-w-0 flex-col">
+      <div ref={body} data-slot="request-body" className="flex min-w-0 flex-col">
         {before.length > 0 && (
           <div data-slot="request-leading-steers" className="gap-activity pb-activity flex min-w-0 flex-col">
             {before.map((part) => part.type === "steer" && <SequenceEntry key={entryKey(part.entry)} entry={part.entry} streaming={false} />)}
@@ -726,6 +769,11 @@ export const RequestBlock: FC = () => {
             answering={answering !== null}
             answerAtMs={answerAtMs}
             onToggle={() => fold.set(!open)}
+            denied={deniedCount}
+            onDenied={() => {
+              fold.set(true);
+              setRevealDenied(true);
+            }}
           />
         )}
         {/* The work, cut at the user's follow-ups: each run of it folds on its own, and the
@@ -751,6 +799,7 @@ export const RequestBlock: FC = () => {
                   commentary={commentary}
                   // A follow-up steered in after it: the work before it is over, whatever still runs.
                   summary={parts.slice(index + 1).some((next) => next.type === "steer")}
+                  revealDenied={revealDenied}
                 />
               </div>
             </WorkFold>
