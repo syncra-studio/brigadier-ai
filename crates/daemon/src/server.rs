@@ -596,8 +596,10 @@ impl Session {
                 });
                 return Ok(Flow::Continue);
             }
-            // Long: answered beside the connection's other requests.
-            request @ (Request::ScanStorage { .. }
+            // Long: answered beside the connection's other requests. A site's icon waits on the
+            // site itself, which may take its whole timeout.
+            request @ (Request::SiteIcon { .. }
+            | Request::ScanStorage { .. }
             | Request::PreviewDelete { .. }
             | Request::CleanStorage { .. }
             | Request::PreviewRemoveProject { .. }
