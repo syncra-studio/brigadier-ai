@@ -678,6 +678,21 @@ is built in D1.0.
 
 Each ships only if V1 or V3 shows a gain at equal quality.
 
+**As probed:**
+- **B4.** On V3 e1 at `e4711fff`, the thread's first call already read 9,366 of its 17,224-token start from another
+  session's cache (Claude Code's static part) and wrote 7,858.
+  - The flag alone moves only Claude Code's few per-machine sections, since the thread's instructions open with the
+    session's own lines (project, repository, workspace, branch).
+  - Sharing the whole start needs those lines moved into the first message, under rule R. That would turn about 7.8k
+    of writes into reads on a session's or a rebirth's first call, with raw tokens unchanged, so it would not move the
+    gate.
+  - Not built; filed as a follow-up with these numbers.
+- **B2.** On the same run, every tool result the thread read came to 8.9 kB (about 2.2k tokens over 6 calls), most of
+  it whole small files read with `cat`. Precise reads could save under 2k tokens an ask on V3 and the bench
+  fixture, inside the spread. Not built.
+- **B7.** The thread does the work itself since phase B: V3 started no scouts, so a verified scout brief has nothing
+  to save there (0 worker starts in all 27 of phase B's V3 runs). Not built; revisit when V1 shows scouts again.
+
 **C7. The session's own worktree starts warm (added in phase C, approved).** It gets the copy-on-write copies of the
 checkout's dependency installs and build caches that a worker's worktree gets (`warm`), and the thread hears so in a
 `[workspace]` note. Every Brigadier bench run at phase B's head lost two calls to a first check failing on a missing
