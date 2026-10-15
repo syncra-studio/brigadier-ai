@@ -406,6 +406,26 @@ const steps = {
     await settle(100);
     return { before, ...found, after: toggle(), place: activePlace() };
   },
+  /** A match at the top of a box that scrolls on its own, scrolled to its end: the box scrolls to it, then the thread. */
+  async inner() {
+    const answers = [...document.querySelectorAll('[data-slot="aui_assistant-message-content"]')];
+    const box = document.createElement("div");
+    box.className = "max-h-shell-output overflow-y-auto";
+    const lines = document.createElement("pre");
+    lines.textContent = ["A walrus on the first line.", ...Array.from({ length: 40 }, (_, index) => `filler ${index + 1}`)].join("\n");
+    box.append(lines);
+    answers.at(-2)?.append(box);
+    box.scrollTop = box.scrollHeight;
+    await settle(300);
+    const found = await find("walrus");
+    const range = activeMatch();
+    const rect = range?.getBoundingClientRect();
+    const sides = box.getBoundingClientRect();
+    const inBox = !!rect && rect.top >= sides.top && rect.bottom <= sides.bottom;
+    box.remove();
+    await settle(300);
+    return { label: found.label, inBox, inView: found.place?.inView ?? false };
+  },
   /** Esc closes the bar and clears the marks. */
   async closed() {
     press(field()!, "Escape");

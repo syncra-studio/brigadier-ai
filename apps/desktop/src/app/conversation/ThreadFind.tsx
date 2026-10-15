@@ -238,6 +238,14 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
       const barBottom = bar.current ? bar.current.getBoundingClientRect().bottom : box.top;
       const top = Math.max(box.top, barBottom) + CLEAR_PX;
       const bottom = Math.max(top, box.bottom - footer - CLEAR_PX);
+      // In a box that scrolls on its own (a Shell box's output, an opened group's list): each, the
+      // innermost first, brings the match to its middle, before the thread does.
+      for (let own = range.startContainer.parentElement; own && own !== viewport && viewport.contains(own); own = own.parentElement) {
+        if (own.scrollHeight <= own.clientHeight + 1 || !/auto|scroll/.test(getComputedStyle(own).overflowY)) continue;
+        const sides = own.getBoundingClientRect();
+        const at = range.getBoundingClientRect();
+        if (at.top < sides.top || at.bottom > sides.bottom) own.scrollTop += at.top - sides.top - (sides.height - at.height) / 2;
+      }
       const rect = range.getBoundingClientRect();
       // In a code block that scrolls sideways: it scrolls to the match.
       const pre = range.startContainer.parentElement?.closest("pre");

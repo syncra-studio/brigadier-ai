@@ -31,6 +31,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
     none: Found & { previous: boolean | null; next: boolean | null };
     folded: Found;
     clipped: Found & { before: string | null; after: string | null };
+    inner: { label: string | null; inBox: boolean; inView: boolean };
     closed: { bar: boolean; matches: boolean; active: boolean };
     multiline: { value: string | null; label: string | null; size: number; closedByButton: boolean };
   };
@@ -114,6 +115,8 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   shownCentred(seen.clipped.place, "marmalade");
 
   // Esc closes the bar and clears the marks.
+  // A match in a box that scrolls on its own, out of its sight: the box and the thread bring it into view.
+  assert.deepEqual(seen.inner, { label: "1 / 1 result", inBox: true, inView: true });
   assert.deepEqual(seen.closed, { bar: false, matches: false, active: false });
 
   // A selection over two lines opens the bar with no text; × closes it.
