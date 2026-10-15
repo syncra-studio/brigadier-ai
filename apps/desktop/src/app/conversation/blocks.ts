@@ -74,7 +74,8 @@ export function isUpdate(text: string): boolean {
  * it. An older task's checks open from its row; an older overnight phase's checks are workers
  * like any other.
  */
-export type BlockRow = { type: "task"; taskId: string; taskIds?: string[]; kind?: WorkerStepKind; position: number };
+/** `wave`: a start whose workers have all come to the same later word, said by the start's own row. */
+export type BlockRow = { type: "task"; taskId: string; taskIds?: string[]; kind?: WorkerStepKind; position: number; wave?: boolean };
 
 /**
  * A judgement call made on the user's behalf, shown as a quiet row among the orchestrator's.
@@ -1020,7 +1021,33 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     }
     merged.push(entry);
   }
-  return merged;
+  return waves(merged);
+}
+
+/**
+ * Workers started together are one row: once every one of them has come to the same later word
+ * ("finished"), the start's row says it ("Count math and Count strings finished") and the rows
+ * that said it of each go. Until then each later word has its own row.
+ */
+function waves(entries: SequenceEntry[]): SequenceEntry[] {
+  const gone = new Set<SequenceEntry>();
+  entries.forEach((start, index) => {
+    if (start.kind !== "row" || lifecycleWord(start.row.kind) !== "started") return;
+    const wave = new Set(start.row.taskIds ?? [start.row.taskId]);
+    const later = entries.slice(index + 1).filter((entry): entry is Extract<SequenceEntry, { kind: "row" }> =>
+      entry.kind === "row" && !gone.has(entry) && lifecycleWord(entry.row.kind) !== "started"
+      && (entry.row.taskIds ?? [entry.row.taskId]).every((id) => wave.has(id)));
+    // The newest word every worker of the wave came to.
+    const last = later.at(-1);
+    if (!last) return;
+    const word = lifecycleWord(last.row.kind);
+    const same = later.filter((entry) => lifecycleWord(entry.row.kind) === word);
+    const reached = new Set(same.flatMap((entry) => entry.row.taskIds ?? [entry.row.taskId]));
+    if (reached.size !== wave.size) return;
+    start.row = { ...start.row, ...(last.row.kind && { kind: last.row.kind }), wave: true };
+    for (const entry of same) gone.add(entry);
+  });
+  return entries.filter((entry) => !gone.has(entry));
 }
 
 /**

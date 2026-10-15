@@ -130,7 +130,7 @@ export const TeamSentence: FC<{ row: BlockRow }> = ({ row }) => {
       data-slot="task-row"
       data-kind={word}
       className={ROW}
-      detail={word === "started" ? <Briefs tasks={known} /> : undefined}
+      detail={word === "started" || row.wave ? <Briefs tasks={known} /> : undefined}
       detailClassName={cn(ROW_DETAIL, "max-h-none")}
     >
       <Glyphs taskIds={ids} />

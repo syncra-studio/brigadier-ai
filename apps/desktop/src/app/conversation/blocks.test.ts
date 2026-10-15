@@ -421,7 +421,7 @@ test("a run's report shows, and copies, as its message was written", () => {
   assert.equal(shown?.text, stored);
 });
 
-test("stored lifecycle events merge when adjacent and of one word: starts with starts, finishes with finishes", () => {
+test("workers started together are one row, which says they finished once they all have", () => {
   const user = { ...messages[0]!, id: "life", requestId: "life", seq: 1 };
   const one = { ...byNumber(1), id: "one", requestId: "life", position: 2 };
   const two = { ...byNumber(1), id: "two", requestId: "life", position: 3 };
@@ -433,11 +433,14 @@ test("stored lifecycle events merge when adjacent and of one word: starts with s
       { taskId: "one", requestId: "life", kind: "finished", position: 5, atMs: 40 },
       { taskId: "one", requestId: "life", kind: "landed", position: 6, atMs: 50 },
     ] };
-  const rows = sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) => entry.kind === "row" ? [entry.row] : []);
-  assert.equal(rows.length, 2);
-  assert.deepEqual(rows[0]?.taskIds, ["one", "two"]);
-  assert.deepEqual(rows.map((row) => row.kind), ["started", "finished"]);
-  assert.deepEqual(rows[1]?.taskIds, ["two", "one"]);
+  const rows = (steps: BoardDigest["workerSteps"]) =>
+    sequence(buildBlocks([user], {}, false, { ...replay, workerSteps: steps }, [])[0]!).flatMap((entry) => entry.kind === "row" ? [entry.row] : []);
+  const all = rows(replay.workerSteps);
+  assert.equal(all.length, 1);
+  assert.deepEqual([all[0]?.taskIds, all[0]?.kind, all[0]?.position, all[0]?.wave], [["one", "two"], "finished", 2, true]);
+  // One of them finished so far: the start's row stands, and the finish has its own.
+  const half = rows(replay.workerSteps.slice(0, 3));
+  assert.deepEqual(half.map((row) => [row.kind, row.taskIds ?? [row.taskId]]), [["started", ["one", "two"]], ["finished", ["two"]]]);
 });
 
 const teamStep = (position: number, kind: OrchestratorStep["kind"]): OrchestratorStep => ({ requestId: "team", atMs: position, position, kind });
