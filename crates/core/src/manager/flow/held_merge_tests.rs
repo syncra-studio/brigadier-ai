@@ -832,7 +832,12 @@ async fn fixed_by_the_thread(
                             format!("# B\n{}", super::thread_tests::reviewed_notes())
                         }
                     };
-                    commit_in_workspace(&turn, "B.md", &text, message);
+                    // Other work goes in a file of code: the review line counts no docs (Q48).
+                    let file = match fix {
+                        OwnFix::Named { .. } => "B.md",
+                        OwnFix::Unnamed => "notes-b.txt",
+                    };
+                    commit_in_workspace(&turn, file, &text, message);
                     let high = fix == OwnFix::Named { high: true };
                     let reply = turn
                         .call(

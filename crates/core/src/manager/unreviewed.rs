@@ -9,10 +9,10 @@
 //!   request started (or after the last review) to a snapshot of them now
 //!   ([`brigadier_git::Repo::snapshot_files`]: a commit no ref names, written without the
 //!   user's index, HEAD, refs or files). It is recorded, so a restart keeps it.
-//! - **The size line** ([`REVIEW_LINE`]): once the range changes that many lines, or more than
-//!   that many files besides tests and docs ([`counts_as_a_file`]), one review of the whole
-//!   range starts in the background, and the range starts again after it. A smaller range gets
-//!   none: the thread's own checks cover it.
+//! - **The size line** ([`REVIEW_LINE`]): once the range changes that many lines of code, or
+//!   more than that many files of code (tests and docs aside, [`counts_as_a_file`]), one review
+//!   of the whole range starts in the background, and the range starts again after it. A
+//!   smaller range gets none: the thread's own checks cover it.
 //! - **The risky mark**: `run_check`'s `risky` makes the range owe a review whatever its size.
 //! - **Before the final answer** (C2): `run_check`, which the thread calls before it answers,
 //!   brings the range up to date first, its uncommitted changes in a worktree included (from
@@ -32,12 +32,12 @@ use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, DomainEvent, Environment, Setup};
 use crate::work::{ReviewFor, ReviewKind, ReviewRun, ReviewState, UnreviewedRange};
 
-/// Where an unreviewed range gets its review: this many changed lines (added and removed) or
-/// more, or more than this many files besides tests and docs. A cheap rule, tuned from
-/// measurements (V1).
+/// Where an unreviewed range gets its review: this many changed lines of code (added and
+/// removed) or more, or more than this many files of code, tests and docs aside (the user,
+/// Q48). A cheap rule, tuned from measurements (V1).
 pub(crate) const REVIEW_LINE: SizeLine = SizeLine {
-    lines: 30,
-    files: 2,
+    lines: 150,
+    files: 5,
 };
 
 /// The size line of [`REVIEW_LINE`].
@@ -57,16 +57,15 @@ impl SizeLine {
 /// How big a range is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Size {
-    /// Every changed line, tests and docs included.
+    /// The lines of code changed, tests and docs aside.
     lines: u32,
-    /// The files changed, tests and docs aside.
+    /// The files of code changed, tests and docs aside.
     files: usize,
 }
 
-/// Whether a changed file counts toward the size line's files. A test or a doc that goes with
-/// a small change doesn't make it big enough for a review (its lines still count): a file
-/// under a `test`, `tests`, `__tests__` or `docs` folder, a `*_test(s).rs`, a
-/// `*.test.{ts,tsx,js,jsx}` or a `*.md`.
+/// Whether a changed file is code, which the size line counts. A test or a doc that goes with
+/// a change doesn't make it big enough for a review: a file under a `test`, `tests`,
+/// `__tests__` or `docs` folder, a `*_test(s).rs`, a `*.test.{ts,tsx,js,jsx}` or a `*.md`.
 pub(crate) fn counts_as_a_file(path: &str) -> bool {
     let mut parts: Vec<&str> = path.split('/').collect();
     let name = parts.pop().unwrap_or_default();
@@ -153,13 +152,17 @@ impl SessionManager {
         })
         .await
         .ok()?;
+        let code: Vec<_> = stat
+            .files
+            .iter()
+            .filter(|file| counts_as_a_file(&file.path))
+            .collect();
         Some(Size {
-            lines: stat.insertions.saturating_add(stat.deletions),
-            files: stat
-                .files
-                .iter()
-                .filter(|file| counts_as_a_file(&file.path))
-                .count(),
+            lines: code.iter().fold(0u32, |sum, file| {
+                sum.saturating_add(file.insertions)
+                    .saturating_add(file.deletions)
+            }),
+            files: code.len(),
         })
     }
 
@@ -685,12 +688,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_size_line_is_thirty_lines_or_more_than_two_files() {
+    fn the_size_line_is_150_lines_or_more_than_five_files_of_code() {
         assert!(!REVIEW_LINE.crossed(10, 1));
-        assert!(!REVIEW_LINE.crossed(29, 2));
-        assert!(REVIEW_LINE.crossed(30, 1));
-        assert!(REVIEW_LINE.crossed(3, 3));
-        assert!(REVIEW_LINE.crossed(40, 3));
+        assert!(!REVIEW_LINE.crossed(149, 5));
+        assert!(REVIEW_LINE.crossed(150, 1));
+        assert!(REVIEW_LINE.crossed(6, 6));
+        assert!(!REVIEW_LINE.crossed(40, 3));
     }
 
     #[test]

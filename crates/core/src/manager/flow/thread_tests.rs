@@ -680,7 +680,7 @@ async fn a_thread_commit_is_reviewed_once() {
                 if turn.input.contains("Add notes.") {
                     let start = git(&turn.add_dirs[0], &["rev-parse", "HEAD"]);
                     let tip =
-                        commit_in_workspace(&turn, "NOTES.md", &reviewed_notes(), "Add notes");
+                        commit_in_workspace(&turn, "notes.txt", &reviewed_notes(), "Add notes");
                     made.lock().unwrap().extend([start, tip]);
                     return Reply::text("Added NOTES.md.");
                 }
@@ -747,7 +747,7 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
                         let start = git(&turn.add_dirs[0], &["rev-parse", "HEAD"]);
                         let tip = commit_in_workspace(
                             &turn,
-                            "NOTES.md",
+                            "notes.txt",
                             &reviewed_notes(),
                             "Add notes\n\nBrigadier-Author: thread",
                         );
@@ -825,7 +825,15 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
         .thread_metrics(&flow.conversation)
         .await
         .unwrap();
-    assert_eq!(edits(metrics), (1, 30, 0, false));
+    assert_eq!(
+        edits(metrics),
+        (
+            1,
+            i64::from(crate::manager::unreviewed::REVIEW_LINE.lines),
+            0,
+            false
+        )
+    );
     // Once the branch is merged and removed, the last count stands.
     git(
         &flow.repo,
@@ -842,7 +850,15 @@ async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_ow
         .thread_metrics(&flow.conversation)
         .await
         .unwrap();
-    assert_eq!(edits(metrics), (1, 30, 0, true));
+    assert_eq!(
+        edits(metrics),
+        (
+            1,
+            i64::from(crate::manager::unreviewed::REVIEW_LINE.lines),
+            0,
+            true
+        )
+    );
     flow.stop().await;
 }
 
@@ -869,7 +885,7 @@ async fn a_merge_counts_the_review_of_the_threads_own_commit() {
             if turn.input.contains("Add notes and merge.") {
                 commit_in_workspace(
                     &turn,
-                    "NOTES.md",
+                    "notes.txt",
                     &reviewed_notes(),
                     "Add notes\n\nBrigadier-Author: thread",
                 );
@@ -1272,7 +1288,7 @@ async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_
                     return Reply::text("The site runs.");
                 }
                 if turn.input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", &reviewed_notes(), "Add notes");
+                    commit_in_workspace(&turn, "notes.txt", &reviewed_notes(), "Add notes");
                     return Reply::text("Added NOTES.md.");
                 }
                 if turn.input.contains("[review of your commits") {

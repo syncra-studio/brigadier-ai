@@ -343,7 +343,7 @@ async fn a_review_of_the_threads_commit_keeps_a_quiet_request_working_until_it_e
         },
         script(|turn| async move {
             if turn.input.contains("Add notes.") {
-                commit_in_workspace(&turn, "NOTES.md", &reviewed_notes(), "Add notes");
+                commit_in_workspace(&turn, "notes.txt", &reviewed_notes(), "Add notes");
                 return Reply::text("[quiet]");
             }
             if turn.input.starts_with("[checks passed") {
@@ -413,7 +413,7 @@ async fn a_quiet_late_turn_leaves_an_answered_request_answered_while_its_review_
             async move {
                 log.lock().unwrap().push(turn.input.clone());
                 if turn.input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", &reviewed_notes(), "Add notes");
+                    commit_in_workspace(&turn, "notes.txt", &reviewed_notes(), "Add notes");
                     return Reply::text("Added the notes.");
                 }
                 if turn.input.contains("late addendum") {
@@ -505,7 +505,7 @@ async fn a_regenerated_quiet_turn_waits_for_its_review_despite_the_earlier_answe
                     if !answered.swap(true, Ordering::SeqCst) {
                         return Reply::text("Ready to add the notes.");
                     }
-                    commit_in_workspace(&turn, "NOTES.md", &reviewed_notes(), "Add notes");
+                    commit_in_workspace(&turn, "notes.txt", &reviewed_notes(), "Add notes");
                     return Reply::text("[quiet]");
                 }
                 if turn.input.starts_with("[checks passed") {

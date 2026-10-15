@@ -141,8 +141,13 @@ async fn conflicting_session(worker: Worker, sides: Sides) -> Flow {
                         commit_in_workspace(&turn, "README.md", "# Session\n", "Add notes");
                         commit_in_workspace(&turn, "notes-2.txt", "two\n", "Add notes two");
                         commit_in_workspace(&turn, "notes-3.txt", "three\n", "Add notes three");
-                        // README.md is a doc, no file of the review line's: three others cross it.
-                        commit_in_workspace(&turn, "notes-4.txt", "four\n", "Add notes four");
+                        // Big enough for the review line (Q48): 150 lines of code; README.md is a doc.
+                        commit_in_workspace(
+                            &turn,
+                            "notes-4.txt",
+                            &super::thread_tests::reviewed_notes(),
+                            "Add notes four",
+                        );
                         if sides.session_ignores {
                             commit_in_workspace(&turn, ".gitignore", "*.log\n*.tmp\n", "Ignore");
                         }

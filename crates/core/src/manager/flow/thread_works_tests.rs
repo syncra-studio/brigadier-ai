@@ -226,10 +226,14 @@ async fn a_session_from_before_hears_the_change_once_and_does_the_work_itself() 
                 }
                 if turn.input.contains("Add a greeting module.") {
                     let workspace = turn.add_dirs[0].clone();
+                    // Big enough for the review line (Q48): 150 changed lines of code.
+                    let greetings: String = (1..=150)
+                        .map(|n| format!("pub fn greet_{n}() -> &'static str {{ \"hi\" }}\n"))
+                        .collect();
                     for (file, text) in [
-                        ("greet.rs", "pub fn greet() -> &'static str { \"hi\" }\n"),
+                        ("greet.rs", greetings.as_str()),
                         ("lib.rs", "pub mod greet;\n"),
-                        ("main.rs", "fn main() { greet::greet(); }\n"),
+                        ("main.rs", "fn main() { greet::greet_1(); }\n"),
                     ] {
                         std::fs::write(workspace.join(file), text).unwrap();
                     }

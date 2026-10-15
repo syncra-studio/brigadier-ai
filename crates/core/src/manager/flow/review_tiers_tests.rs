@@ -91,8 +91,8 @@ async fn small_commits_of_one_request_get_one_review_of_their_combined_range() {
                 }
                 let reply = if turn.input.starts_with("Build the feature") {
                     let start = git(&turn.add_dirs[0], &["rev-parse", "HEAD"]);
-                    let one = commit(&turn, "a.txt", &lines("a", 10), "One");
-                    let two = commit(&turn, "b.txt", &lines("b", 10), "Two");
+                    let one = commit(&turn, "a.txt", &lines("a", 40), "One");
+                    let two = commit(&turn, "b.txt", &lines("b", 40), "Two");
                     seen.lock().unwrap().commits.extend([start, one, two]);
                     continue_request(&turn, "Continue the feature.").await;
                     "[quiet]".to_owned()
@@ -100,8 +100,8 @@ async fn small_commits_of_one_request_get_one_review_of_their_combined_range() {
                     // The turn before found the first two under the line: nothing reviewed.
                     let board = turn.host.core.board(&turn.conversation().unwrap()).await;
                     assert!(board.unwrap().reviews.is_empty());
-                    let three = commit(&turn, "a.txt", &lines("a2", 10), "Three");
-                    let four = commit(&turn, "c.txt", &lines("c", 10), "Four");
+                    let three = commit(&turn, "a.txt", &lines("a2", 40), "Three");
+                    let four = commit(&turn, "c.txt", &lines("c", 40), "Four");
                     seen.lock().unwrap().commits.extend([three, four]);
                     let check = turn.call("run_check", json!({"command": "true"})).await;
                     assert!(!check.is_error, "{}", check.text);
@@ -405,7 +405,7 @@ async fn the_answer_waits_for_the_reviews_findings_and_their_fix() {
             let seen = seen.clone();
             async move {
                 if turn.input.starts_with("Build the feature") {
-                    commit(&turn, "a.txt", &lines("a", 40), "Build the feature");
+                    commit(&turn, "a.txt", &lines("a", 160), "Build the feature");
                     let check = turn.call("run_check", json!({"command": "true"})).await;
                     assert!(check.text.contains("[review running]"), "{}", check.text);
                     seen.lock().unwrap().push("waited".into());
@@ -491,7 +491,7 @@ async fn a_change_checked_before_its_commit_is_reviewed_before_the_answer() {
                 let reply = if turn.input.starts_with("Add the region") {
                     let workspace = turn.add_dirs[0].clone();
                     for file in ["tax.ts", "rates.ts", "region.ts"] {
-                        std::fs::write(workspace.join(file), lines(file, 2)).unwrap();
+                        std::fs::write(workspace.join(file), lines(file, 60)).unwrap();
                     }
                     let check = turn.call("run_check", json!({"command": "true"})).await;
                     assert!(!check.is_error, "{}", check.text);
@@ -565,7 +565,7 @@ fn waiting_thread(answered: Arc<Mutex<Vec<String>>>) -> Script {
         let answered = answered.clone();
         async move {
             if turn.input.starts_with("Build the feature") {
-                commit(&turn, "a.txt", &lines("a", 40), "Build the feature");
+                commit(&turn, "a.txt", &lines("a", 160), "Build the feature");
                 let check = turn.call("run_check", json!({"command": "true"})).await;
                 assert!(check.text.contains("[review running]"), "{}", check.text);
                 return Reply::text("[quiet]");
@@ -713,7 +713,7 @@ async fn a_commit_that_fixes_a_snapshots_findings_gets_no_second_review() {
             let workspace = turn.add_dirs[0].clone();
             if turn.input.starts_with("Add the region") {
                 for file in ["tax.ts", "rates.ts", "region.ts"] {
-                    std::fs::write(workspace.join(file), lines(file, 4)).unwrap();
+                    std::fs::write(workspace.join(file), lines(file, 60)).unwrap();
                 }
                 let check = turn.call("run_check", json!({"command": "true"})).await;
                 assert!(check.text.contains("[review running]"), "{}", check.text);
@@ -725,7 +725,7 @@ async fn a_commit_that_fixes_a_snapshots_findings_gets_no_second_review() {
             {
                 std::fs::write(
                     workspace.join("tax.ts"),
-                    format!("// Tax\n{}", lines("tax.ts", 4)),
+                    format!("// Tax\n{}", lines("tax.ts", 60)),
                 )
                 .unwrap();
                 git(&workspace, &["add", "-A"]);
@@ -764,14 +764,14 @@ async fn a_commit_beyond_a_reviewed_snapshot_is_reviewed_only_from_the_snapshot(
             let workspace = turn.add_dirs[0].clone();
             if turn.input.starts_with("Add the region") {
                 for file in ["tax.ts", "rates.ts", "region.ts"] {
-                    std::fs::write(workspace.join(file), lines(file, 4)).unwrap();
+                    std::fs::write(workspace.join(file), lines(file, 60)).unwrap();
                 }
                 let check = turn.call("run_check", json!({"command": "true"})).await;
                 assert!(check.text.contains("[review running]"), "{}", check.text);
                 return Reply::text("[quiet]");
             }
             if turn.input.contains("found nothing") && !workspace.join("report.ts").exists() {
-                std::fs::write(workspace.join("report.ts"), lines("report.ts", 40)).unwrap();
+                std::fs::write(workspace.join("report.ts"), lines("report.ts", 160)).unwrap();
                 git(&workspace, &["add", "-A"]);
                 git(
                     &workspace,
@@ -815,5 +815,63 @@ async fn a_commit_beyond_a_reviewed_snapshot_is_reviewed_only_from_the_snapshot(
         names, "report.ts",
         "only what the commit added beyond the snapshot"
     );
+    flow.stop().await;
+}
+
+/// The review line (the user, Q48): 150 changed lines of code or more than 5 files of code,
+/// tests and docs aside. 145 lines over 5 code files, with a long test and a doc beside them,
+/// get no review; a sixth code file of a few lines in the same request crosses it.
+#[tokio::test]
+async fn the_review_line_is_150_lines_or_more_than_five_files_of_code() {
+    let checks: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = checks.clone();
+    let flow = Flow::start(
+        "review-tiers-q48",
+        Options::default(),
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("");
+                }
+                if turn.input.starts_with("Build the feature") {
+                    for file in ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"] {
+                        commit(&turn, file, &lines(file, 29), &format!("Add {file}"));
+                    }
+                    commit(&turn, "a.test.ts", &lines("test", 120), "Test it");
+                    commit(&turn, "docs/feature.md", &lines("doc", 40), "Document it");
+                    let check = turn.call("run_check", json!({"command": "true"})).await;
+                    seen.lock().unwrap().push(check.text);
+                    continue_request(&turn, "Add the sixth part.").await;
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("Add the sixth part.") {
+                    commit(&turn, "f.ts", &lines("f.ts", 3), "Add f.ts");
+                    let check = turn.call("run_check", json!({"command": "true"})).await;
+                    let waits = check.text.contains("[review running]");
+                    seen.lock().unwrap().push(check.text);
+                    return Reply::text(if waits { "[quiet]" } else { "Built it." });
+                }
+                if turn.input.contains("found nothing") {
+                    return Reply::text("Built it; the review found nothing.");
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    flow.say("Build the feature.").await;
+    flow.until("the answer", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.state == RequestState::Done)
+    })
+    .await;
+    let board = flow.settled().await;
+    let checks = checks.lock().unwrap().clone();
+    assert!(!checks[0].contains("[review running]"), "{}", checks[0]);
+    assert!(checks[1].contains("[review running]"), "{}", checks[1]);
+    assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
     flow.stop().await;
 }

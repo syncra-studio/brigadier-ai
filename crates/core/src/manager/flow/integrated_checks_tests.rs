@@ -63,6 +63,11 @@ fn started_in(repo: &Path) -> Vec<String> {
         .collect()
 }
 
+/// 60 lines naming `file`: three such files cross the review line (Q48).
+fn notes(file: &str) -> String {
+    (1..=60).map(|n| format!("{file} {n}\n")).collect()
+}
+
 fn hold(repo: &Path) -> PathBuf {
     repo.join(".git/hold-checks")
 }
@@ -960,7 +965,7 @@ fn reviewed_thread(
         let tips = tips.clone();
         async move {
             if turn.input.starts_with("Build it") {
-                let text: String = (1..=40).map(|n| format!("a {n}\n")).collect();
+                let text: String = (1..=160).map(|n| format!("a {n}\n")).collect();
                 tips.lock()
                     .unwrap()
                     .push(thread_commit(&turn, "a.txt", &text));
@@ -1125,7 +1130,7 @@ async fn a_local_checkouts_uncommitted_change_is_reviewed_and_checked_from_a_sna
                 if turn.input.contains("Change three files.") {
                     let workspace = turn.add_dirs[0].clone();
                     for file in ["a.txt", "b.txt", "c.txt"] {
-                        std::fs::write(workspace.join(file), format!("{file}\n")).unwrap();
+                        std::fs::write(workspace.join(file), notes(file)).unwrap();
                     }
                     // One of them staged by hand, as a user might have.
                     git(&workspace, &["add", "b.txt"]);
@@ -1190,7 +1195,7 @@ async fn a_local_checkouts_uncommitted_change_is_reviewed_and_checked_from_a_sna
     for file in ["a.txt", "b.txt", "c.txt"] {
         assert_eq!(
             git(&flow.repo, &["show", &format!("{}:{file}", review.tip)]),
-            file
+            notes(file).trim_end()
         );
     }
     // One full-check run, on that same snapshot, in the check checkout.
@@ -1232,7 +1237,7 @@ async fn a_review_fix_on_the_local_checkout_stays_uncommitted() {
                 if turn.input.contains("Change three files.") {
                     let workspace = workspace.unwrap();
                     for file in ["a.txt", "b.txt", "c.txt"] {
-                        std::fs::write(workspace.join(file), format!("{file}\n")).unwrap();
+                        std::fs::write(workspace.join(file), notes(file)).unwrap();
                     }
                     let check = turn.call("run_check", json!({"command": "true"})).await;
                     assert!(check.text.contains("[review running]"), "{}", check.text);
@@ -1331,7 +1336,7 @@ async fn a_dirty_local_checkouts_review_reads_only_the_requests_change() {
             if turn.input.contains("Change three files.") {
                 let workspace = turn.add_dirs[0].clone();
                 for file in ["b.txt", "c.txt", "d.txt"] {
-                    std::fs::write(workspace.join(file), format!("{file}\n")).unwrap();
+                    std::fs::write(workspace.join(file), notes(file)).unwrap();
                 }
                 std::fs::remove_file(workspace.join("user.txt")).unwrap();
                 return Reply::text("Changed three files; not committed.");

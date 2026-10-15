@@ -501,10 +501,10 @@ Scope: Q35 and Q39 in the engine and the prompts, the measurement B and C need, 
 - **Tiny** (an answer, or an edit the thread's own checks fully cover): no review.
 - **Bigger or risky:** one other-vendor review in the background (`M/review_runs.rs`).
   - **Measured per change, not per commit.** The engine tracks the request's **unreviewed diff**: every thread commit
-    since the last commit a review covered, taken together. When that accumulated range crosses the size line (about
-    30 changed lines or more than 2 files, a cheap engine rule), one review of the whole range starts. Tests and docs
-    don't count toward the files (files in test folders, `*_tests.rs`, `*.test.ts(x)`, `*.md`, `docs/`); their
-    lines still count (decided in phase B's verification, for the Q44 small-task gate).
+    since the last commit a review covered, taken together. When that accumulated range crosses the size line (150
+    changed lines of code or more than 5 files of code, a cheap engine rule; the user, Q48), one review of the whole
+    range starts. Tests and docs don't count (files in test folders, `*_tests.rs`, `*.test.ts(x)`, `*.md`, `docs/`).
+    Phase C re-tunes the line from V1.
   - **Before the final answer** the engine checks again. If the request's unreviewed diff is over the line, or holds
     a commit the thread marked risky (persistence, security, migrations, concurrency, deletion, public API), a review
     of that range starts. "Done" waits for it.
