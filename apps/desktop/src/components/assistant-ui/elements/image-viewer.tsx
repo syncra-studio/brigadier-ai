@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight, Minus, Plus, X } from "@openai/apps-sdk-ui/components/Icon";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { type KeyboardEvent, type MouseEvent, type ReactNode, type WheelEvent, useRef, useState } from "react";
+import { type KeyboardEvent, type MouseEvent, type ReactNode, type Ref, type WheelEvent, useImperativeHandle, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { type AttachmentSource, useAttachmentUrl } from "@/components/assistant-ui/elements/attachment-url";
@@ -89,6 +89,7 @@ export function ImagePreview({
     });
   };
 
+  const zoomKeys = useRef<ZoomKeys>(null);
   const step = (by: number) => setAt((current) => Math.min(images.length - 1, Math.max(0, current + by)));
   const current = images[at] ?? { name, url };
   return (
@@ -113,9 +114,10 @@ export function ImagePreview({
           aria-describedby={undefined}
           data-slot="image-preview"
           onKeyDown={(event: KeyboardEvent) => {
+            // Wherever focus is in the viewer (Radix puts it on a button): ‹ › step, + − 0 zoom.
             if (event.key === "ArrowLeft") step(-1);
             else if (event.key === "ArrowRight") step(1);
-            else return;
+            else if (!zoomKeys.current?.press(event.key)) return;
             event.preventDefault();
           }}
           className={cn(
@@ -124,7 +126,7 @@ export function ImagePreview({
           )}
         >
           <DialogPrimitive.Title className="sr-only">{current.name}</DialogPrimitive.Title>
-          <ShownImage key={at} image={current} morph={morph && at === first} imageRef={shown} onBackdrop={hide} />
+          <ShownImage key={at} image={current} morph={morph && at === first} imageRef={shown} zoomKeys={zoomKeys} onBackdrop={hide} />
           <DialogPrimitive.Close
             aria-label="Close"
             title="Close"
@@ -167,11 +169,15 @@ function StepButton({ side, disabled, onClick }: { side: "start" | "end"; disabl
   );
 }
 
+/** The shown image's zoom keys (+ − 0): `press` says whether it took the key. */
+type ZoomKeys = { press: (key: string) => boolean };
+
 /** The image shown, fitted to the window until zoomed, with its zoom pill. */
-function ShownImage({ image, morph, imageRef, onBackdrop }: {
+function ShownImage({ image, morph, imageRef, zoomKeys, onBackdrop }: {
   image: ViewerImage;
   morph: boolean;
   imageRef: { current: HTMLImageElement | null };
+  zoomKeys: Ref<ZoomKeys>;
   onBackdrop: () => void;
 }) {
   const resolved = useAttachmentUrl(image.source ?? {});
@@ -182,6 +188,15 @@ function ShownImage({ image, morph, imageRef, onBackdrop }: {
   const [scale, setScale] = useState<number | null>(null);
   const current = scale ?? natural?.fit ?? 1;
   const zoom = (factor: number) => setScale(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, current * factor)));
+  useImperativeHandle(zoomKeys, () => ({
+    press: (key) => {
+      if (key === "+" || key === "=") zoom(ZOOM_STEP);
+      else if (key === "-") zoom(1 / ZOOM_STEP);
+      else if (key === "0") setScale(null);
+      else return false;
+      return true;
+    },
+  }));
   return (
     <>
       {/* A click beside the image closes the viewer. */}
@@ -191,13 +206,6 @@ function ShownImage({ image, morph, imageRef, onBackdrop }: {
         data-slot="image-preview-frame"
         tabIndex={-1}
         onClick={(event) => event.target === event.currentTarget && onBackdrop()}
-        onKeyDown={(event) => {
-          if (event.key === "+" || event.key === "=") zoom(ZOOM_STEP);
-          else if (event.key === "-") zoom(1 / ZOOM_STEP);
-          else if (event.key === "0") setScale(null);
-          else return;
-          event.preventDefault();
-        }}
         onWheel={(event: WheelEvent) => {
           // A pinch reaches the page as a wheel with Ctrl held; ⌘ with the wheel zooms too.
           if (!event.ctrlKey && !event.metaKey) return;

@@ -24,6 +24,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     code: string[];
     asked: string[];
     viewer: { first: { open: boolean; count: string | null; alt: string | null }; second: { count: string | null; alt: string | null }; closed: boolean };
+    zoomKeys: (string | null)[];
     boundary: { fallback: boolean; neighbour: string | null };
     mended: string | null;
     links: { before: string[]; after: string[]; asked: string[] };
@@ -80,6 +81,8 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     second: { count: "2 of 3", alt: "image-2.png" },
     closed: true,
   });
+  // + zooms and 0 fits again, pressed with focus on Close (outside the image's own frame).
+  assert.deepEqual(seen.zoomKeys, ["100%", "125%", "100%"]);
   // Web links: a globe until the site's icon comes, kept when the site has none, none for a
   // plain-HTTP link; a site is asked once however many links it has.
   assert.deepEqual(seen.links, {
