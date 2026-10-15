@@ -51,6 +51,7 @@ import {
   type SequenceEntry as Entry,
   updateIndices,
   turnTime,
+  waitedTime,
   waitsOnCard,
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
@@ -125,9 +126,11 @@ export type BlockMeta = {
   endedAtMs: number | null;
   /** When its requests worked, for "Worked for …". */
   worked: WorkSpan[];
+  /** When its requests waited for the answers to their question cards, for "waited for you …". */
+  waited: WorkSpan[];
   /** It waits only for quota, not for the user. */
   quotaWait: boolean;
-  /** It waits for the answer to its own question card, so it still works. */
+  /** It waits for the answer to its own question card, so it still reads as working. */
   cardWait: boolean;
   /** The model the user picked, to flag a fallback. */
   picked: ModelChoice | null;
@@ -164,17 +167,23 @@ function useElapsed(from: number, to: number | null, live: boolean): number {
   return Math.max(0, (live || to === null ? now : to) - from);
 }
 
-function headerLabel(state: BlockState, elapsed: number, quota = false, waitingFor: readonly string[] = []): string {
+/**
+ * `waited`: how long it waited for the answers to its question cards, shown apart from the work
+ * (BUILD-PLAN A9); `onCard`: a card waits for the user now.
+ */
+function headerLabel(state: BlockState, elapsed: number, quota = false, waitingFor: readonly string[] = [], waited = 0, onCard = false): string {
   const time = formatDuration(elapsed);
   switch (state) {
-    case "working":
+    case "working": {
       if (quota) return `Waiting for quota · ${time}`;
-      return elapsed < 1000 ? "Working" : `Working for ${time}`;
+      const work = elapsed < 1000 ? "Working" : `Working for ${time}`;
+      return onCard ? `${work} · waiting for you ${formatDuration(waited)}` : work;
+    }
     case "waiting":
       if (quota) return `Waiting for quota · ${time}`;
       return waitingFor.length > 0 ? `${waitingWords(waitingFor)} · ${time}` : `Waiting for you · ${time}`;
     case "done":
-      return `Worked for ${time}`;
+      return waited >= 1000 ? `Worked ${time} · waited for you ${formatDuration(waited)}` : `Worked for ${time}`;
     case "stopped":
       return `You stopped after ${time}`;
     // Said calmly: the error row under the turn tells what happened.
@@ -219,9 +228,11 @@ const WorkHeader: FC<{
   const phaseElapsed = useElapsed(phase?.startedAtMs ?? 0, phase?.endedAtMs ?? null, !!phase && !phase.settled);
   const now = useTicking(!phase && isLive(meta.state));
   const elapsed = phase ? phaseElapsed : turnTime(meta, now, answerAtMs);
-  // Waiting on its own question card, the turn still works: the card says it waits.
-  const state = answering ? "done" : waitsOnCard(meta) ? "working" : meta.state;
-  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota || meta.quotaWait, waitingFor);
+  const waited = waitedTime(meta, now, answerAtMs);
+  // Waiting on its own question card, the turn still reads as working, with the wait beside it.
+  const onCard = !answering && waitsOnCard(meta);
+  const state = answering ? "done" : onCard ? "working" : meta.state;
+  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota || meta.quotaWait, waitingFor, waited, onCard);
   const text = (
     <span
       data-slot="request-work-label"

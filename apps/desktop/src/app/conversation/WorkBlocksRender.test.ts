@@ -102,3 +102,11 @@ test("a check gone to the background keeps its request working, says what runs a
   assert.deepEqual([seen.done.status, seen.done.row, seen.done.answer], [null, null, "The full Rust tests pass: 812 tests, no failures."]);
   assert.match(seen.done.header ?? "", /^Worked for/);
 });
+
+test("the header shows the work and the wait for the user apart: Worked 15s · waited for you 15s", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ asking: Seen; done: Seen; noWait: Seen }>(t, "drive=timer");
+  // Waiting on its card: the work so far, and the wait beside it, ticking.
+  assert.match(seen.asking.header ?? "", /^Working for 10s · waiting for you \d+s$/);
+  assert.equal(seen.done.header, "Worked 15s · waited for you 15s");
+  assert.equal(seen.noWait.header, "Worked for 15s");
+});

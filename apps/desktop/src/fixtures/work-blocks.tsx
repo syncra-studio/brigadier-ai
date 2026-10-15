@@ -13,6 +13,8 @@
  * - `drive=background` (with `kind=session`): the thread's check goes to the background and it
  *   says so; the request works on with a live line and a context-card row (Stop) until the
  *   result's answer.
+ * - `drive=timer`: the turn waits on its question card, then ends; its header shows the work and the
+ *   wait for the user apart (BUILD-PLAN A9).
  *
  * The result goes to `<pre id="work-blocks-result">`. `stop=running|answering|done|steer|menu` holds the
  * page at that moment instead, for a screenshot.
@@ -403,7 +405,33 @@ async function driveBackground(): Promise<object> {
   return { running, calls, done: { ...seen(), row: text(card()) } };
 }
 
-void (drive === "steer" ? driveSteer() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+async function driveTimer(): Promise<object> {
+  await settle(600);
+  // 10 s of work, then its question card waits on the user.
+  daemon.run = "idle";
+  change(() => ({ run: "idle", runRequest: null, questions: { ask: question } }));
+  request("r1", {
+    state: { type: "waiting" }, endedAtMs: begun + 10_000,
+    worked: [{ fromMs: begun, toMs: begun + 10_000 }], waited: [{ fromMs: begun + 10_000, toMs: null }],
+  });
+  await settle();
+  const asking = seen();
+  // Answered 15 s later; 5 s more of work and it is done.
+  change(() => ({ questions: {} }));
+  request("r1", {
+    state: { type: "done" }, endedAtMs: begun + 30_000,
+    worked: [{ fromMs: begun, toMs: begun + 10_000 }, { fromMs: begun + 25_000, toMs: begun + 30_000 }],
+    waited: [{ fromMs: begun + 10_000, toMs: begun + 25_000 }],
+  });
+  await settle();
+  const done = seen();
+  // One that never waited on a card shows its work alone.
+  request("r1", { waited: [] });
+  await settle();
+  return { asking, done, noWait: seen() };
+}
+
+void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

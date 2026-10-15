@@ -31,7 +31,8 @@ text?: string, } | { "type": "stopped", taskId: TaskId, reason: string, } | { "t
  */
 askedIn: string | null, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "mergeHeld", branch: string, base: string, 
 /**
- * The user message, or merge card, whose consent it holds.
+ * The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
+ * A4), whose consent it holds.
  */
 askedIn: string, 
 /**

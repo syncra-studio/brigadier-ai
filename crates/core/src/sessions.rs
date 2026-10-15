@@ -729,6 +729,7 @@ impl Core {
                         steered_into: None,
                         steered_after: None,
                         undo: None,
+                        waited: Vec::new(),
                         worked: vec![WorkSpan {
                             from_ms: message.created_at_ms,
                             to_ms: None,

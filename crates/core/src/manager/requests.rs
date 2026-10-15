@@ -657,8 +657,8 @@ fn tasks_waiting_for_quota(board: &Board, request: &str) -> bool {
 enum Wait {
     /// The user, with the request's work paused (an approval, a plan, a held worker).
     User,
-    /// The user's answer to the request's own question card: the request goes on with it, so
-    /// its time keeps counting.
+    /// The user's answer to the request's own question card: the request goes on with it, and
+    /// its header shows this wait apart from its work (BUILD-PLAN A9).
     Card,
     /// Quota only: its workers paused until a model is free.
     Quota,
@@ -719,6 +719,7 @@ mod tests {
             steered_into: None,
             steered_after: None,
             undo: None,
+            waited: Vec::new(),
             worked: Vec::new(),
             quota_wait: false,
             waiting_for: Vec::new(),
@@ -731,6 +732,14 @@ mod tests {
     fn spans(request: &crate::work::UserRequest) -> Vec<(i64, Option<i64>)> {
         request
             .worked
+            .iter()
+            .map(|span| (span.from_ms, span.to_ms))
+            .collect()
+    }
+
+    fn waits(request: &crate::work::UserRequest) -> Vec<(i64, Option<i64>)> {
+        request
+            .waited
             .iter()
             .map(|span| (span.from_ms, span.to_ms))
             .collect()
@@ -769,22 +778,35 @@ mod tests {
     }
 
     #[test]
-    fn waiting_on_its_question_card_is_work_so_the_time_runs_on() {
-        // 10 s of work, 30 s on the card, 5 s more: it worked for 45 s.
+    fn waiting_on_its_question_card_is_kept_apart_from_its_work() {
+        // 10 s of work, 30 s on the card, 5 s more: it worked 15 s and waited 30 s.
         let mut stored = request("r", RequestState::Working);
         stored.moved_to(RequestState::Working, false, false, 0);
         stored.moved_to(RequestState::Waiting, false, true, 10_000);
-        assert_eq!(spans(&stored), [(0, None)]);
+        assert_eq!(spans(&stored), [(0, Some(10_000))]);
+        assert_eq!(waits(&stored), [(10_000, None)]);
         assert!(!stored.quota_wait);
         stored.moved_to(RequestState::Working, false, false, 40_000);
         stored.moved_to(RequestState::Done, false, false, 45_000);
-        assert_eq!(spans(&stored), [(0, Some(45_000))]);
-        // A wait for anything else of the user's closes the span, as before.
+        assert_eq!(spans(&stored), [(0, Some(10_000)), (40_000, Some(45_000))]);
+        assert_eq!(waits(&stored), [(10_000, Some(40_000))]);
+        // A wait for anything else of the user's is neither work nor a card wait.
         stored.moved_to(RequestState::Working, false, false, 50_000);
         stored.moved_to(RequestState::Waiting, false, true, 55_000);
         stored.moved_to(RequestState::Waiting, false, false, 60_000);
         stored.moved_to(RequestState::Done, false, false, 90_000);
-        assert_eq!(spans(&stored), [(0, Some(45_000)), (50_000, Some(60_000))]);
+        assert_eq!(
+            spans(&stored),
+            [
+                (0, Some(10_000)),
+                (40_000, Some(45_000)),
+                (50_000, Some(55_000))
+            ]
+        );
+        assert_eq!(
+            waits(&stored),
+            [(10_000, Some(40_000)), (55_000, Some(60_000))]
+        );
     }
 
     #[test]

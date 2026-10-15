@@ -193,7 +193,10 @@ own screenshots are in `msgs/evidence/brigadier/`.
    - Live, it has no chevron. Waiting on a question card, it still says `Working for …`; the card and the live line
      carry the "waiting" (Q6).
    - Done, it is the ghost button with a 14 px chevron.
-5. **The time runs on through question rounds.**
+5. **The time runs on through question rounds.** *Superseded by BUILD-PLAN A9 (the user's Q41.6): a wait on a
+   question card is kept apart from the work. `UserRequest.waited` holds those waits; live, the header reads
+   "Working for 10s · waiting for you 2m", and once done "Worked 11m · waited for you 18m", or the work time alone
+   when no card waited. The test below now ends as 15 s worked and 30 s waited.*
    - Today a wait for the user closes the request's work span (`UserRequest::moved_to`, `crates/core/src/work.rs:1628-1657`),
      and `turnTime` then shows the time waited (`C/blocks.ts:207-215`).
    - New: a wait on an open question card keeps the span open, as a quota wait does: `moved_to` takes a `card_wait`

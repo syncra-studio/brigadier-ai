@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { type BoardDigest, buildBlocks, requestSpans, requestWaitsOnCard, turnTime, waitsOnCard, workedMs } from "@/app/conversation/blocks";
+import { type BoardDigest, buildBlocks, requestSpans, requestWaits, requestWaitsOnCard, turnTime, waitedTime, waitsOnCard, workedMs } from "@/app/conversation/blocks";
 import type { Message, RequestState, UserRequest, WorkSpan } from "@/ipc/generated";
 
 const span = (fromMs: number, toMs: number | null): WorkSpan => ({ fromMs, toMs });
@@ -144,4 +144,25 @@ test("a turn's time stops where its final answer started, whatever ran or waited
   assert.equal(turnTime({ ...meta, worked: [span(0, 2_000), span(3_000, 8_000), span(5_000, null)] }, 9_000, 4_000), 3_000);
   // Work that began after the answer started doesn't count.
   assert.equal(turnTime({ ...meta, state: "done", worked: [span(0, 1_000), span(6_000, 7_000)] }, 9_000, 4_000), 1_000);
+});
+
+test("a turn's wait on its question card is kept apart from its work (BUILD-PLAN A9)", () => {
+  // 10 s of work, 30 s on the card, 5 s more: 15 s worked and 30 s waited.
+  const done = request("r", { type: "done" }, {
+    endedAtMs: 45_000, worked: [span(0, 10_000), span(40_000, 45_000)], waited: [span(10_000, 40_000)],
+  });
+  const meta = { state: "done" as const, worked: requestSpans(done), waited: requestWaits(done), quotaWait: false, cardWait: false, endedAtMs: 45_000 };
+  assert.equal(turnTime(meta, 100_000), 15_000);
+  assert.equal(waitedTime(meta, 100_000), 30_000);
+  // Live on the card: the work stands still, the wait runs on.
+  const asking = request("r", { type: "waiting" }, { worked: [span(0, 10_000)], waited: [span(10_000, null)] });
+  assert.ok(requestWaitsOnCard(asking));
+  const live = { state: "waiting" as const, worked: requestSpans(asking), waited: requestWaits(asking), quotaWait: false, cardWait: true, endedAtMs: 10_000 };
+  assert.equal(turnTime(live, 25_000), 10_000);
+  assert.equal(waitedTime(live, 25_000), 15_000);
+  // A wait still open on a request that is over ends with it; its answer's start stops both.
+  assert.deepEqual(requestWaits(request("r", { type: "done" }, { endedAtMs: 50, waited: [span(10, null)] })), [span(10, 50)]);
+  assert.equal(waitedTime(meta, 100_000, 20_000), 10_000);
+  // The card answered and work going on: no longer waiting on it.
+  assert.ok(!requestWaitsOnCard(request("r", { type: "waiting" }, { worked: [span(0, 10)], waited: [span(10, 20)] })));
 });

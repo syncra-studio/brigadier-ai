@@ -198,9 +198,11 @@ export type Block = {
   endedAtMs: number | null;
   /** When its requests worked (open while one does), for "Worked for …". */
   worked: WorkSpan[];
+  /** When its requests waited for the answer to their question cards, for "waited for you …". */
+  waited: WorkSpan[];
   /** It waits only for quota, not for the user. */
   quotaWait: boolean;
-  /** It waits for the answer to its own question card (and maybe quota), so it still works. */
+  /** It waits for the answer to its own question card (and maybe quota). */
   cardWait: boolean;
   /** The sessions whose replies it waits for: it rests "Waiting for ‹title›". */
   waitingFor: string[];
@@ -248,6 +250,12 @@ export function requestSpans(request: UserRequest): WorkSpan[] {
   return spans.map((span) => (span.toMs === null && over && request.endedAtMs !== null ? { ...span, toMs: request.endedAtMs } : span));
 }
 
+/** When a request waited for the answer to its question cards; a span still open on a request that is over ends with it. */
+export function requestWaits(request: UserRequest): WorkSpan[] {
+  const over = !isLive(request.state.type);
+  return (request.waited ?? []).map((span) => (span.toMs === null && over && request.endedAtMs !== null ? { ...span, toMs: request.endedAtMs } : span));
+}
+
 /** How long the spans worked in all, overlaps counted once; an open span works until `now`. */
 export function workedMs(spans: readonly WorkSpan[], now: number): number {
   let total = 0;
@@ -271,16 +279,26 @@ export function stoppedAtMs(spans: readonly WorkSpan[]): number | null {
 }
 
 /**
- * Whether a request waits only for the user's answer to its own question card: the daemon keeps
- * its work span open then, as it does for a quota wait, so it still reads as working.
+ * Whether a request waits only for the user's answer to its own question card: its waited span is
+ * open (BUILD-PLAN A9). An older daemon kept its work span open instead.
  */
 export function requestWaitsOnCard(request: UserRequest): boolean {
+  if (request.state.type !== "waiting" || request.quotaWait) return false;
+  const waited = request.waited ?? [];
   // Older records (stored boards, an older daemon) have no spans at all.
   const stored: readonly WorkSpan[] | undefined = request.worked;
-  return request.state.type === "waiting" && !request.quotaWait && stored?.at(-1)?.toMs === null;
+  return waited.length > 0 ? waited.at(-1)?.toMs === null : stored?.at(-1)?.toMs === null;
 }
 
-/** Whether a waiting turn waits only for the answer to its question card: it still works. */
+/** How long a turn waited for the answers to its question cards; an open wait runs until `now`. */
+export function waitedTime(meta: { waited: readonly WorkSpan[] }, now: number, answerAtMs?: number): number {
+  const spans = answerAtMs === undefined ? meta.waited : meta.waited
+    .filter((span) => span.fromMs < answerAtMs)
+    .map((span) => ({ ...span, toMs: Math.min(span.toMs ?? answerAtMs, answerAtMs) }));
+  return workedMs(spans, answerAtMs === undefined ? now : Math.min(now, answerAtMs));
+}
+
+/** Whether a waiting turn waits only for the answer to its question card: it still reads as working. */
 export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boolean {
   return meta.state === "waiting" && meta.cardWait;
 }
@@ -288,7 +306,8 @@ export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boo
 /**
  * The time a turn shows: while it works, waits for quota or for the answer to its question
  * card, how long it worked so far; while it waits for the user otherwise, how long it has
- * waited; once over, how long it worked, its other waits for the user left out.
+ * waited; once over, how long it worked, its waits for the user left out ([`waitedTime`]
+ * gives its card waits).
  */
 export function turnTime(
   meta: { state: BlockState; worked: readonly WorkSpan[]; quotaWait: boolean; cardWait: boolean; endedAtMs: number | null },
@@ -640,6 +659,7 @@ export function buildBlocks(
         startedAtMs: request?.startedAtMs ?? startedAtMs,
         endedAtMs: request?.endedAtMs ?? null,
         worked: request ? requestSpans(request) : [{ fromMs: startedAtMs, toMs: null }],
+        waited: request ? requestWaits(request) : [],
         quotaWait: !!request?.quotaWait,
         cardWait: !!request && requestWaitsOnCard(request),
         waitingFor: request?.waitingFor ?? [],
@@ -796,6 +816,7 @@ export function buildBlocks(
       startedAtMs: entry.createdAtMs,
       endedAtMs: null,
       worked: [{ fromMs: entry.createdAtMs, toMs: null }],
+      waited: [],
       quotaWait: false,
       cardWait: false,
       waitingFor: [],
@@ -848,6 +869,7 @@ function continueRequest(earlier: Block, request: UserRequest | undefined, key: 
     startedAtMs: atMs,
     endedAtMs: atMs,
     worked: [],
+    waited: [],
     quotaWait: false,
     cardWait: false,
     waitingFor: [],
@@ -857,11 +879,13 @@ function continueRequest(earlier: Block, request: UserRequest | undefined, key: 
   const over = !request || (final && (request.endedAtMs === null || request.endedAtMs <= atMs));
   if (over) return base;
   const worked = cutSpans(earlier.worked, atMs, true);
+  const waited = cutSpans(earlier.waited, atMs, true);
   Object.assign(earlier, {
     state: "done",
     error: null,
     endedAtMs: atMs,
     worked: cutSpans(earlier.worked, atMs, false),
+    waited: cutSpans(earlier.waited, atMs, false),
     quotaWait: false,
     cardWait: false,
     waitingFor: [],
@@ -872,6 +896,7 @@ function continueRequest(earlier: Block, request: UserRequest | undefined, key: 
     error: request.state.type === "failed" ? request.state.error : null,
     endedAtMs: request.endedAtMs,
     worked: worked.length > 0 ? worked : [{ fromMs: atMs, toMs: request.endedAtMs }],
+    waited,
     quotaWait: request.quotaWait,
     cardWait: requestWaitsOnCard(request),
     waitingFor: request.waitingFor ?? [],
@@ -922,6 +947,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
       // The turn's time runs from its first message, the follow-ups' work counted with it.
       startedAtMs: Math.min(previous.startedAtMs, block.startedAtMs),
       worked: [...previous.worked, ...block.worked],
+      waited: [...previous.waited, ...block.waited],
       quotaWait: state === "waiting" && [previous, block].every((part) => part.state !== "waiting" || part.quotaWait),
       // Waiting on a card while no part waits for the user otherwise.
       cardWait:
@@ -1320,5 +1346,5 @@ function settled(block: Block, chain: readonly Message[]): Block {
   const user = anchorMessage(block)?.createdAtMs;
   const start = user ?? times[0] ?? block.startedAtMs;
   const end = times.at(-1) ?? start;
-  return { ...block, state: "done", error: null, startedAtMs: start, endedAtMs: end, worked: [{ fromMs: start, toMs: end }], quotaWait: false, cardWait: false };
+  return { ...block, state: "done", error: null, startedAtMs: start, endedAtMs: end, worked: [{ fromMs: start, toMs: end }], waited: [], quotaWait: false, cardWait: false };
 }

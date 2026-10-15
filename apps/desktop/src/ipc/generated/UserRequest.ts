@@ -37,11 +37,15 @@ steeredAfter: string | null,
  */
 undo: RequestUndo | null, 
 /**
- * When it worked, oldest first; the last is open while it works. Waiting for quota, or
- * for the user's answer to its question card, is work; other waits for the user are
- * not. Absent on requests stored before it was kept.
+ * When it worked, oldest first; the last is open while it works. Waiting for quota is
+ * work; waits for the user are not. Absent on requests stored before it was kept.
  */
 worked: Array<WorkSpan>, 
+/**
+ * When it waited for the user's answer to its own question card, oldest first; the last is
+ * open while a card waits (BUILD-PLAN A9). Its header shows this time apart from the work.
+ */
+waited?: Array<WorkSpan>, 
 /**
  * It is `Waiting` only for quota (a worker paused until a model is free), not for the
  * user.

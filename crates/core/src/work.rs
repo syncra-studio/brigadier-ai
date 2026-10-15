@@ -2173,11 +2173,15 @@ pub struct UserRequest {
     /// The user's Undo of what its workers landed, once they used it.
     #[serde(default)]
     pub undo: Option<RequestUndo>,
-    /// When it worked, oldest first; the last is open while it works. Waiting for quota, or
-    /// for the user's answer to its question card, is work; other waits for the user are
-    /// not. Absent on requests stored before it was kept.
+    /// When it worked, oldest first; the last is open while it works. Waiting for quota is
+    /// work; waits for the user are not. Absent on requests stored before it was kept.
     #[serde(default)]
     pub worked: Vec<WorkSpan>,
+    /// When it waited for the user's answer to its own question card, oldest first; the last is
+    /// open while a card waits (BUILD-PLAN A9). Its header shows this time apart from the work.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<WorkSpan>>", optional)]
+    pub waited: Vec<WorkSpan>,
     /// It is `Waiting` only for quota (a worker paused until a model is free), not for the
     /// user.
     #[serde(default)]
@@ -2212,9 +2216,9 @@ pub struct WorkSpan {
 }
 
 impl UserRequest {
-    /// Moves it to `state` at `now`: a span opens when it starts working (or waits only for
-    /// quota, or for the user's answer to its question card, `card_wait`) and closes when it
-    /// waits for the user otherwise or is over.
+    /// Moves it to `state` at `now`: a work span opens when it starts working (or waits only
+    /// for quota) and closes when it waits for the user or is over; a waited span is open
+    /// while it waits for the user's answer to its question card (`card_wait`).
     pub fn moved_to(&mut self, state: RequestState, quota_wait: bool, card_wait: bool, now: i64) {
         if self.worked.is_empty() {
             // Stored before spans were kept: what it did so far counts from its start.
@@ -2229,18 +2233,21 @@ impl UserRequest {
             });
         }
         let quota_wait = quota_wait && state == RequestState::Waiting;
-        let works = state == RequestState::Working
-            || quota_wait
-            || (card_wait && state == RequestState::Waiting);
-        let open = self.worked.last_mut().filter(|span| span.to_ms.is_none());
-        match open {
-            Some(span) if !works => span.to_ms = Some(now.max(span.from_ms)),
-            None if works => self.worked.push(WorkSpan {
-                from_ms: now,
-                to_ms: None,
-            }),
-            _ => {}
+        let works = state == RequestState::Working || quota_wait;
+        let on_card = card_wait && state == RequestState::Waiting && !quota_wait;
+        fn track(spans: &mut Vec<WorkSpan>, on: bool, now: i64) {
+            let open = spans.last_mut().filter(|span| span.to_ms.is_none());
+            match open {
+                Some(span) if !on => span.to_ms = Some(now.max(span.from_ms)),
+                None if on => spans.push(WorkSpan {
+                    from_ms: now,
+                    to_ms: None,
+                }),
+                _ => {}
+            }
         }
+        track(&mut self.worked, works, now);
+        track(&mut self.waited, on_card, now);
         if self.state != state {
             self.ended_at_ms = (state != RequestState::Working).then_some(now);
         }

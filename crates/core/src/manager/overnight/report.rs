@@ -139,6 +139,7 @@ impl SessionManager {
                             steered_into: None,
                             steered_after: None,
                             undo: None,
+                            waited: Vec::new(),
                             worked: Vec::new(),
                             quota_wait: false,
                             waiting_for: Vec::new(),
