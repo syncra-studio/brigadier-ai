@@ -723,25 +723,6 @@ impl SessionManager {
             Some(request) => Some(request),
             None => self.request_for(conversation_id, None).await,
         };
-        // A reviewer reads the diff from the merge base: two snapshots of a local checkout are
-        // siblings on its HEAD, so the later one goes on the earlier one first.
-        let tip = {
-            let (git, at, from, to) = (self.git.clone(), repo.clone(), base.clone(), tip.clone());
-            match blocking(move || {
-                git.open(&at)
-                    .map_err(git_error)?
-                    .on_base(&from, &to)
-                    .map_err(git_error)
-            })
-            .await
-            {
-                Ok(linked) => linked,
-                Err(err) => {
-                    tracing::warn!(conversation = %conversation_id, error = %err, "could not put a change on its base for its review");
-                    tip
-                }
-            }
-        };
         let started = self
             .start_review(NewReview {
                 conversation_id: conversation_id.clone(),

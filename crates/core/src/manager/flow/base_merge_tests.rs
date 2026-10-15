@@ -141,6 +141,8 @@ async fn conflicting_session(worker: Worker, sides: Sides) -> Flow {
                         commit_in_workspace(&turn, "README.md", "# Session\n", "Add notes");
                         commit_in_workspace(&turn, "notes-2.txt", "two\n", "Add notes two");
                         commit_in_workspace(&turn, "notes-3.txt", "three\n", "Add notes three");
+                        // README.md is a doc, no file of the review line's: three others cross it.
+                        commit_in_workspace(&turn, "notes-4.txt", "four\n", "Add notes four");
                         if sides.session_ignores {
                             commit_in_workspace(&turn, ".gitignore", "*.log\n*.tmp\n", "Ignore");
                         }
@@ -282,7 +284,7 @@ fn assert_merged(flow: &Flow, landed: &str, session_tip: &str, base_tip: &str) {
     for n in 1..=BASE_FILES {
         assert!(files.contains(&format!("base-{n}.txt")), "{files}");
     }
-    for file in ["README.md", "notes-2.txt", "notes-3.txt"] {
+    for file in ["README.md", "notes-2.txt", "notes-3.txt", "notes-4.txt"] {
         assert!(files.lines().any(|line| line == file), "{files}");
     }
 }

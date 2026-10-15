@@ -163,6 +163,33 @@ impl SessionManager {
         })
     }
 
+    /// What a review of the local checkout's range `base..tip` reads: a reviewer diffs from the
+    /// merge base, and two snapshots of a checkout are siblings on its HEAD, so the later one goes
+    /// on the earlier one first (its own diff would show the user's older changes as the
+    /// thread's and miss a file put back). `tip` itself when that can't be made.
+    async fn on_base(&self, repo: &Path, base: &str, tip: &str) -> Oid {
+        let (git, at, from, to) = (
+            self.git.clone(),
+            repo.to_owned(),
+            Oid(base.to_owned()),
+            Oid(tip.to_owned()),
+        );
+        match blocking(move || {
+            git.open(&at)
+                .map_err(git_error)?
+                .on_base(&from, &to)
+                .map_err(git_error)
+        })
+        .await
+        {
+            Ok(linked) => linked,
+            Err(err) => {
+                tracing::warn!(error = %err, "could not put a change on its base for its review");
+                Oid(tip.to_owned())
+            }
+        }
+    }
+
     /// Whether commits `a` and `b` of `repo` hold the same files.
     async fn same_files(&self, repo: &Path, a: &str, b: &str) -> bool {
         let (git, repo, a, b) = (
@@ -301,11 +328,16 @@ impl SessionManager {
                     .await
                     .is_some_and(|size| REVIEW_LINE.crossed(size.lines, size.files));
             if due {
+                let tip = if range.local {
+                    self.on_base(repo, &range.base, &range.tip).await
+                } else {
+                    Oid(range.tip.clone())
+                };
                 crate::heap(|| {
                     self.review_thread_commits(
                         id,
                         Oid(range.base.clone()),
-                        Oid(range.tip.clone()),
+                        tip,
                         repo.to_owned(),
                         Some(range.request_id.clone()).filter(|request| !request.is_empty()),
                     )
