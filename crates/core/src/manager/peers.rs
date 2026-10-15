@@ -772,10 +772,32 @@ impl SessionManager {
         }
     }
 
+    /// At startup, before any session recovers: the messages each session received that the
+    /// last run left due (not yet taken by its CLI), by id.
+    pub(super) async fn owed_peer_messages(&self) -> std::collections::HashSet<String> {
+        let mut owed = std::collections::HashSet::new();
+        for conversation in self.core.catalog().conversations {
+            if let Ok(board) = self.core.board(&conversation.id).await {
+                owed.extend(
+                    board
+                        .peer_messages
+                        .values()
+                        .filter(|record| !record.outgoing && record.state.due())
+                        .map(|record| record.message_id.clone()),
+                );
+            }
+        }
+        owed
+    }
+
     /// At startup: what other sessions sent session `id` that it hadn't taken goes again,
     /// oldest first, unless its CLI's transcript shows it took it as input before the daemon
     /// stopped (SESSION-MESSAGING-PLAN.md §4): then it is only recorded seen.
-    pub(super) async fn recover_peer_messages(&self, conversation: &Conversation) {
+    pub(super) async fn recover_peer_messages(
+        &self,
+        conversation: &Conversation,
+        owed: &std::collections::HashSet<String>,
+    ) {
         self.return_handed_replies(&conversation.id).await;
         let Ok(board) = self.core.board(&conversation.id).await else {
             return;
@@ -783,7 +805,9 @@ impl SessionManager {
         let mut due: Vec<_> = board
             .peer_messages
             .values()
-            .filter(|record| !record.outgoing && record.state.due())
+            .filter(|record| {
+                !record.outgoing && record.state.due() && owed.contains(&record.message_id)
+            })
             .cloned()
             .collect();
         if due.is_empty() {

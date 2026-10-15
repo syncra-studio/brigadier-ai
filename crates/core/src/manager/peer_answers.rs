@@ -139,6 +139,13 @@ impl SessionManager {
             let mut over = match answer {
                 Some(answer) => Over::Answer(Box::new(answer.clone())),
                 None => match states.iter().find_map(|state| match state {
+                    // A quit cut the turn off (UI audit H1 writes it so): the asker hears that,
+                    // as for a request the restart's settling ended.
+                    RequestState::Failed { error }
+                        if error == super::conversation::INTERRUPTED_BY_QUIT =>
+                    {
+                        Some(Over::CutOff)
+                    }
                     RequestState::Failed { error } => Some(Over::Failed(error.clone())),
                     RequestState::Stopped => Some(Over::Stopped),
                     _ => None,

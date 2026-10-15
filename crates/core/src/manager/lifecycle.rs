@@ -95,6 +95,10 @@ impl SessionManager {
         self.reconcile_trust().await;
         // Tab chats whose session went go now; those whose tab closed, once the app says.
         self.sweep_tab_chats().await;
+        // What other sessions sent that the last run hadn't had taken, as it stands before any
+        // session recovers: a reply sent while they recover (a cut-off request's) is delivered
+        // once, by its sending, and not again as if the last run had left it.
+        let owed = self.owed_peer_messages().await;
         for conversation in self.core.catalog().conversations {
             // One still being deleted (a delete that failed at launch) gets nothing new.
             if conversation.deleting {
@@ -210,7 +214,7 @@ impl SessionManager {
             // is due now (SESSION-FIXES-PLAN.md Q3).
             self.check_held_merge(&conversation.id).await;
             // What other sessions sent it and it hadn't taken goes again (once).
-            self.recover_peer_messages(&conversation).await;
+            self.recover_peer_messages(&conversation, &owed).await;
             // What waits for the user matches the tasks and reports as they are now.
             self.reconcile_waiting(&conversation.id).await;
             // Nothing runs any more: what was working is over or waits for the user. What ends
