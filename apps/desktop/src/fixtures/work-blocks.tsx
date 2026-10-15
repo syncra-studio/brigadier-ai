@@ -82,9 +82,20 @@ const tool = (itemId: string, position: number, name: string, detail: string, st
   kind: { type: "tool", itemId, name, status, detail, throughPosition: position },
 } as OrchestratorStep);
 
+const LONG_MESSAGE = [
+  ...Array.from({ length: 15 }, (_, index) => `Line ${index + 1} of the request.`),
+  "",
+  "```ts",
+  ...Array.from({ length: 12 }, (_, index) => `const v${index} = ${index};`),
+  "```",
+  "",
+  ...Array.from({ length: 10 }, (_, index) => `After ${index + 1}.`),
+].join("\n");
+
 /** What the daemon holds now: the view a load reads. */
 const daemon: { messages: Message[]; requests: Record<string, UserRequest>; steps: OrchestratorStep[]; run: "running" | "idle" } = {
-  messages: [user("r1", 1, "Fix the rounding in math.js", begun)],
+  // `drive=clip`: a long message whose code block crosses its 20-line cut.
+  messages: [user("r1", 1, drive === "clip" ? LONG_MESSAGE : "Fix the rounding in math.js", begun)],
   requests: { r1: asked("r1", begun) },
   // `drive=early`: the turn has done nothing yet.
   steps: drive === "early" ? [] : [tool("read", 1.1, "Read", "/repo/src/math.js", "completed"), tool("test", 1.2, "shell", "npm test", "completed")],
@@ -471,6 +482,25 @@ async function driveDenied(): Promise<object> {
   return { before, fold: seen().fold, row: text(row) };
 }
 
+/** A long message: clipped at the end of the code block crossing its 20-line cut, "Show more" with a chevron. */
+async function driveClip(): Promise<object> {
+  await settle(600);
+  for (const end = performance.now() + 8000; performance.now() < end && !one(".aui-user-message-content pre"); ) await frame();
+  await settle();
+  const bubble = one(".aui-user-message-content");
+  const clip = bubble?.firstElementChild as HTMLElement | null;
+  const block = one(".aui-user-message-content pre");
+  const more = all("button", bubble ?? document).find((button) => text(button) === "Show more");
+  const lineHeight = clip ? Number.parseFloat(getComputedStyle(clip).lineHeight) : 0;
+  return {
+    clipEnd: clip ? Math.round(clip.getBoundingClientRect().bottom) : null,
+    blockEnd: block ? Math.round(block.getBoundingClientRect().bottom) : null,
+    clipLines: clip && lineHeight ? clip.getBoundingClientRect().height / lineHeight : null,
+    more: !!more,
+    chevron: !!more?.querySelector("svg"),
+  };
+}
+
 async function driveQueue(): Promise<object> {
   await settle(600);
   // The composer's editor comes in its own chunk after a plain field and takes the focus a beat
@@ -552,7 +582,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

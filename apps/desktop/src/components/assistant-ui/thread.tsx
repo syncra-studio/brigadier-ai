@@ -18,6 +18,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronRightAlt,
   Copy,
   EditPencil,
   Paperclip,
@@ -719,12 +720,27 @@ const UserMessageText: FC = () => {
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element) return;
-    const measure = () => setClipped(element.scrollHeight > element.clientHeight + 1);
+    // The cut is 20 lines down, or the end of a code block crossing it, so no block is cut through.
+    const measure = () => {
+      element.style.maxHeight = "";
+      if (expanded) return setClipped(false);
+      const cut = element.clientHeight;
+      const top = element.getBoundingClientRect().top;
+      let end = cut;
+      for (const block of element.querySelectorAll("pre")) {
+        const box = block.getBoundingClientRect();
+        if (box.top - top < cut && box.bottom - top > cut) end = Math.max(end, Math.ceil(box.bottom - top));
+      }
+      if (end > cut) element.style.maxHeight = `${end}px`;
+      setClipped(element.scrollHeight > end + 1);
+    };
     measure();
+    // Its content grows under a fixed cut (a code block laid out late): watched as well.
     const observer = new ResizeObserver(measure);
     observer.observe(element);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
     return () => observer.disconnect();
-  }, []);
+  }, [expanded]);
   // Files only: an empty bubble hides itself (and the action bar beside it).
   if (!hasText) return <div className="aui-user-message-content peer empty:hidden" />;
   return (
@@ -740,16 +756,17 @@ const UserMessageText: FC = () => {
           !expanded && "max-h-user-message overflow-hidden",
         )}
       >
-        {UserText ? <MessagePrimitive.Parts components={{ Text: UserText }} /> : <MessagePrimitive.Parts />}
+        <div>{UserText ? <MessagePrimitive.Parts components={{ Text: UserText }} /> : <MessagePrimitive.Parts />}</div>
       </div>
       {(clipped || expanded) && (
         <button
           type="button"
           aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
-          className="text-muted-foreground hover:text-foreground self-start pt-1 text-xs"
+          className="text-muted-foreground hover:text-foreground flex items-center gap-0.5 self-start pt-1 text-xs"
         >
           {expanded ? "Show less" : "Show more"}
+          <ChevronRightAlt aria-hidden className={cn("size-icon-xs transition-transform", expanded ? "-rotate-90" : "rotate-90")} />
         </button>
       )}
     </div>
