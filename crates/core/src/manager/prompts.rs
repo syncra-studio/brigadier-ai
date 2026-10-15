@@ -1569,19 +1569,25 @@ pub(crate) struct WorkerEnvironment<'a> {
     pub low_priority: bool,
 }
 
+/// What a worker or the thread is told about the dependency installs and build caches copied
+/// into its worktree from the user's checkout (`warm`).
+pub(crate) fn copied_in_line(warmed: &[String]) -> String {
+    format!(
+        "Dependencies are already installed: {} {} copied in from the user's checkout. Don't reinstall them.",
+        warmed
+            .iter()
+            .map(|folder| format!("`{folder}`"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        if warmed.len() == 1 { "was" } else { "were" }
+    )
+}
+
 pub(crate) fn environment(env: &WorkerEnvironment<'_>) -> String {
     use brigadier_providers::Access;
     let mut lines: Vec<String> = Vec::new();
     if !env.warmed.is_empty() {
-        lines.push(format!(
-            "Dependencies are already installed: {} {} copied in from the user's checkout. Don't reinstall them.",
-            env.warmed
-                .iter()
-                .map(|folder| format!("`{folder}`"))
-                .collect::<Vec<_>>()
-                .join(", "),
-            if env.warmed.len() == 1 { "was" } else { "were" }
-        ));
+        lines.push(copied_in_line(env.warmed));
     }
     lines.push(format!(
         "Your test data folder, for whatever a test or a smoke run writes outside the checkout (an app's data folder, a test database): {}. Never use an app's real data folder.",

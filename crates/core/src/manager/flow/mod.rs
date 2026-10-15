@@ -1889,4 +1889,6 @@ mod unreported_tests;
 #[cfg(test)]
 mod usage_tests;
 #[cfg(test)]
+mod warm_session_tests;
+#[cfg(test)]
 mod workspace_tests;

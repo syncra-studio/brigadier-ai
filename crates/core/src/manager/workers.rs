@@ -2524,7 +2524,8 @@ impl SessionManager {
                     branch.clone(),
                     start.clone(),
                 );
-                let made = blocking(move || {
+                let platform = self.runtime.platform().clone();
+                let (made, warmed) = blocking(move || {
                     let repo = git.open(&repo_path).map_err(git_error)?;
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)
@@ -2549,9 +2550,42 @@ impl SessionManager {
                     };
                     repo.add_worktree(&path, spec).map_err(git_error)?;
                     super::sidecars::stand_in_at(&git, &path);
-                    Ok(made)
+                    // The thread builds and tests here as a worker does in its own worktree,
+                    // so it starts from the same copies of the checkout's dependency installs
+                    // and build caches (best effort; see `warm`): without them its first check
+                    // fails and it reinstalls them (BUILD-PLAN C7).
+                    let started = std::time::Instant::now();
+                    let warmed = match git.open(&path) {
+                        Ok(worktree) => {
+                            let installing = || warm::install_running(&*platform, repo.root());
+                            let warmed =
+                                warm::warm_worktree(&repo, &[repo_path], &worktree, &installing);
+                            tracing::info!(
+                                worktree = %path.display(),
+                                copied = ?warmed.copied,
+                                skipped = ?warmed.skipped,
+                                ms = started.elapsed().as_millis() as u64,
+                                "warmed the session's worktree"
+                            );
+                            warmed.copied
+                        }
+                        Err(err) => {
+                            tracing::warn!(worktree = %path.display(), %err, "couldn't open the session's worktree to warm it");
+                            Vec::new()
+                        }
+                    };
+                    Ok((made, warmed))
                 })
                 .await?;
+                if !warmed.is_empty()
+                    && let Ok(conv) = self.conv(conversation_id)
+                {
+                    conv.note(format!(
+                        "[workspace] {}",
+                        super::prompts::copied_in_line(&warmed)
+                    ))
+                    .await;
+                }
                 // A branch that was there already (the user's, or one a restored session
                 // made before) is only Brigadier's when its records say so.
                 if made.is_some() {
