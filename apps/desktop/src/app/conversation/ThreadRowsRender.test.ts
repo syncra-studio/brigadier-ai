@@ -34,6 +34,10 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     loneRan: string | null;
     kindIcons: Record<string, string | null>;
     diffDialog: { fits: boolean; files: number; scrolls: boolean; whole: boolean };
+    editRow: { closed: string | null; open: string | null };
+    turnDiff: Record<"many" | "one", { title: string | null; counts: string | null; buttons: (string | null)[]; files: (string | null)[][]; more: string | null }> & {
+      all: { files: number; more: string | null }; opened: { name: string | null; counts: string | null }; asks: string[];
+    };
     user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string; image: string[] };
   } & Record<"diff-patch" | "diff-edit" | "diff-empty" | "diff-missing", {
     name: string | null; counts: string | null; numbers: string[]; kinds: string[]; gaps: string[]; marks: string[]; empty: string | null; coloured: boolean;
@@ -81,6 +85,19 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // An edit rebuilt from its call: no numbers, its changed word marked on both sides.
   assert.deepEqual([seen["diff-edit"].numbers, seen["diff-edit"].marks, seen["diff-edit"].counts], [[], ["1", "2"], "+1 −1"]);
   assert.equal(seen["diff-empty"].empty, "No changes");
+  // An edit row opened to its diff reads "Edited file".
+  assert.deepEqual(seen.editRow, { closed: "Edited math.js", open: "Edited file" });
+  // The turn's diff card: "Edited 5 files +5 −5", Undo and View changes; the first three files, a
+  // folder dim before each name; then all five, and a row opens to its own diff.
+  const { turnDiff } = seen;
+  assert.deepEqual([turnDiff.many.title, turnDiff.many.counts, turnDiff.many.buttons], ["Edited 5 files", "+5 −5", ["View changed files", "Undo", "View changes"]]);
+  assert.deepEqual(turnDiff.many.files, [["", "README.md"], ["src/", "math.js"], ["src/", "strings.js"]]);
+  assert.equal(turnDiff.many.more, "Show 2 more files");
+  assert.deepEqual(turnDiff.all, { files: 5, more: "Collapse files" });
+  assert.deepEqual(turnDiff.opened, { name: "README.md", counts: "+1 −1" });
+  assert.deepEqual(turnDiff.asks, [JSON.stringify({ type: "lastTurn", requestId: "many" })]);
+  // One file: its name is the title, and there is no list.
+  assert.deepEqual([turnDiff.one.title, turnDiff.one.files, turnDiff.one.more], ["Edited run.mjs", [], null]);
   assert.equal(seen["diff-missing"].empty, "Diff too large to preview");
   // Inline code naming a checkout file is a chip: from the list, or asked by its exact path
   // because the list was cut short; other code stays code, and a missing file is no chip.

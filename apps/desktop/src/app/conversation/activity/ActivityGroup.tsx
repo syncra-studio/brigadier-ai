@@ -75,12 +75,15 @@ export function stoppedLabel(words: StepWords, startedAtMs: number | undefined, 
  * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test" ("in 41s" inside an opened group); the verb shimmers while it
  * runs. It opens to `detail` when there is one, also while it runs.
  */
-export function StepRow({ words, status, exit = null, startedAtMs, detail, suffix, slot }: Described & {
+export function StepRow({ words: said, status, exit = null, startedAtMs, detail, suffix, slot }: Described & {
   detail?: ReactNode;
   /** After the words: "in 41s". */
   suffix?: ReactNode;
   slot?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  // An edit opened to its diff, which names the file itself: the row reads "Edited file".
+  const words = open && said.kind === "edit" && status === "completed" && said.object ? { kind: said.kind, doing: said.doing, done: "Edited file" } : said;
   const stoppedBy = useContext(StoppedBy);
   // Still running when the user's Stop ended its thread: it was stopped, not running.
   const stopped = status === "inProgress" && stoppedBy !== null;
@@ -95,6 +98,7 @@ export function StepRow({ words, status, exit = null, startedAtMs, detail, suffi
       data-kind={words.kind}
       data-step-state={stopped ? "stopped" : running ? "running" : undefined}
       detail={detail}
+      onOpenChange={setOpen}
       detailClassName={cn(ROW_DETAIL, "ps-0")}
     >
       <StepIcon words={words} stopped={stopped} />

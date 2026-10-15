@@ -36,11 +36,14 @@ import { stepWords } from "@/app/conversation/activity/words";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
+import { TurnDiff } from "@/app/conversation/TurnDiff";
+import { ViewContext } from "@/app/conversation/viewContext";
 import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, OrchestratorStep, Request } from "@/ipc/generated";
+import { emptyBoard, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -52,6 +55,10 @@ const bigPatch = Array.from({ length: 6 }, (_, file) =>
   `diff --git a/src/f${file}.ts b/src/f${file}.ts\n--- a/src/f${file}.ts\n+++ b/src/f${file}.ts\n@@ -0,0 +1,40 @@\n` + Array.from({ length: 40 }, (_line, line) => `+export const v${line} = ${line};\n`).join(""),
 ).join("");
 const siteAsks: string[] = [];
+const reviewAsks: string[] = [];
+/** The turn's patch, as the Review diff gives it: five files. */
+const TURN_FILES = ["README.md", "src/math.js", "src/strings.js", "src/a.js", "src/b.js"];
+const turnPatch = TURN_FILES.map((path) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,1 @@\n-old ${path}\n+new ${path}\n`).join("");
 const NODE_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/eL9GtQAAAABJRU5ErkJggg==";
 let letIconsCome = () => {};
 const iconsCome = new Promise<void>((resolve) => (letIconsCome = resolve));
@@ -62,6 +69,10 @@ mockIPC((command, payload) => {
   if (req.method === "resolveFileLink") {
     asked.push(req.path);
     return { method: req.method, exists: req.path === `${ROOT}/src/made-later.ts`, stored: null };
+  }
+  if (req.method === "getReviewDiff") {
+    reviewAsks.push(JSON.stringify(req.scope));
+    return { method: req.method, review: { patch: turnPatch } };
   }
   if (req.method === "readArtifact") return { method: req.method, text: { text: bigPatch, offset: 0, totalBytes: bigPatch.length, binary: false } };
   if (req.method === "siteIcon") {
@@ -81,6 +92,18 @@ useApp.setState((state) => ({
   selection: { type: "conversation", id: CHAT },
   settings: state.settings,
 }));
+
+const landed = (id: string, requestId: string, number: number, files: string[]) => ({
+  id, requestId, number, landed: "abc", state: "landed",
+  candidate: { diffStat: { files: files.map((path) => ({ path, insertions: 1, deletions: 1, binary: false })), insertions: files.length, deletions: files.length } },
+});
+useBoard.setState({
+  board: {
+    ...emptyBoard(CHAT), loaded: true,
+    tasks: { t1: landed("t1", "many", 1, TURN_FILES), t2: landed("t2", "one", 2, ["scripts/run.mjs"]) },
+  } as unknown as ReturnType<typeof emptyBoard>,
+});
+const view = { selection: { type: "conversation" as const, id: CHAT }, conversation: { id: CHAT } as Conversation, embedded: false };
 
 const patch = "--- a/src/math.js\n+++ b/src/math.js\n@@ -1,4 +1,4 @@\n export function round(value) {\n-  return Math.round(value * 100) / 100;\n+  return Math.round((value + Number.EPSILON) * 100) / 100;\n }\n \n@@ -20,2 +20,3 @@\n const a = 1;\n+const b = 2;\n const c = 3;\n";
 const links = "See [the release](https://nodejs.org/en/about) and [its schedule](https://nodejs.org/en/about/previous-releases), [a page](https://none.example/x) and [the dev server](http://localhost:3000). Write to [the team](mailto:team@example.com).";
@@ -197,6 +220,21 @@ function Page() {
         <Case id="search">
           <StepRow {...describeLeadStep(search)} />
         </Case>
+        <Case id="edit-row">
+          <StepRow
+            words={stepWords({ name: "Edit", detail: "src/math.js", status: "completed" })}
+            status="completed"
+            detail={<InlineDiff path="src/math.js" diff={patch} />}
+          />
+        </Case>
+        <ViewContext.Provider value={view}>
+          <Case id="turn-diff-many">
+            <TurnDiff requestId="many" />
+          </Case>
+          <Case id="turn-diff-one">
+            <TurnDiff requestId="one" />
+          </Case>
+        </ViewContext.Provider>
         <Case id="diff-patch">
           <InlineDiff path="src/math.js" diff={patch} />
         </Case>
@@ -284,6 +322,31 @@ async function measure(): Promise<object> {
   trigger?.click();
   await wait(400);
   out.children = all("[data-slot=child]", at("group")).map((row) => text(row));
+  // An edit row opened to its diff reads "Edited file": the diff names the file.
+  const editRow = one<HTMLElement>("[role=button]", at("edit-row"));
+  const editClosed = text(editRow);
+  editRow?.click();
+  await wait(400);
+  out.editRow = { closed: editClosed, open: text(editRow) };
+  // The turn's diff card: several files, the first three listed; one file, named in the title, no list.
+  const card = (id: string) => ({
+    title: text(one("[data-slot=turn-diff-title]", at(id))),
+    counts: text(one("[data-slot=turn-diff-counts]", at(id))),
+    buttons: all("button", at(id)).filter((button) => !button.closest("[data-slot=turn-diff-file]") && button.getAttribute("data-slot") !== "turn-diff-more").map((button) => button.getAttribute("aria-label") ?? text(button)),
+    files: all("[data-slot=turn-diff-file]", at(id)).map((row) => [text(one("[data-slot=turn-diff-dir]", row)), text(one("[data-slot=turn-diff-name]", row))]),
+    more: text(one("[data-slot=turn-diff-more]", at(id))),
+  });
+  const many = card("turn-diff-many");
+  one<HTMLButtonElement>("[data-slot=turn-diff-more]", at("turn-diff-many"))?.click();
+  await wait(100);
+  const all5 = card("turn-diff-many");
+  one<HTMLButtonElement>("[data-slot=turn-diff-file] button", at("turn-diff-many"))?.click();
+  for (const end = performance.now() + 8000; performance.now() < end && !one("[data-slot=turn-diff-file-body] [data-slot=diff-name]", at("turn-diff-many")); ) await frame();
+  out.turnDiff = {
+    many, all: { files: all5.files.length, more: all5.more }, one: card("turn-diff-one"),
+    opened: { name: text(one("[data-slot=turn-diff-file-body] [data-slot=diff-name]", at("turn-diff-many"))), counts: text(one("[data-slot=turn-diff-file-body] [data-slot=diff-counts]", at("turn-diff-many"))) },
+    asks: reviewAsks,
+  };
   // The diff engine draws in its own shadow root.
   const inside = (id: string, selector: string) =>
     all("diffs-container", at(id)).flatMap((host) => (host.shadowRoot ? [...host.shadowRoot.querySelectorAll<HTMLElement>(selector)] : []));
