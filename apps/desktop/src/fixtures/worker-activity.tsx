@@ -20,7 +20,9 @@ const task = (id: string, number: number, state: Task["state"], blockedReason: s
   createdAtMs: 8000, updatedAtMs: 80000,
 });
 const tasks = { active: task("active", 1, "running"), blocked: task("blocked", 2, "blocked", "Waiting for plan review"),
-  queued: task("queued", 3, "queued"), completed: task("completed", 4, "done") };
+  queued: task("queued", 3, "queued"), completed: task("completed", 4, "done"),
+  // Stopped before it landed: it counts as stopped, never as done (BUILD-PLAN A7).
+  stopped: task("stopped", 5, "stopped") };
 useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, tasks } });
 mockIPC(() => null);
 function Fixture() {

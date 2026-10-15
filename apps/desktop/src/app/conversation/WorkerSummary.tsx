@@ -2,7 +2,7 @@ import { type FC, useContext, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { WORKERS_LABEL } from "@/app/conversation/Agents";
-import { workerDone } from "@/app/conversation/workerPresentation";
+import { outcomeWords, workerDone } from "@/app/conversation/workerPresentation";
 import {
   AgentsPanelContext,
   WorkerGlyph,
@@ -93,7 +93,7 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
   const { panel, setPanel } = useContext(AgentsPanelContext);
   if (!tasks.length) return null;
   const active = tasks.filter((task) => !workerDone(task));
-  const done = tasks.length - active.length;
+  const finished = outcomeWords(tasks);
   const avatars = active.length ? active : tasks;
   return (
     <SummarySection foldKey="workers" title={WORKERS_LABEL} aria-label="Session workers">
@@ -109,9 +109,9 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
             {avatars.slice(0, 4).map((task) => <WorkerGlyph key={task.id} taskId={task.id} className="size-4" />)}
           </span>
         }
-        meta={active.length > 0 && done > 0 ? `${done} done` : undefined}
+        meta={active.length > 0 && finished ? finished : undefined}
       >
-        {active.length ? `${active.length} working` : `${done} done`}
+        {active.length ? `${active.length} working` : finished}
       </SummaryRowButton>
     </SummarySection>
   );

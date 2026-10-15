@@ -25,7 +25,7 @@ test("a finished worker stays until its request's answer is posted, not before",
   // The answer for its request, after it finished, takes it off; the live one stays.
   const answered = lastReplies([reply("r1", 100), reply("r1", 700)]);
   assert.deepEqual(workersStrip([finished, running], answered, []), {
-    rows: [running.id], working: 1, waiting: 0, done: 0, stopped: 0, stoppable: true,
+    rows: [running.id], working: 1, waiting: 0, done: 0, stopped: 0, failed: 0, stoppable: true,
   });
   // Another request's answer doesn't.
   assert.equal(workersStrip([finished], lastReplies([reply("r2", 900)]), [])?.done, 1);
@@ -38,7 +38,7 @@ test("a live worker always shows, and keeps its request's finished workers in vi
   const second = task({ state: "paused", requestId: "r1" });
   // A progress line after the first landed is no answer while the second still works.
   const view = workersStrip([first, second], lastReplies([reply("r1", 300)]), []);
-  assert.deepEqual(view, { rows: [second.id, first.id], working: 0, waiting: 1, done: 1, stopped: 0, stoppable: true });
+  assert.deepEqual(view, { rows: [second.id, first.id], working: 0, waiting: 1, done: 1, stopped: 0, failed: 0, stoppable: true });
   // A worker with no request has no answer to wait for.
   assert.equal(workersStrip([task({ state: "done", requestId: null })], {}, []), null);
   assert.equal(workersStrip([task({ requestId: null })], {}, [])?.working, 1);

@@ -5,6 +5,31 @@ export function workerDone(task: Task): boolean {
   return ["reported", "landed", "done", "rejected", "stopped", "failed"].includes(task.state);
 }
 
+/**
+ * How a finished worker ended (BUILD-PLAN A7): "done" only when its work landed or was used, so a
+ * worker stopped or turned down before landing reads "stopped", never "done". `null` while it is
+ * at it.
+ */
+export function workerOutcome(task: Task): "done" | "stopped" | "failed" | null {
+  if (!workerDone(task)) return null;
+  if (task.state === "failed") return "failed";
+  if ((task.state === "stopped" || task.state === "rejected") && !task.landed) return "stopped";
+  return "done";
+}
+
+/** "1 done · 1 stopped": the finished workers by how they ended, zeros left out. */
+export function outcomeWords(tasks: readonly Task[]): string {
+  const counts = { done: 0, stopped: 0, failed: 0 };
+  for (const task of tasks) {
+    const outcome = workerOutcome(task);
+    if (outcome) counts[outcome] += 1;
+  }
+  return Object.entries(counts)
+    .filter(([, count]) => count > 0)
+    .map(([word, count]) => `${count} ${word}`)
+    .join(" · ");
+}
+
 export function workerWorking(task: Task): boolean {
   return ["starting", "running", "landing"].includes(task.state);
 }

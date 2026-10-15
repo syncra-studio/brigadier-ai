@@ -130,16 +130,17 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
   }
   const rendering = JSON.parse(serialized) as Rendering;
   // The Workers strip counts them in one line and, open, lists each with Stop all.
-  assert.match(rendering.strip, /1 worker working · 2 waiting · 1 done/);
+  assert.match(rendering.strip, /1 worker working · 2 waiting · 1 done · 1 stopped/);
   assert.match(rendering.strip, /Stop all/);
-  assert.equal(rendering.stripRows, 4);
+  assert.equal(rendering.stripRows, 5);
   assert.match(rendering.thread.active!, /Check active started working/);
   assert.match(rendering.thread.blocked!, /Check blocked is waiting/);
   assert.match(rendering.thread.completed!, /Check completed finished/);
+  assert.match(rendering.thread.stopped!, /Check stopped stopped/);
   assert.match(rendering.summary, /3 working/);
-  assert.match(rendering.summary, /1 done/);
+  assert.match(rendering.summary, /1 done · 1 stopped/);
   assert.match(rendering.list, /Working · 3/);
-  assert.match(rendering.list, /Done · 1/);
+  assert.match(rendering.list, /Done · 2/);
   assert.match(rendering.list, /Waiting for its plan to be reviewed/);
   assert.match(rendering.list, /Waiting for a free slot/);
   assert.match(rendering.list, /3m 12s/);

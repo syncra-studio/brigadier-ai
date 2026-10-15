@@ -1,4 +1,4 @@
-import { workerDone, workerStoppable, workerWorking } from "@/app/conversation/workerPresentation";
+import { workerDone, workerOutcome, workerStoppable, workerWorking } from "@/app/conversation/workerPresentation";
 import type { Message, Task, UserRequest, WorkerStep } from "@/ipc/generated";
 
 /** What the Workers strip on the composer shows (THREAD-UX-PLAN.md §3.5). */
@@ -8,8 +8,10 @@ export type StripView = {
   working: number;
   waiting: number;
   done: number;
-  /** Of the finished, those stopped before they finished: the user's Stop all, or the lead. */
+  /** Of the finished, those stopped before they landed: the user's Stop all, or the lead. */
   stopped: number;
+  /** Of the finished, those that failed. */
+  failed: number;
   /** Whether Stop all has anything to stop. */
   stoppable: boolean;
 };
@@ -79,24 +81,26 @@ export function workersStrip(
   const finished = byAge.filter((task) => workerDone(task) && unanswered(task.requestId));
   if (live.length + finished.length === 0) return null;
   const working = live.filter(workerWorking).length;
-  const stopped = finished.filter((task) => task.state === "stopped").length;
+  const ended = (outcome: "done" | "stopped" | "failed") => finished.filter((task) => workerOutcome(task) === outcome).length;
   return {
     rows: [...live, ...finished].map((task) => task.id),
     working,
     waiting: live.length - working,
-    done: finished.length - stopped,
-    stopped,
+    done: ended("done"),
+    stopped: ended("stopped"),
+    failed: ended("failed"),
     stoppable: live.some(workerStoppable),
   };
 }
 
 /** "2 workers working · 1 waiting · 1 done": the first count names them, zeros are left out. */
-export function stripWords({ working, waiting, done, stopped }: Pick<StripView, "working" | "waiting" | "done" | "stopped">): string {
+export function stripWords({ working, waiting, done, stopped, failed = 0 }: Pick<StripView, "working" | "waiting" | "done" | "stopped"> & Partial<Pick<StripView, "failed">>): string {
   const counts = [
     [working, "working"],
     [waiting, "waiting"],
     [done, "done"],
     [stopped, "stopped"],
+    [failed, "failed"],
   ] as const;
   return counts
     .filter(([count]) => count > 0)
