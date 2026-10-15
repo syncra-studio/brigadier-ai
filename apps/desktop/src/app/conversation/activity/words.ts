@@ -29,6 +29,8 @@ export type StepWords = {
   web?: boolean;
   /** It waits for other sessions to reply. */
   waiting?: boolean;
+  /** It lists a folder's files (drawn with a folder, where a search has a magnifier). */
+  list?: boolean;
 };
 
 export type ToolStep = Extract<OrchestratorStepKind, { type: "tool" }>;
@@ -96,7 +98,7 @@ const OTHER: Record<string, [doing: string, done: string]> = {
   list_sessions: ["Looking for sessions", "Looked for sessions"],
   read_session: ["Reading another session", "Read another session"],
   imagegen: ["Creating an image", "Created an image"],
-  record_findings: ["Noting what it found", "Noted what it found"],
+  record_findings: ["Writing down its findings", "Wrote down its findings"],
   record_nodes: ["Saving to project memory", "Saved to project memory"],
   ci_status: ["Checking CI", "Checked CI"],
   watch_ci: ["Watching CI", "Watched CI"],
@@ -158,8 +160,31 @@ const read = (what: string): StepWords => ({ kind: "read", doing: `Reading ${wha
 
 const listed = (folder: string | null): StepWords =>
   folder
-    ? { kind: "code", doing: `Listing files in ${folder}`, done: `Listed files in ${folder}`, object: folder }
-    : { kind: "code", doing: "Listing files", done: "Listed files" };
+    ? { kind: "code", doing: `Listing files in ${folder}`, done: `Listed files in ${folder}`, object: folder, list: true }
+    : { kind: "code", doing: "Listing files", done: "Listed files", list: true };
+
+/** Options of `curl` and `wget` that send or change something: such a call is no plain page read. */
+const SENDS = /^(?:-X|--request|-d|--data\S*|-F|--form\S*|-T|--upload-file|--post-data|--post-file|--method|--body-data|--body-file)$/;
+
+/** Whether a URL names a host on the internet, not this machine or the local network. */
+function publicHost(url: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(url);
+    if (protocol !== "http:" && protocol !== "https:") return false;
+    if (!hostname.includes(".") || hostname.endsWith(".local") || hostname.endsWith(".internal")) return false;
+    return !/^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.|0\.)/.test(hostname) && !hostname.startsWith("[");
+  } catch {
+    return false;
+  }
+}
+
+/** `curl https://nodejs.org/dist/index.json`: a GET of a public page, which reads as a web search. */
+function readsTheWeb(program: string, words: readonly string[]): boolean {
+  if (program !== "curl" && program !== "wget") return false;
+  if (words.some((word, index) => index > 0 && SENDS.test(word.replace(/=.*$/, "")))) return false;
+  const urls = words.slice(1).filter((word) => /^https?:\/\//.test(word));
+  return urls.length > 0 && urls.every(publicHost);
+}
 
 /** "Searched for “add” in src" / "Searching for “add”". */
 const searchedCode = (pattern: string | null, path: string | null = null): StepWords => {
@@ -180,6 +205,11 @@ function commandWords(raw: string, kind: "run" | "checks" = "run"): StepWords {
   const ran: StepWords = { kind, doing: `Running ${firstLine}`, done: `Ran ${firstLine}`, object: firstLine, ...(web && { web }) };
   // A compound command, or a check, is told as what it runs.
   if (kind === "checks" || /[;&|<>`$(]/.test(command.replace(/\s\|\|\s.*$/, ""))) return ran;
+  if (program === "date" && words.length === 1) {
+    return { kind: "run", doing: "Checking the current date and time", done: "Checked the current date and time" };
+  }
+  // A plain GET of a public page sums up with the web searches, under the globe.
+  if (readsTheWeb(program, words)) return { ...ran, kind: "web", web: true };
   if (program === "rg" && words.includes("--files")) return listed(null);
   if (READERS.has(program)) {
     const file = lastPath(words);
@@ -389,15 +419,14 @@ export function toolHasOwnResult(
 }
 
 /**
- * A step's row: its words for how it stands, and how it ended when that wasn't well ("Ran pnpm
- * test — failed (exit 1)"). `exit` is a command's exit code, when it says.
+ * A step's row: its words for how it stands. A command reads as the call it was however it
+ * ended ("Ran pnpm test"): its exit code is in its Shell box, and a declined call is counted in
+ * the turn's header. Another tool that failed says so ("Used a tool — failed").
  */
-export function stepLabel(words: StepWords, status: ItemStatus, exit: number | null = null): string {
+export function stepLabel(words: StepWords, status: ItemStatus, _exit: number | null = null): string {
   if (status === "inProgress") return words.doing;
-  // Declined is the user's answer, not a failure: said plainly, with what it would have acted on.
-  if (status === "declined") return words.object ? `Declined: ${words.object}` : `${words.done} — declined`;
-  if (exit !== null && exit !== 0) return `${words.done} — failed (exit ${exit})`;
-  if (status === "failed") return `${words.done} — failed`;
+  const command = words.kind === "run" || words.kind === "checks" || (words.kind === "web" && words.done.startsWith("Ran "));
+  if (status === "failed" && !command) return `${words.done} — failed`;
   return words.done;
 }
 
@@ -479,18 +508,26 @@ function summaryRank(key: string): number {
  * files, ran commands"). Each `other` tool counts as a kind of its own.
  */
 export function summarize(steps: readonly StepWords[]): string {
+  const parts = segments(steps).map(([key, { words, count }]) =>
+      words.kind === "other" ? (words.phrase ?? words.done) : LEADING[key as keyof typeof LEADING][count === 1 ? 0 : 1],
+    );
+  return parts.map((part, index) => (index === 0 ? part : part.charAt(0).toLowerCase() + part.slice(1))).join(", ");
+}
+
+/** A run of steps by summary segment, in the summary's order: each segment's first step and how many. */
+function segments(steps: readonly StepWords[]): [string, { words: StepWords; count: number }][] {
   const counts = new Map<string, { words: StepWords; count: number }>();
   for (const words of steps) {
     const key = words.kind === "other" ? `other:${words.phrase ?? words.done}` : words.kind === "code" ? "read" : words.kind;
     const known = counts.get(key);
-    counts.set(key, { words, count: (known?.count ?? 0) + 1 });
+    counts.set(key, { words: known?.words ?? words, count: (known?.count ?? 0) + 1 });
   }
-  const parts = [...counts.entries()]
-    .toSorted(([a], [b]) => summaryRank(a) - summaryRank(b))
-    .map(([key, { words, count }]) =>
-      words.kind === "other" ? (words.phrase ?? words.done) : LEADING[key as keyof typeof LEADING][count === 1 ? 0 : 1],
-    );
-  return parts.map((part, index) => (index === 0 ? part : part.charAt(0).toLowerCase() + part.slice(1))).join(", ");
+  return [...counts.entries()].toSorted(([a], [b]) => summaryRank(a) - summaryRank(b));
+}
+
+/** The step whose icon a summary row shows: the first of the summary's first segment ("Ran commands, …" → a terminal). */
+export function summaryLead(steps: readonly StepWords[]): StepWords | undefined {
+  return segments(steps)[0]?.[1].words;
 }
 
 /** A worker's action, as its transcript keeps it. */

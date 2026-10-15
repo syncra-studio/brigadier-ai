@@ -772,7 +772,7 @@ const CopyMessage: FC = () => {
   const text = useAuiState((s) => s.message.parts.map((part) => (part.type === "text" ? part.text : "")).join(""));
   const { isCopied, copyToClipboard } = useCopyToClipboard({ copiedDuration: 1500 });
   return (
-    <TooltipIconButton tooltip={isCopied ? "Copied" : "Copy"} className="aui-user-action-copy" onClick={() => copyToClipboard(text)}>
+    <TooltipIconButton tooltip={isCopied ? "Copied" : "Copy message"} className="aui-user-action-copy" onClick={() => copyToClipboard(text)}>
       {isCopied ? <Check /> : <CopyIcon />}
     </TooltipIconButton>
   );

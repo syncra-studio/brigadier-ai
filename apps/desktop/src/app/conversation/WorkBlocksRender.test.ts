@@ -18,6 +18,7 @@ async function drive<T>(t: test.TestContext, query: string): Promise<T> {
 test("a turn has one live line, folds the moment its final answer starts, and keeps that time through the end and a reload", { timeout: 120000 }, async (t) => {
   const seen = await drive<Record<"thinking" | "thought" | "question" | "running" | "justEnded" | "ended" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
     foldFirst: string; foldMs: number; actions: string[]; firstHeader: string | null; commentaryAtOnce: string | null;
+    announcedAnswering: string | null; announcedDone: string | null; time: { text: string | null; opacity: string | null }; html: string | null;
   }>(t, "drive=turn");
   // The header is there from the turn's first frame.
   assert.match(seen.firstHeader ?? "", /^Working/);
@@ -72,7 +73,15 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
     ["Waiting for Billing to reply", true, false],
   );
   assert.equal(seen.done.status, null);
-  assert.deepEqual(seen.actions, ["Copy", "Read aloud", "Rate response", "Try again", "Fork chat from here"]);
+  assert.deepEqual(seen.actions, ["Copy response", "Read aloud", "Feedback", "Try again", "Fork chat from here"]);
+  // The latest answer's time shows without a hover.
+  assert.equal(seen.time.opacity, "1");
+  assert.match(seen.time.text ?? "", /\d:\d\d/);
+  // A screen reader hears the answer start, then end with its words.
+  assert.equal(seen.announcedAnswering, "Response started");
+  assert.equal(seen.announcedDone, "Response complete: Fixed the rounding: `round` now rounds half-up, and the tests pass.");
+  // Copy's rich text is the answer as shown, with no classes or controls.
+  assert.equal(seen.html, "<div><p>Fixed the rounding: <code>round</code> now rounds half-up, and the tests pass.</p></div>");
 });
 
 test("a message steered in while a command runs sums the work above it up at once", { timeout: 120000 }, async (t) => {

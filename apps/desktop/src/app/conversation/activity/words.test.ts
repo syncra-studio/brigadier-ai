@@ -13,6 +13,7 @@ import {
   stepLabel,
   stepWords,
   summarize,
+  summaryLead,
   toolHasOwnResult,
   toolName,
   type ToolStep,
@@ -65,7 +66,7 @@ test("a step names what it acts on, by the file's name", () => {
   assert.equal(lead("mcp__brigadier__run", "completed", "pnpm test"), "Ran pnpm test");
   assert.equal(lead("mcp__brigadier__run_check", "inProgress", "cargo test"), "Running cargo test");
   assert.equal(lead("mcp__brigadier__run_check"), "Ran checks");
-  assert.equal(lead("shell", "failed", "cargo build"), "Ran cargo build — failed");
+  assert.equal(lead("shell", "failed", "cargo build"), "Ran cargo build");
   // Moving into the worktree first is no part of what it runs.
   assert.equal(lead("shell", "completed", "cd /tmp/w/session-1 && python3 -m pytest -q"), "Ran python3 -m pytest -q");
   assert.equal(lead("Bash", "completed", 'python3 -c "\nprint(1)\n"'), 'Ran python3 -c " …');
@@ -133,16 +134,34 @@ test("deduplication needs the matching authored result in this call's window", (
   );
 });
 
-test("a command that exited badly says how, a declined one says so", () => {
+test("a command reads as the call it was however it ended; another tool that failed says so", () => {
   const ran = toolStepWords(call("Bash", "completed", "pnpm test"));
   assert.equal(stepLabel(ran, "completed", 0), "Ran pnpm test");
-  assert.equal(stepLabel(ran, "failed", 1), "Ran pnpm test — failed (exit 1)");
-  // A command can end "completed" with a bad exit code (Codex): still a failure.
-  assert.equal(stepLabel(ran, "completed", 2), "Ran pnpm test — failed (exit 2)");
-  assert.equal(stepLabel(ran, "failed"), "Ran pnpm test — failed");
-  // Declined is an answer, not a failure.
-  assert.equal(stepLabel(ran, "declined", 130), "Declined: pnpm test");
-  assert.deepEqual(labelParts(ran, "Declined: pnpm test"), { verb: "Declined: ", object: "pnpm test", rest: "" });
+  // The exit code is in the Shell box; the row is the call.
+  assert.equal(stepLabel(ran, "failed", 1), "Ran pnpm test");
+  assert.equal(stepLabel(ran, "completed", 2), "Ran pnpm test");
+  // A declined call shows as the call it was: the header counts the declined ones.
+  assert.equal(stepLabel(ran, "declined", 130), "Ran pnpm test");
+  assert.equal(stepLabel(toolStepWords(call("review_code", "failed")), "failed"), "Asked for a review — failed");
+});
+
+test("a listing has the folder, `date` and a public page's GET read as what they are", () => {
+  assert.equal(toolStepWords(call("Bash", "completed", "ls src")).list, true);
+  assert.equal(toolStepWords(call("Grep", "completed", "add")).list, undefined);
+  assert.equal(toolStepWords(call("Bash", "completed", "date")).done, "Checked the current date and time");
+  const page = toolStepWords(call("Bash", "completed", "curl -s https://nodejs.org/dist/index.json"));
+  assert.deepEqual([page.kind, page.web, page.done], ["web", true, "Ran curl -s https://nodejs.org/dist/index.json"]);
+  for (const sends of ["curl -X POST https://api.example.com/x", "curl -d a=1 https://api.example.com/x", "curl http://localhost:3000"]) {
+    assert.notEqual(toolStepWords(call("Bash", "completed", sends)).kind, "web", sends);
+  }
+  assert.equal(summarize([page, toolStepWords(call("Bash", "completed", "pnpm test"))]), "Ran a command, searched the web");
+});
+
+test("a summary row's icon is its first segment's first step", () => {
+  const steps = [words("query_brain", "x"), words("Bash", "pnpm test"), words("Read", "a.ts")];
+  assert.equal(summarize(steps), "Read files, ran a command, checked project memory");
+  assert.equal(summaryLead(steps)?.kind, "read");
+  assert.equal(summaryLead([words("Bash", "a"), words("apply_patch", "b.ts")])?.kind, "edit");
 });
 
 test("an edit's call reads as its lines out and in", () => {
@@ -173,7 +192,7 @@ test("a row's words split into its verb and, a step fainter, what it acts on", (
   const edited = stepWords({ name: "Edit", detail: "/r/src/math.ts", status: "completed" });
   assert.deepEqual(labelParts(edited, stepLabel(edited, "completed")), { verb: "Edited ", object: "math.ts", rest: "" });
   const ran = stepWords({ name: "Bash", detail: "pnpm test", status: "failed" });
-  assert.deepEqual(labelParts(ran, stepLabel(ran, "completed", 1)), { verb: "Ran ", object: "pnpm test", rest: " — failed (exit 1)" });
+  assert.deepEqual(labelParts(ran, stepLabel(ran, "completed", 1)), { verb: "Ran ", object: "pnpm test", rest: "" });
   const searched = stepWords({ name: "Grep", detail: "sidebar", status: "completed" });
   assert.deepEqual(labelParts(searched, stepLabel(searched, "completed")), { verb: "Searched for ", object: "“sidebar”", rest: "" });
   // Words with nothing to act on are all verb.
@@ -219,7 +238,7 @@ const doneWords = (name: string) => stepWords({ name: `mcp__brigadier__${name}`,
 
 test("Brigadier's own tools read in plain words, never as their internal names", () => {
   const done = doneWords;
-  assert.equal(done("record_findings"), "Noted what it found");
+  assert.equal(done("record_findings"), "Wrote down its findings");
   assert.equal(done("approve_outline"), "Checked a worker’s outline");
   assert.equal(done("watch_ci"), "Watched CI");
   // A web search's site operator reads after a bar.

@@ -2,6 +2,7 @@ import { BranchAlt } from "@openai/apps-sdk-ui/components/Icon";
 import type { FC } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
+import { Spinner } from "@/components/glyphs/spinner";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import {
   DropdownMenu,
@@ -43,9 +44,11 @@ export const ForkMenu: FC<{ conversationId: string; kind: ConversationKind; mess
     <TooltipIconButton
       tooltip="Fork chat from here"
       disabled={action.busy}
+      aria-busy={action.busy || undefined}
       onClick={kind === "chat" ? () => fork("workspace") : undefined}
     >
-      <BranchAlt />
+      {/* Spinning while the fork is made. */}
+      {action.busy ? <Spinner className="animate-spin" /> : <BranchAlt />}
     </TooltipIconButton>
   );
   const error = action.error && (

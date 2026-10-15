@@ -1,12 +1,12 @@
-import { ChevronRight, Clock, Globe, Stop } from "@openai/apps-sdk-ui/components/Icon";
+import { ChevronRightAlt, Clock, Globe, Stop } from "@openai/apps-sdk-ui/components/Icon";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 
 import type { GroupItem } from "@/app/conversation/activity/group";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { useCalmLabel } from "@/app/conversation/activity/calmLabel";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
-import { labelParts, stepLabel, type StepWords, summarize } from "@/app/conversation/activity/words";
-import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
+import { labelParts, stepLabel, type StepWords, summarize, summaryLead } from "@/app/conversation/activity/words";
+import { CHEVRON, LIST_ICON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useNow } from "@/hooks/use-now";
@@ -26,9 +26,19 @@ export const STEP_LINGERS_MS = 1000;
 /** A row inside an opened group: a running command there reads "Running command for 12s". */
 const InGroup = createContext(false);
 
+/** Which icon a step's row has, by name (the name is also on the row, for tests). */
+export function stepIconName(words: StepWords, stopped = false): string {
+  return stopped ? "stop" : words.web ? "web" : words.waiting ? "waiting" : words.list ? "list" : words.kind;
+}
+
 function StepIcon({ words, stopped = false }: { words: StepWords; stopped?: boolean }) {
-  const Icon = stopped ? Stop : words.web ? Globe : words.waiting ? Clock : WORK_ICONS[words.kind];
-  return <Icon aria-hidden className="size-4 shrink-0" />;
+  const name = stepIconName(words, stopped);
+  const Icon = name === "stop" ? Stop : name === "web" ? Globe : name === "waiting" ? Clock : name === "list" ? LIST_ICON : WORK_ICONS[words.kind];
+  return (
+    <span data-icon={name} className="contents">
+      <Icon aria-hidden className="size-4 shrink-0" />
+    </span>
+  );
 }
 
 /** A step's words in two tones: the verb in the row's, what it acts on a step fainter; white together on hover. */
@@ -62,7 +72,7 @@ export function stoppedLabel(words: StepWords, startedAtMs: number | undefined, 
 }
 
 /**
- * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test in 41s"; the verb shimmers while it
+ * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test" ("in 41s" inside an opened group); the verb shimmers while it
  * runs. It opens to `detail` when there is one, also while it runs.
  */
 export function StepRow({ words, status, exit = null, startedAtMs, detail, suffix, slot }: Described & {
@@ -99,7 +109,8 @@ export function StepRow({ words, status, exit = null, startedAtMs, detail, suffi
           <Words words={words} label={stepLabel(words, status, exit)} />
         )}
       </span>
-      {suffix && <span className="shrink-0 tabular-nums">{suffix}</span>}
+      {/* "in 41s" only on a row inside an opened group: a row on its own says what it did. */}
+      {suffix && inGroup && <span className="shrink-0 tabular-nums">{suffix}</span>}
     </ThreadActivity>
   );
 }
@@ -161,7 +172,8 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   // The live line, unless the step running (or just ended) says it better; waiting on the user always wins.
   const line = live && liveLabel && (!stepNames || liveLabel.tone === "needsYou") ? liveLabel : null;
   const oneStep = !summary && (live || described.length === 1);
-  const head = oneStep ? current : first;
+  // A summary's icon is its first segment's ("Ran commands, read files" → a terminal).
+  const head = oneStep ? current?.words : (summaryLead(described.map((step) => step.words)) ?? first?.words);
   const naming = stepNames && !line && current !== undefined;
   const label = line
     ? line.text
@@ -181,7 +193,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
     <Collapsible data-slot="work-group" open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
         {/* The live line ("Thinking") is no step's: it shows without a step's icon. */}
-        {head && !(line && calm.shown === line.text) && <StepIcon words={head.words} />}
+        {head && !(line && calm.shown === line.text) && <StepIcon words={head} />}
         {/* A live group's step changes in place, with no jump and no fade: a fade-in's first
             frame is invisible, and WebKit can leave it there, and the fade's animation would
             replace the shimmer's. Keyed, a new label's sweep starts over. */}
@@ -198,7 +210,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
         >
           {current && oneStep && !naming && !line ? <Words words={current.words} label={calm.shown} /> : calm.shown}
         </span>
-        <ChevronRight aria-hidden className={CHEVRON} />
+        <ChevronRightAlt aria-hidden className={CHEVRON} />
       </CollapsibleTrigger>
       <CollapsibleContent className={OPENS}>
         {/* Up to 224px of rows 4px apart, then it scrolls, its edges fading while there is more. */}

@@ -1,4 +1,4 @@
-import { ChevronRight, QuestionMarkCircle } from "@openai/apps-sdk-ui/components/Icon";
+import { ChevronRightAlt, QuestionMarkCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { memo } from "react";
 
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
@@ -61,7 +61,7 @@ export const QuestionCardView = memo(function QuestionCardView({ cardId }: { car
         ) : (
           <span className="truncate">{words}</span>
         )}
-        <ChevronRight aria-hidden className={CHEVRON} />
+        <ChevronRightAlt aria-hidden className={CHEVRON} />
       </CollapsibleTrigger>
       <CollapsibleContent className={OPENS}>
         <dl className="flex flex-col gap-3 pt-2 pb-1 text-sm">

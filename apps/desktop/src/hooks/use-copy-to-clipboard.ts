@@ -25,13 +25,25 @@ export const useCopyToClipboard = ({
     [],
   );
 
-  const copyToClipboard = (value: string) => {
+  /** Copies `value` as text and, with `html`, also as rich text for apps that paste it. */
+  const copyToClipboard = (value: string, html?: string) => {
     if (!value || typeof navigator === "undefined" || !navigator.clipboard) {
       return;
     }
 
     const scopeGeneration = scopeGenerationRef.current;
-    navigator.clipboard.writeText(value).then(
+    const write =
+      html && typeof ClipboardItem !== "undefined"
+        ? navigator.clipboard
+            .write([
+              new ClipboardItem({
+                "text/plain": new Blob([value], { type: "text/plain" }),
+                "text/html": new Blob([html], { type: "text/html" }),
+              }),
+            ])
+            .catch(() => navigator.clipboard.writeText(value))
+        : navigator.clipboard.writeText(value);
+    write.then(
       () => {
         if (scopeGeneration !== scopeGenerationRef.current) return;
 

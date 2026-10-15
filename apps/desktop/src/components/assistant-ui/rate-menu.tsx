@@ -17,8 +17,8 @@ import {
 import type { Rating } from "@/ipc/generated";
 
 /**
- * "Rate response" under an answer: one button that opens "Good response"
- * and "Bad response", and shows the thumb the user picked. The items are `RateItem`s, bound
+ * "Feedback" under an answer: one button that opens "Good response" and "Bad response", and
+ * shows the thumb the user picked. The items are `RateItem`s, bound
  * to wherever the rating goes.
  */
 export function RateMenu({ rated, children }: { rated: Rating | null; children: ReactNode }) {
@@ -26,7 +26,7 @@ export function RateMenu({ rated, children }: { rated: Rating | null; children: 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <TooltipIconButton tooltip="Rate response">
+        <TooltipIconButton tooltip="Feedback">
           <Icon />
         </TooltipIconButton>
       </DropdownMenuTrigger>

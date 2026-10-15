@@ -38,6 +38,7 @@ import type {
   ThinkingSegment,
   UserRequest,
 } from "@/ipc/generated";
+import { answerHtml } from "@/app/conversation/RequestBlock";
 import { loadConversation, openConversation } from "@/state/actions";
 import { type Board, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -215,7 +216,7 @@ function seen() {
     // Its row's icons: a step's icon and the chevron, or the chevron alone.
     groupIcons: all("svg", one("button", group ?? document.createElement("div")) ?? document.createElement("div")).length,
     // What its words animate: the shimmer's sweep, never a fade that starts them invisible.
-    groupAnimations: (one("button > span", group ?? document.createElement("div"))?.getAnimations() ?? []).map((animation) => (animation as CSSAnimation).animationName),
+    groupAnimations: (one("button > span:not([data-icon])", group ?? document.createElement("div"))?.getAnimations() ?? []).map((animation) => (animation as CSSAnimation).animationName),
     groupLine: text(one("[data-slot=group-live-line]", block ?? document)),
     groupTone: one("[data-slot=group-live-line]", block ?? document)?.getAttribute("data-tone") ?? null,
     shimmer: !!group?.querySelector(".shimmer"),
@@ -301,6 +302,7 @@ async function driveTurn(): Promise<object> {
   out.foldMs = foldMs;
   await settle();
   out.answering = seen();
+  out.announcedAnswering = text(one("[data-slot=answer-announcer]", turn() ?? document));
   // Ticks later it still says the same time.
   await wait(2200);
   change(() => ({ streaming: { messageId: "a1", text: answerText, requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
@@ -335,6 +337,12 @@ async function driveTurn(): Promise<object> {
   out.done = seen();
   await hold("done");
   out.actions = all("[data-slot=answer-actions] button", turn() ?? document).map((button) => button.getAttribute("aria-label") ?? text(one(".sr-only", button)));
+  // The latest answer says when it came without a hover; a screen reader heard it start and end.
+  const time = one("[data-slot=answer-time]", turn() ?? document);
+  out.time = { text: text(time), opacity: time ? getComputedStyle(time).opacity : null };
+  out.announcedDone = text(one("[data-slot=answer-announcer]", turn() ?? document));
+  // Copy's rich text: the answer as shown, with no classes or controls.
+  out.html = turn() ? answerHtml(turn()!) : null;
   // Read again from the daemon, as after a restart.
   await loadConversation(ID);
   await settle(300);

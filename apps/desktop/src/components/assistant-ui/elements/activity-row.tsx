@@ -1,13 +1,13 @@
 import {
-  Book,
   Chat,
-  CheckCircle,
-  Dock,
   EditPencil,
+  File,
+  Folder,
   Globe,
+  MagnifyingGlassSmSearch,
   PlayCircle,
-  Search,
   Sparkle,
+  Terminal,
   Tools,
 } from "@openai/apps-sdk-ui/components/Icon";
 import type { FC } from "react";
@@ -42,15 +42,19 @@ export const CHEVRON =
 export const OPENS =
   "overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up motion-reduce:animate-none";
 
+/** A row's icon by its kind of work: a terminal for commands and checks, a file for reads, a magnifier for searches. */
 export const WORK_ICONS: Record<WorkKind, FC<{ className?: string }>> = {
-  read: Book,
+  read: File,
   edit: EditPencil,
-  run: Dock,
-  code: Search,
+  run: Terminal,
+  code: MagnifyingGlassSmSearch,
   web: Globe,
   memory: Sparkle,
-  checks: CheckCircle,
+  checks: Terminal,
   preview: PlayCircle,
   message: Chat,
   other: Tools,
 };
+
+/** A listing's icon: a folder, where a search has the magnifier. */
+export const LIST_ICON = Folder;

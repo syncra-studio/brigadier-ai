@@ -28,6 +28,10 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     boundary: { fallback: boolean; neighbour: string | null };
     mended: string | null;
     links: { before: string[]; after: string[]; asked: string[] };
+    doneGroup: { row: string | null; icon: string | null };
+    doneChildren: (string | null)[];
+    loneRan: string | null;
+    kindIcons: Record<string, string | null>;
     diffDialog: { fits: boolean; files: number; scrolls: boolean; whole: boolean };
     user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string; image: string[] };
   } & Record<"diff-patch" | "diff-edit" | "diff-empty" | "diff-missing", {
@@ -55,6 +59,14 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.equal(seen.children.length, 2);
   assert.equal(seen.children[0], "Read math.js");
   assert.match(seen.children[1] ?? "", /^Running command for [3-9]s$/);
+  // A finished group sums up in the fixed order, with the icon of its first segment's first step,
+  // not of its first step; opened, the command says how long it took; a row on its own doesn't.
+  assert.deepEqual(seen.doneGroup, { row: "Read files, ran a command, checked project memory", icon: "read" });
+  // (The time is its own span after the words.)
+  assert.deepEqual(seen.doneChildren, ["Checked project memory for “rounding”", "Ran npm testin 41s", "Read math.js"]);
+  assert.equal(seen.loneRan, "Ran npm test");
+  // Each kind's icon: a terminal, a file, a magnifier, a folder, a pencil, the globe for a public page's GET.
+  assert.deepEqual(seen.kindIcons, { run: "run", read: "read", search: "code", list: "list", edit: "edit", web: "web" });
   // A web search: its site after a bar, nothing to open.
   assert.deepEqual(seen.search, { row: "Searched the web for node lts release | nodejs.org", opens: false });
   // A real patch: numbered from its hunks, the stretch between them counted, changed words marked, coloured.

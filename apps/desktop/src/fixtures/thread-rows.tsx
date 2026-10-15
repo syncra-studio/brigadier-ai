@@ -126,6 +126,23 @@ const group: { key: string; described: Described }[] = [
   { key: "read-running", described: { words: stepWords({ name: "Read", detail: "/repo/src/round.js", status: "inProgress" }), status: "inProgress" } },
 ];
 
+/** A finished group whose first step is project memory: its icon is its summary's first segment's. */
+const doneGroup: { key: string; described: Described }[] = [
+  { key: "memory", described: { words: stepWords({ name: "query_brain", detail: "rounding", status: "completed" }), status: "completed" } },
+  { key: "ran", described: command("npm test", "completed", { startedAtMs: now - 41000, endedAtMs: now }) },
+  { key: "read", described: { words: stepWords({ name: "Read", detail: "/repo/src/math.js", status: "completed" }), status: "completed" } },
+];
+
+/** One row of each kind, for its icon. */
+const kinds: { key: string; described: Described }[] = [
+  { key: "run", described: command("npm test", "completed") },
+  { key: "read", described: { words: stepWords({ name: "Read", detail: "/repo/a.ts", status: "completed" }), status: "completed" } },
+  { key: "search", described: { words: stepWords({ name: "Grep", detail: "round", status: "completed" }), status: "completed" } },
+  { key: "list", described: command("ls src", "completed") },
+  { key: "edit", described: { words: stepWords({ name: "Edit", detail: "/repo/a.ts", status: "completed" }), status: "completed" } },
+  { key: "web", described: command("curl -s https://nodejs.org/dist/index.json", "completed") },
+];
+
 function Page() {
   return (
     <TooltipProvider>
@@ -160,6 +177,22 @@ function Page() {
             describe={(key) => group.find((each) => each.key === key)!.described}
             renderStep={(key) => <StepRow key={key} {...group.find((each) => each.key === key)!.described} slot="child" />}
           />
+        </Case>
+        <Case id="done-group">
+          <ActivityGroup
+            items={doneGroup.map(({ key }) => ({ type: "step", key, step: key }))}
+            live={false}
+            describe={(key) => doneGroup.find((each) => each.key === key)!.described}
+            renderStep={(key) => <StepRow key={key} {...doneGroup.find((each) => each.key === key)!.described} suffix={key === "ran" ? "in 41s" : undefined} slot="child" />}
+          />
+        </Case>
+        <Case id="lone-ran">
+          <StepRow {...command("npm test", "completed")} suffix="in 41s" />
+        </Case>
+        <Case id="kinds">
+          {kinds.map(({ key, described }) => (
+            <StepRow key={key} {...described} slot={`kind-${key}`} />
+          ))}
         </Case>
         <Case id="search">
           <StepRow {...describeLeadStep(search)} />
@@ -340,6 +373,15 @@ async function measure(): Promise<object> {
     // Each file's card as tall as its 40 lines: none squeezed to fit.
     whole: all<HTMLElement>("[data-slot=diff-card] [data-slot=diff-lines]", list ?? document.createElement("div")).every((lines) => lines.scrollHeight <= lines.clientHeight + 1),
   };
+  // A finished group: its summary, its icon from the summary's first segment, and inside it
+  // the command's time; a row on its own has none.
+  const doneTrigger = one<HTMLElement>("[data-slot=work-group] button", at("done-group"));
+  out.doneGroup = { row: text(doneTrigger), icon: one("[data-icon]", doneTrigger ?? undefined)?.getAttribute("data-icon") ?? null };
+  doneTrigger?.click();
+  await wait(400);
+  out.doneChildren = all("[data-slot=child]", at("done-group")).map((row) => text(row));
+  out.loneRan = text(at("lone-ran").firstElementChild);
+  out.kindIcons = Object.fromEntries(kinds.map(({ key }) => [key, one(`[data-slot=kind-${key}] [data-icon]`)?.getAttribute("data-icon") ?? null]));
   const searchRow = at("search").firstElementChild;
   out.search = { row: text(searchRow), opens: !!one("[aria-expanded]", at("search")) || searchRow?.getAttribute("role") === "button" };
   return out;

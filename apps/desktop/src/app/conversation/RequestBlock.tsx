@@ -8,7 +8,7 @@ import {
 import {
   Branch,
   Check,
-  ChevronRight,
+  ChevronRightAlt,
   Copy,
   Info,
   Regenerate,
@@ -16,7 +16,7 @@ import {
   Stop,
   TextShorterConcise,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { type ComponentProps, type ComponentType, type FC, Fragment, lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { type ComponentProps, type ComponentType, type FC, Fragment, lazy, type MouseEvent, Suspense, useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { ThinkingLine } from "@/app/conversation/ThinkingLine";
@@ -266,7 +266,7 @@ const WorkHeader: FC<{
       className={cn(rule, "group gap-1 text-start")}
     >
       {text}
-      <ChevronRight
+      <ChevronRightAlt
         aria-hidden
         className={cn(
           "text-foreground/50 size-chevron group-hover:text-foreground group-focus-visible:text-foreground shrink-0 transition-[rotate,color] duration-150 ease-standard motion-reduce:transition-none",
@@ -334,7 +334,7 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
         {/* Folds like a work row: its words, then the same quiet chevron, never the browser's marker. */}
         <summary className={cn(ROW, ROW_TOGGLE, "list-none [&::-webkit-details-marker]:hidden")}>
           Details
-          <ChevronRight aria-hidden className={cn(CHEVRON, "group-open/details:rotate-90")} />
+          <ChevronRightAlt aria-hidden className={cn(CHEVRON, "group-open/details:rotate-90")} />
         </summary>
         <div className="pt-2">
           <MarkdownBlock text={report.details} />
@@ -788,6 +788,9 @@ export const RequestBlock: FC = () => {
       {!live && answer !== null && <AnswerFilesOf index={answer} requestIds={meta.requestIds} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
       <BlockError meta={meta} live={live} />
+      {answer !== null && (
+        <AnswerAnnouncer answering={live} finished={!live} index={answer} />
+      )}
       {!live && last >= 0 && !phase && (
         <AnswerActions
           session={meta.session}
@@ -855,9 +858,10 @@ const ModelChanged: FC<{ model: ModelChoice | null; picked: ModelChoice | null }
 
 /**
  * Under the answer: copy it, read it aloud, rate it and, in a Chat, ask for another answer and move between
- * answers (a session's answers have neither). The latest answer always shows them, an older one
- * on hover or focus; when it came shows on hover. Copy and Read aloud take the text `shown`
- * (the answer and its update lines, by part), or else the last part.
+ * answers (a session's answers have neither). The latest answer always shows them and when it
+ * came, an older one on hover or focus. Copy and Read aloud take the text `shown` (the answer and
+ * its update lines, by part), or else the last part; Copy also puts the answer as shown (HTML)
+ * on the clipboard, for apps that paste rich text.
  */
 const AnswerActions: FC<{
   session: boolean;
@@ -882,6 +886,10 @@ const AnswerActions: FC<{
   const latest = useAuiState((s) => s.message.isLast);
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const now = useNow(60_000);
+  const copy = (event: MouseEvent<HTMLElement>) => {
+    const turn = event.currentTarget.closest("[data-role=assistant]");
+    copyToClipboard(answer, turn ? answerHtml(turn) : undefined);
+  };
   return (
     <ActionBarPrimitive.Root
       data-slot="answer-actions"
@@ -892,7 +900,7 @@ const AnswerActions: FC<{
         !latest && "opacity-0 group-hover/answer:opacity-100 group-focus-within/answer:opacity-100",
       )}
     >
-      <TooltipIconButton tooltip={isCopied ? "Copied" : "Copy"} onClick={() => copyToClipboard(answer)}>
+      <TooltipIconButton tooltip={isCopied ? "Copied" : "Copy response"} onClick={copy}>
         {isCopied ? (
           <Check className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
         ) : (
@@ -919,12 +927,51 @@ const AnswerActions: FC<{
       {conversation && forkId && (
         <ForkMenu conversationId={conversation.id} kind={conversation.kind} messageId={forkId} />
       )}
+      {/* When it came: always under the latest answer, on hover under an older one. */}
       {atMs !== null && (
-        <span className="ps-1 text-xs tabular-nums opacity-0 group-hover/answer:opacity-100 group-focus-within/answer:opacity-100">
+        <span
+          data-slot="answer-time"
+          className={cn("ps-1 text-xs tabular-nums", !latest && "opacity-0 group-hover/answer:opacity-100 group-focus-within/answer:opacity-100")}
+        >
           {formatSentAt(atMs, now)}
         </span>
       )}
     </ActionBarPrimitive.Root>
+  );
+};
+
+/** What a rich-text paste of the answer gets: its rendered text, without the thread's controls and styling. */
+export function answerHtml(turn: Element): string | undefined {
+  const parts = [...turn.querySelectorAll("[data-slot=aui_assistant-message-content], [data-slot=answer-update]")];
+  if (parts.length === 0) return undefined;
+  return parts
+    .map((part) => {
+      const copy = part.cloneNode(true) as Element;
+      copy.querySelectorAll("button, svg, img[data-slot=site-icon], [aria-hidden=true], [data-copy-skip]").forEach((node) => node.remove());
+      for (const node of [copy, ...copy.querySelectorAll("*")]) {
+        for (const name of node.getAttributeNames()) if (name !== "href" && name !== "src" && name !== "alt") node.removeAttribute(name);
+      }
+      return copy.innerHTML;
+    })
+    .join("");
+}
+
+/**
+ * Says the turn's answer to a screen reader: "Response started" when it starts, then "Response
+ * complete" with its text. Only for the turn it sees happen, never for a thread's history.
+ */
+const AnswerAnnouncer: FC<{ answering: boolean; finished: boolean; index: number }> = ({ answering, finished, index }) => {
+  const text = useAuiState((s) => {
+    const part = s.message.parts[index];
+    return part?.type === "text" ? part.text : "";
+  });
+  const [said, setSaid] = useState<{ started: boolean; words: string }>({ started: false, words: "" });
+  if (answering && !finished && !said.started) setSaid({ started: true, words: "Response started" });
+  if (finished && said.started && !said.words.startsWith("Response complete")) setSaid({ started: true, words: `Response complete: ${text}` });
+  return (
+    <div role="status" aria-live="polite" className="sr-only" data-slot="answer-announcer">
+      {said.words}
+    </div>
   );
 };
 
