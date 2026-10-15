@@ -978,7 +978,7 @@ impl SessionManager {
                 "Started a review of your committed work by {reviewer}. It returns now: gather your evidence and run your checks meanwhile. Its findings arrive as a message from Brigadier; if you finish everything else first, end your turn and they start your next one. Fix what you agree with and commit, then report."
             ),
             (ReviewState::Running, true) => format!(
-                "Started a review of your committed work by {reviewer}. It returns now: gather your evidence and run your checks meanwhile, and don't wait for it. Findings that arrive before your report come as a message from Brigadier: fix what you agree with and commit. Once your checks pass and your evidence is in, report; later findings go to the orchestrator."
+                "Started a review of your committed work by {reviewer}. It returns now: gather your evidence and run your checks meanwhile, and don't wait for it. Findings that arrive before your report come as a message from Brigadier: fix what you agree with and commit. Once your checks pass and your evidence is in, report; later findings go to the session's main thread."
             ),
             (ReviewState::Running, false) if review.notify == ReviewFor::Worker { task_id: task.id.clone() } && waits => {
                 "This exact work is being reviewed already; the findings arrive as a message."
@@ -1002,7 +1002,7 @@ impl SessionManager {
                     clipped(&text)
                 ),
                 None => {
-                    "This exact work was reviewed already; its findings went to the orchestrator."
+                    "This exact work was reviewed already; its findings went to the session's main thread."
                         .to_owned()
                 }
             },
