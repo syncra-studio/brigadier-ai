@@ -82,16 +82,20 @@ async fn a_check_runs_once_per_tree_for_workers_and_the_thread() {
 
     let replies = replies.lock().unwrap().clone();
     assert!(replies[0].starts_with("Nothing changed"), "{}", replies[0]);
-    assert_eq!(replies[1], "[exit 0]\nchecked\n");
+    // Every result ends with its evidence reference, a cached one's too (BUILD-PLAN E2).
+    for reply in &replies[1..] {
+        assert!(reply.contains("\n[evidence: out-"), "{reply}");
+    }
+    assert_eq!(bare(&replies[1]), "[exit 0]\nchecked\n");
     assert!(replies[2].starts_with("[cached: "), "{}", replies[2]);
     assert!(
-        replies[2].ends_with("[exit 0]\nchecked\n"),
+        bare(&replies[2]).ends_with("[exit 0]\nchecked\n"),
         "{}",
         replies[2]
     );
     assert!(replies[3].starts_with("[cached: "), "{}", replies[3]);
     for fresh in &replies[4..] {
-        assert_eq!(fresh, "[exit 0]\nchecked\n");
+        assert_eq!(bare(fresh), "[exit 0]\nchecked\n");
     }
 
     let checks: Vec<_> = flow
@@ -236,12 +240,12 @@ async fn a_prefix_that_changes_nothing_still_answers_from_the_cache() {
     );
     let soft: u64 = env[2].parse().unwrap_or(u64::MAX);
     assert!(soft >= 8192, "{}", replies[0]);
-    assert_eq!(replies[1], "[exit 0]\nchecked\n");
+    assert_eq!(bare(&replies[1]), "[exit 0]\nchecked\n");
     for cached in &replies[2..4] {
         assert!(cached.starts_with("[cached: "), "{cached}");
     }
     for fresh in &replies[4..] {
-        assert_eq!(fresh, "[exit 0]\nchecked\n");
+        assert_eq!(bare(fresh), "[exit 0]\nchecked\n");
     }
     // The cached answers are recorded under the command that ran, without the prefix.
     let commands: Vec<String> = flow
@@ -398,8 +402,8 @@ async fn a_threads_checks_and_commands_bind_sockets_in_their_short_temporary_fol
         assert_eq!(bound, 2, "{permission:?}: {replies:#?}");
         for reply in replies.iter().filter(|reply| reply.starts_with("[exit")) {
             assert_eq!(
-                reply,
-                &format!("[exit 0]\n{tmp}\nbound\n"),
+                bare(reply),
+                format!("[exit 0]\n{tmp}\nbound\n"),
                 "{permission:?}"
             );
         }
@@ -465,4 +469,12 @@ async fn a_passing_checks_long_output_comes_short_and_a_failure_whole() {
     assert!(fail.contains("test case_0 ... ok"), "{fail}");
     assert!(fail.contains("FAIL case_7"), "{fail}");
     flow.stop().await;
+}
+
+/// A check's reply without its evidence reference, the last line `run_check` adds to every
+/// result (BUILD-PLAN E2).
+fn bare(reply: &str) -> &str {
+    reply
+        .rsplit_once("[evidence: out-")
+        .map_or(reply, |(body, _)| body)
 }

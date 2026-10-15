@@ -384,6 +384,11 @@ pub struct RunCheck {
     /// Run it even when it already ran on the same files, and keep the new result.
     #[serde(default)]
     pub rerun: bool,
+    /// An integration, smoke or live check's inputs (paths from the root), so it can answer
+    /// from the cache; without them it always runs.
+    #[serde(default, deserialize_with = "lines")]
+    #[schemars(with = "Vec<String>")]
+    pub inputs: Vec<String>,
 }
 
 /// The thread's `run_check`: a worker's, and its change's risk (BUILD-PLAN B2).
@@ -403,6 +408,11 @@ pub struct ThreadRunCheck {
     /// Run it even when it already ran on the same files, and keep the new result.
     #[serde(default)]
     pub rerun: bool,
+    /// An integration, smoke or live check's inputs (paths from the root), so it can answer
+    /// from the cache; without them it always runs.
+    #[serde(default, deserialize_with = "lines")]
+    #[schemars(with = "Vec<String>")]
+    pub inputs: Vec<String>,
     /// Why your change for this request is risky, when it is (persistence, security,
     /// migrations, concurrency, deletion, public API): it then gets an other-vendor review
     /// whatever its size.
@@ -431,6 +441,7 @@ impl ThreadRunCheck {
                 workdir: self.workdir,
                 timeout_secs: self.timeout_secs,
                 rerun: self.rerun,
+                inputs: self.inputs,
             },
             risky: self.risky,
             commit: self

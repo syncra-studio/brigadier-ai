@@ -2214,8 +2214,15 @@ pub enum DomainEvent {
         status: String,
         /// How long it ran (for a cached result, how long it ran then).
         duration_ms: u64,
-        /// The `out-…` alias of its stored output, which `read_artifact` reads.
+        /// The `out-…` alias of its stored output, which `read_artifact` reads. It is also the
+        /// check's evidence reference: a report or a claim cites it (BUILD-PLAN E1, E2).
         artifact: Option<String>,
+        /// The hash of the check's whole input fingerprint (the tree, the command, its workdir,
+        /// configuration, lockfiles, toolchains and declared inputs); none when an input
+        /// couldn't be identified.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        fingerprint: Option<String>,
     },
     /// What the session's thread read and searched in one turn, its tool calls' in order
     /// (THREAD-PLAN.md Q8 lever 1; [`crate::manager::reads`]).

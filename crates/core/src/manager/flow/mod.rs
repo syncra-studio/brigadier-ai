@@ -1798,6 +1798,8 @@ mod deliverable_tests;
 #[cfg(test)]
 mod ending_tests;
 #[cfg(test)]
+mod evidence_tests;
+#[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
 mod fault_tests;

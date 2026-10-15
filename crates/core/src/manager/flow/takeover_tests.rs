@@ -222,6 +222,7 @@ async fn check_with(flow: &Flow, grant: &str) -> crate::tools::ToolReply {
             workdir: None,
             timeout_secs: None,
             rerun: true,
+            inputs: Vec::new(),
         })),
     )
     .await

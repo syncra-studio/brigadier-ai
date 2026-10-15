@@ -352,6 +352,123 @@ pub(super) struct CheckDone {
     pub alias: String,
 }
 
+impl CheckDone {
+    /// Its reply with its evidence reference last: a report's "done when" or a claim cites
+    /// the check by it (BUILD-PLAN E2). Last, since the first line is read as how it ended.
+    fn cited(mut self) -> Self {
+        if !self.reply.ends_with('\n') {
+            self.reply.push('\n');
+        }
+        self.reply.push_str(&format!("[evidence: {}]", self.alias));
+        self
+    }
+}
+
+/// Whether a check's result is kept under its key, and what is recorded of it.
+enum KeyState {
+    /// Kept and answered from under this key.
+    Kept(Key),
+    /// Run every time and not kept: `key` (when known) is recorded for its tree, and `why`
+    /// as why the cache was left out.
+    Unkept { key: Option<Key>, why: String },
+}
+
+impl KeyState {
+    fn of(key: std::result::Result<Key, String>, keep: bool) -> Self {
+        match key {
+            Ok(key) if keep => Self::Kept(key),
+            Ok(key) => Self::Unkept {
+                key: Some(key),
+                why: LIVE_UNKEPT.to_owned(),
+            },
+            Err(why) => Self::Unkept { key: None, why },
+        }
+    }
+}
+
+/// Why an integration, smoke or live check ran again (G3).
+const LIVE_UNKEPT: &str = "an integration, smoke or live check runs every time unless it declares its inputs";
+
+/// The words of an integration, smoke or live check: what it depends on (services, ignored
+/// fixtures, the network) is more than its files (WEAK-SPOTS G3).
+const LIVE_WORDS: &[&str] = &[
+    "smoke",
+    "integration",
+    "e2e",
+    "live",
+    "playwright",
+    "cypress",
+    "docker",
+    "podman",
+    "curl",
+    "wget",
+    "http",
+    "https",
+];
+
+/// `command` is an integration, smoke or live check, by its words.
+fn live_check(command: &str) -> bool {
+    command
+        .to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| LIVE_WORDS.contains(&word))
+}
+
+/// Most files a check's declared inputs may hold.
+const INPUT_FILES_MAX: usize = 20_000;
+
+/// The content hashes of the files under each of `inputs` (paths relative to `root`, ignored
+/// files included), for a check's key; why not, when one can't be read or lies outside.
+fn declared_inputs(root: &Path, inputs: &[String]) -> std::result::Result<Vec<String>, String> {
+    let mut parts = Vec::new();
+    let mut seen = 0usize;
+    let mut inputs: Vec<&str> = inputs.iter().map(|input| input.trim()).collect();
+    inputs.sort_unstable();
+    inputs.dedup();
+    for input in inputs.into_iter().filter(|input| !input.is_empty()) {
+        let relative = Path::new(input);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(format!("the input `{input}` is outside the checkout"));
+        }
+        let path = root.join(relative);
+        if !path.exists() {
+            parts.push(format!("input {input} missing"));
+            continue;
+        }
+        let mut files = Vec::new();
+        let mut stack = vec![path];
+        while let Some(next) = stack.pop() {
+            if next.is_dir() {
+                let entries = std::fs::read_dir(&next)
+                    .map_err(|err| format!("the input `{input}` can't be read: {err}"))?;
+                for entry in entries {
+                    let entry =
+                        entry.map_err(|err| format!("the input `{input}` can't be read: {err}"))?;
+                    stack.push(entry.path());
+                }
+            } else {
+                seen += 1;
+                if seen > INPUT_FILES_MAX {
+                    return Err(format!("the inputs hold over {INPUT_FILES_MAX} files"));
+                }
+                files.push(next);
+            }
+        }
+        files.sort();
+        for file in files {
+            let bytes = std::fs::read(&file)
+                .map_err(|err| format!("the input `{}` can't be read: {err}", file.display()))?;
+            let name = file.strip_prefix(root).unwrap_or(&file).to_string_lossy();
+            parts.push(format!("input {name} {}", blake3::hash(&bytes).to_hex()));
+        }
+    }
+    Ok(parts)
+}
+
 /// What runs the session's full checks (SESSION-FIXES-PLAN.md §11): its check checkout, at the
 /// session's access, in the background under the checks' own cleanup owner.
 pub(super) struct FullCheckCaller(Caller);
@@ -484,9 +601,9 @@ impl SessionManager {
             .clamp(Duration::from_secs(1), RUN_TIMEOUT_MAX);
         if task.is_some() {
             return self
-                .check_now(&caller, &workdir, &command, timeout, args.rerun)
+                .check_now(&caller, &workdir, &command, timeout, args.rerun, &args.inputs)
                 .await
-                .map(|(_, reply)| reply);
+                .map(|done| done.reply);
         }
         // The thread's check is the session's, not its CLI's: a check gone to the background
         // outlives the CLI.
@@ -499,8 +616,10 @@ impl SessionManager {
             let under_way = manager
                 .thread_check_started(&conversation, tree.as_deref())
                 .await;
-            let (status, mut reply) = manager
-                .check_now(&caller, &workdir, &words, timeout, args.rerun)
+            let CheckDone {
+                status, mut reply, ..
+            } = manager
+                .check_now(&caller, &workdir, &words, timeout, args.rerun, &args.inputs)
                 .await?;
             let passed = status == "exit 0";
             if let (Some(message), Some(tree)) = (commit, tree) {
@@ -521,7 +640,9 @@ impl SessionManager {
     }
 
     /// Runs `command` for `caller` once no run of the same check is under way, unless it
-    /// already ran on the same files (and `rerun` is off): its status and reply.
+    /// already ran on the same files (and `rerun` is off). Its reply ends with its evidence
+    /// reference, the `out-…` alias a report or a claim cites (BUILD-PLAN E2). An
+    /// integration, smoke or live check always runs, unless it declares its `inputs` (G3).
     async fn check_now(
         &self,
         caller: &Caller,
@@ -529,8 +650,12 @@ impl SessionManager {
         command: &str,
         timeout: Duration,
         rerun: bool,
-    ) -> Result<(String, String)> {
-        let key = self.check_key(caller, workdir, command).await;
+        inputs: &[String],
+    ) -> Result<CheckDone> {
+        let key = self.check_key(caller, workdir, command, inputs).await;
+        // An integration, smoke or live check's inputs are more than its files: kept only
+        // with the inputs it declares (G3).
+        let keep = !live_check(command) || !inputs.is_empty();
         // One run of a key at a time: a caller that waited answers from what the other kept.
         let _running = match &key {
             Ok(key) => tokio::select! {
@@ -543,15 +668,16 @@ impl SessionManager {
             },
             Err(_) => None,
         };
-        if let (Ok(key), false) = (&key, rerun)
+        if let (Ok(key), false, true) = (&key, rerun, keep)
             && let Some(done) = self.cached_check(caller, key, command).await
         {
-            return Ok((done.status, done.reply));
+            return Ok(done.cited());
         }
         let heavy = crate::machine::heavy::line_is_heavy(command);
+        let key = KeyState::of(key, keep);
         self.run_check_command(caller, workdir, command, timeout, key, heavy)
             .await
-            .map(|done| (done.status, done.reply))
+            .map(CheckDone::cited)
     }
 
     /// The caller that runs the full checks of conversation `id` in `checkout`.
@@ -641,13 +767,16 @@ impl SessionManager {
         } else {
             root.join(workdir)
         };
-        let key = if cache {
-            self.check_key(caller, &workdir, command).await
-        } else {
-            Err("an install isn't kept".to_owned())
+        let key = self.check_key(caller, &workdir, command, &[]).await;
+        let key = match key {
+            Ok(key) if !cache => KeyState::Unkept {
+                key: Some(key),
+                why: "an install isn't kept".to_owned(),
+            },
+            key => KeyState::of(key, !live_check(command)),
         };
         let _running = match &key {
-            Ok(key) => tokio::select! {
+            KeyState::Kept(key) => tokio::select! {
                 running = check_lock(&key.hash, timeout) => running,
                 () = caller.ended.cancelled() => {
                     return Err(Error::Invalid(
@@ -655,9 +784,9 @@ impl SessionManager {
                     ));
                 }
             },
-            Err(_) => None,
+            KeyState::Unkept { .. } => None,
         };
-        if let (Ok(key), false) = (&key, rerun)
+        if let (KeyState::Kept(key), false) = (&key, rerun)
             && let Some(done) = self.cached_check(caller, key, command).await
         {
             return Ok(done);
@@ -756,6 +885,7 @@ impl SessionManager {
         caller: &Caller,
         workdir: &Path,
         command: &str,
+        inputs: &[String],
     ) -> std::result::Result<Key, String> {
         let root = repo_root(workdir).ok_or("not in a git repository")?;
         let git = self.git.clone();
@@ -788,6 +918,13 @@ impl SessionManager {
             relative.clone(),
         ];
         parts.extend(files);
+        if !inputs.is_empty() {
+            let (root, inputs) = (root.clone(), inputs.to_vec());
+            let declared = blocking(move || Ok(declared_inputs(&root, &inputs)))
+                .await
+                .map_err(|err| err.to_string())??;
+            parts.extend(declared);
+        }
         parts.extend(user_config_files());
         for (name, version, words) in TOOLCHAINS {
             match self.toolchain_version(&root, version).await {
@@ -875,6 +1012,7 @@ impl SessionManager {
             caller,
             command,
             Some(key),
+            true,
             Some(&alias),
             &kept.status,
             kept.duration_ms,
@@ -901,7 +1039,7 @@ impl SessionManager {
         workdir: &Path,
         command: &str,
         timeout: Duration,
-        key: std::result::Result<Key, String>,
+        key: KeyState,
         heavy: bool,
     ) -> Result<CheckDone> {
         let spec = self.check_spec(caller, workdir, command)?;
@@ -949,11 +1087,11 @@ impl SessionManager {
         let ran = ran?;
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let (reply, alias) = self.check_reply(caller, &ran.status, ran.output).await?;
-        let (key, bypassed) = match key {
-            Ok(key) => (Some(key), None),
-            Err(reason) => (None, Some(reason)),
+        let (key, bypassed, kept) = match key {
+            KeyState::Kept(key) => (Some(key), None, true),
+            KeyState::Unkept { key, why } => (key, Some(why), false),
         };
-        if let Some(key) = &key
+        if let Some(key) = key.as_ref().filter(|_| kept)
             && ran.status.starts_with("exit ")
         {
             self.keep_check(caller, key, &ran.status, &reply, &alias, duration_ms)
@@ -963,6 +1101,7 @@ impl SessionManager {
             caller,
             command,
             key.as_ref(),
+            kept,
             Some(&alias),
             &ran.status,
             duration_ms,
@@ -1129,6 +1268,7 @@ impl SessionManager {
         caller: &Caller,
         command: &str,
         key: Option<&Key>,
+        complete: bool,
         artifact: Option<&str>,
         status: &str,
         duration_ms: u64,
@@ -1158,6 +1298,8 @@ impl SessionManager {
             status: status.to_owned(),
             duration_ms,
             artifact: artifact.map(str::to_owned),
+            // Only a key whose inputs are all known is the check's whole fingerprint.
+            fingerprint: key.filter(|_| complete).map(|key| key.hash.clone()),
         };
         if let Err(err) = self
             .core

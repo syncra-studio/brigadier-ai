@@ -712,6 +712,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, your instructions may list a subfolder's rules (its CLAUDE.md or AGENTS.md) instead of showing them: a listed one comes to you with the first file you read or change under its folder; before you change files there with the shell, read it yourself.",
         worker: "From now on, a brief shows whole only the repository rules for the folders its spec names and lists the others: read a listed one before you change files under its folder.",
     },
+    Revision {
+        number: EVIDENCE_REF_REVISION,
+        thread: "From now on, every run_check result ends with its evidence reference, [evidence: out-…]: cite that id for what the check showed. An integration, smoke or live check (by its words: smoke, e2e, integration, live, docker, curl…) runs every time, unless you give its `inputs` (the paths its result depends on), which let it answer from the cache.",
+        worker: "From now on, every run_check result ends with its evidence reference, [evidence: out-…]: cite that id in your report for what the check showed. An integration, smoke or live check (by its words: smoke, e2e, integration, live, docker, curl…) runs every time, unless you give its `inputs` (the paths its result depends on), which let it answer from the cache.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -924,6 +929,11 @@ pub(crate) const CONSTRAINTS_REVISION: u32 = 40;
 /// A subfolder's rules are listed rather than shown, and come with the first file touched
 /// under it (BUILD-PLAN D1.6).
 pub(crate) const SUBFOLDER_RULES_REVISION: u32 = 41;
+
+/// Every run_check result carries its evidence reference, and an integration, smoke or live
+/// check runs every time unless it declares its inputs (BUILD-PLAN E2, G3). Phase E's
+/// revisions are numbered from 50 so parallel phases don't collide (rule R).
+pub(crate) const EVIDENCE_REF_REVISION: u32 = 50;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
