@@ -163,10 +163,11 @@ impl SessionManager {
         })
     }
 
-    /// What a review of the local checkout's range `base..tip` reads: a reviewer diffs from the
-    /// merge base, and two snapshots of a checkout are siblings on its HEAD, so the later one goes
-    /// on the earlier one first (its own diff would show the user's older changes as the
-    /// thread's and miss a file put back). `tip` itself when that can't be made.
+    /// What a review of the range `base..tip` reads: a reviewer diffs from the merge base, and a
+    /// snapshot is a sibling of what comes after it (two snapshots of a checkout on its HEAD, or
+    /// a worktree's snapshot and the commit that follows), so `tip` goes on `base` first (its own
+    /// diff would show what the snapshot held as new again, and miss a file put back). `tip`
+    /// itself when `base` is its ancestor, or when that can't be made.
     async fn on_base(&self, repo: &Path, base: &str, tip: &str) -> Oid {
         let (git, at, from, to) = (
             self.git.clone(),
@@ -269,6 +270,13 @@ impl SessionManager {
         }
         let mut range = match known {
             Some(range) if !range.local && !range.snapshot && range.tip == base.0 => range,
+            // The commit holds more than the snapshot a review read: only what changed since
+            // that snapshot is new, never the whole range again.
+            Some(range) if !range.local && range.snapshot => UnreviewedRange {
+                base: range.tip.clone(),
+                snapshot: false,
+                ..range
+            },
             _ => UnreviewedRange {
                 request_id: request,
                 branch: branch.to_owned(),
@@ -322,12 +330,12 @@ impl SessionManager {
         mut range: UnreviewedRange,
     ) {
         if range.base != range.tip
-            && range.local
             && range.risky.is_none()
             && self.fixes_findings(id, repo, &range).await
         {
-            // The local checkout's fix of the last review's findings, left uncommitted: no
-            // review of its own (no review rounds), and the range goes on after it.
+            // The fix of the last review's findings (left uncommitted on the local checkout, or
+            // a commit without the fix trailer): no review of its own (no review rounds), and
+            // the range goes on after it.
             range.base = range.tip.clone();
         }
         if range.base != range.tip && self.reviews_on() {
@@ -337,11 +345,9 @@ impl SessionManager {
                     .await
                     .is_some_and(|size| REVIEW_LINE.crossed(size.lines, size.files));
             if due {
-                let tip = if range.local {
-                    self.on_base(repo, &range.base, &range.tip).await
-                } else {
-                    Oid(range.tip.clone())
-                };
+                // A range from a snapshot (the local checkout's, or a worktree's uncommitted
+                // files a review read) has no commit of its base in its tip's history.
+                let tip = self.on_base(repo, &range.base, &range.tip).await;
                 crate::heap(|| {
                     self.review_thread_commits(
                         id,
@@ -359,9 +365,8 @@ impl SessionManager {
         self.store_unreviewed(id, Some(range)).await;
     }
 
-    /// Whether the local checkout's `range` starts where the request's last review of its own
-    /// changes ended with findings: what changed since is their fix, as a fix commit names its
-    /// findings in a worktree.
+    /// Whether `range` starts where the request's last review of the thread's own changes ended
+    /// with findings: what changed since is their fix, as a fix commit with the trailer is.
     async fn fixes_findings(
         &self,
         id: &ConversationId,

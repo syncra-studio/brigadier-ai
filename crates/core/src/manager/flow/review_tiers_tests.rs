@@ -691,3 +691,129 @@ async fn a_stopped_request_is_not_woken_by_its_clean_review() {
     assert!(answers(&flow).await.is_empty());
     flow.stop().await;
 }
+
+/// The thread checks its uncommitted change before committing, as threads do: the review of
+/// that snapshot finds something, and the thread fixes it and commits everything in one commit
+/// without the fix trailer. That commit holds the fix, not new work: no second review of the
+/// whole range (no review rounds).
+#[tokio::test]
+async fn a_commit_that_fixes_a_snapshots_findings_gets_no_second_review() {
+    let flow = Flow::start(
+        "review-tiers-snapshot-fix",
+        Options {
+            reviews: Some(script(|_| async {
+                Reply::text("- [P2] tax.ts has no title — tax.ts:1\n  Add one.")
+            })),
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if !turn.is_orchestrator() {
+                return Reply::text("");
+            }
+            let workspace = turn.add_dirs[0].clone();
+            if turn.input.starts_with("Add the region") {
+                for file in ["tax.ts", "rates.ts", "region.ts"] {
+                    std::fs::write(workspace.join(file), lines(file, 4)).unwrap();
+                }
+                let check = turn.call("run_check", json!({"command": "true"})).await;
+                assert!(check.text.contains("[review running]"), "{}", check.text);
+                return Reply::text("[quiet]");
+            }
+            if turn
+                .input
+                .contains("[review of your commits · Codex found 1")
+            {
+                std::fs::write(
+                    workspace.join("tax.ts"),
+                    format!("// Tax\n{}", lines("tax.ts", 4)),
+                )
+                .unwrap();
+                git(&workspace, &["add", "-A"]);
+                git(&workspace, &["commit", "-q", "-m", "Add the region"]);
+                return Reply::text("Added the region and fixed the review's finding.");
+            }
+            Reply::text("[quiet]")
+        }),
+    )
+    .await;
+    flow.say("Add the region.").await;
+    flow.until("the answer", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.state == RequestState::Done)
+    })
+    .await;
+    let board = flow.settled().await;
+    assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
+    flow.stop().await;
+}
+
+/// The review of the uncommitted snapshot finds nothing, then the thread writes more before it
+/// commits: the commit gets a review of only what it holds beyond the snapshot, never the whole
+/// range again.
+#[tokio::test]
+async fn a_commit_beyond_a_reviewed_snapshot_is_reviewed_only_from_the_snapshot() {
+    let flow = Flow::start(
+        "review-tiers-snapshot-more",
+        Options::default(),
+        script(|turn| async move {
+            if !turn.is_orchestrator() {
+                return Reply::text("");
+            }
+            let workspace = turn.add_dirs[0].clone();
+            if turn.input.starts_with("Add the region") {
+                for file in ["tax.ts", "rates.ts", "region.ts"] {
+                    std::fs::write(workspace.join(file), lines(file, 4)).unwrap();
+                }
+                let check = turn.call("run_check", json!({"command": "true"})).await;
+                assert!(check.text.contains("[review running]"), "{}", check.text);
+                return Reply::text("[quiet]");
+            }
+            if turn.input.contains("found nothing") && !workspace.join("report.ts").exists() {
+                std::fs::write(workspace.join("report.ts"), lines("report.ts", 40)).unwrap();
+                git(&workspace, &["add", "-A"]);
+                git(
+                    &workspace,
+                    &["commit", "-q", "-m", "Add the region and its report"],
+                );
+                let check = turn.call("run_check", json!({"command": "true"})).await;
+                if check.text.contains("[review running]") {
+                    return Reply::text("[quiet]");
+                }
+                return Reply::text("Added the region and its report.");
+            }
+            if turn.input.contains("found nothing") {
+                return Reply::text("Added the region and its report; the reviews found nothing.");
+            }
+            Reply::text("[quiet]")
+        }),
+    )
+    .await;
+    flow.say("Add the region.").await;
+    flow.until("the answer", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.state == RequestState::Done)
+    })
+    .await;
+    let board = flow.settled().await;
+    let mut reviews: Vec<_> = board.reviews.values().collect();
+    reviews.sort_by_key(|review| review.number);
+    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    let later = reviews[1];
+    let names = git(
+        &flow.repo,
+        &[
+            "diff",
+            "--name-only",
+            &format!("{}...{}", later.base, later.tip),
+        ],
+    );
+    assert_eq!(
+        names, "report.ts",
+        "only what the commit added beyond the snapshot"
+    );
+    flow.stop().await;
+}
