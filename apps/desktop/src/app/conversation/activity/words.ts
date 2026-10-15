@@ -233,10 +233,7 @@ export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> 
     const object = `“${detail}”`;
     return { kind: "memory", doing: `Checking project memory for ${object}`, done: `Checked project memory for ${object}`, object };
   }
-  if (WEB_SEARCH.has(short)) {
-    if (!detail) return { kind: "web", doing: "Searching the web", done: "Searched the web", web: true };
-    return { kind: "web", doing: `Searching the web for ${detail}`, done: `Searched the web for ${detail}`, object: detail, web: true };
-  }
+  if (WEB_SEARCH.has(short)) return webSearchWords(detail);
   if (WEB_FETCH.has(short)) {
     if (!detail) return { kind: "web", doing: "Reading a web page", done: "Read a web page", web: true };
     const page = hostOf(detail);
@@ -245,6 +242,18 @@ export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> 
   const preview = PREVIEWS[short];
   if (preview) return { kind: "preview", doing: preview[0], done: preview[1] };
   return otherWords(short);
+}
+
+/**
+ * A web search's words: "Searched the web for node lts | nodejs.org", its `site:` operators said
+ * after a bar rather than as query words.
+ */
+export function webSearchWords(query: string | null): StepWords {
+  const sites = [...(query ?? "").matchAll(/(?:^|\s)site:(\S+)/g)].map((match) => match[1] ?? "");
+  const words = (query ?? "").replace(/(?:^|\s)site:\S+/g, " ").replace(/\s+/g, " ").trim();
+  const object = [words, sites.join(", ")].filter(Boolean).join(" | ");
+  if (!object) return { kind: "web", doing: "Searching the web", done: "Searched the web", web: true };
+  return { kind: "web", doing: `Searching the web for ${object}`, done: `Searched the web for ${object}`, object, web: true };
 }
 
 /** The keys a call's detail comes from, in the daemon's order (`conversation.rs`, tool steps). */

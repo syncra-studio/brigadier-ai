@@ -1,9 +1,8 @@
 import { type Described, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { leadStepDetail } from "@/app/conversation/activity/StepDetail";
-import { basename, type StepWords, toolStepWords } from "@/app/conversation/activity/words";
+import { basename, type StepWords, toolStepWords, webSearchWords } from "@/app/conversation/activity/words";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { WebSearch } from "@/components/assistant-ui/elements/web-search";
 import type { Task } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";
 import { useBoard } from "@/state/board";
@@ -23,7 +22,7 @@ export function describeLeadStep(step: LeadStep, tasks: Readonly<Record<string, 
     case "tool":
       return { words: toolStepWords(kind, tasks), status: kind.status, exit: kind.exit ?? null, startedAtMs: step.atMs, endedAtMs: kind.endedAtMs };
     case "searchedWeb":
-      return { words: { kind: "web", doing: `Searching the web for ${kind.query}`, done: `Searched the web for ${kind.query}`, web: true }, status: "completed" };
+      return { words: webSearchWords(kind.query), status: "completed" };
     case "readPage": {
       const host = hostOf(kind.url);
       return { words: { kind: "web", doing: `Reading ${host}`, done: `Read ${host}`, web: true }, status: "completed" };
@@ -51,7 +50,7 @@ export function LeadStepRow({ step }: { step: LeadStep }) {
   const tasks = useBoard((s) => s.board?.tasks);
   const conversationId = useViewConversation()?.id ?? null;
   const described = describeLeadStep(step, tasks);
-  const detail =
-    step.kind.type === "searchedWeb" ? <WebSearch query={step.kind.query} results={[]} /> : leadStepDetail(conversationId, step);
+  // A search the thread made has no results kept: its row says it all, with nothing to open.
+  const detail = step.kind.type === "searchedWeb" ? undefined : leadStepDetail(conversationId, step);
   return <StepRow {...described} detail={detail} suffix={tookFor(step)} slot="orchestrator-step" />;
 }

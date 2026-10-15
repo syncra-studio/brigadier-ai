@@ -25,6 +25,7 @@ import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
+import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type Activity, type LeadStep, thinkingLabel, turnActivity } from "@/app/conversation/activity/group";
 import { deniedCall } from "@/app/conversation/activity/words";
 import { waitingWords, went } from "@/app/conversation/activity/peerWords";
@@ -684,6 +685,8 @@ export const RequestBlock: FC = () => {
     >
       {/* A run picks its models itself: not a change the user made. */}
       {!phase && <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />}
+      {/* A step still running when the user stopped the turn reads "Stopped …". */}
+      <StoppedBy.Provider value={meta.state === "stopped" ? { atMs: meta.endedAtMs } : null}>
       <div data-slot="request-body" className="flex min-w-0 flex-col">
         {header && (
           <WorkHeader
@@ -763,6 +766,7 @@ export const RequestBlock: FC = () => {
           </>
         )}
       </div>
+      </StoppedBy.Provider>
       {/* A run's work is merged from its card, never undone behind the run's back. */}
       {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestId={meta.requestId} />}
       {!live && answer !== null && <AnswerFilesOf index={answer} requestIds={meta.requestIds} />}

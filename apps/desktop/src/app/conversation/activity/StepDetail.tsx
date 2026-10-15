@@ -1,13 +1,15 @@
 import { Check, Copy } from "@openai/apps-sdk-ui/components/Icon";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useContext, useEffect, useState } from "react";
 
 import type { LeadStep } from "@/app/conversation/activity/group";
+import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { searchResults, WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { ItemStatus, ThreadItem } from "@/ipc/generated";
+import { ansiRuns, stripAnsi } from "@/lib/ansi";
 import { cn } from "@/lib/utils";
 import { getThreadItem } from "@/state/actions";
 
@@ -47,60 +49,131 @@ function Output({ text }: { text: string }) {
   );
 }
 
-/** How a command ended, in the Shell box's last line; nothing when it went well (its row says the rest). */
-function ending(status: ItemStatus, exit: number | null): string | null {
-  if (status === "inProgress") return "Running";
-  if (status === "declined") return "Declined";
-  if (exit !== null && exit !== 0) return `Exit code ${exit}`;
-  if (status === "failed") return "Failed";
-  return null;
+/** How a command ended, in the Shell box's last line; nothing while it runs. */
+function ending(status: ItemStatus, exit: number | null, stopped: boolean): { text: string; ok?: boolean } | null {
+  if (stopped) return { text: "Stopped" };
+  if (status === "inProgress") return null;
+  if (status === "declined") return { text: "Declined" };
+  if (exit !== null && exit !== 0) return { text: `Exit code ${exit}` };
+  if (status === "failed") return { text: "Failed" };
+  return { text: "Success", ok: true };
 }
 
-/** A command's box: "Shell", `$ command` and what it printed, then how it ended. */
-export function ShellBox({ command, output, status, exit }: {
+/** What the daemon's clip leaves at the end of output it cut: `… [12345 more bytes]`. */
+const CLIPPED = /… \[(\d+) more bytes\]$/;
+
+/** Output whose end was cut: the part kept, and how much more there was. */
+export function clippedOutput(output: string): { kept: string; more: number | null } {
+  const found = CLIPPED.exec(output);
+  return found ? { kept: output.slice(0, found.index), more: Number(found[1]) } : { kept: output, more: null };
+}
+
+function sizeWords(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Output as the terminal coloured it. */
+function Colored({ text }: { text: string }) {
+  return (
+    <>
+      {ansiRuns(text).map((run, index) => {
+        const { color, background, bold, dim, italic, underline } = run.style;
+        if (!color && !background && !bold && !dim && !italic && !underline) return run.text;
+        return (
+          <span
+            key={index}
+            style={{ color, backgroundColor: background }}
+            className={cn(bold && "font-semibold", dim && "opacity-60", italic && "italic", underline && "underline")}
+          >
+            {run.text}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * A command's box: "Shell", `$ command` (two lines, all of it on a click) and everything it printed
+ * in colour, newest line in view, then how it ended. Output the daemon cut short says so.
+ */
+export function ShellBox({ command, output, status, exit, stopped = false }: {
   command: string;
   output: string | null;
   status: ItemStatus;
   exit: number | null;
+  /** The user's Stop ended it. */
+  stopped?: boolean;
 }) {
-  const printed = output?.trimEnd() ?? "";
-  const end = ending(status, exit);
+  const [whole, setWhole] = useState(false);
+  // A command still running when the user's Stop ended its thread was stopped.
+  const stoppedBy = useContext(StoppedBy);
+  stopped ||= status === "inProgress" && stoppedBy !== null;
+  const { kept, more } = clippedOutput(output?.trimEnd() ?? "");
+  const printed = kept.trimEnd();
+  const end = ending(status, exit, stopped);
+  const shown = unwrapCommand(command);
   return (
-    <div data-slot="shell-card" className={SHELL}>
+    <div data-slot="shell-card" className={cn(SHELL, "group/shell relative")}>
       <span className="text-foreground/70 text-label px-3 py-1">Shell</span>
-      {/* One line, cut with "…"; the whole command in its tooltip. */}
+      <CopyButton text={shown} label="Copy command" className="end-1 top-1" />
+      {/* Two lines, then all of it on a click. */}
       <pre
         data-slot="shell-command"
-        title={unwrapCommand(command)}
-        className="text-code text-foreground truncate px-3 pt-2 font-mono whitespace-pre"
+        data-whole={whole || undefined}
+        {...(!whole && {
+          role: "button",
+          tabIndex: 0,
+          onClick: () => setWhole(true),
+          onKeyDown: (event: React.KeyboardEvent) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              setWhole(true);
+            }
+          },
+        })}
+        className={cn("text-code text-foreground px-3 pt-2 font-mono whitespace-pre-wrap wrap-anywhere", !whole && "line-clamp-2 cursor-pointer")}
       >
         <span className="text-muted-foreground">$ </span>
-        {unwrapCommand(command)}
+        {shown}
       </pre>
       <div className="relative min-w-0">
         {/* Its newest line in view, the older ones fading out above it. */}
-        <div data-slot="shell-output" className="max-h-shell-output scroll-edge-fade flex flex-col-reverse overflow-y-auto px-3 py-2 [--spacing-scroll-fade-bottom:0] [--spacing-scroll-fade-top:var(--spacing-shell-fade)]">
-          <pre className={cn(SHELL_TEXT, "text-foreground/70 font-medium")}>{printed ? <Output text={printed} /> : "No output"}</pre>
-        </div>
-        {printed && <CopyOutput text={printed} />}
+        {(printed || status !== "inProgress") && (
+          <div data-slot="shell-output" className="max-h-shell-output scroll-edge-fade flex flex-col-reverse overflow-y-auto px-3 py-2 [--spacing-scroll-fade-bottom:0] [--spacing-scroll-fade-top:var(--spacing-shell-fade)]">
+            <pre className={cn(SHELL_TEXT, "text-foreground/70 font-medium")}>{printed ? <Colored text={printed} /> : "No output"}</pre>
+          </div>
+        )}
+        {printed && <CopyButton text={stripAnsi(printed)} label="Copy output" className="end-1 top-1" />}
       </div>
-      {end && (
-        <span data-slot="shell-ending" className={cn("text-muted-foreground px-3 py-1.5 text-end text-sm", end === "Running" && "shimmer")}>
-          {end}
-        </span>
+      {(end || more !== null) && (
+        <div className="text-muted-foreground flex items-center gap-2 px-3 py-1.5 text-sm">
+          {more !== null && <span data-slot="shell-clipped" className="min-w-0 truncate">Only the start was kept: {sizeWords(more)} more not shown</span>}
+          {end && (
+            <span data-slot="shell-ending" className="ms-auto flex shrink-0 items-center gap-1">
+              {end.ok && <Check aria-hidden className="size-icon-sm" />}
+              {end.text}
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-/** Copies a command's output, at the output's top right. */
-function CopyOutput({ text }: { text: string }) {
+/** Copies a command or its output; shown on hover of the box. */
+function CopyButton({ text, label, className }: { text: string; label: string; className: string }) {
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   return (
     <TooltipIconButton
-      tooltip={isCopied ? "Copied" : "Copy output"}
+      tooltip={isCopied ? "Copied" : label}
       size="xs"
-      className="text-muted-foreground absolute end-1 top-1"
+      className={cn(
+        "text-muted-foreground absolute opacity-0 group-hover/shell:opacity-100 focus-visible:opacity-100",
+        className,
+      )}
       onClick={() => copyToClipboard(text)}
     >
       {isCopied ? <Check /> : <Copy />}
@@ -194,7 +267,9 @@ function callDetail(name: string, status: ItemStatus, call: { input: string | nu
     );
   }
   if (query !== null) {
-    return <WebSearch className="pt-1" query={query} results={searchResults(call.output)} searching={status === "inProgress"} />;
+    // A search with no results kept has nothing to open: its row says what it searched.
+    const results = searchResults(call.output);
+    return results.length > 0 ? <WebSearch className="pt-1" query={query} results={results} /> : null;
   }
   if (!call.input && !call.output) return null;
   return <ToolBox title={short} body={[call.input, call.output].filter(Boolean).join("\n\n")} />;
@@ -244,6 +319,8 @@ function LeadToolDetail({ conversationId, kind }: { conversationId: string; kind
   const command = SHELLS.has(short) && parsedInput(item.input) === null ? item.input || kind.detail : null;
   const detail = callDetail(kind.name, kind.status, { input: item.input, output: item.output, exit: item.exit ?? kind.exit ?? null, command });
   if (detail) return <>{detail}</>;
+  // A search with no results kept: nothing more to show than its row.
+  if (short === "WebSearch" || short === "web_search") return null;
   if (EDITS.has(short) && kind.detail) return <ToolBox title="Files" body={kind.detail} />;
   return <span className="text-muted-foreground text-xs">Nothing more was kept of this step.</span>;
 }

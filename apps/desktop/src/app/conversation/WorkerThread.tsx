@@ -20,6 +20,7 @@ import { workerDone, workerWorking, workerPreview } from "@/app/conversation/wor
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { actionDetail } from "@/app/conversation/activity/StepDetail";
 import { workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
+import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, itemCall, stepWords } from "@/app/conversation/activity/words";
 import { ROW } from "@/components/assistant-ui/elements/activity-row";
 import { useAction } from "@/app/conversation/useAction";
@@ -332,6 +333,8 @@ export function WorkerThread({ task }: { task: Task }) {
           element.scrollHeight - element.scrollTop - element.clientHeight < tokenPx("--spacing-row");
       }}
     >
+      {/* An action still running when the user stopped the worker reads "Stopped …". */}
+      <StoppedBy.Provider value={task.state === "stopped" ? { atMs: task.updatedAtMs } : null}>
       <div className="max-w-thread mx-auto min-w-0 gap-activity flex flex-col pt-5">
         <Brief text={task.spec} />
         <WorkHeader task={task} />
@@ -359,6 +362,7 @@ export function WorkerThread({ task }: { task: Task }) {
         <Answer task={task} text={finalReply} />
         {task.error && <p className="text-destructive text-sm">{task.error}</p>}
       </div>
+      </StoppedBy.Provider>
     </div>
   );
 }

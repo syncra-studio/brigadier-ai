@@ -1,9 +1,10 @@
-import { ChevronRight, Clock, Globe } from "@openai/apps-sdk-ui/components/Icon";
+import { ChevronRight, Clock, Globe, Stop } from "@openai/apps-sdk-ui/components/Icon";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 
 import type { GroupItem } from "@/app/conversation/activity/group";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { useCalmLabel } from "@/app/conversation/activity/calmLabel";
+import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { labelParts, stepLabel, type StepWords, summarize } from "@/app/conversation/activity/words";
 import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
@@ -25,8 +26,8 @@ export const STEP_LINGERS_MS = 1000;
 /** A row inside an opened group: a running command there reads "Running command for 12s". */
 const InGroup = createContext(false);
 
-function StepIcon({ words }: { words: StepWords }) {
-  const Icon = words.web ? Globe : words.waiting ? Clock : WORK_ICONS[words.kind];
+function StepIcon({ words, stopped = false }: { words: StepWords; stopped?: boolean }) {
+  const Icon = stopped ? Stop : words.web ? Globe : words.waiting ? Clock : WORK_ICONS[words.kind];
   return <Icon aria-hidden className="size-4 shrink-0" />;
 }
 
@@ -51,6 +52,15 @@ function RunningFor({ startedAtMs }: { startedAtMs: number | undefined }) {
   return <>{ms < 1000 ? "Running command" : `Running command for ${formatDuration(ms)}`}</>;
 }
 
+/** What a step the user's Stop cut short says: "Stopped npm test after 4s", "Stopped reading a.ts". */
+export function stoppedLabel(words: StepWords, startedAtMs: number | undefined, atMs: number | null): string {
+  const what = (words.kind === "run" || words.kind === "checks") && words.object
+    ? words.object
+    : words.doing.charAt(0).toLowerCase() + words.doing.slice(1);
+  const ms = startedAtMs !== undefined && atMs !== null ? atMs - startedAtMs : 0;
+  return ms >= 1000 ? `Stopped ${what} after ${formatDuration(ms)}` : `Stopped ${what}`;
+}
+
 /**
  * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test in 41s"; the verb shimmers while it
  * runs. It opens to `detail` when there is one, also while it runs.
@@ -61,22 +71,33 @@ export function StepRow({ words, status, exit = null, startedAtMs, detail, suffi
   suffix?: ReactNode;
   slot?: string;
 }) {
-  const running = status === "inProgress";
+  const stoppedBy = useContext(StoppedBy);
+  // Still running when the user's Stop ended its thread: it was stopped, not running.
+  const stopped = status === "inProgress" && stoppedBy !== null;
+  const running = status === "inProgress" && !stopped;
   const inGroup = useContext(InGroup);
   // Inside an opened group, a running command says how long it has run; the group's own row names it.
-  const ticking = running && inGroup && words.kind === "run";
+  const ticking = running && inGroup && (words.kind === "run" || words.kind === "checks");
   return (
     // Its Shell box or diff spans the column, flush under the row.
     <ThreadActivity
       data-slot={slot}
       data-kind={words.kind}
-      data-state={running ? "running" : undefined}
+      data-step-state={stopped ? "stopped" : running ? "running" : undefined}
       detail={detail}
       detailClassName={cn(ROW_DETAIL, "ps-0")}
     >
-      <StepIcon words={words} />
+      <StepIcon words={words} stopped={stopped} />
       <span className={cn("min-w-0 truncate", running && "shimmer")}>
-        {ticking ? <RunningFor startedAtMs={startedAtMs} /> : running ? stepLabel(words, status, exit) : <Words words={words} label={stepLabel(words, status, exit)} />}
+        {stopped ? (
+          <Words words={words} label={stoppedLabel(words, startedAtMs, stoppedBy.atMs)} />
+        ) : ticking ? (
+          <RunningFor startedAtMs={startedAtMs} />
+        ) : running ? (
+          stepLabel(words, status, exit)
+        ) : (
+          <Words words={words} label={stepLabel(words, status, exit)} />
+        )}
       </span>
       {suffix && <span className="shrink-0 tabular-nums">{suffix}</span>}
     </ThreadActivity>
