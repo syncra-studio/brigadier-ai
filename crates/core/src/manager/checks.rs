@@ -841,6 +841,9 @@ impl SessionManager {
         alias: &str,
         duration_ms: u64,
     ) {
+        if !keepable(status) {
+            return;
+        }
         let blob = match self.core.board(&caller.conversation_id).await {
             Ok(board) => board.outputs.get(alias).map(|output| output.blob.clone()),
             Err(_) => None,
@@ -1186,6 +1189,15 @@ fn cwd_grant(
         (Some(_), ProviderKind::Claude, _) | (Some(_), _, true) => None,
         _ => Some(scratch.to_owned()),
     }
+}
+
+/// Whether a check that ended with `status` is kept for the same files. A command the shell
+/// couldn't find or run (126, 127: a tool not installed in that checkout, such as dependencies
+/// never installed in the thread's workspace) says nothing of the code, so it runs again: the
+/// full checks' checkout, whose dependencies are installed, once took such a failure for its
+/// own.
+fn keepable(status: &str) -> bool {
+    !matches!(status, "exit 126" | "exit 127")
 }
 
 /// Whether `kept` answers `caller`: `None` when the check runs again (a failure under another
@@ -2331,6 +2343,15 @@ mod tests {
         // Output that isn't text is kept byte for byte.
         let binary = vec![0xff, 0xfe, b'a'];
         assert_eq!(redact(binary.clone(), &[redactor]), binary);
+    }
+
+    #[test]
+    fn a_command_the_shell_could_not_find_or_run_is_not_kept() {
+        assert!(keepable("exit 0"));
+        assert!(keepable("exit 1"));
+        assert!(keepable("exit 2"));
+        assert!(!keepable("exit 126"));
+        assert!(!keepable("exit 127"));
     }
 
     fn kept(status: &str, task: Option<&str>, access: Option<&str>) -> Kept {
