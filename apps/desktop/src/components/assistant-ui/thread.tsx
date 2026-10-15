@@ -45,7 +45,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
-import { formatDaySeparator, formatSentAt, sameDay } from "@/lib/format";
+import { formatDaySeparator, formatSentAt, separatesTurn } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -688,7 +688,10 @@ const UserMessage: FC = () => {
   );
 };
 
-/** "Yesterday 3:09 AM", centred above the first message of a day. */
+/**
+ * "Yesterday 3:09 AM", centred above a message sent more than an hour after the one before it,
+ * or above the first when that was more than an hour ago.
+ */
 const DaySeparator: FC = () => {
   const sentAt = useAuiState((s) => s.message.createdAt.getTime());
   const previous = useAuiState((s) => {
@@ -696,7 +699,7 @@ const DaySeparator: FC = () => {
     return index > 0 ? (s.thread.messages[index - 1]?.createdAt.getTime() ?? null) : null;
   });
   const now = useNow(60_000);
-  if (previous === null ? sameDay(sentAt, now) : sameDay(previous, sentAt)) return null;
+  if (!separatesTurn(sentAt, previous, now)) return null;
   return (
     <p className="text-muted-foreground self-stretch pt-2 pb-4 text-center text-sm">
       {formatDaySeparator(sentAt, now)}

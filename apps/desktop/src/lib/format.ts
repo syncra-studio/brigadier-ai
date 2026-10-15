@@ -88,6 +88,8 @@ export function formatCountdown(ms: number, nowMs: number): string {
 const DAY_MS = 86_400_000;
 const weekdayFormat = new Intl.DateTimeFormat(undefined, { weekday: "long" });
 const monthDayFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+const shortWeekdayFormat = new Intl.DateTimeFormat(undefined, { weekday: "short" });
+const monthDayYearFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
 
 /** Midnight of the day `epochMs` falls on. */
 function startOfDay(epochMs: number): number {
@@ -101,7 +103,8 @@ function daysAgo(epochMs: number, nowMs: number): number {
 
 /**
  * When a message was sent, as its hover label: "3:09 AM", "Yesterday 3:09 AM", "Thursday
- * 3:09 AM", "Sep 18 3:09 AM" (the same words as the day's separator above it).
+ * 3:09 AM", "Mon, Sep 18 at 3:09 AM", "Sep 18, 2025 at 3:09 AM" (the same words as a time
+ * separator above it).
  */
 export function formatSentAt(epochMs: number, nowMs: number): string {
   const days = daysAgo(epochMs, nowMs);
@@ -109,20 +112,29 @@ export function formatSentAt(epochMs: number, nowMs: number): string {
   if (days === 0) return time;
   if (days === 1) return `Yesterday ${time}`;
   if (days < 7) return `${weekdayFormat.format(epochMs)} ${time}`;
-  return `${monthDayFormat.format(epochMs)} ${time}`;
+  // Within a year the weekday leads; older, the year ends the date.
+  if (nowMs - epochMs < 365 * DAY_MS) return `${shortWeekdayFormat.format(epochMs)}, ${monthDayFormat.format(epochMs)} at ${time}`;
+  return `${monthDayYearFormat.format(epochMs)} at ${time}`;
 }
 
-/** The separator above the first message of a day: "Yesterday 3:09 AM". */
+/** A time separator's words: "Today 3:09 AM", else as the message's hover label says it. */
 export function formatDaySeparator(epochMs: number, nowMs: number): string {
   const days = daysAgo(epochMs, nowMs);
   if (days === 0) return `Today ${formatTime(epochMs)}`;
   return formatSentAt(epochMs, nowMs);
 }
 
-/** Whether two instants fall on the same calendar day. */
-export function sameDay(a: number, b: number): boolean {
-  return daysAgo(a, b) === 0;
+/** A gap before a user's message that a time separator marks. */
+export const SEPARATOR_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * Whether a time separator goes above a user's message: after more than an hour since the
+ * message before it, or, on the first, when it was sent more than an hour ago.
+ */
+export function separatesTurn(sentAtMs: number, previousAtMs: number | null, nowMs: number): boolean {
+  return (previousAtMs === null ? nowMs : sentAtMs) - (previousAtMs ?? sentAtMs) > SEPARATOR_GAP_MS;
 }
+
 
 /** A home-relative path for display (`~/Development/app`). */
 export function shortPath(path: string): string {
