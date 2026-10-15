@@ -1862,6 +1862,8 @@ mod resume_tests;
 #[cfg(test)]
 mod review_hold_tests;
 #[cfg(test)]
+mod review_on_pass_tests;
+#[cfg(test)]
 mod review_switch_tests;
 #[cfg(test)]
 mod review_tiers_tests;

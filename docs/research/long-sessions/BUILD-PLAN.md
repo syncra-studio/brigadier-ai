@@ -192,6 +192,10 @@ gpt-6.1-sol, both at high.
   - **after phase C:** every small task ≤ 1.15×, and the long task T7L ≤ 1.0×;
   - **after C, every later phase** (D1, E, D2) must still meet C's gates on the rows it runs;
   - **a phase that misses its gate doesn't ship:** nothing is pushed or installed, and the phase goes back.
+  - **a review by the Q48 line (Q52, the user, after phase C's gate bench):** on a task where the thread's own
+    change gets its review by the Q48 line or a risky mark, the token gate compares Brigadier's run without that
+    review: the other vendor's review tokens and the thread's turn that handles its findings are left out. Their
+    cost is reported apart, next to the gate number, as is the full total. Reviews stay on at the Q48 line.
 - **"No loss"** (for changes that must cost nothing, such as Q40): the median is inside the previous Brigadier build's
   min–max or better, on every row, in both regimes.
 
@@ -746,6 +750,42 @@ been missed. The line is settled from those numbers, and the phase report says w
   - model calls went from 8–9 (phase B, `1da10ace`) to 5–7 (median 6), against plain Claude Code's 4–5;
   - tokens per ask went from 285–340k to 95–153k (median 121k), against plain's 71–97k;
   - no tool call was refused for its input.
+
+**C10. What the gate bench found (added in phase C, after the gate bench at `8179f06a` missed).**
+- **The bench** (n=2 warm against plain Claude Code): T1 1.30×, T2 0.81×, T3 1.37×, T4 1.57×, T5 1.21×, T6 0.93×,
+  T7L 0.91×. Every small-task run passed. Triage: `workers/w37` of the run, `msgs/w37-triage.md`.
+- **The drivers:**
+  - T3 and T5 fail on the review over the Q48 line. The turn that handles its findings costs 340–660k Claude tokens
+    (4–7 calls at about 95k of context each), plus 115–170k of Codex. Without it, T3 is 1.01× and T5 is 0.72×.
+  - T1 and T4 fail on one run each, mostly on the model's own detours.
+- **(a) The thread's own shell output comes back whole up to 30,000 bytes**, the CLI's own limit. Above that it gets
+  the digest, as before (`digest::BASH_WHOLE_MAX`).
+  - All 25 digested outputs in the bench were `cat`s of source or tests, and every one was read again in a call of
+    its own (`Read`, another `cat` or `read_artifact`).
+  - Q4's own reason not to trim file reads applies to them.
+  - `run` and `run_check` keep the 8 KB line.
+  - Revision 36 (`SHELL_WHOLE_REVISION`) tells open sessions.
+- **(b) The review of the thread's own changes starts only on a passing check** (`unreviewed::ThreadCheck`).
+  - No review starts while its `run_check` runs, in the call or in the background, the turn's end included.
+  - No review starts on the files its newest check failed on.
+  - The pass that follows starts the held review and says so in its reply, or in the message it sends from the
+    background.
+  - In both T3 runs the review had started on a failing first check, and one finding each time was the failing
+    test that the check itself reported.
+  - With no check at all, the review starts as before. After a restart it also starts as before, because the state
+    is held in memory.
+- **(c) A review's findings message says to look up `record_findings` in the same message as the first fix or
+  check.** That lookup had taken a call of its own in 2 of 6 review turns.
+- **(d) The thread sends its last edit and the `run_check` that checks it in the same message.** Plain Claude Code
+  chains edit and check in one shell call, and the thread spent a call on each.
+- (c) and (d) are revision 37 (`SAME_MESSAGE_REVISION`).
+- **Done when:**
+  - flow tests show a failing check starting no review and the pass after it starting one;
+  - a background pass starts the review it held;
+  - a turn ending on a pending check that then fails starts none;
+  - a 20 kB shell output reaches the model whole;
+  - a session from before hears revisions 36 and 37 once;
+  - the re-bench at the new head meets C's gates as Q52 measures them.
 
 **Validation:**
 - **Bench T1–T6 and T7L,** n = 3, cold and warm (T7L's plain-arm runs are made first, since it is frozen and not run

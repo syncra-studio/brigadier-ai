@@ -19,6 +19,10 @@
 //!   a snapshot, whose review covers the commit with the same files that follows); when that starts a review (or one of the request's
 //!   runs), its reply says so and asks the thread to wait for the findings. The end of every
 //!   thread turn does the same, as the backstop.
+//! - **On a passing check** (C10): while the thread's `run_check` runs, or on the files its
+//!   newest one failed on, no review starts; the range waits, and the check's pass starts its
+//!   review from the check's own reply (or the message it sends from the background). A
+//!   reviewer reading work the thread is still fixing spends findings on what its checks say.
 //! - **Reviews off** ("Review the work"): no review starts, and nothing waits for one.
 //!
 //! Worker landings keep their own review, and the thread's commits that fix findings their
@@ -85,6 +89,68 @@ pub(crate) fn counts_as_a_file(path: &str) -> bool {
 }
 
 /// A review of the thread's own work for `request` that still runs.
+/// Where the thread's newest `run_check` stands ([`SessionManager::thread_checks`]). In
+/// memory only: after a restart a review starts as it did before C10.
+#[derive(Debug, Clone)]
+pub(crate) struct ThreadCheck {
+    /// The tree of the files it runs (or ran) on, when git could tell.
+    tree: Option<String>,
+    state: CheckState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckState {
+    Running,
+    Passed,
+    Failed,
+}
+
+/// A thread check under way: [`Self::ended`] records how it ended. Dropped without that (the
+/// check stopped or errored), it leaves nothing, so no review waits on it.
+pub(crate) struct CheckUnderWay {
+    manager: std::sync::Weak<SessionManager>,
+    id: ConversationId,
+    tree: Option<String>,
+    ended: bool,
+}
+
+impl CheckUnderWay {
+    pub(crate) fn ended(mut self, passed: bool) {
+        self.ended = true;
+        let state = if passed {
+            CheckState::Passed
+        } else {
+            CheckState::Failed
+        };
+        if let Some(manager) = self.manager.upgrade() {
+            manager.thread_checks.lock().unwrap().insert(
+                self.id.clone(),
+                ThreadCheck {
+                    tree: self.tree.take(),
+                    state,
+                },
+            );
+        }
+    }
+}
+
+impl Drop for CheckUnderWay {
+    fn drop(&mut self) {
+        if self.ended {
+            return;
+        }
+        if let Some(manager) = self.manager.upgrade() {
+            let mut checks = manager.thread_checks.lock().unwrap();
+            if checks
+                .get(&self.id)
+                .is_some_and(|check| check.state == CheckState::Running && check.tree == self.tree)
+            {
+                checks.remove(&self.id);
+            }
+        }
+    }
+}
+
 fn running_review<'a>(board: &'a crate::board::Board, request: &str) -> Option<&'a ReviewRun> {
     board.reviews.values().find(|review| {
         review.kind == ReviewKind::Code
@@ -101,6 +167,67 @@ fn short(commit: &str) -> &str {
 
 impl SessionManager {
     /// The session's local checkout, when its thread works there: its repository and branch.
+    /// The thread's `run_check` in the checkout at `tree` starts: until it ends, no review of
+    /// its own changes starts (BUILD-PLAN C10).
+    pub(crate) async fn thread_check_started(
+        &self,
+        id: &ConversationId,
+        tree: Option<&Path>,
+    ) -> CheckUnderWay {
+        let files = match tree {
+            Some(tree) => {
+                let (git, tree) = (self.git.clone(), tree.to_owned());
+                blocking(move || {
+                    git.open_worktree(&tree)
+                        .and_then(|worktree| worktree.checkout_tree())
+                        .map_err(git_error)
+                })
+                .await
+                .ok()
+                .map(|tree| tree.0)
+            }
+            None => None,
+        };
+        self.thread_checks.lock().unwrap().insert(
+            id.clone(),
+            ThreadCheck {
+                tree: files.clone(),
+                state: CheckState::Running,
+            },
+        );
+        CheckUnderWay {
+            manager: self.me.clone(),
+            id: id.clone(),
+            tree: files,
+            ended: false,
+        }
+    }
+
+    /// Whether the thread's checks let the review of `tip` (a commit, or a snapshot of its
+    /// files) start: not while one of them runs, nor on the files the newest one failed on.
+    async fn checks_allow_review(&self, id: &ConversationId, repo: &Path, tip: &str) -> bool {
+        let Some(check) = self.thread_checks.lock().unwrap().get(id).cloned() else {
+            return true;
+        };
+        match check.state {
+            CheckState::Running => false,
+            CheckState::Passed => true,
+            CheckState::Failed => {
+                let Some(failed) = check.tree else {
+                    return false;
+                };
+                let (git, repo, tip) = (self.git.clone(), repo.to_owned(), tip.to_owned());
+                let files = blocking(move || {
+                    git.open(&repo)
+                        .and_then(|repo| repo.tree_of(&tip))
+                        .map_err(git_error)
+                })
+                .await;
+                files.is_ok_and(|files| files.0 != failed)
+            }
+        }
+    }
+
     pub(crate) fn local_checkout(
         &self,
         id: &ConversationId,
@@ -347,7 +474,7 @@ impl SessionManager {
                     .range_size(repo, &range.base, &range.tip)
                     .await
                     .is_some_and(|size| REVIEW_LINE.crossed(size.lines, size.files));
-            if due {
+            if due && self.checks_allow_review(id, repo, &range.tip).await {
                 // A range from a snapshot (the local checkout's, or a worktree's uncommitted
                 // files a review read) has no commit of its base in its tip's history.
                 let tip = self.on_base(repo, &range.base, &range.tip).await;
@@ -453,7 +580,7 @@ impl SessionManager {
             range.tip = now.0.clone();
             self.review_range_if_due(id, &repo, range).await;
         } else {
-            self.review_marked(id).await;
+            self.review_recorded(id).await;
         }
         if checks && changed {
             self.checks_due(id, &repo, &branch, &now, Some(request))
@@ -461,16 +588,18 @@ impl SessionManager {
         }
     }
 
-    /// The running request's range when the thread marked it risky and it holds changes no
-    /// review covered: its review starts now.
-    async fn review_marked(&self, id: &ConversationId) {
+    /// The running request's range when it holds changes no review covered: its review starts
+    /// now when it is due (marked risky, or over the line and held back by a check that ran or
+    /// failed then, C10) and the thread's checks allow it.
+    async fn review_recorded(&self, id: &ConversationId) {
         let Some(request) = self.request_for(id, None).await else {
             return;
         };
         let Some(range) = self.core.board(id).await.ok().and_then(|board| {
-            board.unreviewed.map(|range| *range).filter(|range| {
-                range.request_id == request && range.risky.is_some() && range.base != range.tip
-            })
+            board
+                .unreviewed
+                .map(|range| *range)
+                .filter(|range| range.request_id == request && range.base != range.tip)
         }) else {
             return;
         };
@@ -485,12 +614,13 @@ impl SessionManager {
     }
 
     /// The end of a thread turn (the backstop of [`Self::review_before_answer`]): a local
-    /// checkout's changes are looked at, and a range marked risky gets its review.
+    /// checkout's changes are looked at, and a range that is due gets its review, unless one of
+    /// the thread's checks still runs or failed on its files.
     pub(crate) async fn unreviewed_at_turn_end(&self, id: &ConversationId) {
         if self.local_checkout(id).is_some() {
             self.local_changes(id, true).await;
         } else {
-            self.review_marked(id).await;
+            self.review_recorded(id).await;
         }
     }
 
@@ -614,7 +744,11 @@ impl SessionManager {
                 .range_size(&workspace.repo, &base, &snapshot.0)
                 .await
                 .is_some_and(|size| REVIEW_LINE.crossed(size.lines, size.files));
-        if !due {
+        if !due
+            || !self
+                .checks_allow_review(id, &workspace.repo, &snapshot.0)
+                .await
+        {
             return;
         }
         crate::heap(|| {
@@ -655,7 +789,7 @@ impl SessionManager {
             self.local_changes(id, false).await;
         } else {
             self.scan_thread_commits(id, true).await;
-            self.review_marked(id).await;
+            self.review_recorded(id).await;
             self.review_uncommitted(id).await;
         }
         let request = self.request_for(id, None).await?;

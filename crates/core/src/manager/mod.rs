@@ -166,6 +166,10 @@ pub struct SessionManager {
     /// Held while the thread's new commits are looked for and their tip recorded
     /// ([`thread`]), so a range is taken once.
     thread_scans: tokio::sync::Mutex<()>,
+    /// Where each session's thread's newest `run_check` stands: a review of its own changes
+    /// starts only on files a check passed on, never while one runs or on files one failed
+    /// on ([`unreviewed::ThreadCheck`], BUILD-PLAN C10).
+    thread_checks: std::sync::Mutex<HashMap<ConversationId, unreviewed::ThreadCheck>>,
     /// Commands a Codex thread's `run_unsandboxed` may run, each once: what the user (or their
     /// "allow similar") approved when Codex asked ([`run`]).
     run_passes: run::RunPasses,
@@ -301,6 +305,7 @@ impl SessionManager {
             plans: tokio::sync::Mutex::new(()),
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
+            thread_checks: std::sync::Mutex::new(HashMap::new()),
             run_passes: run::RunPasses::default(),
             ref_records: Arc::default(),
             integrated: integrated_checks::IntegratedChecks::default(),

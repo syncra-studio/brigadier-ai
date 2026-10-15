@@ -251,9 +251,9 @@ struct Kept {
 }
 
 impl SessionManager {
-    /// The thread's `run_check`: its risky mark first, then its change's review when it is
-    /// due (over the line, or marked risky) and the check itself, its reply ending with the
-    /// review that runs, if one does (BUILD-PLAN B2, C2).
+    /// The thread's `run_check`: its risky mark first, then the check itself, and once it has
+    /// ended its change's review when it is due (over the line, or marked risky) and the check
+    /// passed, its reply ending with the review that runs, if one does (BUILD-PLAN B2, C2, C10).
     pub(crate) async fn thread_run_check(
         &self,
         id: &ConversationId,
@@ -272,9 +272,7 @@ impl SessionManager {
             Some(_) if self.local_checkout(id).is_some() => (None, true),
             commit => (commit, false),
         };
-        let review = self.review_before_answer(id).await;
-        let reply = self
-            .check_and_commit(id, None, args, commit)
+        self.check_and_commit(id, None, args, commit)
             .await
             .map(|reply| {
                 if local {
@@ -282,12 +280,7 @@ impl SessionManager {
                 } else {
                     reply
                 }
-            });
-        match (reply, review) {
-            (Ok(reply), Some(review)) => Ok(format!("{reply}\n\n{review}")),
-            (Err(err), Some(review)) => Err(Error::Invalid(format!("{err}\n\n{review}"))),
-            (reply, None) => reply,
-        }
+            })
     }
 
     /// `run_check` for the thread of `id` (`task`: none) or the worker of `task`. The
@@ -304,7 +297,8 @@ impl SessionManager {
 
     /// [`Self::run_check_tool`], then the thread's commit of everything it changed when the
     /// check passes (`commit`: its message), in the same call, even once it went to the
-    /// background (BUILD-PLAN C9).
+    /// background (BUILD-PLAN C9); then, for the thread, the review its change is due, which
+    /// only a pass starts (C10).
     async fn check_and_commit(
         &self,
         id: &ConversationId,
@@ -348,20 +342,27 @@ impl SessionManager {
         let cli_ended = std::mem::replace(&mut caller.ended, CancellationToken::new());
         caller.owner = super::background_runs::background_owner(id);
         let cancel = caller.ended.clone();
-        let (manager, words) = (self.arc(), command.clone());
+        let (manager, words, conversation) = (self.arc(), command.clone(), id.clone());
         let tree = caller.tree.clone();
         let work = async move {
-            let (status, reply) = manager
+            let under_way = manager
+                .thread_check_started(&conversation, tree.as_deref())
+                .await;
+            let (status, mut reply) = manager
                 .check_now(&caller, &workdir, &words, timeout, args.rerun)
                 .await?;
-            let (Some(message), Some(tree)) = (commit, tree) else {
-                return Ok((status, reply));
-            };
             let passed = status == "exit 0";
-            let note = blocking(move || Ok(commit_on_pass(&tree, passed, &message)))
-                .await
-                .unwrap_or_else(|err| format!("Not committed: {err}"));
-            Ok((status, format!("{reply}\n{note}")))
+            if let (Some(message), Some(tree)) = (commit, tree) {
+                let note = blocking(move || Ok(commit_on_pass(&tree, passed, &message)))
+                    .await
+                    .unwrap_or_else(|err| format!("Not committed: {err}"));
+                reply = format!("{reply}\n{note}");
+            }
+            under_way.ended(passed);
+            if let Some(review) = manager.review_before_answer(&conversation).await {
+                reply = format!("{reply}\n\n{review}");
+            }
+            Ok((status, reply))
         };
         self.in_foreground(id, "run_check", &command, cli_ended, cancel, work)
             .await
