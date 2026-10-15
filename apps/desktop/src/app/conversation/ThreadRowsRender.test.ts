@@ -38,6 +38,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     tools: Record<string, { json: string | null; text: string | null; empty: string | null; error: boolean; argumentsShown: boolean; raw: string | null }>;
     toolRaw: string | null;
     compaction: (string | null)[];
+    sentImages: [string | null, string | null, boolean][];
     turnDiff: Record<"many" | "one", { title: string | null; counts: string | null; buttons: (string | null)[]; files: (string | null)[][]; more: string | null }> & {
       all: { files: number; more: string | null }; opened: { name: string | null; counts: string | null }; asks: string[];
     };
@@ -88,6 +89,8 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // An edit rebuilt from its call: no numbers, its changed word marked on both sides.
   assert.deepEqual([seen["diff-edit"].numbers, seen["diff-edit"].marks, seen["diff-edit"].counts], [[], ["1", "2"], "+1 −1"]);
   assert.equal(seen["diff-empty"].empty, "No changes");
+  // A sent image read shows; one that can't be read says "Failed"; one on its way pulses.
+  assert.deepEqual(seen.sentImages, [[null, null, true], ["failed", "Failed", false], ["loading", null, false]]);
   // A compaction says it compacts; after 10 s, that it can take a few minutes.
   assert.deepEqual(seen.compaction, ["Compacting context", "Compacting context · This can take a few minutes"]);
   // A tool's result: structured data as a JSON code block, text as it is, nothing said so, a

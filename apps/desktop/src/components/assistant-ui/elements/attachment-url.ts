@@ -40,9 +40,14 @@ function storedUrl(ref: AttachmentRef, read: AttachmentReader["read"]): Promise<
 }
 
 /** An object URL for the attachment's bytes, once there is one. */
-export function useAttachmentUrl({ file, ref }: AttachmentSource): string | null {
+export function useAttachmentUrl(source: AttachmentSource): string | null {
+  return useAttachment(source).url;
+}
+
+/** An attachment's URL as `useAttachmentUrl` gives it, and whether reading it failed. */
+export function useAttachment({ file, ref }: AttachmentSource): { url: string | null; failed: boolean } {
   const reader = useContext(AttachmentReaderContext);
-  const [url, setUrl] = useState<string | null>(null);
+  const [state, setState] = useState<{ url: string | null; failed: boolean }>({ url: null, failed: false });
   useEffect(() => {
     // A local file's URL is this tile's own; a stored one is shared through the cache.
     const local = file ? URL.createObjectURL(file) : null;
@@ -50,14 +55,14 @@ export function useAttachmentUrl({ file, ref }: AttachmentSource): string | null
     if (!next) return undefined;
     let live = true;
     next.then(
-      (loaded) => live && setUrl(loaded),
-      () => live && setUrl(null),
+      (loaded) => live && setState({ url: loaded, failed: false }),
+      () => live && setState({ url: null, failed: true }),
     );
     return () => {
       live = false;
       if (local) URL.revokeObjectURL(local);
     };
   }, [file, ref, reader]);
-  return url;
+  return state;
 }
 

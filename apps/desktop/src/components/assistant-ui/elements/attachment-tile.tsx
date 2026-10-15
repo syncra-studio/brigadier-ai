@@ -2,6 +2,7 @@ import {
   FileDocument,
   FileImage,
   Paperclip,
+  Warning,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
@@ -16,6 +17,7 @@ import {
   type AttachmentReader,
   AttachmentReaderContext,
   type AttachmentSource,
+  useAttachment,
   useAttachmentUrl,
 } from "@/components/assistant-ui/elements/attachment-url";
 import { ImageContextMenu, ImagePreview, type ViewerImage } from "@/components/assistant-ui/elements/image-viewer";
@@ -173,9 +175,27 @@ export function ImageTile({
   gallery?: { images: readonly ViewerImage[]; index: number } | undefined;
   children?: ReactNode;
 }) {
-  const url = useAttachmentUrl(source);
+  const { url, failed } = useAttachment(source);
+  // A sent image that can't be read: a box that says so, in place of an empty thumbnail.
+  if (sent && failed) {
+    return (
+      <div
+        data-slot="attachment-image"
+        data-state="failed"
+        title={name}
+        className="bg-muted text-muted-foreground size-attachment-sent flex shrink-0 flex-col items-center justify-center gap-1 rounded-2xl text-xs"
+      >
+        <Warning aria-hidden className="size-icon-sm" />
+        Failed
+      </div>
+    );
+  }
   return (
-    <div data-slot="attachment-image" className={cn("group/tile relative shrink-0", sent ? "size-attachment-sent" : "size-attachment-thumb")}>
+    <div
+      data-slot="attachment-image"
+      data-state={url ? undefined : "loading"}
+      className={cn("group/tile relative shrink-0", sent ? "size-attachment-sent" : "size-attachment-thumb")}
+    >
       <ImagePreview url={url} name={name} gallery={gallery}>
         <ImageContextMenu image={{ name, url, source }}>
         <button
@@ -183,7 +203,8 @@ export function ImageTile({
           aria-label={`Preview ${name}`}
           title={name}
           disabled={!url}
-          className="bg-muted size-full overflow-hidden rounded-2xl"
+          // Loading, the box pulses.
+          className={cn("bg-muted size-full overflow-hidden rounded-2xl", !url && "animate-pulse motion-reduce:animate-none")}
         >
           {url && (
             <img

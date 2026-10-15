@@ -41,9 +41,11 @@ import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
+import { AttachmentReaderContext } from "@/components/assistant-ui/elements/attachment-url";
+import { MessageAttachments } from "@/components/assistant-ui/elements/message-attachment";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { Conversation, OrchestratorStep, Request } from "@/ipc/generated";
+import type { AttachmentRef, Conversation, OrchestratorStep, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
@@ -122,6 +124,14 @@ const command = (line: string, status: Described["status"], more: Partial<Descri
 
 /** Three small images, drawn in the palette's colours. */
 const PIXELS = ["red", "green", "blue"].map((name) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" fill="${name}"/></svg>`)}`);
+
+/** Sent images: one the store reads, one it can't, one it never answers. */
+const sentImage = (id: string) => ({ id, name: `${id}.svg`, mime: "image/svg+xml", bytes: 10, pasted: false, inline: null }) as unknown as AttachmentRef;
+const reader = {
+  read: (ref: AttachmentRef) =>
+    ref.id === "bad" ? Promise.reject(new Error("gone")) : ref.id === "slow" ? new Promise<Blob>(() => {}) : fetch(PIXELS[0]!).then((response) => response.blob()),
+  composerRef: () => undefined,
+};
 
 /** A turn that fails to render until `broken` is cleared. */
 let broken = true;
@@ -220,6 +230,11 @@ function Page() {
         </Case>
         <Case id="search">
           <StepRow {...describeLeadStep(search)} />
+        </Case>
+        <Case id="sent-images">
+          <AttachmentReaderContext.Provider value={reader}>
+            <MessageAttachments attachments={["good", "bad", "slow"].map(sentImage)} />
+          </AttachmentReaderContext.Provider>
         </Case>
         <Case id="compaction-new">
           <CompactionRow compaction={{ id: "c1", inTurn: true, automatic: true, state: "running", error: null, position: 1, startedAtMs: now, endedAtMs: null }} />
@@ -343,6 +358,9 @@ async function measure(): Promise<object> {
   trigger?.click();
   await wait(400);
   out.children = all("[data-slot=child]", at("group")).map((row) => text(row));
+  // Sent images: shown, failed, still loading.
+  for (const end = performance.now() + 5000; performance.now() < end && !one("[data-state=failed]", at("sent-images")); ) await frame();
+  out.sentImages = all("[data-slot=attachment-image]", at("sent-images")).map((tile) => [tile.getAttribute("data-state"), text(tile) || null, !!tile.querySelector("img")]);
   // A tool's result: JSON as a code block, text, nothing, a failure; never its arguments inline.
   for (const end = performance.now() + 8000; performance.now() < end && !one("[data-slot=tool-json] code", at("tool-json")); ) await frame();
   const tool = (id: string) => ({
