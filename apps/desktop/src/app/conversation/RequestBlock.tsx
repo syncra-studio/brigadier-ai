@@ -611,7 +611,7 @@ const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
  */
 export const RequestBlock: FC = () => {
   const meta = useAuiState((s) => s.message.metadata.custom["block"]) as BlockMeta | undefined;
-  const fold = useFold();
+  const fold = useFold(meta?.requestId ?? null);
   // A jump to a message this turn sent opens its work.
   const revealing = useRevealing(useViewConversation()?.id ?? null);
   const holds = !!revealing && !!meta?.orchestratorSteps.some((step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing));
@@ -666,8 +666,14 @@ export const RequestBlock: FC = () => {
   // The answer, kept cards and access notices stay outside the fold.
   const folded = activity.filter((item) => item.type === "group" || foldsAway(item.entry, answer));
   const kept = sequence.filter((entry) => entry.kind !== "text" && !foldsAway(entry, answer));
-  const parts = workParts(done ? folded : activity, live && !done);
+  const allParts = workParts(done ? folded : activity, live && !done);
+  // Bubbles the user sent before any work came sit under their message, above the header.
+  const leading = allParts.findIndex((part) => part.type !== "steer");
+  const before = allParts.slice(0, leading < 0 ? allParts.length : leading);
+  const parts = allParts.slice(before.length);
   const foldable = done && parts.some((part) => part.type === "work" && part.items.length > 0);
+  // A turn that ends in a plan keeps its work open, the plan read with the steps that led to it.
+  const open = fold.open ?? endsWithPlan(sequence);
   const outcome = done ? (phase?.outcome ?? null) : null;
   const header =
     phase !== null ||
@@ -704,17 +710,22 @@ export const RequestBlock: FC = () => {
       {/* A step still running when the user stopped the turn reads "Stopped …". */}
       <StoppedBy.Provider value={meta.state === "stopped" ? { atMs: meta.endedAtMs } : null}>
       <div data-slot="request-body" className="flex min-w-0 flex-col">
+        {before.length > 0 && (
+          <div data-slot="request-leading-steers" className="gap-activity pb-activity flex min-w-0 flex-col">
+            {before.map((part) => part.type === "steer" && <SequenceEntry key={entryKey(part.entry)} entry={part.entry} streaming={false} />)}
+          </div>
+        )}
         {header && (
           <WorkHeader
             meta={meta}
             phase={phase}
-            open={fold.open}
+            open={open}
             foldable={foldable}
             quota={quotaWait !== null && meta.state === "working" && !workersActive}
             waitingFor={waitingFor}
             answering={answering !== null}
             answerAtMs={answerAtMs}
-            onToggle={fold.toggle}
+            onToggle={() => fold.set(!open)}
           />
         )}
         {/* The work, cut at the user's follow-ups: each run of it folds on its own, and the
@@ -726,7 +737,7 @@ export const RequestBlock: FC = () => {
               <SequenceEntry entry={part.entry} streaming={false} />
             </div>
           ) : (
-            <WorkFold key={`work:${index}`} open={!done || fold.open}>
+            <WorkFold key={`work:${index}`} open={!done || open}>
               <div
                 data-slot="request-work"
                 className={cn("gap-activity flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}
@@ -762,7 +773,7 @@ export const RequestBlock: FC = () => {
                 data-slot="aui_assistant-message-content"
                 // The replies Brigadier sent other sessions with this answer land a jump here.
                 data-peer-message={meta.texts[answer]?.anchors?.join(" ")}
-                className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0) && "pt-activity")}
+                className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0 || before.length > 0) && "pt-activity")}
               >
                 <ReplyText index={answer} streaming={streams(answer)} report={!streams(answer) && (report || meta.session)} />
               </div>
@@ -810,14 +821,22 @@ export const RequestBlock: FC = () => {
   );
 };
 
+/** The user's open or closed choice per turn, by request: kept while the app runs, through a thread switch. */
+const folds = new Map<string, boolean>();
+
 /**
- * Whether a finished turn's work is open. It folds by default; the thread keeps the header in
- * place on screen while the work opens or closes under it (see `thread-scroll.ts`).
+ * Whether a finished turn's work is open: as the user last left it (`undefined` while they never
+ * chose, for the turn's default). The thread keeps the header in place on screen while the work
+ * opens or closes under it (see `thread-scroll.ts`).
  */
-function useFold() {
-  const [open, setOpen] = useState(false);
-  const show = useCallback(() => setOpen(true), []);
-  return { open, toggle: () => setOpen(!open), show };
+function useFold(requestId: string | null) {
+  const [open, setOpen] = useState<boolean | undefined>(() => (requestId === null ? undefined : folds.get(requestId)));
+  const set = useCallback((next: boolean) => {
+    if (requestId !== null) folds.set(requestId, next);
+    setOpen(next);
+  }, [requestId]);
+  const show = useCallback(() => set(true), [set]);
+  return { open, set, show };
 }
 
 /** A turn's work cut at the user's follow-ups: runs of work, and the steered bubbles between them. */

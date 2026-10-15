@@ -91,6 +91,23 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
   assert.equal(seen.html, "<div><p>Fixed the rounding: <code>round</code> now rounds half-up, and the tests pass.</p></div>");
 });
 
+test("a turn that ends in a plan keeps its work open, and the user's choice outlives a remount", { timeout: 120000 }, async (t) => {
+  const seen = await drive<Record<"ended" | "closed" | "remounted", Seen>>(t, "drive=plan");
+  assert.match(seen.ended.header ?? "", /^Worked for/);
+  // Closed, its fold is gone; remounted, it stays closed where the plan would open it.
+  assert.deepEqual([seen.ended.fold, seen.closed.fold, seen.remounted.fold], ["open", "gone", "gone"]);
+});
+
+test("a message steered in before the turn did anything sits under the first, above its header", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ bubble: string | null; above: boolean; header: string | null; status: string | null; stillAbove: boolean }>(t, "drive=early");
+  assert.match(seen.bubble ?? "", /Use banker's rounding instead/);
+  assert.equal(seen.above, true);
+  assert.match(seen.header ?? "", /^Working/);
+  assert.equal(seen.status, "Thinking");
+  // Rows coming later go under the header, the bubble stays above it.
+  assert.equal(seen.stillAbove, true);
+});
+
 test("a message steered in while a command runs sums the work above it up at once", { timeout: 120000 }, async (t) => {
   const seen = await drive<{
     before: Seen; after: Seen; bubble: string | null; deciding: { note: string | null; shimmer: string | null };

@@ -31,6 +31,7 @@ import type {
   ConversationView as View,
   Message,
   OrchestratorStep,
+  Plan,
   Question,
   QueuedMessage,
   Request,
@@ -85,7 +86,8 @@ const tool = (itemId: string, position: number, name: string, detail: string, st
 const daemon: { messages: Message[]; requests: Record<string, UserRequest>; steps: OrchestratorStep[]; run: "running" | "idle" } = {
   messages: [user("r1", 1, "Fix the rounding in math.js", begun)],
   requests: { r1: asked("r1", begun) },
-  steps: [tool("read", 1.1, "Read", "/repo/src/math.js", "completed"), tool("test", 1.2, "shell", "npm test", "completed")],
+  // `drive=early`: the turn has done nothing yet.
+  steps: drive === "early" ? [] : [tool("read", 1.1, "Read", "/repo/src/math.js", "completed"), tool("test", 1.2, "shell", "npm test", "completed")],
   run: "running",
 };
 const queued: QueuedMessage = {
@@ -147,7 +149,8 @@ function Page() {
     </TooltipProvider>
   );
 }
-createRoot(document.getElementById("root")!).render(<Page />);
+const app = createRoot(document.getElementById("root")!);
+app.render(<Page />);
 
 /* ----- driving and measuring ------------------------------------------------------------ */
 
@@ -396,6 +399,55 @@ async function driveSteer(): Promise<object> {
   return { before, after, bubble, deciding, steerHeld, steerRead: text(one("[data-slot=request-steer] [data-slot=held-note]")) };
 }
 
+/** A message steered in before the turn did anything: its bubble sits under the first, above the header. */
+async function driveEarly(): Promise<object> {
+  await settle(600);
+  const steered = user("r2", 2, "Use banker's rounding instead", Date.now());
+  daemon.messages = [...daemon.messages, steered];
+  daemon.requests.r2 = asked("r2", Date.now(), { steeredInto: "r1" });
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change((board) => ({ requests: { ...board.requests, r2: daemon.requests.r2! }, head: "r2" }));
+  await settle();
+  const block = turn() ?? document;
+  const bubble = one("[data-slot=request-steer]", block);
+  const header = one("[data-slot=request-work-header]", block);
+  const above = !!bubble && !!header && !!(bubble.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING);
+  await hold("early");
+  // Work comes after it: the bubble stays where it was, the rows go under the header.
+  steps([tool("read", 2.1, "Read", "/repo/src/math.js", "completed")]);
+  await settle();
+  const header2 = one("[data-slot=request-work-header]", turn() ?? document);
+  const bubble2 = one("[data-slot=request-steer]", turn() ?? document);
+  return {
+    bubble: text(bubble), above, header: text(header), status: text(one("[data-slot=group-live-line], [data-slot=thread-status]", block)),
+    stillAbove: !!bubble2 && !!header2 && !!(bubble2.compareDocumentPosition(header2) & Node.DOCUMENT_POSITION_FOLLOWING),
+  };
+}
+
+/** A turn that ends in a plan keeps its work open; the user's choice outlives the turn's remount. */
+async function drivePlan(): Promise<object> {
+  await settle(600);
+  const plan = {
+    id: "plan", conversationId: ID, requestId: "r1", position: 1.5, title: "Round half-up",
+    body: "# Round half-up\n\nUse half-up rounding in `round`.\n\n## Steps\n\n1. Change `round`.\n2. Add a test.", steps: [],
+    state: { type: "proposed" }, createdAtMs: begun + 10_000, decidedAtMs: null,
+  } as unknown as Plan;
+  daemon.run = "idle";
+  change(() => ({ run: "idle", runRequest: null, plans: { plan } }));
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 10_000, worked: [{ fromMs: begun, toMs: begun + 10_000 }] });
+  await settle();
+  const ended = seen();
+  one<HTMLButtonElement>("button[data-slot=request-work-header]", turn() ?? document)?.click();
+  await settle();
+  const closed = seen();
+  // Gone and back (a thread switch): the turn stays as the user left it.
+  app.render(<></>);
+  await settle();
+  app.render(<Page />);
+  await settle(600);
+  return { ended, closed, remounted: seen() };
+}
+
 async function driveQueue(): Promise<object> {
   await settle(600);
   // The composer's editor comes in its own chunk after a plain field and takes the focus a beat
@@ -477,7 +529,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");
