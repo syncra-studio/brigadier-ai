@@ -182,7 +182,7 @@ impl SessionManager {
         })?;
         let name = match output.source {
             OutputSource::BashExcerpt => "the stored excerpt of a command's output",
-            OutputSource::Bash | OutputSource::Run | OutputSource::Check => {
+            OutputSource::Bash | OutputSource::Run | OutputSource::Check | OutputSource::Shell => {
                 "a command's full output"
             }
             OutputSource::Preview => "a preview's log",

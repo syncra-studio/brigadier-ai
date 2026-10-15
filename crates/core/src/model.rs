@@ -1402,6 +1402,17 @@ pub struct ThreadItem {
     pub ms: Option<i64>,
 }
 
+/// A page of a thread's own tool calls in one request (or one of its turns), oldest first:
+/// each call's newest event, as a worker's transcript holds it, with its whole output when it
+/// is stored (a digest's or a clipped command's), and a running command's output so far.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadItemsPage {
+    pub entries: Vec<RawEntry>,
+    /// The `after` that reads the next page; `None` on the last.
+    pub next: Option<i64>,
+}
+
 /// Where a raw session's events come from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(

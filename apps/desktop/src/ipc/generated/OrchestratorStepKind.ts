@@ -3,9 +3,11 @@ import type { AnswerOrigin } from "./AnswerOrigin";
 import type { CiConsent } from "./CiConsent";
 import type { CiRun } from "./CiRun";
 import type { ConversationId } from "./ConversationId";
+import type { FileStat } from "./FileStat";
 import type { ItemStatus } from "./ItemStatus";
 import type { MergeCondition } from "./MergeCondition";
 import type { TaskId } from "./TaskId";
+import type { ThreadItemKind } from "./ThreadItemKind";
 
 /**
  * What the orchestrator (or a Chat's model) did that the thread tells as a grey row, in
@@ -20,7 +22,36 @@ endedAtMs?: number,
 /**
  * How a command ended, when it says: its exit code.
  */
-exit?: number, } | { "type": "messaged", taskId: TaskId, 
+exit?: number, 
+/**
+ * What the call is as a transcript item (`listThreadItems` returns it in full).
+ * `None` in steps from before it was kept.
+ */
+item?: ThreadItemKind, 
+/**
+ * A file change's files with their lines in and out (none counted: 0 and 0).
+ */
+files?: Array<FileStat>, 
+/**
+ * How much output a command has printed so far, while it streams (Codex; Claude's
+ * command output arrives at completion), updated at most once a second. The output
+ * itself is read with `listThreadItems`, not kept here.
+ */
+outputBytes?: number, 
+/**
+ * The `out-…` alias its whole output is stored under, when its event holds less of it
+ * (a digest, or the CLI's clip).
+ */
+fullOutput?: string, 
+/**
+ * The orchestrator log entry (its stream sequence in `orch:<id>`) with the call's
+ * newest event, which `listThreadItems` reads.
+ */
+logSeq?: number, 
+/**
+ * The turn it ran in: the orchestrator log entry of the turn's start.
+ */
+turn?: number, } | { "type": "messaged", taskId: TaskId, 
 /**
  * What it sent (`message_worker`), cut to 2000 bytes; none in
  * steps from before it was kept.

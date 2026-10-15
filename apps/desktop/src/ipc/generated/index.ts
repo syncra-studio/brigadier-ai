@@ -407,6 +407,8 @@ export type { TextPhase } from "./TextPhase";
 export type { ThinkingSegment } from "./ThinkingSegment";
 export type { ThreadEdits } from "./ThreadEdits";
 export type { ThreadItem } from "./ThreadItem";
+export type { ThreadItemKind } from "./ThreadItemKind";
+export type { ThreadItemsPage } from "./ThreadItemsPage";
 export type { ThreadMetrics } from "./ThreadMetrics";
 export type { ThreadRead } from "./ThreadRead";
 export type { ThreadSearch } from "./ThreadSearch";

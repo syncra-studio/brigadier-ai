@@ -545,6 +545,9 @@ pub(crate) struct ConvLive {
     pub(super) replies: std::sync::Mutex<super::peer_wait::PeerReplies>,
     /// Wakes a wait when a reply comes for it, or its turn ends.
     pub(super) reply_wake: tokio::sync::Notify,
+    /// The running turn and the output of the thread's running commands
+    /// ([`super::thread_items`]).
+    items: std::sync::Mutex<super::thread_items::ThreadItems>,
     /// Tests: what a merge waits for once prepared, before its last look at consent.
     #[cfg(test)]
     pub(super) merge_pause:
@@ -588,6 +591,7 @@ impl ConvLive {
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             replies: std::sync::Mutex::default(),
             reply_wake: tokio::sync::Notify::new(),
+            items: std::sync::Mutex::default(),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -676,6 +680,10 @@ impl ConvLive {
         if let Some(queued) = self.state.lock().await.peers_reminded.get_mut(message_id) {
             *queued = true;
         }
+    }
+
+    pub(super) fn items(&self) -> std::sync::MutexGuard<'_, super::thread_items::ThreadItems> {
+        self.items.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// The running turn started a call or command: the last reply its request showed was said
@@ -3647,6 +3655,7 @@ impl SessionManager {
             self.on_conversation_event(&conv, &cli, reply).await;
         }
         self.grants.revoke_owner(&cli.owner);
+        conv.items().cli_ended();
         let (was_busy, closing, failed, jobs) = {
             let mut state = conv.state.lock().await;
             if state
@@ -3794,6 +3803,12 @@ impl SessionManager {
     }
 
     async fn store_deltas(&self, conv: &ConvLive, deltas: Vec<ProviderEvent>) {
+        // A command's streamed output is kept while it runs, not stored as it streams.
+        for delta in &deltas {
+            if let ProviderEvent::CommandOutputDelta { item_id, text } = delta {
+                self.command_output(conv, item_id, text).await;
+            }
+        }
         let id = &conv.id;
         let request_id = conv.state.lock().await.request.clone();
         let events: Vec<DomainEvent> = deltas
@@ -4118,6 +4133,21 @@ impl SessionManager {
         cli: &Arc<Cli>,
         event: ProviderEvent,
     ) {
+        // A tool call's row points at its log entry, and a turn's start keys the calls that
+        // follow: both are logged before they are handled.
+        let logged = if super::thread_items::logged_first(&event) {
+            Some(
+                self.log_provider_at(&conv.id, cli.provider, event.clone())
+                    .await,
+            )
+        } else {
+            None
+        };
+        let log_seq = logged.flatten();
+        if matches!(event, ProviderEvent::TurnStarted { .. }) {
+            conv.items().turn_started(log_seq);
+        }
+        let turn = conv.items().turn();
         match &event {
             ProviderEvent::Reasoning { item_id, text } => {
                 let request_id = conv.state.lock().await.request.clone();
@@ -4320,6 +4350,14 @@ impl SessionManager {
                         through_position: 0,
                         ended_at_ms,
                         exit,
+                        item: Some(super::thread_items::tool_item(name, input.as_deref())),
+                        files: None,
+                        output_bytes: None,
+                        full_output: output
+                            .as_deref()
+                            .and_then(super::thread_items::digest_alias),
+                        log_seq,
+                        turn,
                     },
                 )
                 .await;
@@ -4361,8 +4399,10 @@ impl SessionManager {
                 )
                 .await;
                 let command = brigadier_providers::policy::unwrapped_command(command);
-                self.orchestrator_step(
-                    &conv.id,
+                // A Claude command's long output reached its model as a digest, whose whole
+                // output the hook stored; a Codex one's streamed, kept by `command_row`.
+                self.command_row(
+                    conv,
                     OrchestratorStepKind::Tool {
                         item_id: item_id.clone(),
                         name: "shell".into(),
@@ -4371,6 +4411,14 @@ impl SessionManager {
                         through_position: 0,
                         ended_at_ms: (*status != ItemStatus::InProgress).then(now_ms),
                         exit: *exit_code,
+                        item: Some(crate::work::ThreadItemKind::Command),
+                        files: None,
+                        output_bytes: None,
+                        full_output: output
+                            .as_deref()
+                            .and_then(super::thread_items::digest_alias),
+                        log_seq,
+                        turn,
                     },
                 )
                 .await;
@@ -4394,6 +4442,12 @@ impl SessionManager {
                         through_position: 0,
                         ended_at_ms: (*status != ItemStatus::InProgress).then(now_ms),
                         exit: None,
+                        item: Some(crate::work::ThreadItemKind::Files),
+                        files: Some(super::thread_items::file_stats(changes)),
+                        output_bytes: None,
+                        full_output: None,
+                        log_seq,
+                        turn,
                     },
                 )
                 .await;
@@ -4551,7 +4605,9 @@ impl SessionManager {
             ProviderEvent::TurnCompleted { status, .. } => Some(*status),
             _ => None,
         };
-        self.log_provider(&conv.id, cli.provider, event).await;
+        if logged.is_none() {
+            self.log_provider(&conv.id, cli.provider, event).await;
+        }
         if let Some(status) = completed {
             self.turn_completed(conv, cli, status).await;
         }
@@ -5950,7 +6006,19 @@ impl SessionManager {
             .await;
     }
 
-    async fn log_orchestrator(&self, id: &ConversationId, entry: OrchestratorEntry) {
+    /// [`Self::log_provider`], returning where the entry is in the log (`None` if it could
+    /// not be stored).
+    async fn log_provider_at(
+        &self,
+        id: &ConversationId,
+        provider: ProviderKind,
+        event: ProviderEvent,
+    ) -> Option<i64> {
+        self.log_orchestrator(id, OrchestratorEntry::Provider { provider, event })
+            .await
+    }
+
+    async fn log_orchestrator(&self, id: &ConversationId, entry: OrchestratorEntry) -> Option<i64> {
         let start = match &entry {
             OrchestratorEntry::Provider { provider, event } => match event {
                 ProviderEvent::SessionStarted { .. } => Some((*provider, event.clone())),
@@ -5965,19 +6033,23 @@ impl SessionManager {
             conversation_id: id.clone(),
             entry,
         };
-        if let Err(err) = self
+        let seq = match self
             .core
             .record(vec![(streams::orchestrator(id), event)])
             .await
         {
-            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not log the orchestrator"; conversation = %id, error = %err);
-            return;
-        }
+            Ok(seqs) => seqs.first().copied(),
+            Err(err) => {
+                crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not log the orchestrator"; conversation = %id, error = %err);
+                return None;
+            }
+        };
         if let Some((provider, event)) = start
             && let Some(conv) = self.convs_lock().get(id).cloned()
         {
             conv.native_ids().logged(provider, &event);
         }
+        seq
     }
 }
 
@@ -6625,23 +6697,12 @@ pub(crate) fn safe_file_name(name: &str) -> String {
 
 /// A Chat's web search or page read, as a row for its answer.
 fn web_step(tool: &str, input: Option<&str>) -> Option<OrchestratorStepKind> {
-    let field = |key: &str| {
-        input
-            .and_then(|input| serde_json::from_str::<serde_json::Value>(input).ok())
-            .and_then(|args| {
-                args.get(key)
-                    .and_then(|value| value.as_str().map(str::to_owned))
-            })
-    };
-    match tool {
-        "WebSearch" => field("query").map(|query| OrchestratorStepKind::SearchedWeb { query }),
-        // Codex gives the query itself.
-        "web_search" => input.map(|query| OrchestratorStepKind::SearchedWeb {
-            query: query.to_owned(),
-        }),
-        "WebFetch" => field("url").map(|url| OrchestratorStepKind::ReadPage { url }),
-        _ => None,
-    }
+    // Codex gives the query itself.
+    let target = super::thread_items::web_target(tool, input)?;
+    Some(match tool {
+        "WebFetch" => OrchestratorStepKind::ReadPage { url: target },
+        _ => OrchestratorStepKind::SearchedWeb { query: target },
+    })
 }
 
 /// What a conversation whose model hit `limit` waits for, when no model can stand in: what

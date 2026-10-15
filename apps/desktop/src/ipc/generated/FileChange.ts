@@ -5,4 +5,10 @@ export type FileChange = { path: string, kind: FileChangeKind,
 /**
  * The change as diff lines (`-` out, `+` in), when the CLI says (clipped).
  */
-diff?: string, };
+diff?: string, 
+/**
+ * Lines in and out, counted from the whole diff before it was clipped
+ * ([`FileChange::counted`]); `None` when the CLI gave no diff, and in events stored
+ * before they were counted.
+ */
+added?: number, removed?: number, };

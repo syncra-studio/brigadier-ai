@@ -22,9 +22,9 @@ use brigadier_core::{
     PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
     ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
     SearchQuery, SearchUpdate, Settings, Setup, SetupRequest, SourceChange, SourceScope,
-    SourceState, StoredCopy, TaskId, ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView,
-    UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
-    WorkspaceTree,
+    SourceState, StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UpdateTarget,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -800,6 +800,17 @@ pub enum Request {
         conversation_id: ConversationId,
         item_id: String,
     },
+    /// A page of the thread's own tool calls in one request, as the transcript items a
+    /// worker's fold into: each call's newest event (a running command's output so far after
+    /// it), with its whole output when it is stored. `turn` keeps only one turn's (the
+    /// `turn` its rows name); `after` is the page's `next`.
+    ListThreadItems {
+        conversation_id: ConversationId,
+        request_id: String,
+        turn: Option<i64>,
+        after: Option<i64>,
+        limit: u32,
+    },
     /// A session thread's metrics (Inspector): its own commits and its context per request.
     GetThreadMetrics {
         conversation_id: ConversationId,
@@ -1427,6 +1438,9 @@ pub enum Response {
     },
     GetThreadItem {
         item: ThreadItem,
+    },
+    ListThreadItems {
+        page: ThreadItemsPage,
     },
     GetThreadMetrics {
         metrics: ThreadMetrics,

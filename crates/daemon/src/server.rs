@@ -1380,6 +1380,20 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::GetThreadItem {
             item: heap(|| core.thread_item(&conversation_id, &item_id)).await?,
         },
+        Request::ListThreadItems {
+            conversation_id,
+            request_id,
+            turn,
+            after,
+            limit,
+        } => Response::ListThreadItems {
+            page: heap(|| {
+                daemon
+                    .sessions
+                    .thread_items(&conversation_id, &request_id, turn, after, limit)
+            })
+            .await?,
+        },
         Request::GetThreadMetrics { conversation_id } => Response::GetThreadMetrics {
             metrics: heap(|| daemon.sessions.thread_metrics(&conversation_id)).await?,
         },

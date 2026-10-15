@@ -1292,7 +1292,11 @@ impl Core {
     }
 
     /// The whole text of the conversation's stored output `alias`, while its blob is there.
-    async fn stored_output_text(&self, id: &ConversationId, alias: &str) -> Option<String> {
+    pub(crate) async fn stored_output_text(
+        &self,
+        id: &ConversationId,
+        alias: &str,
+    ) -> Option<String> {
         let blob = {
             let mut boards = self.boards.lock().await;
             if !boards.contains_key(id) {

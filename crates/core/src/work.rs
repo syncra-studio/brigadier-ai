@@ -548,6 +548,9 @@ pub enum OutputSource {
     /// A `run_check` command's whole output, stdout and stderr together (THREAD-PLAN.md Q8
     /// lever 3).
     Check,
+    /// A Codex thread's own shell command's whole output, as it streamed, when it was longer
+    /// than the CLI's event kept.
+    Shell,
 }
 
 // ----- previews -----------------------------------------------------------------------------
@@ -655,7 +658,7 @@ pub struct WorkerDiff {
     pub stat: DiffStat,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FileStat {
     pub path: String,
@@ -1735,6 +1738,20 @@ impl WorkerStepKind {
     }
 }
 
+/// What a thread's tool call is, as the transcript item a worker's would fold into: a
+/// command (its output, exit and duration), a file change (its files' diffs and lines in and
+/// out), an image it looked at (its path), a web search or page read (its query or URL), or
+/// any other tool (its input and output).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadItemKind {
+    Command,
+    Files,
+    Image,
+    Web,
+    Tool,
+}
+
 /// One step of a worker, where it happened in the conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1782,6 +1799,35 @@ pub enum OrchestratorStepKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         exit: Option<i32>,
+        /// What the call is as a transcript item (`listThreadItems` returns it in full).
+        /// `None` in steps from before it was kept.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        item: Option<ThreadItemKind>,
+        /// A file change's files with their lines in and out (none counted: 0 and 0).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        files: Option<Vec<FileStat>>,
+        /// How much output a command has printed so far, while it streams (Codex; Claude's
+        /// command output arrives at completion), updated at most once a second. The output
+        /// itself is read with `listThreadItems`, not kept here.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        output_bytes: Option<u64>,
+        /// The `out-…` alias its whole output is stored under, when its event holds less of it
+        /// (a digest, or the CLI's clip).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        full_output: Option<String>,
+        /// The orchestrator log entry (its stream sequence in `orch:<id>`) with the call's
+        /// newest event, which `listThreadItems` reads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        log_seq: Option<i64>,
+        /// The turn it ran in: the orchestrator log entry of the turn's start.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        turn: Option<i64>,
     },
     /// "Sent message to {worker}".
     Messaged {

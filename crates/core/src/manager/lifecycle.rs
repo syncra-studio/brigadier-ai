@@ -244,24 +244,20 @@ impl SessionManager {
             return;
         };
         for step in &board.orchestrator_steps {
+            let mut kind = step.kind.clone();
             if let OrchestratorStepKind::Tool {
-                item_id,
-                name,
-                detail,
-                status: ItemStatus::InProgress,
+                status: status @ ItemStatus::InProgress,
+                through_position,
+                ended_at_ms,
+                exit,
                 ..
-            } = &step.kind
+            } = &mut kind
             {
-                let kind = OrchestratorStepKind::Tool {
-                    item_id: item_id.clone(),
-                    name: name.clone(),
-                    detail: detail.clone(),
-                    status: ItemStatus::Failed,
-                    through_position: 0,
-                    // When it ended isn't known: it ran no further than it is recorded.
-                    ended_at_ms: Some(step.at_ms),
-                    exit: None,
-                };
+                *status = ItemStatus::Failed;
+                *through_position = 0;
+                // When it ended isn't known: it ran no further than it is recorded.
+                *ended_at_ms = Some(step.at_ms);
+                *exit = None;
                 self.orchestrator_step_in(id, step.request_id.clone(), kind)
                     .await;
             }

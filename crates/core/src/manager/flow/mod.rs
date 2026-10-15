@@ -1870,6 +1870,8 @@ mod takeover_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod thread_items_tests;
+#[cfg(test)]
 mod thread_scratch_tests;
 #[cfg(test)]
 mod thread_tests;

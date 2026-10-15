@@ -429,7 +429,16 @@ impl Board {
                     if let Some(known) = self.orchestrator_steps.iter_mut().find(|known| {
                         matches!(&known.kind, crate::work::OrchestratorStepKind::Tool { item_id: id, .. } if id == item_id)
                     }) {
-                        // Input and result updates stay where the call first appeared.
+                        // Input and result updates stay where the call first appeared, in
+                        // the turn it started in.
+                        if let (
+                            crate::work::OrchestratorStepKind::Tool { turn: started, .. },
+                            crate::work::OrchestratorStepKind::Tool { turn, .. },
+                        ) = (&known.kind, &mut step.kind)
+                            && started.is_some()
+                        {
+                            *turn = *started;
+                        }
                         known.kind = step.kind;
                         return;
                     }
