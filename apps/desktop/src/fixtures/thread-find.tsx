@@ -385,9 +385,11 @@ const steps = {
     const input = field();
     return { focused: document.activeElement === input, selected: input ? [input.selectionStart, input.selectionEnd] : null, value: input?.value ?? null };
   },
-  /** Counting stops at 250. */
+  /** Counting stops at 250. A new query changes the marks in place: the same sets, so WebKit repaints what they lose. */
   async many() {
-    return find("tick");
+    const kept = [matches(), CSS.highlights.get(ACTIVE_MATCH)];
+    const found = await find("tick");
+    return { ...found, sameMarks: kept[0] === matches() && kept[1] === CSS.highlights.get(ACTIVE_MATCH) };
   },
   /** Nothing found: "0 results", the buttons off, no marks. */
   async none() {
@@ -426,12 +428,18 @@ const steps = {
     await settle(300);
     return { label: found.label, inBox, inView: found.place?.inView ?? false };
   },
-  /** Esc closes the bar and clears the marks. */
+  /** Esc closes the bar and clears the marks: the sets it drops are emptied first, which is what repaints them. */
   async closed() {
+    const kept = [matches(), CSS.highlights.get(ACTIVE_MATCH)];
     press(field()!, "Escape");
     await until(() => bar() === null);
     await settle(50);
-    return { bar: bar() !== null, matches: CSS.highlights.has(MATCHES), active: CSS.highlights.has(ACTIVE_MATCH) };
+    return {
+      bar: bar() !== null,
+      matches: CSS.highlights.has(MATCHES),
+      active: CSS.highlights.has(ACTIVE_MATCH),
+      emptied: kept.map((highlight) => highlight?.size ?? null),
+    };
   },
   /** A selection over two lines gives an empty text. */
   async multiline() {

@@ -138,20 +138,39 @@ function registry(): HighlightRegistry | null {
   return CSS.highlights;
 }
 
+/**
+ * The marks are changed in place, never swapped or dropped whole: WebKit repaints the ranges a
+ * highlight gains or loses, where a registry entry replaced or deleted left the old marks on screen.
+ */
+function marks(highlights: HighlightRegistry, name: string, priority: number): Highlight {
+  let highlight = highlights.get(name);
+  if (!highlight) {
+    highlight = new Highlight();
+    highlight.priority = priority;
+    highlights.set(name, highlight);
+  }
+  return highlight;
+}
+
 function paint(ranges: readonly Range[], active: Range | null): void {
   const highlights = registry();
   if (!highlights) return;
-  highlights.set(MATCHES, new Highlight(...ranges));
-  const current = active ? new Highlight(active) : new Highlight();
+  const all = marks(highlights, MATCHES, 0);
+  all.clear();
+  for (const range of ranges) all.add(range);
   // Over the others where they meet.
-  current.priority = 1;
-  highlights.set(ACTIVE_MATCH, current);
+  const current = marks(highlights, ACTIVE_MATCH, 1);
+  current.clear();
+  if (active) current.add(active);
 }
 
 function unpaint(): void {
   const highlights = registry();
-  highlights?.delete(MATCHES);
-  highlights?.delete(ACTIVE_MATCH);
+  if (!highlights) return;
+  for (const name of [MATCHES, ACTIVE_MATCH]) {
+    highlights.get(name)?.clear();
+    highlights.delete(name);
+  }
 }
 
 /**

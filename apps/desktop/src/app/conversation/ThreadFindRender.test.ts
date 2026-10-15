@@ -27,12 +27,12 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
     keys: { found: Found; enters: (string | null)[]; shiftEnter: string | null; commandG: string | null; shiftCommandG: string | null };
     revealed: { label: string | null; place: Place; moved: number; after: string | null };
     again: { focused: boolean; selected: number[] | null; value: string | null };
-    many: Found;
+    many: Found & { sameMarks: boolean };
     none: Found & { previous: boolean | null; next: boolean | null };
     folded: Found;
     clipped: Found & { before: string | null; after: string | null };
     inner: { label: string | null; inBox: boolean; inView: boolean };
-    closed: { bar: boolean; matches: boolean; active: boolean };
+    closed: { bar: boolean; matches: boolean; active: boolean; emptied: (number | null)[] };
     multiline: { value: string | null; label: string | null; size: number; closedByButton: boolean };
   };
   assert.equal(seen.error, undefined);
@@ -95,6 +95,8 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   // 280 "tick"s loaded: counting stops at 250.
   assert.match(seen.many.label ?? "", /^\d+ \/ 250\+ results$/);
   assert.equal(seen.many.size, 250);
+  // A new query changes the marks in place: WebKit repaints only the ranges a set gains or loses.
+  assert.equal(seen.many.sameMarks, true);
 
   // A word only in a page never loaded: nothing.
   assert.equal(seen.none.label, "0 results");
@@ -117,7 +119,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   // Esc closes the bar and clears the marks.
   // A match in a box that scrolls on its own, out of its sight: the box and the thread bring it into view.
   assert.deepEqual(seen.inner, { label: "1 / 1 result", inBox: true, inView: true });
-  assert.deepEqual(seen.closed, { bar: false, matches: false, active: false });
+  assert.deepEqual(seen.closed, { bar: false, matches: false, active: false, emptied: [0, 0] });
 
   // A selection over two lines opens the bar with no text; × closes it.
   assert.deepEqual(seen.multiline, { value: "", label: null, size: 0, closedByButton: true });
