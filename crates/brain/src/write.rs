@@ -144,9 +144,13 @@ pub(crate) fn record(
         // fresh, with this recording's provenance and its own supporting files.
         Some(found) if !found.by_key || (found.title == node.title && found.body == node.body) => {
             let embedding = embedding.filter(|_| found.by_key);
+            // A claim that says what the user decided adds a source; the node stays the
+            // user's (BUILD-PLAN A11).
             tx.prepare_cached(
                 "UPDATE nodes SET state = 'fresh', stale_reason = NULL, stale_since_ms = NULL, \
-                 provenance = ?2, session_id = ?3, updated_ms = ?4, expires_ms = ?5, \
+                 provenance = iif(provenance ->> '$.origin' = 'user' \
+                 AND ?2 ->> '$.origin' != 'user', provenance, ?2), \
+                 session_id = ?3, updated_ms = ?4, expires_ms = ?5, \
                  embedding = coalesce(?6, embedding), \
                  embed_model = iif(?6 IS NULL, embed_model, ?7) WHERE id = ?1",
             )?

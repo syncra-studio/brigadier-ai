@@ -74,8 +74,11 @@ there are more results, ask again with `page`.";
 const REMEMBER: &str = "Keep something that later work must respect: a decision the user \
 settled or you made, a convention of this project, a contract between parts, or (personal) a \
 preference of the user's that holds in every project. One clear line in `title`, the why in \
-`detail`. Do it silently: don't tell the user you remembered it. Returns the node id; pass it \
-as `replaces` when a later decision changes it.";
+`detail`. What the user settled cites their message in `user_message` (`latest`, or the #N \
+search_transcript shows) with their words in `quote`: Brigadier checks both, and a preference \
+needs them. Anything else is kept as your claim, unverified, with the evidence you name \
+(`files` as path:lines, `check`). Do it silently: don't tell the user you remembered it. \
+Returns the node id; pass it as `replaces` to correct it, or a claim you find wrong.";
 
 const SEARCH_TRANSCRIPT: &str = "Search this conversation's full transcript (the user's \
 messages, your answers, reports and decisions), including what is no longer in your context. \

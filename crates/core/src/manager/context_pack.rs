@@ -169,7 +169,7 @@ impl SessionManager {
 /// with the number of lines; `None` without hits.
 fn brain_lines(hits: &[BrainHit]) -> Option<(String, u32)> {
     let mut text = format!(
-        "{BRAIN_HEADING}\n\nWhat earlier work in this project found and decided that matches your task, best match first. Start from it; `query_brain <node id>` gives a node in full, and `query_brain` answers more.\n\n"
+        "{BRAIN_HEADING}\n\nWhat earlier work in this project found and decided that matches your task, best match first, each with where it came from. A line marked unverified is a claim nobody checked: check it in the code before you rely on it. Start from it; `query_brain <node id>` gives a node in full, and `query_brain` answers more.\n\n"
     );
     let mut count = 0;
     for hit in hits {
@@ -201,7 +201,11 @@ fn brain_lines(hits: &[BrainHit]) -> Option<(String, u32)> {
             .map_or(node.body.as_str(), |(_, answer)| answer);
         let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
         let title = node.title.split_whitespace().collect::<Vec<_>>().join(" ");
-        let line = cut(&format!("- {kind}: {title}{stale}. {body}"), BRAIN_FACT_MAX);
+        let label = brigadier_brain::source_label(node.kind, &node.provenance);
+        let line = cut(
+            &format!("- {kind} [{label}]: {title}{stale}. {body}"),
+            BRAIN_FACT_MAX,
+        );
         let line = format!("{line} (node {})\n", node.id);
         if text.len() + line.len() > BRAIN_MAX {
             break;
@@ -778,9 +782,9 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "- decision: Flags are off by default. Every new flag starts off. The user turns it on. (node n1)",
-                "- task: task-4 Add the flag. Flags live in config/flags.rs. Changes: - config/flags.rs (node n2)",
-                "- module: crates/config (may be out of date: flags.rs changed). Reads the flags. (node n4)",
+                "- decision [worker claim, unverified]: Flags are off by default. Every new flag starts off. The user turns it on. (node n1)",
+                "- task [worker report]: task-4 Add the flag. Flags live in config/flags.rs. Changes: - config/flags.rs (node n2)",
+                "- module [worker report]: crates/config (may be out of date: flags.rs changed). Reads the flags. (node n4)",
             ]
         );
         assert_eq!(brain_lines(&hits[2..3]), None);

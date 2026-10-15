@@ -23,9 +23,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use brigadier_brain::{
-    Brain, BrainAnswer, BrainCaps, BrainGraph, BrainQuery, Edge, EdgeKind, Embedder, EmbedderState,
-    FileRef, NewNode, Node, NodeFilter, NodeKind, NodeState, Origin, Provenance, Route, Scope,
-    TranscriptEntry, WorkerRef,
+    Brain, BrainAnswer, BrainCaps, BrainGraph, BrainQuery, Claim, Edge, EdgeKind, Embedder,
+    EmbedderState, FileRef, NewNode, Node, NodeFilter, NodeKind, NodeState, Origin, Provenance,
+    Route, Scope, TranscriptEntry, WorkerRef,
 };
 use brigadier_index::{
     CodeHit, CodeIndex, CodeQuery, FileChange, IndexConfig, ScanHelper, SearchKind,
@@ -788,7 +788,9 @@ impl SessionManager {
         Ok(reply)
     }
 
-    /// `remember`: a decision, convention, preference or contract.
+    /// `remember`: a decision, convention, preference or contract (BUILD-PLAN A11). What
+    /// cites the user's message, checked here, is the user's decision; a preference needs
+    /// that. Anything else is the thread's claim, unverified, with the evidence it names.
     pub(crate) async fn remember_tool(
         &self,
         id: &ConversationId,
@@ -804,6 +806,19 @@ impl SessionManager {
             MemoryKind::Convention => NodeKind::Convention,
             MemoryKind::Preference => NodeKind::Preference,
             MemoryKind::Contract => NodeKind::Contract,
+        };
+        let cited = match args.user_message.as_deref() {
+            Some(reference) => Some(
+                self.user_words(id, reference, args.quote.as_deref())
+                    .await
+                    .map_err(|reason| Error::Invalid(format!("not kept: {reason}")))?,
+            ),
+            None if personal => {
+                return Err(Error::Invalid(
+                    "not kept: a preference of the user's needs `user_message`, the message where they said it (`latest`, or the #N search_transcript shows), with their words in `quote`".into(),
+                ));
+            }
+            None => None,
         };
         let before = if personal {
             self.memory_lines(super::brain_jobs::MEMORY_BYTES).await
@@ -822,29 +837,64 @@ impl SessionManager {
             let project = self.project_brain(&project).await?;
             (project.brain.clone(), project.index.clone())
         };
+        // `path:12-30` names the lines; the file itself is what goes stale.
+        let paths: Vec<String> = args
+            .files
+            .iter()
+            .map(|file| without_lines(file).to_owned())
+            .collect();
         let files = if personal {
             Vec::new()
         } else {
-            file_refs(index.as_ref(), &args.files).await
+            file_refs(index.as_ref(), &paths).await
         };
         let commit = if personal {
             None
         } else {
             self.head_commit(id).await
         };
+        let mut body = args.detail.unwrap_or_default();
+        let claim = match &cited {
+            Some(said) => {
+                if !body.is_empty() {
+                    body.push('\n');
+                }
+                body.push_str(&said.source());
+                None
+            }
+            None => Some(Claim {
+                cites: args
+                    .files
+                    .iter()
+                    .map(|file| file.trim().to_owned())
+                    .filter(|file| file.len() > without_lines(file).len())
+                    .chain(
+                        args.check
+                            .iter()
+                            .map(|check| format!("check {}", check.trim())),
+                    )
+                    .collect(),
+                ..Claim::unverified()
+            }),
+        };
         let node = NewNode {
             kind: if personal { NodeKind::Preference } else { kind },
             key: None,
             title,
-            body: args.detail.unwrap_or_default(),
+            body,
             provenance: Provenance {
-                origin: Origin::Orchestrator,
+                origin: if cited.is_some() {
+                    Origin::User
+                } else {
+                    Origin::Orchestrator
+                },
                 session_id: Some(id.0.clone()),
                 task_id: None,
                 job_id: None,
                 worker: None,
                 commit,
                 recorded_at_ms: now_ms(),
+                claim,
             },
             files,
             expires_at_ms: None,
@@ -864,12 +914,82 @@ impl SessionManager {
         }
         Ok(format!(
             "Remembered as {node_id}{}.",
-            if personal {
-                " (the user's preferences)"
-            } else {
-                ""
+            match (personal, cited.is_some()) {
+                (true, _) => " (the user's preferences)",
+                (false, true) => " (a user decision)",
+                (false, false) => " (your claim, unverified)",
             }
         ))
+    }
+
+    /// The user's message `reference` names in this conversation (`latest`, `#12`, `12`), if
+    /// it is the user's and says `quote`; otherwise why not.
+    pub(crate) async fn user_words(
+        &self,
+        id: &ConversationId,
+        reference: &str,
+        quote: Option<&str>,
+    ) -> std::result::Result<UserWords, String> {
+        let reference = reference.trim();
+        let latest = matches!(reference.to_lowercase().as_str(), "latest" | "last");
+        let seq = if latest {
+            None
+        } else {
+            Some(reference.trim_start_matches('#').parse::<i64>().map_err(|_| {
+                format!(
+                    "`user_message` is `latest` or a message number (#N, as search_transcript shows), not \"{reference}\""
+                )
+            })?)
+        };
+        let page = self
+            .core
+            .list_messages(
+                id.clone(),
+                seq.map(|seq| seq + 1),
+                if latest { 50 } else { 1 },
+            )
+            .await
+            .map_err(|err| format!("this conversation's messages can't be read: {err}"))?;
+        let message = match seq {
+            Some(seq) => page
+                .messages
+                .into_iter()
+                .rev()
+                .find(|message| message.seq == seq)
+                .ok_or_else(|| format!("this conversation has no message #{seq}"))?,
+            None => page
+                .messages
+                .into_iter()
+                .rev()
+                .find(|message| message.role == MessageRole::User)
+                .ok_or_else(|| "this conversation has no message from the user yet".to_owned())?,
+        };
+        if message.role != MessageRole::User {
+            let whose = match message.role {
+                MessageRole::Assistant => "yours",
+                MessageRole::Peer => "another session's",
+                MessageRole::System => "Brigadier's",
+                MessageRole::User => "the user's",
+            };
+            return Err(format!(
+                "message #{} isn't the user's: it is {whose}",
+                message.seq
+            ));
+        }
+        let words = self.full_words(&message).await;
+        let quote = quote.map(str::trim).filter(|quote| !quote.is_empty());
+        if let Some(quote) = quote
+            && !says(&words, quote)
+        {
+            return Err(format!(
+                "the user's message #{} doesn't say \"{quote}\"",
+                message.seq
+            ));
+        }
+        Ok(UserWords {
+            seq: message.seq,
+            quote: quote.map(str::to_owned),
+        })
     }
 
     /// `search_transcript`: passages of this conversation's full transcript.
@@ -1070,7 +1190,7 @@ impl SessionManager {
         let version = order.as_ref().map(|order| order.next());
         self.spawn(async move {
             let _learning = learning;
-            let write = manager.record_report(&task, &report);
+            let write = manager.record_report(&task, &report, version);
             let result = match (order, version) {
                 (Some(order), Some(version)) => order.keep(version, write).await,
                 _ => write.await,
@@ -1118,7 +1238,13 @@ impl SessionManager {
         .unwrap_or(unhashed)
     }
 
-    async fn record_report(&self, task: &Task, report: &Report) -> Result<()> {
+    /// `version` is the report's place among the task's reports, when it is known.
+    async fn record_report(
+        &self,
+        task: &Task,
+        report: &Report,
+        version: Option<u64>,
+    ) -> Result<()> {
         if task.kind == TaskKind::Review {
             return Ok(());
         }
@@ -1149,6 +1275,7 @@ impl SessionManager {
                 .clone()
                 .or_else(|| task.workspace.as_ref().and_then(|w| w.base.clone())),
             recorded_at_ms: now_ms(),
+            claim: None,
         };
         let kind = match task.kind {
             TaskKind::Research => NodeKind::Research,
@@ -1182,6 +1309,15 @@ impl SessionManager {
             })
             .collect();
         let task_id = task.id.0.clone();
+        // Its decisions and what it learned are its claims (BUILD-PLAN A11): unverified, with
+        // the task and the report they came from, until evidence for each is checked.
+        let claimed = Provenance {
+            claim: Some(Claim {
+                report_version: version,
+                ..Claim::unverified()
+            }),
+            ..provenance.clone()
+        };
         let decisions = report
             .decisions
             .iter()
@@ -1190,8 +1326,11 @@ impl SessionManager {
                 kind: NodeKind::Decision,
                 key: Some(format!("task:{}:{}", task.id.0, blake_key(decision))),
                 title: one_line(decision, 240),
-                body: format!("{decision}\n(made in task-{}: {})", task.number, task.title),
-                provenance: provenance.clone(),
+                body: format!(
+                    "{decision}\n(task-{}'s claim, unverified: {})",
+                    task.number, task.title
+                ),
+                provenance: claimed.clone(),
                 files: files.clone(),
                 expires_at_ms: None,
             });
@@ -1205,8 +1344,11 @@ impl SessionManager {
                 kind: NodeKind::Convention,
                 key: Some(format!("task:{}:learned:{}", task.id.0, blake_key(item))),
                 title: one_line(item, 240),
-                body: format!("{item}\n(learned in task-{}: {})", task.number, task.title),
-                provenance: provenance.clone(),
+                body: format!(
+                    "{item}\n(task-{}'s claim, unverified: {})",
+                    task.number, task.title
+                ),
+                provenance: claimed.clone(),
                 files: files.clone(),
                 expires_at_ms: None,
             });
@@ -1299,7 +1441,9 @@ impl SessionManager {
         parts
     }
 
-    /// Something the user settled on a card (an answer, a plan decision): a decision node.
+    /// Something the user settled on a card (an answer, a plan or outline go-ahead): a user
+    /// decision node. The user's own words the thread keeps with `remember` are checked
+    /// against their message and kept with the same origin (`remember_tool`).
     pub(crate) fn learn_user_decision(
         &self,
         id: &ConversationId,
@@ -1332,6 +1476,7 @@ impl SessionManager {
                         worker: None,
                         commit,
                         recorded_at_ms: now_ms(),
+                        claim: None,
                     },
                     files: Vec::new(),
                     expires_at_ms: None,
@@ -1363,8 +1508,11 @@ impl SessionManager {
     }
 
     /// Decisions a handoff note lists that were never kept with `remember`: each becomes a
-    /// decision node of the conversation, so this briefing's ledger and every later one carry
-    /// it with an id. Returns how many it kept.
+    /// node of the conversation, so this briefing's ledger and every later one carry it with
+    /// an id. They are the thread's own claims, sourced by the session and the note's
+    /// generation (BUILD-PLAN A11), unless a line cites a user decision: the user's words in
+    /// double quotes, found in one of their messages here, or the id of a user decision
+    /// node. Returns how many it kept.
     pub(crate) async fn keep_note_decisions(
         &self,
         id: &ConversationId,
@@ -1379,26 +1527,44 @@ impl SessionManager {
         }
         let project = self.project_brain(&project).await?;
         let commit = self.head_commit(id).await;
-        let nodes: Vec<NewNode> = lines
-            .into_iter()
-            .map(|line| NewNode {
+        let said = self.user_texts(id).await;
+        let mut nodes = Vec::new();
+        for line in lines {
+            let cited = cites_user_words(&line, &said)
+                || self.cites_user_decision(&project.brain, &line).await;
+            let (origin, claim, from) = if cited {
+                (Origin::User, None, "citing the user")
+            } else {
+                (
+                    Origin::Orchestrator,
+                    Some(Claim {
+                        generation: Some(generation),
+                        ..Claim::unverified()
+                    }),
+                    "your claim, unverified",
+                )
+            };
+            nodes.push(NewNode {
                 kind: NodeKind::Decision,
                 key: Some(format!("handoff:{}:{}", id.0, blake_key(&line))),
                 title: one_line(&line, 240),
-                body: format!("{line}\n(from the handoff note before rebirth {generation})"),
+                body: format!(
+                    "{line}\n(from the handoff note before rebirth {generation}, {from})"
+                ),
                 provenance: Provenance {
-                    origin: Origin::Orchestrator,
+                    origin,
                     session_id: Some(id.0.clone()),
                     task_id: None,
                     job_id: None,
                     worker: None,
                     commit: commit.clone(),
                     recorded_at_ms: now_ms(),
+                    claim,
                 },
                 files: Vec::new(),
                 expires_at_ms: None,
-            })
-            .collect();
+            });
+        }
         let brain = project.brain.clone();
         blocking(move || {
             let mut kept = 0;
@@ -1409,6 +1575,59 @@ impl SessionManager {
             Ok(kept)
         })
         .await
+    }
+
+    /// The full words of the user's messages in this conversation, newest first (at most the
+    /// latest [`USER_TEXTS_MAX`]).
+    async fn user_texts(&self, id: &ConversationId) -> Vec<String> {
+        let mut texts = Vec::new();
+        let mut before = None;
+        while texts.len() < USER_TEXTS_MAX {
+            let Ok(page) = self
+                .core
+                .list_messages(id.clone(), before, brigadier_store::MAX_PAGE - 1)
+                .await
+            else {
+                break;
+            };
+            for message in page.messages.iter().rev() {
+                if message.role == MessageRole::User {
+                    texts.push(self.full_words(message).await);
+                }
+            }
+            match page.messages.first() {
+                Some(oldest) if page.has_more => before = Some(oldest.seq),
+                _ => break,
+            }
+        }
+        texts
+    }
+
+    /// Whether `line` names the id of a node the user decided.
+    async fn cites_user_decision(&self, brain: &Brain, line: &str) -> bool {
+        let ids: Vec<String> = line
+            .split(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
+            .filter(|word| uuid::Uuid::parse_str(word).is_ok())
+            .map(str::to_owned)
+            .collect();
+        if ids.is_empty() {
+            return false;
+        }
+        let brain = brain.clone();
+        blocking(move || {
+            for id in ids {
+                if brain
+                    .node(&id)
+                    .map_err(brain_error)?
+                    .is_some_and(|node| node.provenance.origin == Origin::User)
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })
+        .await
+        .unwrap_or(false)
     }
 
     /// The session checkout's HEAD commit, for provenance.
@@ -1704,8 +1923,8 @@ fn node_text(node: &Node) -> String {
         text.push_str(&format!("\nFiles: {}", files.join(", ")));
     }
     text.push_str(&format!(
-        "\n(from {:?}, {})",
-        node.provenance.origin,
+        "\n({}, {})",
+        brigadier_brain::source_label(node.kind, &node.provenance),
         crate::manager::prompts::date_of(node.provenance.recorded_at_ms)
     ));
     text
@@ -1774,6 +1993,7 @@ fn learn_structure(brain: &Brain, index: &CodeIndex) {
         worker: None,
         commit: None,
         recorded_at_ms: now_ms(),
+        claim: None,
     };
     let described = |kind: NodeKind, key: &str| {
         brain
@@ -2177,6 +2397,80 @@ fn floor_boundary(text: &str, max: usize) -> usize {
 }
 
 /// A stable key part for a piece of text.
+/// A user's message a Brain write cites, checked: its number and the words it quotes.
+#[derive(Debug, Clone)]
+pub(crate) struct UserWords {
+    pub seq: i64,
+    pub quote: Option<String>,
+}
+
+impl UserWords {
+    /// Where the node came from, for its body.
+    fn source(&self) -> String {
+        match &self.quote {
+            Some(quote) => format!("(the user's words in message #{}: \"{quote}\")", self.seq),
+            None => format!("(the user's message #{})", self.seq),
+        }
+    }
+}
+
+/// The user's messages a handoff note's decisions are checked against, at most.
+const USER_TEXTS_MAX: usize = 2_000;
+/// A quoted span shorter than this ("yes") proves nothing.
+const QUOTE_MIN: usize = 8;
+
+/// Whether `line` quotes, in double quotes, words one of `said` holds.
+fn cites_user_words(line: &str, said: &[String]) -> bool {
+    quoted(line)
+        .into_iter()
+        .filter(|span| span.trim().len() >= QUOTE_MIN)
+        .any(|span| said.iter().any(|text| says(text, span)))
+}
+
+/// The spans of `text` in double quotes, straight or curly.
+fn quoted(text: &str) -> Vec<&str> {
+    let mut spans = Vec::new();
+    let mut open: Option<usize> = None;
+    for (at, c) in text.char_indices() {
+        match (c, open) {
+            ('"' | '\u{201c}', None) => open = Some(at + c.len_utf8()),
+            ('"' | '\u{201d}', Some(start)) => {
+                spans.push(&text[start..at]);
+                open = None;
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+/// Whether `text` says `quote`, ignoring case, spacing and the quote marks around it.
+pub(crate) fn says(text: &str, quote: &str) -> bool {
+    let plain = |text: &str| {
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let quote = plain(quote.trim_matches(['"', '\'', '\u{201c}', '\u{201d}', ' ']));
+    !quote.is_empty() && plain(text).contains(&quote)
+}
+
+/// A file named for a Brain write without its line range (`src/a.rs:12-30` is `src/a.rs`).
+fn without_lines(file: &str) -> &str {
+    let file = file.trim();
+    match file.rsplit_once(':') {
+        Some((path, lines))
+            if !path.is_empty()
+                && !lines.is_empty()
+                && lines.chars().all(|c| c.is_ascii_digit() || c == '-') =>
+        {
+            path
+        }
+        _ => file,
+    }
+}
+
 pub(super) fn blake_key(text: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.trim().bytes() {
@@ -2349,6 +2643,7 @@ mod tests {
                 worker: None,
                 commit: None,
                 recorded_at_ms: 1,
+                claim: None,
             },
             files: Vec::new(),
             expires_at_ms: None,

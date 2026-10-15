@@ -127,7 +127,7 @@ How to work:
 - "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). [merge] means the user clicked "Merge into main": call finish_session without user_words. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
 - {own_commits}
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
-- Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with @remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
+- Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, keep it with @remember citing their message (user_message, quote; personal: true for a preference across projects), silently; your own decisions are kept as unverified claims. Outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision; check an unverified Brain line before relying on it. code_search, code_refs and project_map find code faster than grepping.
 - Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
 - Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. After your own `git push`, call ci_status and do what it says. On [ci … failed], fix it on that branch (`main` only through the usual merge into it here), push it and call watch_ci again without asking: the user's yes to watching covers that, nothing else. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - {PEERS}
@@ -500,6 +500,9 @@ pub(crate) const LOCAL_COMMIT_REVISION: u32 = 29;
 /// A1, A2, A6): no scratch paths, files handed over through Save, "To check" only for what
 /// nobody here can check or fix.
 pub(crate) const DELIVERABLES_REVISION: u32 = 30;
+/// What a worker reports and what the thread keeps on its own are claims, unverified, until
+/// checked; only a cited user message makes a user decision (BUILD-PLAN A11).
+pub(crate) const MEMORY_CLAIMS_REVISION: u32 = 31;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -666,6 +669,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: DELIVERABLES_REVISION,
         thread: "From now on, a worker's scratch folder goes when its task ends and its outputs open and save from its task card (a link to a stored output, even an old one, opens Brigadier's copy): never give the user a scratch path, and never point them at a file you haven't just seen exist. Hand a file over through its task card's Save, the Save… shown under your answer for each stored output, or an ask_user card asking where it goes; never copy it to the Desktop, another folder or the clipboard unless the user asked. \"To check: …\" is only for what nobody here can check or fix: a known defect in a deliverable you fix yourself (your workspace is writable at your permission level: write the corrected file there and link it), or send back, before you answer.",
         worker: "From now on, your scratch folder goes when the task ends: never link its path in your report or messages; name the output file (outputs/notes.md).",
+    },
+    Revision {
+        number: MEMORY_CLAIMS_REVISION,
+        thread: "From now on, the Brain keeps only the user's decisions as settled. A worker's decisions and `learned` lines (a report now lists them under Learned) and what you keep with remember on your own are claims, unverified, and briefs and query_brain label every line by where it came from. A decision or preference the user settled is kept with remember citing their message: user_message (`latest`, or the #N search_transcript shows) and their words in quote; Brigadier checks both and refuses a preference without them. Check a claim before relying on it, and correct a wrong one with remember's replaces.",
+        worker: "",
     },
 ];
 
@@ -1696,6 +1704,7 @@ fn short_report(task: &Task, report: &Report, route: &str) -> String {
     list("Changes", &report.changes, true, &mut text);
     list("Risks", &report.risks, false, &mut text);
     list("Decisions", &report.decisions, false, &mut text);
+    list("Learned", &learned(report), false, &mut text);
     if let Some(verdict) = report.verdict {
         text.push_str(&format!("\nVerdict: {verdict:?}"));
     }
@@ -1764,6 +1773,17 @@ fn needs_user_title(task: &Task) -> &'static str {
     }
 }
 
+/// What a worker says it learned, without blank lines: the thread sees every line the Brain
+/// keeps as its claim (BUILD-PLAN A11).
+fn learned(report: &Report) -> Vec<String> {
+    report
+        .learned
+        .iter()
+        .filter(|item| !item.trim().is_empty())
+        .cloned()
+        .collect()
+}
+
 /// A report as the thread reads it whole (read_report), however long.
 pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
     let mut text = format!(
@@ -1780,6 +1800,7 @@ pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
     };
     list("Changes", &report.changes, &mut text);
     list("Decisions", &report.decisions, &mut text);
+    list("Learned", &learned(report), &mut text);
     list("Verification", &report.verification, &mut text);
     list("Done when", &report.done_when, &mut text);
     list("Open questions", &report.open_questions, &mut text);
@@ -1787,8 +1808,8 @@ pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
     // An overnight run's are listed for the user (a gate member's go to its gate); in a
     // session the thread says them in its answer.
     list(needs_user_title(task), &report.needs_user, &mut text);
-    // What it taught the Brain: its decisions and what it learned, by count only
-    // (SESSION-FIXES-PLAN.md Q6.6). A review's report isn't kept.
+    // What it taught the Brain: its decisions and what it learned, kept as its claims,
+    // unverified (SESSION-FIXES-PLAN.md Q6.6, BUILD-PLAN A11). A review's report isn't kept.
     let facts = report
         .decisions
         .iter()
@@ -1801,8 +1822,8 @@ pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
         } else {
             ""
         };
-        let noun = if facts == 1 { "fact" } else { "facts" };
-        text.push_str(&format!("\nBrain: +{facts} {noun}{when}"));
+        let noun = if facts == 1 { "claim" } else { "claims" };
+        text.push_str(&format!("\nBrain: +{facts} {noun}, unverified{when}"));
     }
     if let Some(verdict) = report.verdict {
         text.push_str(&format!("\nVerdict: {verdict:?}"));
@@ -2056,11 +2077,20 @@ mod tests {
         let mut scout = task("claude", None);
         scout.kind = TaskKind::Scout;
         let envelope = report_envelope(&scout, &report, "Claude");
-        assert!(envelope.contains("\nBrain: +3 facts\n"), "{envelope}");
-        assert!(!envelope.contains("Flags live in"), "{envelope}");
+        assert!(
+            envelope.contains("\nBrain: +3 claims, unverified\n"),
+            "{envelope}"
+        );
+        // The thread sees what the Brain keeps (BUILD-PLAN A11).
+        assert!(
+            envelope.contains(
+                "\nLearned:\n- Flags live in config/flags.rs.\n- Run the tests with TMPDIR=/tmp.\n"
+            ),
+            "{envelope}"
+        );
         let envelope = report_envelope(&task("claude", None), &report, "Claude");
         assert!(
-            envelope.contains("\nBrain: +3 facts (kept once it lands)\n"),
+            envelope.contains("\nBrain: +3 claims, unverified (kept once it lands)\n"),
             "{envelope}"
         );
         let mut review = task("claude", None);
@@ -2092,10 +2122,12 @@ mod tests {
             changes: (0..5_000).map(|n| format!("src/file-{n}.rs")).collect(),
             verification: (0..500).map(|_| "ran ".repeat(500)).collect(),
             needs_user: vec!["A key for the payments sandbox.".into()],
+            learned: vec!["Payments run in the sandbox.".into()],
             ..empty
         };
         let envelope = report_envelope(&task, &long, "Claude");
         assert!(envelope.len() < 6_000, "{}", envelope.len());
+        assert!(envelope.contains("\nLearned:"), "{envelope}");
         assert!(envelope.contains("A key for the payments sandbox."));
         assert!(envelope.contains("- … +"), "{envelope}");
         assert!(
@@ -2517,7 +2549,7 @@ mod environment_tests {
                     claude_run
                 );
                 assert_eq!(claude.contains("Use your own CLI shell"), !claude_run);
-                assert!(claude.contains("keep it with mcp__brigadier__remember ("));
+                assert!(claude.contains("keep it with mcp__brigadier__remember citing"));
                 assert!(codex.contains("several delegate_task calls in one message"));
                 assert_eq!(codex.contains("Use run for builds"), !cfg!(windows));
                 assert!(!codex.contains("mcp__brigadier__"));
@@ -2806,9 +2838,10 @@ mod environment_tests {
         // line, the readiness answer first and long commands through Brigadier's runs, and
         // findings fixed only once checked and the thread's scratch in its temp folder, and
         // the small change it makes itself, include_request and the review nobody waits for,
-        // and what it does with its changes on the user's own checkout, and where deliverables
-        // live, how they are handed over and their known defects fixed, BUILD-PLAN A1, A2, A6).
-        assert!(codex.len() < 19_450, "{}", codex.len());
+        // and what it does with its changes on the user's own checkout, where deliverables live,
+        // how they are handed over and their known defects fixed, BUILD-PLAN A1, A2, A6, and that
+        // only a cited user message makes a decision settled, A11).
+        assert!(codex.len() < 19_500, "{}", codex.len());
     }
 
     #[test]

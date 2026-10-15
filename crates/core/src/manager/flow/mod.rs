@@ -329,6 +329,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "read_report" => ToolCall::Orchestrator(O::ReadReport(arg(name, args))),
         "query_brain" if orchestrator => ToolCall::Orchestrator(O::QueryBrain(arg(name, args))),
         "query_brain" => ToolCall::Worker(W::QueryBrain(arg(name, args))),
+        "remember" => ToolCall::Orchestrator(O::Remember(arg(name, args))),
         "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
         "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
         "start_verifier" => ToolCall::Orchestrator(O::StartVerifier(arg(name, args))),
@@ -1810,6 +1811,8 @@ mod lean_work_tests;
 mod litter_tests;
 #[cfg(test)]
 mod local_commit_tests;
+#[cfg(test)]
+mod memory_claims_tests;
 #[cfg(test)]
 mod merge_by_user_tests;
 #[cfg(test)]

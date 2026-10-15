@@ -461,13 +461,14 @@ pub struct QueryBrain {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum MemoryKind {
-    /// Something the user settled, or you decided, that later work must respect, including a
-    /// rule the user sets for this session only.
+    /// Something the user settled (with `user_message`), or you decided (kept as your own
+    /// unverified claim), that later work must respect, including a rule the user sets for
+    /// this session only.
     Decision,
     /// How this project always does things (naming, structure, style, commit messages),
     /// shared with its other sessions; not a rule for this session only.
     Convention,
-    /// What the user likes in general, across projects.
+    /// What the user likes in general, across projects (needs `user_message`).
     Preference,
     /// An interface between parts or services that both sides rely on.
     Contract,
@@ -487,12 +488,24 @@ pub struct Remember {
     /// Personal Brain); false for this project only.
     #[serde(default)]
     pub personal: bool,
-    /// Repository-relative files or folders it is about, if any.
+    /// Repository-relative files or folders it is about, if any; `path:12-30` names the
+    /// lines that show it.
     #[serde(default)]
     pub files: Vec<String>,
     /// The id of an earlier decision this one replaces.
     #[serde(default)]
     pub replaces: Option<String>,
+    /// The user's message that settled it: `latest`, or its number as search_transcript
+    /// shows it (`#12`). Needed for a preference; without it, anything else is kept as your
+    /// own claim, unverified.
+    #[serde(default)]
+    pub user_message: Option<String>,
+    /// The user's words in that message, exactly as they wrote them.
+    #[serde(default)]
+    pub quote: Option<String>,
+    /// The id of a check whose output shows it (a run-N id).
+    #[serde(default)]
+    pub check: Option<String>,
 }
 
 /// `search_transcript`: search this conversation's full transcript.

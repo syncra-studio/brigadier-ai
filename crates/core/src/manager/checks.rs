@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use brigadier_brain::{NewNode, NodeKind, Origin, Provenance};
+use brigadier_brain::{Claim, NewNode, NodeKind, Origin, Provenance};
 use brigadier_providers::redact::Redactor;
 use brigadier_providers::{Access, ProviderKind};
 use serde::{Deserialize, Serialize};
@@ -917,6 +917,7 @@ impl SessionManager {
             worker: None,
             commit: None,
             recorded_at_ms: now_ms(),
+            claim: Some(Claim::verified()),
         };
         let this = self.arc();
         let command = command.to_owned();

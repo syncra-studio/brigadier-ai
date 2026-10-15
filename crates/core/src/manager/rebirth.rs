@@ -83,8 +83,8 @@ recorded in the Project Brain (everything you kept with remember, plan approvals
 answers to cards), the live board (tasks, plan, open cards, queued messages) and the last messages \
 verbatim. Write the handoff note it needs beyond that, in plain text under these headings: Goal \
 and open threads; Decisions not kept yet (every decision or user preference settled in this \
-conversation that is not in the Brain yet, one line each with the reason, or None); Promises made \
-to the user; What to do next (and what you are waiting for). At most about 1,500 words. Don't \
+conversation that is not in the Brain yet, one line each with the reason and, for what the user \
+settled, their words in double quotes, or None); Promises made to the user; What to do next (and what you are waiting for). At most about 1,500 words. Don't \
 call any tool. Reply with the note only.";
 /// A checkpoint's prompt: the same note, written while the conversation idles and its prompt
 /// cache is still warm, for a rebirth once the cache has expired.
@@ -95,8 +95,8 @@ recorded in the Project Brain (everything you kept with remember, plan approvals
 answers to cards), the live board (tasks, plan, open cards, queued messages) and the last messages \
 verbatim. Write the handoff note it needs beyond that, in plain text under these headings: Goal \
 and open threads; Decisions not kept yet (every decision or user preference settled in this \
-conversation that is not in the Brain yet, one line each with the reason, or None); Promises made \
-to the user; What to do next (and what you are waiting for). At most about 1,500 words. Don't \
+conversation that is not in the Brain yet, one line each with the reason and, for what the user \
+settled, their words in double quotes, or None); Promises made to the user; What to do next (and what you are waiting for). At most about 1,500 words. Don't \
 call any tool. Reply with the note only.";
 
 /// The note's headings, lowercase, as [`note_decisions`] finds them.
@@ -960,8 +960,9 @@ impl SessionManager {
                 };
                 if described {
                     text.push_str(&format!(
-                        "- {}{outdated}: {}\n",
+                        "- {} [{}]{outdated}: {}\n",
                         node.title,
+                        brigadier_brain::source_label(node.kind, &node.provenance),
                         one_line(&node.body, 200)
                     ));
                 } else {
@@ -1168,17 +1169,38 @@ fn list_item(line: &str) -> &str {
 }
 
 /// The briefing's decisions part: every decision as its line, with its body in full (they
-/// are never cut, SESSION-FIXES-PLAN Q5).
+/// are never cut, SESSION-FIXES-PLAN Q5). What nobody checked (a worker's or your own claim)
+/// is listed apart, each with its label, never as settled (BUILD-PLAN A11).
 fn decision_text(nodes: &[Node]) -> String {
-    let mut text = String::from(
-        "[Decisions settled in this conversation, oldest first; all still hold unless replaced]\n",
-    );
-    for node in nodes {
-        text.push_str(&decision_line(node));
+    let (claims, settled): (Vec<&Node>, Vec<&Node>) = nodes
+        .iter()
+        .partition(|node| brigadier_brain::unverified(node.kind, &node.provenance));
+    let mut text = String::new();
+    for (heading, nodes) in [
+        (
+            "[Decisions settled in this conversation, oldest first; all still hold unless replaced]",
+            settled,
+        ),
+        (
+            "[Claims kept in this conversation, oldest first: nobody checked them, so they are not settled; check one before relying on it, and remember with replaces corrects a wrong one]",
+            claims,
+        ),
+    ] {
+        if nodes.is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(heading);
         text.push('\n');
-        let body = node.body.trim();
-        if !body.is_empty() && body != node.title {
-            text.push_str(&format!("    {}\n", body.replace('\n', "\n    ")));
+        for node in nodes {
+            text.push_str(&decision_line(node));
+            text.push('\n');
+            let body = node.body.trim();
+            if !body.is_empty() && body != node.title {
+                text.push_str(&format!("    {}\n", body.replace('\n', "\n    ")));
+            }
         }
     }
     text.trim_end().to_owned()
@@ -1224,18 +1246,14 @@ fn fit(fixed: usize, brain: usize, exchanges: &[usize], (target, max): (usize, u
     }
 }
 
-/// A decision as one briefing line: its node id, what it says, where it came from.
+/// A decision as one briefing line: its node id, what it says, where it came from and
+/// whether anyone checked it.
 fn decision_line(node: &Node) -> String {
-    let origin = match node.provenance.origin {
-        NodeOrigin::User => "the user",
-        NodeOrigin::Report => "a worker's report",
-        NodeOrigin::Orchestrator => "you",
-        NodeOrigin::Index | NodeOrigin::Skeleton | NodeOrigin::Enrichment => "the Brain",
-    };
     format!(
-        "- [{}] {:?}: {} ({origin}, {})",
+        "- [{}] {:?} [{}]: {} ({})",
         node.id,
         node.kind,
+        brigadier_brain::source_label(node.kind, &node.provenance),
         one_line(&node.title, 300),
         prompts::date_of(node.created_at_ms)
     )
@@ -1310,6 +1328,7 @@ mod tests {
                 worker: None,
                 commit: None,
                 recorded_at_ms: 0,
+                claim: None,
             },
             files: Vec::new(),
             created_at_ms: 0,

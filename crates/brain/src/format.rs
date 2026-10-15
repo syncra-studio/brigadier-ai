@@ -82,7 +82,8 @@ fn kind_label(kind: NodeKind) -> &'static str {
     }
 }
 
-/// `[decision <id> · fresh] Title`, plus a warning line for a stale node.
+/// `[decision <id> · fresh · worker claim, unverified] Title`, plus a warning line for a
+/// stale node.
 fn header(node: &Node) -> String {
     let state = match &node.state {
         NodeState::Fresh => "fresh",
@@ -90,10 +91,11 @@ fn header(node: &Node) -> String {
         NodeState::Superseded { .. } => "superseded",
     };
     let mut out = format!(
-        "[{} {} · {}] {}",
+        "[{} {} · {} · {}] {}",
         kind_label(node.kind),
         node.id,
         state,
+        crate::source_label(node.kind, &node.provenance),
         node.title.trim()
     );
     match &node.state {

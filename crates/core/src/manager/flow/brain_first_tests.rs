@@ -121,6 +121,7 @@ async fn a_brief_carries_what_the_brain_knows_and_what_the_worker_learned_is_kep
                 worker: None,
                 commit: None,
                 recorded_at_ms: 0,
+                claim: None,
             },
             files: Vec::new(),
             expires_at_ms: None,
@@ -140,7 +141,7 @@ async fn a_brief_carries_what_the_brain_knows_and_what_the_worker_learned_is_kep
     let section = &input[input.find(BRAIN_HEADING).expect("a Brain section")..];
     assert!(
         section.contains(&format!(
-            "- convention: Notes are kept in NOTES.md. Each note is one line of NOTES.md. Never a database. (node {known})"
+            "- convention [thread claim, unverified]: Notes are kept in NOTES.md. Each note is one line of NOTES.md. Never a database. (node {known})"
         )),
         "{input}"
     );

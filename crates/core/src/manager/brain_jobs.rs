@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use brigadier_brain::{
-    Edge, EdgeKind, NewNode, NodeFilter, NodeKind, NodeState, Origin, Provenance, WorkerRef,
+    Claim, Edge, EdgeKind, NewNode, NodeFilter, NodeKind, NodeState, Origin, Provenance, WorkerRef,
 };
 use brigadier_providers::codex;
 use brigadier_providers::policy::{self, ApprovalMode, Route as PolicyRoute};
@@ -739,6 +739,7 @@ impl SessionManager {
             }),
             commit,
             recorded_at_ms: now_ms(),
+            claim: Some(Claim::unverified()),
         };
         let mut nodes = Vec::new();
         let mut summaries = Vec::new();
@@ -1138,6 +1139,7 @@ impl SessionManager {
                 worker: None,
                 commit: None,
                 recorded_at_ms: now_ms(),
+                claim: None,
             },
             files: Vec::new(),
             expires_at_ms: None,

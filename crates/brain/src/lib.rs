@@ -150,6 +150,105 @@ pub struct Provenance {
     /// The repository commit the knowledge was read at, or landed as.
     pub commit: Option<String>,
     pub recorded_at_ms: i64,
+    /// A claim's evidence state and source details (BUILD-PLAN A11): what a worker reported,
+    /// what the thread kept on its own, what enrichment wrote. `None` for the user's own
+    /// decisions and for what the code index read from the code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub claim: Option<Claim>,
+}
+
+/// Whether a claim's evidence was checked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum Evidence {
+    /// Nobody checked it yet: it is never briefed as settled.
+    #[default]
+    Unverified,
+    /// Its evidence was checked (a check that passed, a cited line re-read).
+    Verified,
+}
+
+/// What makes a node a claim rather than the user's word: its evidence state, and where in
+/// its source it came from.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Claim {
+    #[serde(default)]
+    pub evidence: Evidence,
+    /// The version of the worker's report it came from (1 for the first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub report_version: Option<u64>,
+    /// The rebirth whose hand-off note named it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub generation: Option<u32>,
+    /// The evidence it names, for a later check: files with line ranges, check ids.
+    #[serde(default)]
+    pub cites: Vec<String>,
+}
+
+impl Claim {
+    /// A claim nobody checked yet.
+    pub fn unverified() -> Self {
+        Self::default()
+    }
+
+    /// A claim checked when it was recorded.
+    pub fn verified() -> Self {
+        Self {
+            evidence: Evidence::Verified,
+            ..Self::default()
+        }
+    }
+}
+
+/// Where a node's knowledge came from and whether it was checked, in a few words: "user
+/// decision", "worker claim, unverified", "thread claim, unverified", "enrichment,
+/// unverified", "code index".
+pub fn source_label(kind: NodeKind, provenance: &Provenance) -> &'static str {
+    let verified = provenance
+        .claim
+        .as_ref()
+        .is_some_and(|claim| claim.evidence == Evidence::Verified);
+    match provenance.origin {
+        Origin::User if kind == NodeKind::Preference => "user preference",
+        Origin::User => "user decision",
+        Origin::Index => "code index",
+        Origin::Skeleton | Origin::Enrichment if verified => "enrichment, verified",
+        Origin::Skeleton | Origin::Enrichment => "enrichment, unverified",
+        // A thread-kept preference from before claims: the user's, as the thread noted it.
+        Origin::Orchestrator if kind == NodeKind::Preference && provenance.claim.is_none() => {
+            "user preference"
+        }
+        Origin::Orchestrator if verified => "thread claim, verified",
+        Origin::Orchestrator => "thread claim, unverified",
+        // A report's own passages are its findings, not rules.
+        Origin::Report if provenance.claim.is_none() && !is_rule(kind) => "worker report",
+        Origin::Report if verified => "worker claim, verified",
+        Origin::Report => "worker claim, unverified",
+    }
+}
+
+/// The node is a claim (or enrichment) nobody checked yet: briefs say so, and list it after
+/// what is settled.
+pub fn unverified(kind: NodeKind, provenance: &Provenance) -> bool {
+    source_label(kind, provenance).ends_with("unverified")
+}
+
+/// Hits in their order, except that claims nobody checked yet go after the rest (BUILD-PLAN
+/// A11: verified facts first).
+fn settled_first(hits: &mut [BrainHit]) {
+    hits.sort_by_key(|hit| unverified(hit.node.kind, &hit.node.provenance));
+}
+
+/// Decisions, conventions and contracts: what later work is told to respect.
+fn is_rule(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Decision | NodeKind::Convention | NodeKind::Contract
+    )
 }
 
 /// A file a node describes, with its content hash when the node was recorded. A different
@@ -836,7 +935,8 @@ impl Brain {
         })?;
         let (hits, text) = match query.caps {
             Some(caps) => {
-                let (hits, more) = retrieve::capped(hits, caps, query.page.unwrap_or(1));
+                let (mut hits, more) = retrieve::capped(hits, caps, query.page.unwrap_or(1));
+                settled_first(&mut hits);
                 let mut text = format::answer(&hits, budget, query.files, caps.body as usize);
                 if !more.is_empty() && !hits.is_empty() {
                     text.push_str(&format!(
@@ -848,6 +948,8 @@ impl Brain {
                 (hits, text)
             }
             None => {
+                let mut hits = hits;
+                settled_first(&mut hits);
                 let text = format::answer(&hits, budget, query.files, format::MAX_BODY);
                 (hits, text)
             }

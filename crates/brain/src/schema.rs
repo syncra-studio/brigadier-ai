@@ -165,6 +165,36 @@ fn migrations() -> Migrations<'static> {
         CREATE INDEX node_files_by_path ON node_files (path);",
         )
         .comment("file evidence belongs to each supporting source"),
+        // BUILD-PLAN A11: what a worker reported and what the thread kept on its own become
+        // unverified claims, with their provenance kept; enrichment is unverified too; a
+        // check that passed stays verified; the user's own decisions are untouched. A node a
+        // user source supports shows that source. Nothing is deleted.
+        M::up(
+            "UPDATE nodes SET provenance = (
+                SELECT s.provenance FROM node_sources s
+                WHERE s.node_id = nodes.id AND s.origin = 'user'
+                ORDER BY s.recorded_ms DESC LIMIT 1)
+            WHERE provenance ->> '$.origin' != 'user'
+              AND EXISTS (SELECT 1 FROM node_sources s
+                          WHERE s.node_id = nodes.id AND s.origin = 'user');
+            UPDATE nodes SET provenance = json_set(provenance, '$.claim',
+                json(iif(key LIKE 'checks:%', '{\"evidence\":\"verified\",\"cites\":[]}',
+                         '{\"evidence\":\"unverified\",\"cites\":[]}')))
+            WHERE provenance ->> '$.claim' IS NULL
+              AND (provenance ->> '$.origin' IN ('skeleton', 'enrichment')
+                   OR (provenance ->> '$.origin' IN ('report', 'orchestrator')
+                       AND kind IN ('decision', 'convention', 'contract')));
+            UPDATE node_sources SET provenance = json_set(provenance, '$.claim',
+                json(iif((SELECT key FROM nodes WHERE id = node_id) LIKE 'checks:%',
+                         '{\"evidence\":\"verified\",\"cites\":[]}',
+                         '{\"evidence\":\"unverified\",\"cites\":[]}')))
+            WHERE provenance ->> '$.claim' IS NULL
+              AND (origin IN ('skeleton', 'enrichment')
+                   OR (origin IN ('report', 'orchestrator')
+                       AND (SELECT kind FROM nodes WHERE id = node_id)
+                           IN ('decision', 'convention', 'contract')));",
+        )
+        .comment("worker and thread rules and decisions become unverified claims"),
     ])
 }
 
@@ -231,5 +261,165 @@ mod tests {
         );
         conn.execute("DELETE FROM nodes", []).unwrap();
         assert_eq!(count(&conn), 0);
+    }
+
+    /// BUILD-PLAN A11's migration: report and thread rules become unverified claims with
+    /// their provenance kept, enrichment is unverified, a passed check stays verified, the
+    /// user's decisions are untouched (a user-supported node shows its user source), and
+    /// nothing is deleted.
+    #[test]
+    fn worker_and_thread_rules_become_unverified_claims_and_user_decisions_stay() {
+        use crate::{NodeKind, Provenance, source_label};
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_writer(&conn).unwrap();
+        migrations().to_version(&mut conn, 4).unwrap();
+        let rows = [
+            // id, kind, key, origin, task, extra user source
+            ("learned", "convention", None, "report", Some("t1"), false),
+            ("chose", "decision", None, "report", Some("t1"), false),
+            ("kept", "decision", None, "orchestrator", None, false),
+            ("rule", "contract", None, "orchestrator", None, false),
+            ("asked", "decision", None, "user", None, false),
+            ("both", "decision", None, "orchestrator", None, true),
+            (
+                "module",
+                "module",
+                Some("module:a"),
+                "enrichment",
+                None,
+                false,
+            ),
+            (
+                "stack",
+                "convention",
+                Some("skeleton:stack"),
+                "skeleton",
+                None,
+                false,
+            ),
+            (
+                "checks",
+                "convention",
+                Some("checks:crates/a"),
+                "report",
+                Some("t2"),
+                false,
+            ),
+            (
+                "found",
+                "report",
+                Some("task:t1"),
+                "report",
+                Some("t1"),
+                false,
+            ),
+            ("index", "module", Some("module:b"), "index", None, false),
+        ];
+        for (id, kind, key, origin, task, user) in rows {
+            let provenance = serde_json::json!({
+                "origin": origin, "sessionId": "s1", "taskId": task, "jobId": null,
+                "worker": null, "commit": "abc", "recordedAtMs": 5,
+            })
+            .to_string();
+            conn.execute(
+                "INSERT INTO nodes (id, kind, key, title, body, provenance, session_id, \
+                 created_ms, updated_ms) VALUES (?1, ?2, ?3, ?1, '', ?4, 's1', 1, 6)",
+                rusqlite::params![id, kind, key, provenance],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO node_sources (node_id, source, origin, session_id, task_id, \
+                 provenance, recorded_ms) VALUES (?1, ?2, ?2, 's1', ?3, ?4, 5)",
+                rusqlite::params![id, origin, task, provenance],
+            )
+            .unwrap();
+            if user {
+                let said = serde_json::json!({
+                    "origin": "user", "sessionId": "s1", "taskId": null, "jobId": null,
+                    "worker": null, "commit": null, "recordedAtMs": 3,
+                })
+                .to_string();
+                conn.execute(
+                    "INSERT INTO node_sources (node_id, source, origin, session_id, \
+                     provenance, recorded_ms) VALUES (?1, 'user', 'user', 's1', ?2, 3)",
+                    rusqlite::params![id, said],
+                )
+                .unwrap();
+            }
+        }
+        migrate(&mut conn).unwrap();
+        let node = |id: &str| -> (NodeKind, Provenance) {
+            conn.query_row(
+                "SELECT kind, provenance FROM nodes WHERE id = ?1",
+                [id],
+                |row| {
+                    let kind: String = row.get(0)?;
+                    let provenance: String = row.get(1)?;
+                    Ok((
+                        serde_json::from_value(serde_json::Value::String(kind)).unwrap(),
+                        serde_json::from_str(&provenance).unwrap(),
+                    ))
+                },
+            )
+            .unwrap()
+        };
+        let label = |id: &str| {
+            let (kind, provenance) = node(id);
+            source_label(kind, &provenance)
+        };
+        assert_eq!(label("learned"), "worker claim, unverified");
+        assert_eq!(label("chose"), "worker claim, unverified");
+        assert_eq!(label("kept"), "thread claim, unverified");
+        assert_eq!(label("rule"), "thread claim, unverified");
+        assert_eq!(label("asked"), "user decision");
+        assert_eq!(label("both"), "user decision");
+        assert_eq!(label("module"), "enrichment, unverified");
+        assert_eq!(label("stack"), "enrichment, unverified");
+        assert_eq!(label("checks"), "worker claim, verified");
+        assert_eq!(label("found"), "worker report");
+        assert_eq!(label("index"), "code index");
+        // Provenance kept: the claim names its task, session and commit as before.
+        let (_, learned) = node("learned");
+        assert_eq!(
+            (
+                learned.task_id.as_deref(),
+                learned.session_id.as_deref(),
+                learned.commit.as_deref(),
+                learned.recorded_at_ms
+            ),
+            (Some("t1"), Some("s1"), Some("abc"), 5)
+        );
+        assert!(learned.claim.is_some());
+        // The user's decision is as it was: no claim.
+        assert_eq!(node("asked").1.claim, None);
+        // Each source of a claim says so too, and the user's source stays the user's.
+        let source_claims: Vec<(String, String, Option<String>)> = conn
+            .prepare(
+                "SELECT node_id, origin, provenance ->> '$.claim.evidence' FROM node_sources \
+                 ORDER BY node_id, origin",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let evidence = |id: &str, origin: &str| {
+            source_claims
+                .iter()
+                .find(|(node, of, _)| node == id && of == origin)
+                .and_then(|(_, _, evidence)| evidence.clone())
+        };
+        assert_eq!(evidence("learned", "report").as_deref(), Some("unverified"));
+        assert_eq!(evidence("both", "user"), None);
+        assert_eq!(evidence("asked", "user"), None);
+        assert_eq!(evidence("checks", "report").as_deref(), Some("verified"));
+        assert_eq!(evidence("found", "report"), None);
+        // Nothing deleted.
+        let nodes: i64 = conn
+            .query_row("SELECT count(*) FROM nodes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(nodes, rows.len() as i64);
+        assert_eq!(source_claims.len(), rows.len() + 1);
     }
 }

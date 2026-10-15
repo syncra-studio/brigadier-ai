@@ -41,6 +41,7 @@ fn provenance(session: Option<&str>) -> Provenance {
         worker: None,
         commit: None,
         recorded_at_ms: 1,
+        claim: None,
     }
 }
 
@@ -1070,4 +1071,60 @@ fn capped_answers_page_each_kind_and_say_what_is_left() {
     let last = ask(Some(5));
     assert_eq!(count(&last, NodeKind::Module), 1);
     assert!(!last.text.contains("more"), "{}", last.text);
+}
+
+/// BUILD-PLAN A11: a claim that says what the user decided folds into the user's node as one
+/// more source; the node stays the user's decision. Answers list settled facts before claims
+/// and label each.
+#[test]
+fn a_claim_confirming_a_user_decision_keeps_it_the_users_and_claims_come_last() {
+    let brain = TestBrain::new();
+    let said = |origin: Origin, claim: Option<Claim>| Provenance {
+        origin,
+        claim,
+        ..provenance(Some("s1"))
+    };
+    let user = brain
+        .record(NewNode {
+            provenance: said(Origin::User, None),
+            ..node(NodeKind::Decision, None, "Ship tabs in the Makefile", "")
+        })
+        .unwrap();
+    let again = brain
+        .record(NewNode {
+            provenance: said(Origin::Orchestrator, Some(Claim::unverified())),
+            ..node(NodeKind::Decision, None, "Ship tabs in the Makefile", "")
+        })
+        .unwrap();
+    assert_eq!(again, user);
+    let kept = brain.node(&user).unwrap().unwrap();
+    assert_eq!(source_label(kept.kind, &kept.provenance), "user decision");
+    let claim = brain
+        .record(NewNode {
+            provenance: said(Origin::Report, Some(Claim::unverified())),
+            ..node(NodeKind::Decision, None, "Ship spaces in the Makefile", "")
+        })
+        .unwrap();
+    let answer = brain
+        .query(&BrainQuery {
+            text: "Makefile".into(),
+            ..BrainQuery::default()
+        })
+        .unwrap();
+    let order: Vec<&str> = answer.hits.iter().map(|hit| hit.node.id.as_str()).collect();
+    assert_eq!(order, [user.as_str(), claim.as_str()]);
+    assert!(
+        answer
+            .text
+            .contains("· fresh · worker claim, unverified] Ship spaces in the Makefile"),
+        "{}",
+        answer.text
+    );
+    assert!(
+        answer
+            .text
+            .contains("· fresh · user decision] Ship tabs in the Makefile"),
+        "{}",
+        answer.text
+    );
 }
