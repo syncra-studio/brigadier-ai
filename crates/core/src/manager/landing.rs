@@ -2177,9 +2177,14 @@ impl SessionManager {
                 _ => None,
             })
             .filter(|(_, at)| latest.is_none_or(|latest| *at >= latest.created_at_ms));
-        if let Some((asked, clicked)) = click
-            && !used(&asked)
-        {
+        if let Some((asked, clicked)) = click {
+            // A click since the latest message that merged or was cancelled is spent, and the
+            // words before it don't count again: the user acted after writing them.
+            if used(&asked) {
+                return Err(refuse(
+                    "the user's click on \"Merge into main\" since their latest message was used or cancelled already; another merge needs their fresh click or words".into(),
+                ));
+            }
             if wrote_since(clicked) {
                 return Err(refuse(
                     "the user wrote again since (it waits in the queue): read it first".into(),

@@ -758,31 +758,7 @@ impl SessionManager {
                 "An overnight run is going in this session: stop it first.".into(),
             ));
         }
-        let board = self.core.board(id).await?;
-        if !matches!(
-            board.run,
-            crate::work::RunState::Idle
-                | crate::work::RunState::Hibernated
-                | crate::work::RunState::Failed
-        ) {
-            return Err(Error::Invalid(
-                "The session is working: stop it first, then close its workspace.".into(),
-            ));
-        }
-        let writing: Vec<String> = self
-            .core
-            .tasks(id)
-            .await?
-            .iter()
-            .filter(|task| task.kind.writes() && !task.state.is_final())
-            .map(|task| format!("task-{}", task.number))
-            .collect();
-        if !writing.is_empty() {
-            return Err(Error::Invalid(format!(
-                "Workers still have work for this branch ({}): stop them or land their work first.",
-                writing.join(", ")
-            )));
-        }
+        self.quiet_for_close(id).await?;
         // What runs in the folder stops before it goes.
         let _ = self.stop_previews(id, "the workspace closed").await;
         self.stop_background_runs(id);
@@ -792,6 +768,9 @@ impl SessionManager {
                 "Its uncommitted changes couldn't be kept, so the workspace stays.".into(),
             ));
         }
+        // Asked again just before the folder goes: a turn or worker that started meanwhile
+        // keeps it (Codex review, phase A verify).
+        self.quiet_for_close(id).await?;
         let leftovers = self
             .runtime
             .ledger()
@@ -816,6 +795,37 @@ impl SessionManager {
             .await;
         }
         Ok(format!("Closed the workspace. {branch_line}"))
+    }
+
+    /// Why the session's workspace can't close now: its thread works, or a worker of it runs
+    /// (a read task's report would start a turn in the folder that goes).
+    async fn quiet_for_close(&self, id: &ConversationId) -> Result<()> {
+        let board = self.core.board(id).await?;
+        if !matches!(
+            board.run,
+            crate::work::RunState::Idle
+                | crate::work::RunState::Hibernated
+                | crate::work::RunState::Failed
+        ) {
+            return Err(Error::Invalid(
+                "The session is working: stop it first, then close its workspace.".into(),
+            ));
+        }
+        let running: Vec<String> = self
+            .core
+            .tasks(id)
+            .await?
+            .iter()
+            .filter(|task| !task.state.is_final())
+            .map(|task| format!("task-{}", task.number))
+            .collect();
+        if !running.is_empty() {
+            return Err(Error::Invalid(format!(
+                "Workers of this session still run ({}): stop them or let them finish first.",
+                running.join(", ")
+            )));
+        }
+        Ok(())
     }
 
     /// Stops everything a conversation runs and removes what it created.

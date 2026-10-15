@@ -218,6 +218,36 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
     flow.stop().await;
 }
 
+/// A click after the user's words spends both: once it merged, the words before it don't
+/// authorise another merge of what comes later.
+#[tokio::test]
+async fn a_spent_click_never_falls_back_to_the_words_before_it() {
+    let (flow, _) = session("merge-spent-click").await;
+    flow.say("Add notes. Then merge it into main.").await;
+    flow.settled().await;
+    flow.manager
+        .merge_session(&flow.conversation, click())
+        .await
+        .unwrap();
+    flow.until("the merge", |board| merged(board) == 1).await;
+    flow.settled().await;
+    let (path, _) = workspace(&flow);
+    let path = path.expect("the worktree stays");
+    std::fs::write(path.join("LATER.md"), "later\n").unwrap();
+    git(&path, &["add", "LATER.md"]);
+    git(&path, &["commit", "-qm", "Add later"]);
+    let refused = flow
+        .manager
+        .finish_session(&flow.conversation, "merge it into main", None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("[not merged]"), "{refused}");
+    assert_eq!(merged(&flow.board().await), 1);
+    assert!(!on_main(&flow, "LATER.md"));
+    flow.stop().await;
+}
+
 /// A session that still has propose_merge gets a refusal that says what to do instead, and no
 /// card is made.
 #[tokio::test]
@@ -537,5 +567,83 @@ async fn close_workspace_removes_it_only_when_asked() {
         path.join("DRAFT.md").exists(),
         "the fresh worktree is on the same branch"
     );
+    flow.stop().await;
+}
+
+/// Close workspace waits for the session's workers: while a scout runs, the folder stays and
+/// the user hears why; once it has ended, the workspace closes (Codex review, phase A verify).
+#[tokio::test]
+async fn close_workspace_waits_for_a_running_scout() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let held = release.clone();
+    let flow = Flow::start(
+        "merge-close-scout",
+        Options::default(),
+        script(move |turn| {
+            let held = held.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.input.contains("Add notes.") {
+                        commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                        return Reply::text("Notes are in.");
+                    }
+                    if turn.input.contains("Look around.") {
+                        let reply = turn
+                            .call(
+                                "delegate_task",
+                                json!({"effort": "low", "title": "Look around",
+                                       "kind": "scout", "spec": "Look around."}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                    }
+                    return Reply::text(crate::manager::prompts::QUIET);
+                }
+                held.notified().await;
+                let reply = turn
+                    .call("submit_report", json!({"summary": "Looked around."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Looked around.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let path = workspace(&flow).0.unwrap();
+    flow.say("Look around.").await;
+    flow.until("the scout to run", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.number == 1 && !task.state.is_final())
+    })
+    .await;
+    let refused = flow
+        .manager
+        .close_workspace(&flow.conversation)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("still run") || refused.contains("working"),
+        "{refused}"
+    );
+    assert!(path.join(".git").exists());
+    release.notify_one();
+    flow.until("the scout to end", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.number == 1 && task.state.is_final())
+    })
+    .await;
+    flow.settled().await;
+    flow.manager
+        .close_workspace(&flow.conversation)
+        .await
+        .unwrap();
+    assert!(!path.exists());
     flow.stop().await;
 }
