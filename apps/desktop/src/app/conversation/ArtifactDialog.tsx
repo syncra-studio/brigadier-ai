@@ -125,8 +125,11 @@ function PatchFiles({ patch }: { patch: string }) {
   }
   return (
     <div data-slot="artifact-diff" data-selectable className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto">
+      {/* Each file's diff whole, the list scrolling: a card clips its corners, so in a column it would shrink. */}
       {files.map((file) => (
-        <InlineDiff key={file.path} path={file.path} diff={file.diff} tall />
+        <div key={file.path} className="shrink-0">
+          <InlineDiff path={file.path} diff={file.diff} tall />
+        </div>
       ))}
     </div>
   );

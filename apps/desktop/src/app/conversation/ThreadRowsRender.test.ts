@@ -27,6 +27,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     boundary: { fallback: boolean; neighbour: string | null };
     mended: string | null;
     links: { before: string[]; after: string[]; asked: string[] };
+    diffDialog: { fits: boolean; files: number; scrolls: boolean; whole: boolean };
     user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string };
   } & Record<"diff-patch" | "diff-edit" | "diff-empty" | "diff-missing", {
     name: string | null; counts: string | null; numbers: string[]; kinds: string[]; gaps: string[]; marks: string[]; empty: string | null; coloured: boolean;
@@ -86,6 +87,9 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     after: ["icon", "icon", "globe", "none"],
     asked: ["https://nodejs.org", "https://none.example"],
   });
+  // A worker's diff opens as its files' diffs in a dialog within the window: the list scrolls,
+  // each file's diff whole.
+  assert.deepEqual(seen.diffDialog, { fits: true, files: 6, scrolls: true, whole: true });
   // A turn that fails to render says so in its place, the rest stays; Try again renders it afresh.
   assert.deepEqual(seen.boundary, { fallback: true, neighbour: "The next turn" });
   assert.equal(seen.mended, "Rendered again");

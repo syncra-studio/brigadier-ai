@@ -34,6 +34,7 @@ import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { stepWords } from "@/app/conversation/activity/words";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
+import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
@@ -46,6 +47,10 @@ const query = new URLSearchParams(location.search);
 const CHAT = "thread-rows";
 const ROOT = "/repo";
 const asked: string[] = [];
+/** A worker's diff of six files, forty new lines each: taller than any window. */
+const bigPatch = Array.from({ length: 6 }, (_, file) =>
+  `diff --git a/src/f${file}.ts b/src/f${file}.ts\n--- a/src/f${file}.ts\n+++ b/src/f${file}.ts\n@@ -0,0 +1,40 @@\n` + Array.from({ length: 40 }, (_line, line) => `+export const v${line} = ${line};\n`).join(""),
+).join("");
 const siteAsks: string[] = [];
 const NODE_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/eL9GtQAAAABJRU5ErkJggg==";
 let letIconsCome = () => {};
@@ -58,6 +63,7 @@ mockIPC((command, payload) => {
     asked.push(req.path);
     return { method: req.method, exists: req.path === `${ROOT}/src/made-later.ts`, stored: null };
   }
+  if (req.method === "readArtifact") return { method: req.method, text: { text: bigPatch, offset: 0, totalBytes: bigPatch.length, binary: false } };
   if (req.method === "siteIcon") {
     siteAsks.push(req.origin);
     return iconsCome.then(() => ({ method: req.method, icon: req.origin === "https://nodejs.org" ? NODE_ICON : null }));
@@ -298,6 +304,25 @@ async function measure(): Promise<object> {
   for (const end = performance.now() + 3000; performance.now() < end && !icons().includes("icon"); ) await frame();
   await wait(100);
   out.links = { before, after: icons(), asked: siteAsks.toSorted() };
+  // A worker's diff in its dialog: within the window, its files scrolling, none squashed.
+  const host = document.createElement("div");
+  document.body.append(host);
+  createRoot(host).render(
+    <TooltipProvider>
+      <ArtifactDialog artifact={{ id: "a", title: "Diff of task-1", kind: "diff", mime: "text/x-diff", bytes: bigPatch.length, fileName: null }} onOpenChange={() => {}} />
+    </TooltipProvider>,
+  );
+  for (const end = performance.now() + 3000; performance.now() < end && all("[data-slot=diff-card]", host.ownerDocument).length < 6 + 4; ) await frame();
+  await wait(300);
+  const dialog = one("[role=dialog]");
+  const list = one("[data-slot=artifact-diff]");
+  out.diffDialog = {
+    fits: !!dialog && dialog.getBoundingClientRect().top >= 0 && dialog.getBoundingClientRect().bottom <= innerHeight,
+    files: all("[data-slot=diff-card]", list ?? document.createElement("div")).length,
+    scrolls: !!list && list.scrollHeight > list.clientHeight,
+    // Each file's card as tall as its 40 lines: none squeezed to fit.
+    whole: all<HTMLElement>("[data-slot=diff-card] [data-slot=diff-lines]", list ?? document.createElement("div")).every((lines) => lines.scrollHeight <= lines.clientHeight + 1),
+  };
   const searchRow = at("search").firstElementChild;
   out.search = { row: text(searchRow), opens: !!one("[aria-expanded]", at("search")) || searchRow?.getAttribute("role") === "button" };
   return out;
