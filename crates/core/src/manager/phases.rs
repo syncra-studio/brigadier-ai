@@ -633,6 +633,7 @@ impl SessionManager {
         args: ApproveOutline,
     ) -> Result<String> {
         let lead = self.find_task(id, &args.task).await?;
+        self.refuse_user_stopped(id, &lead).await?;
         let Some((plan, index)) = self.phase_of(&lead).await else {
             return Err(Error::Invalid(format!(
                 "task-{} has no outline to approve",

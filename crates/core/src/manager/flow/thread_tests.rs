@@ -1893,13 +1893,124 @@ async fn stop_all_stops_every_running_worker_and_tells_the_orchestrator_once() {
     let last = inputs.last().unwrap();
     assert!(last.contains("What now?"), "{last}");
     let note = "[worker] The user stopped all workers: task-1 \"Fix uploads\" and task-2 \
-                \"Thread rows\". Don't start them again unless the user asks.";
+                \"Thread rows\". You didn't stop them and nothing failed. Don't message, steer \
+                or approve them, and don't start them again unless the user asks.";
     assert!(last.contains(note), "{last}");
     let told: usize = inputs
         .iter()
         .map(|input| input.matches("The user stopped all workers").count())
         .sum();
     assert_eq!(told, 1, "{inputs:?}");
+    flow.stop().await;
+}
+
+/// The user's stops reach the thread inside its running turn (UI audit H2): one worker's Stop,
+/// then Stop all, each steered in as it happens. From then on the thread can't message, answer
+/// or approve a worker the user stopped, and `list_tasks` says who stopped it.
+#[tokio::test]
+async fn the_users_stop_reaches_the_running_turn_and_the_stopped_worker_is_refused() {
+    let heard: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = heard.clone();
+    let flow = Flow::start(
+        "stop-into-turn",
+        super::Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    std::future::pending::<()>().await;
+                    return Reply::text("");
+                }
+                if !turn.input.contains("Scout both.") {
+                    return Reply::text("Fine.");
+                }
+                for title in ["Fix uploads", "Thread rows"] {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": title, "kind": "scout", "spec": "Look around."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                for _ in 0..2 {
+                    let note = turn.steered().await.expect("told of the stop in this turn");
+                    log.lock().unwrap().push(note);
+                }
+                for (tool, args) in [
+                    ("message_worker", json!({"task": "task-1", "text": "Keep going."})),
+                    ("answer_worker", json!({"task": "task-2", "answer": "Yes.", "why": "It asked."})),
+                    ("approve_outline", json!({"task": "task-2"})),
+                ] {
+                    let reply = turn.call(tool, args).await;
+                    assert!(reply.is_error, "{tool}: {}", reply.text);
+                    log.lock().unwrap().push(reply.text);
+                }
+                let reply = turn.call("list_tasks", json!({})).await;
+                log.lock().unwrap().push(reply.text);
+                Reply::text("Both stopped.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Scout both.").await;
+    let board = flow
+        .until("both workers to run", |board| {
+            board.tasks.len() == 2
+                && board
+                    .tasks
+                    .values()
+                    .all(|task| task.state == crate::work::TaskState::Running)
+        })
+        .await;
+    let first = Flow::task(&board, 1).id.clone();
+    flow.manager.stop_task_by_user(first.clone()).await.unwrap();
+    flow.until("the first to stop", |board| {
+        board.tasks[&first].state == crate::work::TaskState::Stopped
+    })
+    .await;
+    let stopped = flow
+        .manager
+        .stop_workers(flow.conversation.clone())
+        .await
+        .unwrap();
+    assert_eq!(stopped.len(), 1);
+    flow.settled().await;
+    let heard = heard.lock().unwrap().clone();
+    assert_eq!(heard.len(), 6, "{heard:?}");
+    assert_eq!(
+        heard[0],
+        "[worker] The user stopped task-1 \"Fix uploads\". You didn't stop it and nothing \
+         failed. Don't message, steer or approve it, and don't start it again unless the user \
+         asks."
+    );
+    assert!(
+        heard[1].starts_with("[worker] The user stopped all workers: task-2 \"Thread rows\"."),
+        "{}",
+        heard[1]
+    );
+    for (refusal, number) in heard[2..5].iter().zip([1, 2, 2]) {
+        assert!(
+            refusal.contains(&format!("task-{number} was stopped by the user.")),
+            "{refusal}"
+        );
+    }
+    assert_eq!(
+        heard[5].matches("(stopped by the user)").count(),
+        2,
+        "{}",
+        heard[5]
+    );
+    // Told once each, in the turn: nothing waits for the next one.
+    flow.say("What now?").await;
+    flow.settled().await;
+    let board = flow.board().await;
+    let steps = board
+        .orchestrator_steps
+        .iter()
+        .filter(|step| matches!(&step.kind, OrchestratorStepKind::Stopped { reason, .. } if reason == "Stopped by the user"))
+        .count();
+    assert_eq!(steps, 2);
     flow.stop().await;
 }
 

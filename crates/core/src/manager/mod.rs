@@ -197,6 +197,9 @@ pub struct SessionManager {
     /// Requests the last restart cut off before they answered: a message they owe a reply
     /// to hears that, so its sender can ask again.
     cut_off: Mutex<HashSet<String>>,
+    /// Tasks the user stopped (a worker's Stop, Stop all, or the stop of a turn), from the
+    /// moment the stop starts: the thread may no longer message, steer or approve them.
+    user_stops: Mutex<HashSet<TaskId>>,
     waiters: Waiters,
     admitting: AtomicBool,
     background: TaskTracker,
@@ -305,6 +308,7 @@ impl SessionManager {
             fixes_starting: tokio::sync::Mutex::new(()),
             peer_sends: tokio::sync::Mutex::new(()),
             cut_off: Mutex::new(HashSet::new()),
+            user_stops: Mutex::new(HashSet::new()),
             waiters: Waiters::default(),
             admitting: AtomicBool::new(true),
             background: TaskTracker::new(),
@@ -630,6 +634,25 @@ impl SessionManager {
 
     fn cut_off_lock(&self) -> MutexGuard<'_, HashSet<String>> {
         self.cut_off.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn user_stops_lock(&self) -> MutexGuard<'_, HashSet<TaskId>> {
+        self.user_stops.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Records that the user is stopping `task`, before the stop runs.
+    pub(crate) fn mark_user_stop(&self, task: &TaskId) {
+        self.user_stops_lock().insert(task.clone());
+    }
+
+    /// Whether the user stopped `task`: being stopped by them now, or filed "Stopped by the
+    /// user" on `board` (which outlives a restart).
+    pub(crate) fn user_stopped(&self, board: &crate::board::Board, task: &TaskId) -> bool {
+        self.user_stops_lock().contains(task)
+            || board.orchestrator_steps.iter().any(|step| {
+                matches!(&step.kind, crate::work::OrchestratorStepKind::Stopped { task_id, reason }
+                    if task_id == task && reason == workers::USER_STOP_REASON)
+            })
     }
 
     /// Whether `task` is being stopped right now.

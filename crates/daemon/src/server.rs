@@ -1917,7 +1917,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             Response::AckOvernightNotification
         }
         Request::StopTask { task_id } => {
-            heap(|| sessions.stop_task(task_id)).await?;
+            heap(|| sessions.stop_task_by_user(task_id)).await?;
             Response::StopTask
         }
         Request::StopWorkers { conversation_id } => Response::StopWorkers {

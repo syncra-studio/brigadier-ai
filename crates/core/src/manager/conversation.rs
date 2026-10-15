@@ -242,6 +242,8 @@ struct ConvState {
     /// which ends that command's process tree (a CLI's interrupt can leave it running); the
     /// next turn resumes the session.
     end_commands: bool,
+    /// The user stopped the running turn: nothing more is steered into it.
+    interrupted: bool,
     /// The CLI is being closed on purpose (hibernate, archive, fallback).
     closing: bool,
     /// Envelopes for coming turns, each with the request it belongs to.
@@ -1680,6 +1682,35 @@ impl SessionManager {
         }
     }
 
+    /// Tells the thread `text` now: into its running turn when one runs (and isn't
+    /// compacting or being stopped), else as a note before its next turn.
+    pub(super) async fn tell_thread_now(&self, conv: &Arc<ConvLive>, text: String) {
+        let mut state = conv.state.lock().await;
+        let cli = state
+            .cli
+            .clone()
+            .filter(|_| state.busy && !state.compacting && !state.interrupted);
+        if let Some(cli) = cli
+            && cli
+                .session
+                .steer(TurnInput::text(text.clone()))
+                .await
+                .is_ok()
+        {
+            drop(state);
+            self.log_injection(
+                &conv.id,
+                InjectionKind::Decision,
+                "the user's stop".into(),
+                None,
+                text.len(),
+            )
+            .await;
+            return;
+        }
+        state.notes.push(text);
+    }
+
     /// Steers another session's message into the running turn (SESSION-MESSAGING-PLAN.md
     /// §5.3): returns whether the CLI took it. A reply goes only into a turn of the request it
     /// is filed under; any other message joins whatever runs, and the rest of the turn answers
@@ -1892,6 +1923,7 @@ impl SessionManager {
         {
             let mut state = conv.state.lock().await;
             state.end_commands = !state.commands.is_empty();
+            state.interrupted = true;
         }
         let interrupted = match cli {
             Some(cli) => cli
@@ -2046,6 +2078,7 @@ impl SessionManager {
             }
             // A turn of its own, for no request.
             state.busy = true;
+            state.interrupted = false;
             state.compacting = true;
             state.request = None;
             state.turn_error = None;
@@ -2403,6 +2436,7 @@ impl SessionManager {
                 None => envelopes[0].1.clone(),
             };
             state.busy = true;
+            state.interrupted = false;
             conv.scratch_used
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             state.landed = false;
@@ -4313,6 +4347,7 @@ impl SessionManager {
                         // The CLI began a turn of its own, for its background jobs' end: it
                         // answers the request that started them.
                         state.busy = true;
+                        state.interrupted = false;
                         state.limit_hit = None;
                         state.turn_error = None;
                         state.unshown_error = None;

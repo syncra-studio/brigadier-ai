@@ -802,9 +802,10 @@ export async function interrupt(conversationId: string): Promise<void> {
   const ids = tasks?.conversationId === conversationId
     ? Object.values(tasks.tasks).filter((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)).map((task) => task.id)
     : [];
-  const results = await Promise.allSettled([
-    request({ method: "interrupt", conversationId }), ...ids.map(stopTask),
-  ]);
+  // The turn first: the workers' stop then reaches the thread before its next turn, not
+  // inside the one ending.
+  const [interrupted] = await Promise.allSettled([request({ method: "interrupt", conversationId })]);
+  const results = [interrupted, ...await Promise.allSettled(ids.map(stopTask))];
   const failed = results.find((result) => result.status === "rejected");
   if (failed?.status === "rejected") throw failed.reason;
 }
@@ -993,6 +994,7 @@ export async function continueOvernight(
   return run;
 }
 
+/** The user's Stop for one worker: the thread hears the user stopped it. */
 export async function stopTask(taskId: string): Promise<void> {
   await request({ method: "stopTask", taskId });
 }

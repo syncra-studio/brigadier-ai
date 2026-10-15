@@ -359,6 +359,7 @@ impl SessionManager {
             }
             OrchestratorCall::MessageWorker(mut args) => {
                 let mut task = crate::heap(|| self.find_task(id, &args.task)).await?;
+                self.refuse_user_stopped(id, &task).await?;
                 if !args.attachments.is_empty() {
                     let given =
                         crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
@@ -398,6 +399,7 @@ impl SessionManager {
             }
             OrchestratorCall::AnswerWorker(args) => {
                 let task = crate::heap(|| self.find_task(id, &args.task)).await?;
+                self.refuse_user_stopped(id, &task).await?;
                 let reply =
                     crate::heap(|| self.answer_worker(&task, args.answer.clone(), args.why))
                         .await?;
@@ -689,14 +691,23 @@ impl SessionManager {
                 if tasks.is_empty() {
                     return Ok(format!("No tasks yet.\n{standing}").trim_end().to_owned());
                 }
+                let board = self.core.board(id).await.ok();
                 let listed = tasks
                     .iter()
                     .map(|task| {
+                        let by_user = board
+                            .as_ref()
+                            .is_some_and(|board| self.user_stopped(board, &task.id));
                         format!(
-                            "task-{} {:?} {:?} on {}: {}{}",
+                            "task-{} {:?} {:?}{} on {}: {}{}",
                             task.number,
                             task.kind,
                             task.state,
+                            if by_user {
+                                " (stopped by the user)"
+                            } else {
+                                ""
+                            },
                             route_label(task),
                             task.title,
                             task.blocked_reason
@@ -710,6 +721,18 @@ impl SessionManager {
                 Ok(format!("{listed}\n{standing}").trim_end().to_owned())
             }
         }
+    }
+
+    /// Refuses a call that would message, steer or approve a task the user stopped.
+    pub(crate) async fn refuse_user_stopped(&self, id: &ConversationId, task: &Task) -> Result<()> {
+        let stopped = match self.core.board(id).await {
+            Ok(board) => self.user_stopped(&board, &task.id),
+            Err(_) => false,
+        };
+        if stopped {
+            return Err(Error::Invalid(super::workers::user_stopped_refusal(task)));
+        }
+        Ok(())
     }
 
     /// Files a row for the thread under the request the orchestrator serves.

@@ -752,7 +752,8 @@ pub enum Request {
         run_id: OvernightRunId,
         notification_id: String,
     },
-    /// Stops a worker for good (its unfinished changes are kept, see `Task.kept`).
+    /// The user's Stop for one worker: stops it for good (its unfinished changes are kept,
+    /// see `Task.kept`), shows "Stopped by the user", and tells the thread at once.
     StopTask {
         task_id: TaskId,
     },

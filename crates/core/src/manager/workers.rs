@@ -4271,9 +4271,28 @@ impl SessionManager {
         Ok(true)
     }
 
+    /// The user's Stop for one worker (its row, its view, or the stop of a turn): stops it
+    /// for good, files "Stopped by the user", and tells the thread at once (into its running
+    /// turn, else before its next one).
+    pub async fn stop_task_by_user(&self, task_id: TaskId) -> Result<()> {
+        let conversation_id = self.conversation_of_task(&task_id).await?;
+        let task = self.task_by_id(&conversation_id, &task_id).await?;
+        self.mark_user_stop(&task.id);
+        if self
+            .stop_worker(&conversation_id, &task, USER_STOP_REASON.to_owned())
+            .await?
+            && let Ok(conv) = self.conv(&conversation_id)
+        {
+            self.tell_thread_now(&conv, stopped_note(&[task], false))
+                .await;
+        }
+        Ok(())
+    }
+
     /// The user's Stop all: stops every worker of the conversation that runs or waits (to
-    /// start, for an answer, for quota), files a "Stopped" row for each, and leaves the
-    /// orchestrator one note naming them for its next turn. Returns the tasks stopped.
+    /// start, for an answer, for quota), files a "Stopped" row for each, and tells the thread
+    /// in one note naming them, into its running turn or before its next one. Returns the
+    /// tasks stopped.
     pub async fn stop_workers(&self, conversation_id: ConversationId) -> Result<Vec<TaskId>> {
         let board = self.core.board(&conversation_id).await?;
         let mut tasks: Vec<Task> = board
@@ -4283,6 +4302,9 @@ impl SessionManager {
             .cloned()
             .collect();
         tasks.sort_by_key(|task| task.number);
+        for task in &tasks {
+            self.mark_user_stop(&task.id);
+        }
         let mut stopped = Vec::new();
         for task in tasks {
             match self
@@ -4304,7 +4326,8 @@ impl SessionManager {
         if !stopped.is_empty()
             && let Ok(conv) = self.conv(&conversation_id)
         {
-            conv.note(stopped_note(&stopped)).await;
+            self.tell_thread_now(&conv, stopped_note(&stopped, true))
+                .await;
         }
         Ok(stopped.into_iter().map(|task| task.id).collect())
     }
@@ -5076,8 +5099,8 @@ pub(crate) fn user_stoppable(state: TaskState) -> bool {
     )
 }
 
-/// The orchestrator's note about the workers the user's Stop all stopped.
-fn stopped_note(tasks: &[Task]) -> String {
+/// The thread's note about the workers the user stopped (`all`: with Stop all).
+fn stopped_note(tasks: &[Task], all: bool) -> String {
     let names: Vec<String> = tasks
         .iter()
         .map(|task| format!("task-{} \"{}\"", task.number, task.title))
@@ -5087,9 +5110,24 @@ fn stopped_note(tasks: &[Task]) -> String {
         [one] => one.clone(),
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     };
+    let (what, them) = match (all, tasks.len()) {
+        (true, _) => ("all workers: ", "them"),
+        (false, 1) => ("", "it"),
+        (false, _) => ("", "them"),
+    };
     format!(
-        "[worker] The user stopped all workers: {names}. Don't start them again unless the \
-         user asks."
+        "[worker] The user stopped {what}{names}. You didn't stop {them} and nothing failed. \
+         Don't message, steer or approve {them}, and don't start {them} again unless the user \
+         asks."
+    )
+}
+
+/// The thread's refusal for a task the user stopped.
+pub(crate) fn user_stopped_refusal(task: &Task) -> String {
+    format!(
+        "task-{} was stopped by the user. Don't message, steer or approve it, and don't start \
+         it again unless the user asks.",
+        task.number
     )
 }
 
