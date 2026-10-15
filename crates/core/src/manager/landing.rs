@@ -1026,28 +1026,13 @@ impl SessionManager {
                 text.push_str(&format!("\n---\n{message}"));
             }
         }
+        // The worker's whole report, its risks, open questions and artifacts included
+        // (BUILD-PLAN E2): what it claims is checked against the code, not taken on trust.
         if let Some(report) = &subject.report {
             text.push_str(&format!(
-                "\n\nThe worker's report:\n{}\n{}",
-                report.summary,
-                report
-                    .verification
-                    .iter()
-                    .map(|v| format!("- verified: {v}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                "\n\nThe worker's report (check its claims in the code; don't take them on trust):\n{}",
+                super::prompts::report_text(subject, report, "the worker")
             ));
-            for (heading, lines) in [
-                ("Done when, as the worker reported it", &report.done_when),
-                ("Risks the worker named", &report.risks),
-            ] {
-                if !lines.is_empty() {
-                    text.push_str(&format!("\n\n{heading}:"));
-                    for line in lines {
-                        text.push_str(&format!("\n- {line}"));
-                    }
-                }
-            }
         }
         if let Some(base) = subject.workspace.as_ref().and_then(|w| w.base.clone()) {
             text.push_str(&format!(

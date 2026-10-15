@@ -77,7 +77,7 @@ const NUDGE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a fix Brigadier lands waits for the worker's turn that reported it to end.
 const TURN_END_WAIT: Duration = Duration::from_secs(30);
 /// How long `ask_orchestrator` waits for the orchestrator's answer.
-const QUESTION_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+pub(crate) const QUESTION_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// How a task waiting on its question to the orchestrator says so; the question follows.
 pub(crate) const ASKED_THE_ORCHESTRATOR: &str = "Asked the orchestrator: ";
 /// How long a worker waiting for its own background jobs may stay silent before its wait
@@ -1818,6 +1818,18 @@ impl SessionManager {
             mcp_servers.push(kit.server);
             skill_plugins.push(kit.plugin);
         }
+        // A Claude worker's turn ends only with its report, or rightly waiting (BUILD-PLAN E2).
+        let stop_hook = (task.route.choice.provider == ProviderKind::Claude).then(|| {
+            let grant = self.grants.issue(
+                grant_owner,
+                Role::StopHook {
+                    conversation_id: conversation_id.clone(),
+                    task_id: task.id.clone(),
+                },
+            );
+            secret_values.push(grant.clone());
+            self.stop_hook_command(grant)
+        });
         let env = worker_env(&workspace.scratch);
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
@@ -1893,6 +1905,7 @@ impl SessionManager {
             auto_review: self.permission(&conversation_id) == PermissionLevel::ApproveForMe,
             omit_ai_coauthors,
             output_hook: None,
+            stop_hook,
             deny_tools: None,
             protection: protection.unwrap_or_default(),
         };
@@ -3047,6 +3060,10 @@ impl SessionManager {
             if state.stopping {
                 return;
             }
+            // Its question waits for an answer, which starts its next turn (BUILD-PLAN E2).
+            if state.question.is_some() {
+                return;
+            }
             let background = state.background_jobs > 0 && !state.background_overdue;
             // Waiting for its own background jobs is no turn without a report: the nudge is
             // kept for one.
@@ -3440,13 +3457,16 @@ impl SessionManager {
         }
     }
 
-    /// `ask_orchestrator`: blocks the worker until the orchestrator answers.
+    /// `ask_orchestrator`: blocks the worker until the orchestrator answers. When nobody does
+    /// within the hour, an operational question goes on with its recorded safe default; any
+    /// other keeps waiting, and its answer comes as a message (BUILD-PLAN E2).
     pub(crate) async fn worker_question(
         &self,
         conversation_id: &ConversationId,
         task_id: &TaskId,
-        question: String,
+        args: crate::tools::AskOrchestrator,
     ) -> Result<String> {
+        let question = args.question;
         let live = self
             .existing_task_live(task_id)
             .ok_or_else(|| Error::Invalid("the task has ended".into()))?;
@@ -3475,20 +3495,111 @@ impl SessionManager {
             },
         )
         .await;
-        let answer = tokio::time::timeout(QUESTION_TIMEOUT, rx).await;
-        self.set_task_blocked(task_id, None).await;
+        let timeout = Duration::from_millis(
+            self.question_timeout_ms
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let answer = tokio::time::timeout(timeout, rx).await;
         match answer {
-            Ok(Ok(answer)) => Ok(answer),
-            Ok(Err(_)) => Err(Error::Invalid(
-                "the question was withdrawn (the task ended)".into(),
-            )),
-            Err(_) => {
-                live.state.lock().await.question = None;
+            Ok(Ok(answer)) => {
+                self.set_task_blocked(task_id, None).await;
+                Ok(answer)
+            }
+            Ok(Err(_)) => {
+                self.set_task_blocked(task_id, None).await;
                 Err(Error::Invalid(
-                    "The orchestrator did not answer within an hour. Continue with your best judgement and say so in the report.".into(),
+                    "the question was withdrawn (the task ended)".into(),
                 ))
             }
+            Err(_) => match safe_default(args.about, &question, args.safe_default.as_deref()) {
+                Some(default) => {
+                    live.state.lock().await.question = None;
+                    self.set_task_blocked(task_id, None).await;
+                    self.record_answer(
+                        &task,
+                        question,
+                        default.clone(),
+                        "No answer came within the hour: it went on with the safe default it recorded.".into(),
+                    )
+                    .await;
+                    Ok(format!(
+                        "No answer came within the hour. Go on with your safe default: {default}. Name it under decisions in your report."
+                    ))
+                }
+                None => {
+                    // It keeps waiting: the answer comes as a message, and its turn may end.
+                    let (tx, _) = oneshot::channel();
+                    live.state.lock().await.question = Some((question.clone(), tx));
+                    Ok("No answer yet, and this question waits for one: it is about consent or a product choice, or you gave no safe default. Don't go on with that choice. End your turn now; the answer starts your next one.".into())
+                }
+            },
         }
+    }
+
+    /// What a Claude worker's `Stop` hook answers (BUILD-PLAN E2): why its turn may not end
+    /// yet, or `None` to let it. It refuses only a turn ending with no report, or with a
+    /// hand-off note missing its parts, and only once per stop (`active`: the CLI already
+    /// continued for this hook): the turn-end nudge covers what is left. A worker rightly
+    /// waiting (its outline's go-ahead, its own review, its background jobs, its question) is
+    /// never refused.
+    pub(crate) async fn stop_decision(&self, task_id: &TaskId, active: bool) -> Option<String> {
+        if active {
+            return None;
+        }
+        let live = self.existing_task_live(task_id)?;
+        let task = self.task_by_id(&live.conversation_id, task_id).await.ok()?;
+        if task.state.is_final()
+            || task.state == TaskState::Paused
+            || task.report.is_some()
+            || task.error.is_some()
+            || Self::waits_for_go_ahead(&task)
+        {
+            return None;
+        }
+        let (handoff, note) = {
+            let state = live.state.lock().await;
+            if state.stopping
+                || state.question.is_some()
+                || (state.background_jobs > 0 && !state.background_overdue)
+                || state.cutoff.is_some()
+            {
+                return None;
+            }
+            (state.handoff_asked, state.last_message.clone())
+        };
+        if task.role == Some(WorkerRole::Verifier)
+            && self.reviews_on()
+            && self.review_pending(&task).await
+        {
+            return None;
+        }
+        if handoff {
+            let missing = handoff_gaps(note.as_deref().unwrap_or_default());
+            return (!missing.is_empty()).then(|| {
+                format!(
+                    "Your handoff note is missing: {}. End your turn with the whole note, under each of its headings, so a fresh session can carry on.",
+                    missing.join(", ")
+                )
+            });
+        }
+        Some("You are ending your turn without calling submit_report, and the orchestrator reads only your report. If the task is done or you cannot continue, call submit_report now; otherwise keep working.".into())
+    }
+
+    /// The Stop hook of `grant`'s worker: `None` for a grant that isn't one.
+    pub async fn stop_hook(&self, grant: &str, active: bool) -> Option<Option<String>> {
+        let Some(Role::StopHook { task_id, .. }) = self.grants.resolve(grant) else {
+            return None;
+        };
+        Some(self.stop_decision(&task_id, active).await)
+    }
+
+    /// Shortens how long a worker's question waits before its safe default may stand in.
+    #[cfg(test)]
+    pub(crate) fn set_question_timeout(&self, timeout: Duration) {
+        self.question_timeout_ms.store(
+            timeout.as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     /// `answer_worker`: answers the question a worker waits on, and why.
@@ -3507,9 +3618,22 @@ impl SessionManager {
                 task.number
             )));
         };
-        if waiter.send(answer.clone()).is_err() {
-            self.answer_after_restart(&live, task, &question, &answer)
+        if let Err(answer) = waiter.send(answer.clone()) {
+            if live.cli().await.is_none() {
+                // Its call ended with its CLI (Brigadier restarted): the answer resumes it.
+                self.answer_after_restart(&live, task, &question, &answer)
+                    .await?;
+            } else {
+                // A question that outlived its call: the answer comes as a message.
+                self.set_task_blocked(&task.id, None).await;
+                self.tell_worker(
+                    &task.conversation_id,
+                    task,
+                    format!("[answer to your question] {question}\n{answer}"),
+                    "Brigadier",
+                )
                 .await?;
+            }
         }
         self.record_answer(task, question, answer, why).await;
         Ok(format!("Answered task-{}; it continues.", task.number))
@@ -3637,6 +3761,19 @@ impl SessionManager {
                     .map(|path| format!("`{path}`"))
                     .collect::<Vec<_>>()
                     .join(", ")
+            )));
+        }
+        // A criterion is [met] only with its evidence (BUILD-PLAN E2): the worker adds it in
+        // this same turn, as it lists a new file.
+        let unevidenced = crate::heap(|| self.unevidenced_met(&task, &input.done_when)).await;
+        if !unevidenced.is_empty() {
+            return Err(Error::Invalid(format!(
+                "Nothing was reported: a \"done when\" is [met] only with its evidence. These have none:\n{}\nGive each the out-… id its check's result ends with ([evidence: out-…]), or the lines that show it as path:12-14 followed by the exact words in backticks; list every criterion by its id (p2-c1) when you verify a phase; mark what you didn't check [not checked]. Then call submit_report again.",
+                unevidenced
+                    .iter()
+                    .map(|line| format!("- {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             )));
         }
         // A development build's planted `learned` line (the continuity battery's false claim).
@@ -5611,6 +5748,56 @@ fn is_late_findings(summary: &str, message: &str) -> bool {
     message.len() >= KEEP_MESSAGE_MIN_BYTES || POINTERS.iter().any(|word| summary.contains(word))
 }
 
+/// The headings a worker's handoff note must hold (the wrap-up steer's), as words to find.
+const HANDOFF_PARTS: &[(&str, &str)] = &[
+    ("goal", "Goal and where it stands"),
+    ("done", "Done"),
+    ("in progress", "In progress"),
+    ("next steps", "Next steps"),
+    ("decisions", "Decisions and approvals already given"),
+    ("gotchas", "Gotchas learned"),
+    ("checks", "Checks that passed"),
+    ("how to verify", "How to verify"),
+];
+
+/// The parts a handoff note leaves out, by heading.
+fn handoff_gaps(note: &str) -> Vec<&'static str> {
+    let note = note.to_lowercase();
+    HANDOFF_PARTS
+        .iter()
+        .filter(|(word, _)| !note.contains(word))
+        .map(|(_, heading)| *heading)
+        .collect()
+}
+
+/// What may stand in for a worker's question nobody answered: its safe default, only for an
+/// operational question whose words and default ask no consent (BUILD-PLAN E2, Q35: nothing
+/// happens on its own).
+fn safe_default(
+    about: crate::tools::QuestionAbout,
+    question: &str,
+    default: Option<&str>,
+) -> Option<String> {
+    let default = default
+        .map(str::trim)
+        .filter(|default| !default.is_empty())?;
+    if about != crate::tools::QuestionAbout::Operational {
+        return None;
+    }
+    let asks_consent = |text: &str| {
+        text.to_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| CONSENT_WORDS.contains(&word))
+    };
+    (!asks_consent(question) && !asks_consent(default)).then(|| default.to_owned())
+}
+
+/// Words of a question that asks for consent, whatever it says it is about.
+const CONSENT_WORDS: &[&str] = &[
+    "merge", "merging", "push", "pushing", "delete", "deleting", "remove", "removing", "deploy",
+    "publish", "release", "pay", "buy", "spend", "purchase", "send", "email", "drop", "force",
+];
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -6246,6 +6433,80 @@ mod job_name_tests {
         assert_eq!(
             job_name("task-3", TaskKind::Scout, None, &[]),
             "Worker task"
+        );
+    }
+}
+
+#[cfg(test)]
+mod safe_default_tests {
+    use super::safe_default;
+    use crate::tools::QuestionAbout;
+
+    /// Only an operational question goes on with its default; consent and product questions
+    /// wait whatever default they give, and so does one whose words ask for consent.
+    #[test]
+    fn only_an_operational_question_goes_on_with_its_default() {
+        let default = Some("put it in src/util.ts");
+        assert_eq!(
+            safe_default(
+                QuestionAbout::Operational,
+                "Which file holds the helper?",
+                default
+            ),
+            Some("put it in src/util.ts".to_owned())
+        );
+        assert_eq!(
+            safe_default(QuestionAbout::Consent, "Which file?", default),
+            None
+        );
+        assert_eq!(
+            safe_default(QuestionAbout::Product, "Which file?", default),
+            None
+        );
+        assert_eq!(
+            safe_default(
+                QuestionAbout::Operational,
+                "Should I merge it into main?",
+                default
+            ),
+            None
+        );
+        assert_eq!(
+            safe_default(
+                QuestionAbout::Operational,
+                "Old files?",
+                Some("delete them")
+            ),
+            None
+        );
+        assert_eq!(
+            safe_default(QuestionAbout::Operational, "Which file?", Some(" ")),
+            None
+        );
+        assert_eq!(
+            safe_default(QuestionAbout::Operational, "Which file?", None),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod handoff_gap_tests {
+    use super::handoff_gaps;
+
+    #[test]
+    fn a_note_missing_headings_names_them() {
+        let whole = "Goal and where it stands: x\nDone: a1\nIn progress: y\nNext steps: 1\nDecisions and approvals already given: none\nGotchas learned: z\nChecks that passed: cargo test at a1\nHow to verify: cargo test";
+        assert!(handoff_gaps(whole).is_empty());
+        assert_eq!(
+            handoff_gaps("Goal: x. Done: y. Next steps: z."),
+            [
+                "In progress",
+                "Decisions and approvals already given",
+                "Gotchas learned",
+                "Checks that passed",
+                "How to verify"
+            ]
         );
     }
 }

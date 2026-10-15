@@ -105,9 +105,16 @@ status: string,
  */
 durationMs: number, 
 /**
- * The `out-…` alias of its stored output, which `read_artifact` reads.
+ * The `out-…` alias of its stored output, which `read_artifact` reads. It is also the
+ * check's evidence reference: a report or a claim cites it (BUILD-PLAN E1, E2).
  */
-artifact: string | null, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "previewsCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "brainJobUpdated", job: BrainJob, } | { "type": "memoryUpdated", conversationId: ConversationId, memory: MemoryChange, } | { "type": "decidedForYou", decision: Decision, } | { "type": "waitingOnYou", item: WaitingItem, } | { "type": "overnightUpdated", run: OvernightRun, } | { "type": "waitingResolved", id: string, by: ResolvedBy, } | { "type": "peerMessageSent", messageId: string, to: ConversationId, text: string, blob: string | null, replyTo: string | null, chainId: string, hop: number, 
+artifact: string | null, 
+/**
+ * The hash of the check's whole input fingerprint (the tree, the command, its workdir,
+ * configuration, lockfiles, toolchains and declared inputs); none when an input
+ * couldn't be identified.
+ */
+fingerprint?: string, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "previewsCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "brainJobUpdated", job: BrainJob, } | { "type": "memoryUpdated", conversationId: ConversationId, memory: MemoryChange, } | { "type": "decidedForYou", decision: Decision, } | { "type": "waitingOnYou", item: WaitingItem, } | { "type": "overnightUpdated", run: OvernightRun, } | { "type": "waitingResolved", id: string, by: ResolvedBy, } | { "type": "peerMessageSent", messageId: string, to: ConversationId, text: string, blob: string | null, replyTo: string | null, chainId: string, hop: number, 
 /**
  * The sender's request whose turn sent it.
  */

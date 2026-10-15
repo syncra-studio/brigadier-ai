@@ -315,14 +315,14 @@ impl Thread {
 async fn build(turn: &Turn) -> Reply {
     let n = phase_of_lead(turn).expect("a phase lead");
     let file = format!("p{n}.txt");
-    turn.write(&file, &format!("{n}\n"));
+    turn.write(&file, &format!("phase {n}\n"));
     turn.git(&["add", &file]);
     turn.git(&["commit", "-q", "-m", &format!("Add {file}")]);
     let reply = turn
         .call(
             "submit_report",
             json!({"summary": format!("Added {file}."), "changes": [file],
-                   "done_when": format!("[met] p{n}.txt exists: ls shows it"),
+                   "done_when": format!("[met] p{n}.txt exists: p{n}.txt:1 `phase {n}`"),
                    "needs_user": if n == 1 { vec![RELEASE_TOKEN] } else { Vec::new() }}),
         )
         .await;
@@ -934,8 +934,10 @@ async fn restart_while_winding_down(
     let restarted = Arc::new(AtomicBool::new(false));
     let release = Arc::new(tokio::sync::Notify::new());
     let heard: Arc<Mutex<Vec<String>>> = Arc::default();
+    // The lead hands off half done: the phase settles partial (done needs its evidence).
     let thread = Arc::new(Thread {
         order: vec![1],
+        outcomes: HashMap::from([(1, StepOutcome::Partial)]),
         ..Default::default()
     });
     let (after, released, told, inner) = (

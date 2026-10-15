@@ -671,11 +671,14 @@ impl SessionManager {
     pub(crate) async fn query_brain_tool(
         &self,
         id: &ConversationId,
+        worktree: Option<&std::path::Path>,
         text: String,
         history: bool,
         page: Option<u32>,
     ) -> Result<String> {
         let started = Instant::now();
+        // Each claim's sources are re-read for this answer (BUILD-PLAN E1).
+        let reader = self.sources_for(id, worktree);
         let project = match self.project_of(id) {
             Some(project) => Some(self.project_brain(&project).await?),
             None => None,
@@ -691,9 +694,13 @@ impl SessionManager {
                     .chain(personal.clone())
                     .collect::<Vec<_>>(),
             );
+            let reader = reader.clone();
             let found = blocking(move || {
                 for brain in brains {
-                    if let Some(node) = brain.node(&node_id).map_err(brain_error)? {
+                    if let Some(mut node) = brain.node(&node_id).map_err(brain_error)? {
+                        brigadier_brain::check_sources(&mut [&mut node], &|source| {
+                            reader.check(source)
+                        });
                         return Ok(Some(node));
                     }
                 }
@@ -730,16 +737,19 @@ impl SessionManager {
                 Some(project) => Some(
                     project
                         .brain
-                        .query(&BrainQuery {
-                            text: query.clone(),
-                            kinds: Vec::new(),
-                            limit: None,
-                            max_tokens: Some(QUERY_TOKENS),
-                            files: true,
-                            history,
-                            caps: Some(BrainCaps::default()),
-                            page,
-                        })
+                        .query_with(
+                            &BrainQuery {
+                                text: query.clone(),
+                                kinds: Vec::new(),
+                                limit: None,
+                                max_tokens: Some(QUERY_TOKENS),
+                                files: true,
+                                history,
+                                caps: Some(BrainCaps::default()),
+                                page,
+                            },
+                            &|source| reader.check(source),
+                        )
                         .map_err(brain_error)?,
                 ),
                 None => None,
@@ -859,6 +869,50 @@ impl SessionManager {
         } else {
             self.head_commit(id).await
         };
+        // The claim's evidence, with the words it shows (BUILD-PLAN E1): the cited lines, a
+        // check's output, or a review finding's location or output.
+        let mut evidence: Vec<String> = args
+            .files
+            .iter()
+            .map(|file| file.trim().to_owned())
+            .filter(|file| super::evidence::lines_cite(file).is_some())
+            .chain(args.check.iter().map(|check| check.trim().to_owned()))
+            .collect();
+        let words = match &cited {
+            None => args
+                .quote
+                .as_deref()
+                .map(str::trim)
+                .filter(|quote| !quote.is_empty()),
+            Some(_) => None,
+        };
+        let mut finding_note = None;
+        if let (Some(finding), None) = (args.finding.as_deref(), &cited) {
+            let found = self
+                .finding_cites(id, finding, words.unwrap_or_default())
+                .await
+                .map_err(|reason| Error::Invalid(format!("not kept: {reason}")))?;
+            if found.is_empty() {
+                finding_note = Some(format!(
+                    "; finding {} names no lines or check output, so it is no evidence",
+                    finding.trim()
+                ));
+            }
+            evidence.extend(found.into_iter().map(|(cite, _)| cite));
+        }
+        let sources = match (words, personal) {
+            (Some(words), false) => {
+                self.claim_sources(
+                    id,
+                    evidence
+                        .iter()
+                        .map(|cite| (cite.clone(), words.to_owned()))
+                        .collect(),
+                )
+                .await
+            }
+            _ => Vec::new(),
+        };
         let mut body = args.detail.unwrap_or_default();
         let claim = match &cited {
             Some(said) => {
@@ -879,7 +933,13 @@ impl SessionManager {
                             .iter()
                             .map(|check| format!("check {}", check.trim())),
                     )
+                    .chain(
+                        args.finding
+                            .iter()
+                            .map(|finding| format!("finding {}", finding.trim())),
+                    )
                     .collect(),
+                sources: sources.clone(),
                 ..Claim::unverified()
             }),
         };
@@ -918,13 +978,45 @@ impl SessionManager {
         if personal {
             self.told_own_preference(id, &before).await;
         }
+        // What its source shows now, so a wrong cite or quote is fixed at once.
+        let source = if sources.is_empty() {
+            match (personal || cited.is_some(), evidence.is_empty()) {
+                (true, _) | (false, true) => String::new(),
+                (false, false) => {
+                    "; no words to check its evidence by: give them in `quote`".into()
+                }
+            }
+        } else {
+            let reader = self.sources_for(id, None);
+            let checked = blocking(move || {
+                let checked: Vec<_> = sources
+                    .iter()
+                    .filter_map(|source| reader.check(source))
+                    .collect();
+                Ok(checked)
+            })
+            .await
+            .unwrap_or_default();
+            match checked.iter().find(|checked| checked.holds) {
+                Some(held) => format!("; its source {} shows your words", held.cite),
+                None => format!(
+                    "; its source doesn't show your words ({}): correct it with replaces",
+                    checked
+                        .iter()
+                        .filter_map(|checked| checked.why.clone())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+            }
+        };
         Ok(format!(
-            "Remembered as {node_id}{}.",
+            "Remembered as {node_id}{}{source}{}.",
             match (personal, cited.is_some()) {
                 (true, _) => " (the user's preferences)",
                 (false, true) => " (a user decision)",
                 (false, false) => " (your claim, unverified)",
-            }
+            },
+            finding_note.unwrap_or_default()
         ))
     }
 
@@ -1326,40 +1418,67 @@ impl SessionManager {
             }),
             ..provenance.clone()
         };
-        let decisions = report
+        // Each line's own evidence, `[evidence: path:12-14 `words`]` (BUILD-PLAN E1): kept as
+        // its claim's sources, re-read whenever the claim is used.
+        let evidenced = |line: &str| {
+            let (text, cites) = super::evidence::evidence_tags(line);
+            (line.to_owned(), text, cites)
+        };
+        let decision_lines: Vec<_> = report
             .decisions
             .iter()
             .filter(|decision| !decision.trim().is_empty())
-            .map(|decision| NewNode {
+            .map(|decision| evidenced(decision))
+            .collect();
+        let learned_lines: Vec<_> = report
+            .learned
+            .iter()
+            .filter(|item| !item.trim().is_empty())
+            .map(|item| evidenced(item))
+            .collect();
+        let sourced = |cites: Vec<(String, String)>| {
+            let mut claim = claimed.clone();
+            let conversation = task.conversation_id.clone();
+            async move {
+                if let Some(claim) = claim.claim.as_mut() {
+                    claim.cites = cites.iter().map(|(cite, _)| cite.clone()).collect();
+                    claim.sources = self.claim_sources(&conversation, cites).await;
+                }
+                claim
+            }
+        };
+        let mut decisions = Vec::new();
+        for (decision, text, cites) in decision_lines {
+            decisions.push(NewNode {
                 kind: NodeKind::Decision,
-                key: Some(format!("task:{}:{}", task.id.0, blake_key(decision))),
-                title: one_line(decision, 240),
+                key: Some(format!("task:{}:{}", task.id.0, blake_key(&decision))),
+                title: one_line(&text, 240),
                 body: format!(
                     "{decision}\n(task-{}'s claim, unverified: {})",
                     task.number, task.title
                 ),
-                provenance: claimed.clone(),
+                provenance: crate::heap(|| sourced(cites)).await,
                 files: files.clone(),
                 expires_at_ms: None,
             });
+        }
         // What it says the next worker here should know (SESSION-FIXES-PLAN.md Q6.6), linked
         // like its decisions to the report and the modules it touched.
-        let learned = report
-            .learned
-            .iter()
-            .filter(|item| !item.trim().is_empty())
-            .map(|item| NewNode {
+        let mut learned = Vec::new();
+        for (item, text, cites) in learned_lines {
+            learned.push(NewNode {
                 kind: NodeKind::Convention,
-                key: Some(format!("task:{}:learned:{}", task.id.0, blake_key(item))),
-                title: one_line(item, 240),
+                key: Some(format!("task:{}:learned:{}", task.id.0, blake_key(&item))),
+                title: one_line(&text, 240),
                 body: format!(
                     "{item}\n(task-{}'s claim, unverified: {})",
                     task.number, task.title
                 ),
-                provenance: claimed.clone(),
+                provenance: crate::heap(|| sourced(cites)).await,
                 files: files.clone(),
                 expires_at_ms: None,
             });
+        }
         let facts: Vec<NewNode> = decisions.into_iter().chain(learned).collect();
         let kept = facts.len() as u32;
         let modules = modules_of(&project, &paths).await;
@@ -1978,7 +2097,7 @@ fn node_text(node: &Node) -> String {
     }
     text.push_str(&format!(
         "\n({}, {})",
-        brigadier_brain::source_label(node.kind, &node.provenance),
+        brigadier_brain::source_words(node.kind, &node.provenance),
         crate::manager::prompts::date_of(node.provenance.recorded_at_ms)
     ));
     text

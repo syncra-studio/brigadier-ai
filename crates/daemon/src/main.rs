@@ -112,7 +112,8 @@ fn main() -> ExitCode {
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
         return bridge::run(std::env::args_os().skip(2));
     }
-    // `brigadierd hook post-tool-use [--data-dir PATH]`: a Claude thread's output hook.
+    // `brigadierd hook post-tool-use [--data-dir PATH]`: a Claude thread's output hook; `hook
+    // stop`: a Claude worker's Stop hook.
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "hook") {
         return hook::run(std::env::args_os().skip(2));
     }

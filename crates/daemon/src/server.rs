@@ -181,6 +181,11 @@ pub async fn accept_loop(
                     output,
                     stream,
                 }) => upgrade::serve_hook(daemon_for_task, grant, output, stream).await,
+                Ok(Accepted::StopHook {
+                    grant,
+                    active,
+                    stream,
+                }) => upgrade::serve_stop_hook(daemon_for_task, grant, active, stream).await,
                 Err(err) => tracing::warn!(error = %err, "rejected IPC connection"),
             }
         });

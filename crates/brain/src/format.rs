@@ -96,7 +96,7 @@ fn header(node: &Node) -> String {
         kind_label(node.kind),
         node.id,
         state,
-        crate::source_label(node.kind, &node.provenance),
+        crate::source_words(node.kind, &node.provenance),
         node.title.trim()
     );
     match &node.state {

@@ -62,6 +62,12 @@ pub enum Role {
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`): it may only store the
     /// thread's command output, and calls no tools.
     OutputHook { conversation_id: ConversationId },
+    /// A Claude worker's `Stop` hook (`brigadierd hook stop`): it may only ask whether its
+    /// worker's turn may end, and calls no tools (BUILD-PLAN E2).
+    StopHook {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+    },
 }
 
 /// The tools of a tab's chat, by what its tab shows.
@@ -595,12 +601,16 @@ pub struct Remember {
     /// own claim, unverified.
     #[serde(default)]
     pub user_message: Option<String>,
-    /// The user's words in that message, exactly as they wrote them.
+    /// With `user_message`: the user's words in it, exactly. Else the exact words your
+    /// evidence shows (the `files` lines, the `check` output or the `finding`).
     #[serde(default)]
     pub quote: Option<String>,
-    /// The id of a check whose output shows it (a run-N id).
+    /// The out-… id a check's result ends with, whose output shows it.
     #[serde(default)]
     pub check: Option<String>,
+    /// A review finding's id (R3.2) whose location or check output shows it.
+    #[serde(default)]
+    pub finding: Option<String>,
 }
 
 /// `search_transcript`: search this conversation's full transcript.
@@ -974,6 +984,11 @@ pub struct SettleStep {
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "String", extend("default" = ""))]
     pub left: Vec<String>,
+    /// Your own evidence for criteria the reports don't bind to the tip: "[met] p2-c1: out-…"
+    /// for a check you ran at the tip, one per line.
+    #[serde(default, deserialize_with = "lines")]
+    #[schemars(with = "String", extend("default" = ""))]
+    pub done_when: Vec<String>,
 }
 
 /// `end_run`: the thread ends its overnight run early: the plan is done, or all that is left
@@ -1196,6 +1211,26 @@ impl OrchestratorCall {
 pub struct AskOrchestrator {
     /// The question, with the context the orchestrator needs to answer it.
     pub question: String,
+    /// What it is about: `operational` (a choice your task leaves to you: which file, which
+    /// test, an order of steps), `consent` (merging, deleting, pushing, spending, anything
+    /// outward) or `product` (what the user gets). Product unless you say.
+    #[serde(default)]
+    pub about: QuestionAbout,
+    /// For an operational question only: what you will do if no answer comes within the
+    /// hour. Consent and product questions wait for their answer whatever this says.
+    #[serde(default)]
+    pub safe_default: Option<String>,
+}
+
+/// What a worker's question is about (BUILD-PLAN E2): only an operational one may go on with
+/// its safe default when nobody answers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum QuestionAbout {
+    Operational,
+    Consent,
+    #[default]
+    Product,
 }
 
 /// `submit_outline`: a lead's plan for its phase, written after reading the code. The lead then
@@ -1232,13 +1267,14 @@ pub struct SubmitReport {
     /// folder): a report that leaves one out is refused until you list or delete it.
     #[serde(default, deserialize_with = "paths")]
     pub changes: Vec<String>,
-    /// Decisions made and why, one per line.
+    /// Decisions made and why, one per line, each with its evidence as `learned` says.
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "String", extend("default" = ""))]
     pub decisions: Vec<String>,
     /// What the next worker in this area should know that the code doesn't say plainly (a
     /// trap, a command that works, where something lives), one per line. Each is kept in the
-    /// project's Brain.
+    /// project's Brain, with its evidence where you have it: [evidence: path:12-14 `the exact
+    /// words there`] or [evidence: out-… `the words of that check's output`].
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "String", extend("default" = ""))]
     pub learned: Vec<String>,
@@ -1247,8 +1283,9 @@ pub struct SubmitReport {
     #[schemars(with = "String", extend("default" = ""))]
     pub verification: Vec<String>,
     /// Each "done when" criterion of the task, one per line: its status in brackets, the
-    /// criterion, then the evidence, e.g. "[met] `pnpm test` passes: 41 passed, 0 failed".
-    /// The status is [met], [not met] or [not checked].
+    /// criterion, then the evidence, e.g. "[met] `pnpm test` passes: 41 passed (out-1a2b3c4d)".
+    /// The status is [met], [not met] or [not checked]; [met] needs its evidence: the out-… id
+    /// its check's result ends with, or path:12-14 with the exact words in backticks.
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "String", extend("default" = ""))]
     pub done_when: Vec<String>,

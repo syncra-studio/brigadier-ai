@@ -1099,6 +1099,9 @@ pub struct SessionSpec {
     pub omit_ai_coauthors: bool,
     /// A Claude thread's output hook; Codex runs no hooks.
     pub output_hook: Option<OutputHook>,
+    /// A Claude worker's `Stop` hook: the command answers whether its turn may end (it
+    /// refuses a turn that ends with no report, BUILD-PLAN E2). Codex runs no hooks.
+    pub stop_hook: Option<OutputHook>,
     /// Every tool call is refused before it runs, with this reason for the model: a Claude
     /// `PreToolUse` hook that denies all tools, native and MCP. Hooks run in the client, so the
     /// tool list (and the cached prefix it starts) stays the same; `--disallowedTools` would

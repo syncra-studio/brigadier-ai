@@ -115,6 +115,14 @@ pub enum ClientFrame {
         grant: String,
         output: HookOutput,
     },
+    /// The only frame of a Claude worker's `Stop` hook (`brigadierd hook stop`): whether its
+    /// turn may end. The daemon answers with one [`StopHookReply`] frame; a refused grant just
+    /// closes the connection.
+    StopHook {
+        grant: String,
+        /// The CLI already continued once for this hook in this stop.
+        stop_hook_active: bool,
+    },
 }
 
 /// What a thread's output hook sends after its [`ClientFrame::Hook`].
@@ -132,6 +140,14 @@ pub struct HookOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub touched: Option<String>,
+}
+
+/// The daemon's answer to a worker's `Stop` hook.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StopHookReply {
+    /// Why the turn may not end yet, for the model to continue with; none: it may.
+    pub block: Option<String>,
 }
 
 /// The daemon's answer to a thread's output hook.

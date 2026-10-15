@@ -1,4 +1,5 @@
-//! `brigadierd hook post-tool-use`: a Claude thread's output hook (THREAD-PLAN.md Q4).
+//! `brigadierd hook post-tool-use`: a Claude thread's output hook (THREAD-PLAN.md Q4); and
+//! `brigadierd hook stop`, a Claude worker's `Stop` hook (BUILD-PLAN E2), at the end.
 //!
 //! The thread's CLI runs it after every `Bash` call (`PostToolUse` and `PostToolUseFailure`,
 //! from Brigadier's `--settings`), with the call's event on stdin
@@ -29,8 +30,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use brigadier_core::digest::BASH_WHOLE_MAX;
-use brigadier_core::manager::{HOOK_GRANT_ENV, OUTPUT_MAX_BYTES};
-use brigadier_ipc::protocol::{ClientFrame, HookOutput, HookReply};
+use brigadier_core::manager::{HOOK_GRANT_ENV, OUTPUT_MAX_BYTES, STOP_GRANT_ENV};
+use brigadier_ipc::protocol::{ClientFrame, HookOutput, HookReply, StopHookReply};
 use brigadier_sandbox::PlatformOptions;
 use serde_json::{Map, Value, json};
 
@@ -54,9 +55,11 @@ enum Plan {
 /// Runs the hook with the arguments after `hook`.
 pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     // Every path ends here with nothing printed: never break the tool call.
-    if args.next().is_none_or(|event| event != "post-tool-use") {
-        return ExitCode::SUCCESS;
-    }
+    let stop = match args.next() {
+        Some(event) if event == "post-tool-use" => false,
+        Some(event) if event == "stop" => true,
+        _ => return ExitCode::SUCCESS,
+    };
     let mut data_dir: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         if arg == "--data-dir" {
@@ -65,6 +68,17 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     }
     let mut stdin = String::new();
     if std::io::stdin().read_to_string(&mut stdin).is_err() {
+        return ExitCode::SUCCESS;
+    }
+    if stop {
+        let grant = std::env::var(STOP_GRANT_ENV).ok();
+        if let Some(printed) = stop_answer(&stdin, |active| {
+            ask_stop(grant.as_deref(), data_dir, active)
+        }) {
+            let mut stdout = std::io::stdout().lock();
+            let _ = stdout.write_all(printed.as_bytes());
+            let _ = stdout.flush();
+        }
         return ExitCode::SUCCESS;
     }
     let grant = std::env::var(HOOK_GRANT_ENV).ok();
@@ -258,6 +272,36 @@ fn capped(mut bytes: Vec<u8>, size: u64) -> Vec<u8> {
     bytes
 }
 
+/// What a worker's `Stop` hook prints for the stop event `stdin`: `decision: "block"` with the
+/// daemon's reason when the turn may not end yet; `None` (the turn ends) otherwise, and on any
+/// failure: a hook that can't reach the daemon never keeps a worker going.
+fn stop_answer(stdin: &str, ask: impl FnOnce(bool) -> Option<StopHookReply>) -> Option<String> {
+    let event: Value = serde_json::from_str(stdin).ok()?;
+    let active = event
+        .get("stop_hook_active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let reason = ask(active)?.block?;
+    Some(json!({ "decision": "block", "reason": reason }).to_string())
+}
+
+/// Asks the daemon for `data_dir` whether the worker of `grant` may end its turn.
+fn ask_stop(grant: Option<&str>, data_dir: Option<PathBuf>, active: bool) -> Option<StopHookReply> {
+    let grant = grant.filter(|grant| !grant.is_empty())?.to_owned();
+    let platform = brigadier_sandbox::native(PlatformOptions { data_dir }).ok()?;
+    let mut stream = brigadier_ipc::connect_blocking(
+        platform.paths(),
+        &ClientFrame::StopHook {
+            grant,
+            stop_hook_active: active,
+        },
+    )
+    .ok()?;
+    brigadier_ipc::read_frame_blocking::<StopHookReply>(&mut stream)
+        .ok()
+        .flatten()
+}
+
 /// Sends `output` to the daemon for `data_dir` with the grant from the environment, and reads
 /// its answer; `None` on any failure.
 fn send(
@@ -288,6 +332,36 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    /// A worker's `Stop` hook blocks with the daemon's reason, passes `stop_hook_active` on,
+    /// and lets the turn end when the daemon has no reason or can't be reached.
+    #[test]
+    fn a_stop_hook_blocks_only_with_the_daemons_reason() {
+        let event = r#"{"hook_event_name":"Stop","stop_hook_active":true}"#;
+        let printed = stop_answer(event, |active| {
+            assert!(active);
+            Some(StopHookReply {
+                block: Some("Report first.".into()),
+            })
+        })
+        .unwrap();
+        let printed: Value = serde_json::from_str(&printed).unwrap();
+        assert_eq!(
+            printed,
+            json!({"decision": "block", "reason": "Report first."})
+        );
+        assert_eq!(
+            stop_answer(event, |_| Some(StopHookReply { block: None })),
+            None
+        );
+        assert_eq!(stop_answer(event, |_| None), None);
+        assert_eq!(stop_answer("not json", |_| unreachable!()), None);
+        // An event without the flag is a first stop.
+        let _ = stop_answer(r#"{"hook_event_name":"Stop"}"#, |active| {
+            assert!(!active);
+            None
+        });
+    }
 
     /// A folder in the temp directory, removed when dropped however the test ends.
     struct Temp(PathBuf);

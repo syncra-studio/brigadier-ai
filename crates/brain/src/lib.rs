@@ -190,6 +190,43 @@ pub struct Claim {
     /// The evidence it names, for a later check: files with line ranges, check ids.
     #[serde(default)]
     pub cites: Vec<String>,
+    /// The excerpts its evidence quotes (BUILD-PLAN E1): re-read whenever the claim is used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub sources: Vec<Source>,
+    /// What the re-read of [`Self::sources`] found for this use; never stored.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub source: Option<SourceCheck>,
+}
+
+/// An excerpt a claim's evidence quotes: the lines of a file (`path:12-14`) or a check's stored
+/// output (`out-…`), and the exact words they show.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Source {
+    /// `path:12-14` (repository-relative), or a check's `out-…` id.
+    pub cite: String,
+    /// The words the lines or the output show, exactly.
+    pub quote: String,
+    /// A check output's content hash in the blob store, when the cite is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub blob: Option<String>,
+}
+
+/// What a claim's source showed when it was re-read for one use. Only the excerpt is checked:
+/// whether it supports the claim is the reader's judgement, so the claim stays unverified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceCheck {
+    /// The source re-read: `path:12-14` (where the quote is now, when it moved a little), or
+    /// the check's `out-…` id.
+    pub cite: String,
+    pub quote: String,
+    /// The quoted words are still there.
+    pub holds: bool,
+    /// Why not, in a few words, when they aren't.
+    pub why: Option<String>,
 }
 
 impl Claim {
@@ -240,10 +277,70 @@ pub fn unverified(kind: NodeKind, provenance: &Provenance) -> bool {
     source_label(kind, provenance).ends_with("unverified")
 }
 
+/// [`source_label`], and for a claim whose source was re-read for this use, what it showed
+/// (BUILD-PLAN E1): "worker claim, unverified · verified source: path:12-14 `words`". The claim
+/// itself stays unverified: the source is checked, its reading is the reader's.
+pub fn source_words(kind: NodeKind, provenance: &Provenance) -> String {
+    let label = source_label(kind, provenance);
+    let Some(checked) = provenance
+        .claim
+        .as_ref()
+        .and_then(|claim| claim.source.as_ref())
+    else {
+        return label.to_owned();
+    };
+    let quote: String = checked
+        .quote
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let quote = match quote.char_indices().nth(SOURCE_QUOTE_SHOWN) {
+        Some((at, _)) => format!("{}…", &quote[..at]),
+        None => quote,
+    };
+    if checked.holds {
+        format!("{label} · verified source: {} `{quote}`", checked.cite)
+    } else {
+        format!(
+            "{label} · its source no longer shows it: {} ({})",
+            checked.cite,
+            checked.why.as_deref().unwrap_or("the words aren't there")
+        )
+    }
+}
+
+/// How much of a quoted source a brief line shows, in characters.
+const SOURCE_QUOTE_SHOWN: usize = 160;
+
+/// Sets each claim's [`Claim::source`] for this use: `check` re-reads its sources, the first
+/// that still shows its words standing for all (else the first that was read).
+pub fn check_sources(nodes: &mut [&mut Node], check: &dyn Fn(&Source) -> Option<SourceCheck>) {
+    for node in nodes {
+        let Some(claim) = node.provenance.claim.as_mut() else {
+            continue;
+        };
+        let checked: Vec<SourceCheck> = claim.sources.iter().filter_map(check).collect();
+        claim.source = checked
+            .iter()
+            .find(|checked| checked.holds)
+            .or_else(|| checked.first())
+            .cloned();
+    }
+}
+
 /// Hits in their order, except that claims nobody checked yet go after the rest (BUILD-PLAN
-/// A11: verified facts first).
+/// A11: verified facts first), and among those, a claim whose source still shows it goes first.
 fn settled_first(hits: &mut [BrainHit]) {
-    hits.sort_by_key(|hit| unverified(hit.node.kind, &hit.node.provenance));
+    hits.sort_by_key(|hit| {
+        let held = hit
+            .node
+            .provenance
+            .claim
+            .as_ref()
+            .and_then(|claim| claim.source.as_ref())
+            .is_some_and(|checked| checked.holds);
+        (unverified(hit.node.kind, &hit.node.provenance), !held)
+    });
 }
 
 /// Decisions, conventions and contracts: what later work is told to respect.
@@ -906,6 +1003,16 @@ impl Brain {
     /// Hybrid retrieval: FTS5 and embeddings fused, plus linked decisions and conventions.
     /// Stale nodes are included and marked.
     pub fn query(&self, query: &BrainQuery) -> Result<BrainAnswer> {
+        self.query_with(query, &|_| None)
+    }
+
+    /// [`Self::query`], with each claim's sources re-read by `check` before the answer is
+    /// written, so it shows what each one's source says now (BUILD-PLAN E1).
+    pub fn query_with(
+        &self,
+        query: &BrainQuery,
+        check: &dyn Fn(&Source) -> Option<SourceCheck>,
+    ) -> Result<BrainAnswer> {
         let started = std::time::Instant::now();
         let limit = match query.caps {
             // Every candidate, for the caps to choose from.
@@ -936,9 +1043,17 @@ impl Brain {
                 limit,
             )
         })?;
+        // Only what the answer holds is re-read.
+        let checked = |hits: &mut Vec<BrainHit>| {
+            check_sources(
+                &mut hits.iter_mut().map(|hit| &mut hit.node).collect::<Vec<_>>(),
+                check,
+            );
+        };
         let (hits, text) = match query.caps {
             Some(caps) => {
                 let (mut hits, more) = retrieve::capped(hits, caps, query.page.unwrap_or(1));
+                checked(&mut hits);
                 settled_first(&mut hits);
                 let mut text = format::answer(&hits, budget, query.files, caps.body as usize);
                 if !more.is_empty() && !hits.is_empty() {
@@ -952,6 +1067,7 @@ impl Brain {
             }
             None => {
                 let mut hits = hits;
+                checked(&mut hits);
                 settled_first(&mut hits);
                 let text = format::answer(&hits, budget, query.files, format::MAX_BODY);
                 (hits, text)

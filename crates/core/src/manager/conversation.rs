@@ -3133,6 +3133,7 @@ impl SessionManager {
             auto_review,
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook,
+            stop_hook: None,
             deny_tools: None,
             protection: launch
                 .as_ref()
@@ -3283,6 +3284,21 @@ impl SessionManager {
             trusted: true,
             always_load,
             prompt_tools: Vec::new(),
+        }
+    }
+
+    /// A Claude worker's `Stop` hook (`brigadierd hook stop`), with its grant (BUILD-PLAN E2).
+    pub(crate) fn stop_hook_command(&self, grant: String) -> OutputHook {
+        OutputHook {
+            command: self.config.daemon_exe.clone(),
+            args: vec![
+                "hook".into(),
+                "stop".into(),
+                "--data-dir".into(),
+                self.data_dir.to_string_lossy().into_owned(),
+            ],
+            env: vec![(super::tool_output::STOP_GRANT_ENV.into(), grant)],
+            timeout_secs: super::tool_output::HOOK_TIMEOUT_SECS,
         }
     }
 

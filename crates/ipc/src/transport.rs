@@ -117,6 +117,13 @@ pub enum Accepted {
         output: crate::protocol::HookOutput,
         stream: RawStream,
     },
+    /// A Claude worker's `Stop` hook (`brigadierd hook stop`): the daemon answers with one
+    /// length-prefixed [`crate::protocol::StopHookReply`].
+    StopHook {
+        grant: String,
+        active: bool,
+        stream: RawStream,
+    },
 }
 
 impl Pending {
@@ -157,6 +164,14 @@ impl Pending {
             Ok(Some(ClientFrame::Hook { grant, output })) => Ok(Accepted::Hook {
                 grant,
                 output,
+                stream,
+            }),
+            Ok(Some(ClientFrame::StopHook {
+                grant,
+                stop_hook_active,
+            })) => Ok(Accepted::StopHook {
+                grant,
+                active: stop_hook_active,
                 stream,
             }),
             Ok(Some(ClientFrame::Request { .. })) => {

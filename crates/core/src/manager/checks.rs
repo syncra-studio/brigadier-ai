@@ -387,7 +387,8 @@ impl KeyState {
 }
 
 /// Why an integration, smoke or live check ran again (G3).
-const LIVE_UNKEPT: &str = "an integration, smoke or live check runs every time unless it declares its inputs";
+const LIVE_UNKEPT: &str =
+    "an integration, smoke or live check runs every time unless it declares its inputs";
 
 /// The words of an integration, smoke or live check: what it depends on (services, ignored
 /// fixtures, the network) is more than its files (WEAK-SPOTS G3).
@@ -601,7 +602,14 @@ impl SessionManager {
             .clamp(Duration::from_secs(1), RUN_TIMEOUT_MAX);
         if task.is_some() {
             return self
-                .check_now(&caller, &workdir, &command, timeout, args.rerun, &args.inputs)
+                .check_now(
+                    &caller,
+                    &workdir,
+                    &command,
+                    timeout,
+                    args.rerun,
+                    &args.inputs,
+                )
                 .await
                 .map(|done| done.reply);
         }

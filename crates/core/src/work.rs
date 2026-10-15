@@ -1214,6 +1214,15 @@ pub struct StepSettlement {
     /// The run branch's tip when it settled.
     pub tip: Option<String>,
     pub at_ms: i64,
+    /// For a step settled done: each "done when" criterion with the evidence that met it at
+    /// that tip (BUILD-PLAN E2), one line each.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub evidence: Vec<String>,
+    /// What review it had: settled (and how), or that none was run because reviews are off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review: Option<String>,
 }
 
 /// How a settled step ended.

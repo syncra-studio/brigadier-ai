@@ -882,6 +882,16 @@ fn phase_evidence(step: &Step, board: &Board, segments: &[&OvernightRunId]) -> V
                 one_line(gap, EVIDENCE).trim_end_matches('.')
             )));
         }
+        // What each criterion rests on, and its review (BUILD-PLAN E2).
+        for line in &settled.evidence {
+            lines.push(sentence(&format!(
+                "Evidence: {}",
+                one_line(line, EVIDENCE).trim_end_matches('.')
+            )));
+        }
+        if let Some(review) = &settled.review {
+            lines.push(sentence(&one_line(review, EVIDENCE)));
+        }
     }
     let tasks = phase_tasks(step.number, board, segments);
     let reported = |task: &&&Task| task.report.is_some();
@@ -1679,6 +1689,8 @@ mod tests {
                 left: left.iter().map(|line| (*line).to_owned()).collect(),
                 tip: Some(tip.into()),
                 at_ms: 1,
+                evidence: Vec::new(),
+                review: None,
             })
         };
         let plan = crate::work::Plan {

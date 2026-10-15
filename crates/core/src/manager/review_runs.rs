@@ -1370,6 +1370,7 @@ impl SessionManager {
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            stop_hook: None,
             deny_tools: None,
             protection: Default::default(),
         };
@@ -1574,6 +1575,8 @@ impl SessionManager {
     /// the context card shows it, and finish_session's answer says it.
     pub(super) async fn tell_review(&self, review: &ReviewRun, text: Option<&str>) {
         self.tell_review_now(review, text).await;
+        // An overnight phase that waited for this review to settle (BUILD-PLAN E2).
+        crate::heap(|| self.settle_wait_over(review)).await;
         // A merge held for the review's end looks again (SESSION-FIXES-PLAN.md Q3), on its
         // own: a review that fails at once ends inside finish_session, which holds the merge
         // lock this takes. Then the requests settle: one that waited for this review is over

@@ -6,6 +6,7 @@
 //! revision the user saw, so a proposal that changed meanwhile isn't started unseen. Only the
 //! app sends these commands; worker and orchestrator grants can't.
 
+mod acceptance;
 pub(crate) mod admission;
 pub mod directives;
 mod messages;
@@ -56,6 +57,8 @@ pub(crate) struct Runs {
     /// The generic recovery is ending the old daemon's tasks: their missing results are not
     /// verdicts on a run's checks (the round starts again afterwards).
     pub(crate) recovering: std::sync::atomic::AtomicBool,
+    /// Phases whose settling waits for their review: the thread hears when it ends.
+    pub(crate) settle_waits: std::sync::Mutex<std::collections::HashSet<(OvernightRunId, u32)>>,
 }
 
 impl SessionManager {

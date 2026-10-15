@@ -17,4 +17,8 @@ left: Array<string>,
 /**
  * The run branch's tip when it settled.
  */
-tip: string | null, atMs: number, };
+tip: string | null, atMs: number, 
+/**
+ * What review it had: settled (and how), or that none was run because reviews are off.
+ */
+review?: string, };

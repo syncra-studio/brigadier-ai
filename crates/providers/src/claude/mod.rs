@@ -395,6 +395,9 @@ fn session_env(spec: &SessionSpec) -> Vec<(String, String)> {
     {
         env.extend(hook.env.iter().cloned());
     }
+    if let Some(hook) = &spec.stop_hook {
+        env.extend(hook.env.iter().cloned());
+    }
     if let Some(secs) = spec
         .mcp_servers
         .iter()
@@ -772,6 +775,9 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
     if let Some(hooks) = output_hooks(spec) {
         settings["hooks"] = hooks;
     }
+    if let Some(stop) = stop_hooks(spec) {
+        settings["hooks"]["Stop"] = stop;
+    }
     if let Some(reason) = &spec.deny_tools {
         settings["hooks"]["PreToolUse"] = deny_hook(reason);
     }
@@ -834,6 +840,22 @@ fn output_hooks(spec: &SessionSpec) -> Option<Value> {
 
 /// The file tools whose successful calls also run a thread's output hook.
 const FILE_TOOLS_MATCHER: &str = "Read|Edit|Write|MultiEdit|NotebookEdit";
+
+/// A worker's `Stop` hook ([`SessionSpec::stop_hook`]) as settings `hooks.Stop`: its command
+/// reads the stop's event (`stop_hook_active` among it) and answers `decision: "block"` with a
+/// reason when the turn may not end yet, which the CLI gives the model to continue with
+/// (code.claude.com/docs/en/hooks, "Stop decision control"; the CLI stops continuing after 8).
+fn stop_hooks(spec: &SessionSpec) -> Option<Value> {
+    let hook = spec.stop_hook.as_ref()?;
+    let command = std::iter::once(hook.command.display().to_string())
+        .chain(hook.args.iter().cloned())
+        .map(|part| shell_quote(&part))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(json!([{
+        "hooks": [{ "type": "command", "command": command, "timeout": hook.timeout_secs }],
+    }]))
+}
 
 /// A `PreToolUse` hook that refuses every tool call, native and MCP, before it runs, telling
 /// the model `reason` ([`SessionSpec::deny_tools`]). The command reads the call's event and
@@ -2176,6 +2198,7 @@ for line in sys.stdin:
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            stop_hook: None,
             deny_tools: None,
             protection: Default::default(),
         }
@@ -2585,6 +2608,44 @@ for line in sys.stdin:
             );
         }
         assert_eq!(shell_quote("it's"), r"'it'\''s'");
+    }
+
+    /// A worker's `Stop` hook is a `hooks.Stop` command with no matcher, beside nothing else,
+    /// and its grant reaches the CLI's environment (BUILD-PLAN E2).
+    #[test]
+    fn a_worker_gets_its_stop_hook() {
+        let cwd = Temp::new();
+        let worker = SessionSpec {
+            stop_hook: Some(OutputHook {
+                command: PathBuf::from("/Applications/Brigadier.app/Contents/MacOS/brigadierd"),
+                args: vec!["hook".into(), "stop".into()],
+                env: vec![("BRIGADIER_STOP_GRANT".into(), "brg_stop".into())],
+                timeout_secs: 60,
+            }),
+            ..spec(cwd.path(), &[])
+        };
+        let hooks = &settings(&worker, cwd.path(), &SubAgents::Any, false)["hooks"];
+        assert_eq!(hooks.as_object().map(Map::len), Some(1), "{hooks}");
+        assert_eq!(
+            hooks["Stop"],
+            json!([{"hooks": [{
+                "type": "command",
+                "command": "/Applications/Brigadier.app/Contents/MacOS/brigadierd hook stop",
+                "timeout": 60,
+            }]}])
+        );
+        assert!(
+            session_env(&worker)
+                .iter()
+                .any(|(name, value)| name == "BRIGADIER_STOP_GRANT" && value == "brg_stop")
+        );
+        // Without one, no hooks at all.
+        let plain = spec(cwd.path(), &[]);
+        assert!(
+            settings(&plain, cwd.path(), &SubAgents::Any, false)
+                .get("hooks")
+                .is_none_or(Value::is_null)
+        );
     }
 
     /// A note fork's hook refuses every tool, native and MCP, before it runs, with the reason

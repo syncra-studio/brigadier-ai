@@ -1327,7 +1327,7 @@ async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
                         "submit_report",
                         json!({"summary": "Checks pass. The review found a missing trailing newline in hello.txt; fixed.",
                                "changes": ["hello.txt"],
-                               "done_when": "[met] hello.txt exists: cat shows it"}),
+                               "done_when": "[met] hello.txt exists: hello.txt:1 `hello`"}),
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
@@ -1641,7 +1641,7 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                             "submit_report",
                             json!({"summary": "Phase one passes; fixed one thing.",
                                    "changes": ["p1-fix.txt"],
-                                   "done_when": "[met] p1.txt exists: ls shows it"}),
+                                   "done_when": "[met] p1.txt exists: p1.txt:1 `one`"}),
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
@@ -2852,11 +2852,20 @@ async fn a_phase_with_only_litter_ends_its_lead_with_its_verifier() {
                 return Reply::text("[quiet]");
             }
             if turn.prompt.contains("You verify this phase") {
+                let check = turn
+                    .call("run_check", json!({"command": "echo looked"}))
+                    .await;
+                assert!(!check.is_error, "{}", check.text);
+                let output = check
+                    .text
+                    .rsplit_once("[evidence: ")
+                    .map(|(_, cite)| cite.trim_end().trim_end_matches(']').to_owned())
+                    .unwrap();
                 let reply = turn
                     .call(
                         "submit_report",
                         json!({"summary": "Nothing to fix.",
-                               "done_when": "[met] looked: read the log"}),
+                               "done_when": format!("[met] looked: {output}")}),
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);

@@ -27,6 +27,8 @@ pub const OUTPUT_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// The environment variable that holds a hook's grant (set in the CLI's environment, which its
 /// hooks inherit).
 pub const HOOK_GRANT_ENV: &str = "BRIGADIER_HOOK_GRANT";
+/// Where a worker's `Stop` hook finds its grant (BUILD-PLAN E2).
+pub const STOP_GRANT_ENV: &str = "BRIGADIER_STOP_GRANT";
 /// How long Claude lets the hook take (it reads at most one output file and stores it).
 pub(crate) const HOOK_TIMEOUT_SECS: u64 = 60;
 /// The prefix of an output's alias.

@@ -138,7 +138,7 @@ How to talk to the user:
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
 - {LEAD}
 - Even while work runs, write one line for: a failure of what you started (a preview, a dev app, a build, a check you awaited), in the same turn: what failed, its key error line, what you do about it; work the user didn't ask for, before it starts ("Starting 3 fixes from the review; about 20 min."); and [status due]: what runs, why, roughly what's left. Never say something compiles or runs without checking its process, or having a worker look.
-- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …", only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_plan), never in text; a merge needs none.
+- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …", only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report under a last heading `### Details`, shown folded, which always holds three labelled lines: `Checks:` each check you ran in this request with its result (or "none run"), `Review:` its state (none for a tiny edit, off, still running, or what it found and what you fixed) and `Not checked:` what nobody checked (or "nothing"). Say code compiles or works only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text; a merge needs none.
 - Fix a known defect in a deliverable yourself, with no card (write a fixed copy in your workspace, writable at your level, and link its full path), or send it back, before you answer.
 - {LATE_EVENT} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.{voice}{orchestrator_voice}
@@ -717,6 +717,21 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, every run_check result ends with its evidence reference, [evidence: out-…]: cite that id for what the check showed. An integration, smoke or live check (by its words: smoke, e2e, integration, live, docker, curl…) runs every time, unless you give its `inputs` (the paths its result depends on), which let it answer from the cache.",
         worker: "From now on, every run_check result ends with its evidence reference, [evidence: out-…]: cite that id in your report for what the check showed. An integration, smoke or live check (by its words: smoke, e2e, integration, live, docker, curl…) runs every time, unless you give its `inputs` (the paths its result depends on), which let it answer from the cache.",
     },
+    Revision {
+        number: CLAIM_EVIDENCE_REVISION,
+        thread: "From now on, a claim you keep with remember names its evidence with the exact words it shows: `files` as path:lines, `check` as the out-… id a check's result ends with, or `finding` as a review finding's id, and those words in `quote`. Brigadier re-reads that source whenever the claim is used, and briefs and query_brain show it beside the claim (\"verified source: …\" or \"its source no longer shows it\"). Only the words are checked: the claim stays unverified, so judge whether they bear it out. A review finding with no lines and no check output is no evidence.",
+        worker: "From now on, give each `learned` and `decisions` line its evidence where you have it, as [evidence: path:12-14 `the exact words there`] or [evidence: out-… `the words of that check's output`]: Brigadier re-reads it whenever the line is used later. A line with no evidence is kept as your unverified claim.",
+    },
+    Revision {
+        number: MET_EVIDENCE_REVISION,
+        thread: "From now on, an overnight phase settles done only with evidence for every \"done when\" at the run's tip: a check that passed on the tip's tree (its out-… id), the session's full checks at the tip, or lines the tip still shows. Its report gives it (its verifier's, when one ran), or you do in settle_step's done_when (\"[met] p2-c1: out-…\", from a run_check in your workspace, which is at the tip). With reviews on, its review must have ended and its findings be recorded first; with reviews off, the morning report says no review ran. A verifier or reviewer now gets the lead's whole report. A worker's question nobody answers within the hour goes on only with an operational safe default; a consent or product question waits until you answer it with answer_worker.",
+        worker: "From now on, a \"done when\" is [met] only with its evidence: the out-… id its check's result ends with, or the lines that show it as path:12-14 followed by the exact words in backticks; submit_report refuses a [met] without one, and a verifier of an overnight phase lists every criterion by its id (p2-c1). In ask_orchestrator, say what the question is `about` (operational, consent or product) and, for an operational one, your `safe_default`: when no answer comes within the hour, only an operational question goes on with it; any other waits, and you end your turn until the answer comes.",
+    },
+    Revision {
+        number: CHECKED_ANSWER_REVISION,
+        thread: "From now on, your final answer's `### Details` always holds three labelled lines: `Checks:` each check you ran in this request with its result (or \"none run\"), `Review:` its state (none for a tiny edit, off, still running, or what it found and what you fixed) and `Not checked:` what nobody checked (or \"nothing\"). Say code compiles or works only after a check in this request showed it.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -934,6 +949,20 @@ pub(crate) const SUBFOLDER_RULES_REVISION: u32 = 41;
 /// check runs every time unless it declares its inputs (BUILD-PLAN E2, G3). Phase E's
 /// revisions are numbered from 50 so parallel phases don't collide (rule R).
 pub(crate) const EVIDENCE_REF_REVISION: u32 = 50;
+
+/// A claim's evidence (lines of a file or a check's output, with the words they show) is
+/// re-read whenever the claim is used, and shown beside it; the claim stays unverified
+/// (BUILD-PLAN E1).
+pub(crate) const CLAIM_EVIDENCE_REVISION: u32 = 51;
+
+/// A "done when" is [met] only with its evidence, an overnight phase settles done only with
+/// evidence for every criterion at its tip and its review settled, and an unanswered worker
+/// question goes on only with an operational safe default (BUILD-PLAN E2).
+pub(crate) const MET_EVIDENCE_REVISION: u32 = 52;
+
+/// The final answer's details always list the checks run with their results, the review's
+/// state and what wasn't checked (BUILD-PLAN E3).
+pub(crate) const CHECKED_ANSWER_REVISION: u32 = 53;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1368,7 +1397,7 @@ pub(crate) fn told_from_log<'a>(
 
 /// What the voice covers for a worker, and its report's shape.
 const WORKER_VOICE: &str = "
-- Your report is for the orchestrator. Summary: the outcome first (done, partly done or blocked), then the findings that answer the task. Changes: one line per file. Verification: what you ran or read and what you saw. Done when: each criterion of \"done\" in the task, with [met], [not met] or [not checked] and its evidence; a check you didn't run is [not checked], never [met]. Open questions: decisions you need. Risks: assumptions, risks, and what you skipped and why. Needs user: what only the user can do. Report failures and unknowns plainly, and never leave out a failed check.
+- Your report is for the orchestrator. Summary: the outcome first (done, partly done or blocked), then the findings that answer the task. Changes: one line per file. Verification: what you ran or read and what you saw. Done when: each criterion of \"done\" in the task, with [met], [not met] or [not checked] and its evidence; [met] names it: the out-… id its check's result ends with, or path:12-14 with the exact words in backticks; a check you didn't run is [not checked], never [met]. Open questions: decisions you need. Risks: assumptions, risks, and what you skipped and why. Needs user: what only the user can do. Report failures and unknowns plainly, and never leave out a failed check.
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
 /// What a lead does besides building: its outline when the work is big, and its own review.
@@ -1523,7 +1552,7 @@ Rules:
 - Never push, publish, deploy or open pull requests, unless the task says the user asked for exactly that: list such steps under needs user instead. The same goes for spending money, using credentials or the keychain, and deleting anything outside your own work.
 - If you start subagents, never use a Fable model, and never raise reasoning effort above high.
 - Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Your scratch folder goes when the task ends: never link its path; name the output file (outputs/notes.md). Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
-- The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
+- The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain, with its evidence where you have it: [evidence: path:12-14 `the exact words there`] or [evidence: out-… `the words of that check's output`]), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
     )
 }
 

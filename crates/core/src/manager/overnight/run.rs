@@ -532,12 +532,48 @@ impl SessionManager {
                 }
             }
         }
+        // Done only with evidence for every criterion at this tip and, with reviews on, its
+        // review settled (BUILD-PLAN E2).
+        let (evidence, review) = if args.outcome == StepOutcome::Done {
+            use super::acceptance::NotAccepted;
+            match crate::heap(|| self.accept_phase(id, &run, args.phase, &tip, &args.done_when))
+                .await
+            {
+                Ok(accepted) => (accepted.evidence, Some(accepted.review)),
+                Err(NotAccepted::Criteria(problems)) => {
+                    return Err(Error::Invalid(format!(
+                        "Phase {} isn't settled done: each \"done when\" needs evidence that holds at the run's tip ({}). Not yet:\n{}\nRun a check at the tip yourself (run_check in your workspace, which is at the tip) and give its out-… id in settle_step's done_when as \"[met] p{}-c1: out-…\", or send the work back; settle it partial, with what is left, if it can't be met.",
+                        args.phase,
+                        &tip[..tip.len().min(10)],
+                        problems
+                            .iter()
+                            .map(|problem| format!("- {problem}"))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        args.phase
+                    )));
+                }
+                Err(NotAccepted::Review(why)) => {
+                    if let Ok(mut waits) = self.overnight.settle_waits.lock() {
+                        waits.insert((run.id.clone(), args.phase));
+                    }
+                    return Err(Error::Invalid(why));
+                }
+            }
+        } else {
+            (
+                Vec::new(),
+                (!self.reviews_on()).then(|| "No review was run: reviews are off.".to_owned()),
+            )
+        };
         let settlement = StepSettlement {
             outcome: args.outcome,
             summary: summary.clone(),
             left: left.clone(),
             tip: Some(tip.clone()),
             at_ms: now_ms(),
+            evidence,
+            review,
         };
         let plan = self
             .change_plan(id, &plan.id, |plan| {
@@ -967,7 +1003,7 @@ pub(crate) fn run_brief(run: &OvernightRun, words: &str, done: &[u32]) -> String
         ));
     }
     text.push_str(&format!("\n{}\n", directives_text(run)));
-    text.push_str("\nHow the run goes: give each phase's work to a lead with delegate_task and `phase: <its number>` (tiny edits you make yourself, committed on the run's branch). Land finished work with land_phase. Once a phase's whole scope and every \"done when\" are met and landed, settle it with settle_step (partial or blocked with what is left, when it can't be finished); the user's Merge takes the work up to the last phase settled done with every phase before it done. Phases that build on one left unfinished wait. When every selected phase is settled, or all that is left needs the user, call end_run. Nobody can answer before the morning: decide what the plan and the Rules settle (note_for_user, kind decided) and list what only the user can do (note_for_user, kind waiting).");
+    text.push_str("\nHow the run goes: give each phase's work to a lead with delegate_task and `phase: <its number>` (tiny edits you make yourself, committed on the run's branch). Land finished work with land_phase. Once a phase's whole scope and every \"done when\" are met and landed, settle it with settle_step (partial or blocked with what is left, when it can't be finished): done needs evidence for each criterion that holds at the run's tip, from its report or your own run_check at the tip in settle_step's done_when, and, with reviews on, its review ended and its findings recorded; the user's Merge takes the work up to the last phase settled done with every phase before it done. Phases that build on one left unfinished wait. When every selected phase is settled, or all that is left needs the user, call end_run. Nobody can answer before the morning: decide what the plan and the Rules settle (note_for_user, kind decided) and list what only the user can do (note_for_user, kind waiting).");
     text
 }
 
@@ -1055,6 +1091,8 @@ mod tests {
             left: vec!["l".into()],
             tip: None,
             at_ms: 0,
+            evidence: Vec::new(),
+            review: None,
         });
         assert!(stop_reached(&run, Some(&settled)));
         assert_eq!(current_step(&settled), Some(4));

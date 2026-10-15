@@ -880,11 +880,9 @@ impl SessionManager {
         for message in &lead.messages {
             brief.push_str(&format!("\n---\n{message}"));
         }
-        let mut summary = report.summary.clone();
-        for line in report.done_when.iter().chain(&report.verification) {
-            summary.push_str(&format!("\n- {line}"));
-        }
-        let report = summary;
+        // The lead's whole report: its risks, open questions, decisions and artifacts too, not
+        // only what it says it checked (BUILD-PLAN E2).
+        let report = super::prompts::report_text(lead, report, "the phase's lead");
         // Reviews off (the user's setting): the same steps without the review.
         let spec = if !self.reviews_on() {
             format!(

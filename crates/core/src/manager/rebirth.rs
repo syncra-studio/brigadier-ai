@@ -299,6 +299,7 @@ pub(crate) fn note_fork_spec(thread: &SessionSpec, native_id: String, grant: &st
         sweep_dir: None,
         // Its hook stores the output of commands, and no command runs here.
         output_hook: None,
+        stop_hook: None,
         deny_tools: Some(NOTE_FORK_REFUSAL.into()),
         ..thread.clone()
     }
@@ -337,6 +338,7 @@ fn plain_fork_spec(
         auto_review: false,
         omit_ai_coauthors: false,
         output_hook: None,
+        stop_hook: None,
         deny_tools: None,
         protection: Default::default(),
     }
@@ -801,7 +803,7 @@ impl SessionManager {
             read = self.session_decisions(id).await;
         }
         let nodes = match read {
-            Ok(nodes) => nodes,
+            Ok(nodes) => crate::heap(|| self.sources_checked(id, nodes)).await,
             Err(err) => {
                 tracing::warn!(conversation = %id, error = %err, "could not read the decision ledger");
                 let mut part = Part::new(
@@ -1073,8 +1075,10 @@ impl SessionManager {
                 .unwrap_or_default(),
         };
         let brain = project.brain.clone();
+        // Each claim's sources are re-read for this briefing (BUILD-PLAN E1).
+        let reader = self.sources_for(id, None);
         let digest = blocking(move || {
-            let structure = brain
+            let mut structure = brain
                 .nodes(&NodeFilter {
                     kinds: vec![
                         NodeKind::Convention,
@@ -1088,20 +1092,27 @@ impl SessionManager {
                     limit: Some(2_000),
                 })
                 .map_err(brain_error)?;
+            brigadier_brain::check_sources(
+                &mut structure.iter_mut().collect::<Vec<_>>(),
+                &|source| reader.check(source),
+            );
             let related = if recent_text.trim().is_empty() {
                 None
             } else {
                 brain
-                    .query(&BrainQuery {
-                        text: recent_text,
-                        kinds: Vec::new(),
-                        limit: Some(8),
-                        max_tokens: Some(1_200),
-                        files: false,
-                        history: false,
-                        caps: Some(BrainCaps::default()),
-                        page: None,
-                    })
+                    .query_with(
+                        &BrainQuery {
+                            text: recent_text,
+                            kinds: Vec::new(),
+                            limit: Some(8),
+                            max_tokens: Some(1_200),
+                            files: false,
+                            history: false,
+                            caps: Some(BrainCaps::default()),
+                            page: None,
+                        },
+                        &|source| reader.check(source),
+                    )
                     .ok()
             };
             Ok((structure, related))
@@ -1159,7 +1170,7 @@ impl SessionManager {
                     text.push_str(&format!(
                         "- {} [{}]{outdated}: {}\n",
                         node.title,
-                        brigadier_brain::source_label(node.kind, &node.provenance),
+                        brigadier_brain::source_words(node.kind, &node.provenance),
                         one_line(&node.body, 200)
                     ));
                 } else {
@@ -1507,7 +1518,7 @@ fn decision_line(node: &Node) -> String {
         "- [{}] {:?} [{}]: {} ({})",
         node.id,
         node.kind,
-        brigadier_brain::source_label(node.kind, &node.provenance),
+        brigadier_brain::source_words(node.kind, &node.provenance),
         one_line(&node.title, 300),
         prompts::date_of(node.created_at_ms)
     )

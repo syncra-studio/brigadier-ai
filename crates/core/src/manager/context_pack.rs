@@ -146,6 +146,8 @@ impl SessionManager {
                 return None;
             }
         };
+        // Each claim's sources are re-read in the worker's worktree (BUILD-PLAN E1).
+        let reader = self.sources_for(&task.conversation_id, worktree);
         let (title, spec, worktree) = (
             task.title.clone(),
             task.spec.clone(),
@@ -162,16 +164,19 @@ impl SessionManager {
                 cut(&spec, BRAIN_QUESTION_SPEC)
             );
             brain
-                .query(&BrainQuery {
-                    text,
-                    kinds: Vec::new(),
-                    limit: None,
-                    max_tokens: None,
-                    files: false,
-                    history: false,
-                    caps: Some(BRAIN_CAPS),
-                    page: None,
-                })
+                .query_with(
+                    &BrainQuery {
+                        text,
+                        kinds: Vec::new(),
+                        limit: None,
+                        max_tokens: None,
+                        files: false,
+                        history: false,
+                        caps: Some(BRAIN_CAPS),
+                        page: None,
+                    },
+                    &|source| reader.check(source),
+                )
                 .map_err(brain_error)
         })
         .await;
@@ -189,7 +194,7 @@ impl SessionManager {
 /// with the number of lines; `None` without hits.
 fn brain_lines(hits: &[BrainHit]) -> Option<(String, u32)> {
     let mut text = format!(
-        "{BRAIN_HEADING}\n\nWhat earlier work in this project found and decided that matches your task, best match first, each with where it came from. A line marked unverified is a claim nobody checked: check it in the code before you rely on it. Start from it; `query_brain <node id>` gives a node in full, and `query_brain` answers more.\n\n"
+        "{BRAIN_HEADING}\n\nWhat earlier work in this project found and decided that matches your task, best match first, each with where it came from. A line marked unverified is a claim nobody checked: check it in the code before you rely on it; a verified source shows only that its quoted words are still there, not that they bear the claim out. Start from it; `query_brain <node id>` gives a node in full, and `query_brain` answers more.\n\n"
     );
     let mut count = 0;
     for hit in hits {
@@ -223,7 +228,7 @@ fn brain_lines(hits: &[BrainHit]) -> Option<(String, u32)> {
             .map_or(node.body.as_str(), |(_, answer)| answer);
         let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
         let title = node.title.split_whitespace().collect::<Vec<_>>().join(" ");
-        let label = brigadier_brain::source_label(node.kind, &node.provenance);
+        let label = brigadier_brain::source_words(node.kind, &node.provenance);
         let line = cut(
             &format!("- {kind} [{label}]: {title}{stale}. {body}"),
             BRAIN_FACT_MAX,

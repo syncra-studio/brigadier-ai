@@ -112,8 +112,9 @@ message in `user_message` (`latest`, or the #N search_transcript shows) with the
 the user's exact words (the quoted span, or their whole message) with its `scope` (request, \
 session or project); an exception is a constraint of its own, and `replaces` only when their \
 new words replace the old rule entirely. Anything else is kept as your claim, unverified, with \
-the evidence you name (`files` as path:lines, `check`). Do it silently: don't tell the user you \
-remembered it. \
+the evidence you name (`files` as path:lines, `check` as an out-… id, or a review `finding`) \
+and the exact words it shows in `quote`, re-read whenever the claim is used. Do it silently: \
+don't tell the user you remembered it. \
 Returns the node id; pass it as `replaces` to correct it, or a claim you find wrong.";
 
 const SEARCH_TRANSCRIPT: &str = "Search this conversation's full transcript (the user's \
@@ -164,8 +165,10 @@ the lead's. Small work needs none: land the lead. Returns at once.";
 const SETTLE_STEP: &str = "Only during an overnight run: settle a step of the run's plan, by \
 its number, once you have judged its whole scope and every \"done when\" (your own edits \
 too) and nothing of it still runs or waits to land. Done: all of it is met and landed; partial: \
-some is left for a later run; blocked: what is left needs the user. A step settled done moves \
-the tip the user's Merge takes, once every step before it is done too.";
+some is left for a later run; blocked: what is left needs the user. Done needs evidence for \
+every criterion at the tip (its report's, or yours in `done_when`) and, with reviews on, its \
+review ended and recorded. A step settled done moves the tip the user's Merge takes, once every \
+step before it is done too.";
 
 const END_RUN: &str = "Only during an overnight run: end it now, because every selected step \
 is settled (done) or all that is left needs the user (needsUser). Brigadier then ends the run \
@@ -386,7 +389,8 @@ const ASK_ORCHESTRATOR: &str = "Ask the orchestrator (who gave you this task) a 
 cannot settle yourself, such as an unclear requirement or a choice outside your task. One \
 question per call, with the options you see and the one you recommend. The call blocks until \
 the answer comes back. Ask only when you cannot sensibly go on without the answer; look things \
-up with query_brain and the code tools first.";
+up with query_brain and the code tools first. If none comes within the hour, an operational \
+question goes on with its `safe_default`; any other keeps waiting.";
 
 const WORKER_QUERY_BRAIN: &str = "Ask the Project Brain (read-only): what Brigadier knows \
 about this project (its modules, earlier findings, decisions, conventions, contracts) and the \
@@ -477,7 +481,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
                 ),
             ]
         }),
-        Role::OutputHook { .. } => &[],
+        Role::OutputHook { .. } | Role::StopHook { .. } => &[],
     }
 }
 
@@ -920,7 +924,7 @@ pub fn parse_call(
             };
             Ok(ToolCall::TabChat(call))
         }
-        Role::OutputHook { .. } => Err(unknown()),
+        Role::OutputHook { .. } | Role::StopHook { .. } => Err(unknown()),
     }
 }
 

@@ -515,7 +515,13 @@ impl SessionManager {
             }
             OrchestratorCall::QueryBrain(args) => {
                 crate::heap(|| {
-                    self.query_brain_tool(id, args.query, args.history.unwrap_or(false), args.page)
+                    self.query_brain_tool(
+                        id,
+                        None,
+                        args.query,
+                        args.history.unwrap_or(false),
+                        args.page,
+                    )
                 })
                 .await
             }
@@ -870,8 +876,7 @@ impl SessionManager {
     ) -> ToolReply {
         let result = match call {
             WorkerCall::AskOrchestrator(args) => {
-                self.worker_question(&conversation_id, &task_id, args.question)
-                    .await
+                self.worker_question(&conversation_id, &task_id, args).await
             }
             WorkerCall::SubmitOutline(args) => {
                 self.submit_outline(&conversation_id, &task_id, args.outline)
@@ -880,8 +885,17 @@ impl SessionManager {
             WorkerCall::ReviewCode => self.review_code(&conversation_id, &task_id).await,
             WorkerCall::QueryBrain(args) => {
                 self.note_brain_query(&conversation_id, &task_id).await;
+                // A claim's source is re-read where the worker works.
+                let worktree = self
+                    .task_by_id(&conversation_id, &task_id)
+                    .await
+                    .ok()
+                    .and_then(|task| task.workspace)
+                    .and_then(|workspace| workspace.worktree)
+                    .map(std::path::PathBuf::from);
                 self.query_brain_tool(
                     &conversation_id,
+                    worktree.as_deref(),
                     args.query,
                     args.history.unwrap_or(false),
                     args.page,

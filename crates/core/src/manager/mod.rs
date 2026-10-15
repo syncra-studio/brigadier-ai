@@ -39,6 +39,7 @@ pub(crate) mod decisions;
 pub mod disk;
 mod engine;
 mod escalation;
+mod evidence;
 mod fallback;
 #[cfg(debug_assertions)]
 pub mod fault;
@@ -130,7 +131,7 @@ pub use conversation::SendOutcome;
 pub(crate) use integrated_checks::integrated_check_number;
 pub use side_chat::BrowserPage;
 pub use takeover::{HostedTerminal, TerminalHost, WorkerTerminal};
-pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES};
+pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES, STOP_GRANT_ENV};
 pub use uninstall::TearDown;
 
 use self::cards::Waiters;
@@ -216,6 +217,9 @@ pub struct SessionManager {
     faults: fault::Faults,
     research: research::Research,
     overnight: overnight::Runs,
+    /// How long a worker's question waits before its safe default may stand in, in ms (an
+    /// hour; tests shorten it).
+    question_timeout_ms: std::sync::atomic::AtomicU64,
     /// Holds new work while the machine struggles, and runs heavy commands one at a time.
     machine: Arc<crate::machine::MachineWatch>,
     /// Conversations being archived or deleted: their fences and cleanups.
@@ -333,6 +337,9 @@ impl SessionManager {
             faults: fault::Faults::default(),
             research: research::Research::default(),
             overnight: overnight::Runs::default(),
+            question_timeout_ms: std::sync::atomic::AtomicU64::new(
+                workers::QUESTION_TIMEOUT.as_millis() as u64,
+            ),
             machine,
             closing: closing::Closing::default(),
             computer_use: computer_use::ComputerUse::default(),

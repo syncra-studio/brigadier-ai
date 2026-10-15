@@ -6,4 +6,8 @@ import type { Request } from "./Request";
 /**
  * Frames sent by a client.
  */
-export type ClientFrame = { "type": "hello", token: string, protocol: number, client: ClientInfo, } | { "type": "request", id: number, request: Request, } | { "type": "mcp", grant: string, } | { "type": "hook", grant: string, output: HookOutput, };
+export type ClientFrame = { "type": "hello", token: string, protocol: number, client: ClientInfo, } | { "type": "request", id: number, request: Request, } | { "type": "mcp", grant: string, } | { "type": "hook", grant: string, output: HookOutput, } | { "type": "stopHook", grant: string, 
+/**
+ * The CLI already continued once for this hook in this stop.
+ */
+stopHookActive: boolean, };

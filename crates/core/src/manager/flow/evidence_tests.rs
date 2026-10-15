@@ -1,14 +1,18 @@
 //! Evidence references (BUILD-PLAN E2's producer side, G3): every `run_check` result ends with
 //! the `out-…` id a report or a claim cites, recorded with its status, tree and input
 //! fingerprint; an integration, smoke or live check runs every time unless it declares its
-//! inputs; and a session told the instructions before revision 50 hears it once.
+//! inputs. Rule R: a session told the instructions before phase E's revisions (50–53) hears
+//! them once, at its next turn, and goes on working.
 
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::manager::prompts::{EVIDENCE_REF_REVISION, revision_note};
+use crate::manager::prompts::{
+    CHECKED_ANSWER_REVISION, CLAIM_EVIDENCE_REVISION, EVIDENCE_REF_REVISION, MET_EVIDENCE_REVISION,
+    revision_note,
+};
 use crate::model::DomainEvent;
 
 type Log = Arc<Mutex<Vec<String>>>;
@@ -122,7 +126,15 @@ async fn every_check_cites_its_output_and_a_live_check_reruns_unless_it_declares
                 artifact,
                 fingerprint,
                 ..
-            } => Some((command, tree, cached, bypassed, status, artifact, fingerprint)),
+            } => Some((
+                command,
+                tree,
+                cached,
+                bypassed,
+                status,
+                artifact,
+                fingerprint,
+            )),
             _ => None,
         })
         .collect();
@@ -150,7 +162,7 @@ async fn every_check_cites_its_output_and_a_live_check_reruns_unless_it_declares
 }
 
 #[tokio::test]
-async fn a_session_from_before_hears_of_evidence_references_once() {
+async fn a_session_from_before_hears_phase_es_revisions_once() {
     let inputs: Log = Arc::default();
     let heard = inputs.clone();
     let mut flow = Flow::start(
@@ -176,10 +188,35 @@ async fn a_session_from_before_hears_of_evidence_references_once() {
     flow.say("And once more.").await;
     flow.settled().await;
 
+    assert_eq!(
+        [
+            CLAIM_EVIDENCE_REVISION,
+            MET_EVIDENCE_REVISION,
+            CHECKED_ANSWER_REVISION
+        ],
+        [
+            EVIDENCE_REF_REVISION + 1,
+            EVIDENCE_REF_REVISION + 2,
+            EVIDENCE_REF_REVISION + 3
+        ]
+    );
     let note = revision_note(EVIDENCE_REF_REVISION - 1, false).unwrap();
-    assert!(note.contains("[evidence: out-…]"), "{note}");
+    for rule in [
+        "[evidence: out-…]",
+        "\"verified source: …\"",
+        "settles done only with evidence for every \"done when\"",
+        "always holds three labelled lines",
+    ] {
+        assert!(note.contains(rule), "{rule}: {note}");
+    }
     let worker = revision_note(EVIDENCE_REF_REVISION - 1, true).unwrap();
-    assert!(worker.contains("cite that id in your report"), "{worker}");
+    for rule in [
+        "cite that id in your report",
+        "give each `learned` and `decisions` line its evidence",
+        "submit_report refuses a [met] without one",
+    ] {
+        assert!(worker.contains(rule), "{rule}: {worker}");
+    }
     let inputs = inputs.lock().unwrap().clone();
     let told: usize = inputs
         .iter()

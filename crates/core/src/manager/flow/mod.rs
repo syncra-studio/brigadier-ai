@@ -295,6 +295,17 @@ impl Turn {
     }
 
     /// Reports `event` as the session's CLI would, mid-turn.
+    /// What this worker's `Stop` hook would answer now (BUILD-PLAN E2): why its turn may not
+    /// end yet, or `None`. `active`: the CLI already continued once for the hook.
+    pub async fn stop_decision(&self, active: bool) -> Option<String> {
+        let Some(crate::tools::Role::Worker { task_id, .. }) =
+            self.host.grants.resolve(&self.grant)
+        else {
+            panic!("only a worker has a Stop hook");
+        };
+        self.host.stop_decision(&task_id, active).await
+    }
+
     pub async fn emit(&self, event: ProviderEvent) {
         let _ = self.events.send(event).await;
     }
@@ -1784,6 +1795,8 @@ mod card_tests;
 #[cfg(test)]
 mod checks_tests;
 #[cfg(test)]
+mod claim_evidence_tests;
+#[cfg(test)]
 mod clean_up_tests;
 #[cfg(test)]
 mod commit_on_pass_tests;
@@ -1798,9 +1811,9 @@ mod deliverable_tests;
 #[cfg(test)]
 mod ending_tests;
 #[cfg(test)]
-mod evidence_tests;
-#[cfg(test)]
 mod engine_tests;
+#[cfg(test)]
+mod evidence_tests;
 #[cfg(test)]
 mod fault_tests;
 #[cfg(test)]
@@ -1858,6 +1871,8 @@ mod peer_view_tests;
 #[cfg(test)]
 mod peer_wait_tests;
 #[cfg(test)]
+mod phase_acceptance_tests;
+#[cfg(test)]
 mod plan_tests;
 mod preview_tests;
 #[cfg(test)]
@@ -1886,6 +1901,8 @@ mod settings_toggles_tests;
 mod spare_worktree_tests;
 #[cfg(test)]
 mod status_tests;
+#[cfg(test)]
+mod stop_hook_tests;
 #[cfg(test)]
 mod subfolder_rules_tests;
 #[cfg(test)]
