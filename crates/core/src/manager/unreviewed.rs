@@ -14,7 +14,8 @@
 //!   starts again after it. A smaller range gets none: the thread's own checks cover it.
 //! - **The risky mark**: `run_check`'s `risky` makes the range owe a review whatever its size.
 //! - **Before the final answer** (C2): `run_check`, which the thread calls before it answers,
-//!   brings the range up to date first; when that starts a review (or one of the request's
+//!   brings the range up to date first, its uncommitted changes in a worktree included (from
+//!   a snapshot, whose review covers the commit with the same files that follows); when that starts a review (or one of the request's
 //!   runs), its reply says so and asks the thread to wait for the findings. The end of every
 //!   thread turn does the same, as the backstop.
 //! - **Reviews off** ("Review the work"): no review starts, and nothing waits for one.
@@ -132,6 +133,22 @@ impl SessionManager {
         })
     }
 
+    /// Whether commits `a` and `b` of `repo` hold the same files.
+    async fn same_files(&self, repo: &Path, a: &str, b: &str) -> bool {
+        let (git, repo, a, b) = (
+            self.git.clone(),
+            repo.to_owned(),
+            a.to_owned(),
+            b.to_owned(),
+        );
+        blocking(move || {
+            let repo = git.open(&repo).map_err(git_error)?;
+            Ok(repo.tree_of(&a).map_err(git_error)? == repo.tree_of(&b).map_err(git_error)?)
+        })
+        .await
+        .unwrap_or(false)
+    }
+
     async fn store_unreviewed(&self, id: &ConversationId, range: Option<UnreviewedRange>) {
         if let Err(err) = self
             .core
@@ -180,8 +197,21 @@ impl SessionManager {
         let request = self.request_for(id, None).await.unwrap_or_default();
         let known = self.recorded_range(id, &request, branch).await;
         let risky = known.as_ref().and_then(|range| range.risky.clone());
+        // The thread committed what a review of its snapshot covered: nothing new.
+        if let Some(range) = known.as_ref().filter(|range| range.snapshot)
+            && self.same_files(repo, &range.tip, &tip.0).await
+        {
+            let range = UnreviewedRange {
+                base: tip.0.clone(),
+                tip: tip.0.clone(),
+                snapshot: false,
+                ..range.clone()
+            };
+            self.store_unreviewed(id, Some(range)).await;
+            return;
+        }
         let mut range = match known {
-            Some(range) if !range.local && range.tip == base.0 => range,
+            Some(range) if !range.local && !range.snapshot && range.tip == base.0 => range,
             _ => UnreviewedRange {
                 request_id: request,
                 branch: branch.to_owned(),
@@ -190,6 +220,7 @@ impl SessionManager {
                 local: false,
                 start: None,
                 risky,
+                snapshot: false,
             },
         };
         range.tip = tip.0.clone();
@@ -283,6 +314,7 @@ impl SessionManager {
                 local: true,
                 start: Some(start.0),
                 risky: None,
+                snapshot: false,
             }),
         )
         .await;
@@ -415,11 +447,94 @@ impl SessionManager {
                     local: local.is_some(),
                     start: local.is_some().then(|| base.0.clone()),
                     risky: None,
+                    snapshot: false,
                 }
             }
         };
         range.risky = Some(why.to_owned());
         self.store_unreviewed(id, Some(range)).await;
+    }
+
+    /// Before the answer in a worktree, the changes the thread hasn't committed yet count too:
+    /// it often runs its checks before it commits. When they take the request's range over the
+    /// line, or the range is marked risky, the review of a snapshot of them starts now, before
+    /// the answer; the commit that follows with the same files needs none of its own.
+    async fn review_uncommitted(&self, id: &ConversationId) {
+        if !self.reviews_on() || self.local_checkout(id).is_some() {
+            return;
+        }
+        let (Some(request), Some(workspace)) = (
+            self.request_for(id, None).await,
+            self.recorded_workspace(id),
+        ) else {
+            return;
+        };
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        if running_review(&board, &request).is_some() {
+            return;
+        }
+        let (git, path) = (self.git.clone(), workspace.path.clone());
+        let Ok((head, snapshot)) = blocking(move || {
+            let repo = git.open(&path).map_err(git_error)?;
+            Ok((
+                repo.resolve("HEAD").map_err(git_error)?,
+                repo.snapshot_files().map_err(git_error)?,
+            ))
+        })
+        .await
+        else {
+            return;
+        };
+        if snapshot == head {
+            return;
+        }
+        let known = self.recorded_range(id, &request, &workspace.branch).await;
+        // The same files on the same commit make the same snapshot: reviewed already.
+        if known
+            .as_ref()
+            .is_some_and(|range| range.snapshot && range.tip == snapshot.0)
+        {
+            return;
+        }
+        let risky = known.as_ref().and_then(|range| range.risky.clone());
+        let base = match known {
+            Some(range) if !range.snapshot && range.tip == head.0 => range.base,
+            _ => head.0,
+        };
+        let due = risky.is_some()
+            || self
+                .range_size(&workspace.repo, &base, &snapshot.0)
+                .await
+                .is_some_and(|size| REVIEW_LINE.crossed(size.lines, size.files));
+        if !due {
+            return;
+        }
+        crate::heap(|| {
+            self.review_thread_commits(
+                id,
+                Oid(base.clone()),
+                snapshot.clone(),
+                workspace.repo.clone(),
+                Some(request.clone()),
+            )
+        })
+        .await;
+        self.store_unreviewed(
+            id,
+            Some(UnreviewedRange {
+                request_id: request,
+                branch: workspace.branch,
+                base: snapshot.0.clone(),
+                tip: snapshot.0,
+                local: false,
+                start: None,
+                risky: None,
+                snapshot: true,
+            }),
+        )
+        .await;
     }
 
     /// Before the thread answers (`run_check`): its range is brought up to date, and reviewed
@@ -435,6 +550,7 @@ impl SessionManager {
         } else {
             self.scan_thread_commits(id, true).await;
             self.review_marked(id).await;
+            self.review_uncommitted(id).await;
         }
         let request = self.request_for(id, None).await?;
         let board = self.core.board(id).await.ok()?;

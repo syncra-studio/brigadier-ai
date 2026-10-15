@@ -34,4 +34,10 @@ start: string | null,
 /**
  * Why the thread marked them risky (`run_check`'s `risky`), when it did.
  */
-risky: string | null, };
+risky: string | null, 
+/**
+ * In a worktree, `tip` is a snapshot of changes the thread hadn't committed yet when
+ * `run_check` started their review: the commit that follows with the same files needs no
+ * review of its own.
+ */
+snapshot: boolean, };

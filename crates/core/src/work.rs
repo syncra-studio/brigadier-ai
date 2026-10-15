@@ -1589,6 +1589,11 @@ pub struct UnreviewedRange {
     /// Why the thread marked them risky (`run_check`'s `risky`), when it did.
     #[serde(default)]
     pub risky: Option<String>,
+    /// In a worktree, `tip` is a snapshot of changes the thread hadn't committed yet when
+    /// `run_check` started their review: the commit that follows with the same files needs no
+    /// review of its own.
+    #[serde(default)]
+    pub snapshot: bool,
 }
 
 /// What the user's consent to the session's merge waits for (SESSION-FIXES-PLAN.md Q3).

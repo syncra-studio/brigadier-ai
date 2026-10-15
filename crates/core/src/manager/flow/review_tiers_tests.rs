@@ -427,3 +427,91 @@ async fn the_answer_waits_for_the_reviews_findings_and_their_fix() {
     assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
     flow.stop().await;
 }
+
+/// C2 in the order a thread works: it edits three files, runs its checks with `run_check`
+/// before it commits, then commits and answers. The uncommitted change is over the line, so
+/// `run_check` starts the review of a snapshot of it and says to wait; the commit with the
+/// same files that follows needs no review of its own, and the answer comes after the
+/// review's word.
+#[tokio::test]
+async fn a_change_checked_before_its_commit_is_reviewed_before_the_answer() {
+    let log: Arc<Mutex<Log>> = Arc::default();
+    let seen = log.clone();
+    let flow = Flow::start(
+        "review-tiers-uncommitted",
+        Options::default(),
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("");
+                }
+                let reply = if turn.input.starts_with("Add the region") {
+                    let workspace = turn.add_dirs[0].clone();
+                    for file in ["tax.ts", "tax.test.ts", "rates.md"] {
+                        std::fs::write(workspace.join(file), lines(file, 2)).unwrap();
+                    }
+                    let check = turn.call("run_check", json!({"command": "true"})).await;
+                    assert!(!check.is_error, "{}", check.text);
+                    seen.lock().unwrap().checks.push(check.text.clone());
+                    git(&workspace, &["add", "-A"]);
+                    git(&workspace, &["commit", "-q", "-m", "Add the region"]);
+                    let tip = git(&workspace, &["rev-parse", "HEAD"]);
+                    seen.lock().unwrap().commits.push(tip);
+                    if check.text.contains("[review running]") {
+                        "[quiet]".to_owned()
+                    } else {
+                        "Added the region.".to_owned()
+                    }
+                } else if turn
+                    .input
+                    .contains("[review of your commits · Codex found nothing")
+                {
+                    "Added the region; the review found nothing.".to_owned()
+                } else {
+                    "[quiet]".to_owned()
+                };
+                seen.lock()
+                    .unwrap()
+                    .turns
+                    .push((turn.input.clone(), reply.clone()));
+                Reply::text(reply)
+            }
+        }),
+    )
+    .await;
+    flow.say("Add the region.").await;
+    flow.until("the answer", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.state == RequestState::Done)
+    })
+    .await;
+    let board = flow.settled().await;
+    let log = std::mem::take(&mut *log.lock().unwrap());
+    assert!(
+        log.checks[0].contains("[review running] Codex reviews your change"),
+        "{}",
+        log.checks[0]
+    );
+    // One review, of the files the commit then held.
+    let reviews: Vec<_> = board.reviews.values().collect();
+    assert_eq!(reviews.len(), 1, "{reviews:#?}");
+    assert_eq!(reviews[0].state, ReviewState::Clean);
+    let tree = |rev: &str| git(&flow.repo, &["rev-parse", &format!("{rev}^{{tree}}")]);
+    assert_eq!(tree(&reviews[0].tip), tree(&log.commits[0]));
+    let answered: Vec<&(String, String)> = log
+        .turns
+        .iter()
+        .filter(|(_, reply)| reply != "[quiet]")
+        .collect();
+    assert_eq!(answered.len(), 1, "{:#?}", log.turns);
+    assert!(answered[0].0.contains("found nothing"), "{:#?}", log.turns);
+    let shown = answers(&flow).await;
+    assert_eq!(
+        shown.last().map(|message| message.text.as_str()),
+        Some("Added the region; the review found nothing.")
+    );
+    flow.stop().await;
+}
