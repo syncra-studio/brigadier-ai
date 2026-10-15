@@ -89,6 +89,51 @@ workspace as the run left it.
   through settlement (`v3/v3tokens.py`: `brig_tokens.py` + `tokens.py` over the conversation's own sessions,
   reconciled as `armtokens.sh` does; all vendors, cache reads apart), interventions and background work.
 
+## V2 continuity battery (`v2/`)
+
+BUILD-PLAN D1.0 / PLAN §0 V2. One frozen battery, `v2/battery/thread.md`: several requests in one session. `r1`–`r6`
+plant every item:
+- a standing constraint, and its exception;
+- a decision with its reason;
+- a commit hash, a path:line and a number with units;
+- a failed check with its error line;
+- a ruled-out approach;
+- an item only in the thread's own tool output;
+- a false `learned` line in a worker report (planted by the daemon's debug `debugPlantLearned`).
+
+Fillers then push the plants far out of the verbatim tail. Two edits act on the constraint, its exception and the
+ruled-out approach, and a probe asks for every item.
+
+- **Fixture:** `v2/fixture/build.sh` is V3's fixture plus `scripts/import-check.mjs`. Its feed (`v2/fixture/feed/`)
+  is copied into the session's workspace for `r4`–`r5` and deleted after them, so what it said can only be
+  remembered.
+- **Seams:** forced at least twice between the last plant and the probe (`--seam`):
+  - `size`: `BRIGADIER_REBIRTH_TOKENS`, passed on by `startd.sh`'s `BRIG_DEBUG_ENV`;
+  - `restart`: the daemon is SIGKILLed mid-request and started again;
+  - `kill`: the thread's CLI is SIGKILLed mid-request;
+  - `context`, `auth`, `billing`: the error is injected mid-turn (`debugInjectError`);
+  - `limit`: a usage limit is injected (`debugInjectLimit`);
+  - `none`: no seam, as a control.
+
+    export BRIGD=<dev brigadierd> BRIG_SRC=<its source tree>
+    v2/run.py template --root /tmp/v2-X --provider claude --tag X    # or --provider codex (thread and workers)
+    v2/run.py battery --root /tmp/v2-X --seam size [--rebirth-tokens 45000]
+    v2/run.py set --root /tmp/v2-X --seam size --reruns 3            # D1.0: three reruns, one build
+    v2/summary.py /tmp/v2-X        # rescored; per item and run; exit 1 when the reruns disagree on an item
+    v2/selftest.py [/tmp/v2-X]     # the scorer's rules on synthetic runs, and byte-identical rescoring
+    v2/run.py cleanup --root /tmp/v2-X [--export DIR]
+
+**Scoring** (`v2/score.py`, from the run dir alone):
+- **Item verdicts:** each item is `pass`, `fail`, `unknown` (lost, and the thread said it didn't know) or
+  `not_tested`.
+  - An item passes when the probe recalls it exactly, the edits that depend on it act on it correctly (the hidden
+    checks' `RESULT` lines), and, for the false line, no rebirth briefing or worker brief carries it unlabelled.
+  - An item is `not_tested` when its source was still in the verbatim tail of the last briefing before a step
+    that needs it.
+- **The run:** a run is `valid` only when its seam happened at least twice.
+- **Also reported:** the "unknown instead of a guess" score (unknown ÷ (unknown + guessed) over the lost items),
+  every briefing's size and sections, and the probe's tool calls.
+
 ## Boundaries (both arms)
 
 - **t0**: the request is submitted.

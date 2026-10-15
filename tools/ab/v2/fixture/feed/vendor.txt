@@ -1,0 +1,4 @@
+Vendor: Northwind Paper Co.
+Account: tally-staging
+Support ticket: VT-88213
+Status: waiting on the vendor
