@@ -115,11 +115,16 @@ async fn a_round_of_questions_is_one_card_and_its_answers_continue_the_same_requ
                 .is_some_and(|request| request.state == RequestState::Waiting)
         })
         .await;
-    // Waiting on its card, the request's time runs on.
+    // Waiting on its card, the request's work stops and the wait for the user runs on
+    // (BUILD-PLAN A9).
     let request = board.latest_request().unwrap().clone();
     assert!(
+        request.worked.iter().all(|span| span.to_ms.is_some()),
+        "{request:#?}"
+    );
+    assert!(
         request
-            .worked
+            .waited
             .last()
             .is_some_and(|span| span.to_ms.is_none()),
         "{request:#?}"
@@ -174,8 +179,10 @@ async fn a_round_of_questions_is_one_card_and_its_answers_continue_the_same_requ
     assert_eq!(board.requests.len(), 1, "{:#?}", board.requests);
     let request = board.latest_request().unwrap();
     assert_eq!(request.state, RequestState::Done);
-    // One span, from the request's start to its end: the wait on the card counted.
-    assert_eq!(request.worked.len(), 1, "{:#?}", request.worked);
+    // Two work spans around one closed wait on the card: the wait isn't counted as work.
+    assert_eq!(request.worked.len(), 2, "{:#?}", request.worked);
+    assert_eq!(request.waited.len(), 1, "{:#?}", request.waited);
+    assert!(request.waited[0].to_ms.is_some(), "{:#?}", request.waited);
     flow.stop().await;
 }
 
