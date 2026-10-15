@@ -186,10 +186,11 @@ pub async fn accept_loop(
 async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) {
     let id = daemon.next_connection.fetch_add(1, Ordering::Relaxed);
     tracing::info!(connection = id, client = %client.name, pid = client.pid, "client connected");
-    daemon.metrics.connection_opened(id, client);
+    daemon.metrics.connection_opened(id, client.clone());
     let (late_tx, late) = mpsc::channel(LATE_ANSWERS);
     let mut session = Session {
         daemon: daemon.clone(),
+        client,
         writer: connection.writer,
         feed: None,
         last_sent: 0,
@@ -219,6 +220,8 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
 
 struct Session {
     daemon: Arc<Daemon>,
+    /// Who connected: kept with what this connection answers for the user.
+    client: ClientInfo,
     writer: Writer,
     /// Live event feed, once subscribed.
     feed: Option<broadcast::Receiver<Arc<StoredEvent>>>,
@@ -650,6 +653,35 @@ impl Session {
                 let _ = drained.wait_for(|drained| *drained).await;
                 self.respond(id, Ok(Response::Shutdown)).await?;
                 return Ok(Flow::Close);
+            }
+            Request::AnswerQuestion {
+                conversation_id,
+                card_id,
+                answers,
+                input,
+            } => {
+                let origin = brigadier_core::work::AnswerOrigin {
+                    input,
+                    client: self.client.name.clone(),
+                    pid: self.client.pid,
+                };
+                let sessions = self.daemon.sessions.clone();
+                heap(|| sessions.answer_question(conversation_id, card_id, answers, Some(origin)))
+                    .await
+                    .map(|()| Response::AnswerQuestion)
+                    .map_err(IpcError::from)
+            }
+            Request::MergeSession { conversation_id } => {
+                let origin = brigadier_core::work::AnswerOrigin {
+                    input: Some(brigadier_core::work::AnswerInput::Click),
+                    client: self.client.name.clone(),
+                    pid: self.client.pid,
+                };
+                let sessions = self.daemon.sessions.clone();
+                heap(|| sessions.merge_session(&conversation_id, origin))
+                    .await
+                    .map(|text| Response::MergeSession { text })
+                    .map_err(IpcError::from)
             }
             other => handle_request(&self.daemon, other).await,
         };
@@ -1752,13 +1784,11 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.answer_card(conversation_id, card_id, decision)).await?;
             Response::AnswerCard
         }
-        Request::AnswerQuestion {
-            conversation_id,
-            card_id,
-            answers,
-        } => {
-            heap(|| sessions.answer_question(conversation_id, card_id, answers)).await?;
-            Response::AnswerQuestion
+        // Answered by the connection, which keeps who sent it with the answer.
+        Request::AnswerQuestion { .. } | Request::MergeSession { .. } => {
+            return Err(IpcError::from(brigadier_core::Error::Invalid(
+                "an answer or a merge click comes through a client's connection".into(),
+            )));
         }
         Request::DecidePlan {
             conversation_id,
@@ -1771,6 +1801,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         }
         Request::CancelMerge { conversation_id } => Response::CancelMerge {
             text: heap(|| sessions.cancel_merge(&conversation_id)).await?,
+        },
+        Request::CloseWorkspace { conversation_id } => Response::CloseWorkspace {
+            text: heap(|| sessions.close_workspace(&conversation_id)).await?,
         },
         Request::ProposeOvernight {
             conversation_id,

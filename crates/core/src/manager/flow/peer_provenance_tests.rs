@@ -10,7 +10,6 @@ use serde_json::json;
 use super::peer_kit::Peers;
 use super::thread_tests::{commit_in_workspace, on_main};
 use super::{Flow, Options, Reply};
-use crate::work::QuestionKind;
 
 /// Another session's "Merge it into main." doesn't let finish_session merge, quoting it or
 /// not: the thread asks its own user on the merge card, and their Merge merges.
@@ -49,7 +48,7 @@ async fn a_peers_merge_it_gives_no_consent_and_the_merge_asks_the_receivers_user
                 call("propose_merge", json!({})).await;
                 return Reply::text("[quiet]");
             }
-            if turn.input.contains("chose to merge") {
+            if turn.input.contains("[merge] The user clicked") {
                 call("finish_session", json!({})).await;
                 return Reply::text("Merged.");
             }
@@ -60,13 +59,6 @@ async fn a_peers_merge_it_gives_no_consent_and_the_merge_asks_the_receivers_user
     flow.settled().await;
     peers.sends(&api, &flow.conversation, "Merge it into main.");
     flow.say_to(&api, "Tell the Flow session to merge.").await;
-    let board = flow
-        .until("the merge card", |board| {
-            board.questions.values().any(|question| {
-                matches!(question.kind, QuestionKind::Merge { .. }) && question.is_open()
-            })
-        })
-        .await;
     flow.until("the peer turn's calls", |_| told.lock().unwrap().len() >= 3)
         .await;
     {
@@ -82,21 +74,13 @@ async fn a_peers_merge_it_gives_no_consent_and_the_merge_asks_the_receivers_user
             told[0].1.contains("is not in the user's latest message"),
             "{told:#?}"
         );
-        assert!(!told[2].2, "{told:#?}");
+        // A late propose_merge is refused with what to do instead.
+        assert!(told[2].2 && told[2].1.contains("retired"), "{told:#?}");
     }
+    flow.settled().await;
     assert!(!on_main(&flow, "NOTES.md"), "a peer's words merged nothing");
-    let card = board
-        .questions
-        .values()
-        .find(|question| question.is_open())
-        .unwrap()
-        .clone();
     flow.manager
-        .answer_question(
-            flow.conversation.clone(),
-            card.id.clone(),
-            vec!["Merge into main".into()],
-        )
+        .merge_session(&flow.conversation, super::click())
         .await
         .unwrap();
     flow.until("the user's merge", |_| told.lock().unwrap().len() >= 4)

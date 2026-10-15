@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Turn, git};
 use crate::model::{Environment, Setup};
-use crate::work::{OrchestratorStepKind, QuestionKind, Task, TaskState};
+use crate::work::{OrchestratorStepKind, Task, TaskState};
 
 /// The files `main` adds while the session works.
 const BASE_FILES: usize = 18;
@@ -384,7 +384,7 @@ async fn a_wait_between_conflict_and_retry_revokes_consent() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(error.contains("wait"), "{error}");
+    assert!(error.contains("[not merged]"), "{error}");
     assert_eq!(git(&flow.repo, &["show", "main:README.md"]), "# Base");
     flow.stop().await;
 }
@@ -419,46 +419,22 @@ async fn an_unchanged_resolution_still_lands_two_parents() {
     flow.stop().await;
 }
 
+/// A click on "Merge into main" with conflicts with the base: the merge is held on the click,
+/// the conflict resolved, and the merge finishes on it (BUILD-PLAN A4).
 #[tokio::test]
-async fn the_conflicted_card_offers_resolution_and_its_answer_carries_over() {
+async fn a_click_with_base_conflicts_resolves_and_finishes_on_the_click() {
     let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
     flow.manager
-        .propose_merge(&flow.conversation, None)
-        .await
-        .unwrap();
-    let board = flow.board().await;
-    let card = board.questions.values().find(|q| q.is_open()).unwrap();
-    assert!(
-        matches!(&card.kind, QuestionKind::Merge { conflicted: true, conflicts, .. } if conflicts == &["README.md"])
-    );
-    assert!(
-        card.text
-            .contains("1 file conflicts with `main`: `README.md`"),
-        "{}",
-        card.text
-    );
-    assert_eq!(
-        card.round()[0]
-            .options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect::<Vec<_>>(),
-        ["Merge & resolve conflicts", "Not yet"]
-    );
-    flow.manager
-        .answer_question(
-            flow.conversation.clone(),
-            card.id.clone(),
-            vec!["Merge & resolve conflicts".into()],
-        )
+        .merge_session(&flow.conversation, super::click())
         .await
         .unwrap();
     flow.settled().await;
+    assert!(flow.board().await.questions.is_empty(), "no card");
     conflict(&flow, "").await;
     resolve(&flow).await;
     finish(&flow, "").await;
     let board = flow.board().await;
-    assert!(board.orchestrator_steps.iter().any(|step| matches!(&step.kind, OrchestratorStepKind::Merged { asked_in: Some(id), .. } if *id == card.id.to_string())));
+    assert!(board.orchestrator_steps.iter().any(|step| matches!(&step.kind, OrchestratorStepKind::Merged { asked_in: Some(id), .. } if id.starts_with("merge-click:"))));
     flow.stop().await;
 }
 

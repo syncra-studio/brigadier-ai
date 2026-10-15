@@ -171,7 +171,7 @@ async fn held(name: &str, plan: Plan) -> Held {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    // The merge isn't offered on a card while they write.
+                    // A late propose_merge is refused: merge cards are retired.
                     let card = turn.call("propose_merge", json!({})).await;
                     assert!(card.is_error, "{}", card.text);
                     log(&format!("propose_merge: {}", card.text));
@@ -271,7 +271,7 @@ async fn stopped(held: &Held) {
 async fn merge_when_done_with_two_writers_merges_once_they_land_without_asking_again() {
     let held = held("held-merge", Plan::default()).await;
     writing(&held).await;
-    assert_eq!(held.logged("Workers are still writing (task-1, task-2)"), 1);
+    assert_eq!(held.logged("propose_merge: propose_merge is retired"), 1);
     assert_eq!(
         held.logged("finish_session: [merge held] Merging after 2 workers finish"),
         1
@@ -650,12 +650,13 @@ async fn a_cancel_waits_for_a_merge_under_way_and_finds_it_merged() {
     held.flow.stop().await;
 }
 
-/// After the merge, the user's next message makes the session's worktree again, on a fresh
-/// branch from the base; its turn hears so, so it never takes it for a leftover (bug 5).
+/// After the merge, the session keeps its worktree and branch (BUILD-PLAN A3): the branch is at
+/// the merge, and the next request works in the same folder.
 #[tokio::test]
-async fn the_message_after_a_merge_hears_of_its_fresh_worktree() {
-    let held = held("held-merge-fresh", Plan::default()).await;
+async fn a_merge_keeps_the_workspace_and_the_next_request_works_in_it() {
+    let held = held("held-merge-kept", Plan::default()).await;
     writing(&held).await;
+    let before = worktree_of(&held.flow);
     held.release.store(true, Ordering::SeqCst);
     held.flow
         .until("the merge", |board| {
@@ -666,11 +667,18 @@ async fn the_message_after_a_merge_hears_of_its_fresh_worktree() {
         })
         .await;
     held.flow.settled().await;
-    // finish_session said the next message makes a fresh one.
     assert_eq!(
-        held.logged("the user's next message starts a fresh branch from `main` in the same folder"),
-        1
+        held.logged("The session keeps its worktree and branch: `"),
+        1,
+        "{:?}",
+        held.log.lock().unwrap()
     );
+    let branch = branch_of(&held.flow).await;
+    assert!(before.join(".git").exists(), "the worktree stays");
+    assert_eq!(worktree_of(&held.flow), before);
+    let main = git(&held.flow.repo, &["rev-parse", "main"]);
+    assert_eq!(git(&held.flow.repo, &["rev-parse", &branch]), main);
+    assert_eq!(git(&before, &["rev-parse", "HEAD"]), main);
     held.flow.say("Now add a third note.").await;
     held.flow.settled().await;
     let input = held
@@ -681,17 +689,30 @@ async fn the_message_after_a_merge_hears_of_its_fresh_worktree() {
         .find(|line| line.contains("Now add a third note."))
         .cloned()
         .unwrap();
-    let tip = git(&held.flow.repo, &["rev-parse", "main"]);
-    assert!(
-        input.contains(&format!(
-            "[workspace] A fresh branch `{}` from `main` at {}",
-            branch_of(&held.flow).await,
-            &tip[..10]
-        )),
-        "{input}"
-    );
-    assert!(input.contains("never remove it"), "{input}");
+    assert!(!input.contains("[workspace] A fresh branch"), "{input}");
+    assert_eq!(worktree_of(&held.flow), before);
+    assert!(before.join("A.md").exists() && before.join("B.md").exists());
     held.flow.stop().await;
+}
+
+/// The session's worktree, as the conversation records it.
+fn worktree_of(flow: &Flow) -> std::path::PathBuf {
+    match flow
+        .manager
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .setup
+    {
+        Some(crate::model::Setup::Session {
+            environment:
+                crate::model::Environment::NewWorktree {
+                    path: Some(path), ..
+                },
+            ..
+        }) => std::path::PathBuf::from(path),
+        other => panic!("no session worktree: {other:?}"),
+    }
 }
 
 async fn branch_of(flow: &Flow) -> String {

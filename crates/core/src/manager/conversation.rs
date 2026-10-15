@@ -5935,7 +5935,7 @@ impl Quiet {
 }
 
 /// What the thread is told when its reply asked the user something in text, with no card open.
-const ASK_ON_A_CARD: &str = "[Your reply asked the user a question in text. Ask it on a card instead: propose_merge for the merge, ask_user for anything else (with options and the one you recommend). Then reply [quiet], and don't repeat the question in text.]";
+const ASK_ON_A_CARD: &str = "[Your reply asked the user a question in text. Ask it on a card instead, with ask_user (with options and the one you recommend); a merge needs no question: the user merges with \"Merge into main\" or in words. Then reply [quiet], and don't repeat the question in text.]";
 
 /// Replies shorter than this are held back until the turn shows whether they were narration.
 const NARRATION_BYTES: usize = 400;

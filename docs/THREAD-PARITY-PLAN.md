@@ -4,7 +4,9 @@
 > from `main` at `a9f6924d`.
 > It builds on docs/THREAD-UX-PLAN.md (approved 2026-10-08, built). Where the two differ, this plan wins; each
 > such change is marked **(changes THREAD-UX-PLAN §n)**. Two of the user's 2026-10-09 decisions supersede older
-> ones (§8.2): the merge card replaces THREAD-PLAN §8 decision 6 ("Merging is conversational") for sessions, and
+> ones (§8.2): the merge card replaces THREAD-PLAN §8 decision 6 ("Merging is conversational") for sessions (itself retired on
+> 2026-10-15 by docs/research/long-sessions/BUILD-PLAN.md A4: no merge cards, a merge only on the side panel's "Merge into
+> main" or the user's words), and
 > the plan card replaces PLAN §10.2's plan-only-in-the-context-card rule for a session's proposed plan.
 > Paths: `C/` = `apps/desktop/src/app/conversation/`, `E/` = `apps/desktop/src/components/assistant-ui/elements/`,
 > `M/` = `crates/core/src/manager/`. File:line references are to `a9f6924d`.
@@ -393,6 +395,10 @@ own screenshots are in `msgs/evidence/brigadier/`.
   (`M/prompts.rs:862`) becomes "Needs the user (say it in your answer)".
 - **Merge: a decision card, asked once.** This is the user's grill decision Q6 (2026-10-09). It supersedes
   THREAD-PLAN §8 decision 6 ("Merging is conversational", 2026-10-08) for sessions. That line now points here.
+  **Retired 2026-10-15** (BUILD-PLAN A4, the user's Q37): `propose_merge` and merge cards are gone, and no card answer is
+  consent. A merge comes only from the side panel's "Merge into main" click (a `MergeRequested` step with its origin) or
+  the user's words. Open merge cards are withdrawn at the upgrade, and a merge held on one is cancelled. The rest of
+  this item is history.
   - A new tool, `propose_merge`, opens a question of kind `Merge { branch, base }` with two options: "Merge into
     {base}" and "Not yet".
   - **The card's answer is consent in the daemon's consent contract.**
@@ -412,11 +418,12 @@ own screenshots are in `msgs/evidence/brigadier/`.
   stays as it is for everything else):
   - At most about 5 short lines: what changed and what to know.
   - Then the "To check:" and "You'll need to:" lines.
-  - Then `propose_merge` when the work waits on that decision.
+  - ~~Then `propose_merge` when the work waits on that decision.~~ (Retired by BUILD-PLAN A4: the thread may say once,
+    in plain text, that the work is ready to merge.)
   - The full report (tests, review findings, what wasn't tested) goes under `### Details`, which the UI folds (§4.6).
 - **A late review:** when its fix lands after the answer, the thread writes the ending again, updated, and the UI shows
-  only the request's last reply as its answer (§4.6). The instructions say: never repeat a closing, never ask the
-  merge again (its card is already open or answered).
+  only the request's last reply as its answer (§4.6). The instructions say: never repeat a closing, and say a merge
+  is ready at most once (BUILD-PLAN A4: there is no merge card).
 - **A clean late review** stays a "Reviewed …" row in the folded work (`M/review_runs.rs:68-82`). It doesn't wake the
   thread, as today.
 
@@ -624,7 +631,8 @@ The phases run in order.
 
 ### 8.2 Decisions this plan supersedes
 - **THREAD-PLAN §8 decision 6** ("Merging is conversational", 2026-10-08) is replaced for sessions by the merge card
-  (grill Q6, 2026-10-09). A typed "merge it" stays valid consent. Overnight runs keep their own Merge.
+  (grill Q6, 2026-10-09). The merge card is itself retired (BUILD-PLAN A4, 2026-10-15): the side panel's "Merge into
+  main" or the user's words. A typed "merge it" stays valid consent. Overnight runs keep their own Merge.
 - **PLAN §10.2**, "a session's own plan is a Plan section of the context card", is extended by the plan card in the
   thread and the composer's "Implement this plan?" (the addendum, 2026-10-09). The context card keeps its Plan section,
   and an overnight run's phase plans stay in the run card.
@@ -645,7 +653,7 @@ The thirteen points were folded in:
 - `full-checks.sh` and native checks (§7).
 
 ### 8.4 From building phase 2 (2026-10-10)
-- **The merge card holds nothing up.** It comes after the request's answer, so an open merge card no longer
+- **The merge card holds nothing up.** (Moot since BUILD-PLAN A4 retired the merge card.) It comes after the request's answer, so an open merge card no longer
   keeps its request waiting (phase 1 had it wait like a question round). The request is done: its work folds,
   its newest reply is the answer, and "Worked for" stops counting while the card waits in the composer's place,
   possibly overnight. The user's answer makes the request work again. `propose_merge` tells the thread to write

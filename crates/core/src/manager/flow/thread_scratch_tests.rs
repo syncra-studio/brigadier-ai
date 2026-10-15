@@ -159,7 +159,7 @@ async fn a_waiting_request_keeps_the_threads_scratch() {
         .id
         .clone();
     flow.manager
-        .answer_question(flow.conversation.clone(), card, vec!["CSV".into()])
+        .answer_question(flow.conversation.clone(), card, vec!["CSV".into()], None)
         .await
         .unwrap();
     super::eventually("the scratch to go", || !tmp.join("bt-main").exists()).await;

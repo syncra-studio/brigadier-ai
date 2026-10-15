@@ -16,8 +16,8 @@ use super::SessionManager;
 use super::conversation::{Envelope, SendOutcome};
 use crate::model::{ConversationId, DomainEvent, Setup};
 use crate::work::{
-    Approval, ApprovalSubject, CardId, CardState, InjectionKind, Plan, PlanApprover, PlanState,
-    Question, QuestionItem, QuestionKind, TaskId,
+    AnswerOrigin, Approval, ApprovalSubject, CardId, CardState, InjectionKind, Plan, PlanApprover,
+    PlanState, Question, QuestionItem, QuestionKind, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -395,6 +395,7 @@ impl SessionManager {
             created_at_ms: now_ms(),
             answered_at_ms: None,
             words_id: None,
+            answered_by: None,
         };
         let rx = self.waiters.register(question.id.clone());
         self.core
@@ -409,12 +410,14 @@ impl SessionManager {
         Ok((question, rx))
     }
 
-    /// The user answered a question card: one answer per question of its round.
+    /// The user answered a question card: one answer per question of its round. `origin`: the
+    /// client that sent it and how the user gave it, kept with the answer.
     pub async fn answer_question(
         &self,
         conversation_id: ConversationId,
         card_id: CardId,
         answers: Vec<String>,
+        origin: Option<AnswerOrigin>,
     ) -> Result<()> {
         let board = self.core.board(&conversation_id).await?;
         let mut question = board
@@ -465,18 +468,15 @@ impl SessionManager {
             question.answers = answers.clone();
         }
         question.answered_at_ms = Some(now_ms());
+        question.answered_by = origin;
         // Until its words are sent, the card's own id marks them on their way.
         question.words_id = typed.as_ref().map(|_| card_id.to_string());
         // Recorded before it is delivered: until the answer is in the inbox, the request
         // counts as carried, or a settle in between would end it (its card answered, nothing
         // queued) and open its time again with the answer's turn.
-        // Only "Merge into main" starts work on the asking request: "Not yet" leaves its
-        // finished block closed, and the decision rides on the thread's next turn.
-        let delivers = match &question.kind {
-            QuestionKind::Orchestrator => true,
-            QuestionKind::Merge { base, .. } => merge_chosen(&answers[0], base),
-            _ => false,
-        };
+        // A merge card's answer starts no work: merge cards are retired, and none of their
+        // answers is consent (BUILD-PLAN A4).
+        let delivers = matches!(&question.kind, QuestionKind::Orchestrator);
         if delivers {
             self.answering(&conversation_id, &card_id, question.request_id.clone())
                 .await;
@@ -559,43 +559,16 @@ impl SessionManager {
                     .await?;
                 return Ok(());
             }
-            QuestionKind::Merge {
-                branch,
-                base,
-                conflicted,
-                ..
-            } => {
-                if !delivers {
-                    self.conv(&conversation_id)?
-                        .note(format!(
-                            "[answer] The user doesn't want `{branch}` merged into `{base}` yet: they answered the merge card \"{}\". Don't merge, and don't ask again until they bring it up.",
-                            answers[0]
-                        ))
-                        .await;
-                    self.waiters.answer(&card_id, CardAnswer::Answered);
-                    self.settle_requests(&conversation_id).await;
-                    return Ok(());
-                }
-                let text = if *conflicted {
-                    format!(
-                        "[answer] The user chose to merge `{branch}` into `{base}` and have its conflicts resolved. Call finish_session now, without user_words: it names the merge task that resolves them, and the merge goes through on this answer once that lands."
-                    )
-                } else {
-                    format!(
-                        "[answer] The user chose to merge `{branch}` into `{base}`. Call finish_session now, without user_words."
-                    )
-                };
-                self.deliver_for(
-                    &conversation_id,
-                    Envelope {
-                        kind: InjectionKind::Decision,
-                        label: "user answer".into(),
-                        task_id: None,
-                        text,
-                    },
-                    question.request_id.clone(),
-                )
-                .await;
+            QuestionKind::Merge { branch, base, .. } => {
+                self.conv(&conversation_id)?
+                    .note(format!(
+                        "[answer] The user answered an old merge card for `{branch}` into `{base}` \"{}\". Merge cards are retired and no answer on one is consent: don't merge on it. The user merges with the side panel's \"Merge into main\", or by asking in their own words.",
+                        answers[0]
+                    ))
+                    .await;
+                self.waiters.answer(&card_id, CardAnswer::Answered);
+                self.settle_requests(&conversation_id).await;
+                return Ok(());
             }
             QuestionKind::UncommittedChanges { .. } => {
                 let see = answer_is_yes(&answer);
@@ -826,7 +799,8 @@ impl SessionManager {
                     )
                     .await;
                 }
-                // A merge card from before merging was asked for in words: the thread asks again.
+                // A merge approval from before merging was asked for in words: nothing merges on
+                // it, and merge cards are retired (BUILD-PLAN A4).
                 ApprovalSubject::FinishSession { branch, base, .. } => {
                     self.deliver_for(
                         conversation_id,
@@ -835,7 +809,7 @@ impl SessionManager {
                             label: "finish session".into(),
                             task_id: None,
                             text: format!(
-                                "[not finished] The user had not answered whether to merge `{branch}` into `{base}` when Brigadier restarted; nothing was merged. Ask them again with propose_merge."
+                                "[not finished] The user had not answered whether to merge `{branch}` into `{base}` when Brigadier restarted; nothing was merged. Don't ask on a card: the user merges with \"Merge into main\" or in their own words; you may say once, in plain text, that the work is ready."
                             ),
                         },
                         approval.request_id.clone(),

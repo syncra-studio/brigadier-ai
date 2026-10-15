@@ -1417,6 +1417,7 @@ mod tests {
                 created_at_ms: 5,
                 answered_at_ms: answered,
                 words_id: None,
+                answered_by: None,
             },
         );
         for (seq, (sha, result, consented)) in watches.iter().enumerate() {

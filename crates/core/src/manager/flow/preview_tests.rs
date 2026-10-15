@@ -400,10 +400,10 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
     flow.stop().await;
 }
 
-/// The user's Stop, a change of the thread's workspace, and the merge of the session branch
-/// each stop the running previews.
+/// The user's Stop and a change of the thread's workspace each stop the running previews; the
+/// merge of the session branch doesn't, as the workspace stays.
 #[tokio::test]
-async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
+async fn the_users_stop_and_a_workspace_change_stop_previews_and_a_merge_doesnt() {
     let replies: Replies = Arc::default();
     let flow = Flow::start("preview-stops", Options::default(), thread(replies.clone())).await;
     let tmp = scratch("stops");
@@ -490,20 +490,17 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
     super::git(&worktree, &["add", "page.html"]);
     super::git(&worktree, &["commit", "-q", "-m", "Add the page"]);
     flow.say("Please merge.").await;
-    // The merge takes the thread's turns: its stop is recorded once it has killed the preview.
-    let board = flow
-        .until("the merge's stop recorded", |board| {
-            !board.previews[&preview.id].state.is_running()
-        })
-        .await;
-    gone(&flow, preview.pid.unwrap()).await;
-    gone(&flow, child).await;
-    assert_eq!(
-        board.previews[&preview.id].state,
-        PreviewState::Stopped {
-            reason: "the session was merged".into()
-        }
-    );
+    // The merge keeps the workspace (BUILD-PLAN A3), so what runs in it keeps running.
+    flow.until("the merge", |board| {
+        board
+            .orchestrator_steps
+            .iter()
+            .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
+    })
+    .await;
+    let board = flow.settled().await;
+    assert!(board.previews[&preview.id].state.is_running());
+    assert!(alive(&flow, child), "the preview's child still runs");
     flow.stop().await;
 }
 
@@ -873,22 +870,10 @@ async fn preview_data_is_session_owned_and_failed_spawns_leave_no_folder() {
     })
     .await;
     assert!(data.join("probe").exists());
-    // Worktree disposal after a merge must leave data under its separate owner.
-    let old_worktree = workspace(&flow);
-    let _ = flow
-        .manager
-        .release_merged_session(&flow.conversation)
+    // A second start in the same session reuses the data (a merge keeps the worktree now).
+    flow.say("Start it again.").await;
+    flow.until("data reused", |_| replies.lock().unwrap().len() == 4)
         .await;
-    assert!(
-        !old_worktree.exists(),
-        "merge actually released the worktree"
-    );
-    assert!(data.join("probe").exists());
-    flow.say("Start it again after the merge.").await;
-    flow.until("data reused after merge", |_| {
-        replies.lock().unwrap().len() == 4
-    })
-    .await;
     flow.settled().await;
     let worktree = workspace(&flow);
     let git_file = worktree.join(".git");

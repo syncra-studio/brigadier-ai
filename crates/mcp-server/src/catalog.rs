@@ -6,12 +6,12 @@ use std::sync::{Arc, OnceLock};
 use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CiPush, CodeRefs, CodeSearch,
     DelegateTask, EndRun, FinishSession, JobCall, LandPhase, ListSessions, MessageSession,
-    MessageWorker, NoteForUser, OrchestratorCall, PlanPhases, PreviewLog, ProposeMerge,
-    ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, RecordFindings,
-    RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
-    RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, SettleWait,
-    StartPreview, StopPreview, StopWorker, SubmitOutline, SubmitReport, SuggestFullAccess,
-    TabChatCall, TabTools, TaskRef, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
+    MessageWorker, NoteForUser, OrchestratorCall, PlanPhases, PreviewLog, ProposeOvernight,
+    ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, RecordFindings, RecordNodes,
+    Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand,
+    RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, SettleWait, StartPreview,
+    StopPreview, StopWorker, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools,
+    TaskRef, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, Tool};
 use serde::de::DeserializeOwned;
@@ -184,22 +184,14 @@ a [checks failed …] message for you to send back. Conflicts come back to you: 
 task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
-base branch, once the user consented: they chose \"Merge\" on your propose_merge card (leave \
-user_words out), or their latest message asks for it in words (\"merge it\", also together with \
-the work: then merge as soon as it has landed, without asking again). Pass such words in \
-user_words, quoted exactly from that message. Brigadier checks the consent and refuses on a \
-question, a condition, a \"no\" or a \"wait\", or consent already used for a merge; \"merge it \
-when done\" is consent. While workers write it holds the merge ([merge held]) and tells you \
-[merge due] once they land: call it again then, without asking. Never merge on silence. \
-Returns when merged.";
-
-const PROPOSE_MERGE: &str = "New-worktree sessions only: once the work has landed and no \
-worker writes, ask the \
-user on a card whether to merge the session branch into its base (\"Merge into main\" / \"Not \
-yet\"). Ask it once: Brigadier refuses a second card while one is open, or after \"Not yet\" until \
-the user writes again. `note` is one short line on what the merge brings and what the reviews \
-found. Returns at once; reply with exactly [quiet] or your final answer. The answer arrives as \
-an [answer] message: on \"Merge\", call finish_session without user_words.";
+base branch, once the user consented: they clicked \"Merge into main\" on the side panel (you \
+hear [merge]; leave user_words out), or their latest message asks for it in words (\"merge it\", \
+also together with the work: then merge as soon as it has landed, without asking again). Pass \
+such words in user_words, quoted exactly from that message. Brigadier checks the consent and \
+refuses on a question, a condition, a \"no\" or a \"wait\", or consent already used for a merge; \
+\"merge it when done\" is consent. While workers write it holds the merge ([merge held]) and \
+tells you [merge due] once they land: call it again then, without asking. Never merge on \
+silence. The session keeps its worktree and branch after the merge. Returns when merged.";
 
 const NOTE_FOR_USER: &str = "Keep the user's session summary current. kind \"decided\": a \
 judgement call you made on the user's behalf that they would want to know (a product or scope \
@@ -509,11 +501,6 @@ fn orchestrator_tools() -> Vec<Tool> {
             "finish_session",
             FINISH_SESSION,
             input_schema::<FinishSession>(),
-        ),
-        tool(
-            "propose_merge",
-            PROPOSE_MERGE,
-            input_schema::<ProposeMerge>(),
         ),
         tool(
             "note_for_user",
@@ -1244,6 +1231,29 @@ mod tests {
         names.sort_unstable();
         listed.sort_unstable();
         assert_eq!(names, listed);
+    }
+
+    /// Merge cards are retired (BUILD-PLAN A4): no role lists propose_merge, and a late call
+    /// from a session started before still parses, with any arguments, to reach its refusal.
+    #[test]
+    fn propose_merge_is_retired_but_a_late_call_still_parses() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::WithEscalation,
+        };
+        for role in [thread.clone(), worker(false), worker(true)] {
+            assert!(
+                tools_for(&role)
+                    .iter()
+                    .all(|tool| tool.name != "propose_merge"),
+                "{role:?}"
+            );
+        }
+        let late = serde_json::json!({ "note": "Adds NOTES.md.", "extra": true });
+        assert!(matches!(
+            parse_call(&thread, "propose_merge", late.as_object().cloned()),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::ProposeMerge(_)))
+        ));
     }
 
     #[test]

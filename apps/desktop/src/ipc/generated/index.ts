@@ -7,6 +7,8 @@ export type { AccountUsage } from "./AccountUsage";
 export type { AccountView } from "./AccountView";
 export type { AccountsView } from "./AccountsView";
 export type { Alternative } from "./Alternative";
+export type { AnswerInput } from "./AnswerInput";
+export type { AnswerOrigin } from "./AnswerOrigin";
 export type { AppInfo } from "./AppInfo";
 export type { AppRemoval } from "./AppRemoval";
 export type { AppliedCommand } from "./AppliedCommand";

@@ -661,12 +661,26 @@ pub enum Request {
         conversation_id: ConversationId,
         card_id: CardId,
         answers: Vec<String>,
+        /// How the user gave the answer, kept with it.
+        #[serde(default)]
+        #[ts(optional)]
+        input: Option<brigadier_core::work::AnswerInput>,
     },
     DecidePlan {
         conversation_id: ConversationId,
         card_id: CardId,
         approve: bool,
         message: Option<String>,
+    },
+    /// The user clicked "Merge into main" on the side panel: the session branch merges into
+    /// its base on this click, once.
+    MergeSession {
+        conversation_id: ConversationId,
+    },
+    /// "Close workspace": removes the session's own worktree, its uncommitted changes kept as
+    /// a commit on its branch first. The next change makes a fresh one in the same folder.
+    CloseWorkspace {
+        conversation_id: ConversationId,
     },
     /// Cancels the session's held merge ("Merging after N workers finish"): its consent is
     /// spent. A merge that already went answers "Too late: already merged".
@@ -1337,6 +1351,14 @@ pub enum Response {
     DecidePlan,
     /// What became of the Cancel, for the user.
     CancelMerge {
+        text: String,
+    },
+    /// What the click set going, for the user.
+    MergeSession {
+        text: String,
+    },
+    /// What went and what stayed, for the user.
+    CloseWorkspace {
         text: String,
     },
     ProposeOvernight {

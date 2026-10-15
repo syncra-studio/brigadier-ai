@@ -84,6 +84,9 @@ impl SessionManager {
     /// After a restart: nothing runs any more, so running tasks end, stale cards expire, and
     /// cleanups that could not finish before (worktrees need the git engine) finish now.
     pub(super) async fn recover(&self) {
+        // Before the sweep finishes old disposals: a merge's removal of a session workspace is
+        // taken back (BUILD-PLAN A3).
+        self.keep_merged_workspaces().await;
         self.runtime.ledger().sweep().await;
         // No thread runs yet: what their commands left goes before anything starts again.
         self.sweep_scratch_at_launch().await;
@@ -97,6 +100,10 @@ impl SessionManager {
             }
             // The thread's turn the restart cut off ran its calls no further.
             self.end_cut_off_calls(&conversation.id).await;
+            // Merge cards are retired: open ones close, and no card answer merges.
+            if conversation.lifecycle != Lifecycle::Archived {
+                self.retire_merge_cards(&conversation.id).await;
+            }
             // Messages that waited for quota keep waiting (an archived conversation's never go).
             if conversation.quota_wait.is_some() && conversation.lifecycle != Lifecycle::Archived {
                 self.keep_conversation_wait(&conversation).await;
@@ -603,6 +610,174 @@ impl SessionManager {
         })
     }
 
+    /// Takes back the removal of a session's workspace that an earlier version started on a
+    /// merge (THREAD-PLAN.md Q9, retired by BUILD-PLAN A3) and couldn't finish: a `session:`
+    /// owner still disposing whose session is neither archived nor being deleted. Its worktree
+    /// stays, and the session works in it again if it is still there. Archive, delete and
+    /// project removal dispose of the owner after the session is archived or marked deleting,
+    /// so theirs go on.
+    async fn keep_merged_workspaces(&self) {
+        let ledger = self.runtime.ledger();
+        let disposing = ledger.disposing();
+        for conversation in self.core.catalog().conversations {
+            let owner = format!("session:{}", conversation.id);
+            if !disposing.contains(&owner)
+                || conversation.deleting
+                || conversation.lifecycle == Lifecycle::Archived
+            {
+                continue;
+            }
+            if let Err(err) = ledger.cancel_disposal(&owner).await {
+                tracing::warn!(conversation = %conversation.id, error = %err, "could not keep a merged session's workspace");
+                continue;
+            }
+            tracing::info!(conversation = %conversation.id, "kept a merged session's workspace");
+            let Some(Setup::Session {
+                repo,
+                environment:
+                    Environment::NewWorktree {
+                        base,
+                        branch,
+                        path: None,
+                        start,
+                    },
+                permission,
+                orchestrator,
+                workers_see_uncommitted,
+                plan_mode,
+            }) = conversation.setup.clone()
+            else {
+                continue;
+            };
+            let Some(path) =
+                ledger
+                    .artifacts(&owner)
+                    .into_iter()
+                    .find_map(|artifact| match artifact {
+                        Artifact::Worktree { path, .. }
+                            if Path::new(&path).join(".git").exists() =>
+                        {
+                            Some(path)
+                        }
+                        _ => None,
+                    })
+            else {
+                continue;
+            };
+            let _ = self
+                .core
+                .set_setup(
+                    conversation.id.clone(),
+                    Setup::Session {
+                        repo,
+                        environment: Environment::NewWorktree {
+                            base,
+                            branch,
+                            path: Some(path),
+                            start,
+                        },
+                        permission,
+                        orchestrator,
+                        workers_see_uncommitted,
+                        plan_mode,
+                    },
+                )
+                .await;
+        }
+    }
+
+    /// "Close workspace" (BUILD-PLAN A3): the user removes the session's own worktree, after a
+    /// confirm. Its uncommitted changes are kept as a commit on its branch first; the branch
+    /// stays unless all of its work is on the base. The next change makes a fresh worktree in
+    /// the same folder. Refused while anything still works in it.
+    pub async fn close_workspace(&self, id: &ConversationId) -> Result<String> {
+        let conversation = self.core.conversation(id)?;
+        if conversation.deleting || conversation.lifecycle == Lifecycle::Archived {
+            return Err(Error::Invalid(
+                "This session is closed already: its workspace went with it.".into(),
+            ));
+        }
+        let Some(Setup::Session {
+            environment:
+                Environment::NewWorktree {
+                    path: Some(path),
+                    branch,
+                    base,
+                    ..
+                },
+            ..
+        }) = conversation.setup.clone()
+        else {
+            return Err(Error::Invalid(
+                "This session has no workspace of its own to close.".into(),
+            ));
+        };
+        if self.overnight.active.get(id).is_some() {
+            return Err(Error::Invalid(
+                "An overnight run is going in this session: stop it first.".into(),
+            ));
+        }
+        let board = self.core.board(id).await?;
+        if !matches!(
+            board.run,
+            crate::work::RunState::Idle
+                | crate::work::RunState::Hibernated
+                | crate::work::RunState::Failed
+        ) {
+            return Err(Error::Invalid(
+                "The session is working: stop it first, then close its workspace.".into(),
+            ));
+        }
+        let writing: Vec<String> = self
+            .core
+            .tasks(id)
+            .await?
+            .iter()
+            .filter(|task| task.kind.writes() && !task.state.is_final())
+            .map(|task| format!("task-{}", task.number))
+            .collect();
+        if !writing.is_empty() {
+            return Err(Error::Invalid(format!(
+                "Workers still have work for this branch ({}): stop them or land their work first.",
+                writing.join(", ")
+            )));
+        }
+        // What runs in the folder stops before it goes.
+        let _ = self.stop_previews(id, "the workspace closed").await;
+        self.stop_background_runs(id);
+        self.drop_prewarm(id, "the workspace closed");
+        self.drop_check_checkout(id).await;
+        if !self.keep_session_changes(&conversation).await {
+            return Err(Error::Invalid(
+                "Its uncommitted changes couldn't be kept, so the workspace stays.".into(),
+            ));
+        }
+        let leftovers = self
+            .runtime
+            .ledger()
+            .dispose(&format!("session:{id}"))
+            .await;
+        if !leftovers.is_clean() {
+            return Err(Error::Invalid(format!(
+                "The workspace couldn't be removed: {}",
+                leftovers.failures.join("; ")
+            )));
+        }
+        let deleted = self.forget_session_worktree(&conversation).await;
+        let branch_line = if deleted {
+            format!("Branch `{branch}` went too: all of its work is on `{base}`.")
+        } else {
+            format!("Branch `{branch}` stays.")
+        };
+        if let Ok(conv) = self.conv(id) {
+            conv.note(format!(
+                "[workspace closed] The user closed this session's workspace: its folder {path} is removed. {branch_line} The next change makes a fresh worktree in the same folder."
+            ))
+            .await;
+        }
+        Ok(format!("Closed the workspace. {branch_line}"))
+    }
+
     /// Stops everything a conversation runs and removes what it created.
     pub(super) async fn wind_down(&self, conversation: &Conversation) {
         let id = &conversation.id;
@@ -677,71 +852,6 @@ impl SessionManager {
         self.set_run(id, crate::work::RunState::Idle, None).await;
         if session_worktree_goes {
             self.forget_session_worktree(conversation).await;
-        }
-    }
-
-    /// After the user merged the session (THREAD-PLAN.md Q9): its worktree and merged branch
-    /// go, and the next user message makes a fresh worktree from the base's tip, at the same
-    /// path and under the same branch name, so the thread's CLI goes on as it is. Uncommitted
-    /// changes in the worktree keep both. Returns what the thread is told about it.
-    pub(crate) async fn release_merged_session(&self, id: &ConversationId) -> String {
-        let Ok(conversation) = self.core.conversation(id) else {
-            return String::new();
-        };
-        let Some(Setup::Session {
-            environment:
-                Environment::NewWorktree {
-                    base,
-                    path: Some(path),
-                    ..
-                },
-            ..
-        }) = &conversation.setup
-        else {
-            return String::new();
-        };
-        let (git, worktree) = (self.git.clone(), PathBuf::from(path));
-        if worktree_locked(&worktree) {
-            // Removing it would fail; the session would then make a new one where it still is.
-            return " The session's worktree is locked (`git worktree lock`), so it and its branch stay; unlock it, and the next merge removes both.".into();
-        }
-        let dirty = blocking(move || {
-            let repo = git.open(&worktree).map_err(git_error)?;
-            Ok(repo.state().map_err(git_error)?.dirty_files)
-        })
-        .await;
-        match dirty {
-            Ok(dirty) if dirty.is_empty() => {}
-            Ok(dirty) => {
-                return format!(
-                    " The session's worktree has uncommitted changes ({}), so it and its branch stay; commit or drop them, and the next merge removes both.",
-                    dirty.join(", ")
-                );
-            }
-            Err(err) => {
-                crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not look at the merged session's worktree; it stays"; conversation = %id, error = %err);
-                return String::new();
-            }
-        }
-        // A pre-warm was made from the branch that just went.
-        self.drop_prewarm(id, "the session was merged");
-        let owner = format!("session:{id}");
-        let leftovers = self.runtime.ledger().dispose(&owner).await;
-        let removed = leftovers.is_clean();
-        if !removed {
-            crate::logging::private_trace!(owner.starts_with(crate::ledger::TAB_CHAT_OWNER), warn, "the merged session's worktree couldn't be removed; the next message retries"; owner,
-                ?leftovers);
-        }
-        let deleted = self.forget_session_worktree(&conversation).await;
-        if !removed {
-            " Its worktree couldn't be removed yet; the user's next message tries again, then starts a fresh branch from the base in the same folder.".into()
-        } else if deleted {
-            format!(
-                " Its worktree and branch are removed; the user's next message starts a fresh branch from `{base}` in the same folder."
-            )
-        } else {
-            " Its worktree is removed; the user's next message makes it again in the same folder."
-                .into()
         }
     }
 
@@ -1227,24 +1337,6 @@ fn interrupted_fix(task: &Task) -> bool {
                 | TaskState::Blocked
                 | TaskState::Paused
         )
-}
-
-/// Whether `worktree` is a linked worktree the user locked (`git worktree lock`): its admin
-/// folder, which its `.git` file names, holds a `locked` file.
-fn worktree_locked(worktree: &std::path::Path) -> bool {
-    let Ok(link) = std::fs::read_to_string(worktree.join(".git")) else {
-        return false;
-    };
-    let Some(admin) = link.trim().strip_prefix("gitdir:") else {
-        return false;
-    };
-    let admin = PathBuf::from(admin.trim());
-    let admin = if admin.is_absolute() {
-        admin
-    } else {
-        worktree.join(admin)
-    };
-    admin.join("locked").exists()
 }
 
 /// The task test data folders in `root`.

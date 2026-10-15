@@ -2501,30 +2501,10 @@ impl SessionManager {
                     return Ok(branch.clone());
                 }
                 let owner = format!("session:{conversation_id}");
-                // A merged session's worktree whose removal failed is removed first (THREAD-PLAN.md
-                // Q9); the next launch's sweep would otherwise remove the one made now.
-                let (conversation, start) = if self.runtime.ledger().disposing().contains(&owner) {
-                    let leftovers = self.runtime.ledger().dispose(&owner).await;
-                    if !leftovers.is_clean() {
-                        return Err(Error::Invalid(format!(
-                            "the session's earlier worktree couldn't be removed yet: {}",
-                            leftovers.failures.join("; ")
-                        )));
-                    }
-                    // Its merged branch, kept while that worktree was there, goes now too.
-                    self.forget_session_worktree(&conversation).await;
-                    let conversation = self.core.conversation(conversation_id)?;
-                    let start = match &conversation.setup {
-                        Some(Setup::Session {
-                            environment: Environment::NewWorktree { start, .. },
-                            ..
-                        }) => start.clone(),
-                        _ => start.clone(),
-                    };
-                    (conversation, start)
-                } else {
-                    (conversation, start.clone())
-                };
+                // A `session:` owner still disposing here is an old post-merge removal; the
+                // upgrade reconcile cancelled it (BUILD-PLAN A3), and nothing removes the
+                // session's workspace on a merge any more.
+                let start = start.clone();
                 let worktree = self.session_worktree_path(&conversation);
                 self.runtime
                     .ledger()
@@ -2577,8 +2557,9 @@ impl SessionManager {
                 if made.is_some() {
                     self.note_branch_made(repo, branch).await;
                 }
-                // A merged session's worktree made again: the thread hears it is new and its
-                // own, or it takes it for a leftover of the merge and removes it (bug 5).
+                // A session's worktree made again (after Close workspace, or a restore): the
+                // thread hears it is new and its own, or it takes it for a leftover and removes
+                // it (bug 5).
                 if let Some(start) = made
                     && let Ok(board) = self.core.board(conversation_id).await
                     && board
@@ -2588,7 +2569,7 @@ impl SessionManager {
                     && let Ok(conv) = self.conv(conversation_id)
                 {
                     conv.note(format!(
-                        "[workspace] A fresh branch `{branch}` from `{base}` at {} was made for this message, in the same folder {}. The merged one is gone; this one is new and yours: work in it, and never remove it.",
+                        "[workspace] A fresh branch `{branch}` from `{base}` at {} was made for this message, in the same folder {}. The earlier one is gone; this one is new and yours: work in it, and never remove it.",
                         &start.0[..start.0.len().min(10)],
                         worktree.display(),
                     ))

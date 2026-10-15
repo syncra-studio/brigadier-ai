@@ -103,11 +103,12 @@ function useSessionDiff(
   conversationId: string,
   worktree: boolean,
 ): DiffStat | null {
+  // Landings, the thread's own requests ending (it commits too) and merges move the branch.
   const landed = useBoard(
     (s) =>
-      Object.values(s.board?.tasks ?? {}).filter(
-        (task) => task.state === "landed",
-      ).length,
+      Object.values(s.board?.tasks ?? {}).filter((task) => task.state === "landed").length +
+      Object.values(s.board?.requests ?? {}).filter((asked) => asked.state.type === "done").length +
+      (s.board?.orchestratorSteps ?? []).filter((step) => step.kind.type === "merged").length,
   );
   const [stat, setStat] = useState<DiffStat | null>(null);
   useEffect(() => {
@@ -755,6 +756,11 @@ export function SummaryFloat({ children }: { children: ReactNode }) {
   );
 }
 
+/** Whether the branch changes anything its base lacks: "Merge into ‹base›" shows only then. */
+export function hasWork(diff: DiffStat | null): boolean {
+  return diff !== null && diff.files.length > 0;
+}
+
 /** The branch the session's work is on, with its +N −N once known. */
 function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) {
   return (
@@ -883,7 +889,19 @@ function SessionSummaryContent({
               // The run's card merges its verified work: no second way to merge here.
               <BranchRow branch={run.workspace.branch} diff={diff} />
             ) : (
-              <GitActions conversationId={conversation.id}>
+              <GitActions
+                conversationId={conversation.id}
+                workspace={
+                  setup.environment.type === "newWorktree" && setup.environment.path
+                    ? {
+                        path: setup.environment.path,
+                        branch: setup.environment.branch,
+                        base: setup.environment.base,
+                      }
+                    : null
+                }
+                mergeable={hasWork(diff)}
+              >
                 <BranchRow branch={setup.environment.branch} diff={diff} />
               </GitActions>
             )}

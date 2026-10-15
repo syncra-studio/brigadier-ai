@@ -202,7 +202,10 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
   - A per-request summary goes in the Inspector.
   - `tools/ab/`, ported from the 10-05 phaseE tools, runs the A/B automatically.
 
-**Q9: after merge, the session worktree and branch are removed; the next message starts fresh.**
+**Q9: after merge, the session worktree and branch are removed; the next message starts fresh.** (Retired 2026-10-15
+by docs/research/long-sessions/BUILD-PLAN.md A3: the user read it as the thread deleting its workspace. The worktree and
+branch now stay through merges, the branch moves to the merge, and they go only on archive, delete or "Close
+workspace". An earlier version's unfinished post-merge removal is taken back at the upgrade.)
 - Today a merge (`M/landing.rs:1122-1145`) leaves both. They only go on archive (`M/lifecycle.rs:496-525`).
 - **Change:** after the merge lands, stop previews, dispose `session:<id>`, and delete the merged `brigadier/…` branch, reusing `lifecycle.rs:496-525`.
 - On the next message, `ensure_target` (`M/workers.rs:1640-1747`) recreates the worktree **at the same path** on a new branch from the base tip. The thread's `--add-dir` stays valid with no CLI restart (its cwd is its own scratch, Q1).
@@ -346,7 +349,7 @@ Shared work comes first, so parallel streams don't edit the same contracts (corr
 - the per-request time/token summary in the Inspector.
 
 **Done when:**
-- After merge, the session worktree and branch are gone. The next message gets a fresh branch from the base tip, and the thread resumes (not reborn).
+- ~~After merge, the session worktree and branch are gone. The next message gets a fresh branch from the base tip, and the thread resumes (not reborn).~~ Retired by BUILD-PLAN A3: after a merge the worktree and branch stay, the branch is at the merge, and the thread goes on in the same folder.
 - "Open in terminal" round trip for a Claude worker and a Codex worker: the session's earlier turns are visible, an edit made there shows up in the headless report, and no two writers run at once.
 - The longest stretch with only "Thinking" in T1 is ≤ 5 s.
 
@@ -424,7 +427,7 @@ If a task is inconclusive, rerun it once with the arm order swapped. Missing evi
 5. Baselines at the start of phase 1, a T1 run per phase, the full A/B in phase 6. Yes.
 
 **The user decided (2026-10-08):**
-6. **Merging is conversational.** (Superseded for sessions on 2026-10-09 by the merge card, docs/THREAD-PARITY-PLAN.md §5 Q6 and §8.2; a typed "merge it" stays valid consent.) No merge card, no Merge/Deny buttons: "user can ask to the orchestrator to merge it, orchestrator can recommend/propose to merge, user agrees, in words, without any buttons. Just like a normal thread." When work has landed, the thread may propose the merge in its reply, as a question naming the base, with what the reviews found. `finish_session` merges only when the user's latest message asks for it or plainly agrees to that proposal. The thread passes the user's words (`user_words`), and the daemon checks them in code (`M/merge_consent.rs`, no model call) against the latest user message on the branch shown:
+6. **Merging is conversational.** (Superseded for sessions on 2026-10-09 by the merge card, docs/THREAD-PARITY-PLAN.md §5 Q6 and §8.2, which docs/research/long-sessions/BUILD-PLAN.md A4 retired on 2026-10-15: a merge now comes only from the side panel's "Merge into main" button or the user's own words, and no card answer is consent. A typed "merge it" stays valid consent.) No merge card, no Merge/Deny buttons: "user can ask to the orchestrator to merge it, orchestrator can recommend/propose to merge, user agrees, in words, without any buttons. Just like a normal thread." When work has landed, the thread may propose the merge in its reply, as a question naming the base, with what the reviews found. `finish_session` merges only when the user's latest message asks for it or plainly agrees to that proposal. The thread passes the user's words (`user_words`), and the daemon checks them in code (`M/merge_consent.rs`, no model call) against the latest user message on the branch shown:
    - It refuses a question, a condition ("if", "once", "after"…), a "no", a "wait" or a "don't".
    - It refuses a plain yes unless the thread's reply right before proposed this merge.
    - It refuses words from a message that already asked for a merge.

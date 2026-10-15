@@ -770,6 +770,20 @@ impl CleanupLedger {
         self.state().disposing.iter().cloned().collect()
     }
 
+    /// Takes back `owner`'s disposal: what it still holds stays recorded and is kept, and no
+    /// sweep removes it.
+    pub async fn cancel_disposal(&self, owner: &str) -> Result<()> {
+        if !self.state().disposing.contains(owner) {
+            return Ok(());
+        }
+        self.append(DomainEvent::CleanupFinished {
+            owner: owner.to_owned(),
+        })
+        .await?;
+        self.state().disposing.remove(owner);
+        Ok(())
+    }
+
     /// Removes `artifacts` of `owner`, acknowledging each one that is gone.
     async fn remove(&self, owner: &str, artifacts: Vec<Artifact>) -> Leftovers {
         let mut leftovers = Leftovers::default();

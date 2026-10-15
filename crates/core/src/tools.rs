@@ -320,10 +320,9 @@ pub struct AskOption {
     pub description: Option<String>,
 }
 
-/// `propose_merge`: ask the user once, on a card, whether to merge the session branch into
-/// its base.
+/// `propose_merge`, retired (BUILD-PLAN A4): no longer offered, and a late call from a session
+/// that still has it is refused with what to do instead, whatever it passed.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ProposeMerge {
     /// One short line under the question: what the merge brings, and what the reviews found.
     #[serde(default)]
@@ -693,7 +692,7 @@ pub struct WriteTabFile {
 #[serde(deny_unknown_fields)]
 pub struct FinishSession {
     /// The user's own words that ask for the merge, quoted exactly from their latest message
-    /// ("yes, merge it"). Leave it out when the user chose "Merge" on your propose_merge card.
+    /// ("yes, merge it"). Leave it out when the user clicked "Merge into main" ([merge]).
     /// On `[merge due]` (the held merge's workers landed, or its conflict-resolution task
     /// did), retry with the same words (or none): the consent still holds unless the user has
     /// taken it back.
@@ -996,7 +995,6 @@ pub const THREAD_TOOLS: &[&str] = &[
     "request_approval",
     "land_phase",
     "finish_session",
-    "propose_merge",
     "note_for_user",
     "record_findings",
     "ci_status",

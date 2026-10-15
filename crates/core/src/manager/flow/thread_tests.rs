@@ -1021,50 +1021,39 @@ async fn starts_over_on_older_instructions(thread: ProviderKind) {
     flow.stop().await;
 }
 
-/// After the merge the user asked for, the session's worktree and merged branch are gone
-/// (THREAD-PLAN.md Q9). The rest of that turn doesn't bring them back; the user's next message does, at the
-/// same path, on a fresh branch from the base's tip as it is then, and the thread goes on in
-/// the same CLI session.
-#[tokio::test]
-async fn a_merge_removes_the_session_worktree_and_the_next_message_starts_fresh() {
-    let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
-    let log = seen.clone();
-    let flow = Flow::start(
-        "thread-merge-fresh",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                log.lock()
-                    .unwrap()
-                    .push((turn.input.clone(), turn.add_dirs.clone()));
-                if turn.input.contains("Add notes.") {
-                    commit_in_workspace(
-                        &turn,
-                        "NOTES.md",
-                        "notes\n",
-                        "Add notes\n\nBrigadier-Author: thread",
-                    );
-                    return Reply::text("Notes added. Merge them into `main`?");
-                }
-                if turn.input.contains("yes, merge it") {
-                    let reply = turn
-                        .call("finish_session", json!({"user_words": "yes, merge it"}))
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    log.lock().unwrap().push((reply.text.clone(), Vec::new()));
-                    return Reply::text("Merged.");
-                }
-                Reply::text("Done.")
+/// The script of the merge tests below: commits NOTES.md on "Add notes.", merges on "yes,
+/// merge it", and logs every input with its folders and finish_session's answer.
+fn merging_thread(seen: Arc<Mutex<Vec<Seen>>>) -> Script {
+    script(move |turn| {
+        let log = seen.clone();
+        async move {
+            log.lock()
+                .unwrap()
+                .push((turn.input.clone(), turn.add_dirs.clone()));
+            if turn.input.contains("Add notes.") {
+                commit_in_workspace(
+                    &turn,
+                    "NOTES.md",
+                    "notes\n",
+                    "Add notes\n\nBrigadier-Author: thread",
+                );
+                return Reply::text("Notes added, ready to merge.");
             }
-        }),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    let worktree = session_worktree(&flow);
-    let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    flow.say("yes, merge it").await;
+            if turn.input.contains("yes, merge it") {
+                let reply = turn
+                    .call("finish_session", json!({"user_words": "yes, merge it"}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                log.lock().unwrap().push((reply.text.clone(), Vec::new()));
+                return Reply::text("Merged.");
+            }
+            Reply::text("Done.")
+        }
+    })
+}
+
+/// finish_session's answer, once the thread has it.
+async fn finished(flow: &Flow, seen: &Arc<Mutex<Vec<Seen>>>) -> String {
     flow.until("the [finished] answer", |_| {
         seen.lock()
             .unwrap()
@@ -1073,46 +1062,54 @@ async fn a_merge_removes_the_session_worktree_and_the_next_message_starts_fresh(
     })
     .await;
     flow.settled().await;
-    let finished = seen
-        .lock()
+    seen.lock()
         .unwrap()
         .iter()
         .find(|(input, _)| input.contains("[finished]"))
         .unwrap()
         .0
-        .clone();
+        .clone()
+}
+
+/// After the merge the user asked for, the session keeps its worktree and branch (BUILD-PLAN
+/// A3): the branch is at the merge, and the user's next message goes on in the same folder, in
+/// the same CLI session, with nothing made again.
+#[tokio::test]
+async fn a_merge_keeps_the_session_worktree_and_its_branch_moves_to_the_merge() {
+    let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
+    let flow = Flow::start(
+        "thread-merge-kept",
+        Options::default(),
+        merging_thread(seen.clone()),
+    )
+    .await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let worktree = session_worktree(&flow);
+    let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    flow.say("yes, merge it").await;
+    let finished = finished(&flow, &seen).await;
     assert!(
-        finished.contains("worktree and branch are removed"),
+        finished.contains("The session keeps its worktree and branch"),
         "{finished}"
     );
-    assert!(!worktree.exists(), "{}", worktree.display());
-    assert_eq!(git(&flow.repo, &["branch", "--list", &branch]), "");
     assert!(git(&flow.repo, &["cat-file", "-e", "main:NOTES.md"]).is_empty());
-    assert!(matches!(
-        flow.core.conversation(&flow.conversation).unwrap().setup,
-        Some(Setup::Session {
-            environment: Environment::NewWorktree { path: None, .. },
-            ..
-        })
-    ));
-    // The base moves on after the merge; the next message starts from where it is then.
-    std::fs::write(flow.repo.join("LATER.md"), "later\n").unwrap();
-    git(&flow.repo, &["add", "LATER.md"]);
-    git(&flow.repo, &["commit", "-q", "-m", "Later"]);
+    assert!(worktree.join(".git").exists(), "{}", worktree.display());
     let main_tip = git(&flow.repo, &["rev-parse", "main"]);
+    assert_eq!(git(&flow.repo, &["rev-parse", &branch]), main_tip);
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), main_tip);
+    assert_eq!(session_worktree(&flow), worktree);
     let specs = flow.thread_specs().len();
     flow.say("Next.").await;
     flow.settled().await;
     assert_eq!(session_worktree(&flow), worktree, "the same path");
-    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), main_tip);
     assert_eq!(
         git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]),
         branch
     );
     let (input, dirs) = seen.lock().unwrap().last().unwrap().clone();
     assert!(input.contains("Next."), "{input}");
-    // It hears that its worktree was made again (bug 5), in the same CLI session.
-    assert!(input.contains("[workspace] A fresh branch"), "{input}");
+    assert!(!input.contains("[workspace] A fresh branch"), "{input}");
     assert_eq!(dirs[0], worktree);
     assert_eq!(
         flow.thread_specs().len(),
@@ -1122,178 +1119,35 @@ async fn a_merge_removes_the_session_worktree_and_the_next_message_starts_fresh(
     flow.stop().await;
 }
 
-/// A merge whose worktree removal failed (a folder it may not empty) says so, and the user's
-/// next message removes it first, then starts fresh from the base's tip at the same path: the
-/// next launch's sweep has nothing left to remove from under the session.
+/// Uncommitted changes in the session's worktree stay through a merge, with the branch at the
+/// merge.
 #[tokio::test]
-async fn a_merge_whose_worktree_removal_failed_retries_it_at_the_next_message() {
-    use std::os::unix::fs::PermissionsExt;
+async fn a_merge_keeps_uncommitted_changes_in_the_session_worktree() {
     let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
-    let log = seen.clone();
     let flow = Flow::start(
-        "thread-merge-unremovable",
+        "thread-merge-dirty",
         Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                log.lock()
-                    .unwrap()
-                    .push((turn.input.clone(), turn.add_dirs.clone()));
-                if turn.input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    return Reply::text("Notes added. Merge them into `main`?");
-                }
-                if turn.input.contains("yes, merge it") {
-                    let reply = turn
-                        .call("finish_session", json!({"user_words": "yes, merge it"}))
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    log.lock().unwrap().push((reply.text.clone(), Vec::new()));
-                    return Reply::text("Merged.");
-                }
-                Reply::text("Done.")
-            }
-        }),
+        merging_thread(seen.clone()),
     )
     .await;
     flow.say("Add notes.").await;
     flow.settled().await;
     let worktree = session_worktree(&flow);
+    std::fs::write(worktree.join("DRAFT.md"), "draft\n").unwrap();
     let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    let mode = |path: &std::path::Path, mode: u32| {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-    };
-    mode(&worktree, 0o555);
     flow.say("yes, merge it").await;
-    flow.until("the [finished] answer", |_| {
-        seen.lock()
-            .unwrap()
-            .iter()
-            .any(|(input, _)| input.contains("[finished]"))
-    })
-    .await;
-    flow.settled().await;
-    mode(&worktree, 0o755);
-    let finished = seen
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|(input, _)| input.contains("[finished]"))
-        .unwrap()
-        .0
-        .clone();
-    assert!(finished.contains("couldn't be removed yet"), "{finished}");
-    let owner = format!("session:{}", flow.conversation);
-    assert!(flow.manager.runtime.ledger().disposing().contains(&owner));
-    std::fs::write(flow.repo.join("LATER.md"), "later\n").unwrap();
-    git(&flow.repo, &["add", "LATER.md"]);
-    git(&flow.repo, &["commit", "-q", "-m", "Later"]);
-    let main_tip = git(&flow.repo, &["rev-parse", "main"]);
-    flow.say("Next.").await;
-    flow.settled().await;
-    assert_eq!(session_worktree(&flow), worktree, "the same path");
-    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), main_tip);
-    assert_eq!(
-        git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]),
-        branch
-    );
+    let finished = finished(&flow, &seen).await;
     assert!(
-        !flow.manager.runtime.ledger().disposing().contains(&owner),
-        "nothing left for the next launch's sweep"
+        finished.contains("The session keeps its worktree and branch"),
+        "{finished}"
     );
-    let (input, _) = seen.lock().unwrap().last().unwrap().clone();
-    assert!(input.contains("Next."), "{input}");
-    flow.stop().await;
-}
-
-/// Uncommitted changes in the session's worktree, or a lock the user put on it, keep it and its
-/// branch after a merge, and the thread is told why.
-#[tokio::test]
-async fn a_merge_keeps_a_session_worktree_with_uncommitted_changes() {
-    for locked in [false, true] {
-        merge_keeps_the_worktree(locked).await;
-    }
-}
-
-async fn merge_keeps_the_worktree(locked: bool) {
-    let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
-    let log = seen.clone();
-    let flow = Flow::start(
-        if locked {
-            "thread-merge-locked"
-        } else {
-            "thread-merge-dirty"
-        },
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                log.lock()
-                    .unwrap()
-                    .push((turn.input.clone(), turn.add_dirs.clone()));
-                if turn.input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    return Reply::text("Notes added. Merge them into `main`?");
-                }
-                if turn.input.contains("yes, merge it") {
-                    let reply = turn
-                        .call("finish_session", json!({"user_words": "yes, merge it"}))
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    log.lock().unwrap().push((reply.text.clone(), Vec::new()));
-                    return Reply::text("Merged.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    let worktree = session_worktree(&flow);
-    if locked {
-        git(
-            &flow.repo,
-            &["worktree", "lock", &worktree.display().to_string()],
-        );
-    } else {
-        std::fs::write(worktree.join("DRAFT.md"), "draft\n").unwrap();
-    }
-    let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    flow.say("yes, merge it").await;
-    flow.until("the [finished] answer", |_| {
-        seen.lock()
-            .unwrap()
-            .iter()
-            .any(|(input, _)| input.contains("[finished]"))
-    })
-    .await;
-    flow.settled().await;
-    let finished = seen
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|(input, _)| input.contains("[finished]"))
-        .unwrap()
-        .0
-        .clone();
-    if locked {
-        assert!(finished.contains("is locked"), "{finished}");
-        git(
-            &flow.repo,
-            &["worktree", "unlock", &worktree.display().to_string()],
-        );
-    } else {
-        assert!(
-            finished.contains("uncommitted changes (DRAFT.md)"),
-            "{finished}"
-        );
-        assert!(worktree.join("DRAFT.md").exists());
-    }
-    assert!(worktree.exists());
     assert_eq!(
-        git(&flow.repo, &["branch", "--list", &branch]).trim_start_matches(['*', '+', ' ']),
-        branch
+        std::fs::read_to_string(worktree.join("DRAFT.md")).unwrap(),
+        "draft\n"
+    );
+    assert_eq!(
+        git(&flow.repo, &["rev-parse", &branch]),
+        git(&flow.repo, &["rev-parse", "main"])
     );
     assert_eq!(session_worktree(&flow), worktree);
     flow.stop().await;

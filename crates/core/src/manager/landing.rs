@@ -30,14 +30,13 @@ use brigadier_git::{
     SeriesOutcome, Side, litter,
 };
 
-use super::cards::{MERGE_RESOLVING, merge_chosen, merge_label};
 use super::conversation::Envelope;
 use super::workers::Workspace;
 use super::{SessionManager, blocking, git_error, merge_consent};
 use crate::model::{ConversationId, Environment, MessageRole, Setup};
 use crate::work::{
-    DecisionKind, DecisionSource, DiffStat, ExcludedFile, FileStat, InjectionKind, MergeInputs,
-    OrchestratorStepKind, PhaseStage, QuestionItem, QuestionKind, QuestionOption, Task, TaskState,
+    AnswerOrigin, DecisionKind, DecisionSource, DiffStat, ExcludedFile, FileStat, InjectionKind,
+    MergeInputs, OrchestratorStepKind, PhaseStage, QuestionKind, Task, TaskState,
 };
 use crate::{Error, Result};
 
@@ -1293,151 +1292,14 @@ impl SessionManager {
         Ok(run)
     }
 
-    /// `propose_merge`: asks the user once, on a card, whether to merge the session branch into
-    /// its base. A second card is refused while one is open, after "Merge" (finish_session is
-    /// what's next), or after "Not yet" until the user writes again.
+    /// `propose_merge`, retired (BUILD-PLAN A4): merge cards are gone, and a session that still
+    /// has the tool hears what to do instead.
     pub(crate) async fn propose_merge(
         &self,
-        id: &ConversationId,
-        note: Option<String>,
+        _id: &ConversationId,
+        _note: Option<String>,
     ) -> Result<String> {
-        if self.overnight.active.get(id).is_some() {
-            return Err(Error::Invalid(
-                "An overnight run is going in this session: its verified work merges by the user's Merge on the run's card, in the morning.".into(),
-            ));
-        }
-        let Some(Setup::Session {
-            repo,
-            environment: Environment::NewWorktree { base, branch, .. },
-            ..
-        }) = self.core.conversation(id)?.setup
-        else {
-            return Err(Error::Invalid(
-                "this session works on a local checkout: its commits are already on the picked branch, and there is nothing to merge".into(),
-            ));
-        };
-        // The merge is offered only once no worker writes (SESSION-FIXES-PLAN.md Q3).
-        let writing = self.writing(id).await?;
-        if !writing.is_empty() {
-            return Err(Error::Invalid(format!(
-                "Workers are still writing ({}): offer the merge once they land.",
-                writing.join(", ")
-            )));
-        }
-        let board = self.core.board(id).await?;
-        let cards: Vec<_> = board
-            .questions
-            .values()
-            .filter(|question| matches!(&question.kind, QuestionKind::Merge { .. }))
-            .collect();
-        // The message a card's own words went as is no writing since that card's "Not yet".
-        let messages = match &board.head {
-            Some((head, _)) => self.core.branch(id, head).await?,
-            None => self.core.all_messages(id).await?,
-        };
-        let latest = messages
-            .iter()
-            .rev()
-            .find(|message| {
-                message.role == MessageRole::User
-                    && !cards.iter().any(|card| {
-                        card.words_id.as_ref().is_some_and(|words| {
-                            *words == message.id
-                                || (*words == card.id.to_string()
-                                    && message.created_at_ms >= card.answered_at_ms.unwrap_or(0))
-                        })
-                    })
-            })
-            .map(|message| message.created_at_ms);
-        if cards.iter().any(|card| card.is_open()) {
-            return Err(Error::Invalid(
-                "A merge card is already open: wait for the user's answer, which arrives as a message.".into(),
-            ));
-        }
-        // A card withdrawn (its request was edited) has no answer and doesn't count.
-        let since = |card: &&crate::work::Question| {
-            card.answer.is_some()
-                && card
-                    .answered_at_ms
-                    .is_some_and(|answered| latest.is_none_or(|latest| answered >= latest))
-        };
-        if let Some(card) = cards
-            .iter()
-            .copied()
-            .filter(since)
-            .max_by_key(|card| card.answered_at_ms)
-        {
-            let merge = card
-                .answer
-                .as_deref()
-                .is_some_and(|answer| merge_chosen(answer, &base));
-            if merge && !spent(&board, &card.id.to_string()) {
-                return Err(Error::Invalid(
-                    "The user already chose \"Merge\" on the card: call finish_session, without user_words.".into(),
-                ));
-            }
-            if !merge {
-                return Err(Error::Invalid(
-                    "The user answered \"Not yet\" on the merge card and hasn't written since: don't ask again until they bring it up.".into(),
-                ));
-            }
-        }
-        let note = note
-            .map(|line| line.trim().to_owned())
-            .filter(|line| !line.is_empty());
-        // Whether the merge would stop at conflicts, looked at ahead: the card then offers to
-        // resolve them. A look that fails shows the plain card.
-        let (git, repo_path, base_name, branch_name) = (
-            self.git.clone(),
-            PathBuf::from(&repo),
-            base.clone(),
-            branch.clone(),
-        );
-        let conflicts = blocking(move || {
-            let repo = git.open(&repo_path).map_err(git_error)?;
-            match repo
-                .prepare_merge(&base_name, &branch_name, "Merge")
-                .map_err(git_error)?
-            {
-                MergeOutcome::Conflicts { paths } => Ok(Some(paths)),
-                MergeOutcome::Ready { .. } => Ok(None),
-            }
-        })
-        .await
-        .unwrap_or_else(|err| {
-            tracing::warn!(conversation = %id, error = %err, "could not look ahead at the session merge");
-            None
-        });
-        let (text, label) = merge_offer(&branch, &base, conflicts.as_deref());
-        let item = QuestionItem {
-            text,
-            options: vec![
-                QuestionOption {
-                    label,
-                    description: note,
-                },
-                QuestionOption {
-                    label: "Not yet".into(),
-                    description: Some(format!("The work stays on `{branch}`.")),
-                },
-            ],
-            recommended: None,
-        };
-        let kind = QuestionKind::Merge {
-            branch: branch.clone(),
-            base: base.clone(),
-            conflicted: conflicts.is_some(),
-            conflicts: conflicts
-                .unwrap_or_default()
-                .into_iter()
-                .take(CONFLICTS_SHOWN)
-                .collect(),
-        };
-        self.open_round(id, None, kind, vec![item]).await?;
-        Ok(format!(
-            "Asked the user whether to merge `{branch}` into `{base}`. The card shows under your final answer: write it now, unless you already did. The answer arrives as an [answer] message.{}",
-            unsettled_findings(&board)
-        ))
+        Err(Error::Invalid(PROPOSE_MERGE_RETIRED.into()))
     }
 
     /// When the user last wrote on the branch shown, if ever.
@@ -1475,8 +1337,8 @@ impl SessionManager {
         Ok(sent.max(queued))
     }
 
-    /// `finish_session`: merges the session branch into its base once the user consented: on the
-    /// thread's merge card, or in their latest message's words (`user_words`, quoted from it;
+    /// `finish_session`: merges the session branch into its base once the user consented: their
+    /// click on "Merge into main", or their latest message's words (`user_words`, quoted from it;
     /// [`merge_consent`]).
     pub(crate) async fn finish_session(
         &self,
@@ -1699,7 +1561,7 @@ impl SessionManager {
             Prepared::Ready(commit, base_tip, tip, commits) => (commit, base_tip, tip, commits),
             Prepared::Moved => {
                 return Err(Error::Invalid(format!(
-                    "[not merged] Other work landed on `{branch}` since the user consented, and their consent doesn't cover it. Nothing was merged. Ask with propose_merge."
+                    "[not merged] Other work landed on `{branch}` since the user consented, and their consent doesn't cover it. Nothing was merged. Tell the user; it merges on their next \"Merge into main\" or their words."
                 )));
             }
             Prepared::Unchecked => {
@@ -1759,9 +1621,10 @@ impl SessionManager {
             };
             // What the user asked for is the session branch as it was: work that landed on it
             // meanwhile would be left out.
+            let expected = session_tip.clone();
             blocking(move || {
                 let repo = git.open(&repo_path).map_err(git_error)?;
-                if repo.branch_tip(&session_branch).map_err(git_error)? != Some(session_tip) {
+                if repo.branch_tip(&session_branch).map_err(git_error)? != Some(expected) {
                     return Ok(None);
                 }
                 repo.land(&request).map(Some).map_err(git_error)
@@ -1820,31 +1683,20 @@ impl SessionManager {
         .await;
         *conv.merge_told.lock().unwrap() = None;
         drop(landing_lock);
-        // The session's work is merged: what showed it stops, and its worktree and branch go
-        // (THREAD-PLAN.md Q9).
-        let _ = self.stop_previews(id, "the session was merged").await;
-        // The landed workers kept for their reviews' findings are done with too, and the
-        // checkout its full checks ran in.
+        // The session's work is merged. Its worktree and branch stay with the session (BUILD-PLAN
+        // A3): the branch moves on to the merge, and the next change starts from there.
+        // The landed workers kept for their reviews' findings are done with, and the checkout
+        // its full checks ran in.
         self.settle_all_holds(id).await;
         self.drop_check_checkout(id).await;
-        let released = self.release_merged_session(id).await;
+        let released = self
+            .follow_merge(&repo, &branch, &base, session_tip, new_tip.clone())
+            .await;
         Ok(format!(
             "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{reviews}{released}",
             if commits == 1 { "" } else { "s" },
             short(&new_tip)
         ))
-    }
-
-    /// The session's write tasks that aren't final, as `task-N`.
-    async fn writing(&self, id: &ConversationId) -> Result<Vec<String>> {
-        Ok(self
-            .core
-            .tasks(id)
-            .await?
-            .iter()
-            .filter(|t| t.kind.writes() && !t.state.is_final())
-            .map(|t| format!("task-{}", t.number))
-            .collect())
     }
 
     /// Once no write task is left, the held merge is stopped, waits for findings to be
@@ -2026,11 +1878,174 @@ impl SessionManager {
                 kind: InjectionKind::Decision,
                 label: "merge cancelled".into(),
                 task_id: None,
-                text: "[merge cancelled by the user] The user cancelled the merge they had asked for. Don't merge: their consent is spent, and only new words or a new Merge on a card give it again. Reply in one line at most.".into(),
+                text: "[merge cancelled by the user] The user cancelled the merge they had asked for. Don't merge: their consent is spent, and only their new words or a new \"Merge into main\" click give it again. Reply in one line at most.".into(),
             },
         )
         .await;
         Ok("Merge cancelled.".into())
+    }
+
+    /// Merge cards are retired (BUILD-PLAN A4). After an upgrade, a session's open merge card
+    /// is withdrawn, and a held merge whose consent came from a card answer is cancelled; the
+    /// thread hears of either in one line. A held merge from the user's words stays.
+    pub(super) async fn retire_merge_cards(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        let open: Vec<_> = board
+            .questions
+            .values()
+            .filter(|question| {
+                matches!(question.kind, QuestionKind::Merge { .. }) && question.is_open()
+            })
+            .cloned()
+            .collect();
+        for question in &open {
+            self.withdraw_question(question).await;
+        }
+        let held = pending_merge(&board).filter(|held| {
+            board.questions.values().any(|question| {
+                matches!(question.kind, QuestionKind::Merge { .. })
+                    && question.id.to_string() == held.asked_in
+            })
+        });
+        if let Some(held) = &held {
+            self.orchestrator_step(
+                id,
+                OrchestratorStepKind::MergeCancelled {
+                    asked_in: held.asked_in.clone(),
+                },
+            )
+            .await;
+        }
+        let text = match (open.is_empty(), held.is_some()) {
+            (true, false) => return,
+            (_, true) => {
+                "[merge cards retired] Brigadier no longer merges on a card's answer, so the merge held from one is cancelled and nothing was merged. Merge only on the side panel's \"Merge into main\" or the user's own words."
+            }
+            (false, false) => {
+                "[merge cards retired] Brigadier no longer asks about merges on cards, so the open merge card is closed. Merge only on the side panel's \"Merge into main\" or the user's own words."
+            }
+        };
+        self.queue_envelope(
+            id,
+            Envelope {
+                kind: InjectionKind::Decision,
+                label: "merge cards retired".into(),
+                task_id: None,
+                text: text.into(),
+            },
+            None,
+        )
+        .await;
+    }
+
+    /// After a merge, the session branch fast-forwards to the merge commit in its worktree, so
+    /// the session goes on from what is on the base, with its build caches. Returns what the
+    /// thread is told about it.
+    async fn follow_merge(
+        &self,
+        repo: &str,
+        branch: &str,
+        base: &str,
+        session_tip: Oid,
+        merged: Oid,
+    ) -> String {
+        let (git, repo_path, request) = (
+            self.git.clone(),
+            PathBuf::from(repo),
+            LandRequest {
+                branch: branch.to_owned(),
+                expected_tip: session_tip,
+                commit: merged,
+            },
+        );
+        let moved = blocking(move || {
+            git.open(&repo_path)
+                .map_err(git_error)?
+                .land(&request)
+                .map_err(git_error)
+        })
+        .await;
+        match moved {
+            Ok(LandOutcome::Landed { .. }) => format!(
+                " The session keeps its worktree and branch: `{branch}` is at the merge now, so later work goes on from what is on `{base}`."
+            ),
+            Ok(LandOutcome::Blocked(block)) => format!(
+                " The session keeps its worktree and branch; `{branch}` stays where it was ({block}), and its work is on `{base}` all the same."
+            ),
+            Err(err) => format!(
+                " The session keeps its worktree and branch; `{branch}` couldn't move to the merge ({err}), and its work is on `{base}` all the same."
+            ),
+        }
+    }
+
+    /// The user clicked "Merge into main" (BUILD-PLAN A4): the click is recorded with where it
+    /// came from, and the thread is told to merge. Consent holds once, until the user writes
+    /// again; behind running writers it waits as a held merge does.
+    pub async fn merge_session(&self, id: &ConversationId, origin: AnswerOrigin) -> Result<String> {
+        if self.overnight.active.get(id).is_some() {
+            return Err(Error::Invalid(
+                "An overnight run is going in this session: its verified work merges by Merge on the run's card.".into(),
+            ));
+        }
+        let Some(Setup::Session {
+            repo,
+            environment: Environment::NewWorktree { base, branch, .. },
+            ..
+        }) = self.core.conversation(id)?.setup
+        else {
+            return Err(Error::Invalid(
+                "This session works in your checkout: its commits are already on the branch."
+                    .into(),
+            ));
+        };
+        let (git, repo_path, base_name, branch_name) = (
+            self.git.clone(),
+            PathBuf::from(&repo),
+            base.clone(),
+            branch.clone(),
+        );
+        let ahead = blocking(move || {
+            let repo = git.open(&repo_path).map_err(git_error)?;
+            let (Some(tip), Some(base_tip)) = (
+                repo.branch_tip(&branch_name).map_err(git_error)?,
+                repo.branch_tip(&base_name).map_err(git_error)?,
+            ) else {
+                return Ok(0);
+            };
+            repo.count_commits(&base_tip, &tip).map_err(git_error)
+        })
+        .await?;
+        if ahead == 0 {
+            return Err(Error::Invalid(format!(
+                "Nothing to merge: `{branch}` has no commits that `{base}` lacks."
+            )));
+        }
+        let asked = format!("merge-click:{}", crate::model::CardId::generate());
+        self.orchestrator_step(
+            id,
+            OrchestratorStepKind::MergeRequested {
+                id: asked,
+                branch: branch.clone(),
+                base: base.clone(),
+                origin,
+            },
+        )
+        .await;
+        self.deliver(
+            id,
+            Envelope {
+                kind: InjectionKind::Decision,
+                label: "merge".into(),
+                task_id: None,
+                text: format!(
+                    "[merge] The user clicked \"Merge into main\" for `{branch}` into `{base}`. Call finish_session now, without user_words."
+                ),
+            },
+        )
+        .await;
+        Ok(format!("Merging `{branch}` into `{base}`."))
     }
 
     /// The user's consent to the session's merge: given now ([`Self::fresh_consent`]), or held
@@ -2066,8 +2081,8 @@ impl SessionManager {
 
     /// Consent `held` (a pending merge), unless it was used or cancelled, or the user since
     /// they gave it wrote something that waits, says "no", "wait", "not yet" or "don't", holds
-    /// the merge or puts a condition on it ([`merge_consent::takes_back`]), or answered "Not
-    /// yet" on a merge card. `refused` is why fresh consent was refused.
+    /// the merge or puts a condition on it ([`merge_consent::takes_back`]). `refused` is why
+    /// fresh consent was refused.
     async fn held_consent(
         &self,
         id: &ConversationId,
@@ -2093,29 +2108,15 @@ impl SessionManager {
         })
     }
 
-    /// Why the user took back the consent `held` since they gave it: a "Not yet" on a merge
-    /// card, or a message that waits, says "no", "wait", "not yet" or "don't", holds the merge
-    /// or puts a condition on it ([`merge_consent::takes_back`]). `None` while it holds.
+    /// Why the user took back the consent `held` since they gave it: a message that says "no",
+    /// "wait", "not yet" or "don't", holds the merge or puts a condition on it
+    /// ([`merge_consent::takes_back`]). `None` while it holds.
     async fn taken_back(
         &self,
         id: &ConversationId,
         board: &crate::board::Board,
         held: &PendingMerge,
     ) -> Result<Option<String>> {
-        let not_yet = board.questions.values().any(|question| {
-            matches!(&question.kind, QuestionKind::Merge { branch, base, .. } if *branch == held.branch && *base == held.base)
-                && question.id.to_string() != held.asked_in
-                && question.answered_at_ms.is_some_and(|at| at >= held.consented_at_ms)
-                && !question
-                    .answer
-                    .as_deref()
-                    .is_some_and(|answer| merge_chosen(answer, &held.base))
-        });
-        if not_yet {
-            return Ok(Some(
-                "the user answered \"Not yet\" on the merge card since they consented; don't ask again until they bring it up".into(),
-            ));
-        }
         let messages = match &board.head {
             Some((head, _)) => self.core.branch(id, head).await?,
             None => self.core.all_messages(id).await?,
@@ -2131,9 +2132,10 @@ impl SessionManager {
             .map(|why| format!("the user wrote since they consented, and their message {why}")))
     }
 
-    /// The user message that gives consent to the session's merge: the latest on the branch
-    /// shown, with `user_words` in it ([`merge_consent::check`]), nothing the user wrote waiting
-    /// after it, and no merge asked in it already.
+    /// What gives consent to the session's merge: the user's click on "Merge into main" since
+    /// their latest message, or that message (the latest on the branch shown) with `user_words`
+    /// in it ([`merge_consent::check`]); either with nothing the user wrote waiting after it,
+    /// and neither used for a merge already.
     async fn fresh_consent(
         &self,
         id: &ConversationId,
@@ -2159,55 +2161,33 @@ impl SessionManager {
                 .any(|item| item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= since)
         };
         let used = |asked: &str| spent(&board, asked);
-        // The user's latest answer on a merge card, after their latest message, decides: its
-        // "Merge" is consent, anything else revokes what their message said.
-        let card = board
-            .questions
-            .values()
-            .filter(|question| {
-                matches!(&question.kind, QuestionKind::Merge { branch: b, base: a, .. } if b == branch && a == base)
-                    && question.answer.is_some()
+        // The user's click on "Merge into main" after their latest message is consent, once
+        // (BUILD-PLAN A4). A merge card's answer never is.
+        let click = board
+            .orchestrator_steps
+            .iter()
+            .rev()
+            .find_map(|step| match &step.kind {
+                OrchestratorStepKind::MergeRequested {
+                    id,
+                    branch: b,
+                    base: a,
+                    ..
+                } if b == branch && a == base => Some((id.clone(), step.at_ms)),
+                _ => None,
             })
-            .max_by_key(|question| question.answered_at_ms);
-        // Words the user answered that card with instead of its Merge are no consent either.
-        if let (Some(card), Some(latest)) = (card, latest)
-            && card.words_id.as_ref().is_some_and(|words| {
-                *words == latest.id
-                    || (*words == card.id.to_string()
-                        && latest.created_at_ms >= card.answered_at_ms.unwrap_or(0))
-            })
+            .filter(|(_, at)| latest.is_none_or(|latest| *at >= latest.created_at_ms));
+        if let Some((asked, clicked)) = click
+            && !used(&asked)
         {
-            return Err(refuse(
-                "the user's latest message is what they answered the merge card with instead of Merge, which isn't consent; don't ask again until they bring it up".into(),
-            ));
-        }
-        if let Some(card) = card
-            && let Some(answered) = card.answered_at_ms
-            && latest.is_none_or(|latest| answered >= latest.created_at_ms)
-        {
-            if !card
-                .answer
-                .as_deref()
-                .is_some_and(|answer| merge_chosen(answer, base))
-            {
-                return Err(refuse(
-                    "the user answered \"Not yet\" on the merge card after their latest message; don't ask again until they bring it up".into(),
-                ));
-            }
-            let asked = card.id.to_string();
-            if used(&asked) {
-                return Err(refuse(
-                    "the user's Merge on the card was already used for a merge; another merge needs their fresh consent".into(),
-                ));
-            }
-            if wrote_since(answered) {
+            if wrote_since(clicked) {
                 return Err(refuse(
                     "the user wrote again since (it waits in the queue): read it first".into(),
                 ));
             }
             return Ok(Consent {
                 asked_in: asked,
-                at_ms: answered,
+                at_ms: clicked,
                 condition: crate::work::MergeCondition::Now,
             });
         }
@@ -2400,7 +2380,7 @@ fn conflict_marker(line: &[u8]) -> bool {
 
 /// The user's consent to a session merge.
 pub(super) struct Consent {
-    /// The user message, or merge card, that gave it.
+    /// The user message, or "Merge into main" click, that gave it.
     asked_in: String,
     /// When they gave it.
     at_ms: i64,
@@ -2632,9 +2612,12 @@ pub(super) fn reviews_since_merge(board: &crate::board::Board) -> Vec<&crate::wo
     reviews
 }
 
+/// What a late `propose_merge` call hears: merge cards are retired (BUILD-PLAN A4).
+pub(super) const PROPOSE_MERGE_RETIRED: &str = "propose_merge is retired: there are no merge cards any more. When the work is ready to merge you may say so once, in plain text. Merge only on the side panel's \"Merge into main\" button (you hear [merge] when the user clicks it, then call finish_session without user_words) or the user's own words (finish_session with user_words).";
+
 fn not_consented(why: String) -> Error {
     Error::Invalid(format!(
-        "[not merged] {why}. Nothing was merged. Merge only once the user consents: ask with propose_merge and wait for their answer, or when their latest message asks for it in words."
+        "[not merged] {why}. Nothing was merged. Merge only once the user consents: their click on the side panel's \"Merge into main\" (you hear [merge]), or their latest message asking for it in words. You may say once, in plain text, that the work is ready."
     ))
 }
 
@@ -2744,43 +2727,6 @@ fn unverified_text(unverified: &[String]) -> String {
     )
 }
 
-/// What `propose_merge` tells the thread of the findings since the last merge that aren't
-/// settled: recorded open, not recorded, or fixed without a check. Its card's note must not
-/// say they are fixed.
-pub(super) fn unsettled_findings(board: &crate::board::Board) -> String {
-    use crate::work::FindingStatus;
-    let reviews = reviews_since_merge(board);
-    let items: Vec<_> = reviews.iter().flat_map(|review| &review.items).collect();
-    let open: Vec<String> = items
-        .iter()
-        .filter(|item| matches!(item.status, FindingStatus::Open { .. }))
-        .map(|item| format!("{} {}", item.id, item.title))
-        .collect();
-    let new: Vec<&str> = items
-        .iter()
-        .filter(|item| item.status == FindingStatus::New)
-        .map(|item| item.id.as_str())
-        .collect();
-    let unverified = unverified_findings(&items);
-    let mut text = String::new();
-    if !open.is_empty() {
-        text.push_str(&format!(
-            " Review findings you recorded open: {}. Your answer tells the user they are not fixed.",
-            open.join("; ")
-        ));
-    }
-    if !new.is_empty() {
-        text.push_str(&format!(
-            " Findings you haven't recorded: {}.",
-            new.join(", ")
-        ));
-    }
-    if !unverified.is_empty() {
-        text.push_str(&unverified_text(&unverified));
-    }
-    text
-}
-
 pub(super) fn diff_stat_of(stat: &brigadier_git::DiffStat) -> DiffStat {
     DiffStat {
         files: stat
@@ -2856,47 +2802,6 @@ fn landed_line(task: &Task, target: &str) -> String {
         landed
     } else {
         format!("{landed} on `{target}`")
-    }
-}
-
-/// The most conflicting files a merge card names.
-const CONFLICTS_SHOWN: usize = 3;
-
-/// "3 files conflict with `main`: a.rs, b.rs, c.rs.", the first few named.
-fn merge_offer(branch: &str, base: &str, conflicts: Option<&[String]>) -> (String, String) {
-    match conflicts {
-        None => (
-            format!("Merge `{branch}` into `{base}`?"),
-            merge_label(base),
-        ),
-        Some(paths) => (
-            format!(
-                "Merge `{branch}` into `{base}`? {}",
-                conflicts_line(paths, base)
-            ),
-            MERGE_RESOLVING.to_owned(),
-        ),
-    }
-}
-
-fn conflicts_line(paths: &[String], base: &str) -> String {
-    let shown: Vec<String> = paths
-        .iter()
-        .take(CONFLICTS_SHOWN)
-        .map(|path| format!("`{path}`"))
-        .collect();
-    let more = paths.len().saturating_sub(CONFLICTS_SHOWN);
-    match paths.len() {
-        0 => format!("It conflicts with `{base}`."),
-        1 => format!("1 file conflicts with `{base}`: {}.", shown[0]),
-        count if more == 0 => format!(
-            "{count} files conflict with `{base}`: {}.",
-            shown.join(", ")
-        ),
-        count => format!(
-            "{count} files conflict with `{base}`: {} and {more} more.",
-            shown.join(", ")
-        ),
     }
 }
 
@@ -3062,10 +2967,7 @@ mod tests {
     }
 
     #[test]
-    fn a_conflict_without_paths_still_offers_resolution_and_old_cards_load() {
-        let (text, label) = merge_offer("session", "main", Some(&[]));
-        assert!(text.contains("conflicts with `main`"));
-        assert_eq!(label, MERGE_RESOLVING);
+    fn old_merge_cards_still_load() {
         let old: QuestionKind = serde_json::from_value(serde_json::json!({
             "type": "merge", "branch": "session", "base": "main"
         }))
@@ -3073,10 +2975,6 @@ mod tests {
         assert!(
             matches!(old, QuestionKind::Merge { conflicted: false, conflicts, .. } if conflicts.is_empty())
         );
-        let paths = (0..20).map(|i| format!("file-{i}.rs")).collect::<Vec<_>>();
-        let (text, _) = merge_offer("session", "main", Some(&paths));
-        assert!(text.contains("20 files conflict"));
-        assert!(!text.contains("file-19.rs"));
     }
 
     #[test]

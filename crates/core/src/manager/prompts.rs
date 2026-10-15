@@ -54,7 +54,7 @@ pub(crate) fn date_of(at_ms: i64) -> String {
 
 /// How the thread keeps the user from guessing: what a long step is before it starts, a
 /// readiness question answered first, the user's choice on a card.
-pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: before a long step, one line on what runs, why and about how long. Answer a yes/no or readiness question (\"ready to merge?\") first, with your recommendation and why (list_tasks says where the full checks stand); then, if the choice is theirs, ask_user with options (\"Run the full checks first (~15 min)\" / \"Merge now\" / \"Not yet\") or propose_merge. Never start a long run silently instead.";
+pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: before a long step, one line on what runs, why and about how long. Answer a yes/no or readiness question (\"ready to merge?\") first, with your recommendation and why (list_tasks says where the full checks stand); then, if the choice is theirs, ask_user with options (\"Run the full checks first (~15 min)\" / \"Not yet\"); a merge itself is never a card's answer: the user merges with \"Merge into main\" or in words. Never start a long run silently instead.";
 
 /// How the thread runs what takes long: through Brigadier, whose runs outlive its turn.
 pub(crate) const LONG_COMMANDS: &str = "A command still going after a minute goes on in the background by itself (@run, run_check): the call returns its run-N id and its result comes as a message in this request. Never background one yourself (`&`, nohup), and never run the full suite: the full checks run on their own (rerun_checks).";
@@ -115,7 +115,7 @@ How to work:
 - {LONG_COMMANDS}
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
 - Land finished work with land_phase (no phase needed), each report at once. Each landing and commit of yours queues the session's full checks, run once in the background on everyone's work; never run them yourself or ask the user how much to check. [checks failed …]: one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix the cause, then rerun_checks. Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. A worker never waits for its own review: land a report whose review still runs, and its findings come to you. A finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason (mention it to the user if it matters). Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. Record one fixed only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
-- "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). Offer propose_merge only once no worker writes. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
+- "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). [merge] means the user clicked "Merge into main": call finish_session without user_words. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
 - Your own changes stay small (the size above): read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`. One fixing only findings adds `--trailer "{FIXES_TRAILER}: R2.2, R2.3"`; a held merge covers it.
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with @remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
@@ -132,8 +132,8 @@ How to talk to the user:
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
 - {LEAD}
 - Even while work runs, write one line for: a failure of what you started (a preview, a dev app, a build, a check you awaited), in the same turn: what failed, its key error line, what you do about it; work the user didn't ask for, before it starts ("Starting 3 fixes from the review; about 20 min."); and [status due]: what runs, why, roughly what's left. Never say something compiles or runs without checking its process, or having a worker look.
-- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know. Then, if any, one line "To check: …" for what nobody could check and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_merge, propose_plan), never in text.
-- {LATE_EVENT} Never repeat a closing or ask the merge again.
+- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know. Then, if any, one line "To check: …" for what nobody could check and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_plan), never in text; a merge needs none.
+- {LATE_EVENT} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
 - {AUTHORITY}{short}{code_rules}{preferences}"#,
@@ -300,7 +300,7 @@ fn environment_text(environment: &Environment) -> String {
             "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`). Merging it into `{base}` is the user's call. When the work has landed, ask them once, on a card, with propose_merge (its note: what the merge brings and what the reviews found); never ask it in your text, and never ask it again once they answered. When they choose \"Merge into {base}\", call finish_session without user_words. When the user's latest message asks for the merge in words (\"merge it\", or \"… and merge it into `{base}`\" with the work itself), that is their consent too: call finish_session as soon as the work has landed, with their words, without asking. On \"Not yet\", silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), don't merge, and never take an earlier yes for a later merge. If finish_session reports conflicts with `{base}`, do what it says at once, without asking the user."
+            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: when the work is ready to merge you may say so once, in plain text, and never ask it on a card. Merge only on the side panel's \"Merge into main\" ([merge]: call finish_session without user_words) or the user's own words: when their latest message asks for the merge (\"merge it\", or \"… and merge it into `{base}`\" with the work itself), call finish_session as soon as the work has landed, with their words, without asking. On silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), don't merge, and never take an earlier yes for a later merge. After a merge the branch moves to it and you go on in the same worktree. If finish_session reports conflicts with `{base}`, do what it says at once, without asking the user."
         ),
     }
 }
@@ -466,6 +466,10 @@ pub(crate) const THREAD_NO_COMPUTER_REVISION: u32 = 26;
 /// dismisses out-of-scope findings; a worker never waits for its own review (a verifier
 /// still does) and builds only what its task asks.
 pub(crate) const LEAN_WORK_REVISION: u32 = 27;
+/// Merging is the user's act (BUILD-PLAN A3, A4): merge cards and propose_merge are gone, a
+/// merge comes only from the side panel's "Merge into main" or the user's words, and the
+/// session keeps its worktree and branch through it.
+pub(crate) const MERGE_BY_USER_REVISION: u32 = 28;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -617,6 +621,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: LEAN_WORK_REVISION,
         thread: "From now on, make a small change yourself instead of delegating it: one bounded change in one area (a bug, a small feature, about 100 changed lines or fewer in a few files), with no part worth running in parallel and no worker writing those files; read the code it touches, run the checks of what you changed, then commit with the trailer. Everything bigger still goes to workers. Never rerun a worker's checks after you land its work: the session's full checks run on their own after each landing. When one worker takes the whole request, set delegate_task's include_request and Brigadier adds the request verbatim (with what was added to it since and who sent it): don't copy it into the spec. A worker no longer waits for its own review: land a report whose review still runs, and its findings come to you. A finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason.",
         worker: "From now on, unless you verify a phase: never wait for your own review (review_code). Once your checks pass and your evidence is in, call submit_report; findings that arrive before your report are yours, later ones go to the orchestrator. Do exactly what your task asks: no extra feature, sample data, docs or refactor it didn't ask for, and a finding that asks for something your task didn't, or contradicts it, is no bug: note it in your report, don't build it.",
+    },
+    Revision {
+        number: MERGE_BY_USER_REVISION,
+        thread: "From now on, there are no merge cards: propose_merge is retired, and an answer on an old merge card is never consent. When the work is ready to merge you may say so once, in plain text. Merge only when the user clicks \"Merge into main\" on the side panel (you hear [merge]: call finish_session without user_words) or asks in their own words (finish_session with user_words). After a merge the session keeps its worktree and branch: the branch moves to the merge, and you go on working there.",
+        worker: "",
     },
 ];
 
@@ -2677,16 +2686,18 @@ mod environment_tests {
             assert!(!text.contains("kind waiting"));
             assert!(!text.contains("Waiting on you"));
         }
-        // The merge is asked once on a card; typed words still consent.
+        // The merge is the user's act: their click or their words, never a card.
         let worktree = environment_text(&Environment::NewWorktree {
             base: "main".into(),
             branch: "brigadier/flow".into(),
             path: None,
             start: None,
         });
-        assert!(worktree.contains("ask them once, on a card, with propose_merge"));
-        assert!(worktree.contains("call finish_session without user_words"));
-        assert!(worktree.contains("that is their consent too"));
+        assert!(!worktree.contains("propose_merge"));
+        assert!(worktree.contains("you may say so once, in plain text"));
+        assert!(worktree.contains("([merge]: call finish_session without user_words)"));
+        assert!(worktree.contains("the user's own words"));
+        assert!(worktree.contains("stays with the session through merges"));
         assert!(!worktree.contains("there is no card"));
         // Every byte is paid for on every call: it stays near 15 KB, code rules included
         // (the old orchestrator's 11,371 bytes, the interview the user wanted built in, and

@@ -13,14 +13,14 @@ test("approval cards show safe session scopes, dispatch decisions and stack on n
     ["command", "Allow git push for this session"],
     ["network", "Allow example.com for this session"],
     ["files", "Allow workspace edits for this session"],
-  ]) assert.deepEqual(seen.buttons[id!], ["DenyEsc", label, "Allow once⏎"]);
+  ]) assert.deepEqual(seen.buttons[id!], ["DenyEsc", label, "Allow once"]);
   for (const id of ["outside", "permissions", "tool", "unscoped-command"]) {
-    assert.deepEqual(seen.buttons[id], ["DenyEsc", "Allow once⏎"]);
+    assert.deepEqual(seen.buttons[id], ["DenyEsc", "Allow once"]);
   }
-  assert.deepEqual(seen.buttons["peer"], ["Don't sendEsc", "Send⏎"]);
+  assert.deepEqual(seen.buttons["peer"], ["Don't sendEsc", "Send"]);
   assert.deepEqual(seen.calls, [
+    // A window-wide Enter allows nothing: allowing takes a click or Enter on a focused Allow.
     { id: "command", decision: "allowSimilar" },
-    { id: "command", decision: "allow" },
     { id: "command", decision: "deny" },
     { id: "network", decision: "allowSimilar" },
     { id: "files", decision: "allowSimilar" },

@@ -1,17 +1,16 @@
 //! The thread asks the user only on cards (THREAD-PARITY-PLAN.md §5): a round of questions
 //! on one card, answered at once, inside the same request; a question asked in text is asked
-//! again on a card; the merge is asked once on a card, whose Merge is the user's consent.
+//! again on a card. Merges are never asked on a card (merge_by_user_tests).
 
 use std::sync::{Arc, Mutex};
 
 use brigadier_providers::{ItemStatus, ProviderEvent, Role};
 use serde_json::{Value, json};
 
-use super::thread_tests::{commit_in_workspace, on_main};
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::board::Board;
 use crate::model::MessageRole;
-use crate::work::{OrchestratorStepKind, Question, QuestionKind, RequestState};
+use crate::work::{AnswerInput, AnswerOrigin, Question, QuestionKind, RequestState};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -132,6 +131,7 @@ async fn a_round_of_questions_is_one_card_and_its_answers_continue_the_same_requ
             flow.conversation.clone(),
             card.id.clone(),
             vec!["CSV".into()],
+            None,
         )
         .await;
     assert!(short.is_err());
@@ -140,6 +140,11 @@ async fn a_round_of_questions_is_one_card_and_its_answers_continue_the_same_requ
             flow.conversation.clone(),
             card.id.clone(),
             vec!["CSV".into(), "Admins only".into(), "export.csv".into()],
+            Some(AnswerOrigin {
+                input: Some(AnswerInput::Click),
+                client: "Brigadier".into(),
+                pid: 4242,
+            }),
         )
         .await
         .unwrap();
@@ -148,6 +153,15 @@ async fn a_round_of_questions_is_one_card_and_its_answers_continue_the_same_requ
     let board = flow.settled().await;
     let answered = &board.questions[&card.id];
     assert_eq!(answered.answers, ["CSV", "Admins only", "export.csv"]);
+    // Where the answer came from is stored with it (BUILD-PLAN A5).
+    assert_eq!(
+        answered.answered_by,
+        Some(AnswerOrigin {
+            input: Some(AnswerInput::Click),
+            client: "Brigadier".into(),
+            pid: 4242,
+        })
+    );
     let heard = inputs.lock().unwrap().clone();
     assert_eq!(heard.len(), 2, "{heard:#?}");
     assert!(
@@ -220,6 +234,7 @@ async fn a_question_asked_in_text_is_asked_again_on_a_card() {
             flow.conversation.clone(),
             card.id.clone(),
             vec!["Dark".into()],
+            None,
         )
         .await
         .unwrap();
@@ -247,136 +262,6 @@ async fn a_question_asked_in_text_is_asked_again_on_a_card() {
     let latest = board.latest_request().unwrap();
     assert_eq!(latest.state, RequestState::Done, "{latest:#?}");
     assert!(open_card(&board, false).is_none());
-    flow.stop().await;
-}
-
-/// What the thread was told by its merge calls, in order.
-type Calls = Arc<Mutex<Vec<(String, String, bool)>>>;
-
-async fn call(turn: &Turn, calls: &Calls, name: &str, args: Value) -> bool {
-    let reply = turn.call(name, args).await;
-    calls
-        .lock()
-        .unwrap()
-        .push((name.to_owned(), reply.text.clone(), reply.is_error));
-    !reply.is_error
-}
-
-/// The merge is asked once, on a card. A second card is refused while one is open; finish_session
-/// refuses without consent. "Not yet" starts no turn: its note rides on the user's next message.
-/// The card's "Merge into main" is consent: finish_session merges without the user's words, once.
-#[tokio::test]
-async fn the_merge_is_asked_on_a_card_once_and_its_merge_is_the_users_consent() {
-    let calls: Calls = Arc::default();
-    let log = calls.clone();
-    let flow = Flow::start(
-        "card-merge",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                let input = turn.input.clone();
-                if input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    assert!(
-                        call(
-                            &turn,
-                            &log,
-                            "propose_merge",
-                            json!({ "note": "Adds NOTES.md; the review is clean." })
-                        )
-                        .await
-                    );
-                    assert!(!call(&turn, &log, "propose_merge", json!({})).await);
-                    assert!(!call(&turn, &log, "finish_session", json!({})).await);
-                    return Reply::text("[quiet]");
-                }
-                if input.contains("ask me again") {
-                    assert!(input.contains("doesn't want"), "{input}");
-                    assert!(call(&turn, &log, "propose_merge", json!({})).await);
-                    return Reply::text("[quiet]");
-                }
-                if input.contains("chose to merge") {
-                    assert!(call(&turn, &log, "finish_session", json!({})).await);
-                    // One Merge, one merge.
-                    assert!(!call(&turn, &log, "finish_session", json!({})).await);
-                    return Reply::text("Merged.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    // Answered once the turn that asked has made its calls: an answer before its second
-    // propose_merge would refuse it as "Not yet", not as "already open".
-    flow.until("the asking turn's calls", |_| {
-        calls.lock().unwrap().len() >= 3
-    })
-    .await;
-    let board = flow
-        .until("the merge card", |board| open_card(board, true).is_some())
-        .await;
-    let first = open_card(&board, true).unwrap();
-    let item = &first.round()[0];
-    assert_eq!(
-        item.options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect::<Vec<_>>(),
-        ["Merge into main", "Not yet"]
-    );
-    assert_eq!(
-        item.options[0].description.as_deref(),
-        Some("Adds NOTES.md; the review is clean.")
-    );
-    flow.manager
-        .answer_question(
-            flow.conversation.clone(),
-            first.id.clone(),
-            vec!["Not yet".into()],
-        )
-        .await
-        .unwrap();
-    flow.settled().await;
-    assert_eq!(calls.lock().unwrap().len(), 3, "no turn on Not yet");
-    assert!(!on_main(&flow, "NOTES.md"), "nothing merged on Not yet");
-    flow.say("OK, ask me again about merging.").await;
-    let board = flow
-        .until("the second merge card", |board| {
-            cards(board, true).len() == 2 && open_card(board, true).is_some()
-        })
-        .await;
-    let second = open_card(&board, true).unwrap();
-    flow.manager
-        .answer_question(
-            flow.conversation.clone(),
-            second.id.clone(),
-            vec!["Merge into main".into()],
-        )
-        .await
-        .unwrap();
-    flow.until("the merge", |_| calls.lock().unwrap().len() >= 6)
-        .await;
-    let board = flow.settled().await;
-    assert!(on_main(&flow, "NOTES.md"), "merged on the card's Merge");
-    let calls = calls.lock().unwrap().clone();
-    let said = |at: usize, text: &str| {
-        assert!(calls[at].1.contains(text), "{at}: {calls:#?}");
-    };
-    said(1, "already open");
-    said(2, "[not merged]");
-    said(4, "[finished]");
-    said(5, "already used");
-    let merged: Vec<_> = board
-        .orchestrator_steps
-        .iter()
-        .filter_map(|step| match &step.kind {
-            OrchestratorStepKind::Merged { asked_in, .. } => Some(asked_in.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(merged, [Some(second.id.to_string())]);
     flow.stop().await;
 }
 
@@ -478,300 +363,5 @@ async fn an_earlier_requests_open_card_doesnt_spare_a_later_text_question() {
             .any(|input| input.contains("asked the user a question in text"))
     })
     .await;
-    flow.stop().await;
-}
-
-/// A "Not yet" on the merge card after the user's message revokes what that message said:
-/// finish_session refuses the words it quoted, and a second card waits for the user to write.
-#[tokio::test]
-async fn a_not_yet_on_the_card_revokes_the_words_before_it() {
-    let calls: Calls = Arc::default();
-    let log = calls.clone();
-    let answered = Arc::new(tokio::sync::Notify::new());
-    let heard = answered.clone();
-    let flow = Flow::start(
-        "card-merge-revoked",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            let heard = heard.clone();
-            async move {
-                if turn.input.contains("Add notes and merge it.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    assert!(call(&turn, &log, "propose_merge", json!({})).await);
-                    // The card is answered while this turn still runs.
-                    heard.notified().await;
-                    assert!(
-                        !call(
-                            &turn,
-                            &log,
-                            "finish_session",
-                            json!({ "user_words": "merge it" })
-                        )
-                        .await
-                    );
-                    assert!(!call(&turn, &log, "propose_merge", json!({})).await);
-                    return Reply::text("It stays on its branch.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add notes and merge it.").await;
-    let board = flow
-        .until("the merge card", |board| open_card(board, true).is_some())
-        .await;
-    let card = open_card(&board, true).unwrap();
-    flow.manager
-        .answer_question(
-            flow.conversation.clone(),
-            card.id.clone(),
-            vec!["Not yet".into()],
-        )
-        .await
-        .unwrap();
-    answered.notify_one();
-    flow.until("the refusals", |_| calls.lock().unwrap().len() >= 3)
-        .await;
-    flow.settled().await;
-    assert!(!on_main(&flow, "NOTES.md"), "nothing merged after Not yet");
-    let calls = calls.lock().unwrap().clone();
-    assert!(calls[1].1.contains("Not yet"), "{calls:#?}");
-    assert!(calls[2].1.contains("Not yet"), "{calls:#?}");
-    flow.stop().await;
-}
-
-/// A merge card left open while the user asks for the merge in words: their words merge, the
-/// card goes with the merge, and no request is left waiting on it. The card holds nothing up:
-/// the request that opened it is done while it waits.
-#[tokio::test]
-async fn a_merge_asked_in_words_closes_the_merge_card_left_open() {
-    let calls: Calls = Arc::default();
-    let log = calls.clone();
-    let flow = Flow::start(
-        "card-merge-words",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                if turn.input.contains("just merge it") {
-                    let merged = call(
-                        &turn,
-                        &log,
-                        "finish_session",
-                        json!({ "user_words": "just merge it" }),
-                    )
-                    .await;
-                    assert!(merged, "{:#?}", log.lock().unwrap());
-                    return Reply::text("Merged.");
-                }
-                if turn.input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    assert!(call(&turn, &log, "propose_merge", json!({})).await);
-                    return Reply::text("Notes are in.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    flow.until("the merge card", |board| open_card(board, true).is_some())
-        .await;
-    let board = flow.settled().await;
-    assert!(open_card(&board, true).is_some());
-    let asked = board.latest_request().unwrap();
-    assert_eq!(asked.state, RequestState::Done, "{asked:#?}");
-    flow.say("Yes, just merge it.").await;
-    flow.until("the merge", |_| calls.lock().unwrap().len() >= 2)
-        .await;
-    let board = flow.settled().await;
-    assert!(on_main(&flow, "NOTES.md"), "merged on the user's words");
-    assert!(open_card(&board, true).is_none(), "{:#?}", board.questions);
-    assert!(
-        board
-            .requests
-            .values()
-            .all(|request| request.state == RequestState::Done),
-        "{:#?}",
-        board.requests
-    );
-    flow.stop().await;
-}
-
-/// A merge card answered in the user's own words is a new request, never consent: the card
-/// records "Not yet", the request that asked stays done, and the words reach the orchestrator
-/// as the new request's one message, with the decision on it. Even words that read as consent
-/// don't merge, nor reopen the card at once; the same words written later in the composer do.
-#[tokio::test]
-async fn a_merge_card_answered_in_words_is_a_new_request() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = inputs.clone();
-    let flow = Flow::start(
-        "card-merge-words",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                if !turn.is_orchestrator() {
-                    return Reply::text("Done.");
-                }
-                let input = turn.input.clone();
-                log.lock().unwrap().push(input.clone());
-                if input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    let reply = turn
-                        .call("propose_merge", json!({ "note": "Adds NOTES.md." }))
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Added NOTES.md.");
-                }
-                if input.contains("start the dev app") {
-                    let words = "please merge it into main and start the dev app";
-                    let reply = turn
-                        .call("finish_session", json!({ "user_words": words }))
-                        .await;
-                    if input.contains("doesn't want") {
-                        // The words read as consent, but they answered the card instead of
-                        // Merge; nor are they the user writing since its "Not yet".
-                        assert!(reply.is_error, "{}", reply.text);
-                        let again = turn.call("propose_merge", json!({})).await;
-                        assert!(again.is_error, "{}", again.text);
-                        assert!(again.text.contains("Not yet"), "{}", again.text);
-                        return Reply::text("The dev app runs.");
-                    }
-                    // The same words, written later in the composer, are fresh consent.
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Merged.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    flow.until("the merge card", |board| open_card(board, true).is_some())
-        .await;
-    let board = flow.settled().await;
-    let card = open_card(&board, true).unwrap();
-    let asked = board.latest_request().unwrap().clone();
-    let seen = flow.events().await.len();
-    let words = "please merge it into main and start the dev app";
-    flow.manager
-        .answer_question(
-            flow.conversation.clone(),
-            card.id.clone(),
-            vec![words.into()],
-        )
-        .await
-        .unwrap();
-    let board = flow
-        .until("the words' request to end", |board| {
-            board.requests.len() == 2
-                && board
-                    .requests
-                    .values()
-                    .all(|request| request.state == RequestState::Done)
-        })
-        .await;
-    let answered = &board.questions[&card.id];
-    assert_eq!(answered.answer.as_deref(), Some("Not yet"));
-    // The request that asked never worked again.
-    let reopened = flow.events().await[seen..].iter().any(|event| {
-        matches!(event, crate::model::DomainEvent::RequestUpdated { request }
-            if request.id == asked.id && request.state != RequestState::Done)
-    });
-    assert!(!reopened, "the asking request stayed done");
-    assert_eq!(board.requests[&asked.id].worked.len(), asked.worked.len());
-    let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
-    let said: Vec<_> = messages
-        .iter()
-        .filter(|message| message.role == MessageRole::User && message.text == words)
-        .collect();
-    assert_eq!(said.len(), 1, "one message for the words");
-    assert_eq!(board.latest_request().unwrap().id, said[0].id);
-    let inputs = inputs.lock().unwrap().clone();
-    assert_eq!(inputs.len(), 2, "one turn for the words: {inputs:#?}");
-    assert!(inputs[1].contains(words), "{}", inputs[1]);
-    assert!(inputs[1].contains("doesn't want"), "{}", inputs[1]);
-    assert!(!inputs[1].contains("earlier request"), "{}", inputs[1]);
-    assert!(!on_main(&flow, "NOTES.md"), "nothing merged");
-    flow.say(words).await;
-    flow.until("the merge", |_| on_main(&flow, "NOTES.md"))
-        .await;
-    flow.stop().await;
-}
-
-/// A "Not yet" click never reopens the request that asked: it starts no turn, the decision
-/// rides on the user's next message as a note, and a later "merge it" there still merges.
-#[tokio::test]
-async fn a_not_yet_click_leaves_the_finished_request_closed() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = inputs.clone();
-    let flow = Flow::start(
-        "card-merge-not-yet",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                if !turn.is_orchestrator() {
-                    return Reply::text("Done.");
-                }
-                let input = turn.input.clone();
-                log.lock().unwrap().push(input.clone());
-                if input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    let reply = turn.call("propose_merge", json!({})).await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Added NOTES.md.");
-                }
-                if input.contains("merge it") {
-                    let reply = turn
-                        .call("finish_session", json!({ "user_words": "merge it" }))
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Merged.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    flow.until("the merge card", |board| open_card(board, true).is_some())
-        .await;
-    let board = flow.settled().await;
-    let card = open_card(&board, true).unwrap();
-    let asked = board.latest_request().unwrap().clone();
-    assert_eq!(asked.state, RequestState::Done);
-    let seen = flow.events().await.len();
-    flow.manager
-        .answer_question(
-            flow.conversation.clone(),
-            card.id.clone(),
-            vec!["Not yet".into()],
-        )
-        .await
-        .unwrap();
-    let board = flow.settled().await;
-    assert_eq!(board.questions[&card.id].answer.as_deref(), Some("Not yet"));
-    let reopened = flow.events().await[seen..].iter().any(|event| {
-        matches!(event, crate::model::DomainEvent::RequestUpdated { request }
-            if request.id == asked.id)
-    });
-    assert!(!reopened, "the asking request stayed done");
-    assert_eq!(board.requests.len(), 1);
-    assert_eq!(inputs.lock().unwrap().len(), 1, "no turn on Not yet");
-    assert!(!on_main(&flow, "NOTES.md"), "nothing merged on Not yet");
-    flow.say("OK, merge it now.").await;
-    flow.until("the merge", |_| on_main(&flow, "NOTES.md"))
-        .await;
-    let board = flow.settled().await;
-    assert_eq!(board.requests[&asked.id].state, RequestState::Done);
-    let inputs = inputs.lock().unwrap().clone();
-    assert_eq!(inputs.len(), 2, "{inputs:#?}");
-    assert!(inputs[1].contains("doesn't want"), "{}", inputs[1]);
-    assert!(!inputs[1].contains("earlier request"), "{}", inputs[1]);
     flow.stop().await;
 }

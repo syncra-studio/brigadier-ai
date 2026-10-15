@@ -12,7 +12,9 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
+  type RefObject,
   useContext,
   useEffect,
   useEffectEvent,
@@ -51,6 +53,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type {
+  AnswerInput,
   ApprovalDecision,
   ApprovalRequest,
   Conversation,
@@ -138,13 +141,16 @@ function inField(target: EventTarget | null): boolean {
 }
 
 /**
- * Enter and Esc answer the card from anywhere in its view: not from a text field (the
- * composer sends), not Enter on a focused button or link (that clicks it), and not while
- * a menu or dialog is open (they take their keys first). A side chat's keys are its own.
+ * Esc puts the card aside, and Enter answers it, from anywhere in its view: not from a text
+ * field (the composer sends), not Enter on a focused button or link (that clicks it), and not
+ * while a menu or dialog is open (they take their keys first). A side chat's keys are its own.
+ * A card whose answer is hard to undo has no window-wide Enter: without `enter` Enter is left
+ * alone, and with `within` it answers only from inside that element (the focused card).
  */
 function useCardKeys(
   enabled: boolean,
-  keys: { enter: () => void; escape: () => void },
+  keys: { enter?: () => void; escape: () => void },
+  within?: RefObject<HTMLElement | null>,
 ) {
   const { embedded } = useContext(ViewContext);
   const onKeyDown = useEffectEvent((event: globalThis.KeyboardEvent) => {
@@ -155,15 +161,15 @@ function useCardKeys(
     const target = event.target instanceof Element ? event.target : null;
     if ((target?.closest("[data-embedded-view]") != null) !== embedded) return;
     if (inField(target)) return;
-    if (
-      event.key === "Enter" &&
-      target?.closest("button, a[href], [role=button], summary")
-    )
-      return;
+    if (event.key === "Enter") {
+      if (!keys.enter) return;
+      if (target?.closest("button, a[href], [role=button], summary")) return;
+      if (within && !(target && within.current?.contains(target))) return;
+    }
     if (document.querySelector(OVERLAYS)) return;
     event.preventDefault();
     event.stopPropagation();
-    if (event.key === "Enter") keys.enter();
+    if (event.key === "Enter") keys.enter?.();
     else keys.escape();
   });
   useEffect(() => {
@@ -419,9 +425,10 @@ export type ApprovalStep = { index: number; total: number; onStep: (index: numbe
 
 /**
  * An approval, compact: kind and asker, the reason as the title, the exact command, then
- * [Deny `Esc`] [Allow … for this session] [Allow once `⏎`]. Allow takes focus so Enter allows; both keys work from
- * anywhere in the view. Several waiting step "1 of 3" as each is answered. In the composer's
- * place, "Reply…" brings the message field back.
+ * [Deny `Esc`] [Allow … for this session] [Allow once]. Esc denies from anywhere in the view;
+ * allowing takes a click, or Enter on an Allow the user moved to: a stray Enter never allows.
+ * Several waiting step "1 of 3" as each is answered. In the composer's place, "Reply…" brings
+ * the message field back.
  */
 export function ApprovalAction({
   id,
@@ -448,13 +455,6 @@ export function ApprovalAction({
   );
   const inSession = useInSession(approval?.conversationId);
   const action = useAction();
-  const allow = useRef<HTMLButtonElement>(null);
-  // Unless the user is typing somewhere, Allow takes focus.
-  useEffect(() => {
-    // Focused for Enter, without a focus ring: it wasn't reached by keyboard.
-    if (!inField(document.activeElement))
-      allow.current?.focus({ focusVisible: false });
-  }, []);
   const answer = (decision: ApprovalDecision) => {
     if (!approval || action.busy) return;
     action.run(() =>
@@ -462,22 +462,13 @@ export function ApprovalAction({
     );
   };
   const deny = () => answer({ type: "deny", message: "" });
-  useCardKeys(approval !== undefined && !action.busy, {
-    enter: () => answer({ type: "allow" }),
-    escape: deny,
-  });
+  useCardKeys(approval !== undefined && !action.busy, { escape: deny });
   if (!approval) return null;
 
   const shown = describe(approval, landingId, inSession);
   const request =
     approval.subject.type === "cli" ? approval.subject.request : null;
   const grant = request ? sessionGrant(request) : null;
-  const allowLabel = (
-    <>
-      <span className="truncate">{shown.allow ?? "Allow once"}</span>
-      <ActionKbd variant="primary">⏎</ActionKbd>
-    </>
-  );
   return (
     <ActionCard aria-label="Approval" data-action="approval">
       <div className="flex min-w-0 flex-col gap-2 px-4 pt-3.5 pb-2.5">
@@ -548,13 +539,12 @@ export function ApprovalAction({
           </Tooltip>
         )}
         <button
-          ref={allow}
           type="button"
           className={actionButton("primary", "max-w-full @max-md/approval-card:justify-center")}
           disabled={action.busy}
           onClick={() => answer({ type: "allow" })}
         >
-          {allowLabel}
+          <span className="truncate">{shown.allow ?? "Allow once"}</span>
         </button>
       </ActionCardActions>
       {footer}
@@ -637,11 +627,21 @@ function sessionGrant(request: ApprovalRequest): { scope: string; explanation: s
 /** How long a picked answer shows its dot before it goes. */
 const COMMIT_MS = 180;
 
+/** A button's click as the user gave it: by the pointer, or by Enter or Space on it. */
+function clickInput(event: MouseEvent): AnswerInput {
+  return event.detail === 0 ? "enter" : "click";
+}
+
 /**
  * The card shared by questions and "Implement this plan?": numbered answers (1–9 pick, ↑/↓
  * move, Enter picks the lit one; a pick shows its dot, then goes), then the free-text row
  * with Skip, which turns into Submit once something is typed (Next, before a round's last
  * question; ←/→ page through the round). Esc or × puts it aside.
+ *
+ * A `consequential` card (a choice that is hard to undo: a merge, building a plan) lights
+ * nothing until the user moves to an answer, even when it took focus on its own: ↑/↓ or 1–9
+ * light one (the pointer passing over lights nothing), and Enter picks the lit answer only from
+ * the focused card, never from elsewhere in the window. A click on an answer picks it.
  */
 function ChoiceCard({
   name,
@@ -650,6 +650,7 @@ function ChoiceCard({
   extra,
   choices,
   initial,
+  consequential = false,
   initialText = "",
   placeholder,
   pager,
@@ -671,8 +672,10 @@ function ChoiceCard({
   /** Between the question and the answers (the files asked about). */
   extra?: ReactNode;
   choices: { label: string; description?: ReactNode; recommended?: boolean }[];
-  /** The answer lit at first. */
+  /** The answer lit at first (none on a consequential card). */
   initial: number;
+  /** Its answers are hard to undo: only a deliberate pick answers it. */
+  consequential?: boolean;
   /** What the free-text row holds at first (an answer typed before paging back). */
   initialText?: string;
   placeholder: string;
@@ -682,11 +685,13 @@ function ChoiceCard({
   last?: boolean;
   /** ←/→ to the round's previous or next question. */
   onPage?: (step: -1 | 1) => void;
-  onChoose: (index: number) => void;
+  /** An answer picked, and how: a click, Enter, or its digit. */
+  onChoose: (index: number, input: AnswerInput) => void;
+  /** Words typed in the free-text row. */
   onText: (text: string) => void;
   /** What the free-text row holds as it is typed, so paging away and back keeps it. */
   onTyped?: (text: string) => void;
-  onSkip: () => void;
+  onSkip: (input: AnswerInput) => void;
   onDismiss: () => void;
   busy: boolean;
   error: string | null;
@@ -694,8 +699,10 @@ function ChoiceCard({
   /** Fade the rows in one after another. */
   stagger: boolean;
 }) {
-  // The lit answer; -1 is the free-text row.
-  const [highlight, setHighlight] = useState(choices.length > 0 ? initial : -1);
+  // The lit answer; -1 is the free-text row, null none yet.
+  const [highlight, setHighlight] = useState<number | null>(
+    choices.length === 0 ? -1 : consequential ? null : initial,
+  );
   const [chosen, setChosen] = useState<number | null>(null);
   const [typed, setTyped] = useState(initialText);
   const card = useRef<HTMLElement>(null);
@@ -711,27 +718,31 @@ function ChoiceCard({
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const idle = !busy && chosen === null;
-  const commit = (index: number) => {
+  const commit = (index: number, input: AnswerInput) => {
     if (!idle || choices[index] === undefined) return;
     setChosen(index);
     setHighlight(index);
     timer.current = setTimeout(() => {
       setChosen(null);
-      onChoose(index);
+      onChoose(index, input);
     }, COMMIT_MS);
   };
   const text = typed.trim();
-  const send = () => {
+  const send = (input: AnswerInput) => {
     if (!idle) return;
     if (text) onText(text);
-    else onSkip();
+    else onSkip(input);
   };
-  useCardKeys(idle, {
-    enter: () => {
-      if (highlight >= 0) commit(highlight);
+  useCardKeys(
+    idle,
+    {
+      enter: () => {
+        if (highlight !== null && highlight >= 0) commit(highlight, "enter");
+      },
+      escape: onDismiss,
     },
-    escape: onDismiss,
-  });
+    consequential ? card : undefined,
+  );
   const onKeyDown = (event: KeyboardEvent) => {
     if (
       !idle ||
@@ -749,17 +760,19 @@ function ChoiceCard({
       digit <= Math.min(9, choices.length)
     ) {
       event.preventDefault();
-      commit(digit - 1);
+      if (consequential) setHighlight(digit - 1);
+      else commit(digit - 1, "digit");
     } else if (digit === choices.length + 1 && digit <= 9) {
       event.preventDefault();
       field.current?.focus();
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
-      if (highlight >= lastChoice) field.current?.focus();
+      if (highlight === null) setHighlight(0);
+      else if (highlight >= lastChoice) field.current?.focus();
       else setHighlight(highlight + 1);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      if (highlight === -1) setHighlight(lastChoice);
+      if (highlight === null || highlight === -1) setHighlight(lastChoice);
       else if (highlight > 0) setHighlight(highlight - 1);
     } else if (onPage && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
       event.preventDefault();
@@ -803,8 +816,8 @@ function ChoiceCard({
                   highlighted={index === highlight}
                   chosen={index === chosen}
                   disabled={busy}
-                  onPointerEnter={() => idle && setHighlight(index)}
-                  onClick={() => commit(index)}
+                  onPointerEnter={() => idle && !consequential && setHighlight(index)}
+                  onClick={(event) => commit(index, clickInput(event))}
                   {...row(index + 2)}
                 />
               ))}
@@ -828,7 +841,7 @@ function ChoiceCard({
               if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                 // Never the composer's form around the card.
                 event.preventDefault();
-                if (text) send();
+                if (text) send("enter");
               } else if (event.key === "ArrowUp" && choices.length > 0) {
                 event.preventDefault();
                 setHighlight(choices.length - 1);
@@ -848,7 +861,7 @@ function ChoiceCard({
                 "font-medium",
               )}
               disabled={busy}
-              onClick={send}
+              onClick={(event) => send(clickInput(event))}
             >
               {!text ? "Skip" : last ? "Submit" : "Next"}
             </button>
@@ -904,7 +917,7 @@ function QuestionAction({
     to >= 0 && to < round.length && to <= answers.filter((answer) => answer !== null).length;
   const draft = (text: string | undefined) =>
     setDrafts((kept) => round.map((_, index) => (index === at ? text : kept[index])));
-  const answer = (text: string) => {
+  const answer = (text: string, input: AnswerInput) => {
     const next = round.map((_, index) => (index === at ? text : (answers[index] ?? null)));
     setAnswers(next);
     draft(undefined);
@@ -914,7 +927,7 @@ function QuestionAction({
       return;
     }
     action.run(() =>
-      answerQuestion(question.conversationId, question.id, next.map((given) => given ?? SKIPPED)),
+      answerQuestion(question.conversationId, question.id, next.map((given) => given ?? SKIPPED), input),
     );
   };
   const given = answers[at] ?? null;
@@ -961,6 +974,7 @@ function QuestionAction({
         recommended: item.recommended === index,
       }))}
       initial={picked >= 0 ? picked : (item.recommended ?? 0)}
+      consequential={question.kind.type === "merge"}
       initialText={drafts[at] ?? (given !== null && picked < 0 && given !== SKIPPED ? given : "")}
       placeholder={
         item.options.length > 0
@@ -970,11 +984,11 @@ function QuestionAction({
       pager={pager}
       last={answers.filter((other, index) => index !== at && other !== null).length === round.length - 1}
       onPage={(step) => reachable(at + step) && setPage(at + step)}
-      onChoose={(index) => answer(item.options[index]?.label ?? "")}
-      onText={answer}
+      onChoose={(index, input) => answer(item.options[index]?.label ?? "", input)}
+      onText={(text) => answer(text, "typed")}
       onTyped={draft}
       // A merge card's Skip is its "Not yet": words typed there are a new request instead.
-      onSkip={() => answer(question.kind.type === "merge" ? (item.options.at(-1)?.label ?? SKIPPED) : SKIPPED)}
+      onSkip={(input) => answer(question.kind.type === "merge" ? (item.options.at(-1)?.label ?? SKIPPED) : SKIPPED, input)}
       onDismiss={onDismiss}
       busy={action.busy}
       error={action.error}
@@ -1048,6 +1062,7 @@ function ImplementPlanAction({
       title="Implement this plan?"
       choices={[{ label: "Yes, implement this plan" }]}
       initial={0}
+      consequential
       placeholder="No, and tell Brigadier what to do differently"
       onChoose={() => decide(true, null)}
       onText={(text) => decide(false, text)}
@@ -1084,7 +1099,10 @@ function PlanAction({
   );
 }
 
-/** The rail points to the single plan card and keeps message entry available. */
+/**
+ * The rail points to the single plan card and keeps message entry available. The plan is
+ * approved on its card, never by an Enter on the rail: Esc puts it off for later.
+ */
 function PhasePlanAction({
   id,
   onDismiss,
@@ -1096,14 +1114,7 @@ function PhasePlanAction({
 }) {
   const plan = useBoard((s) => s.board?.plans[id]);
   const action = useAction();
-  // Preserve the existing rail shortcuts; focused controls keep their own Enter.
-  useCardKeys(Boolean(plan) && !action.busy, {
-    enter: () => {
-      if (plan)
-        action.run(() => decidePlan(plan.conversationId, plan.id, true, null));
-    },
-    escape: onDismiss,
-  });
+  useCardKeys(Boolean(plan) && !action.busy, { escape: onDismiss });
   return (
     <div className="flex flex-col gap-2">
       <div className="min-h-row flex min-w-0 items-center gap-2 px-3">

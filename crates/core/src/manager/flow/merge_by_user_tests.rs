@@ -1,0 +1,541 @@
+//! Merging is the user's act (BUILD-PLAN A3, A4): only their click on "Merge into main" or
+//! their own words merge. Merge cards are retired: a late propose_merge is refused with what to
+//! do instead, an old card's answer never authorises a merge (live, or stored across a
+//! restart), and an upgrade closes open merge cards and cancels a merge held on one. The
+//! session keeps its workspace through a merge, and an old post-merge removal is taken back.
+
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use serde_json::json;
+
+use super::thread_tests::{commit_in_workspace, on_main};
+use super::{Flow, Options, Reply, Script, Turn, click, git};
+use crate::manager::landing::pending_merge;
+use crate::manager::prompts::{MERGE_BY_USER_REVISION, revision_note};
+use crate::model::{CardId, DomainEvent, Environment, Lifecycle, MessageRole, Setup};
+use crate::now_ms;
+use crate::work::{AnswerInput, MergeCondition, OrchestratorStepKind, Question, QuestionKind};
+
+fn script<F, Fut>(f: F) -> Script
+where
+    F: Fn(Turn) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Reply> + Send + 'static,
+{
+    Arc::new(move |turn| Box::pin(f(turn)))
+}
+
+type Log = Arc<Mutex<Vec<String>>>;
+
+/// A session whose thread commits NOTES.md on "Add notes.", says once that it is ready, merges
+/// on [merge] without words and on "just merge it" with them, and tries propose_merge when told
+/// to. Every thread input and every reply it got are logged.
+async fn session(name: &str) -> (Flow, Log) {
+    let log: Log = Arc::default();
+    let said = log.clone();
+    let flow = Flow::start(
+        name,
+        Options::default(),
+        script(move |turn| {
+            let said = said.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Done.");
+                }
+                said.lock().unwrap().push(turn.input.clone());
+                let log = |text: String| said.lock().unwrap().push(text);
+                if turn.input.contains("Ask about the merge.") {
+                    let reply = turn.call("propose_merge", json!({})).await;
+                    log(format!("propose_merge: {} {}", reply.is_error, reply.text));
+                    return Reply::text("Ready to merge when you are.");
+                }
+                if turn.input.contains("[merge] The user clicked") {
+                    let reply = turn.call("finish_session", json!({})).await;
+                    log(format!("finish_session: {} {}", reply.is_error, reply.text));
+                    return Reply::text("Merged.");
+                }
+                if turn.input.contains("just merge it") {
+                    let reply = turn
+                        .call("finish_session", json!({ "user_words": "just merge it" }))
+                        .await;
+                    log(format!("finish_session: {} {}", reply.is_error, reply.text));
+                    return Reply::text("Merged.");
+                }
+                if turn.input.contains("Add more notes.") {
+                    let head = commit_in_workspace(&turn, "MORE.md", "more\n", "Add more");
+                    log(format!("worked in: {}", turn.add_dirs[0].display()));
+                    log(format!("head: {head}"));
+                    return Reply::text("More notes are in.");
+                }
+                // Last: a resumed thread's input may carry the earlier messages too.
+                if turn.input.contains("Add notes.") {
+                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                    return Reply::text("Notes are in, ready to merge when you are.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    (flow, log)
+}
+
+fn logged(log: &Log, what: &str) -> Vec<String> {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.contains(what))
+        .cloned()
+        .collect()
+}
+
+/// The session's worktree and branch, as the conversation records them.
+fn workspace(flow: &Flow) -> (Option<PathBuf>, String) {
+    match flow.core.conversation(&flow.conversation).unwrap().setup {
+        Some(Setup::Session {
+            environment: Environment::NewWorktree { path, branch, .. },
+            ..
+        }) => (path.map(PathBuf::from), branch),
+        other => panic!("not a worktree session: {other:?}"),
+    }
+}
+
+/// A merge card as the earlier version stored it: open, or answered with `answer`.
+async fn plant_merge_card(flow: &Flow, answer: Option<&str>) -> Question {
+    let (_, branch) = workspace(flow);
+    let now = now_ms();
+    let question = Question {
+        id: CardId::generate(),
+        conversation_id: flow.conversation.clone(),
+        task_id: None,
+        request_id: flow.board().await.latest_request().map(|r| r.id.clone()),
+        position: 0,
+        kind: QuestionKind::Merge {
+            branch: branch.clone(),
+            base: "main".into(),
+            conflicted: false,
+            conflicts: Vec::new(),
+        },
+        text: format!("Merge `{branch}` into `main`?"),
+        options: vec!["Merge into main".into(), "Not yet".into()],
+        recommended: None,
+        items: Vec::new(),
+        answer: answer.map(str::to_owned),
+        answers: answer.map(|a| vec![a.to_owned()]).unwrap_or_default(),
+        created_at_ms: now,
+        answered_at_ms: answer.map(|_| now),
+        words_id: None,
+        answered_by: None,
+    };
+    flow.core
+        .record_conversation(
+            &flow.conversation,
+            vec![DomainEvent::QuestionUpdated {
+                question: question.clone(),
+            }],
+        )
+        .await
+        .unwrap();
+    question
+}
+
+fn merged(board: &crate::board::Board) -> usize {
+    board
+        .orchestrator_steps
+        .iter()
+        .filter(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+        .count()
+}
+
+/// The click merges, once: it is recorded with where it came from, the thread merges on its
+/// [merge], and a second finish_session on the same click is refused. Nothing was ever put on a
+/// card, and the workspace stays with its branch at the merge.
+#[tokio::test]
+async fn a_click_merges_once_and_keeps_the_workspace() {
+    let (flow, log) = session("merge-click").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    // Without the click or the user's words, there is no merge.
+    assert!(
+        flow.manager
+            .finish_session(&flow.conversation, "", None)
+            .await
+            .is_err()
+    );
+    let reply = flow
+        .manager
+        .merge_session(&flow.conversation, click())
+        .await
+        .unwrap();
+    assert!(reply.contains("Merging"), "{reply}");
+    flow.until("the merge", |board| merged(board) == 1).await;
+    let board = flow.settled().await;
+    assert!(on_main(&flow, "NOTES.md"));
+    assert!(
+        board.questions.is_empty(),
+        "no card: {:#?}",
+        board.questions
+    );
+    let origin = board
+        .orchestrator_steps
+        .iter()
+        .find_map(|step| match &step.kind {
+            OrchestratorStepKind::MergeRequested { origin, .. } => Some(origin.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(origin.input, Some(AnswerInput::Click));
+    assert_eq!(origin.client, "Brigadier");
+    assert_eq!(logged(&log, "finish_session: false [finished]").len(), 1);
+    // The click is spent: no second merge on it.
+    assert!(
+        flow.manager
+            .finish_session(&flow.conversation, "", None)
+            .await
+            .is_err()
+    );
+    // And with nothing left to merge, the button's request is refused.
+    let nothing = flow
+        .manager
+        .merge_session(&flow.conversation, click())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(nothing.contains("Nothing to merge"), "{nothing}");
+    // The workspace stays, its branch at the merge, and the next request works in it.
+    let (path, branch) = workspace(&flow);
+    let path = path.expect("the worktree stays");
+    assert!(path.join(".git").exists());
+    let main = git(&flow.repo, &["rev-parse", "main"]);
+    assert_eq!(git(&flow.repo, &["rev-parse", &branch]), main);
+    flow.say("Add more notes.").await;
+    flow.settled().await;
+    assert_eq!(
+        logged(&log, "worked in: "),
+        [format!("worked in: {}", path.display())]
+    );
+    assert!(path.join("MORE.md").exists());
+    flow.stop().await;
+}
+
+/// A session that still has propose_merge gets a refusal that says what to do instead, and no
+/// card is made.
+#[tokio::test]
+async fn a_late_propose_merge_is_refused_with_what_to_do() {
+    let (flow, log) = session("merge-late-propose").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    flow.say("Ask about the merge.").await;
+    let board = flow.settled().await;
+    let refused = logged(&log, "propose_merge: ");
+    assert_eq!(refused.len(), 1);
+    assert!(refused[0].starts_with("propose_merge: true"), "{refused:?}");
+    assert!(refused[0].contains("Merge into main"), "{refused:?}");
+    assert!(board.questions.is_empty());
+    assert!(!on_main(&flow, "NOTES.md"));
+    flow.stop().await;
+}
+
+/// An old merge card's "Merge into main", answered live or stored before a restart, never
+/// authorises finish_session.
+#[tokio::test]
+async fn an_old_merge_cards_answer_never_authorises_a_merge() {
+    let (mut flow, _) = session("merge-old-card").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    // Answered live.
+    let card = plant_merge_card(&flow, None).await;
+    flow.manager
+        .answer_question(
+            flow.conversation.clone(),
+            card.id.clone(),
+            vec!["Merge into main".into()],
+            Some(click()),
+        )
+        .await
+        .unwrap();
+    flow.settled().await;
+    assert_eq!(merged(&flow.board().await), 0);
+    assert!(
+        flow.manager
+            .finish_session(&flow.conversation, "", None)
+            .await
+            .is_err()
+    );
+    // Stored answered, then replayed at a restart.
+    plant_merge_card(&flow, Some("Merge into main")).await;
+    flow.restart().await;
+    flow.settled().await;
+    let refused = flow
+        .manager
+        .finish_session(&flow.conversation, "", None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("[not merged]"), "{refused}");
+    assert_eq!(merged(&flow.board().await), 0);
+    assert!(!on_main(&flow, "NOTES.md"));
+    flow.stop().await;
+}
+
+/// The user's own words still merge, and close a merge card left open.
+#[tokio::test]
+async fn words_still_merge_and_close_an_old_open_card() {
+    let (flow, log) = session("merge-words").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let card = plant_merge_card(&flow, None).await;
+    flow.say("Yes, just merge it.").await;
+    flow.until("the merge", |board| merged(board) == 1).await;
+    let board = flow.settled().await;
+    assert!(on_main(&flow, "NOTES.md"));
+    assert_eq!(logged(&log, "finish_session: false").len(), 1);
+    assert!(!board.questions[&card.id].is_open());
+    flow.stop().await;
+}
+
+/// At the upgrade, an open merge card is withdrawn and a merge held on a card's answer is
+/// cancelled, and the thread hears of it once; a merge held on the user's words stays.
+#[tokio::test]
+async fn an_upgrade_closes_merge_cards_and_cancels_a_merge_held_on_one() {
+    let (mut flow, log) = session("merge-upgrade").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let (_, branch) = workspace(&flow);
+    let open = plant_merge_card(&flow, None).await;
+    let answered = plant_merge_card(&flow, Some("Merge into main")).await;
+    let held = |asked_in: String| OrchestratorStepKind::MergeHeld {
+        branch: branch.clone(),
+        base: "main".into(),
+        asked_in,
+        consented_at_ms: now_ms(),
+        condition: MergeCondition::WorkersFinish,
+        waiting: Vec::new(),
+        tip: String::new(),
+    };
+    flow.manager
+        .orchestrator_step(&flow.conversation, held(answered.id.to_string()))
+        .await;
+    flow.restart().await;
+    let board = flow.settled().await;
+    let withdrawn = &board.questions[&open.id];
+    assert!(
+        !withdrawn.is_open() && withdrawn.answer.is_none(),
+        "{withdrawn:#?}"
+    );
+    assert!(board.orchestrator_steps.iter().any(|step| matches!(&step.kind, OrchestratorStepKind::MergeCancelled { asked_in } if *asked_in == answered.id.to_string())));
+    assert!(pending_merge(&board).is_none());
+    flow.say("Anything new?").await;
+    flow.settled().await;
+    assert_eq!(logged(&log, "[merge cards retired]").len(), 1);
+    assert_eq!(merged(&flow.board().await), 0);
+    // A merge held on the user's words isn't the card's: it stays.
+    let words = flow
+        .core
+        .all_messages(&flow.conversation)
+        .await
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|message| message.role == MessageRole::User)
+        .unwrap();
+    flow.manager
+        .orchestrator_step(&flow.conversation, held(words.id.clone()))
+        .await;
+    flow.restart().await;
+    let board = flow.settled().await;
+    assert!(!board.orchestrator_steps.iter().any(|step| matches!(&step.kind, OrchestratorStepKind::MergeCancelled { asked_in } if *asked_in == words.id)));
+    assert_eq!(logged(&log, "[merge cards retired]").len(), 1);
+    flow.stop().await;
+}
+
+/// Rule R: a session told the instructions before this change hears the merge note once when
+/// it resumes; its late propose_merge is refused, and a click merges.
+#[tokio::test]
+async fn a_session_from_before_hears_the_note_once_and_merges_on_a_click() {
+    let (mut flow, log) = session("merge-revision").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    flow.core
+        .record(vec![(
+            crate::model::streams::orchestrator(&flow.conversation),
+            DomainEvent::OrchestratorLogged {
+                conversation_id: flow.conversation.clone(),
+                entry: crate::work::OrchestratorEntry::Injection {
+                    injection: crate::work::ContextInjection {
+                        kind: crate::work::InjectionKind::Instructions,
+                        bytes: 100,
+                        tokens_estimate: 25,
+                        label: "instructions revision".into(),
+                        task_id: None,
+                        told: Some(crate::work::Told {
+                            revision: Some(MERGE_BY_USER_REVISION - 1),
+                            ..crate::work::Told::default()
+                        }),
+                    },
+                },
+            },
+        )])
+        .await
+        .unwrap();
+    flow.restart().await;
+    flow.say("Ask about the merge.").await;
+    flow.settled().await;
+    let note = revision_note(MERGE_BY_USER_REVISION - 1, false).unwrap();
+    assert!(note.contains("there are no merge cards"), "{note}");
+    assert_eq!(logged(&log, &note).len(), 1);
+    assert!(logged(&log, "propose_merge: true")[0].contains("Merge into main"));
+    flow.manager
+        .merge_session(&flow.conversation, click())
+        .await
+        .unwrap();
+    flow.until("the merge", |board| merged(board) == 1).await;
+    flow.settled().await;
+    assert!(on_main(&flow, "NOTES.md"));
+    assert_eq!(logged(&log, &note).len(), 1);
+    flow.stop().await;
+}
+
+/// Plants what an earlier version left when it couldn't finish removing a merged session's
+/// worktree: the `session:` owner still disposing, and the session recording no worktree.
+async fn plant_failed_removal(flow: &Flow) -> PathBuf {
+    let (path, _) = workspace(flow);
+    let path = path.unwrap();
+    flow.core
+        .record(vec![(
+            crate::model::streams::CLEANUP.to_owned(),
+            DomainEvent::CleanupRequested {
+                owner: format!("session:{}", flow.conversation),
+            },
+        )])
+        .await
+        .unwrap();
+    let Some(Setup::Session {
+        repo,
+        environment:
+            Environment::NewWorktree {
+                base,
+                branch,
+                start,
+                ..
+            },
+        permission,
+        orchestrator,
+        workers_see_uncommitted,
+        plan_mode,
+    }) = flow.core.conversation(&flow.conversation).unwrap().setup
+    else {
+        panic!("a worktree session");
+    };
+    flow.core
+        .set_setup(
+            flow.conversation.clone(),
+            Setup::Session {
+                repo,
+                environment: Environment::NewWorktree {
+                    base,
+                    branch,
+                    path: None,
+                    start,
+                },
+                permission,
+                orchestrator,
+                workers_see_uncommitted,
+                plan_mode,
+            },
+        )
+        .await
+        .unwrap();
+    path
+}
+
+/// An earlier version's failed post-merge removal, opened by this one: the startup sweep, the
+/// next request and its workspace setup leave the worktree in place, and the session works in
+/// it.
+#[tokio::test]
+async fn an_old_post_merge_removal_is_taken_back_at_the_upgrade() {
+    let (mut flow, log) = session("merge-old-removal").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let path = plant_failed_removal(&flow).await;
+    flow.restart().await;
+    flow.settled().await;
+    let owner = format!("session:{}", flow.conversation);
+    assert!(!flow.manager.runtime.ledger().disposing().contains(&owner));
+    assert!(path.join(".git").exists(), "the sweep left it");
+    assert_eq!(workspace(&flow).0.as_deref(), Some(path.as_path()));
+    flow.say("Add more notes.").await;
+    flow.settled().await;
+    assert_eq!(
+        logged(&log, "worked in: "),
+        [format!("worked in: {}", path.display())]
+    );
+    assert!(path.join("NOTES.md").exists() && path.join("MORE.md").exists());
+    assert!(path.join(".git").exists());
+    flow.stop().await;
+}
+
+/// The same leftover in an archived session is the archive's own cleanup: it still goes.
+#[tokio::test]
+async fn an_archived_sessions_unfinished_removal_still_goes() {
+    let (mut flow, _) = session("merge-old-removal-archived").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let path = plant_failed_removal(&flow).await;
+    flow.core
+        .set_lifecycle(flow.conversation.clone(), Lifecycle::Archived)
+        .await
+        .unwrap();
+    flow.restart().await;
+    super::eventually("the archived session's worktree removed", || !path.exists()).await;
+    flow.stop().await;
+}
+
+/// "Close workspace" removes the session's worktree only when the user asks; its branch keeps
+/// work the base lacks, and the next change makes a fresh worktree in the same folder.
+#[tokio::test]
+async fn close_workspace_removes_it_only_when_asked() {
+    let (flow, log) = session("merge-close").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let (path, branch) = workspace(&flow);
+    let path = path.unwrap();
+    // Uncommitted work is kept on the branch.
+    std::fs::write(path.join("DRAFT.md"), "draft\n").unwrap();
+    assert!(path.join(".git").exists(), "nothing removes it on its own");
+    let reply = flow
+        .manager
+        .close_workspace(&flow.conversation)
+        .await
+        .unwrap();
+    assert!(
+        reply.contains(&format!("Branch `{branch}` stays")),
+        "{reply}"
+    );
+    assert!(!path.exists());
+    assert_eq!(workspace(&flow).0, None);
+    let files = git(&flow.repo, &["ls-tree", "-r", "--name-only", &branch]);
+    assert!(
+        files.contains("NOTES.md") && files.contains("DRAFT.md"),
+        "{files}"
+    );
+    // Nothing more to close.
+    assert!(
+        flow.manager
+            .close_workspace(&flow.conversation)
+            .await
+            .is_err()
+    );
+    flow.say("Add more notes.").await;
+    flow.settled().await;
+    assert_eq!(
+        logged(&log, "worked in: "),
+        [format!("worked in: {}", path.display())]
+    );
+    assert!(logged(&log, "[workspace closed]").len() == 1);
+    assert!(
+        path.join("DRAFT.md").exists(),
+        "the fresh worktree is on the same branch"
+    );
+    flow.stop().await;
+}

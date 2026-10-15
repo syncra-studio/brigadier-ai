@@ -1017,9 +1017,8 @@ pub enum QuestionKind {
     Orchestrator,
     /// Local checkout with uncommitted changes: should workers start from them?
     UncommittedChanges { files: Vec<String> },
-    /// The thread asks once whether to merge the session branch into its base
-    /// (`propose_merge`); the answer "Merge into {base}" is the user's consent, or "Merge &
-    /// resolve conflicts" when the branch was found to conflict with the base as it was asked.
+    /// A merge card from before BUILD-PLAN A4 (`propose_merge`, retired): none is made any
+    /// more, and no answer on one is consent. Kept so stored cards still load.
     Merge {
         branch: String,
         base: String,
@@ -1090,6 +1089,38 @@ pub struct Question {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub words_id: Option<String>,
+    /// Where its answer came from: the client that sent it and how the user gave it. Cards
+    /// answered before this was kept have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub answered_by: Option<AnswerOrigin>,
+}
+
+/// How the user gave a card's answer, as the app saw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AnswerInput {
+    /// A click on an answer or a button.
+    Click,
+    /// Enter (or Space) on the focused card or one of its buttons.
+    Enter,
+    /// An answer's digit, on the focused card.
+    Digit,
+    /// Words typed in the card's own field.
+    Typed,
+}
+
+/// Where a card's answer came from: what to read when an answer nobody remembers giving turns
+/// up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AnswerOrigin {
+    /// How the user gave it, when the client said.
+    pub input: Option<AnswerInput>,
+    /// The client that sent it, by the name it connected with ("Brigadier" for the app).
+    pub client: String,
+    /// That client's process.
+    pub pid: u32,
 }
 
 impl Question {
@@ -1805,7 +1836,8 @@ pub enum OrchestratorStepKind {
     MergeHeld {
         branch: String,
         base: String,
-        /// The user message, or merge card, whose consent it holds.
+        /// The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
+        /// A4), whose consent it holds.
         asked_in: String,
         /// When the user consented.
         consented_at_ms: i64,
@@ -1816,6 +1848,16 @@ pub enum OrchestratorStepKind {
         /// the session's own landings on it. Other work on the branch isn't covered.
         #[serde(default)]
         tip: String,
+    },
+    /// The user clicked "Merge into main" on the side panel (BUILD-PLAN A4): consent to merge
+    /// the session branch into its base, once, unless they write again first. `id` is what a
+    /// merge on it names as `asked_in`.
+    MergeRequested {
+        id: String,
+        branch: String,
+        base: String,
+        /// Who sent the click: the client and how.
+        origin: AnswerOrigin,
     },
     /// The user cancelled the held merge (the pill's Cancel): its consent is spent.
     MergeCancelled { asked_in: String },

@@ -9,6 +9,15 @@ import { type FC, type ReactNode, useEffect, useRef, useState } from "react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Spinner } from "@/components/glyphs/spinner";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +29,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { request } from "@/ipc/client";
 import type { GitState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { closeWorkspace, mergeSession } from "@/state/actions";
 import { toast } from "@/state/toasts";
 
 /** Why a session's branch can't be created or switched from here (PLAN §4). */
@@ -57,16 +67,29 @@ function push(conversationId: string): void {
     .catch((error: unknown) => toast(`Failed to push: ${reason(error)}`, { tone: "error" }));
 }
 
+/** A worktree session's own workspace: what "Close workspace" removes, and where it merges. */
+export interface SessionWorkspace {
+  path: string;
+  branch: string;
+  base: string;
+}
+
 /**
  * The branch row's hover ⋯ "Git actions": Commit (the commit popover), Push, Create branch
- * and Switch branch. The last two stay off: a session's branch is fixed when it starts.
+ * and Switch branch. The last two stay off: a session's branch is fixed when it starts. A
+ * worktree session also gets "Merge into ‹base›" on the row while its branch has work to merge
+ * (the only way to merge besides the user's words), and "Close workspace…" in the menu.
  */
-export const GitActions: FC<{ conversationId: string; children: ReactNode }> = ({
-  conversationId,
-  children,
-}) => {
+export const GitActions: FC<{
+  conversationId: string;
+  workspace?: SessionWorkspace | null;
+  /** Whether the branch has work its base lacks. */
+  mergeable?: boolean;
+  children: ReactNode;
+}> = ({ conversationId, workspace = null, mergeable = false, children }) => {
   const [menu, setMenu] = useState(false);
   const [committing, setCommitting] = useState(false);
+  const [closing, setClosing] = useState(false);
   // Commit opens the popover once the menu has closed, so its focus return doesn't dismiss it.
   const commitNext = useRef(false);
   const { state, error } = useGitState(conversationId, menu || committing);
@@ -75,6 +98,7 @@ export const GitActions: FC<{ conversationId: string; children: ReactNode }> = (
       <PopoverAnchor asChild>
         <div className="group/git flex min-w-0 items-center gap-2">
           {children}
+          {workspace && mergeable && <MergeButton conversationId={conversationId} base={workspace.base} />}
           <DropdownMenu open={menu} onOpenChange={setMenu}>
             <DropdownMenuTrigger asChild>
               <TooltipIconButton
@@ -111,8 +135,19 @@ export const GitActions: FC<{ conversationId: string; children: ReactNode }> = (
               <DropdownMenuItem disabled title={BRANCH_FIXED}>
                 Switch branch
               </DropdownMenuItem>
+              {workspace && (
+                <DropdownMenuItem onSelect={() => setClosing(true)}>Close workspace…</DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
+          {workspace && (
+            <CloseWorkspaceDialog
+              conversationId={conversationId}
+              workspace={workspace}
+              open={closing}
+              onOpenChange={setClosing}
+            />
+          )}
         </div>
       </PopoverAnchor>
       <PopoverContent align="end" className="w-sm p-1">
@@ -126,6 +161,83 @@ export const GitActions: FC<{ conversationId: string; children: ReactNode }> = (
         )}
       </PopoverContent>
     </Popover>
+  );
+};
+
+/**
+ * "Merge into ‹base›": the user's own act of merging (BUILD-PLAN A4). A click only: it takes no
+ * default focus and no Enter from elsewhere. The thread merges on it once.
+ */
+export const MergeButton: FC<{ conversationId: string; base: string }> = ({ conversationId, base }) => {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      type="button"
+      size="xs"
+      variant="outline"
+      data-slot="merge-session"
+      disabled={busy}
+      onClick={() => {
+        setBusy(true);
+        mergeSession(conversationId)
+          .then((text) => toast(text))
+          .catch((error: unknown) => toast(`Couldn't merge: ${reason(error)}`, { tone: "error" }))
+          .finally(() => setBusy(false));
+      }}
+    >
+      {busy && <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" />}
+      Merge into {base}
+    </Button>
+  );
+};
+
+/** The confirm before "Close workspace": it names the folder that goes and the branch that stays. */
+const CloseWorkspaceDialog: FC<{
+  conversationId: string;
+  workspace: SessionWorkspace;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}> = ({ conversationId, workspace, open, onOpenChange }) => {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Close workspace?</DialogTitle>
+          <DialogDescription>
+            This removes the folder <code className="break-all">{workspace.path}</code>. Uncommitted
+            changes are kept as a commit on <code>{workspace.branch}</code>, and the branch stays
+            unless all of its work is already on <code>{workspace.base}</code>. The session&apos;s
+            next change makes a fresh workspace in the same folder.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button type="button" variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              closeWorkspace(conversationId)
+                .then((text) => {
+                  toast(text);
+                  onOpenChange(false);
+                })
+                .catch((error: unknown) =>
+                  toast(`Couldn't close the workspace: ${reason(error)}`, { tone: "error" }),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            {busy && <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" />}
+            Close workspace
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
