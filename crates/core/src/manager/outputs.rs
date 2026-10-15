@@ -18,8 +18,9 @@ use std::time::{Duration, UNIX_EPOCH};
 use brigadier_providers::redact::Redactor;
 
 use super::{SessionManager, blocking, secrets};
+use crate::ConversationId;
 use crate::tools::ArtifactInput;
-use crate::work::{ArtifactKind, ArtifactRef, Task, TaskKind};
+use crate::work::{ArtifactKind, ArtifactRef, StoredCopy, Task, TaskKind};
 use crate::{Error, Result};
 
 /// The folder in a worker's scratch folder for files meant for the orchestrator or the user.
@@ -701,6 +702,120 @@ impl SessionManager {
             .await?
             .ok_or_else(|| Error::NotFound(format!("artifact {id}")))
     }
+
+    /// The stored copy a file link in this conversation points at (BUILD-PLAN A1): a task's
+    /// output or report file, kept when it reported and again when it ended, found from the
+    /// link's path in the task's scratch folder (or `outputs/…`). Links are resolved when
+    /// they are opened, not rewritten, so messages written before this still open their
+    /// files after the scratch folder is gone.
+    pub async fn stored_output(
+        &self,
+        conversation: &ConversationId,
+        link: &str,
+    ) -> Result<Option<StoredCopy>> {
+        let tasks = self.core.tasks(conversation).await?;
+        Ok(find_stored(&tasks, link))
+    }
+}
+
+/// [`SessionManager::stored_output`] over `tasks`, the newest task's copy first.
+fn find_stored(tasks: &[Task], link: &str) -> Option<StoredCopy> {
+    let path = link_path(link);
+    let found = |task: &Task, artifact: &ArtifactRef| {
+        Some(StoredCopy {
+            task_id: task.id.clone(),
+            artifact: artifact.clone(),
+        })
+    };
+    // `outputs/x.md`, as a worker or the thread writes it.
+    let relative = path.strip_prefix("./").unwrap_or(&path);
+    if let Some(name) = relative.strip_prefix("outputs/") {
+        return tasks
+            .iter()
+            .rev()
+            .find_map(|task| matching(&task.outputs, name).and_then(|a| found(task, a)));
+    }
+    let path = without_private(&path);
+    tasks.iter().rev().find_map(|task| {
+        let scratch = without_private(&task.workspace.as_ref()?.scratch);
+        let inner = path
+            .strip_prefix(scratch.trim_end_matches('/'))?
+            .strip_prefix('/')?;
+        let report = task.report.as_ref().map_or(&[][..], |r| &r.artifacts[..]);
+        let artifact = match inner.strip_prefix("outputs/") {
+            Some(name) => matching(&task.outputs, name).or_else(|| matching(report, name)),
+            None => matching(report, inner).or_else(|| matching(&task.outputs, inner)),
+        }?;
+        found(task, artifact)
+    })
+}
+
+/// The file `name` (a path inside a folder) among `artifacts`: by the path it was stored
+/// under (its title, unless the report gave one), else by its file name.
+fn matching<'a>(artifacts: &'a [ArtifactRef], name: &str) -> Option<&'a ArtifactRef> {
+    let base = name.rsplit('/').next().unwrap_or(name);
+    artifacts
+        .iter()
+        .find(|a| a.title == name && a.file_name.as_deref() == Some(base))
+        .or_else(|| {
+            artifacts
+                .iter()
+                .find(|a| a.file_name.as_deref() == Some(base))
+        })
+}
+
+/// A file link's path: without `file://`, percent-decoded, and without a line (`:36`,
+/// `:36-40`, `#L36`).
+fn link_path(link: &str) -> String {
+    let link = link.trim();
+    let link = link.strip_prefix("file://").unwrap_or(link);
+    let path = percent_decoded(link);
+    let name_start = path.rfind('/').map_or(0, |i| i + 1);
+    let line = |at: usize| {
+        let rest = &path[at..];
+        let digits = rest.trim_start_matches(':').trim_start_matches("#L");
+        (rest.starts_with(':') || rest.starts_with("#L"))
+            && digits.starts_with(|c: char| c.is_ascii_digit())
+            && digits
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, '-' | ':' | 'L'))
+    };
+    match path[name_start..].find([':', '#']) {
+        Some(at) if line(name_start + at) => path[..name_start + at].to_owned(),
+        _ => path,
+    }
+}
+
+/// `text` with `%XX` escapes decoded; kept as written when they don't make UTF-8.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        match (
+            bytes[i],
+            bytes.get(i + 1).copied().and_then(hex),
+            bytes.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(high), Some(low)) => {
+                out.push(u8::try_from(high * 16 + low).unwrap_or(b'%'));
+                i += 3;
+            }
+            (byte, _, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| text.to_owned())
+}
+
+/// macOS's temp folders as `/private/var/…` and as `/var/…` are one place.
+fn without_private(path: &str) -> &str {
+    path.strip_prefix("/private")
+        .filter(|rest| rest.starts_with('/'))
+        .unwrap_or(path)
 }
 
 #[cfg(all(test, unix))]
@@ -798,5 +913,93 @@ mod tests {
             assert_eq!(names, vec!["live-1.png"], "no temporary file is left");
         }
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn artifact(id: &str, title: &str, file: &str) -> crate::work::ArtifactRef {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "title": title, "kind": "note", "mime": "text/markdown", "bytes": 1,
+            "fileName": file
+        }))
+        .unwrap()
+    }
+
+    fn read_task(
+        id: &str,
+        scratch: &str,
+        outputs: Vec<crate::work::ArtifactRef>,
+    ) -> crate::work::Task {
+        let mut task: crate::work::Task = serde_json::from_value(serde_json::json!({
+            "id": id, "conversationId": "c1", "number": 1, "position": 0, "title": "Scout",
+            "kind": "scout", "spec": "Look.",
+            "access": { "repo": "read", "network": false, "unsandboxed": false },
+            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
+            "state": "done", "attachments": [], "createdAtMs": 0, "updatedAtMs": 0,
+            "workspace": { "worktree": null, "branch": null, "base": null, "target": null, "scratch": scratch },
+            "report": {
+                "summary": "", "changes": [], "decisions": [], "verification": [], "openQuestions": [],
+                "verdict": null, "submittedAtMs": 0,
+                "artifacts": [{ "id": "notes", "title": "notes/raw.txt", "kind": "file",
+                                "mime": "text/plain", "bytes": 1, "fileName": "raw.txt" }]
+            }
+        }))
+        .unwrap();
+        task.outputs = outputs;
+        task
+    }
+
+    /// BUILD-PLAN A1: a link to a file in a task's scratch folder, written however a model
+    /// writes it, finds the copy stored with the task; the newest task's copy wins.
+    #[test]
+    fn a_link_into_a_gone_scratch_folder_finds_the_stored_copy() {
+        let scratch = "/var/folders/ab/T/brigadier/scratch/t1 x";
+        let old = read_task(
+            "t0",
+            "/var/folders/ab/T/brigadier/scratch/t0",
+            vec![artifact("old", "rounding.md", "rounding.md")],
+        );
+        let task = read_task(
+            "t1",
+            scratch,
+            vec![
+                artifact("new", "rounding.md", "rounding.md"),
+                artifact("deep", "sub/rounding.md", "rounding.md"),
+            ],
+        );
+        let tasks = vec![old, task];
+        let found = |link: &str| {
+            super::find_stored(&tasks, link).map(|s| (s.task_id.to_string(), s.artifact.id))
+        };
+        let new = Some(("t1".to_owned(), "new".to_owned()));
+        for link in [
+            format!("{scratch}/outputs/rounding.md"),
+            format!("/private{scratch}/outputs/rounding.md:12"),
+            format!(
+                "file://{}/outputs/rounding.md#L3-L9",
+                scratch.replace(' ', "%20")
+            ),
+            "outputs/rounding.md".to_owned(),
+            "./outputs/rounding.md:4-8".to_owned(),
+        ] {
+            assert_eq!(found(&link), new, "{link}");
+        }
+        assert_eq!(
+            found(&format!("{scratch}/outputs/sub/rounding.md"))
+                .unwrap()
+                .1,
+            "deep"
+        );
+        assert_eq!(
+            found(&format!("{scratch}/notes/raw.txt")).unwrap().1,
+            "notes"
+        );
+        assert_eq!(
+            found("/var/folders/ab/T/brigadier/scratch/t0/outputs/rounding.md")
+                .unwrap()
+                .1,
+            "old"
+        );
+        assert_eq!(found(&format!("{scratch}/outputs/missing.md")), None);
+        assert_eq!(found("/Users/me/repo/rounding.md"), None);
+        assert_eq!(found(&format!("{scratch}x/outputs/rounding.md")), None);
     }
 }

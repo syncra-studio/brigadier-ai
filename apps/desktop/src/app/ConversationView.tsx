@@ -76,7 +76,7 @@ import {
   type AttachmentReader,
   AttachmentReaderContext,
 } from "@/components/assistant-ui/elements/attachment-tile";
-import { OpenFileContext } from "@/components/assistant-ui/file-links";
+import { LinkConversationContext, OpenFileContext } from "@/components/assistant-ui/file-links";
 import { Thread, type ThreadComponents } from "@/components/assistant-ui/thread";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Button } from "@/components/ui/button";
@@ -819,6 +819,7 @@ export function ConversationView({
               <AssistantRuntimeProvider runtime={runtime}>
                 <AttachmentReaderContext.Provider value={reader}>
                   <OpenFileContext.Provider value={openFileAt}>
+                  <LinkConversationContext.Provider value={conversationId}>
                     {/* The summary's popover, where it floats: opened in the top bar, under it. */}
                     <SummaryFloat>
                     {/* The top bar spans the window to its end edge, over the right panels too, so
@@ -892,6 +893,7 @@ export function ConversationView({
                     </div>
                     </div>
                     </SummaryFloat>
+                  </LinkConversationContext.Provider>
                   </OpenFileContext.Provider>
                   {conversation && (
                     <RenameDialog

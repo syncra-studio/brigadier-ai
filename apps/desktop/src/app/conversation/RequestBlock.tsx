@@ -60,6 +60,7 @@ import type { StatusHead } from "@/app/conversation/liveStatus";
 import { HeldNote } from "@/app/conversation/HeldNote";
 import { AnsweredStatus, StatusLine, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
+import { AnswerFiles } from "@/app/conversation/AnswerFiles";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { describeTurnError, interruptedByQuit } from "@/app/conversation/turnError";
 import { useAction } from "@/app/conversation/useAction";
@@ -770,6 +771,7 @@ export const RequestBlock: FC = () => {
       </div>
       {/* A run's work is merged from its card, never undone behind the run's back. */}
       {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestId={meta.requestId} />}
+      {!live && answer !== null && <AnswerFiles requestIds={meta.requestIds} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
       <BlockError meta={meta} live={live} />
       {!live && last >= 0 && !phase && (

@@ -100,7 +100,7 @@ before: number | null, limit: number, } | { "method": "listOrchestratorLog", con
 /**
  * Absolute path.
  */
-path: string, } | { "method": "openArtifact", id: string, fileName: string, } | { "method": "hibernate", id: ConversationId, } | { "method": "archive", ids: Array<ConversationId>, } | { "method": "restore", ids: Array<ConversationId>, } | { "method": "previewRemoveProject", id: ProjectId, } | { "method": "removeProject", id: ProjectId, 
+path: string, } | { "method": "openArtifact", id: string, fileName: string, } | { "method": "resolveFileLink", conversationId: ConversationId, link: string, path: string, } | { "method": "hibernate", id: ConversationId, } | { "method": "archive", ids: Array<ConversationId>, } | { "method": "restore", ids: Array<ConversationId>, } | { "method": "previewRemoveProject", id: ProjectId, } | { "method": "removeProject", id: ProjectId, 
 /**
  * Brigadier branches to delete, at the tips the preview showed.
  */

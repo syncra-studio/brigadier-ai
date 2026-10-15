@@ -1787,6 +1787,8 @@ mod clean_up_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod computer_host_tests;
 #[cfg(test)]
+mod deliverable_tests;
+#[cfg(test)]
 mod ending_tests;
 #[cfg(test)]
 mod engine_tests;

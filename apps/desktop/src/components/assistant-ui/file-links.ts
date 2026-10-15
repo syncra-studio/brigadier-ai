@@ -5,6 +5,8 @@
  */
 import { createContext } from "react";
 
+import { useContext } from "react";
+
 import { selectedConversation, useApp } from "@/state/store";
 
 /** The root of the open session's checkout, for resolving file links. */
@@ -25,3 +27,13 @@ export function useCheckoutRoot(): string | null {
 export const OpenFileContext = createContext<(path: string, line: number | null) => boolean>(
   () => false,
 );
+
+/** The conversation whose messages hold the links, where a view shows one that isn't selected. */
+export const LinkConversationContext = createContext<string | null>(null);
+
+/** The conversation a file link belongs to: the view's, else the selected one. */
+export function useLinkConversation(): string | null {
+  const own = useContext(LinkConversationContext);
+  const selected = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
+  return own ?? selected;
+}

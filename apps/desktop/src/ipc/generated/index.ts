@@ -382,6 +382,7 @@ export type { StopAfter } from "./StopAfter";
 export type { StopReason } from "./StopReason";
 export type { StorageReport } from "./StorageReport";
 export type { StoreMetrics } from "./StoreMetrics";
+export type { StoredCopy } from "./StoredCopy";
 export type { StoredOutput } from "./StoredOutput";
 export type { StreamingMessage } from "./StreamingMessage";
 export type { TabChat } from "./TabChat";

@@ -3837,6 +3837,12 @@ impl SessionManager {
             file_name: Some(format!("task-{}-after-report.md", task.number)),
         };
         let shown = prompts::late_findings_text(&artifact, &text);
+        // A read task's scratch folder goes as it ends, right after this.
+        let scratch_gone = !task.kind.writes()
+            || task
+                .workspace
+                .as_ref()
+                .is_none_or(|w| !std::path::Path::new(&w.scratch).exists());
         let added = artifact.clone();
         let updated = self
             .update_task(&task.conversation_id, &task.id, move |task| {
@@ -3853,7 +3859,10 @@ impl SessionManager {
         tracing::info!(task = %task.id, bytes = size, "kept what the worker wrote after its report");
         // Its report not read yet: the thread reads both in one turn, with no wake of its own.
         if self
-            .fold_into_queued_report(&updated, &prompts::late_findings_folded(&updated, &shown))
+            .fold_into_queued_report(
+                &updated,
+                &prompts::late_findings_folded(&updated, &shown, scratch_gone),
+            )
             .await
         {
             if !updated.kind.writes()
@@ -3867,7 +3876,7 @@ impl SessionManager {
             kind: InjectionKind::Report,
             label: addendum_label(task.number),
             task_id: Some(task.id.clone()),
-            text: prompts::late_findings_envelope(&updated, &shown),
+            text: prompts::late_findings_envelope(&updated, &shown, scratch_gone),
         };
         let request = self
             .request_for(&task.conversation_id, Some(&task.id))

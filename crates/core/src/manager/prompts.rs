@@ -132,7 +132,7 @@ How to work:
 - Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. After your own `git push`, call ci_status and do what it says. On [ci … failed], fix it on that branch (`main` only through the usual merge into it here), push it and call watch_ci again without asking: the user's yes to watching covers that, nothing else. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - {PEERS}
 - Tools return at once; never wait or poll. Reports, questions, reviews and outcomes arrive later as messages from Brigadier, in blocks like [report task-3 …] … [/report].
-- Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder, nor name a /tmp path in a spec.
+- Each worker has an outputs folder for files meant for you or the user. Never tell a worker to write anywhere outside its worktree and scratch folder, nor name a /tmp path in a spec. Its scratch folder goes when it ends: never give the user a scratch path, nor point them at a file you haven't just seen exist. Hand a file over through its task card's Save, the Save… under your answer, or an ask_user card asking where it goes; never copy it to the Desktop, elsewhere or the clipboard unasked.
 - Your commands' scratch (second checkouts, build output, logs) goes in $TMPDIR, never elsewhere in /tmp; it is emptied when the request is over.
 - Brigadier cleans up after you; use clean_up only if the user asks. Never delete branches, worktrees or temp folders by hand: "Operation not permitted" on another session's branch or folder is Brigadier protecting it, so leave it.{GRILLING}
 
@@ -141,7 +141,8 @@ How to talk to the user:
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
 - {LEAD}
 - Even while work runs, write one line for: a failure of what you started (a preview, a dev app, a build, a check you awaited), in the same turn: what failed, its key error line, what you do about it; work the user didn't ask for, before it starts ("Starting 3 fixes from the review; about 20 min."); and [status due]: what runs, why, roughly what's left. Never say something compiles or runs without checking its process, or having a worker look.
-- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know. Then, if any, one line "To check: …" for what nobody could check and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_plan), never in text; a merge needs none.
+- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know. Then, if any, one line "To check: …", only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_plan), never in text; a merge needs none.
+- Fix a known defect in a deliverable yourself (your workspace is writable at your permission level: write the corrected file there and link it), or send it back, before you answer.
 - {LATE_EVENT} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
@@ -495,6 +496,10 @@ pub(crate) const MERGE_BY_USER_REVISION: u32 = 28;
 /// On the user's own checkout the thread leaves its changes uncommitted unless the user asks,
 /// and a commit they ask for carries no Brigadier trailer (UI audit M6).
 pub(crate) const LOCAL_COMMIT_REVISION: u32 = 29;
+/// Deliverables survive and have a home, and the thread fixes their known defects (BUILD-PLAN
+/// A1, A2, A6): no scratch paths, files handed over through Save, "To check" only for what
+/// nobody here can check or fix.
+pub(crate) const DELIVERABLES_REVISION: u32 = 30;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -656,6 +661,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: LOCAL_COMMIT_REVISION,
         thread: "From now on, on a local checkout (the user's own checkout), don't commit your own changes unless the user asks: leave them uncommitted and end your answer with one line saying so, for example \"Changed 1 file, not committed.\" When the user asks you to commit, write a plain message in the project's style with no Brigadier trailer: Brigadier records that the commit is yours. On a session's own worktree nothing changes: commit there with the trailer as before.",
         worker: "",
+    },
+    Revision {
+        number: DELIVERABLES_REVISION,
+        thread: "From now on, a worker's scratch folder goes when its task ends and its outputs open and save from its task card (a link to a stored output, even an old one, opens Brigadier's copy): never give the user a scratch path, and never point them at a file you haven't just seen exist. Hand a file over through its task card's Save, the Save… shown under your answer for each stored output, or an ask_user card asking where it goes; never copy it to the Desktop, another folder or the clipboard unless the user asked. \"To check: …\" is only for what nobody here can check or fix: a known defect in a deliverable you fix yourself (your workspace is writable at your permission level: write the corrected file there and link it), or send back, before you answer.",
+        worker: "From now on, your scratch folder goes when the task ends: never link its path in your report or messages; name the output file (outputs/notes.md).",
     },
 ];
 
@@ -1318,7 +1328,7 @@ Your first message is your task: what it is, where you work, what you may change
 Rules:
 - Never push, publish, deploy or open pull requests, unless the task says the user asked for exactly that: list such steps under needs user instead. The same goes for spending money, using credentials or the keychain, and deleting anything outside your own work.
 - If you start subagents, never use a Fable model, and never raise reasoning effort above high.
-- Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
+- Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Your scratch folder goes when the task ends: never link its path; name the output file (outputs/notes.md). Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
 - The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
     )
 }
@@ -1808,7 +1818,7 @@ pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
     }
     if !task.outputs.is_empty() {
         text.push_str(
-            "\nOutputs (the user saves them from the task card; read_artifact reads them):",
+            "\nOutputs (the user opens and saves them from the task card; read_artifact reads them; never give their scratch path):",
         );
         for output in &task.outputs {
             text.push_str(&format!(
@@ -1862,23 +1872,36 @@ const CUT_TAIL: &str = " reads all ";
 /// What a worker wrote after its report (see [`report_envelope`]), shown as
 /// [`late_findings_text`] gives it. It often restates the report: then the thread says nothing,
 /// so its answer stays the request's ending instead of a line about the note.
-pub(crate) fn late_findings_envelope(task: &Task, shown: &str) -> String {
+/// `scratch_gone`: the task's scratch folder is gone, or goes as it ends now (BUILD-PLAN A1).
+pub(crate) fn late_findings_envelope(task: &Task, shown: &str, scratch_gone: bool) -> String {
     format!(
         "[report task-{} · addendum] The worker wrote this after its report, which left it out; \
-         it is kept with the report:\n{shown}\n[/report] If it changes nothing you told the user \
-         or the work still to do, reply exactly {QUIET}. If your answer is already written: \
+         it is kept with the report:\n{shown}\n[/report]{} If it changes nothing you told the \
+         user or the work still to do, reply exactly {QUIET}. If your answer is already written: \
          {LATE_EVENT}",
-        task.number
+        task.number,
+        scratch_note(scratch_gone)
     )
 }
 
 /// [`late_findings_envelope`] added to its report while that still waits to be read.
-pub(crate) fn late_findings_folded(task: &Task, shown: &str) -> String {
+pub(crate) fn late_findings_folded(task: &Task, shown: &str, scratch_gone: bool) -> String {
     format!(
         "[report task-{} · addendum] The worker wrote this after its report, which left it out; \
-         it is kept with the report:\n{shown}\n[/report]",
-        task.number
+         it is kept with the report:\n{shown}\n[/report]{}",
+        task.number,
+        scratch_note(scratch_gone)
     )
+}
+
+/// What an addendum says when the paths it names are gone.
+fn scratch_note(scratch_gone: bool) -> &'static str {
+    if scratch_gone {
+        " Its scratch folder is gone, so paths in it no longer open: its outputs open and save \
+         from its task card."
+    } else {
+        ""
+    }
 }
 
 /// Asks the orchestrator to sort a follow-up the user sent while `request` works.
@@ -1945,7 +1968,7 @@ mod tests {
                 .contains("a CI result")
                 && note.contains("never a new ending"))
         );
-        let envelope = late_findings_envelope(&task("claude", None), "All 4 tests pass.");
+        let envelope = late_findings_envelope(&task("claude", None), "All 4 tests pass.", false);
         assert!(
             envelope.starts_with("[report task-1 · addendum]"),
             "{envelope}"
@@ -2586,7 +2609,12 @@ mod environment_tests {
         // Rule R: an open session hears it once, in plain words.
         let note = revision_note(LOCAL_COMMIT_REVISION - 1, false).unwrap();
         assert!(note.contains("on a local checkout (the user's own checkout), don't commit your own changes unless the user asks"));
-        assert!(revision_note(LOCAL_COMMIT_REVISION - 1, true).is_none());
+        assert!(
+            REVISIONS
+                .iter()
+                .find(|revision| revision.number == LOCAL_COMMIT_REVISION)
+                .is_some_and(|revision| revision.worker.is_empty())
+        );
     }
 
     #[test]
@@ -2778,8 +2806,9 @@ mod environment_tests {
         // line, the readiness answer first and long commands through Brigadier's runs, and
         // findings fixed only once checked and the thread's scratch in its temp folder, and
         // the small change it makes itself, include_request and the review nobody waits for,
-        // and what it does with its changes on the user's own checkout).
-        assert!(codex.len() < 18_950, "{}", codex.len());
+        // and what it does with its changes on the user's own checkout, and where deliverables
+        // live, how they are handed over and their known defects fixed, BUILD-PLAN A1, A2, A6).
+        assert!(codex.len() < 19_450, "{}", codex.len());
     }
 
     #[test]

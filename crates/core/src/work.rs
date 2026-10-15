@@ -453,6 +453,15 @@ pub enum ArtifactKind {
     File,
 }
 
+/// The stored copy a file link resolves to once the folder it named is gone: a task's
+/// output or report file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredCopy {
+    pub task_id: TaskId,
+    pub artifact: ArtifactRef,
+}
+
 /// Something stored in the blob store that the orchestrator can read on demand.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

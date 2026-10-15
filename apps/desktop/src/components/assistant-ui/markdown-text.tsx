@@ -17,14 +17,15 @@ import type { TextMessagePartProps } from "@assistant-ui/react";
 import { Check, Copy, ExpandLg } from "@openai/apps-sdk-ui/components/Icon";
 
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
-import { OpenFileContext, useCheckoutRoot } from "@/components/assistant-ui/file-links";
+import { OpenFileContext, useCheckoutRoot, useLinkConversation } from "@/components/assistant-ui/file-links";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { createWordFade } from "@/components/assistant-ui/word-fade";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { revealPath } from "@/ipc/client";
+import { openArtifact, request, revealPath, saveArtifact } from "@/ipc/client";
+import type { StoredCopy } from "@/ipc/generated";
 import { openLink } from "@/state/links";
 import { cn } from "@/lib/utils";
 import { toast } from "@/state/toasts";
@@ -121,34 +122,86 @@ function fileTarget(href: string, root: string | null): { path: string; line: nu
   return { path, line };
 }
 
+/** What a click on a file link found when its file was gone, shown after the chip. */
+type Gone = { stored: StoredCopy | null };
+
 /**
  * The file-link chip: the file's type icon and its name in link blue, "(line 36)"
  * after it, the absolute path on hover. A click opens the file in the Files tab, or shows it
- * in Finder when it isn't the session's.
+ * in Finder when it isn't the session's. A worker's file whose scratch folder is gone opens
+ * the copy Brigadier stored with its report (BUILD-PLAN A1), with "This file is no longer
+ * here" and that copy's Save after the chip; never an error toast.
  */
-const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, children }) => {
+export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, children }) => {
   const root = useCheckoutRoot();
   const openFile = useContext(OpenFileContext);
+  const conversationId = useLinkConversation();
+  const [gone, setGone] = useState<Gone | null>(null);
   const { path, line } = fileTarget(href, root);
+  const open = async () => {
+    const found = conversationId
+      ? await request({ method: "resolveFileLink", conversationId, link: href, path }).catch(() => null)
+      : null;
+    if (found && !found.exists) {
+      setGone({ stored: found.stored });
+      if (found.stored) {
+        const { artifact } = found.stored;
+        await openArtifact(artifact.id, artifact.fileName ?? artifact.title);
+      }
+      return;
+    }
+    setGone(null);
+    if (openFile(path, line)) return;
+    await revealPath(path).catch((error: unknown) => {
+      // Gone, with nothing stored (no session to ask, or not a worker's file).
+      if (found) throw error;
+      setGone({ stored: null });
+    });
+  };
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <a
-          href={href}
-          data-slot="file-chip"
-          onClick={(event) => {
-            event.preventDefault();
-            if (!openFile(path, line)) revealPath(path).catch(failed);
-          }}
-          className="aui-md-file text-link hover:text-link/80 cursor-pointer no-underline"
-        >
-          <FileTypeIcon name={path} className="me-0.5 inline-block size-icon-sm align-text-bottom" />
-          {children}
-          {line !== null && <span className="text-muted-foreground"> (line {line})</span>}
-        </a>
-      </TooltipTrigger>
-      <TooltipContent side="top">{path}</TooltipContent>
-    </Tooltip>
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <a
+            href={href}
+            data-slot="file-chip"
+            onClick={(event) => {
+              event.preventDefault();
+              open().catch(failed);
+            }}
+            className="aui-md-file text-link hover:text-link/80 cursor-pointer no-underline"
+          >
+            <FileTypeIcon name={path} className="me-0.5 inline-block size-icon-sm align-text-bottom" />
+            {children}
+            {line !== null && <span className="text-muted-foreground"> (line {line})</span>}
+          </a>
+        </TooltipTrigger>
+        <TooltipContent side="top">{path}</TooltipContent>
+      </Tooltip>
+      {gone && (
+        <span data-slot="file-chip-gone" className="text-muted-foreground">
+          {" "}
+          (This file is no longer here
+          {gone.stored && (
+            <>
+              {"; Brigadier kept a copy: "}
+              <button
+                type="button"
+                data-slot="file-chip-save"
+                onClick={() => {
+                  const { artifact } = gone.stored!;
+                  saveArtifact(artifact.id, artifact.fileName ?? artifact.title).catch(failed);
+                }}
+                className="text-link hover:text-link/80 cursor-pointer"
+              >
+                Save…
+              </button>
+            </>
+          )}
+          )
+        </span>
+      )}
+    </>
   );
 };
 

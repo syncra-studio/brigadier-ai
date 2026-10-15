@@ -22,8 +22,9 @@ use brigadier_core::{
     PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
     ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
     SearchQuery, SearchUpdate, Settings, Setup, SetupRequest, SourceChange, SourceScope,
-    SourceState, TaskId, ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView, UsageActivity,
-    UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    SourceState, StoredCopy, TaskId, ThreadItem, ThreadMetrics, UpdateTarget, UpdatesView,
+    UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
+    WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -821,6 +822,14 @@ pub enum Request {
         id: String,
         file_name: String,
     },
+    /// What a file link in a conversation's messages opens: whether `path` (the link as the
+    /// app resolved it) is still there, and the copy Brigadier stored of it with a task's
+    /// report or outputs, found from `link` as written.
+    ResolveFileLink {
+        conversation_id: ConversationId,
+        link: String,
+        path: String,
+    },
     /// Stops its CLI processes and removes temp files now; the next message continues it.
     Hibernate {
         id: ConversationId,
@@ -1419,6 +1428,11 @@ pub enum Response {
     OpenArtifact {
         /// The copy to open.
         path: String,
+    },
+    ResolveFileLink {
+        /// The file at the link's path exists.
+        exists: bool,
+        stored: Option<StoredCopy>,
     },
     Hibernate {
         conversation: Box<Conversation>,
