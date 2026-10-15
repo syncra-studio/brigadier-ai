@@ -221,8 +221,9 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
         <ChevronRightAlt aria-hidden className={CHEVRON} />
       </CollapsibleTrigger>
       <CollapsibleContent className={OPENS}>
-        {/* Up to 224px of rows 4px apart, then it scrolls, its edges fading while there is more. */}
-        <div className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)]">
+        {/* Up to 224px of rows 4px apart, then it scrolls, its edges fading while there is more.
+            Its rows keep their height: an opened Shell box scrolls with them, never squeezed. */}
+        <div className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto *:shrink-0 pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)]">
           <InGroup.Provider value>
             {items.map((item, index) => (described[index] && exploring(described[index]) ? null : renderStep(item.step, item.key)))}
           </InGroup.Provider>

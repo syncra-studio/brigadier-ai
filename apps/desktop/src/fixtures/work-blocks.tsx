@@ -442,6 +442,16 @@ async function driveEarly(): Promise<object> {
   };
 }
 
+/** A turn whose answer starts while the window is hidden folds its work at once: WebKit holds animations still there. */
+async function driveHidden(): Promise<object> {
+  await settle(600);
+  const shown = !!one("[data-slot=request-fold]", turn() ?? document);
+  Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+  change(() => ({ streaming: { messageId: "a1", text: "Fixed the rounding.", requestId: "r1", phase: "answer", startedAtMs: Date.now() } }));
+  await frame();
+  return { shown, gone: !one("[data-slot=request-fold]", turn() ?? document) };
+}
+
 /** A turn that ends in a plan keeps its work open; the user's choice outlives the turn's remount. */
 async function drivePlan(): Promise<object> {
   await settle(600);
@@ -680,7 +690,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

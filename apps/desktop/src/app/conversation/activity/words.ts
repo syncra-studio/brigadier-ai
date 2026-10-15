@@ -25,7 +25,7 @@ export type StepWords = {
   object?: string;
   /** For `other`: the summary's words for it ("Asked for a review"). */
   phrase?: string;
-  /** It reaches the network (a web page, `curl`, `git fetch`). */
+  /** It reads the web (a search, a page, a plain GET of a public page): drawn with a globe. */
   web?: boolean;
   /** It waits for other sessions to reply. */
   waiting?: boolean;
@@ -125,8 +125,6 @@ const PREVIEWS: Record<string, [doing: string, done: string]> = {
 const READERS = new Set(["cat", "head", "tail", "nl", "less", "more", "bat", "wc", "sed"]);
 const LISTERS = new Set(["ls", "find", "tree", "fd"]);
 const SEARCHERS = new Set(["rg", "grep", "ag", "ack"]);
-const NETWORK = new Set(["curl", "wget", "http", "ping", "ssh", "scp", "nc", "dig"]);
-const NETWORK_GIT = new Set(["fetch", "pull", "push", "clone", "ls-remote"]);
 
 /**
  * The command a shell wrapper runs, without moving into its folder first:
@@ -201,8 +199,8 @@ function commandWords(raw: string, kind: "run" | "checks" = "run"): StepWords {
   const firstLine = rest.length > 0 ? `${head} …` : head;
   const words = wordsOf(command);
   const program = basename(words[0] ?? "");
-  const web = NETWORK.has(program) || (program === "git" && NETWORK_GIT.has(words[1] ?? ""));
-  const ran: StepWords = { kind, doing: `Running ${firstLine}`, done: `Ran ${firstLine}`, object: firstLine, ...(web && { web }) };
+  // Any other command has a terminal, also one that reaches the network (`curl … | python3`, `git fetch`).
+  const ran: StepWords = { kind, doing: `Running ${firstLine}`, done: `Ran ${firstLine}`, object: firstLine };
   // A compound command, or a check, is told as what it runs.
   if (kind === "checks" || /[;&|<>`$(]/.test(command.replace(/\s\|\|\s.*$/, ""))) return ran;
   if (program === "date" && words.length === 1) {

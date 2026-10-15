@@ -15,6 +15,11 @@ async function drive<T>(t: test.TestContext, query: string): Promise<T> {
   return seen;
 }
 
+test("a turn whose answer starts while the window is hidden folds its work at once", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ shown: boolean; gone: boolean }>(t, "drive=hidden");
+  assert.deepEqual(seen, { shown: true, gone: true });
+});
+
 test("a turn has one live line, folds the moment its final answer starts, and keeps that time through the end and a reload", { timeout: 120000 }, async (t) => {
   const seen = await drive<Record<"thinking" | "thought" | "question" | "approval" | "running" | "justEnded" | "ended" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
     foldFirst: string; foldMs: number; actions: string[]; firstHeader: string | null; commentaryAtOnce: string | null;

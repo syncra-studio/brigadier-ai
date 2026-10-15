@@ -4,8 +4,12 @@ import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 const OPEN = { duration: 300, easing: "cubic-bezier(0.19, 1, 0.22, 1)" } as const;
 const CLOSE = { duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)" } as const;
 
-function reducedMotion(): boolean {
-  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+/**
+ * Whether it opens and closes at once: with less motion, or while the window is hidden, where
+ * WebKit holds animations still and a fold that closed there would stay open until it is shown.
+ */
+function atOnce(): boolean {
+  return document.hidden || (typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 }
 
 /**
@@ -13,7 +17,7 @@ function reducedMotion(): boolean {
  * unmounted when it has closed. Height (in px, from what it measures), opacity and an 8px slide
  * run on one clock, the Web Animations API's, and the body leaves in that animation's own finish,
  * so what follows moves with the height frame by frame and nothing jumps when it settles. Turned
- * around midway, it goes back from where it is. With less motion it opens and closes at once.
+ * around midway, it goes back from where it is. With less motion, or hidden, it opens and closes at once.
  */
 export function WorkFold({ open, children }: { open: boolean; children: ReactNode }) {
   const [mounted, setMounted] = useState(open);
@@ -23,7 +27,7 @@ export function WorkFold({ open, children }: { open: boolean; children: ReactNod
   const was = useRef(open);
   // Mounted the moment it opens; with less motion, gone the moment it closes.
   if (open && !mounted) setMounted(true);
-  if (!open && mounted && reducedMotion()) setMounted(false);
+  if (!open && mounted && atOnce()) setMounted(false);
 
   useLayoutEffect(() => {
     if (was.current === open) return;
@@ -44,7 +48,7 @@ export function WorkFold({ open, children }: { open: boolean; children: ReactNod
     growing.current = null;
     // It clips only while it moves: open, focus rings and shadows inside it show in full.
     element.dataset.moving = "";
-    if (reducedMotion()) {
+    if (atOnce()) {
       delete element.dataset.moving;
       return;
     }

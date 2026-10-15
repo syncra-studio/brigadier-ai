@@ -155,6 +155,11 @@ test("a listing has the folder, `date` and a public page's GET read as what they
     assert.notEqual(toolStepWords(call("Bash", "completed", sends)).kind, "web", sends);
   }
   assert.equal(summarize([page, toolStepWords(call("Bash", "completed", "pnpm test"))]), "Ran a command, searched the web");
+  // A command that only reaches the network, in a pipe or not, keeps its terminal.
+  for (const command of ["curl -s https://nodejs.org/dist/index.json | python3 -c 'import json'", "git fetch origin", "ssh host uptime"]) {
+    const ran = toolStepWords(call("Bash", "completed", command));
+    assert.deepEqual([ran.kind, ran.web], ["run", undefined], command);
+  }
 });
 
 test("a summary row's icon is its first segment's first step", () => {

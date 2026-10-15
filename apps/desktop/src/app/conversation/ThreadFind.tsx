@@ -248,7 +248,8 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
       if (rect.top >= top && rect.bottom <= bottom) return;
       const max = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
       const target = viewport.scrollTop + rect.top + rect.height / 2 - (top + bottom) / 2;
-      viewport.scrollTo({ top: Math.round(Math.max(0, Math.min(max, target))), behavior: reducedMotion() ? "instant" : "smooth" });
+      // A hidden window holds a smooth scroll still: there it jumps.
+      viewport.scrollTo({ top: Math.round(Math.max(0, Math.min(max, target))), behavior: reducedMotion() || document.hidden ? "instant" : "smooth" });
     },
     [viewport, scroller],
   );

@@ -31,6 +31,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     linkExtras: { address: string | null; joined: boolean; dashed: boolean; menu: string[]; mailMenu: string[]; chipMenu: string[] };
     doneGroup: { row: string | null; icon: string | null };
     doneChildren: (string | null)[];
+    groupShell: { card: boolean; whole: boolean; commandClear: boolean; scrolls: boolean };
     loneRan: string | null;
     kindIcons: Record<string, string | null>;
     diffDialog: { fits: boolean; files: number; scrolls: boolean; whole: boolean };
@@ -73,6 +74,8 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.deepEqual(seen.doneGroup, { row: "Read files, ran a command, checked project memory", icon: "read" });
   // (The time is its own span after the words.)
   assert.deepEqual(seen.doneChildren, ["Checked project memory for “rounding”", "Ran npm testin 41s", "Read math.js"]);
+  // A Shell box opened inside a group is never squeezed by the group's 224px: the list scrolls.
+  assert.deepEqual(seen.groupShell, { card: true, whole: true, commandClear: true, scrolls: true });
   assert.equal(seen.loneRan, "Ran npm test");
   // Each kind's icon: a terminal, a file, a magnifier, a folder, a pencil, the globe for a public page's GET.
   assert.deepEqual(seen.kindIcons, { run: "run", read: "read", search: "code", list: "list", edit: "edit", web: "web" });

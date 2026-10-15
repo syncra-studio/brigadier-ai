@@ -217,7 +217,15 @@ function Page() {
             items={doneGroup.map(({ key }) => ({ type: "step", key, step: key }))}
             live={false}
             describe={(key) => doneGroup.find((each) => each.key === key)!.described}
-            renderStep={(key) => <StepRow key={key} {...doneGroup.find((each) => each.key === key)!.described} suffix={key === "ran" ? "in 41s" : undefined} slot="child" />}
+            renderStep={(key) => (
+              <StepRow
+                key={key}
+                {...doneGroup.find((each) => each.key === key)!.described}
+                suffix={key === "ran" ? "in 41s" : undefined}
+                detail={key === "ran" ? <ShellBox command="npm test" output={longOutput} status="completed" exit={0} /> : undefined}
+                slot="child"
+              />
+            )}
           />
         </Case>
         <Case id="lone-ran">
@@ -519,6 +527,23 @@ async function measure(): Promise<object> {
   doneTrigger?.click();
   await wait(400);
   out.doneChildren = all("[data-slot=child]", at("done-group")).map((row) => text(row));
+  // Its command opened inside it: the Shell box keeps its whole height, and the list scrolls to it.
+  const ranRow = all<HTMLElement>("[data-slot=child] [role=button]", at("done-group")).find((row) => text(row)?.startsWith("Ran"));
+  ranRow?.click();
+  await wait(400);
+  const shellCard = one<HTMLElement>("[data-slot=shell-card]", at("done-group"));
+  const shellHolder = shellCard?.parentElement?.parentElement ?? null;
+  const groupList = shellHolder?.closest<HTMLElement>(".max-h-group-list") ?? null;
+  out.groupShell = {
+    card: !!shellCard,
+    whole: !!shellCard && !!shellHolder && shellHolder.getBoundingClientRect().height + 1 >= shellCard.scrollHeight,
+    commandClear: !!shellCard && (() => {
+      const said = one("[data-slot=shell-command]", shellCard)!.getBoundingClientRect();
+      const output = one("[data-slot=shell-output]", shellCard)!.getBoundingClientRect();
+      return said.bottom <= output.top + 1;
+    })(),
+    scrolls: !!groupList && groupList.scrollHeight > groupList.clientHeight,
+  };
   out.loneRan = text(at("lone-ran").firstElementChild);
   out.kindIcons = Object.fromEntries(kinds.map(({ key }) => [key, one(`[data-slot=kind-${key}] [data-icon]`)?.getAttribute("data-icon") ?? null]));
   const searchRow = at("search").firstElementChild;
