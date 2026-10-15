@@ -435,8 +435,25 @@ fn resolve(base: &str, href: &str) -> Option<String> {
     let path = base.path();
     let folder = &path[..path.rfind('/').map_or(0, |at| at + 1)];
     let folder = if folder.is_empty() { "/" } else { folder };
-    let href = href.strip_prefix("./").unwrap_or(href);
-    Some(format!("https://{host}{folder}{href}"))
+    // Its `.` and `..` resolved, as a browser does (servers needn't).
+    let (relative, rest) = href.split_at(href.find(['?', '#']).unwrap_or(href.len()));
+    let joined = format!("{folder}{relative}");
+    let mut kept: Vec<&str> = Vec::new();
+    let segments: Vec<&str> = joined.split('/').skip(1).collect();
+    for (index, segment) in segments.iter().enumerate() {
+        match *segment {
+            "." => {}
+            ".." => {
+                kept.pop();
+            }
+            other => kept.push(other),
+        }
+        // A trailing `.` or `..` still names a folder.
+        if index + 1 == segments.len() && (*segment == "." || *segment == "..") {
+            kept.push("");
+        }
+    }
+    Some(format!("https://{host}/{}{rest}", kept.join("/")))
 }
 
 #[cfg(test)]
@@ -501,6 +518,18 @@ mod tests {
         assert_eq!(
             resolve("https://a.dev/en/home", "/i.png").as_deref(),
             Some("https://a.dev/i.png")
+        );
+        assert_eq!(
+            resolve("https://a.dev/assets/old.ico", "../new.ico?v=../2").as_deref(),
+            Some("https://a.dev/new.ico?v=../2")
+        );
+        assert_eq!(
+            resolve("https://a.dev/a/b/c.ico", "../../../../x/./y.ico").as_deref(),
+            Some("https://a.dev/x/y.ico")
+        );
+        assert_eq!(
+            resolve("https://a.dev/a/b/", "..").as_deref(),
+            Some("https://a.dev/a/")
         );
         assert_eq!(icon_link(r#"<link rel="preload" href="/x">"#), None);
     }
