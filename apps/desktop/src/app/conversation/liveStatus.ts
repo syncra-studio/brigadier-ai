@@ -12,8 +12,12 @@ import { type Board, RETRYING } from "@/state/board";
  */
 export type StatusTone = "busy" | "still" | "needsYou";
 
-/** `sinceMs`: a long run's start, its elapsed time said after the words ("Running the full checks · 6m"). */
-export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number };
+/**
+ * `sinceMs`: a long run's start, its elapsed time said after the words ("Running the full checks · 6m").
+ * `waitsOn`: what of the user's the turn waits on: an answer's line carries a checklist glyph, an
+ * approval's shimmers fainter.
+ */
+export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; waitsOn?: "answer" | "approval" };
 
 /**
  * What the end of a live turn says: one line. Each worker's own progress is in the Workers
@@ -73,22 +77,23 @@ function runningHead({ board, requestIds }: StatusInput): StatusHead | null {
 }
 
 /** What only the user can do for these requests, in a few words; `null` when nothing. */
-function needsYou({ board, requestIds }: StatusInput, leadRunning: boolean, workers: readonly Task[]): string | null {
+function needsYou({ board, requestIds }: StatusInput, leadRunning: boolean, workers: readonly Task[]): StatusHead | null {
   const ours = (id: string | null) => id !== null && requestIds.includes(id);
+  // A call the user must allow: the turn's last row says so, quietly, the card itself asks.
   if (Object.values(board.approvals).some((card) => ours(card.requestId) && card.state.type === "pending")) {
-    return "Waiting for your approval";
+    return { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" };
   }
   if (Object.values(board.questions).some((card) => ours(card.requestId) && card.answer === null && card.answeredAtMs === null)) {
-    return "Waiting for your answer";
+    return { text: "Waiting for your answer", tone: "needsYou", waitsOn: "answer" };
   }
   // The user works in a worker's own session: the request waits until they close it.
-  if (workers.some((task) => task.state === "takenOver")) return "Working in your terminal";
+  if (workers.some((task) => task.state === "takenOver")) return { text: "Working in your terminal", tone: "needsYou" };
   // The lead reviews a proposed plan and lands a ready change itself while its turn runs.
   if (leadRunning) return null;
-  if (Object.values(board.plans).some((plan) => ours(plan.requestId) && plan.state.type === "proposed")) {
-    return "Waiting for your approval";
+  if (Object.values(board.plans).some((plan) => ours(plan.requestId) && plan.state.type === "proposed")
+    || workers.some((task) => task.state === "readyToLand" && !task.run)) {
+    return { text: "Waiting for your approval", tone: "needsYou" };
   }
-  if (workers.some((task) => task.state === "readyToLand" && !task.run)) return "Waiting for your approval";
   return null;
 }
 
@@ -125,7 +130,7 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
   const working = live.some((task) => activelyWorking({ task }));
 
   const needs = needsYou(input, leadRunning, live);
-  if (needs) return { head: { text: needs, tone: "needsYou" } };
+  if (needs) return { head: needs };
   if (leadRunning) return { head: leadHead(input) };
   if (quotaWait && !working) return { head: { text: quotaWords(quotaWait.resetsAtMs), tone: "still" } };
   if (live.length > 0) {

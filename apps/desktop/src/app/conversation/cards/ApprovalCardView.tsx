@@ -165,7 +165,7 @@ export const ApprovalCardView = memo(function ApprovalCardView({ cardId }: { car
 
   const shown = describe(approval, actorId, landingId);
   if (approval.state.type === "pending") {
-    return <WaitingRow icon={shown.icon}>Waiting for your approval</WaitingRow>;
+    return <WaitingRow icon={shown.icon} quiet>Awaiting approval</WaitingRow>;
   }
   return (
     <ApprovalCard

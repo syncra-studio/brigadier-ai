@@ -5,7 +5,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Seen = {
   header: string | null; newest: string | null; newestShimmers: boolean; fold: string; groupRow: string | null; groupIcons: number; groupAnimations: string[];
-  groupLine: string | null; groupTone: string | null; shimmer: boolean; status: string | null; thinkingLive: number;
+  groupLine: string | null; groupTone: string | null; groupGlyph: string | null; groupQuiet: boolean; shimmer: boolean; status: string | null; thinkingLive: number;
   commentary: string | null; commentaryShimmers: boolean; answer: string | null; answerInWork: boolean; statusAfterAnswer: boolean; statusInWork: boolean;
 };
 
@@ -16,7 +16,7 @@ async function drive<T>(t: test.TestContext, query: string): Promise<T> {
 }
 
 test("a turn has one live line, folds the moment its final answer starts, and keeps that time through the end and a reload", { timeout: 120000 }, async (t) => {
-  const seen = await drive<Record<"thinking" | "thought" | "question" | "running" | "justEnded" | "ended" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
+  const seen = await drive<Record<"thinking" | "thought" | "question" | "approval" | "running" | "justEnded" | "ended" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
     foldFirst: string; foldMs: number; actions: string[]; firstHeader: string | null; commentaryAtOnce: string | null;
     announcedAnswering: string | null; announcedDone: string | null; time: { text: string | null; opacity: string | null }; html: string | null;
   }>(t, "drive=turn");
@@ -31,6 +31,13 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
   assert.deepEqual([seen.thought.groupLine, seen.thought.status, seen.thought.thinkingLive], ["Checking the failing test", null, 0]);
   // What waits on the user wins over the thought.
   assert.deepEqual([seen.question.groupLine, seen.question.groupTone, seen.question.status, seen.question.thinkingLive], ["Waiting for your answer", "needsYou", null, 0]);
+  // A question's wait has a checklist before its words; "Thinking" has no glyph.
+  assert.deepEqual([seen.question.groupGlyph, seen.question.groupQuiet, seen.thinking.groupGlyph], ["tasks", false, null]);
+  // A call waiting for the user's OK: "Awaiting approval", its sweep over fainter words, no glyph.
+  assert.deepEqual(
+    [seen.approval.groupLine, seen.approval.groupTone, seen.approval.groupQuiet, seen.approval.groupGlyph, seen.approval.status],
+    ["Awaiting approval", "needsYou", true, null, null],
+  );
   // A step running says itself, shimmering: still one line.
   assert.deepEqual([seen.running.groupRow, seen.running.shimmer, seen.running.groupLine, seen.running.status], ["Running sleep 4", true, null, null]);
   // A command that just ended still names its group for a second, then the group says "Thinking".

@@ -1,4 +1,4 @@
-import { ChevronRightAlt, Clock, Globe, Stop } from "@openai/apps-sdk-ui/components/Icon";
+import { ChevronRightAlt, Clock, Globe, Stop, Tasks } from "@openai/apps-sdk-ui/components/Icon";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 
 import type { GroupItem } from "@/app/conversation/activity/group";
@@ -192,8 +192,11 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   return (
     <Collapsible data-slot="work-group" open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
-        {/* The live line ("Thinking") is no step's: it shows without a step's icon. */}
-        {head && !(line && calm.shown === line.text) && <StepIcon words={head} />}
+        {/* The live line ("Thinking") is no step's: it shows without a step's icon, but a
+            question waiting for its answer has a checklist. */}
+        {line && calm.shown === line.text
+          ? line.waitsOn === "answer" && <Tasks aria-hidden data-icon="tasks" className="size-4 shrink-0" />
+          : head && <StepIcon words={head} />}
         {/* A live group's step changes in place, with no jump and no fade: a fade-in's first
             frame is invisible, and WebKit can leave it there, and the fade's animation would
             replace the shimmer's. Keyed, a new label's sweep starts over. */}
@@ -206,6 +209,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
           className={cn(
             "min-w-0 truncate",
             (naming || (line && line.tone !== "still")) && "shimmer",
+            line?.waitsOn === "approval" && "shimmer-quiet",
           )}
         >
           {current && oneStep && !naming && !line ? <Words words={current.words} label={calm.shown} /> : calm.shown}

@@ -40,7 +40,7 @@ import type {
 } from "@/ipc/generated";
 import { answerHtml } from "@/app/conversation/RequestBlock";
 import { loadConversation, openConversation } from "@/state/actions";
-import { type Board, useBoard } from "@/state/board";
+import { type Board, type ShownApproval, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -219,6 +219,10 @@ function seen() {
     groupAnimations: (one("button > span:not([data-icon])", group ?? document.createElement("div"))?.getAnimations() ?? []).map((animation) => (animation as CSSAnimation).animationName),
     groupLine: text(one("[data-slot=group-live-line]", block ?? document)),
     groupTone: one("[data-slot=group-live-line]", block ?? document)?.getAttribute("data-tone") ?? null,
+    // The glyph before its words, by name ("tasks" for a question waiting for its answer).
+    groupGlyph: one("button [data-icon]", group ?? document.createElement("div"))?.getAttribute("data-icon") ?? null,
+    // Its live words' sweep runs over the fainter base of an approval's wait.
+    groupQuiet: !!one("[data-slot=group-live-line].shimmer-quiet", block ?? document),
     shimmer: !!group?.querySelector(".shimmer"),
     status: text(status),
     thinkingLive: all("[data-slot=thinking-live]", block ?? document).length,
@@ -241,6 +245,11 @@ const question: Question = {
   createdAtMs: begun, answeredAtMs: null,
 } as unknown as Question;
 
+const approval = {
+  id: "allow", conversationId: ID, taskId: null, requestId: "r1", position: 1.06, state: { type: "pending" }, createdAtMs: begun, resolvedAtMs: null,
+  subject: { type: "cli", request: { id: "allow", kind: "command", tool: "Bash", command: "git push", cwd: null, paths: [], reason: null, escalation: false, input: null, grant: null } },
+} as unknown as ShownApproval;
+
 async function driveTurn(): Promise<object> {
   const out: Record<string, unknown> = {};
   // The header shows from the turn's first frame.
@@ -256,7 +265,11 @@ async function driveTurn(): Promise<object> {
   change(() => ({ questions: { ask: question } }));
   await settle();
   out.question = seen();
-  change(() => ({ questions: {}, thinking: [thought(true)] }));
+  // A call waiting for the user's OK: the same row says so, fainter, with no glyph.
+  change(() => ({ questions: {}, approvals: { allow: approval } }));
+  await settle();
+  out.approval = seen();
+  change(() => ({ approvals: {}, thinking: [thought(true)] }));
   steps([...daemon.steps, tool("sleep", 1.4, "shell", "sleep 4", "inProgress")]);
   await settle();
   out.running = seen();

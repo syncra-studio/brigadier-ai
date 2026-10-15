@@ -113,11 +113,11 @@ test("only a card or a question for the user reads as needing them", () => {
   const approval = { id: "a", requestId: "r1", state: { type: "pending" } } as unknown as ShownApproval;
   const worker = task();
   const view = threadStatus(input({ ...leading, approvals: byId([approval]), tasks: byId([worker]) }, { state: "waiting" }));
-  assert.deepEqual(view, { head: { text: "Waiting for your approval", tone: "needsYou" } });
+  assert.deepEqual(view, { head: { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" } });
   const allowed = { ...approval, state: { type: "allowed" } } as unknown as ShownApproval;
   assert.equal(head(input({ approvals: byId([allowed]) }))?.tone, "busy");
   const question = { id: "q", requestId: "r1", answer: null, answeredAtMs: null } as unknown as Question;
-  assert.deepEqual(head(input({ questions: byId([question]) }, { state: "waiting" })), { text: "Waiting for your answer", tone: "needsYou" });
+  assert.deepEqual(head(input({ questions: byId([question]) }, { state: "waiting" })), { text: "Waiting for your answer", tone: "needsYou", waitsOn: "answer" });
   // An overnight run's list or a question in the lead's text: nothing reads as needing them.
   const item = { id: "w", requestId: "r1", what: "Sign in to GitHub" } as unknown as WaitingItem;
   assert.equal(head(input({ waiting: { w: item } }, { state: "waiting" })), null);

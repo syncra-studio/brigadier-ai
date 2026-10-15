@@ -56,16 +56,16 @@ export function DiffStatView({ stat }: { stat: DiffStat }) {
 
 /**
  * In the thread, a decision whose card is in the composer: a grey row, e.g. "Waiting for your
- * answer".
+ * answer". `quiet`: an approval's, its words fainter ("Awaiting approval").
  */
-export function WaitingRow({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+export function WaitingRow({ icon, quiet = false, children }: { icon: ReactNode; quiet?: boolean; children: ReactNode }) {
   return (
     <div
       data-slot="waiting-row"
       className="text-muted-foreground min-h-row-sm flex min-w-0 items-center gap-2 text-sm [&_svg]:size-icon-md [&_svg]:shrink-0"
     >
       {icon}
-      <span className="shimmer min-w-0 truncate">{children}</span>
+      <span className={cn("shimmer min-w-0 truncate", quiet && "shimmer-quiet")}>{children}</span>
     </div>
   );
 }

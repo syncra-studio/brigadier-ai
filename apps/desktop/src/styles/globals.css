@@ -392,9 +392,8 @@
 /* Live text ("Thinking", a running step): muted text a highlight band sweeps across now and
    then, the first time 600ms after it shows, then every 4s. Still with less motion. */
 @utility shimmer {
-  --shimmer-base: var(--live-text);
   --shimmer-highlight: var(--live-text-highlight);
-  background-color: var(--shimmer-base);
+  background-color: var(--shimmer-base, var(--live-text));
   background-image: linear-gradient(
     to right,
     transparent 0%,
@@ -411,6 +410,11 @@
   @media (prefers-reduced-motion: reduce) {
     animation: none;
   }
+}
+
+/* A wait on the user's approval: the same sweep over fainter words. */
+@utility shimmer-quiet {
+  --shimmer-base: var(--live-text-quiet);
 }
 
 /* The dots of "still working" in a wave, each a little after the one before. */

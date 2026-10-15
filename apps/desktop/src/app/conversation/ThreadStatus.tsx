@@ -1,3 +1,4 @@
+import { Tasks } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useMemo } from "react";
 
 import { elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
@@ -41,7 +42,9 @@ export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => {
   const now = useNow(head.sinceMs === undefined ? null : 5_000);
   const text = head.sinceMs === undefined ? head.text : `${head.text} · ${elapsedWords(now - head.sinceMs)}`;
   return (
-    <div data-slot="thread-status" data-tone={head.tone} className="flex min-w-0">
+    <div data-slot="thread-status" data-tone={head.tone} data-waits-on={head.waitsOn} className="flex min-w-0 items-center gap-2">
+      {/* A question waiting for its answer: a checklist before the words. */}
+      {head.waitsOn === "answer" && <Tasks aria-hidden data-icon="tasks" className="size-4 shrink-0 text-muted-foreground" />}
       {/* As wide as its words, so the sweep crosses them rather than the whole row. */}
       <div
         data-slot="request-activity"
@@ -49,6 +52,7 @@ export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => {
           "w-fit max-w-full truncate text-sm",
           // Waiting on the user is live too: it shimmers as quietly as the work, the card itself asks.
           (head.tone === "busy" || head.tone === "needsYou") && "shimmer",
+          head.waitsOn === "approval" && "shimmer-quiet",
           head.tone === "still" && "text-muted-foreground",
         )}
       >
