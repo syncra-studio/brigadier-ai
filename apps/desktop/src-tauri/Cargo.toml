@@ -29,6 +29,7 @@ tauri-plugin-dialog = "2.7.3"
 tauri-plugin-notification = "2.4.0"
 tauri-plugin-opener = "2.5.5"
 tauri-plugin-single-instance = "2.4.5"
+tauri-plugin-updater = "2.12.0"
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

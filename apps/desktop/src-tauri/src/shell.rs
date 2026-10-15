@@ -52,6 +52,8 @@ static IN_MENU_BAR: AtomicBool = AtomicBool::new(false);
 /// The code the process exits with once the event loop returns. Tauri's runtime turns
 /// `app.exit(code)` into a plain exit, so the event loop itself always reports 0.
 static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
+/// The quit stopped the daemon (it acknowledged), so the app's files can be replaced.
+static DAEMON_STOPPED: AtomicBool = AtomicBool::new(false);
 
 /// Until when (ms since the Unix epoch) Settings records a key press. Meanwhile the menu's own
 /// items (Settings…, Open Folder…, Close Window) reach the page as key presses instead of acting.
@@ -88,6 +90,10 @@ pub fn is_quitting() -> bool {
 
 pub fn exit_code() -> i32 {
     EXIT_CODE.load(Ordering::Acquire)
+}
+
+pub fn daemon_stopped() -> bool {
+    DAEMON_STOPPED.load(Ordering::Acquire)
 }
 
 /// Whether this process can reach the window server. AppKit aborts the process when it can't
@@ -573,6 +579,7 @@ async fn stop_daemon(app: &AppHandle) {
     }
     if bridge.shutdown_daemon(QUIT_TIMEOUT).await {
         tracing::info!("brigadierd drained and acknowledged the quit");
+        DAEMON_STOPPED.store(true, Ordering::Release);
     } else {
         tracing::warn!("brigadierd did not acknowledge the quit");
     }

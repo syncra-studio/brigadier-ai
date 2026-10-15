@@ -5,6 +5,7 @@ import { KeepAwakeMenu, UsageMenu } from "@/app/BarStatus";
 import { useShortcuts } from "@/app/shortcuts";
 import { preloadSettings } from "@/app/settings/lazy";
 import { FootButton } from "@/app/sidebar/nav";
+import { RestartToUpdate } from "@/app/RestartToUpdate";
 import { UpdatesRow } from "@/app/UpdatesRow";
 import { useSidebar } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
@@ -12,7 +13,7 @@ import { toggleSettings } from "@/state/actions";
 
 /**
  * The icons at the sidebar's foot, outside Settings: keeping awake, the agents' usage, updates
- * while there are any, and Settings. Expanded, they make one row along the bottom, Settings
+ * while there are any, "Restart to update" while a nightly update waits, and Settings. Expanded, they make one row along the bottom, Settings
  * first; collapsed, they stack in the strip, Settings last. Settings stays in the corner either way, and the others fade in where they
  * move to, so the foot doesn't jump as the sidebar collapses or expands.
  */
@@ -46,6 +47,9 @@ export function SidebarFoot() {
       </Moving>
       <Moving open={open}>
         <UpdatesRow />
+      </Moving>
+      <Moving open={open}>
+        <RestartToUpdate />
       </Moving>
       {!open && settings}
     </div>

@@ -25,6 +25,7 @@ mod login_item;
 mod overnight_notifications;
 mod shell;
 mod smoke;
+mod updates;
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -606,7 +607,21 @@ fn main() {
             window.visible = false;
         }
     }
-    let app = tauri::Builder::default()
+    // Only the signed nightly carries the updater's configuration (updates.rs).
+    let check_updates = updates::enabled(
+        cfg!(debug_assertions),
+        updates::configured(context.config()),
+        smoke,
+        intent.is_some(),
+    );
+    tracing::info!(on = check_updates, "nightly updates");
+    let builder = tauri::Builder::default();
+    let builder = if check_updates {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        builder
+    };
+    let app = builder
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             if overnight_notifications::host_id(&args).is_some() {
                 return;
@@ -680,6 +695,9 @@ fn main() {
             }
             if smoke {
                 smoke::start_watchdog(app.handle());
+            }
+            if check_updates {
+                updates::start(app.handle().clone());
             }
             Ok(())
         })
@@ -788,7 +806,9 @@ fn main() {
             browser::browser_site_set,
             browser_import::browser_import_sources,
             browser_import::browser_import,
-            browser_import::browser_import_open_access
+            browser_import::browser_import_open_access,
+            updates::app_update_ready,
+            updates::restart_to_update
         ])
         .build(context)
         .unwrap_or_else(|err| {
@@ -796,6 +816,7 @@ fn main() {
             std::process::exit(1);
         });
 
+    let env = app.env();
     app.run_return(|app, event| match event {
         // Cmd+Q and other user-initiated exits go through the orderly quit.
         RunEvent::ExitRequested { api, code, .. } if code.is_none() && !shell::is_quitting() => {
@@ -815,6 +836,11 @@ fn main() {
         ),
         _ => {}
     });
+    // A waiting nightly update goes in now that the daemon has stopped; "Restart to update"
+    // opens the app again.
+    if updates::finish(shell::daemon_stopped()) {
+        tauri::process::restart(&env);
+    }
     // The code the quit asked for, so smoke failures reach CI.
     std::process::exit(shell::exit_code());
 }

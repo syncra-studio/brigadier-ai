@@ -22,6 +22,7 @@ import { startMenuBar } from "@/state/menuBar";
 import { emitPageChanged } from "@/state/pageChanges";
 import { emitWorkspaceChanged } from "@/state/workspaceCache";
 import { emitSearchUpdate } from "@/state/workspaceSearch";
+import { startAppUpdate } from "@/state/appUpdate";
 import { startPagesFlush } from "@/state/pagesFlush";
 import { applyUpdateEvents, loadUpdates } from "@/state/updates";
 import { applyUsageEvents } from "@/state/usage";
@@ -165,6 +166,9 @@ function onBridgeEvent(message: BridgeEvent) {
 export async function startBridge(): Promise<void> {
   startPagesFlush().catch((error: unknown) => {
     console.error("listening for the quit's page save failed", error);
+  });
+  startAppUpdate().catch((error: unknown) => {
+    console.error("listening for a nightly update failed", error);
   });
   await subscribe(onBridgeEvent);
   startMenuBar();

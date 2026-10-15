@@ -75,6 +75,16 @@ export function appInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("app_info");
 }
 
+/** The version of the nightly update downloaded and waiting for a restart, if any. */
+export function appUpdateReady(): Promise<string | null> {
+  return invoke<string | null>("app_update_ready");
+}
+
+/** Quits, installs the waiting nightly update and opens the app again. */
+export function restartToUpdate(): Promise<void> {
+  return invoke("restart_to_update");
+}
+
 /** Reports when the app became usable; resolves to cold start in ms. */
 export function appReady(readyMs: number): Promise<number> {
   return invoke<number>("app_ready", { readyMs });
