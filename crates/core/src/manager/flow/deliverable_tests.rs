@@ -125,7 +125,9 @@ async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_
         .find(|input| input.contains("[report task-1") && !input.contains("· addendum]"))
         .unwrap();
     assert!(
-        report.contains("link one as [notes.md](outputs/notes.md), never by its scratch path"),
+        report.contains(
+            "link one as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy after its scratch folder goes, never by its scratch path"
+        ),
         "{report}"
     );
     let answer = flow

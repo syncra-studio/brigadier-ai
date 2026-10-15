@@ -1738,7 +1738,7 @@ fn short_report(task: &Task, report: &Report, route: &str) -> String {
         &mut text,
     );
     named(
-        "Outputs (the user saves them from the task card; read_artifact reads them; link one as [notes.md](outputs/notes.md))",
+        "Outputs (the user saves them from the task card; read_artifact reads them; link one as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy)",
         task.outputs
             .iter()
             .map(|o| {
@@ -1839,7 +1839,7 @@ pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
     }
     if !task.outputs.is_empty() {
         text.push_str(
-            "\nOutputs (the user opens and saves them from the task card; read_artifact reads them; link one as [notes.md](outputs/notes.md), never by its scratch path):",
+            "\nOutputs (the user opens and saves them from the task card; read_artifact reads them; link one as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy after its scratch folder goes, never by its scratch path):",
         );
         for output in &task.outputs {
             text.push_str(&format!(
