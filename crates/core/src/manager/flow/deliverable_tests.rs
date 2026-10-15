@@ -119,6 +119,15 @@ async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_
         addendum.contains("Its scratch folder is gone, so paths in it no longer open"),
         "{addendum}"
     );
+    // The report tells the thread how to link an output without its scratch path.
+    let report = inputs
+        .iter()
+        .find(|input| input.contains("[report task-1") && !input.contains("· addendum]"))
+        .unwrap();
+    assert!(
+        report.contains("link one as [notes.md](outputs/notes.md), never by its scratch path"),
+        "{report}"
+    );
     let answer = flow
         .core
         .all_messages(&flow.conversation)
@@ -155,6 +164,14 @@ async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_
             .unwrap();
         assert_eq!(std::fs::read_to_string(copy).unwrap(), LIST, "{whose}");
     }
+    // The link form the report teaches opens the same copy.
+    let stored = flow
+        .manager
+        .stored_output(&flow.conversation, "outputs/rounding.md")
+        .await
+        .unwrap()
+        .expect("outputs/rounding.md has a stored copy");
+    assert_eq!(stored.task_id, task.id);
     flow.stop().await;
 }
 

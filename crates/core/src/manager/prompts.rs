@@ -142,7 +142,7 @@ How to talk to the user:
 - {LEAD}
 - Even while work runs, write one line for: a failure of what you started (a preview, a dev app, a build, a check you awaited), in the same turn: what failed, its key error line, what you do about it; work the user didn't ask for, before it starts ("Starting 3 fixes from the review; about 20 min."); and [status due]: what runs, why, roughly what's left. Never say something compiles or runs without checking its process, or having a worker look.
 - When the request's work is done, write one final answer: at most about five short lines of what changed and what to know. Then, if any, one line "To check: …", only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report (checks run, review findings, what wasn't tested) under a last heading `### Details`, shown folded. A decision goes on a card (ask_user, propose_plan), never in text; a merge needs none.
-- Fix a known defect in a deliverable yourself (your workspace is writable at your permission level: write the corrected file there and link it), or send it back, before you answer.
+- Fix a known defect in a deliverable yourself, with no card (write a fixed copy in your workspace, writable at your level, and link its full path), or send it back, before you answer.
 - {LATE_EVENT} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
@@ -667,7 +667,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: DELIVERABLES_REVISION,
-        thread: "From now on, a worker's scratch folder goes when its task ends and its outputs open and save from its task card (a link to a stored output, even an old one, opens Brigadier's copy): never give the user a scratch path, and never point them at a file you haven't just seen exist. Hand a file over through its task card's Save, the Save… shown under your answer for each stored output, or an ask_user card asking where it goes; never copy it to the Desktop, another folder or the clipboard unless the user asked. \"To check: …\" is only for what nobody here can check or fix: a known defect in a deliverable you fix yourself (your workspace is writable at your permission level: write the corrected file there and link it), or send back, before you answer.",
+        thread: "From now on, a worker's scratch folder goes when its task ends and its outputs open and save from its task card (a link to a stored output, even an old one, opens Brigadier's copy): never give the user a scratch path, and never point them at a file you haven't just seen exist; link a worker's file as [notes.md](outputs/notes.md). Hand a file over through its task card's Save, the Save… shown under your answer for each stored output, or an ask_user card asking where it goes; never copy it to the Desktop, another folder or the clipboard unless the user asked. \"To check: …\" is only for what nobody here can check or fix: a known defect in a deliverable is no decision for a card: fix it yourself (your workspace is writable at your permission level: write the corrected file there and link its full path), or send it back, before you answer.",
         worker: "From now on, your scratch folder goes when the task ends: never link its path in your report or messages; name the output file (outputs/notes.md).",
     },
     Revision {
@@ -1738,7 +1738,7 @@ fn short_report(task: &Task, report: &Report, route: &str) -> String {
         &mut text,
     );
     named(
-        "Outputs (the user saves them from the task card; read_artifact reads them)",
+        "Outputs (the user saves them from the task card; read_artifact reads them; link one as [notes.md](outputs/notes.md))",
         task.outputs
             .iter()
             .map(|o| {
@@ -1839,7 +1839,7 @@ pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
     }
     if !task.outputs.is_empty() {
         text.push_str(
-            "\nOutputs (the user opens and saves them from the task card; read_artifact reads them; never give their scratch path):",
+            "\nOutputs (the user opens and saves them from the task card; read_artifact reads them; link one as [notes.md](outputs/notes.md), never by its scratch path):",
         );
         for output in &task.outputs {
             text.push_str(&format!(
@@ -2781,6 +2781,9 @@ mod environment_tests {
             assert!(text.contains("at most about five short lines"));
             assert!(text.contains("\"To check: …\""));
             assert!(text.contains("\"You'll need to: …\""));
+            // A6: a known defect is fixed with no card, the fixed copy linked by its full path.
+            assert!(text.contains("Fix a known defect in a deliverable yourself, with no card"));
+            assert!(text.contains("and link its full path"));
             assert!(text.contains("`### Details`, shown folded"));
             assert!(text.contains(LATE_EVENT));
             // A merge said while workers write is held, then due (SESSION-FIXES-PLAN.md Q3).
