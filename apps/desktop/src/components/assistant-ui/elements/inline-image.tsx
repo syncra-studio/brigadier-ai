@@ -10,7 +10,7 @@ import {
   TileRemove,
   useAttachmentUrl,
 } from "@/components/assistant-ui/elements/attachment-tile";
-import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
+import { ImageContextMenu, ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import type { AttachmentRef } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +61,7 @@ export function InlineImage({
       )}
     >
       <ImagePreview url={url} name={label}>
+        <ImageContextMenu image={{ name: label, url, ...(source && { source }) }}>
         <button
           type="button"
           aria-label={`Preview ${label}`}
@@ -80,6 +81,7 @@ export function InlineImage({
           )}
           {label}
         </button>
+        </ImageContextMenu>
       </ImagePreview>
       {onRemove && (
         // Smaller than a tile's ×, its reach (the ::after) a little larger than it looks.

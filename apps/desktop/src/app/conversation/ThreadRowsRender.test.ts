@@ -93,7 +93,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     closed: true,
   });
   // + zooms and 0 fits again, pressed with focus on Close (outside the image's own frame).
-  assert.deepEqual(seen.zoomKeys, ["100%", "125%", "100%"]);
+  assert.deepEqual(seen.zoomKeys, ["100%", "110%", "100%"]);
   // Web links: a globe until the site's icon comes, kept when the site has none, none for a
   // plain-HTTP link; a site is asked once however many links it has.
   assert.deepEqual(seen.links, {

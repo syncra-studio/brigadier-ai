@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight, Download, Minus, Plus, X } from "@openai/apps-sdk-ui/components/Icon";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { type KeyboardEvent, type MouseEvent, type ReactNode, type Ref, useEffect, useEffectEvent, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import { type ComponentProps, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref, useEffect, useEffectEvent, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { type AttachmentSource, useAttachmentUrl } from "@/components/assistant-ui/elements/attachment-url";
@@ -67,16 +67,21 @@ async function copyImage(image: ViewerImage, url: string | null): Promise<void> 
 }
 
 /** Reuse around thumbnail triggers so their right-click menu matches the full image. */
-export function ImageContextMenu({ image, children }: { image: ViewerImage; children: ReactNode }) {
+export function ImageContextMenu({ image, children, ...trigger }: { image: ViewerImage; children: ReactNode } & ComponentProps<typeof ContextMenuTrigger>) {
   const resolved = useAttachmentUrl(image.source ?? {});
   const url = image.url ?? resolved;
-  return <ContextMenu>
-    <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-    <ContextMenuContent>
-      <ContextMenuItem onSelect={() => { void copyImage(image, url); }}>Copy image</ContextMenuItem>
-      <ContextMenuItem onSelect={() => { void downloadImage(image, url); }}>Download image</ContextMenuItem>
-    </ContextMenuContent>
-  </ContextMenu>;
+  // What a trigger around it passes on (the viewer's click, its ref) reaches the thumbnail too.
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild {...trigger}>
+        {children}
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => void copyImage(image, url)}>Copy image</ContextMenuItem>
+        <ContextMenuItem onSelect={() => void downloadImage(image, url)}>Download image</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 /** The name the thumbnail and the shown image share while one morphs into the other. */

@@ -18,7 +18,7 @@ import {
   type AttachmentSource,
   useAttachmentUrl,
 } from "@/components/assistant-ui/elements/attachment-url";
-import { ImagePreview, type ViewerImage } from "@/components/assistant-ui/elements/image-viewer";
+import { ImageContextMenu, ImagePreview, type ViewerImage } from "@/components/assistant-ui/elements/image-viewer";
 
 export { type AttachmentReader, AttachmentReaderContext, type AttachmentSource, useAttachmentUrl };
 export { ImagePreview };
@@ -177,6 +177,7 @@ export function ImageTile({
   return (
     <div data-slot="attachment-image" className={cn("group/tile relative shrink-0", sent ? "size-attachment-sent" : "size-attachment-thumb")}>
       <ImagePreview url={url} name={name} gallery={gallery}>
+        <ImageContextMenu image={{ name, url, source }}>
         <button
           type="button"
           aria-label={`Preview ${name}`}
@@ -193,6 +194,7 @@ export function ImageTile({
             />
           )}
         </button>
+        </ImageContextMenu>
       </ImagePreview>
       <span
         aria-hidden

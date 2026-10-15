@@ -325,10 +325,10 @@ async function measure(): Promise<object> {
   // Zoom keys work from wherever focus is, the Close button too.
   const percent = () => all("span", viewer() ?? undefined).map((node) => text(node)).find((words) => words?.endsWith("%")) ?? null;
   const fitted = percent();
-  one("[data-slot=image-preview] [aria-label=Close]")?.dispatchEvent(new KeyboardEvent("keydown", { key: "+", bubbles: true }));
+  one("[data-slot=image-preview] [aria-label='Close image preview']")?.dispatchEvent(new KeyboardEvent("keydown", { key: "+", bubbles: true }));
   await wait(100);
   const zoomed = percent();
-  one("[data-slot=image-preview] [aria-label=Close]")?.dispatchEvent(new KeyboardEvent("keydown", { key: "0", bubbles: true }));
+  one("[data-slot=image-preview] [aria-label='Close image preview']")?.dispatchEvent(new KeyboardEvent("keydown", { key: "0", bubbles: true }));
   await wait(100);
   out.zoomKeys = [fitted, zoomed, percent()];
   one<HTMLElement>("[data-slot=image-preview-frame]")?.click();
