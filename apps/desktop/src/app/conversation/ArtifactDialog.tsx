@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import type { ArtifactRef, ArtifactText } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
+import { filePatch, patchPaths } from "@/lib/patch";
 import { readArtifact } from "@/state/actions";
 
 /** Bytes read per page: enough for most reports and diffs, small enough to stay responsive. */
@@ -90,6 +92,8 @@ function ArtifactBody({ artifact }: { artifact: ArtifactRef }) {
       )}
       {binary ? (
         <p className="text-muted-foreground text-sm">This artifact is not text.</p>
+      ) : artifact.kind === "diff" && text ? (
+        <PatchFiles patch={text} />
       ) : (
         <pre
           data-selectable
@@ -110,5 +114,20 @@ function ArtifactBody({ artifact }: { artifact: ArtifactRef }) {
         </Button>
       )}
     </>
+  );
+}
+
+/** A diff artifact as the thread shows changes: each file's diff in its colours, numbered. */
+function PatchFiles({ patch }: { patch: string }) {
+  const files = useMemo(() => patchPaths(patch).map((path) => ({ path, diff: filePatch(patch, path) })), [patch]);
+  if (files.length === 0) {
+    return <pre data-selectable className="bg-code-surface rounded-control min-h-0 flex-1 overflow-auto p-3 font-mono text-xs whitespace-pre-wrap">{patch}</pre>;
+  }
+  return (
+    <div data-slot="artifact-diff" data-selectable className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto">
+      {files.map((file) => (
+        <InlineDiff key={file.path} path={file.path} diff={file.diff} tall />
+      ))}
+    </div>
   );
 }

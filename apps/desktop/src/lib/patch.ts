@@ -216,3 +216,104 @@ export function changedSpan(before: string, after: string): { before: [number, n
     after: [start, after.length - end],
   };
 }
+
+/** The paths `patch` changes, in its order. */
+export function patchPaths(patch: string): string[] {
+  return [...readFiles(patch).keys()];
+}
+
+/**
+ * One file's diff text as rows: a git hunk (`@@ -3,7 +3,9 @@`) gives each line its numbers, and
+ * the unchanged stretch between two hunks is a gap; bare `-`/`+` lines (an edit rebuilt from its
+ * call's old and new text) have none. `numbered` says which it was.
+ */
+export function parseDiff(diff: string): { numbered: boolean; rows: DiffRow[] } {
+  const lines = diff.replace(/\n$/, "").split("\n").filter((line) => !/^(---|\+\+\+) /.test(line) && !line.startsWith("diff --git "));
+  if (lines.some((line) => /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/.test(line))) {
+    const [file] = parsePatch(`diff --git a/f b/f\n${lines.join("\n")}\n`, ["f"], false);
+    // The lines before the first change are not shown apart: only those between changes are.
+    const rows = file?.rows ?? [];
+    return { numbered: true, rows: rows[0]?.kind === "gap" ? rows.slice(1) : rows };
+  }
+  const rows: DiffRow[] = lines.flatMap((line): DiffRow[] => {
+    const sign = line[0];
+    const text = line.slice(1);
+    if (sign === "+") return [{ kind: "add", old: null, new: null, text }];
+    if (sign === "-") return [{ kind: "del", old: null, new: null, text }];
+    if (sign === " ") return [{ kind: "context", old: null, new: null, text }];
+    // A hunk header without numbers (`@@`): the edit's places apart.
+    if (line.startsWith("@@")) return [{ kind: "gap", id: nextGap++, count: 0, lines: null }];
+    return [];
+  });
+  return { numbered: false, rows };
+}
+
+/** How many lines rows add and remove. */
+export function diffCounts(rows: readonly DiffRow[]): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const row of rows) {
+    if (row.kind === "add") added += 1;
+    else if (row.kind === "del") removed += 1;
+  }
+  return { added, removed };
+}
+
+/** Words, runs of spaces and single marks: what a word diff compares. */
+function tokens(text: string): { text: string; at: number }[] {
+  return [...text.matchAll(/\w+|\s+|[^\w\s]/g)].map((match) => ({ text: match[0], at: match.index }));
+}
+
+/** Lines longer than this in tokens are compared by `changedSpan` instead: a word diff costs their product. */
+const WORD_DIFF_TOKENS = 300;
+
+/**
+ * A deleted line and the added line that replaced it: the words that differ on each side, as
+ * offset ranges, from the longest run of words they share. Spaces between two changed words join
+ * them into one range.
+ */
+export function wordSpans(before: string, after: string): { before: [number, number][]; after: [number, number][] } {
+  const a = tokens(before);
+  const b = tokens(after);
+  if (a.length > WORD_DIFF_TOKENS || b.length > WORD_DIFF_TOKENS) {
+    const span = changedSpan(before, after);
+    return {
+      before: span.before[0] < span.before[1] ? [span.before] : [],
+      after: span.after[0] < span.after[1] ? [span.after] : [],
+    };
+  }
+  // The longest common sequence of tokens, by its lengths from each end.
+  const lengths = Array.from({ length: a.length + 1 }, () => Array.from({ length: b.length + 1 }, () => 0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lengths[i]![j] = a[i]!.text === b[j]!.text ? lengths[i + 1]![j + 1]! + 1 : Math.max(lengths[i + 1]![j]!, lengths[i]![j + 1]!);
+    }
+  }
+  const keptA = new Set<number>();
+  const keptB = new Set<number>();
+  for (let i = 0, j = 0; i < a.length && j < b.length; ) {
+    if (a[i]!.text === b[j]!.text) {
+      keptA.add(i++);
+      keptB.add(j++);
+    } else if (lengths[i + 1]![j]! >= lengths[i]![j + 1]!) i++;
+    else j++;
+  }
+  return { before: ranges(a, keptA), after: ranges(b, keptB) };
+}
+
+const space = (token: { text: string }) => /^\s+$/.test(token.text);
+
+/** The changed tokens as ranges, joined across the spaces between them. */
+function ranges(side: { text: string; at: number }[], kept: ReadonlySet<number>): [number, number][] {
+  const out: [number, number][] = [];
+  let previous = -1;
+  side.forEach((token, index) => {
+    if (kept.has(index) || space(token)) return;
+    const end = token.at + token.text.length;
+    const last = out.at(-1);
+    if (last && side.slice(previous + 1, index).every(space)) last[1] = end;
+    else out.push([token.at, end]);
+    previous = index;
+  });
+  return out;
+}

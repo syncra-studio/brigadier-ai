@@ -24,6 +24,7 @@ import {
   useLinkConversation,
 } from "@/components/assistant-ui/file-links";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
+import { codePath, type CodePath, underRoot, useCodePathExists } from "@/components/assistant-ui/code-paths";
 import { createWordFade } from "@/components/assistant-ui/word-fade";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -33,6 +34,8 @@ import { openArtifact, request, revealPath, saveArtifact } from "@/ipc/client";
 import type { StoredCopy } from "@/ipc/generated";
 import { openLink } from "@/state/links";
 import { cn } from "@/lib/utils";
+import { useBoard } from "@/state/board";
+import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
 type MarkdownTextProps = Partial<TextMessagePartProps> & {
@@ -252,6 +255,24 @@ const Link: FC<React.ComponentProps<"a">> = ({ className, href, children, ...pro
   );
 };
 
+/**
+ * Inline code that names a file of the session's checkout (`src/cli.ts:64`): a file chip
+ * opening it at that line, once the file is known to exist; plain code until then and when not.
+ */
+const CodeFile: FC<React.ComponentProps<"code"> & { named: CodePath }> = ({ named, className, ...props }) => {
+  const root = useCheckoutRoot();
+  const conversationId = useLinkConversation();
+  // The checkout may change with each message and whenever the thread starts or stops working.
+  const updated = useApp((s) => (conversationId ? (s.conversations[conversationId]?.updatedAtMs ?? 0) : 0));
+  const run = useBoard((s) => s.board?.run ?? "idle");
+  const exists = useCodePathExists(root ? conversationId : null, root, `${updated}:${run}`, named);
+  if (exists && root) {
+    const href = `${underRoot(root, named.path)}${named.line === null ? "" : `:${named.line}`}`;
+    return <FileChip href={href}>{named.path}</FileChip>;
+  }
+  return <code className={cn("aui-md-inline-code bg-muted text-code-inline rounded-md px-1.5 py-0.5 font-mono", className)} {...props} />;
+};
+
 const line = (cells: string[]) => `| ${cells.join(" | ")} |`;
 
 /** A table's text as a Markdown table, for "Copy table". */
@@ -451,6 +472,8 @@ const defaultComponents = memoizeMarkdownComponents({
   ),
   code: function Code({ className, ...props }) {
     const isCodeBlock = useIsMarkdownCodeBlock();
+    const named = !isCodeBlock && typeof props.children === "string" ? codePath(props.children) : null;
+    if (named) return <CodeFile named={named} className={className} {...props} />;
     return (
       <code
         className={cn(

@@ -53,8 +53,9 @@ import { useNow } from "@/hooks/use-now";
 import { openFolder, request, revealPath } from "@/ipc/client";
 import type { ReviewDiff, ReviewFile, ReviewScope } from "@/ipc/generated";
 import { formatSentAt } from "@/lib/format";
-import { HIGHLIGHT_CHARS, highlight, languageOf, type Token } from "@/lib/highlight";
-import { changedSpan, type DiffLine, type DiffRow, filePatch, type PatchFile, parsePatch } from "@/lib/patch";
+import { languageOf } from "@/lib/highlight";
+import { type DiffLine, type DiffRow, filePatch, type PatchFile, parsePatch } from "@/lib/patch";
+import { LineText, lineKey, pairChanges, TINT, TokensContext, useSideTokens } from "@/app/conversation/diffLines";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -816,7 +817,7 @@ const FileBody: FC<{ file: ReviewFile; patch: PatchFile | undefined; options: Re
 }) => {
   const [opened, setOpened] = useState<ReadonlySet<number>>(new Set());
   const [commenting, setCommenting] = useState<string | null>(null);
-  const tokens = useSideTokens(file.path, patch);
+  const tokens = useSideTokens(file.path, patch?.binary ? undefined : patch?.rows);
   if (!patch || file.binary || patch.binary) {
     return (
       <p className="text-muted-foreground px-3 py-2 text-sm">
@@ -876,160 +877,6 @@ const FileBody: FC<{ file: ReviewFile; patch: PatchFile | undefined; options: Re
     </TokensContext.Provider>
   );
 };
-
-/** Each side's colours by line number: the old file's for deleted lines, the new one's else. */
-type SideTokens = { old: Map<number, Token[]>; new: Map<number, Token[]> };
-
-const TokensContext = createContext<SideTokens | null>(null);
-
-/** Colours both sides of a file's diff, from the lines the patch holds of each. */
-function useSideTokens(path: string, patch: PatchFile | undefined): SideTokens | null {
-  // Kept with the patch they colour, so a new patch shows plain until its colours come.
-  const [found, setFound] = useState<{ patch: PatchFile; tokens: SideTokens } | null>(null);
-  useEffect(() => {
-    if (!patch || patch.binary) return;
-    const language = languageOf(path);
-    const lines = patch.rows.flatMap((row) => (row.kind === "gap" ? (row.lines ?? []) : [row]));
-    const olds = lines.filter((line) => line.kind !== "add");
-    const news = lines.filter((line) => line.kind !== "del");
-    const beforeText = olds.map((line) => line.text).join("\n");
-    const afterText = news.map((line) => line.text).join("\n");
-    if (beforeText.length + afterText.length > HIGHLIGHT_CHARS) return;
-    let live = true;
-    Promise.all([highlight(beforeText, language), highlight(afterText, language)])
-      .then(([before, after]) => {
-        if (!live || !before || !after) return;
-        setFound({
-          patch,
-          tokens: { old: byNumber(olds, before, "old"), new: byNumber(news, after, "new") },
-        });
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [path, patch]);
-  return found && found.patch === patch ? found.tokens : null;
-}
-
-function byNumber(side: DiffLine[], tokens: Token[][], key: "old" | "new"): Map<number, Token[]> {
-  return new Map(side.map((line, index) => [line[key] ?? 0, tokens[index] ?? []]));
-}
-
-/** `text` in its colours, the part in `span` marked (word diffs). */
-function Coloured({
-  tokens,
-  span,
-  kind,
-}: {
-  tokens: Token[];
-  span: [number, number] | null;
-  kind: DiffLine["kind"];
-}) {
-  const parts: ReactNode[] = [];
-  let offset = 0;
-  tokens.forEach((token, index) => {
-    const start = offset;
-    const end = offset + token.content.length;
-    offset = end;
-    const style = token.color ? { color: token.color } : undefined;
-    const italic = cn(token.italic && "italic");
-    // A token is cut where the marked span starts and ends.
-    const cuts = [start, ...(span ?? []).filter((at) => at > start && at < end), end];
-    for (let piece = 0; piece < cuts.length - 1; piece += 1) {
-      const from = cuts[piece] as number;
-      const to = cuts[piece + 1] as number;
-      const text = token.content.slice(from - start, to - start);
-      const marked = span !== null && from >= span[0] && to <= span[1];
-      parts.push(
-        marked ? (
-          <mark
-            key={`${index}:${piece}`}
-            className={cn(
-              "rounded-xs",
-              italic,
-              kind === "add" ? "bg-success/30" : "bg-destructive/30",
-            )}
-            style={style}
-          >
-            {text}
-          </mark>
-        ) : (
-          <span key={`${index}:${piece}`} className={italic} style={style}>
-            {text}
-          </span>
-        ),
-      );
-    }
-  });
-  return <>{parts}</>;
-}
-
-function lineKey(line: DiffLine): string {
-  return `${line.kind}:${line.old}:${line.new}`;
-}
-
-/** Each deleted line with the added line that took its place, for word diffs. */
-function pairChanges(rows: DiffRow[]): Map<DiffLine, DiffLine> {
-  const pairs = new Map<DiffLine, DiffLine>();
-  let index = 0;
-  while (index < rows.length) {
-    const deleted: DiffLine[] = [];
-    while (rows[index]?.kind === "del") deleted.push(rows[index++] as DiffLine);
-    const added: DiffLine[] = [];
-    while (rows[index]?.kind === "add") added.push(rows[index++] as DiffLine);
-    for (let pair = 0; pair < Math.min(deleted.length, added.length); pair += 1) {
-      const before = deleted[pair] as DiffLine;
-      const after = added[pair] as DiffLine;
-      pairs.set(before, after);
-      pairs.set(after, before);
-    }
-    if (deleted.length === 0 && added.length === 0) index += 1;
-  }
-  return pairs;
-}
-
-const TINT: Record<DiffLine["kind"], string> = {
-  context: "",
-  add: "bg-success/10 border-success",
-  del: "bg-destructive/10 border-destructive",
-};
-
-/** A line's text, with the part that differs from its partner marked (word diffs). */
-function LineText({ line, partner }: { line: DiffLine; partner: DiffLine | null }) {
-  const sides = useContext(TokensContext);
-  const tokens = sides?.[line.kind === "del" ? "old" : "new"].get(
-    (line.kind === "del" ? line.old : line.new) ?? 0,
-  );
-  const span: [number, number] | null =
-    !partner || line.kind === "context"
-      ? null
-      : line.kind === "del"
-        ? changedSpan(line.text, partner.text).before
-        : changedSpan(partner.text, line.text).after;
-  if (tokens && tokens.length > 0) {
-    return (
-      <Coloured tokens={tokens} span={span && span[0] < span[1] ? span : null} kind={line.kind} />
-    );
-  }
-  if (!span) return <>{line.text || " "}</>;
-  const [start, end] = span;
-  if (start >= end) return <>{line.text || " "}</>;
-  return (
-    <>
-      {line.text.slice(0, start)}
-      <mark
-        className={cn(
-          "text-inherit rounded-xs",
-          line.kind === "add" ? "bg-success/30" : "bg-destructive/30",
-        )}
-      >
-        {line.text.slice(start, end)}
-      </mark>
-      {line.text.slice(end)}
-    </>
-  );
-}
 
 /** One line of a unified diff: its number, a "+" to comment on hover, and its text. */
 const LineRow: FC<{ line: DiffLine; partner: DiffLine | null; onComment: () => void }> = ({

@@ -12,6 +12,10 @@
  * - An open live group: its running command reads "Running command for 3s", a running read is
  *   hidden until done.
  * - A web search: its `site:` operator after a bar, and nothing to open.
+ * - Diffs: a real patch numbered, coloured and word-marked; an edit rebuilt from its call
+ *   unnumbered; an empty and a missing diff's placeholders.
+ * - An answer's inline code: a file of the checkout is a chip (from the file list, or asked by
+ *   its exact path when the list is cut short), anything else stays code.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { ReactNode } from "react";
@@ -22,11 +26,40 @@ import { describeLeadStep } from "@/app/conversation/activity/LeadStep";
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { stepWords } from "@/app/conversation/activity/words";
+import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
+import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { OrchestratorStep } from "@/ipc/generated";
+import type { Conversation, OrchestratorStep, Request } from "@/ipc/generated";
+import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
-mockIPC(() => null);
+const CHAT = "thread-rows";
+const ROOT = "/repo";
+const asked: string[] = [];
+mockIPC((command, payload) => {
+  if (command !== "ipc_request") return null;
+  const req = (payload as { request: Request }).request;
+  if (req.method === "listFiles") return { method: req.method, files: ["src/cli.ts", "src/math.js"], truncated: true };
+  if (req.method === "resolveFileLink") {
+    asked.push(req.path);
+    return { method: req.method, exists: req.path === `${ROOT}/src/made-later.ts`, stored: null };
+  }
+  return { method: req.method };
+});
+useApp.setState((state) => ({
+  conversations: {
+    [CHAT]: {
+      id: CHAT, kind: "session", title: "Rows", projectId: null, pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, lifecycle: "active",
+      forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+      setup: { type: "session", repo: ROOT, environment: { type: "local" }, permission: "fullAccess", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "codex", model: null, effort: null } },
+    } as unknown as Conversation,
+  },
+  selection: { type: "conversation", id: CHAT },
+  settings: state.settings,
+}));
+
+const patch = "--- a/src/math.js\n+++ b/src/math.js\n@@ -1,4 +1,4 @@\n export function round(value) {\n-  return Math.round(value * 100) / 100;\n+  return Math.round((value + Number.EPSILON) * 100) / 100;\n }\n \n@@ -20,2 +20,3 @@\n const a = 1;\n+const b = 2;\n const c = 3;\n";
+const answer = "The CLI parses it in `src/cli.ts:64`, the new helper is `src/made-later.ts`, rounding uses `Math.round`, and `src/gone.ts` was removed.";
 
 const now = Date.now();
 const longOutput = Array.from({ length: 60 }, (_, index) => (index === 59 ? "\u001b[32m✓ 60 tests passed\u001b[0m" : `line ${index + 1}`)).join("\n");
@@ -96,6 +129,21 @@ function Page() {
         <Case id="search">
           <StepRow {...describeLeadStep(search)} />
         </Case>
+        <Case id="diff-patch">
+          <InlineDiff path="src/math.js" diff={patch} />
+        </Case>
+        <Case id="diff-edit">
+          <InlineDiff path="src/math.js" diff={"-const a = 1;\n+const a = 2;"} />
+        </Case>
+        <Case id="diff-empty">
+          <InlineDiff path="src/math.js" diff="" />
+        </Case>
+        <Case id="diff-missing">
+          <InlineDiff path="src/math.js" diff={null} />
+        </Case>
+        <Case id="chips">
+          <MarkdownBlock text={answer} />
+        </Case>
       </main>
     </TooltipProvider>
   );
@@ -146,6 +194,25 @@ async function measure(): Promise<object> {
   trigger?.click();
   await wait(400);
   out.children = all("[data-slot=child]", at("group")).map((row) => text(row));
+  const diff = (id: string) => ({
+    name: text(one("[data-slot=diff-name]", at(id))),
+    counts: text(one("[data-slot=diff-counts]", at(id))),
+    numbers: all("[data-slot=diff-number]", at(id)).map((cell) => text(cell)),
+    kinds: all("[data-slot=diff-lines] [data-kind]", at(id)).map((row) => row.getAttribute("data-kind")),
+    gaps: all("[data-slot=diff-gap]", at(id)).map((row) => text(row)),
+    marks: all("mark", at(id)).map((mark) => mark.textContent),
+    empty: text(one("[data-slot=diff-empty]", at(id))),
+    coloured: all("[data-slot=diff-lines] span[style]", at(id)).length > 0,
+  });
+  // Syntax colours come once the grammar loads.
+  for (const end = performance.now() + 8000; performance.now() < end && !diff("diff-patch").coloured; ) await frame();
+  for (const id of ["diff-patch", "diff-edit", "diff-empty", "diff-missing"]) out[id] = diff(id);
+  // The answer's chips, once the checkout's files are known.
+  for (const end = performance.now() + 8000; performance.now() < end && all("[data-slot=file-chip]", at("chips")).length < 2; ) await frame();
+  await wait(300);
+  out.chips = all("[data-slot=file-chip]", at("chips")).map((chip) => [text(chip), chip.getAttribute("href")]);
+  out.code = all("code", at("chips")).map((code) => text(code));
+  out.asked = asked.toSorted();
   const searchRow = at("search").firstElementChild;
   out.search = { row: text(searchRow), opens: !!one("[aria-expanded]", at("search")) || searchRow?.getAttribute("role") === "button" };
   return out;

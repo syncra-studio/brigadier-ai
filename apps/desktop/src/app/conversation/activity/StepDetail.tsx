@@ -2,6 +2,7 @@ import { Check, Copy } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useContext, useEffect, useState } from "react";
 
 import type { LeadStep } from "@/app/conversation/activity/group";
+import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
@@ -193,43 +194,17 @@ export function ToolBox({ title, body }: { title: string; body: string }) {
   );
 }
 
-/** One file's change as diff lines: `-` out, `+` in, `@@` between the places it changed. */
-function DiffBox({ path, diff }: { path: string; diff: string }) {
-  const lines = diff.replace(/\n$/, "").split("\n").filter((line) => !/^(---|\+\+\+) /.test(line));
-  const added = lines.filter((line) => line.startsWith("+")).length;
-  const removed = lines.filter((line) => line.startsWith("-")).length;
-  return (
-    <div data-slot="diff-card" className={BOX}>
-      <span className="text-muted-foreground flex gap-2 px-3 pt-2 text-xs">
-        <span className="min-w-0 truncate">{path.split("/").pop()}</span>
-        <span className="text-success tabular-nums">+{added}</span>
-        <span className="text-destructive tabular-nums">−{removed}</span>
-      </span>
-      <pre className={cn(BODY, "pb-2")}>
-        {lines.map((line, index) => (
-          <span
-            key={index}
-            className={cn(
-              "block",
-              line.startsWith("+") && "bg-success/10",
-              line.startsWith("-") && "bg-destructive/10",
-              line.startsWith("@@") && "text-muted-foreground",
-            )}
-          >
-            {line.startsWith("@@") ? "⋯" : line || " "}
-          </span>
-        ))}
-      </pre>
-    </div>
-  );
-}
-
-/** Several files' changes, each its own box. */
+/**
+ * Several files' changes, each its own card; an edit's several places in one file are one card,
+ * "⋯" between them.
+ */
 function Diffs({ files }: { files: readonly { path: string; diff: string }[] }) {
+  const byPath = new Map<string, string[]>();
+  for (const file of files) byPath.set(file.path, [...(byPath.get(file.path) ?? []), file.diff]);
   return (
     <div className="flex flex-col gap-1">
-      {files.map((file, index) => (
-        <DiffBox key={`${file.path}:${index}`} path={file.path} diff={file.diff} />
+      {[...byPath].map(([path, diffs]) => (
+        <InlineDiff key={path} path={path} diff={diffs.join("\n@@\n")} />
       ))}
     </div>
   );
