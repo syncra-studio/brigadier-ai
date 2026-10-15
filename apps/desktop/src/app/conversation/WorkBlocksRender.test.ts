@@ -111,11 +111,13 @@ test("a turn's denied calls are counted in its header, which opens the work to t
 });
 
 test("a long message is clipped at the end of a code block crossing its 20-line cut, Show more with a chevron", { timeout: 120000 }, async (t) => {
-  const seen = await drive<{ clipEnd: number | null; blockEnd: number | null; clipLines: number | null; more: boolean; chevron: boolean }>(t, "drive=clip");
+  const seen = await drive<{ clipEnd: number | null; blockEnd: number | null; clipLines: number | null; more: boolean; chevron: boolean; sides: string[] | null }>(t, "drive=clip");
   // The block crossing line 20 shows whole: the clip ends where it does, past 20 lines.
   assert.ok(seen.blockEnd !== null && seen.clipEnd !== null && Math.abs(seen.clipEnd - seen.blockEnd) <= 1, `clip ${seen.clipEnd}, block ${seen.blockEnd}`);
   assert.ok((seen.clipLines ?? 0) > 20, `clipped at ${seen.clipLines} lines`);
   assert.deepEqual([seen.more, seen.chevron], [true, true]);
+  // It cuts below only: a list's "10." hanging left of its text keeps its first digit.
+  assert.deepEqual(seen.sides, ["visible", "clip"]);
 });
 
 test("a message edited in place is a composer the column's width, its Cancel and Send pills", { timeout: 120000 }, async (t) => {

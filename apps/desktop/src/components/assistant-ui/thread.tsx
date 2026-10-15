@@ -789,7 +789,8 @@ const UserMessageText: FC = () => {
           // Its own renderer (Markdown, in the conversation) lays the lines out; plain text keeps them.
           "wrap-anywhere [&_.aui-md-inline-code]:bg-foreground/10",
           !UserText && "whitespace-pre-wrap",
-          !expanded && "max-h-user-message overflow-hidden",
+          // Cut below only: a list's numbers hang left of its text ("10.") and show whole.
+          !expanded && "max-h-user-message overflow-y-clip",
         )}
       >
         <div>{UserText ? <MessagePrimitive.Parts components={{ Text: UserText }} /> : <MessagePrimitive.Parts />}</div>

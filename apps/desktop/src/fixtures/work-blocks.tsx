@@ -515,6 +515,7 @@ async function driveClip(): Promise<object> {
     clipLines: clip && lineHeight ? clip.getBoundingClientRect().height / lineHeight : null,
     more: !!more,
     chevron: !!more?.querySelector("svg"),
+    sides: clip ? [getComputedStyle(clip).overflowX, getComputedStyle(clip).overflowY] : null,
   };
 }
 
