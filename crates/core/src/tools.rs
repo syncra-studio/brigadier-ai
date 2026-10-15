@@ -408,20 +408,36 @@ pub struct ThreadRunCheck {
     /// whatever its size.
     #[serde(default)]
     pub risky: Option<String>,
+    /// A commit message: when the check passes, all your changes are committed with it and
+    /// your trailer, in this same call; when it fails, nothing is. Not on the user's own
+    /// checkout.
+    #[serde(default)]
+    pub commit: Option<String>,
+}
+
+/// The parts of the thread's `run_check`: the check, the risk it marks and the commit it asks
+/// for on a pass.
+pub struct ThreadCheckParts {
+    pub check: RunCheck,
+    pub risky: Option<String>,
+    pub commit: Option<String>,
 }
 
 impl ThreadRunCheck {
-    /// The check to run, and the risk the thread marked.
-    pub fn split(self) -> (RunCheck, Option<String>) {
-        (
-            RunCheck {
+    pub fn split(self) -> ThreadCheckParts {
+        ThreadCheckParts {
+            check: RunCheck {
                 command: self.command,
                 workdir: self.workdir,
                 timeout_secs: self.timeout_secs,
                 rerun: self.rerun,
             },
-            self.risky,
-        )
+            risky: self.risky,
+            commit: self
+                .commit
+                .map(|message| message.trim().to_owned())
+                .filter(|message| !message.is_empty()),
+        }
     }
 }
 

@@ -145,6 +145,54 @@ struct Caller {
     low_priority: bool,
 }
 
+/// What `run_check`'s `commit` says on the user's own checkout.
+const NOT_ON_LOCAL: &str = "Not committed: this is the user's own checkout, where you commit only when they ask, with git yourself.";
+
+/// `run_check`'s `commit` (BUILD-PLAN C9): on a pass, everything changed in `tree` is committed
+/// with `message` and the thread's trailer; on a failure nothing is. What happened, in one line.
+fn commit_on_pass(tree: &Path, passed: bool, message: &str) -> String {
+    if !passed {
+        return "Not committed: the check didn't pass.".into();
+    }
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(tree)
+            .args(args)
+            .output()
+    };
+    let failed = |what: &str, output: std::io::Result<std::process::Output>| match output {
+        Ok(output) if output.status.success() => None,
+        Ok(output) => Some(format!(
+            "Not committed: {what} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .rfind(|line| !line.trim().is_empty())
+                .unwrap_or("no error output")
+        )),
+        Err(err) => Some(format!("Not committed: {what} failed: {err}")),
+    };
+    if let Some(note) = failed("git add", git(&["add", "-A"])) {
+        return note;
+    }
+    if git(&["diff", "--cached", "--quiet"]).is_ok_and(|output| output.status.success()) {
+        return "Nothing to commit: no change is left uncommitted.".into();
+    }
+    let trailer = super::prompts::THREAD_TRAILER;
+    if let Some(note) = failed(
+        "git commit",
+        git(&["commit", "-q", "-m", message, "--trailer", trailer]),
+    ) {
+        return note;
+    }
+    let sha = git(&["rev-parse", "--short", "HEAD"])
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_default();
+    let subject = message.lines().next().unwrap_or_default();
+    format!("Committed {sha} \"{subject}\" with your trailer.")
+}
+
 /// How one check ended: the reply the model gets, its status ("exit 0", "timed out after …")
 /// and its whole output's alias.
 pub(super) struct CheckDone {
@@ -211,12 +259,30 @@ impl SessionManager {
         id: &ConversationId,
         args: crate::tools::ThreadRunCheck,
     ) -> Result<String> {
-        let (args, risky) = args.split();
+        let crate::tools::ThreadCheckParts {
+            check: args,
+            risky,
+            commit,
+        } = args.split();
         if let Some(why) = &risky {
             self.mark_risky(id, why).await;
         }
+        // On the user's own checkout the thread commits only when they ask, with git itself.
+        let (commit, local) = match commit {
+            Some(_) if self.local_checkout(id).is_some() => (None, true),
+            commit => (commit, false),
+        };
         let review = self.review_before_answer(id).await;
-        let reply = self.run_check_tool(id, None, args).await;
+        let reply = self
+            .check_and_commit(id, None, args, commit)
+            .await
+            .map(|reply| {
+                if local {
+                    format!("{reply}\n{NOT_ON_LOCAL}")
+                } else {
+                    reply
+                }
+            });
         match (reply, review) {
             (Ok(reply), Some(review)) => Ok(format!("{reply}\n\n{review}")),
             (Err(err), Some(review)) => Err(Error::Invalid(format!("{err}\n\n{review}"))),
@@ -232,6 +298,19 @@ impl SessionManager {
         id: &ConversationId,
         task: Option<&TaskId>,
         args: RunCheck,
+    ) -> Result<String> {
+        self.check_and_commit(id, task, args, None).await
+    }
+
+    /// [`Self::run_check_tool`], then the thread's commit of everything it changed when the
+    /// check passes (`commit`: its message), in the same call, even once it went to the
+    /// background (BUILD-PLAN C9).
+    async fn check_and_commit(
+        &self,
+        id: &ConversationId,
+        task: Option<&TaskId>,
+        args: RunCheck,
+        commit: Option<String>,
     ) -> Result<String> {
         let mut caller = self.check_caller(id, task).await?;
         let command = args
@@ -270,10 +349,19 @@ impl SessionManager {
         caller.owner = super::background_runs::background_owner(id);
         let cancel = caller.ended.clone();
         let (manager, words) = (self.arc(), command.clone());
+        let tree = caller.tree.clone();
         let work = async move {
-            manager
+            let (status, reply) = manager
                 .check_now(&caller, &workdir, &words, timeout, args.rerun)
+                .await?;
+            let (Some(message), Some(tree)) = (commit, tree) else {
+                return Ok((status, reply));
+            };
+            let passed = status == "exit 0";
+            let note = blocking(move || Ok(commit_on_pass(&tree, passed, &message)))
                 .await
+                .unwrap_or_else(|err| format!("Not committed: {err}"));
+            Ok((status, format!("{reply}\n{note}")))
         };
         self.in_foreground(id, "run_check", &command, cli_ended, cancel, work)
             .await

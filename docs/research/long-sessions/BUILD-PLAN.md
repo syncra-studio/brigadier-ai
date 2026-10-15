@@ -704,6 +704,23 @@ checkout's dependency installs and build caches that a worker's worktree gets (`
 code, 5 code files), and a small change marked risky, measure each review's cost and whether its findings would have
 been missed. The line is settled from those numbers, and the phase report says what was chosen and why.
 
+**C9. The thread commits in the same call as its last check (added in phase C, Q50).**
+- **The user's answer (Q50).** The engine never commits for the thread: commits stay the thread's decision, with the
+  user's. But the thread may save the call itself.
+- **The call it saves.** On V3 e1 at `e4711fff` the thread's own `git commit` was the one call above plain (6 calls
+  against 4–5), about 23k tokens. Every edit request in a session worktree pays it.
+- **The field.** `run_check` takes `commit: "<message>"`. When the check passes, everything the thread changed is
+  committed with that message and its trailer, in the same call, also when the check finishes in the background.
+  When the check fails, nothing is committed. On the user's own checkout it commits nothing and says why, since
+  M6's rule stands there.
+- **What stays the thread's.** A commit that fixes review findings still goes through git with both trailers.
+- **Revision 35** (`COMMIT_ON_PASS_REVISION`) tells open sessions.
+- **Done when:**
+  - a flow test shows a pass committing and a failure committing nothing;
+  - nothing is committed on the user's checkout;
+  - a session from before hears the note once;
+  - V3 e1–e4 keep their exact correctness with fewer calls. It ships only then.
+
 **Validation:**
 - **Bench T1–T6 and T7L,** n = 3, cold and warm (T7L's plain-arm runs are made first, since it is frozen and not run
   yet):

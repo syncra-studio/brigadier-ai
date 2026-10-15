@@ -239,7 +239,7 @@ fn own_commits(local: bool) -> String {
             .to_owned()
     } else {
         format!(
-            "For your own changes, read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch with `git commit --trailer \"{THREAD_TRAILER}\"`. One fixing only findings adds `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
+            "For your own changes, read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch: give your last run_check `commit: \"<message>\"` to commit all your changes with your trailer when it passes, in that same call, or use `git commit --trailer \"{THREAD_TRAILER}\"`. One fixing only findings goes through git with both trailers, adding `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
         )
     }
 }
@@ -682,6 +682,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, on a Claude thread, Brigadier's rarer tools (workers, plans, previews, CI, other sessions, findings, merging) may not be in your tool list until you look them up: when one these instructions name isn't there, search for it by name with ToolSearch, then call it. The everyday ones (run, run_check, read_artifact, ask_user, note_for_user, query_brain, remember, code_search, code_refs) are always there.",
         worker: "",
     },
+    Revision {
+        number: COMMIT_ON_PASS_REVISION,
+        thread: "From now on, on your session's own worktree, give your last run_check `commit: \"<message>\"` to save a step: when the check passes, Brigadier commits all your changes with your message and your trailer in that same call, and when it fails nothing is committed. A commit that fixes review findings still goes through git with both trailers. On the user's own checkout nothing changes.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -870,6 +875,10 @@ pub(crate) const FIRST_USE_REVISION: u32 = 33;
 /// A Claude thread's rarer Brigadier tools wait behind its tool search (BUILD-PLAN C2, Q40):
 /// the new tool set reaches an open session at its next resume or rebirth.
 pub(crate) const LAZY_TOOLS_REVISION: u32 = 34;
+
+/// The thread may commit in the same call as its last check, `run_check`'s `commit`
+/// (BUILD-PLAN C9, Q50): its decision, carried out only on a pass.
+pub(crate) const COMMIT_ON_PASS_REVISION: u32 = 35;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
