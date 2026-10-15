@@ -709,10 +709,10 @@ pub fn preview(query: &Query) -> Preview {
         .any(|i| (candidates[*i].score - pick.score).abs() <= TIE);
     let why = why.unwrap_or_else(|| score_why(query, pick, tie, rule_text.as_deref()));
 
-    let ranked_effort = ranking
-        .zip(place)
-        .and_then(|(ranking, entry)| ranking.entries.get(entry))
-        .and_then(|entry| entry.effort.as_deref());
+    let ranked_effort = ranking.zip(place).and_then(|(ranking, entry)| {
+        let effort = ranking.entries.get(entry)?.effort.as_deref()?;
+        Some((effort, ranking.manual))
+    });
     let effort = effort(query, pick, ranked_effort, &mut notes);
     let explanation = Explanation {
         score: (!manual_pick).then(|| round(pick.score)),
@@ -984,10 +984,14 @@ fn listing(
         .into_iter()
         .map(|i| {
             let c = &candidates[i];
-            let ranked_effort = ranking
-                .zip(c.listed)
-                .and_then(|(ranking, position)| ranking.entries.get(position as usize - 1))
-                .and_then(|entry| entry.effort.as_deref());
+            let ranked_effort = ranking.zip(c.listed).and_then(|(ranking, position)| {
+                let effort = ranking
+                    .entries
+                    .get(position as usize - 1)?
+                    .effort
+                    .as_deref()?;
+                Some((effort, ranking.manual))
+            });
             let effort = c
                 .eligible()
                 .then(|| effort(query, c, ranked_effort, &mut Vec::new()))
@@ -1578,41 +1582,79 @@ fn provider_block(candidates: &[Candidate], provider: ProviderKind) -> String {
         )
 }
 
-/// The effort: the ranked place's, else the pin's, else the registry's for this category, fitted
-/// to the model and never above `high`.
+/// The effort: the ranked place's, else the pin's (the thread names it for the job, or the
+/// user), else the registry's for this category, fitted to the model and never above `high`.
+/// Then the model family's floor for the category applies ([`effort_floor`], BUILD-PLAN
+/// D1.7): the router never runs a model below it, unless the user's own list (a manual
+/// ranking) set the effort. `ranked`: the ranked place's effort, and whether the user's list
+/// set it.
 fn effort(
     query: &Query,
     pick: &Candidate,
-    ranked: Option<&str>,
+    ranked: Option<(&str, bool)>,
     notes: &mut Vec<String>,
 ) -> Option<String> {
     let pinned = query.pin.as_ref().and_then(|pin| pin.effort.as_deref());
-    // Operating apps never runs below medium, even when the orchestrator asks for less.
-    let pinned = pinned.map(|asked| {
-        if query.category == TaskCategory::Operate && table::rank(asked) < table::rank("medium") {
-            "medium"
-        } else {
-            asked
-        }
-    });
     let registry_effort = pick
         .model
         .default_effort
         .get(&query.category)
         .and_then(|effort| clamp_effort(effort))
         .map(|effort| at_least(query.category, effort));
-    let wanted = ranked
-        .or(pinned)
+    let asked = ranked.map(|(effort, _)| effort).or(pinned);
+    let wanted = asked
         .or(registry_effort)
         .or_else(|| category_effort(query.category));
+    let user_set = ranked.is_some_and(|(_, manual)| manual);
+    let floor = effort_floor(&pick.model, query.category).filter(|_| !user_set);
+    let wanted = match (wanted, floor) {
+        (Some(wanted), Some(floor)) if table::rank(wanted) < table::rank(floor) => {
+            notes.push(format!(
+                "effort raised from {wanted} to {floor}, the least this model runs this job at"
+            ));
+            Some(floor)
+        }
+        (wanted, _) => wanted,
+    };
     let (effort, lowered) = table::fit_effort_in(Some(&pick.model.efforts), wanted);
-    if lowered && let Some(asked) = ranked.or(pinned) {
+    if lowered && let Some(asked) = asked {
         notes.push(format!(
             "effort lowered from {asked} to {}",
             effort.as_deref().unwrap_or("the default")
         ));
     }
     effort
+}
+
+/// The lowest effort a model family runs a category at, by its registry entry: measured on
+/// V1 per model and effort on frozen tasks (BUILD-PLAN D1.7). An entry here lowers or raises
+/// [`default_effort_floor`] for one family; a lower floor is adopted only where completion
+/// holds and V2's "unknown instead of a guess" score doesn't drop. None is measured yet.
+const FAMILY_EFFORT_FLOORS: &[(&str, TaskCategory, &str)] = &[];
+
+/// The floor every family keeps until measured otherwise: operating apps never runs below
+/// medium, where a model misreads the screens it acts on.
+fn default_effort_floor(category: TaskCategory) -> Option<&'static str> {
+    (category == TaskCategory::Operate).then_some("medium")
+}
+
+/// The least effort `model` runs `category` at: its family's measured floor, else
+/// [`default_effort_floor`].
+fn effort_floor(model: &MergedModel, category: TaskCategory) -> Option<&'static str> {
+    effort_floor_in(FAMILY_EFFORT_FLOORS, model, category)
+}
+
+fn effort_floor_in(
+    floors: &[(&str, TaskCategory, &'static str)],
+    model: &MergedModel,
+    category: TaskCategory,
+) -> Option<&'static str> {
+    let key = model.registry_key.as_deref();
+    floors
+        .iter()
+        .find(|(family, of, _)| Some(*family) == key && *of == category)
+        .map(|(_, _, floor)| *floor)
+        .or_else(|| default_effort_floor(category))
 }
 
 // ----- waiting -------------------------------------------------------------------------------
@@ -2351,6 +2393,91 @@ mod tests {
                 "asked {asked}"
             );
         }
+    }
+
+    /// D1.7: the thread names the effort for the job and the model family's floor applies,
+    /// from a measured table by registry entry, else today's floor (operate at medium). A
+    /// family's own floor applies to it alone.
+    #[test]
+    fn the_thread_names_the_effort_and_the_family_floor_applies() {
+        let registry = Registry::bundled();
+        let models = catalog_with_haiku_5_5(&registry);
+        let haiku = models.iter().find(|m| is_haiku_5_5(m)).unwrap();
+        let floors = [("claude-haiku-5-5", TaskCategory::Implement, "medium")];
+        assert_eq!(
+            effort_floor_in(&floors, haiku, TaskCategory::Implement),
+            Some("medium")
+        );
+        assert_eq!(effort_floor_in(&floors, haiku, TaskCategory::Scout), None);
+        assert_eq!(
+            effort_floor_in(&floors, haiku, TaskCategory::Operate),
+            Some("medium")
+        );
+        let other = models
+            .iter()
+            .find(|m| m.registry_key.as_deref() == Some("claude-haiku-4-5"))
+            .unwrap();
+        assert_eq!(
+            effort_floor_in(&floors, other, TaskCategory::Implement),
+            None
+        );
+        // Nothing is measured lower yet: today's floors hold, and a thread's ask above them
+        // stands.
+        assert!(FAMILY_EFFORT_FLOORS.is_empty());
+        assert_eq!(effort_floor(haiku, TaskCategory::Implement), None);
+        let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        });
+        let mut asked = query(&registry, &models, &both);
+        asked.category = TaskCategory::Implement;
+        for effort in ["low", "medium", "high"] {
+            asked.pin = Some(Pin {
+                effort: Some(effort.into()),
+                ..Default::default()
+            });
+            assert_eq!(routed(&asked).effort.as_deref(), Some(effort));
+        }
+    }
+
+    /// D1.7: the floor applies to what an automatic list ranks, but the user's own list (a
+    /// manual ranking) sets the effort as it says.
+    #[test]
+    fn the_users_own_list_sets_the_effort_below_the_floor() {
+        let registry = Registry::bundled();
+        let models = catalog_with_haiku_5_5(&registry);
+        let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        });
+        let list = |manual: bool| {
+            [Ranking {
+                id: "operate".into(),
+                category: TaskCategory::Operate,
+                areas: vec![],
+                project_id: None,
+                manual,
+                only: false,
+                updated_at_ms: 0,
+                entries: vec![crate::RankedEntry {
+                    target: OverrideTarget::Vendor {
+                        provider: ProviderKind::Claude,
+                    },
+                    effort: Some("low".into()),
+                }],
+            }]
+        };
+        let mut q = operate_query(&registry, &models, &both);
+        let manual = list(true);
+        q.rankings = &manual;
+        let route = routed(&q);
+        assert_eq!(route.provider, ProviderKind::Claude);
+        assert_eq!(route.effort.as_deref(), Some("low"));
+        let automatic = list(false);
+        q.rankings = &automatic;
+        assert_eq!(routed(&q).effort.as_deref(), Some("medium"));
     }
 
     /// With only Codex set up, operating apps stays on a Codex model at the operate floor,
