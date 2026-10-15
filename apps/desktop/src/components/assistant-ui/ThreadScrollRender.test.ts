@@ -45,6 +45,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     };
     resizeAtBottom: { placed: number; shrunk: number; grown: number };
     returnAfterSend: { room: number; distance: number; roomBack: number; lastGap: number; button: boolean };
+    sendScrolledUp: { top: number; after: number; button: boolean };
     newChat: { userTop: number | null; top: number };
     capsule: { atBottom: { capsule: boolean; capsuleInStack: number | null; lastGap: number; distance: number }; button: Button };
     peerExchange: { stages: { stage: string; userTop: number; status: string | null; rows: string[] }[]; tops: number[] };
@@ -165,6 +166,8 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(returnAfterSend.roomBack, 0);
   near(returnAfterSend.lastGap, 84, "returned to the bottom");
   assert.equal(returnAfterSend.button, false);
+  // Scrolled up, a send doesn't move the view: the turn is added below, the scroll button shown.
+  assert.deepEqual(seen.sendScrolledUp, { top: seen.sendScrolledUp.top, after: seen.sendScrolledUp.top, button: true });
 
   // The first message of a new chat sits at the top padding; an unseen working chat opens at
   // its bottom.

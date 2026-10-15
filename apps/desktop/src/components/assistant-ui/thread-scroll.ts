@@ -13,6 +13,7 @@
  *   answer fill it. Once the running turn reaches past the view's bottom it is followed, unless
  *   the user scrolled away or opened a fold in the meantime. The room only ever shrinks: by the
  *   turn's growth, and by what the user scrolls below the view; a turn ending leaves what shows.
+ *   Sent while the user had scrolled up, reading, nothing moves: the turn is added below.
  * - The scroll button shows while a row reaches under the floating footer or below the view,
  *   never for the room alone or for content in the gap above the footer, which stays in view.
  * - Each conversation's place is kept for the app's run, by row id, and restored on return: a
@@ -228,6 +229,11 @@ export class ThreadScroller {
       if (sent || edited) {
         if (sent && this.key !== null) sentTurns.delete(this.key);
         this.editSentAtMs = null;
+        // Scrolled up reading, the user stays where they are: the turn is added below.
+        if (sent && this.away && !this.follow) {
+          this.resized();
+          return;
+        }
         this.place(this.newestUser);
         return;
       }

@@ -632,6 +632,16 @@ const steps = {
       button: buttonState().shown,
     };
   },
+  /** Scrolled up, a send leaves the view where it is: the turn is added below. */
+  async sendScrolledUp() {
+    await open("other");
+    await userScroll(Math.round(max() / 2));
+    await settle(100);
+    const top = Math.round(viewport().scrollTop);
+    await send({ text: "A question sent while reading above.", attachments: [], mentions: [] });
+    await settle(600);
+    return { top, after: Math.round(viewport().scrollTop), button: buttonState().shown };
+  },
   /** The first message of a new chat, sent from the new-chat view. */
   async newChat() {
     select({ type: "draft", kind: "chat" });
