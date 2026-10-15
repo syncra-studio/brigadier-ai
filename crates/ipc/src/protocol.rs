@@ -829,6 +829,11 @@ pub enum Request {
         conversation_id: ConversationId,
         link: String,
         path: String,
+        /// When the message holding the link was written: a link to `outputs/<name>` opens the
+        /// copy of the newest task made by then, not a later task's file of the same name.
+        #[serde(default)]
+        #[ts(optional)]
+        at_ms: Option<i64>,
     },
     /// Stops its CLI processes and removes temp files now; the next message continues it.
     Hibernate {

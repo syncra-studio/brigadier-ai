@@ -707,19 +707,23 @@ impl SessionManager {
     /// output or report file, kept when it reported and again when it ended, found from the
     /// link's path in the task's scratch folder (or `outputs/…`). Links are resolved when
     /// they are opened, not rewritten, so messages written before this still open their
-    /// files after the scratch folder is gone.
+    /// files after the scratch folder is gone. `at_ms`: when the message holding the link was
+    /// written, so an `outputs/<name>` link keeps opening the task it meant after a later task
+    /// stores a file of the same name.
     pub async fn stored_output(
         &self,
         conversation: &ConversationId,
         link: &str,
+        at_ms: Option<i64>,
     ) -> Result<Option<StoredCopy>> {
         let tasks = self.core.tasks(conversation).await?;
-        Ok(find_stored(&tasks, link))
+        Ok(find_stored(&tasks, link, at_ms))
     }
 }
 
-/// [`SessionManager::stored_output`] over `tasks`, the newest task's copy first.
-fn find_stored(tasks: &[Task], link: &str) -> Option<StoredCopy> {
+/// [`SessionManager::stored_output`] over `tasks`, the newest task's copy first (for an
+/// `outputs/` link, the newest made by `at_ms`, when it is known).
+fn find_stored(tasks: &[Task], link: &str, at_ms: Option<i64>) -> Option<StoredCopy> {
     let path = link_path(link);
     let found = |task: &Task, artifact: &ArtifactRef| {
         Some(StoredCopy {
@@ -730,10 +734,15 @@ fn find_stored(tasks: &[Task], link: &str) -> Option<StoredCopy> {
     // `outputs/x.md`, as a worker or the thread writes it.
     let relative = path.strip_prefix("./").unwrap_or(&path);
     if let Some(name) = relative.strip_prefix("outputs/") {
-        return tasks
-            .iter()
-            .rev()
-            .find_map(|task| matching(&task.outputs, name).and_then(|a| found(task, a)));
+        let newest = |by: Option<i64>| {
+            tasks
+                .iter()
+                .rev()
+                .filter(|task| by.is_none_or(|by| task.created_at_ms <= by))
+                .find_map(|task| matching(&task.outputs, name).and_then(|a| found(task, a)))
+        };
+        // A message older than every task with the file (a clock set back) still opens one.
+        return newest(at_ms).or_else(|| newest(None));
     }
     let path = without_private(&path);
     tasks.iter().rev().find_map(|task| {
@@ -967,7 +976,7 @@ mod tests {
         );
         let tasks = vec![old, task];
         let found = |link: &str| {
-            super::find_stored(&tasks, link).map(|s| (s.task_id.to_string(), s.artifact.id))
+            super::find_stored(&tasks, link, None).map(|s| (s.task_id.to_string(), s.artifact.id))
         };
         let new = Some(("t1".to_owned(), "new".to_owned()));
         for link in [
@@ -1001,5 +1010,32 @@ mod tests {
         assert_eq!(found(&format!("{scratch}/outputs/missing.md")), None);
         assert_eq!(found("/Users/me/repo/rounding.md"), None);
         assert_eq!(found(&format!("{scratch}x/outputs/rounding.md")), None);
+    }
+
+    /// Two requests each get an `outputs/notes.md`: the older answer's link keeps opening its
+    /// own task's copy, the newer answer's the newer one (Codex review, phase A verify).
+    #[test]
+    fn an_outputs_link_opens_the_task_made_before_its_message() {
+        let mut first = read_task(
+            "t1",
+            "/tmp/s/t1",
+            vec![artifact("first", "notes.md", "notes.md")],
+        );
+        first.created_at_ms = 1_000;
+        let mut second = read_task(
+            "t2",
+            "/tmp/s/t2",
+            vec![artifact("second", "notes.md", "notes.md")],
+        );
+        second.created_at_ms = 5_000;
+        let tasks = vec![first, second];
+        let found = |at: Option<i64>| {
+            super::find_stored(&tasks, "outputs/notes.md", at).map(|s| s.artifact.id)
+        };
+        assert_eq!(found(Some(2_000)).as_deref(), Some("first"));
+        assert_eq!(found(Some(9_000)).as_deref(), Some("second"));
+        // Unknown time: the newest, as before; a message older than both still opens one.
+        assert_eq!(found(None).as_deref(), Some("second"));
+        assert_eq!(found(Some(10)).as_deref(), Some("second"));
     }
 }

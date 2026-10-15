@@ -1412,10 +1412,11 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             conversation_id,
             link,
             path,
+            at_ms,
         } => Response::ResolveFileLink {
             exists: std::path::Path::new(&path).is_absolute()
                 && tokio::fs::try_exists(&path).await.unwrap_or(false),
-            stored: heap(|| sessions.stored_output(&conversation_id, &link)).await?,
+            stored: heap(|| sessions.stored_output(&conversation_id, &link, at_ms)).await?,
         },
         Request::GetBrain { project_id } => Response::GetBrain {
             overview: Box::new(heap(|| sessions.brain_overview(project_id)).await?),

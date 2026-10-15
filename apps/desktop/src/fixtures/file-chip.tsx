@@ -1,12 +1,14 @@
 /**
  * File links in an answer whose files are gone (BUILD-PLAN A1): a link into a worker's removed
  * scratch folder opens the copy Brigadier stored, and both dead links say "This file is no
- * longer here", the stored one with its Save. Driven with real clicks; IPC is mocked, no daemon.
+ * longer here", the stored one with its Save. A chip in a message passes when the message was
+ * written, so an `outputs/` link opens the task of its time. Driven with real clicks; IPC is
+ * mocked, no daemon.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { LinkConversationContext } from "@/components/assistant-ui/file-links";
+import { LinkConversationContext, LinkTimeContext } from "@/components/assistant-ui/file-links";
 import { FileChip } from "@/components/assistant-ui/markdown-text";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
@@ -30,7 +32,7 @@ mockIPC((command, payload) => {
   }
   const req = (payload as { request: Request }).request;
   if (req.method === "resolveFileLink") {
-    calls.push({ method: req.method, conversationId: req.conversationId, link: req.link });
+    calls.push({ method: req.method, conversationId: req.conversationId, link: req.link, atMs: req.atMs });
     return { method: req.method, exists: false, stored: req.link.startsWith(scratch) ? stored : null };
   }
   return { method: req.method };
@@ -42,9 +44,12 @@ createRoot(document.getElementById("root")!).render(
       <main className="bg-background text-foreground flex min-h-screen w-96 flex-col gap-24 p-8">
         {Object.entries(links).map(([id, href]) => (
           // Apart, so one chip's tooltip never covers the next.
-          <p key={id} data-fixture={id}>
-            The list is in <FileChip href={href}>{href.split("/").at(-1)}</FileChip>.
-          </p>
+          // The stored one sits in a message written at 1700 ms: its click says so.
+          <LinkTimeContext.Provider key={id} value={id === "stored" ? 1700 : null}>
+            <p data-fixture={id}>
+              The list is in <FileChip href={href}>{href.split("/").at(-1)}</FileChip>.
+            </p>
+          </LinkTimeContext.Provider>
         ))}
       </main>
     </LinkConversationContext.Provider>

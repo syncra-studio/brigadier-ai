@@ -154,7 +154,7 @@ async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_
         assert!(!PathBuf::from(&link).exists(), "{whose}: {link} is gone");
         let stored = flow
             .manager
-            .stored_output(&flow.conversation, &link)
+            .stored_output(&flow.conversation, &link, None)
             .await
             .unwrap()
             .unwrap_or_else(|| panic!("{whose}: {link} has no stored copy"));
@@ -169,7 +169,7 @@ async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_
     // The link form the report teaches opens the same copy.
     let stored = flow
         .manager
-        .stored_output(&flow.conversation, "outputs/rounding.md")
+        .stored_output(&flow.conversation, "outputs/rounding.md", None)
         .await
         .unwrap()
         .expect("outputs/rounding.md has a stored copy");

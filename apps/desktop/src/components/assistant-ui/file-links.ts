@@ -31,6 +31,12 @@ export const OpenFileContext = createContext<(path: string, line: number | null)
 /** The conversation whose messages hold the links, where a view shows one that isn't selected. */
 export const LinkConversationContext = createContext<string | null>(null);
 
+/**
+ * When the message holding the links was written: a link to `outputs/<name>` then opens the
+ * copy of the task that existed by then, not a later task's file of the same name.
+ */
+export const LinkTimeContext = createContext<number | null>(null);
+
 /** The conversation a file link belongs to: the view's, else the selected one. */
 export function useLinkConversation(): string | null {
   const own = useContext(LinkConversationContext);

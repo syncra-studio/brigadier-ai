@@ -34,8 +34,10 @@ import {
   useSyncExternalStore,
   type ComponentType,
   type FC,
+  type ReactNode,
 } from "react";
 
+import { LinkTimeContext } from "@/components/assistant-ui/file-links";
 import { ThreadScroller } from "@/components/assistant-ui/thread-scroll";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
@@ -548,10 +550,18 @@ const ReplyLoading: FC = () => (
   </div>
 );
 
+/** A message's file links open what existed when it was written (`LinkTimeContext`). */
+const MessageTime: FC<{ children: ReactNode }> = ({ children }) => {
+  const sentAt = useAuiState((s) => s.message.createdAt.getTime());
+  return <LinkTimeContext.Provider value={sentAt}>{children}</LinkTimeContext.Provider>;
+};
+
 export const MessageText: FC<TextMessagePartProps> = (props) => (
-  <Suspense fallback={<ReplyLoading />}>
-    <MarkdownText {...props} />
-  </Suspense>
+  <MessageTime>
+    <Suspense fallback={<ReplyLoading />}>
+      <MarkdownText {...props} />
+    </Suspense>
+  </MessageTime>
 );
 
 /** Markdown outside a thread message, such as a worker's replies in its panel. */
@@ -568,9 +578,11 @@ export const MarkdownBlock: FC<{ text: string; streaming?: boolean }> = ({
 
 /** Text that is still streaming: its newest words fade in. */
 export const StreamingMessageText: FC<TextMessagePartProps> = (props) => (
-  <Suspense fallback={<ReplyLoading />}>
-    <MarkdownText {...props} streaming />
-  </Suspense>
+  <MessageTime>
+    <Suspense fallback={<ReplyLoading />}>
+      <MarkdownText {...props} streaming />
+    </Suspense>
+  </MessageTime>
 );
 
 const AssistantMessage: FC = () => {

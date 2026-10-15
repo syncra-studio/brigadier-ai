@@ -17,7 +17,12 @@ import type { TextMessagePartProps } from "@assistant-ui/react";
 import { Check, Copy, ExpandLg } from "@openai/apps-sdk-ui/components/Icon";
 
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
-import { OpenFileContext, useCheckoutRoot, useLinkConversation } from "@/components/assistant-ui/file-links";
+import {
+  LinkTimeContext,
+  OpenFileContext,
+  useCheckoutRoot,
+  useLinkConversation,
+} from "@/components/assistant-ui/file-links";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { createWordFade } from "@/components/assistant-ui/word-fade";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -136,11 +141,18 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
   const root = useCheckoutRoot();
   const openFile = useContext(OpenFileContext);
   const conversationId = useLinkConversation();
+  const atMs = useContext(LinkTimeContext);
   const [gone, setGone] = useState<Gone | null>(null);
   const { path, line } = fileTarget(href, root);
   const open = async () => {
     const found = conversationId
-      ? await request({ method: "resolveFileLink", conversationId, link: href, path }).catch(() => null)
+      ? await request({
+          method: "resolveFileLink",
+          conversationId,
+          link: href,
+          path,
+          ...(atMs === null ? {} : { atMs }),
+        }).catch(() => null)
       : null;
     if (found && !found.exists) {
       setGone({ stored: found.stored });

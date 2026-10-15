@@ -23,7 +23,10 @@ test("a dead file link says the file is no longer here, opens and saves the stor
     method: "resolveFileLink",
     conversationId: "chat-1",
     link: "/var/folders/xy/T/brigadier/scratch/task-1/outputs/rounding.md:3",
+    atMs: 1700,
   });
+  // A chip outside a message passes no time.
+  assert.equal(seen.calls[2]!.atMs, undefined);
   assert.equal(seen.calls[1]!.id, "blob-1");
   assert.equal(seen.calls[3]!.id, "blob-1");
   assert.equal(seen.calls[3]!.fileName, "rounding.md");
