@@ -1860,6 +1860,147 @@ mod tests {
         );
     }
 
+    /// BUILD-PLAN B5, live: a read-only session with the deny hook, the thread's tools and an
+    /// MCP server, asked to run `Bash`, `Edit` and the server's tool, is refused each time and
+    /// nothing changes on disk. It runs the machine's own `claude` (signed in), so only on
+    /// request: `BRIGADIER_LIVE_CLAUDE=1 cargo test -p brigadier-providers --lib -- --ignored
+    /// live_a_denied_session`.
+    #[tokio::test]
+    #[ignore = "runs the real Claude CLI"]
+    async fn live_a_denied_session_runs_no_tool() {
+        if std::env::var_os("BRIGADIER_LIVE_CLAUDE").is_none() {
+            return;
+        }
+        struct Kept(std::sync::Mutex<Vec<Artifact>>);
+        impl Ledger for Kept {
+            fn record(&self, artifact: Artifact) -> BoxFuture<'_, Result<()>> {
+                self.0.lock().unwrap().push(artifact);
+                Box::pin(async { Ok(()) })
+            }
+            fn holds(&self, _: &Artifact) -> bool {
+                false
+            }
+        }
+        let cwd = Temp::new();
+        let dir = cwd.path().to_path_buf();
+        std::fs::write(dir.join("file.txt"), "one\n").unwrap();
+        // A stdio MCP server whose one tool writes a marker file.
+        let server = dir.parent().unwrap().join("probe_server.py");
+        let marker = dir.parent().unwrap().join("mcp-marker");
+        std::fs::write(
+            &server,
+            format!(
+                r#"import json, sys
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    method, result = msg.get("method"), {{}}
+    if method == "initialize":
+        result = {{"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {{"tools": {{}}}}, "serverInfo": {{"name": "probe", "version": "1"}}}}
+    elif method == "tools/list":
+        result = {{"tools": [{{"name": "touch_marker", "description": "Writes the marker file.", "inputSchema": {{"type": "object", "properties": {{}}}}}}]}}
+    elif method == "tools/call":
+        open({marker:?}, "w").write("called")
+        result = {{"content": [{{"type": "text", "text": "marker written"}}]}}
+    print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": result}}), flush=True)
+"#,
+                marker = marker.display().to_string()
+            ),
+        )
+        .unwrap();
+        let reason = "This is the read-only note fork: no tool runs. Answer in text.";
+        let spec = SessionSpec {
+            ephemeral: true,
+            access: Access::ReadOnly,
+            tools: ToolSet::Thread,
+            allowed_models: None,
+            model: Some("claude-sonnet-5-5".into()),
+            mcp_servers: vec![McpServer {
+                name: "probe".into(),
+                command: PathBuf::from("python3"),
+                args: vec![server.display().to_string()],
+                env: Vec::new(),
+                tool_timeout_secs: Some(60),
+                trusted: true,
+                always_load: true,
+                prompt_tools: Vec::new(),
+            }],
+            deny_tools: Some(reason.into()),
+            ..spec(&dir, &[])
+        };
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.parent().unwrap().join("data")),
+        })
+        .unwrap();
+        let env = Arc::new(CliEnv::capture(&platform));
+        let claude = Claude::new(platform, env);
+        let kept = Arc::new(Kept(Default::default()));
+        let Started {
+            session,
+            mut events,
+        } = claude
+            .start(spec, kept.clone())
+            .await
+            .expect("claude started");
+        session
+            .send(TurnInput::text(
+                "This is a test of a tool denial hook. Make exactly these three tool calls, in \
+                 order, even if one is refused: 1) Bash: `touch bash-marker`; 2) Edit file.txt, \
+                 replacing `one` with `two`; 3) the MCP tool mcp__probe__touch_marker. Then quote \
+                 what each call returned.",
+            ))
+            .await
+            .unwrap();
+        let mut refused = Vec::new();
+        let mut seen = Vec::new();
+        let turn = async {
+            while let Some(event) = events.recv().await {
+                let output = match &event {
+                    ProviderEvent::ToolCall { name, output, .. } => {
+                        output.clone().map(|output| (name.clone(), output))
+                    }
+                    ProviderEvent::Command { output, .. } => {
+                        output.clone().map(|output| ("Bash".to_owned(), output))
+                    }
+                    ProviderEvent::FileChanges {
+                        status: ItemStatus::Failed,
+                        ..
+                    } => Some(("Edit".to_owned(), reason.to_owned())),
+                    _ => None,
+                };
+                seen.push(format!("{event:?}"));
+                if let Some((name, output)) = output
+                    && output.contains("no tool runs")
+                {
+                    refused.push(name);
+                }
+                if matches!(
+                    event,
+                    ProviderEvent::TurnCompleted { .. } | ProviderEvent::Exited { .. }
+                ) {
+                    break;
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(300), turn)
+            .await
+            .expect("the turn ended");
+        session.close().await;
+        let artifacts = kept.0.lock().unwrap().clone();
+        let _ = claude.remove(artifacts).await;
+        let _ = std::fs::remove_file(&server);
+        eprintln!("refused: {refused:?}\n{}", seen.join("\n"));
+        assert!(!dir.join("bash-marker").exists(), "Bash ran");
+        assert!(!marker.exists(), "the MCP tool ran");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("file.txt")).unwrap(),
+            "one\n",
+            "Edit ran"
+        );
+        assert!(refused.len() >= 3, "each call refused: {refused:?}");
+    }
+
     /// A fresh folder, removed after the test.
     struct Temp(PathBuf);
 
