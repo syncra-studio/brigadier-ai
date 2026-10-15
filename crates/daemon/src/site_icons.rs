@@ -415,11 +415,18 @@ fn attribute(tag: &str, name: &str) -> Option<String> {
 /// `base`'s folder.
 fn resolve(base: &str, href: &str) -> Option<String> {
     let href = href.trim();
-    if href.starts_with("data:") {
+    if href
+        .get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+    {
         return None;
     }
-    if href.starts_with("https://") {
-        return Some(href.to_owned());
+    // A scheme in any case (`HTTPS://`), written as `https://`.
+    if href
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+    {
+        return Some(format!("https://{}", &href[8..]));
     }
     if let Some(rest) = href.strip_prefix("//") {
         return Some(format!("https://{rest}"));
@@ -506,6 +513,11 @@ mod tests {
         );
         // An HTTP icon isn't fetched.
         assert_eq!(resolve("https://a.dev/", "http://a.dev/i.ico"), None);
+        assert_eq!(
+            resolve("https://a.dev/", "HTTPS://cdn.a.dev/i.png").as_deref(),
+            Some("https://cdn.a.dev/i.png")
+        );
+        assert_eq!(resolve("https://a.dev/", "HTTP://a.dev/i.ico"), None);
         // A page or a redirect deeper in the site: a bare name is in its folder.
         assert_eq!(
             resolve("https://a.dev/assets/old.ico?v=1", "new.ico").as_deref(),
