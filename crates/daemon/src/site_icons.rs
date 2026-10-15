@@ -415,12 +415,6 @@ fn attribute(tag: &str, name: &str) -> Option<String> {
 /// `base`'s folder.
 fn resolve(base: &str, href: &str) -> Option<String> {
     let href = href.trim();
-    if href
-        .get(..5)
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
-    {
-        return None;
-    }
     // A scheme in any case (`HTTPS://`), written as `https://`.
     if href
         .get(..8)
@@ -431,7 +425,9 @@ fn resolve(base: &str, href: &str) -> Option<String> {
     if let Some(rest) = href.strip_prefix("//") {
         return Some(format!("https://{rest}"));
     }
-    if href.contains("://") {
+    // Any other scheme (`http:`, `data:`) isn't fetched; a `://` in a query is no scheme.
+    let first = href.find(['/', '?', '#']).unwrap_or(href.len());
+    if href[..first].contains(':') {
         return None;
     }
     let base: Uri = base.parse().ok()?;
@@ -518,6 +514,22 @@ mod tests {
             Some("https://cdn.a.dev/i.png")
         );
         assert_eq!(resolve("https://a.dev/", "HTTP://a.dev/i.ico"), None);
+        assert_eq!(
+            resolve("https://a.dev/", "data:image/png;base64,AAAA"),
+            None
+        );
+        assert_eq!(
+            resolve("https://a.dev/", "DATA:image/png;base64,AAAA"),
+            None
+        );
+        assert_eq!(
+            resolve("https://a.dev/i", "/favicon.png?origin=https://a.dev").as_deref(),
+            Some("https://a.dev/favicon.png?origin=https://a.dev")
+        );
+        assert_eq!(
+            resolve("https://a.dev/i/", "icon.png?next=https://b.dev").as_deref(),
+            Some("https://a.dev/i/icon.png?next=https://b.dev")
+        );
         // A page or a redirect deeper in the site: a bare name is in its folder.
         assert_eq!(
             resolve("https://a.dev/assets/old.ico?v=1", "new.ico").as_deref(),
