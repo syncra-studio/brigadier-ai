@@ -1278,8 +1278,7 @@ pub(crate) const NO_AI_COAUTHORS: &str =
 /// A worker's system prompt: the same for every worker of a repository on one vendor, so a
 /// second worker's first call reads it from the prompt cache (THREAD-PLAN.md Q8 lever 2). It
 /// holds the rules every worker follows, then the repository's own instructions
-/// (`instructions`); what its task changes is in [`worker_brief`], its first message. A
-/// pre-warmed worker's CLI starts on it before its task is known.
+/// (`instructions`); what its task changes is in [`worker_brief`], its first message.
 pub(crate) fn worker_system(instructions: &str) -> String {
     format!(
         r#"You are a Brigadier worker. Your model's knowledge may be older than today (your first message gives the date): check current docs before relying on any third-party API, version or CLI.

@@ -88,6 +88,8 @@ impl SessionManager {
         // taken back (BUILD-PLAN A3).
         self.keep_merged_workspaces().await;
         self.runtime.ledger().sweep().await;
+        // Spare worktrees an earlier version made ahead of a task that never came (BUILD-PLAN A8).
+        self.sweep_spare_worktrees().await;
         // No thread runs yet: what their commands left goes before anything starts again.
         self.sweep_scratch_at_launch().await;
         self.reconcile_trust().await;
@@ -468,7 +470,6 @@ impl SessionManager {
                 live.allow_revival().await;
             }
         }
-        self.drop_prewarm(&id, "the session hibernated");
         let (owner, area) = conversation_owner(&conversation);
         self.runtime.ledger().end_processes(&owner).await;
         let attachments = self.owned_dir(area, &id.0).join("attachments");
@@ -610,6 +611,40 @@ impl SessionManager {
         })
     }
 
+    /// Removes the spare `task-next-*` worktrees earlier versions made ahead of a session's next
+    /// task: an owner `task:<id>` that holds one and whose task was never made. The ledger's own
+    /// sweep finishes only disposals already started, so these stayed on disk.
+    async fn sweep_spare_worktrees(&self) {
+        let mut tasks = std::collections::HashSet::new();
+        for conversation in self.core.catalog().conversations {
+            if let Ok(found) = self.core.tasks(&conversation.id).await {
+                tasks.extend(found.into_iter().map(|task| task.id.0));
+            }
+        }
+        let ledger = self.runtime.ledger();
+        for (owner, artifacts, _) in ledger.owners() {
+            let Some(id) = owner.strip_prefix("task:") else {
+                continue;
+            };
+            let spare = artifacts.iter().any(|artifact| {
+                matches!(artifact, Artifact::Worktree { path, .. }
+                    if Path::new(path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("task-next-")))
+            });
+            if !spare || tasks.contains(id) {
+                continue;
+            }
+            let leftovers = ledger.dispose(&owner).await;
+            tracing::info!(
+                owner,
+                failures = leftovers.failures.len(),
+                "removed a spare worktree"
+            );
+        }
+    }
+
     /// Takes back the removal of a session's workspace that an earlier version started on a
     /// merge (THREAD-PLAN.md Q9, retired by BUILD-PLAN A3) and couldn't finish: a `session:`
     /// owner still disposing whose session is neither archived nor being deleted. Its worktree
@@ -745,7 +780,6 @@ impl SessionManager {
         // What runs in the folder stops before it goes.
         let _ = self.stop_previews(id, "the workspace closed").await;
         self.stop_background_runs(id);
-        self.drop_prewarm(id, "the workspace closed");
         self.drop_check_checkout(id).await;
         if !self.keep_session_changes(&conversation).await {
             return Err(Error::Invalid(
@@ -783,7 +817,6 @@ impl SessionManager {
         let id = &conversation.id;
         // Its previews run in the workspace that goes next: they stop first.
         let _ = self.stop_previews(id, "the session closed").await;
-        self.drop_prewarm(id, "the session closed");
         let conv = self.convs_lock().remove(id);
         if let Some(conv) = conv {
             // Messages waiting for quota never go.

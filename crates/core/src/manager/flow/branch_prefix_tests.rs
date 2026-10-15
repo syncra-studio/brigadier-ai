@@ -244,16 +244,12 @@ async fn a_project_prefix_wins_and_one_git_refuses_gives_way_with_a_notice() {
 }
 
 #[tokio::test]
-async fn a_pre_warm_takes_the_prefix_set_after_it_was_made() {
-    let flow = Flow::start("prefix-prewarm", Options::default(), delegating()).await;
+async fn a_task_takes_the_prefix_set_after_the_sessions_last_message() {
+    let flow = Flow::start("prefix-later", Options::default(), delegating()).await;
     flow.say("Hello").await;
     flow.settled().await;
-    flow.manager
-        .prewarm_made(&flow.conversation)
-        .await
-        .expect("a pre-warm");
-    // The prefix changes between warming and adoption: the task's branch is named when the
-    // pre-warm is adopted, and the task records the branch its worktree is really on.
+    // The prefix changes between two messages: the task's branch is named when its worktree is
+    // made, and the task records the branch its worktree is really on.
     set_prefix(&flow, "sg/").await;
     flow.say("Please add a greeting").await;
     let board = flow.settled().await;

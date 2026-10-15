@@ -1840,7 +1840,6 @@ mod peer_wait_tests;
 mod plan_tests;
 mod preview_tests;
 #[cfg(test)]
-mod prewarm_tests;
 #[cfg(test)]
 mod reads_tests;
 #[cfg(test)]
@@ -1851,6 +1850,8 @@ mod review_hold_tests;
 mod review_switch_tests;
 #[cfg(test)]
 mod search_tests;
+#[cfg(test)]
+mod spare_worktree_tests;
 #[cfg(test)]
 mod status_tests;
 #[cfg(test)]

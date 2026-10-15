@@ -1117,8 +1117,6 @@ impl SessionManager {
         let paused = queue_index.is_some() && self.core.board(&id).await?.queue.paused;
         let conv = self.conv(&id)?;
         if conversation.kind == ConversationKind::Session {
-            // The next worker's worktree is made while the thread reads the message.
-            self.prewarm(&id);
             return self
                 .send_to_session(
                     &conv,
@@ -1903,7 +1901,6 @@ impl SessionManager {
             tracing::warn!(conversation = %id, error = %err, "could not remove user-stopped previews");
         }
         self.stop_background_runs(&id);
-        self.drop_prewarm(&id, "stopped by the user");
         // What Brigadier still owed the stopped answers ends with them, so nothing wakes the
         // thread for them later or merges on its own: the CI watches, and the held merge
         // (the composer's Stop stops the workers too). A failed turn ends none of it: what

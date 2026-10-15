@@ -194,7 +194,7 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
   - Since 2026-10-14 workers run only their own change's checks; the session's full checks run once per integrated tip, in the background (SESSION-FIXES-PLAN.md §11).
 - **Lever 4: one-shot cross-vendor reviews** (Q12).
 - **Lever 5: non-blocking plan review.** `review_plan` runs a one-shot review in the background. The findings reach the thread as a message, and the worker is never parked on it.
-- **Lever 6: pre-warmed worker.** When a user message arrives, the daemon prepares one task worktree from the session tip (`M/warm.rs:156`; per-task today, no pool) and one idle CLI for the default implement route. It is used by the next `delegate_task`. It is dropped when the tip moves or after 10 min.
+- **Lever 6: pre-warmed worker (retired by BUILD-PLAN A8).** When a user message arrives, the daemon prepares one task worktree from the session tip (`M/warm.rs:156`; per-task today, no pool) and one idle CLI for the default implement route. It is used by the next `delegate_task`. It is dropped when the tip moves or after 10 min. Retired: it made a spare worktree on every user message, most never used. A worker's worktree is now made when `delegate_task` starts it, and a launch sweep removes the `task-next-*` worktrees earlier versions left.
 - **Lever 7: cheap models for chores.** Router floors (Q7).
 - **Lever 8: metrics.** Per-step time and tokens:
   - `TurnUsage` (`crates/core/src/routing/store.rs:85-96`) gets `duration_ms` and the step kind (thread turn, worker, review, preview).
@@ -331,7 +331,7 @@ Shared work comes first, so parallel streams don't edit the same contracts (corr
 **Scope:**
 - the context pack (lever 1);
 - the shared, cache-friendly worker prefix (lever 2);
-- the pre-warmed worktree and CLI (lever 6);
+- the pre-warmed worktree and CLI (lever 6, retired by BUILD-PLAN A8);
 - the check cache, affected checks and shared target dir (lever 3).
 
 **Done when:**
@@ -413,7 +413,7 @@ If a task is inconclusive, rerun it once with the arm order swapped. Missing evi
 1. **Claude hook shape.** The docs say `updatedToolOutput` replaces a built-in tool's result and must match its shape. Memory (CLI 2.1.283) says Bash's shape was `{stdout, stderr, interrupted, isImage}`. Failures go to `PostToolUseFailure`. Phase 2 step 1 checks this live on 2.1.292. If replacement fails, keep failures untrimmed.
 2. **Codex built-in shell output isn't trimmed** (hooks are off). Use `run`, and enable Codex hooks only after a measured test (PLAN §7).
 3. **The thread's context grows faster with tools.** Rebirth fires sooner. Track it with the Q13 metrics. Its briefing must list recently read files.
-4. **Beating `/delegator` on time.** Brigadier adds worktree warm-up and landing, which `/delegator` doesn't have. The pre-warm (lever 6) and the check cache must pay for them.
+4. **Beating `/delegator` on time.** Brigadier adds worktree warm-up and landing, which `/delegator` doesn't have. The check cache must pay for them (the pre-warm, lever 6, is retired by BUILD-PLAN A8).
 5. **Shared `CARGO_TARGET_DIR`** across worktrees can churn fingerprints. Measure it in phase 3. Fall back to per-worktree CoW-warmed targets.
 6. **Open in terminal on Codex.** `codex resume <id>` on a thread made by app-server is unproven. That's what the spike is for. If it fails for either vendor, phase 4's takeover part stops. A revised takeover design (for example a PTY-hosted worker from the start) is written, Codex-reviewed and approved before it's built. Transcript viewing is not a substitute: that would be a scope change to Q5, and only the user can make it.
 7. **ToS.** Only the user's own unmodified `claude` binary is used. `claude --bg`/agents are API-key-only and not used.

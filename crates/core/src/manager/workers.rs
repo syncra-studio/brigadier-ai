@@ -1222,21 +1222,8 @@ impl SessionManager {
             subject.as_ref().map(|task| task.title.as_str()),
             &names,
         );
-        // A new writing task of the session's own takes its pre-warmed worktree's id, and with
-        // it the worktree (THREAD-PLAN.md Q8 lever 6).
-        let prewarmed = (extra.id.is_none()
-            && subject.is_none()
-            && run.is_none()
-            && gate_link.is_none()
-            && !waits)
-            .then(|| self.claim_prewarm(conversation_id, kind))
-            .flatten();
         let task = Task {
-            id: extra
-                .id
-                .clone()
-                .or(prewarmed.clone())
-                .unwrap_or_else(TaskId::generate),
+            id: extra.id.clone().unwrap_or_else(TaskId::generate),
             conversation_id: conversation_id.clone(),
             number,
             position: 0,
@@ -1310,17 +1297,11 @@ impl SessionManager {
         // A cleanup that stopped waiting for this has already passed the session's tasks (it
         // may have been restored since): the task isn't made.
         if fence.cut_off() {
-            if prewarmed.is_some() {
-                self.release_prewarm(&task.id);
-            }
             return Err(super::closing::closing_error());
         }
-        if let Err(err) = self.core.record_conversation(conversation_id, events).await {
-            if prewarmed.is_some() {
-                self.release_prewarm(&task.id);
-            }
-            return Err(err);
-        }
+        self.core
+            .record_conversation(conversation_id, events)
+            .await?;
         if waits {
             // Its timer is set as for any task waiting for quota.
             self.keep_waiting(&task).await;
@@ -1349,7 +1330,6 @@ impl SessionManager {
         self.set_task_state(&conversation_id, &task.id, TaskState::Starting)
             .await?;
         let owner = format!("task:{}", task.id);
-        let took_prewarm = self.prewarms.took(&task.id);
         // A fix of landed work's review findings resumes the session that did the work, in a
         // worktree made again where it was (SESSION-FIXES-PLAN.md Q6.1).
         let held = subject
@@ -1492,11 +1472,6 @@ impl SessionManager {
             TurnInput::with_files(text, files),
         )
         .await?;
-        // The next worker of a busy session finds one ready too; made only now, so its copy
-        // never competes with this worker's start.
-        if took_prewarm {
-            self.prewarm(&conversation_id);
-        }
         Ok(())
     }
 
@@ -2237,10 +2212,6 @@ impl SessionManager {
         else {
             return Err(Error::Invalid("tasks belong to a session".into()));
         };
-        // A task that took the session's pre-warm starts from its worktree when it can.
-        if let Some(workspace) = self.adopt_prewarm(task).await {
-            return Ok(workspace);
-        }
         let scratch = self.owned_dir("scratch", &task.id.0);
         self.prepare_owned_dir(owner, &scratch).await?;
         let repo = PathBuf::from(repo);

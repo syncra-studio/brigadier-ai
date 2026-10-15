@@ -63,7 +63,6 @@ mod peers;
 mod phases;
 mod preview;
 mod preview_ready;
-mod prewarm;
 mod project_removal;
 mod prompts;
 mod protection;
@@ -171,8 +170,6 @@ pub struct SessionManager {
     /// The engine's branches and their tips, for the ref check (PLAN bug 6); read and written
     /// under each repository's ref lock, off the async threads.
     ref_records: Arc<refcheck::RefRecords>,
-    /// Each session's pre-warmed next worktree (THREAD-PLAN.md Q8 lever 6).
-    prewarms: prewarm::Prewarms,
     /// The sessions' full checks on the integrated tree ([`integrated_checks`]).
     integrated: integrated_checks::IntegratedChecks,
     /// The thread's commands gone to the background ([`background_runs`]).
@@ -298,7 +295,6 @@ impl SessionManager {
             thread_scans: tokio::sync::Mutex::new(()),
             run_passes: run::RunPasses::default(),
             ref_records: Arc::default(),
-            prewarms: prewarm::Prewarms::default(),
             integrated: integrated_checks::IntegratedChecks::default(),
             background_runs: background_runs::BackgroundRuns::default(),
             previews: preview::Previews::default(),

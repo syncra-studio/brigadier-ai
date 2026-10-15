@@ -1496,40 +1496,6 @@ async fn findings_after_the_runs_report_reach_the_thread() {
     flow.stop().await;
 }
 
-/// The session's pre-warmed worktree is on its own branch, not the run's: a run's start drops
-/// it, and leaves nothing of it behind.
-#[tokio::test]
-async fn a_runs_start_drops_the_sessions_pre_warm() {
-    let thread = Arc::new(Thread {
-        order: vec![1],
-        ..Default::default()
-    });
-    let flow = flow_with("overnight-prewarm", thread).await;
-    flow.say("Hello").await;
-    flow.settled().await;
-    let (reserved, worktree) = flow
-        .manager
-        .prewarm_made(&flow.conversation)
-        .await
-        .expect("a pre-warm");
-    let run = start_run(&flow, "/overnight Make one file.", 1).await;
-    flow.until("the run's worktree", |board| {
-        board
-            .runs
-            .get(&run.id)
-            .is_some_and(|run| run.workspace.is_some())
-    })
-    .await;
-    assert!(flow.manager.prewarm_id(&flow.conversation).is_none());
-    let owner = format!("task:{reserved}");
-    super::eventually(&format!("{} to go", worktree.display()), || {
-        flow.manager.runtime.ledger().artifacts(&owner).is_empty() && !worktree.exists()
-    })
-    .await;
-    finished(&flow, &run.id).await;
-    flow.stop().await;
-}
-
 /// An overnight run approves for the user under Ask for approval, but not in a folder the user
 /// doesn't trust: there it stays Ask for approval, so its steps outside the sandbox wait for
 /// the user.

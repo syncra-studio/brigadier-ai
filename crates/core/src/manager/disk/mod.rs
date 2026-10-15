@@ -493,8 +493,7 @@ impl SessionManager {
                             | "checks",
                             id,
                         )) => records.conversation(id).is_some(),
-                        // A pre-warm's reserved task id has no task yet.
-                        Some(("task", id)) => records.task(id).is_some() || self.prewarms.owns(id),
+                        Some(("task", id)) => records.task(id).is_some(),
                         // A landed worker's session, kept for its review's findings.
                         Some(("review-hold", id)) => records.task(id).is_some(),
                         // A run's worktree serves Continue and Merge while its session exists.
