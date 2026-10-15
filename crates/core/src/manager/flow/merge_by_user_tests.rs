@@ -531,15 +531,24 @@ async fn clean_up_keeps_a_workspace_whose_close_failed() {
     flow.settled().await;
     let (path, _) = workspace(&flow);
     let path = path.unwrap();
-    flow.core
-        .record(vec![(
-            crate::model::streams::CLEANUP.to_owned(),
-            DomainEvent::CleanupRequested {
-                owner: format!("session:{}", flow.conversation),
-            },
-        )])
-        .await
-        .unwrap();
+    // The folder can't be removed (a locked file, say), so the Close fails.
+    flow.manager
+        .runtime
+        .ledger()
+        .set_worktree_remover(std::sync::Arc::new(|_, _| {
+            Box::pin(async { Err("a file in it is locked".to_owned()) })
+        }));
+    assert!(
+        flow.manager
+            .close_workspace(&flow.conversation)
+            .await
+            .is_err()
+    );
+    let owner = format!("session:{}", flow.conversation);
+    assert!(flow.manager.runtime.ledger().disposing().contains(&owner));
+    assert_eq!(workspace(&flow).0.as_deref(), Some(path.as_path()));
+    flow.manager.install_worktree_remover();
+    // The user keeps working there, then asks the thread to clean up.
     std::fs::write(path.join("DRAFT.md"), "draft\n").unwrap();
     let text = flow.manager.clean_up(&flow.conversation).await.unwrap();
     assert!(path.join(".git").exists(), "{text}");
