@@ -70,6 +70,7 @@ import { migrateDrafts } from "@/state/pageTabs";
 import { pruneSideChats } from "@/state/sessionTabResources";
 import { keepTabChats, prepareTabChatSend } from "@/state/tabChats";
 import { forgetDraft } from "@/state/drafts";
+import { reopenable, rememberSelection, savedSelection } from "@/state/lastSelection";
 import { forgetRightSidebarTabs, pruneRightSidebarTabs } from "@/state/rightSidebar";
 import { dismissToast, toast, useToasts } from "@/state/toasts";
 
@@ -85,9 +86,28 @@ function updateThread(id: string, update: (thread: Thread) => Thread): void {
   }));
 }
 
+/** Whether the launch has looked for the conversation to reopen (once, at the first catalog). */
+let reopened = false;
+
+/**
+ * At launch, reopens the conversation the user last had open, unless they have already moved
+ * on from the blank home (UI audit M2). Then remembers each conversation they open.
+ */
+function reopenLastSelection(): void {
+  if (reopened) return;
+  reopened = true;
+  const { selection, conversations } = useApp.getState();
+  const id = selection.type === "draft" && selection.kind === "chat" ? reopenable(savedSelection(), conversations) : null;
+  if (id) select({ type: "conversation", id }, "replace");
+  useApp.subscribe((state, previous) => {
+    if (state.selection !== previous.selection) rememberSelection(state.selection);
+  });
+}
+
 export async function loadCatalog(): Promise<void> {
   const { catalog } = await request({ method: "getCatalog" });
   replaceCatalog(catalog.projects, catalog.conversations, catalog.settings);
+  reopenLastSelection();
   pruneRightSidebarTabs(catalog.conversations.map((conversation) => conversation.id));
   pruneSideChats(catalog.conversations);
   void keepTabChats().catch(console.error);
