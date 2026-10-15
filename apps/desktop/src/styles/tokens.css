@@ -45,6 +45,10 @@
  *               max-h-queue-max               the queue card's maximum height (then it scrolls)
  *               scroll-mt-thread-turn         where a message row stops under the thread's top when scrolled to;
  *                                             thread-composer-gap, thread-fade-{bottom,top} (globals.css)
+ *               w-rail-marker, h-rail-marker-height  a marker of the thread's message rail (36×10), its
+ *               rail-line(-hover), h-rail-line-height  line at rest and hovered (6px / 26px, 2px tall),
+ *               max-h-rail-list, rail-fade    the rail's list (then it scrolls) and its faded ends;
+ *                                             ease-rail (the hovered lines growing)
  *               size-attachment-thumb, w-attachment-card  an image attachment, a file attachment
  *               mx-rail-inset, -mb-rail-tuck  the composer rail: its side inset, the tuck under the card
  *               {px,py,gap,size,h}-notice-*   the Full access card (nine tenths of a card), with
@@ -224,6 +228,16 @@
   --spacing-thread-composer-gap: 5.25rem;
   --spacing-thread-fade-bottom: 1.25rem;
   --spacing-thread-fade-top: 1.25rem;
+  /* The rail of the user's messages beside the thread: a 36×10 marker per message holding a 2px
+     line, 6px wide at rest and 26px hovered; the list shows up to 70% of the window's height
+     (40rem at most), then scrolls, its ends fading over 2.5rem. */
+  --spacing-rail-marker: 2.25rem;
+  --spacing-rail-marker-height: 0.625rem;
+  --spacing-rail-line: 0.375rem;
+  --spacing-rail-line-hover: 1.625rem;
+  --spacing-rail-line-height: 0.125rem;
+  --spacing-rail-list: min(70vh, 40rem);
+  --spacing-rail-fade: 2.5rem;
   /* The composer grows with its text up to a quarter of the window, then scrolls. */
   --spacing-composer-max: 25dvh;
   /* The Full access card above the composer: nine tenths of a card's padding, gaps, icon and
@@ -540,6 +554,8 @@
   --ease-enter: cubic-bezier(0.19, 1, 0.22, 1);
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-session-tab: cubic-bezier(0.333, 0.667, 0.667, 1);
+  /* The message rail's lines growing under the pointer: a slight overshoot, 160ms. */
+  --ease-rail: cubic-bezier(0.34, 1.36, 0.64, 1);
 
   --tracking-hero: -0.015em;
   --tracking-section: -0.01em;

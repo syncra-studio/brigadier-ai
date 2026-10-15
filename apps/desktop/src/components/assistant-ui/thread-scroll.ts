@@ -20,6 +20,8 @@
  *   conversation left at its bottom (its sent turn's room in view, too) comes back at the bottom.
  * - While the thread is hidden (`display: none`, under a fullscreen side panel) nothing is measured
  *   or kept; shown again, it is put back where it was, or at the bottom if it was there.
+ * - A jump to one of the user's messages (the rail beside the thread, ⌥↑ and ⌥↓) is the user's
+ *   own move: it stops following (`release`); older history prepended above keeps the anchor.
  */
 
 /** Within this of the bottom the thread is at its bottom: it follows, and comes back there. */
@@ -344,6 +346,18 @@ export class ThreadScroller {
     this.stopGlide();
     this.restore = null;
     this.held = null;
+  };
+
+  /**
+   * The user jumps to a place themselves (one of their messages, from the rail or ⌥↑/⌥↓): as
+   * with their own scroll away from the bottom, nothing follows, springs or is watched. Reaching
+   * the bottom again follows again (see `scrolled`).
+   */
+  release = (): void => {
+    this.interrupt();
+    this.follow = false;
+    this.watch = false;
+    this.away = true;
   };
 
   /**

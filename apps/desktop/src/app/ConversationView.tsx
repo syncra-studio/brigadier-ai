@@ -13,7 +13,6 @@ import {
 } from "@assistant-ui/react";
 import { Info, Unarchive, Warning, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
-  createContext,
   type FC,
   useCallback,
   useContext,
@@ -36,6 +35,7 @@ import { WorkerDiffs } from "@/app/conversation/WorkerSummary";
 import { latestRequest, reworkableRequest } from "@/app/conversation/rework";
 import { interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
+import { foldedEntries } from "@/app/conversation/railHistory";
 import { useSidePanel } from "@/app/conversation/SidePanel";
 import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
 import { BlobAttachmentAdapter } from "@/app/conversation/attachments";
@@ -77,7 +77,9 @@ import {
   AttachmentReaderContext,
 } from "@/components/assistant-ui/elements/attachment-tile";
 import { LinkConversationContext, OpenFileContext } from "@/components/assistant-ui/file-links";
+import { ThreadHistoryContext, type RailEntry, type ThreadHistory } from "@/components/assistant-ui/message-rail";
 import { Thread, type ThreadComponents } from "@/components/assistant-ui/thread";
+import { Spinner } from "@/components/glyphs/spinner";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/use-now";
@@ -515,15 +517,36 @@ export function ConversationView({
     [full, unfoldedIn, conversationId],
   );
   const tree = folded.tree;
-  const earlier = useMemo(
+  // The folded turns' messages for the message rail, kept as they were while an answer streams.
+  const foldedKey = useMemo(
+    () => (folded.hidden > 0 ? JSON.stringify(foldedEntries(full, folded.tree)) : "[]"),
+    [full, folded],
+  );
+  // An older page that failed to load offers Try again, in the conversation it failed in.
+  const [olderFailedIn, setOlderFailedIn] = useState<string | null>(null);
+  const hasMore = thread.hasMore;
+  const earlier = useMemo<ThreadHistory>(
     () => ({
       hidden: folded.hidden,
-      show: () => {
+      folded: JSON.parse(foldedKey) as RailEntry[],
+      unfold: () => {
         if (conversationId !== null) unfolded.add(conversationId);
         setUnfoldedIn(conversationId);
       },
+      hasMore,
+      failed: olderFailedIn !== null && olderFailedIn === conversationId,
+      loadOlder: async () => {
+        if (conversationId === null) return;
+        setOlderFailedIn(null);
+        try {
+          await loadEarlier(conversationId);
+        } catch (cause) {
+          setOlderFailedIn(conversationId);
+          throw cause;
+        }
+      },
     }),
-    [folded.hidden, conversationId],
+    [folded.hidden, foldedKey, conversationId, hasMore, olderFailedIn],
   );
   // Open, what it finished is seen: the sidebar's dot clears, and stays clear.
   const finishedAtMs = lastFinished(conversation) ?? 0;
@@ -532,7 +555,7 @@ export function ConversationView({
   }, [embedded, conversationId, finishedAtMs]);
   // A jump to a message between sessions here: the earlier turns unfold, and it lands once shown.
   const reveal = useReveal((s) => (!embedded && s.reveal?.conversationId === conversationId ? s.reveal : null));
-  const showEarlier = earlier.show;
+  const showEarlier = earlier.unfold;
   useEffect(() => {
     if (!reveal) return;
     showEarlier();
@@ -811,7 +834,7 @@ export function ConversationView({
   );
   return (
     <ViewContext.Provider value={{ selection, conversation, embedded }}>
-      <EarlierTurnsContext.Provider value={earlier}>
+      <ThreadHistoryContext.Provider value={earlier}>
       <ComposerTargetContext.Provider value={target}>
         <WorkspacePaneContext.Provider value={workspace}>
         <RightSidebarContext.Provider value={sidePanel}>
@@ -910,7 +933,7 @@ export function ConversationView({
         </RightSidebarContext.Provider>
         </WorkspacePaneContext.Provider>
       </ComposerTargetContext.Provider>
-      </EarlierTurnsContext.Provider>
+      </ThreadHistoryContext.Provider>
     </ViewContext.Provider>
   );
 }
@@ -967,34 +990,69 @@ const Welcome: FC = () => {
   );
 };
 
-/** The older turns a long thread folds away, and how to show them. */
-const EarlierTurnsContext = createContext<{ hidden: number; show: () => void }>({ hidden: 0, show: () => {} });
-
+/**
+ * Above the messages: "N earlier messages" while older turns are folded away; then, while older
+ * pages wait in the database, they load as the user scrolls to the top (a spinner while one
+ * does, Try again when it failed), or with "Load earlier messages" when nothing scrolls yet.
+ */
 const LoadEarlier: FC = () => {
   const { selection } = useContext(ViewContext);
   const conversationId = selection.type === "conversation" ? selection.id : "";
   const hasMore = useApp((s) => s.threads[conversationId]?.hasMore ?? false);
   const loading = useApp((s) => s.threads[conversationId]?.loading ?? false);
-  const earlier = useContext(EarlierTurnsContext);
-  if (earlier.hidden > 0) {
+  const earlier = useContext(ThreadHistoryContext);
+  const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
+  const loadOlder = earlier?.loadOlder;
+  const auto = hasMore && !loading && !earlier?.failed && (earlier?.hidden ?? 0) === 0;
+  // Scrolled to the top, the next page loads: the thread keeps what shows where it is.
+  useEffect(() => {
+    const viewport = sentinel?.closest("[data-slot=aui_thread-viewport]");
+    if (!auto || !sentinel || !viewport || !loadOlder) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting) && viewport.scrollHeight > viewport.clientHeight) {
+          loadOlder().catch(() => {});
+        }
+      },
+      { root: viewport },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [auto, sentinel, loadOlder]);
+  if (earlier && earlier.hidden > 0) {
     return (
       <div className="mb-4 flex justify-center">
-        <Button variant="ghost" size="sm" data-slot="earlier-turns" onClick={earlier.show}>
+        <Button variant="ghost" size="sm" data-slot="earlier-turns" onClick={earlier.unfold}>
           {earlier.hidden} earlier {earlier.hidden === 1 ? "message" : "messages"}
         </Button>
       </div>
     );
   }
-  if (!hasMore) return null;
+  if (!hasMore || !loadOlder) return null;
+  if (loading) {
+    return (
+      <div data-slot="earlier-loading" role="status" className="flex justify-center py-4">
+        <Spinner className="text-muted-foreground size-icon-sm animate-spin" />
+        <span className="sr-only">Loading older messages…</span>
+      </div>
+    );
+  }
+  if (earlier.failed) {
+    return (
+      <div data-slot="earlier-failed" className="mb-4 flex items-center justify-center gap-2">
+        <span role="alert" className="text-muted-foreground text-sm">
+          Couldn't load older messages
+        </span>
+        <Button variant="secondary" size="sm" onClick={() => loadOlder().catch(() => {})}>
+          Try again
+        </Button>
+      </div>
+    );
+  }
   return (
-    <div className="mb-4 flex justify-center">
-      <Button
-        variant="ghost"
-        size="sm"
-        disabled={loading}
-        onClick={() => void loadEarlier(conversationId)}
-      >
-        {loading ? "Loading…" : "Load earlier messages"}
+    <div ref={setSentinel} data-slot="earlier-load" className="mb-4 flex justify-center">
+      <Button variant="ghost" size="sm" onClick={() => loadOlder().catch(() => {})}>
+        Load earlier messages
       </Button>
     </div>
   );

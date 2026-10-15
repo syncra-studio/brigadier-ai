@@ -62,6 +62,14 @@ export const SHORTCUTS: readonly Shortcut[] = [
     keys: ["⌘⌫"],
   },
   { id: "clear-picked", name: "Clear picked", line: "Let go of the rows picked in the sidebar", area: "Conversations", keys: ["Esc"] },
+  {
+    id: "previous-message",
+    name: "Previous message",
+    line: "Scroll the thread to your message before the one at the top, loading older ones as needed",
+    area: "Conversations",
+    keys: ["⌥↑"],
+  },
+  { id: "next-message", name: "Next message", line: "Scroll the thread to your next message", area: "Conversations", keys: ["⌥↓"] },
 
   // Tabs and panes
   { id: "new-tab", name: "New tab", line: "Open a new tab in the session", area: "Tabs and panes", keys: ["⌘T"], menu: "new" },

@@ -40,6 +40,7 @@ import {
 } from "react";
 
 import { LinkTimeContext } from "@/components/assistant-ui/file-links";
+import { MessageRail } from "@/components/assistant-ui/message-rail";
 import { ThreadScroller } from "@/components/assistant-ui/thread-scroll";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
@@ -138,6 +139,7 @@ function useThreadScroll(
   scroller: ThreadScroller,
   saveKey: string | null,
 ): {
+  viewport: HTMLDivElement | null;
   setViewport: (element: HTMLDivElement | null) => void;
   setColumn: (element: HTMLDivElement | null) => void;
   setGroup: (element: HTMLDivElement | null) => void;
@@ -248,7 +250,7 @@ function useThreadScroll(
     if (event.messageId) scroller.editSent();
   });
 
-  return { setViewport, setColumn, setGroup, setSpacer, setPad, setFooter };
+  return { viewport, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter };
 }
 
 /** "Drop to attach", over the thread while files are dragged onto it. */
@@ -279,7 +281,7 @@ const ThreadRoot: FC<{
     Composer: ComposerComponent = Composer,
   } = useContext(ThreadComponentsContext);
   const [scroller] = useState(() => new ThreadScroller());
-  const { setViewport, setColumn, setGroup, setSpacer, setPad, setFooter } = useThreadScroll(
+  const { viewport, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter } = useThreadScroll(
     scroller,
     scrollKey,
   );
@@ -346,6 +348,8 @@ const ThreadRoot: FC<{
               {isEmpty ? <div className="flex grow basis-0 flex-col justify-end">{pad}</div> : pad}
             </div>
           </div>
+          {/* The user's messages, beside the column (see `message-rail.tsx`). */}
+          <MessageRail viewport={viewport} scroller={scroller} />
 
           {/* The composer, with what sits above it, floats over the thread's bottom; its height
               and a gap are the thread's bottom padding. */}
