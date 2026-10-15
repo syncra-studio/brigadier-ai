@@ -1653,14 +1653,31 @@ impl SessionManager {
             None => false,
         };
         let range = format!("{}..{}", short(&review.base), short(&review.tip));
+        // How a fix is made: on the user's own checkout a fix is a change like any other (UI
+        // audit M6, issue #33), left uncommitted unless the user asks.
+        let local = self.local_checkout(&review.conversation_id).is_some();
+        let fix_rule = if local {
+            "This is the user's own checkout: make the fix yourself and leave it uncommitted, with the one line saying so, unless the user asked you to commit it; it gets no review of its own."
+                .to_owned()
+        } else {
+            format!(
+                "A fix commit of yours names what it fixes, `--trailer \"{FIXES_TRAILER}: <their ids>\"`: it gets no review of its own."
+            )
+        };
         let text = match (review.kind, &review.state, text) {
             // The thread's own commits and plans.
             (ReviewKind::Code, ReviewState::Findings { count }, Some(text))
                 if review.task_id.is_none() =>
             {
                 format!(
-                    "[review of your commits · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of the commits you made yourself. Fix what you agree with (a tiny fix of your own, or delegate one), or tell the user why not. A fix commit of yours names what it fixes, `--trailer \"{FIXES_TRAILER}: <their ids>\"`: it gets no review of its own. There are no review rounds.\n{}",
+                    "[review of your commits · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of the {} you made yourself. Fix what you agree with ({}), or tell the user why not. {fix_rule} There are no review rounds.\n{}",
                     clipped(text),
+                    if local { "changes" } else { "commits" },
+                    if local {
+                        "a fix of your own"
+                    } else {
+                        "a tiny fix of your own, or delegate one"
+                    },
                     record_line(&review.items)
                 )
             }
@@ -1683,12 +1700,22 @@ impl SessionManager {
                 )
             }
             (ReviewKind::Code, ReviewState::Findings { count }, Some(text)) => format!(
-                "[review {of} · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of what landed{}. Fix what you agree with (delegate a fix, or a tiny fix of your own), or tell the user why not. A fix commit of yours names what it fixes, `--trailer \"{FIXES_TRAILER}: <their ids>\"`: it gets no review of its own, and a held merge still covers it. There are no review rounds.\n{}",
+                "[review {of} · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of what landed{}. Fix what you agree with ({}), or tell the user why not. {fix_rule}{} There are no review rounds.\n{}",
                 clipped(text),
                 if unlanded {
                     " (its worker reported before it ended: land the work as usual, and its fixes come after)"
                 } else {
                     ""
+                },
+                if local {
+                    "a fix of your own"
+                } else {
+                    "delegate a fix, or a tiny fix of your own"
+                },
+                if local {
+                    ""
+                } else {
+                    " A held merge still covers it."
                 },
                 record_line(&review.items)
             ),

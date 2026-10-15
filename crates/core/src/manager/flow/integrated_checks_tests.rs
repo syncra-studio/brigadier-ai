@@ -1210,6 +1210,113 @@ async fn a_local_checkouts_uncommitted_change_is_reviewed_and_checked_from_a_sna
     flow.stop().await;
 }
 
+/// Issue #33: on the user's own checkout a review's fix is a change like any other (UI audit
+/// M6). The findings say to leave the fix uncommitted, the thread does, nothing is committed on
+/// the user's branch, and the fix, however big, gets no review of its own.
+#[tokio::test]
+async fn a_review_fix_on_the_local_checkout_stays_uncommitted() {
+    let told: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = told.clone();
+    let mut flow = Flow::start(
+        "integrated-local-fix",
+        Options {
+            reviews: Some(script(|_| async {
+                Reply::text("- [P2] a.txt has no title — a.txt:1\n  Add one.")
+            })),
+            ..options()
+        },
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                let workspace = turn.add_dirs.first().cloned();
+                if turn.input.contains("Change three files.") {
+                    let workspace = workspace.unwrap();
+                    for file in ["a.txt", "b.txt", "c.txt"] {
+                        std::fs::write(workspace.join(file), format!("{file}\n")).unwrap();
+                    }
+                    let check = turn.call("run_check", json!({"command": "true"})).await;
+                    assert!(check.text.contains("[review running]"), "{}", check.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[review of your changes") || turn.input.contains("found 1")
+                {
+                    seen.lock().unwrap().push(turn.input.clone());
+                    let workspace = workspace.unwrap();
+                    let title: String = (1..=40).map(|n| format!("# Title {n}\n")).collect();
+                    std::fs::write(workspace.join("a.txt"), format!("{title}a.txt\n")).unwrap();
+                    let check = turn.call("run_check", json!({"command": "true"})).await;
+                    assert!(!check.text.contains("[review running]"), "{}", check.text);
+                    return Reply::text("Fixed R1.1. Changed 1 file, not committed.");
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id;
+    flow.conversation = flow
+        .manager
+        .create_conversation(
+            crate::model::ConversationKind::Session,
+            project,
+            Some("Local".into()),
+            Some(crate::model::SetupRequest::Session {
+                repo: flow.repo.display().to_string(),
+                environment: crate::model::EnvironmentRequest::LocalCheckout {
+                    branch: "main".into(),
+                    create_from: None,
+                },
+                permission: crate::model::PermissionLevel::FullAccess,
+                orchestrator: crate::model::ModelChoice {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    model: Some("claude-opus-5-5".into()),
+                    effort: None,
+                    fast: None,
+                    account: None,
+                },
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+    let start = git(&flow.repo, &["rev-parse", "HEAD"]);
+    flow.say("Change three files.").await;
+    flow.until("the answer", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.state == crate::work::RequestState::Done)
+    })
+    .await;
+    let board = flow.settled().await;
+    let told = told.lock().unwrap().clone();
+    assert_eq!(told.len(), 1, "{told:#?}");
+    assert!(
+        told[0].contains(
+            "This is the user's own checkout: make the fix yourself and leave it uncommitted"
+        ),
+        "{}",
+        told[0]
+    );
+    assert!(!told[0].contains("Brigadier-Fixes"), "{}", told[0]);
+    assert!(!told[0].contains("delegate"), "{}", told[0]);
+    // Nothing was committed on the user's branch; the fix is in their files.
+    assert_eq!(git(&flow.repo, &["rev-parse", "HEAD"]), start);
+    assert!(
+        std::fs::read_to_string(flow.repo.join("a.txt"))
+            .unwrap()
+            .starts_with("# Title 1\n")
+    );
+    // One review: the fix got none of its own.
+    assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
+    flow.stop().await;
+}
+
 /// The user's checkout already held a change of theirs when the request started, and the
 /// thread's work removes it: the review reads exactly the request's change, from the start's
 /// snapshot to the end's, whose commit goes on the start's (two snapshots are siblings on

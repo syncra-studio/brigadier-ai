@@ -321,6 +321,15 @@ impl SessionManager {
         repo: &Path,
         mut range: UnreviewedRange,
     ) {
+        if range.base != range.tip
+            && range.local
+            && range.risky.is_none()
+            && self.fixes_findings(id, repo, &range).await
+        {
+            // The local checkout's fix of the last review's findings, left uncommitted: no
+            // review of its own (no review rounds), and the range goes on after it.
+            range.base = range.tip.clone();
+        }
         if range.base != range.tip && self.reviews_on() {
             let due = range.risky.is_some()
                 || self
@@ -348,6 +357,33 @@ impl SessionManager {
             }
         }
         self.store_unreviewed(id, Some(range)).await;
+    }
+
+    /// Whether the local checkout's `range` starts where the request's last review of its own
+    /// changes ended with findings: what changed since is their fix, as a fix commit names its
+    /// findings in a worktree.
+    async fn fixes_findings(
+        &self,
+        id: &ConversationId,
+        repo: &Path,
+        range: &UnreviewedRange,
+    ) -> bool {
+        let Some(last) = self.core.board(id).await.ok().and_then(|board| {
+            board
+                .reviews
+                .values()
+                .filter(|review| {
+                    review.kind == ReviewKind::Code
+                        && review.task_id.is_none()
+                        && review.request_id.as_deref() == Some(range.request_id.as_str())
+                })
+                .max_by_key(|review| (review.started_at_ms, review.number))
+                .cloned()
+        }) else {
+            return false;
+        };
+        matches!(last.state, ReviewState::Findings { .. })
+            && self.same_files(repo, &last.tip, &range.base).await
     }
 
     /// A turn of `request` starts on a local checkout: the request's start is recorded as a
