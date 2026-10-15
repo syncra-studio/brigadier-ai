@@ -102,9 +102,12 @@ test("T1's unfolded turn: one row per run of work, and no thought rows", () => {
 });
 
 test("the live line says the newest heading, else the last whole line, never half a line", () => {
+  // The last whole line, a lone bold heading by its words.
   assert.equal(thinkingLabel("**Checking the tests**\n\nI should run them first."), "Checking the tests");
+  assert.equal(thinkingLabel("**Checking the tests**\n\nI should run them first.\n"), "I should run them first.");
   const streamed = "**Reading the code**\n\nSome text.\n\n**Planning the fix**\n\nMore.";
   assert.equal(thinkingLabel(streamed), "Planning the fix");
+  assert.equal(thinkingLabel(streamed, true), "More.");
   // No heading: the last line a newline closed, markdown left out.
   assert.equal(thinkingLabel("Reading `blocks.ts` and the *fold* code.\nThen the te"), "Reading blocks.ts and the fold code.");
   // A line still streaming is never shown: "Thinking" says it meanwhile.

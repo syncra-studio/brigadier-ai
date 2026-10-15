@@ -48,17 +48,18 @@ export function groupActivity<S, E>(entries: readonly E[], sort: (entry: E) => S
 const HEADING = /^\s*\*\*(.+?)\*\*\s*$/;
 
 /**
- * What the thread thinks about now, for its live line: the newest heading of its thinking, else
- * its last whole line, without markdown; "" when no line is whole yet, and the line says
- * "Thinking". A line still streaming is never shown, so the label never reads half a sentence.
+ * What the thread thinks about now, for its live line: the last whole line of its thinking (a
+ * lone bold heading gives its words), without markdown; "" when no line is whole yet, and the
+ * line says "Thinking". A line still streaming is never shown, so the label never reads half a
+ * sentence.
  */
 export function thinkingLabel(text: string, complete = false): string {
   const lines = text.split("\n");
   // The last line is whole once a newline follows it, or the thought is complete.
-  const whole = (complete ? lines : lines.slice(0, -1)).filter((line) => line.trim());
-  const heading = whole.flatMap((line) => HEADING.exec(line)?.[1]?.trim() || []).at(-1);
+  const last = (complete ? lines : lines.slice(0, -1)).filter((line) => line.trim()).at(-1) ?? "";
+  const heading = HEADING.exec(last)?.[1]?.trim();
   if (heading) return heading;
-  return (whole.at(-1) ?? "").replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim();
+  return last.replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim();
 }
 
 /** Whether the lead's step is work it did itself (a group's step), rather than news of its team. */

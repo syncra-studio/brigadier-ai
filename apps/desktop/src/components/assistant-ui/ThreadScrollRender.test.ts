@@ -59,11 +59,10 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(firstOpen.button.shown, false);
   assert.equal(firstOpen.button.tabbable, false);
   near(firstOpen.topFade, 20, "fade under the top bar");
-  // Solid over the composer and the scroll button's 64px strip, then a 20px fade: the solid
-  // reaches 8px above the button, so no fading line meets it, and the last row, 84px above the
-  // composer, stays clear of the fade.
-  near(firstOpen.bottomFade, 84, "fade above the composer");
-  near(firstOpen.buttonOnSolid, 8, "the scroll button's top, below the solid background's top by");
+  // Solid over the composer, then a 20px fade; the scroll button floats over the text above it,
+  // with no strip of its own, and the last row, 84px above the composer, stays clear of the fade.
+  near(firstOpen.bottomFade, 20, "fade above the composer");
+  assert.ok(firstOpen.buttonOnSolid < 0, `the scroll button floats above the solid background (${firstOpen.buttonOnSolid})`);
 
   // The button: hidden while the last row reaches at most 8px under the composer's top (the
   // 84px gap above the composer is in view), shown past it; a 32px circle 24px above the

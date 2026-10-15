@@ -46,10 +46,10 @@
       background-position: 250% 0;
     }
   }
-  /* A thread's group or row opening (THREAD-UX-PLAN.md §3.8). */
-  --animate-collapsible-down: collapsible-down 160ms ease-out;
+  /* A thread's group or row opening and closing: height and opacity over 300ms, fast out. */
+  --animate-collapsible-down: collapsible-down 300ms cubic-bezier(0.19, 1, 0.22, 1);
   --animate-shimmer: shimmer 4s 600ms infinite;
-  --animate-collapsible-up: collapsible-up 160ms ease-out;
+  --animate-collapsible-up: collapsible-up 300ms cubic-bezier(0.19, 1, 0.22, 1);
   /* A rail card opens from nothing to its height. */
   @keyframes rail-open {
     from {
@@ -122,10 +122,10 @@
   height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-composer-gap));
 }
 
-/* Behind the floating footer and the scroll button's strip above it the background is solid,
-   then fades out above that: text never shows under the button. */
+/* Behind the floating footer the background is solid, then fades out above it; the scroll
+   button floats over the text above. */
 @utility thread-bottom-fade {
-  height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-scroll-strip) + var(--spacing-thread-fade-bottom));
+  height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-fade-bottom));
   background-image: linear-gradient(
     to top,
     var(--color-background) 0%,
@@ -443,16 +443,13 @@
   }
 }
 
-/* A streaming reply's words fade in as they show (see word-fade.ts); rules, table rows and
-   quotes fade in quicker, list markers with their words. */
+/* A streaming reply's words fade in as they show (see word-fade.ts); rules, table rows, quotes,
+   list items and images fade in the same way, as units, list markers with their words. */
 @layer components {
   .aui-fade,
   .aui-fade-block {
     opacity: 0;
     animation: word-fade-in 700ms cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;
-  }
-  .aui-fade-block {
-    animation-duration: 150ms;
   }
   .aui-fade-marker::marker {
     animation: marker-fade-in 700ms cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;

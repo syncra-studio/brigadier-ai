@@ -418,9 +418,9 @@ const steps = {
       buttonOnSolid: round($(".aui-thread-scroll-to-bottom")!.getBoundingClientRect().top - ($(".thread-bottom-fade")!.getBoundingClientRect().top + 20)),
     };
   },
-  /** The button's threshold and place: the last row 8px, then 9px, under the composer's top. */
+  /** The button's threshold and place: the last row 7px (within the 8px allowed, clear of sub-pixel rounding), then 9px, under the composer's top. */
   async button() {
-    await userScroll(max() - 84 - 8);
+    await userScroll(max() - 84 - 7);
     await settle(250);
     const at8 = buttonState();
     await userScroll(max() - 84 - 9);

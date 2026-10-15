@@ -3,8 +3,8 @@
  * A rehype pass wraps every word of the text in a span. A span's key is its place among its
  * siblings, so a word keeps its element (and its fade) while it grows and more words arrive
  * after it. A word shown for longer than the fade loses the class, so an element made again
- * for it doesn't replay the fade. Inline code fades in as a unit; rules, table rows and quotes
- * fade in quicker; list markers fade with their words.
+ * for it doesn't replay the fade. Inline code, rules, table rows, quotes, list items and images
+ * fade in as units, as slowly as a word; list markers fade with their words.
  */
 
 type HastNode = {
@@ -26,6 +26,7 @@ const UNITS: Record<string, string[]> = {
   tr: ["aui-fade-block"],
   blockquote: ["aui-fade-block"],
   li: ["aui-fade-block", "aui-fade-marker"],
+  img: ["aui-fade-block"],
 };
 
 const ASCII = /^\p{ASCII}*$/u;

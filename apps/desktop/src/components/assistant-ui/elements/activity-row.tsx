@@ -29,14 +29,14 @@ export const ROW_TOGGLE = "group hover:text-foreground focus-visible:text-foregr
 export const ROW_DETAIL = "text-foreground/60 flex max-h-action-list min-w-0 flex-col gap-1 overflow-y-auto ps-5.5 pt-1 pb-1 text-sm";
 
 /**
- * The chevron of a row that opens: always shown, quieter than the words, 4px after them and
- * centred on their line; white with the words on hover, turned down while open.
+ * The chevron of a row that opens: hidden until the row is hovered or focused, 4px after the
+ * words and centred on their line, white with them; turned down and kept while open.
  */
 export const CHEVRON =
-  "text-row-chevron size-chevron -ms-0.5 shrink-0 transition-[rotate,color] duration-300 ease-standard group-hover:text-foreground group-focus-visible:text-foreground group-data-[state=open]:rotate-90 motion-reduce:transition-none";
+  "size-chevron -ms-0.5 shrink-0 opacity-0 transition-[rotate,color,opacity] duration-300 ease-standard group-hover:text-foreground group-hover:opacity-100 group-focus-visible:text-foreground group-focus-visible:opacity-100 group-data-[state=open]:rotate-90 group-data-[state=open]:opacity-100 motion-reduce:transition-none";
 
 /**
- * How a row's or group's detail opens and closes: its height and opacity over 160 ms, at once
+ * How a row's or group's detail opens and closes: its height and opacity over 300 ms, fast out, at once
  * with reduced motion. On the collapsible's content; the detail's own layout goes inside it.
  */
 export const OPENS =

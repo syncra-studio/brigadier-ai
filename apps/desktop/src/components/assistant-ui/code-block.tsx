@@ -146,7 +146,7 @@ const CopyButton: FC<{ text: string; tooltip?: string }> = ({ text, tooltip = "C
 const Card: FC<{ header: ReactNode; children: ReactNode }> = ({ header, children }) => (
   <div
     data-slot="code-block"
-    className="border-border bg-code-surface my-3 overflow-hidden rounded-xl border first:mt-0 last:mb-0"
+    className="border-border bg-code-surface my-3 overflow-hidden rounded-2xl border first:mt-0 last:mb-0"
   >
     <div className="text-muted-foreground flex h-control-md items-center gap-1.5 ps-3 pe-1.5 text-xs">
       {header}
@@ -224,7 +224,7 @@ const Diagram: FC<{ code: string }> = ({ code }) => {
       {markup ? (
         <div className="overflow-x-auto py-2">{drawn}</div>
       ) : (
-        <pre className="text-code bg-code-surface border-border overflow-x-auto rounded-xl border p-3 font-mono text-sm">
+        <pre className="text-code bg-code-surface border-border overflow-x-auto rounded-2xl border p-3 font-mono text-sm">
           {code}
         </pre>
       )}

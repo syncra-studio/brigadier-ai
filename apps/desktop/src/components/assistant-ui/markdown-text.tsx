@@ -156,7 +156,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced 
       // block folding): revealed from nothing, it would shrink the thread for a moment and
       // pull it off the newest message. The end of a stream shows the rest at once.
       smooth={streaming === true && paced && STREAM_PACE}
-      className="aui-md"
+      className="aui-md font-prose"
       urlTransform={keepLinks}
       components={markdownComponents}
       defer
