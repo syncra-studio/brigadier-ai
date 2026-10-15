@@ -236,6 +236,9 @@ pub struct SessionManager {
     /// the target.
     #[cfg(test)]
     pub(crate) landing_rewritten: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Tests: how long quiet envelopes wait for others, instead of `QUIET_WINDOW`.
+    #[cfg(test)]
+    pub(crate) quiet_window: std::sync::Mutex<Option<std::time::Duration>>,
     /// Background model turns, for maintenance's idle check.
     activity: Arc<quiet::Activity>,
 }
@@ -332,6 +335,8 @@ impl SessionManager {
             peer_fault: std::sync::Mutex::new(None),
             #[cfg(test)]
             landing_rewritten: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            quiet_window: std::sync::Mutex::new(None),
             activity: Arc::default(),
         });
         manager.install_worktree_remover();

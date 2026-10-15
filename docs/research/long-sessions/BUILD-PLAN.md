@@ -635,6 +635,10 @@ Target: 3–5k fewer tokens per thread call.
 - Envelopes that need nothing now (a landing done, checks passed, a clean review, a status) wait a short window. They
   go together in one turn (`take_one_request`, `M/conversation.rs:6215`) when the window ends, or earlier if something
   urgent arrives: a question, a failure, a report or a user message. Nothing is dropped.
+- **As built:** the window is 15 s, and it runs only while more of the envelope's request still runs (a task that
+  works, or one whose envelope is on its way). With nothing else running, the news is what the answer waits for, so
+  it wakes the thread at once and adds no wait to the answer. The quiet ones are a landing done, checks passed, a
+  clean review of the thread's own changes and a status due (`Envelope::quiet`).
 - **Done when:** V1 shows fewer thread turns per request at equal quality, and a flow test shows a question still
   wakes the thread at once.
 

@@ -1014,6 +1014,7 @@ impl SessionManager {
         // Queue the whole batch before settling or starting a turn, so delivering the
         // first result cannot settle the other requests before their messages are queued.
         let mut queued = None;
+        let mut wait = false;
         let count = requests.len();
         for (index, request) in requests.into_iter().enumerate() {
             // A live look is work for the thread once, on the newest waiting request.
@@ -1036,11 +1037,23 @@ impl SessionManager {
                 Some(request) => Some(request),
                 None => self.request_for(id, envelope.task_id.as_ref()).await,
             };
+            // A pass waits a little while more of its request runs (BUILD-PLAN C3).
+            if let Some(request) = &request
+                && envelope.quiet()
+                && self
+                    .more_coming(id, request, envelope.task_id.as_ref())
+                    .await
+            {
+                wait = true;
+            }
             if let Some(conv) = self.queue_envelope(id, envelope, request).await {
                 queued = Some(conv);
             }
         }
         if let Some(conv) = queued {
+            if wait {
+                self.wait_quietly(&conv).await;
+            }
             self.settle_requests(id).await;
             self.kick(&conv);
         }

@@ -1850,6 +1850,8 @@ mod plan_tests;
 mod preview_tests;
 #[cfg(test)]
 #[cfg(test)]
+mod quiet_wake_tests;
+#[cfg(test)]
 mod reads_tests;
 #[cfg(test)]
 mod resume_tests;

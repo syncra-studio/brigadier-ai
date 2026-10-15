@@ -416,21 +416,7 @@ impl SessionManager {
                 Ok(conv) => self.announced(&conv, request).await,
                 Err(_) => HashSet::new(),
             };
-            let mut running: Vec<_> = board
-                .tasks
-                .values()
-                .filter(|task| {
-                    announced.contains(&task.id)
-                        || (task.request_id.as_deref() == Some(request)
-                            && !task.state.is_final()
-                            && (task.state != TaskState::Reported || relanding_pending(task)))
-                })
-                .collect();
-            running.sort_by_key(|task| task.number);
-            // A change held back from landing runs no more: it waits for what holds it.
-            let (held, running): (Vec<_>, Vec<_>) = running.into_iter().partition(|task| {
-                task.state == TaskState::ReadyToLand && !announced.contains(&task.id)
-            });
+            let (running, held) = still_running(&board, request, &announced);
             let undecided = self.undecided(&board, request).await;
             last.push_str("\n\n");
             if running.is_empty() {
@@ -500,6 +486,31 @@ impl SessionManager {
         undecided.sort_by_key(|task| task.number);
         undecided
     }
+}
+
+/// The request's tasks that still run, by number, and its changes held back from landing:
+/// `announced` tasks count as running while their envelope is on its way.
+pub(super) fn still_running<'a>(
+    board: &'a Board,
+    request: &str,
+    announced: &HashSet<TaskId>,
+) -> (Vec<&'a Task>, Vec<&'a Task>) {
+    let mut running: Vec<_> = board
+        .tasks
+        .values()
+        .filter(|task| {
+            announced.contains(&task.id)
+                || (task.request_id.as_deref() == Some(request)
+                    && !task.state.is_final()
+                    && (task.state != TaskState::Reported || relanding_pending(task)))
+        })
+        .collect();
+    running.sort_by_key(|task| task.number);
+    // A change held back from landing runs no more: it waits for what holds it.
+    let (held, running) = running
+        .into_iter()
+        .partition(|task| task.state == TaskState::ReadyToLand && !announced.contains(&task.id));
+    (running, held)
 }
 
 /// The request's changes held back from landing (`ReadyToLand`): not running, and not landed.

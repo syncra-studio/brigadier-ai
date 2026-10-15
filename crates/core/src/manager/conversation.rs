@@ -69,6 +69,11 @@ const DELTA_WINDOW: Duration = Duration::from_millis(30);
 /// a thread inside a long command can't judge it, and the user shouldn't watch it decide.
 pub(crate) const DECIDING_WAIT: Duration = Duration::from_secs(if cfg!(test) { 3 } else { 20 });
 
+/// How long an envelope that needs nothing now (a landing done, checks passed, a clean review,
+/// a status) waits for others while more of its request still runs, so they wake the thread
+/// once (BUILD-PLAN C3). Anything else ends the wait at once.
+pub(crate) const QUIET_WINDOW: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 15 });
+
 /// Characters of a CLI job's output its message to the thread carries (the end of it).
 const JOB_OUTPUT_TAIL: usize = 4000;
 
@@ -163,6 +168,16 @@ impl Envelope {
     /// it (BUILD-PLAN B2): an answer given meanwhile makes it moot.
     fn optional_clean_review(&self) -> bool {
         self.kind == InjectionKind::Report && self.label == CLEAN_REVIEW
+    }
+
+    /// Whether it needs nothing from the thread now, so it may wait a little for others to
+    /// wake it once with (BUILD-PLAN C3): a landing done, checks passed, a clean review of its
+    /// own changes, or a status due.
+    pub(crate) fn quiet(&self) -> bool {
+        self.optional_check_pass()
+            || self.optional_clean_review()
+            || (self.kind == InjectionKind::Decision && self.label.starts_with("landed task-"))
+            || (self.kind == InjectionKind::Reminder && self.label == "status")
     }
 
     /// The message of another session's it carries.
@@ -279,6 +294,9 @@ struct ConvState {
     /// put together (a landing's cleanup runs first), each with its request: until the
     /// envelope is in the inbox, the request works and a turn counts the task as running.
     announcing: HashMap<TaskId, Option<String>>,
+    /// Until when the inbox's quiet envelopes wait for more ([`QUIET_WINDOW`]): none while
+    /// nothing waits.
+    quiet_until: Option<tokio::time::Instant>,
     /// Cards the user answered whose answer is not in the inbox yet, each with its request:
     /// the same for an answer, which is recorded before it is delivered.
     answering: HashMap<CardId, Option<String>>,
@@ -2243,12 +2261,78 @@ impl SessionManager {
         envelope: Envelope,
         request: Option<String>,
     ) {
+        // A quiet envelope waits a little while more of its request runs (BUILD-PLAN C3).
+        let wait = envelope.quiet()
+            && match &request {
+                Some(request) => {
+                    self.more_coming(id, request, envelope.task_id.as_ref())
+                        .await
+                }
+                None => false,
+            };
         let Some(conv) = self.queue_envelope(id, envelope, request).await else {
             return;
         };
+        if wait {
+            self.wait_quietly(&conv).await;
+        }
         // The request works again until the orchestrator has read it.
         self.settle_requests(id).await;
         self.kick(&conv);
+    }
+
+    /// Whether more of `request` still runs, besides `except`: a task of it that works, or
+    /// one whose envelope is being put together.
+    pub(super) async fn more_coming(
+        &self,
+        id: &ConversationId,
+        request: &str,
+        except: Option<&TaskId>,
+    ) -> bool {
+        let Ok(board) = self.core.board(id).await else {
+            return false;
+        };
+        let announcing: HashSet<TaskId> = match self.conv(id) {
+            Ok(conv) => conv
+                .state
+                .lock()
+                .await
+                .announcing
+                .iter()
+                .filter(|(_, of)| of.as_deref() == Some(request))
+                .map(|(task, _)| task.clone())
+                .collect(),
+            Err(_) => HashSet::new(),
+        };
+        !super::requests::still_running(&board, request, &announcing)
+            .0
+            .iter()
+            .all(|task| Some(&task.id) == except)
+    }
+
+    /// Starts the quiet window if none runs, and the turn that ends it.
+    pub(super) async fn wait_quietly(&self, conv: &Arc<ConvLive>) {
+        let mut state = conv.state.lock().await;
+        if state.quiet_until.is_some() {
+            return;
+        }
+        let window = self.quiet_window();
+        state.quiet_until = Some(tokio::time::Instant::now() + window);
+        drop(state);
+        let manager = self.arc();
+        let conv = conv.clone();
+        self.spawn(async move {
+            tokio::time::sleep(window).await;
+            manager.kick(&conv);
+        });
+    }
+
+    fn quiet_window(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(window) = *self.quiet_window.lock().unwrap() {
+            return window;
+        }
+        QUIET_WINDOW
     }
 
     /// Puts an envelope in the inbox without starting a turn (see [`Self::deliver_for`]): the
@@ -2457,6 +2541,9 @@ impl SessionManager {
                 std::mem::take(&mut state.notes)
             };
             let envelopes = if users.is_empty() {
+                if waits_quietly(&mut state) {
+                    return;
+                }
                 take_one_request(&mut state.inbox)
             } else {
                 Vec::new()
@@ -6523,6 +6610,22 @@ fn ends_on_question(text: &str) -> bool {
     {
         return ends_on_question(&text[..open]);
     }
+    false
+}
+
+/// Whether the inbox waits for its quiet window to end: only quiet envelopes wait, and the
+/// window still runs. Anything else, or the window's end, ends it.
+fn waits_quietly(state: &mut ConvState) -> bool {
+    let Some(until) = state.quiet_until else {
+        return false;
+    };
+    if tokio::time::Instant::now() < until
+        && !state.inbox.is_empty()
+        && state.inbox.iter().all(|(envelope, _)| envelope.quiet())
+    {
+        return true;
+    }
+    state.quiet_until = None;
     false
 }
 
