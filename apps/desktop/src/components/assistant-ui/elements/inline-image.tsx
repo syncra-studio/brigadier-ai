@@ -6,11 +6,11 @@ import {
   type AttachmentReader,
   AttachmentReaderContext,
   type AttachmentSource,
-  ImagePreview,
   inlineNumberOf,
   TileRemove,
   useAttachmentUrl,
 } from "@/components/assistant-ui/elements/attachment-tile";
+import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import type { AttachmentRef } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 

@@ -18,6 +18,8 @@
  *   mention left as written.
  * - A turn that throws while rendering: "This turn couldn't render" with Try again, its
  *   neighbour unharmed; Try again renders it afresh.
+ * - The image viewer: a set of three opened from its first, stepped with →, closed by a click
+ *   on the backdrop.
  * - An answer's inline code: a file of the checkout is a chip (from the file list, or asked by
  *   its exact path when the list is cut short), anything else stays code.
  */
@@ -33,6 +35,7 @@ import { stepWords } from "@/app/conversation/activity/words";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
+import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, OrchestratorStep, Request } from "@/ipc/generated";
@@ -76,6 +79,9 @@ const command = (line: string, status: Described["status"], more: Partial<Descri
   status,
   ...more,
 });
+
+/** Three small images, drawn in the palette's colours. */
+const PIXELS = ["red", "green", "blue"].map((name) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" fill="${name}"/></svg>`)}`);
 
 /** A turn that fails to render until `broken` is cleared. */
 let broken = true;
@@ -163,6 +169,13 @@ function Page() {
           </TurnBoundary>
           <p data-slot="neighbour">The next turn</p>
         </Case>
+        <Case id="viewer">
+          <ImagePreview url={PIXELS[0]!} name="one.png" gallery={{ images: PIXELS.map((url, index) => ({ url, name: `image-${index + 1}.png` })), index: 0 }}>
+            <button type="button" data-slot="viewer-thumb" aria-label="View image-1.png">
+              <img src={PIXELS[0]} alt="" className="size-icon-lg" />
+            </button>
+          </ImagePreview>
+        </Case>
         <Case id="chips">
           <MarkdownBlock text={answer} />
         </Case>
@@ -241,6 +254,18 @@ async function measure(): Promise<object> {
   all<HTMLButtonElement>("button", boundary).find((button) => text(button) === "Try again")?.click();
   await wait(100);
   out.mended = text(one("[data-slot=mended]", boundary));
+  // The viewer: opened from its thumbnail (morphing where the browser can), stepped, closed from the backdrop.
+  one<HTMLElement>("[data-slot=viewer-thumb]")?.click();
+  for (const end = performance.now() + 3000; performance.now() < end && !one("[data-slot=image-preview] img"); ) await frame();
+  await wait(400);
+  const viewer = () => one("[data-slot=image-preview]");
+  const first = { open: !!viewer(), count: text(one("[data-slot=image-preview-count]")), alt: one("[data-slot=image-preview] img")?.getAttribute("alt") ?? null };
+  viewer()?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  await wait(100);
+  const second = { count: text(one("[data-slot=image-preview-count]")), alt: one("[data-slot=image-preview] img")?.getAttribute("alt") ?? null };
+  one<HTMLElement>("[data-slot=image-preview-frame]")?.click();
+  for (const end = performance.now() + 3000; performance.now() < end && viewer(); ) await frame();
+  out.viewer = { first, second, closed: !viewer() };
   const user = at("user");
   out.user = {
     strong: all("strong", user).map((node) => text(node)),

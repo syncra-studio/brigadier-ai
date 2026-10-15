@@ -652,3 +652,14 @@ html[data-page-beneath] body {
 html[data-page-beneath] #root {
   @apply bg-background;
 }
+
+/* The image viewer's morph: the thumbnail grows into the shown image over 0.2s (and back), while
+   the rest of the window cross-fades. */
+::view-transition-group(image-viewer-image) {
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 150ms;
+}

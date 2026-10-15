@@ -23,6 +23,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     chips: [string, string][];
     code: string[];
     asked: string[];
+    viewer: { first: { open: boolean; count: string | null; alt: string | null }; second: { count: string | null; alt: string | null }; closed: boolean };
     boundary: { fallback: boolean; neighbour: string | null };
     mended: string | null;
     user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string };
@@ -71,6 +72,12 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.deepEqual(seen.chips, [["src/cli.ts (line 64)", "/repo/src/cli.ts:64"], ["src/made-later.ts", "/repo/src/made-later.ts"]]);
   assert.deepEqual(seen.code, ["Math.round", "src/gone.ts"]);
   assert.deepEqual(seen.asked, ["/repo/src/gone.ts", "/repo/src/made-later.ts"]);
+  // The image viewer steps through its set and closes from the backdrop.
+  assert.deepEqual(seen.viewer, {
+    first: { open: true, count: "1 of 3", alt: "image-1.png" },
+    second: { count: "2 of 3", alt: "image-2.png" },
+    closed: true,
+  });
   // A turn that fails to render says so in its place, the rest stays; Try again renders it afresh.
   assert.deepEqual(seen.boundary, { fallback: true, neighbour: "The next turn" });
   assert.equal(seen.mended, "Rendered again");

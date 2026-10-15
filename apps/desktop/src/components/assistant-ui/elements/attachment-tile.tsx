@@ -1,40 +1,28 @@
 import {
   FileDocument,
   FileImage,
-  Minus,
   Paperclip,
-  Plus,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   type ComponentPropsWithRef,
-  createContext,
-  type KeyboardEvent,
   type ReactNode,
   useContext,
   useEffect,
-  useRef,
   useState,
 } from "react";
 
-import type { AttachmentRef } from "@/ipc/generated";
+import {
+  type AttachmentReader,
+  AttachmentReaderContext,
+  type AttachmentSource,
+  useAttachmentUrl,
+} from "@/components/assistant-ui/elements/attachment-url";
+import { ImagePreview, type ViewerImage } from "@/components/assistant-ui/elements/image-viewer";
+
+export { type AttachmentReader, AttachmentReaderContext, type AttachmentSource, useAttachmentUrl };
+export { ImagePreview };
 import { cn } from "@/lib/utils";
-
-/**
- * Where attachment bytes come from, provided by the app: the daemon's blob store, and the
- * stored reference behind a composer attachment that has no local file (one pulled back from
- * the queue).
- */
-export type AttachmentReader = {
-  read: (ref: AttachmentRef) => Promise<Blob>;
-  composerRef: (attachmentId: string) => AttachmentRef | undefined;
-};
-
-export const AttachmentReaderContext = createContext<AttachmentReader | null>(null);
-
-/** A tile's bytes: a file not stored yet, or a stored reference. */
-export type AttachmentSource = { file?: File | undefined; ref?: AttachmentRef | undefined };
 
 /** A paste this long becomes a "Pasted text" attachment instead of text. */
 export const PASTE_AS_ATTACHMENT_CHARS = 5000;
@@ -107,50 +95,6 @@ export function AttachmentIcon({ mime, className }: { mime: string; className?: 
   return <Icon aria-hidden className={cn("size-icon-sm shrink-0", className)} />;
 }
 
-/** Object URLs of stored attachments by content hash, least recently used first. */
-const storedUrls = new Map<string, Promise<string>>();
-const STORED_URLS = 32;
-
-function storedUrl(ref: AttachmentRef, read: AttachmentReader["read"]): Promise<string> {
-  const cached = storedUrls.get(ref.id);
-  if (cached) {
-    storedUrls.delete(ref.id);
-    storedUrls.set(ref.id, cached);
-    return cached;
-  }
-  const url = read(ref).then((blob) => URL.createObjectURL(blob));
-  url.catch(() => storedUrls.delete(ref.id));
-  storedUrls.set(ref.id, url);
-  const oldest = storedUrls.keys().next().value;
-  if (storedUrls.size > STORED_URLS && oldest !== undefined) {
-    void storedUrls.get(oldest)?.then(URL.revokeObjectURL, () => undefined);
-    storedUrls.delete(oldest);
-  }
-  return url;
-}
-
-/** An object URL for the attachment's bytes, once there is one. */
-export function useAttachmentUrl({ file, ref }: AttachmentSource): string | null {
-  const reader = useContext(AttachmentReaderContext);
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    // A local file's URL is this tile's own; a stored one is shared through the cache.
-    const local = file ? URL.createObjectURL(file) : null;
-    const next = local ? Promise.resolve(local) : ref && reader ? storedUrl(ref, reader.read) : null;
-    if (!next) return undefined;
-    let live = true;
-    next.then(
-      (loaded) => live && setUrl(loaded),
-      () => live && setUrl(null),
-    );
-    return () => {
-      live = false;
-      if (local) URL.revokeObjectURL(local);
-    };
-  }, [file, ref, reader]);
-  return url;
-}
-
 /** The attachment's text (a pasted text), read once. */
 export function useAttachmentText({ file, ref }: AttachmentSource): string | null {
   const reader = useContext(AttachmentReaderContext);
@@ -216,6 +160,7 @@ export function ImageTile({
   name,
   busy = false,
   sent = false,
+  gallery,
   children,
 }: {
   source: AttachmentSource;
@@ -224,12 +169,14 @@ export function ImageTile({
   busy?: boolean;
   /** In a sent message: a smaller tile above the bubble. */
   sent?: boolean;
+  /** The images it is shown among, to step between in the viewer. */
+  gallery?: { images: readonly ViewerImage[]; index: number } | undefined;
   children?: ReactNode;
 }) {
   const url = useAttachmentUrl(source);
   return (
     <div data-slot="attachment-image" className={cn("group/tile relative shrink-0", sent ? "size-attachment-sent" : "size-attachment-thumb")}>
-      <ImagePreview url={url} name={name}>
+      <ImagePreview url={url} name={name} gallery={gallery}>
         <button
           type="button"
           aria-label={`Preview ${name}`}
@@ -297,121 +244,3 @@ export function FileTile({
   );
 }
 
-const ZOOM_STEP = 1.25;
-const ZOOM_MIN = 0.1;
-const ZOOM_MAX = 8;
-
-/**
- * The "Image preview": the image over the dimmed window, fitted to it, with a close
- * button at the top right and a "− 100% +" zoom pill at the bottom (+, − and 0 zoom too).
- */
-export function ImagePreview({
-  url,
-  name,
-  children,
-}: {
-  url: string | null;
-  name: string;
-  children: ReactNode;
-}) {
-  const frame = useRef<HTMLDivElement>(null);
-  const [natural, setNatural] = useState<{ width: number; height: number; fit: number } | null>(
-    null,
-  );
-  // Shown size over the natural size; null until the image is measured (then it fits).
-  const [scale, setScale] = useState<number | null>(null);
-  const current = scale ?? natural?.fit ?? 1;
-  const zoom = (factor: number) =>
-    setScale(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, current * factor)));
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "+" || event.key === "=") zoom(ZOOM_STEP);
-    else if (event.key === "-") zoom(1 / ZOOM_STEP);
-    else if (event.key === "0") setScale(null);
-    else return;
-    event.preventDefault();
-  };
-  return (
-    <DialogPrimitive.Root onOpenChange={(open) => open && setScale(null)}>
-      <DialogPrimitive.Trigger asChild>{children}</DialogPrimitive.Trigger>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="bg-background/85 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 fixed inset-0 z-50 duration-150" />
-        <DialogPrimitive.Content
-          aria-describedby={undefined}
-          onKeyDown={onKeyDown}
-          data-slot="image-preview"
-          className="data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 fixed inset-0 z-50 flex flex-col outline-none duration-150"
-        >
-          <DialogPrimitive.Title className="sr-only">{name}</DialogPrimitive.Title>
-          <DialogPrimitive.Close
-            aria-label="Close"
-            title="Close"
-            className="bg-secondary hover:bg-accent size-icon-button-lg rounded-capsule absolute end-4 top-4 z-10 flex items-center justify-center"
-          >
-            <X aria-hidden className="size-icon-md" />
-          </DialogPrimitive.Close>
-          <div ref={frame} className="flex min-h-0 flex-1 overflow-auto p-16">
-            {url && (
-              <img
-                src={url}
-                alt={name}
-                draggable={false}
-                onLoad={(event) => {
-                  const image = event.currentTarget;
-                  const box = frame.current;
-                  const room = box
-                    ? Math.min(
-                        (box.clientWidth - 2 * parseFloat(getComputedStyle(box).paddingLeft)) /
-                          image.naturalWidth,
-                        (box.clientHeight - 2 * parseFloat(getComputedStyle(box).paddingTop)) /
-                          image.naturalHeight,
-                      )
-                    : 1;
-                  setNatural({
-                    width: image.naturalWidth,
-                    height: image.naturalHeight,
-                    fit: Math.min(1, room),
-                  });
-                }}
-                style={
-                  natural
-                    ? { width: natural.width * current, height: natural.height * current }
-                    : undefined
-                }
-                className={cn(
-                  "m-auto max-w-none shrink-0 rounded-lg object-contain",
-                  !natural && "invisible",
-                )}
-              />
-            )}
-          </div>
-          <div className="bg-popover ring-border rounded-capsule absolute bottom-6 start-1/2 flex -translate-x-1/2 items-center gap-1 p-1 ring-1 rtl:translate-x-1/2">
-            <button
-              type="button"
-              aria-label="Zoom out"
-              title="Zoom out"
-              disabled={current <= ZOOM_MIN}
-              onClick={() => zoom(1 / ZOOM_STEP)}
-              className="hover:bg-accent size-icon-button-lg rounded-capsule flex items-center justify-center disabled:opacity-50"
-            >
-              <Minus aria-hidden className="size-icon-md" />
-            </button>
-            <span
-              aria-live="polite"
-              className="min-w-control-lg text-center text-sm tabular-nums"
-            >{`${Math.round(current * 100)}%`}</span>
-            <button
-              type="button"
-              aria-label="Zoom in"
-              title="Zoom in"
-              disabled={current >= ZOOM_MAX}
-              onClick={() => zoom(ZOOM_STEP)}
-              className="hover:bg-accent size-icon-button-lg rounded-capsule flex items-center justify-center disabled:opacity-50"
-            >
-              <Plus aria-hidden className="size-icon-md" />
-            </button>
-          </div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
-  );
-}

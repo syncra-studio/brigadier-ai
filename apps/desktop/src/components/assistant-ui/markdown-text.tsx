@@ -25,6 +25,7 @@ import {
   useLinkConversation,
 } from "@/components/assistant-ui/file-links";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
+import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { codePath, type CodePath, underRoot, useCodePathExists } from "@/components/assistant-ui/code-paths";
 import { createWordFade } from "@/components/assistant-ui/word-fade";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -437,6 +438,15 @@ const defaultComponents = memoizeMarkdownComponents({
       {...props}
     />
   ),
+  // An image in an answer opens in the image viewer.
+  img: ({ src, alt, className }) =>
+    typeof src === "string" && src ? (
+      <ImagePreview url={src} name={alt || "Image"}>
+        <button type="button" aria-label={`View ${alt || "image"}`} className="aui-md-img my-3 block cursor-zoom-in">
+          <img src={src} alt={alt ?? ""} className={cn("max-h-80 max-w-full rounded-lg", className)} />
+        </button>
+      </ImagePreview>
+    ) : null,
   hr: ({ className, ...props }) => (
     <hr
       className={cn("aui-md-hr border-muted-foreground/20 my-3", className)}

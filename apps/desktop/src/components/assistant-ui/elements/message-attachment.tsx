@@ -7,6 +7,7 @@ import {
   PasteShortened,
   pasteTooLong,
 } from "@/components/assistant-ui/elements/attachment-tile";
+import type { ViewerImage } from "@/components/assistant-ui/elements/image-viewer";
 import type { AttachmentRef } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,9 @@ export function MessageAttachments({
 }: Omit<ComponentProps<"ul">, "children"> & { attachments: readonly AttachmentRef[] }) {
   attachments = attachments.filter((ref) => ref.inline == null);
   if (attachments.length === 0) return null;
+  // The message's images, stepped between in the viewer.
+  const images = attachments.filter((ref) => ref.mime.startsWith("image/"));
+  const gallery = images.map((ref): ViewerImage => ({ name: ref.name, source: { ref } }));
   return (
     <ul
       data-slot="message-attachments"
@@ -32,7 +36,12 @@ export function MessageAttachments({
       {attachments.map((attachment) => (
         <li key={attachment.id} className="flex">
           {attachment.mime.startsWith("image/") ? (
-            <ImageTile source={{ ref: attachment }} name={attachment.name} sent />
+            <ImageTile
+              source={{ ref: attachment }}
+              name={attachment.name}
+              sent
+              gallery={images.length > 1 ? { images: gallery, index: images.indexOf(attachment) } : undefined}
+            />
           ) : (
             <FileTile
               name={attachment.name}

@@ -257,6 +257,8 @@
   --spacing-attachment-thumb: 7.625rem;
   /* An image the user sent, above their bubble. */
   --spacing-attachment-sent: 5rem;
+  /* The image viewer's backdrop: near-black in both themes, so the image reads as itself. */
+  --color-image-viewer: oklch(0 0 0 / 90%);
   --spacing-attachment-card: 14rem;
   /* A mockup's tab (SESSION-FIXES-PLAN.md Q10): its header band, a floating control's height,
      a note's marker and the gap from it to the note's box, the box's width and heights
