@@ -1,5 +1,5 @@
 import { useWorkerText, WorkerLine } from "@/app/conversation/WorkerChip";
-import { ThinkingRow } from "@/app/conversation/ThinkingRow";
+import { ThinkingLine } from "@/app/conversation/ThinkingLine";
 import {
   Check,
   ChevronRight,
@@ -276,7 +276,7 @@ export function WorkerThread({ task }: { task: Task }) {
   // The report is the answer when there is one; a message after it ("Reported.") stays a message.
   const finalReply = workerDone(task) && !task.report?.summary && tail?.kind === "item" && tail.item.kind === "message" && tail.item.role === "assistant" ? tail.item.text : undefined;
   const visibleEntries = finalReply ? entries.slice(0, -1) : entries;
-  const activity = workerActivity(visibleEntries, working);
+  const activity = workerActivity(visibleEntries);
   const previous = activity.slice(0, Math.max(0, activity.length - 3));
   const previousCount = task.messages.length + previous.reduce((count, item) => count + (item.type === "group" ? item.items.length : 1), 0);
   const recent = activity.slice(previous.length);
@@ -353,7 +353,7 @@ export function WorkerThread({ task }: { task: Task }) {
           </p>
         )}
         {recent.map((item, index) => show(item, previous.length + index))}
-        {thinking && <ThinkingRow text={thinking.text} live />}
+        {thinking && <ThinkingLine text={thinking.text} />}
         {now && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
         {!working && !workerDone(task) && <p className="text-foreground/65 text-sm">{workerPreview(task)}</p>}
         <Answer task={task} text={finalReply} />

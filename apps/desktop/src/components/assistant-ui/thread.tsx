@@ -585,6 +585,15 @@ export const StreamingMessageText: FC<TextMessagePartProps> = (props) => (
   </MessageTime>
 );
 
+/** A line between a turn's steps while it streams: its words fade in as they arrive, unpaced. */
+export const CommentaryMessageText: FC<TextMessagePartProps> = (props) => (
+  <MessageTime>
+    <Suspense fallback={<ReplyLoading />}>
+      <MarkdownText {...props} streaming paced={false} />
+    </Suspense>
+  </MessageTime>
+);
+
 const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root

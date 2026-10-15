@@ -171,7 +171,9 @@ async function settle(ms = 50): Promise<void> {
   while (performance.now() < until) {
     await frame();
     const now = text(turn());
-    if (animating() || one("[data-slot=reply-loading]") || now !== last) stillSince = performance.now();
+    // A live label waiting its turn (at most a second), or a step's name lingering, still moves.
+    const moving = animating() || one("[data-slot=reply-loading]") || one("[data-pending],[data-lingers]");
+    if (moving || now !== last) stillSince = performance.now();
     else if (performance.now() - stillSince >= 100) return;
     last = now;
   }
@@ -215,7 +217,8 @@ function seen() {
     shimmer: !!group?.querySelector(".shimmer"),
     status: text(status),
     thinkingLive: all("[data-slot=thinking-live]", block ?? document).length,
-    commentary: text(one("[data-slot=commentary-live]", block ?? document)),
+    commentary: text(one("[data-commentary]", block ?? document)),
+    commentaryShimmers: !!one("[data-commentary] .shimmer, [data-commentary].shimmer", block ?? document),
     answer: text(answer),
     answerInWork: !!answer && work.some((part) => part.contains(answer)),
     statusAfterAnswer: !!answer && !!status && !!(answer.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING),
@@ -235,6 +238,9 @@ const question: Question = {
 
 async function driveTurn(): Promise<object> {
   const out: Record<string, unknown> = {};
+  // The header shows from the turn's first frame.
+  for (const end = performance.now() + 8000; performance.now() < end && !turn(); ) await frame();
+  out.firstHeader = text(one("[data-slot=request-work-label]", turn() ?? document));
   await settle(600);
   // Its newest group's step is done and nothing runs: the group's row says "Thinking".
   out.thinking = seen();
@@ -250,8 +256,23 @@ async function driveTurn(): Promise<object> {
   await settle();
   out.running = seen();
   await hold("running");
-  steps(daemon.steps.map((step) => (step.kind.type === "tool" && step.kind.itemId === "sleep" ? tool("sleep", 1.4, "shell", "sleep 4", "completed") : step)));
-  change(() => ({ streaming: { messageId: "line", text: "I’ll fix the rounding next.\n\nThen run the tests again.", requestId: "r1", phase: "commentary", startedAtMs: Date.now() } }));
+  // The command ends: its group still names it for a second, then says "Thinking".
+  const ended = tool("sleep", 1.4, "shell", "sleep 4", "completed");
+  if (ended.kind.type === "tool") ended.kind.endedAtMs = Date.now();
+  steps(daemon.steps.map((step) => (step.kind.type === "tool" && step.kind.itemId === "sleep" ? ended : step)));
+  await frame();
+  out.justEnded = seen();
+  await settle();
+  out.ended = seen();
+  // A line between steps streams as prose, each piece shown as it arrives: never paced.
+  const line = "I’ll fix the rounding next.";
+  change(() => ({ streaming: { messageId: "line", text: line, requestId: "r1", phase: "commentary", startedAtMs: Date.now() } }));
+  await settle();
+  const more = `${line}\n\nThen run the tests again.`;
+  change(() => ({ streaming: { messageId: "line", text: more, requestId: "r1", phase: "commentary", startedAtMs: Date.now() } }));
+  await frame();
+  await frame();
+  out.commentaryAtOnce = text(one("[data-commentary]", turn() ?? document));
   await settle();
   out.commentary = seen();
   // A peer reply stays outstanding while the final answer streams.

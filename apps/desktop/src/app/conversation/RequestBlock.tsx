@@ -18,14 +18,14 @@ import {
 import { type ComponentProps, type ComponentType, type FC, Fragment, lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { ThinkingRow } from "@/app/conversation/ThinkingRow";
+import { ThinkingLine } from "@/app/conversation/ThinkingLine";
 import { WorkFold } from "@/app/conversation/WorkFold";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { MentionText } from "@/app/conversation/Mentions";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
-import { type Activity, type LeadStep, thoughtTopic, turnActivity } from "@/app/conversation/activity/group";
+import { type Activity, type LeadStep, thinkingLabel, turnActivity } from "@/app/conversation/activity/group";
 import { deniedCall } from "@/app/conversation/activity/words";
 import { waitingWords, went } from "@/app/conversation/activity/peerWords";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
@@ -69,6 +69,7 @@ import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import {
   BranchPicker,
   MarkdownBlock,
+  CommentaryMessageText,
   MessageText,
   StreamingMessageText,
 } from "@/components/assistant-ui/thread";
@@ -202,9 +203,6 @@ function phaseLabel(phase: PhaseView, elapsed: number): string {
   return phase.startedAtMs === null ? `${phase.title} — ${state}` : `${phase.title} — ${state} · ${formatDuration(elapsed)}`;
 }
 
-/** A live turn shows no header until it has worked this long (only "Thinking"). */
-const HEADER_AFTER_MS = 2000;
-
 /**
  * The row over a request's work, with a rule under it: "Working for 12s" while live, "Worked
  * for 3m 4s ›" once its work folds, "Waiting for quota · 12s" while its messages wait for a
@@ -309,11 +307,15 @@ function CardEntry({ card }: { card: BlockCard }) {
   );
 }
 
-/** One reply of the block; text that still streams fades in word by word. */
-const ReplyText: FC<{ index: number; streaming: boolean; report?: boolean }> = ({ index, streaming, report = false }) => (
+/**
+ * One reply of the block; text that still streams fades in word by word. A line between the
+ * turn's steps (`commentary`) streams as prose like the answer, but shows as it arrives: only the
+ * final answer is paced.
+ */
+const ReplyText: FC<{ index: number; streaming: boolean; report?: boolean; commentary?: boolean }> = ({ index, streaming, report = false, commentary = false }) => (
   <MessagePrimitive.PartByIndex
     index={index}
-    components={{ Text: report ? ReportText : streaming ? StreamingMessageText : MessageText }}
+    components={{ Text: report ? ReportText : streaming ? (commentary ? CommentaryMessageText : StreamingMessageText) : MessageText }}
   />
 );
 
@@ -350,39 +352,22 @@ const AnswerFilesOf: FC<{ index: number; requestIds: readonly string[] }> = ({ i
   return <AnswerFiles requestIds={requestIds} answer={answer} />;
 };
 
-/**
- * A line between the turn's steps while it is written: one shimmering line of it so far, like
- * the step rows; it settles into its paragraph once whole.
- */
-const CommentaryLine: FC<{ index: number }> = ({ index }) => {
-  const text = useAuiState((s) => {
-    const part = s.message.parts[index];
-    return part?.type === "text" ? part.text : "";
-  });
-  const line = (text.split("\n").find((each) => each.trim()) ?? "").replace(/^[#>*\-\s]+/, "").replaceAll(/[*_`]/g, "");
-  return (
-    <div data-slot="commentary-live" className="shimmer w-fit max-w-full truncate text-sm leading-(--spacing-activity-row) motion-reduce:animate-none">
-      {line || "Thinking"}
-    </div>
-  );
-};
-
 /** A reply, card or row in the block's work. */
 const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: boolean }> = ({ entry, streaming, commentary = false }) => {
   switch (entry.kind) {
     case "thinking":
-      // Only the live thought is an entry: a settled one sits in its work group.
-      return entry.live ? <ThinkingRow text={entry.segment.text} live /> : null;
+      // Thinking is never a row: the live thought feeds the live line.
+      return null;
     case "text":
-      if (streaming && commentary) return <CommentaryLine index={entry.index} />;
       return (
         <div
           data-slot="aui_assistant-message-content"
+          data-commentary={commentary || undefined}
           // The replies Brigadier sent other sessions with this answer land a jump here.
           data-peer-message={entry.anchors?.join(" ")}
           className="text-foreground leading-relaxed wrap-break-word"
         >
-          <ReplyText index={entry.index} streaming={streaming} />
+          <ReplyText index={entry.index} streaming={streaming} commentary={commentary} />
         </div>
       );
     case "card":
@@ -432,7 +417,7 @@ const CompactionBlock: FC<{ compaction: BlockCompaction }> = ({ compaction }) =>
   const elapsed = useElapsed(compaction.startedAtMs, compaction.endedAtMs, live);
   return (
     <div data-slot="compaction-block" className="mt-4 flex flex-col gap-2">
-      {live && elapsed >= HEADER_AFTER_MS && (
+      {live && (
         <div className="border-border flex items-center border-b pb-2">
           <span className="text-muted-foreground text-sm">{headerLabel("working", elapsed)}</span>
         </div>
@@ -498,7 +483,7 @@ const ActivityItems: FC<{
   // Under a message just steered in, with what ran before it summed up, it thinks: even while that still runs.
   const line: (StatusHead & { thought?: boolean }) | null = !live
     ? null
-    : (head ?? (thought === null ? (activity.length === 0 ? { text: "Thinking", tone: "busy" } : null) : { text: thoughtTopic(thought, "newest") || "Thinking", tone: "busy", thought: true }));
+    : (head ?? (thought === null ? (activity.length === 0 ? { text: "Thinking", tone: "busy" } : null) : { text: thinkingLabel(thought) || "Thinking", tone: "busy", thought: true }));
   // A message to another session says how its exchange stands itself: the line stays under it.
   const newest = activity.at(-1);
   const lastStep = newest?.type === "group" ? newest.items.findLast((item) => item.type === "step") : undefined;
@@ -547,7 +532,7 @@ const ActivityItems: FC<{
           <SequenceEntry key={entryKey(item.entry)} entry={item.entry} streaming={streaming(item.entry)} commentary={commentary(item.entry)} />
         ),
       )}
-      {!inGroup && shownLine && (shownLine.thought && thought !== null ? <ThinkingRow text={thought} live /> : <StatusLine head={shownLine} />)}
+      {!inGroup && shownLine && (shownLine.thought && thought !== null ? <ThinkingLine text={thought} /> : <StatusLine head={shownLine} />)}
     </>
   );
 };

@@ -39,6 +39,11 @@ type MarkdownTextProps = Partial<TextMessagePartProps> & {
   components?: Parameters<typeof memoizeMarkdownComponents>[0];
   /** The text is still streaming: it shows at a steady pace and each word fades in. */
   streaming?: boolean | undefined;
+  /**
+   * Streaming text shows at `STREAM_PACE` (the default). Off, it shows as it arrives, each word
+   * still fading in: a line between the turn's steps is never held back.
+   */
+  paced?: boolean | undefined;
 };
 
 /**
@@ -77,7 +82,7 @@ const useShallowStable = <T extends Record<string, unknown> | undefined>(
   return stable;
 };
 
-const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming }) => {
+const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced = true }) => {
   const stableComponents = useShallowStable(components);
   const markdownComponents = useMemo(() => {
     if (!stableComponents) return defaultComponents;
@@ -97,7 +102,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming }) => {
       // once, also when it mounts again (the stored reply replacing the streamed one, a work
       // block folding): revealed from nothing, it would shrink the thread for a moment and
       // pull it off the newest message. The end of a stream shows the rest at once.
-      smooth={streaming === true && STREAM_PACE}
+      smooth={streaming === true && paced && STREAM_PACE}
       className="aui-md"
       urlTransform={keepLinks}
       components={markdownComponents}

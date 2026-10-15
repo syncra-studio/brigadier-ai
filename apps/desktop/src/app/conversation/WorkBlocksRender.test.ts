@@ -6,7 +6,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 type Seen = {
   header: string | null; newest: string | null; newestShimmers: boolean; fold: string; groupRow: string | null;
   groupLine: string | null; groupTone: string | null; shimmer: boolean; status: string | null; thinkingLive: number;
-  commentary: string | null; answer: string | null; answerInWork: boolean; statusAfterAnswer: boolean; statusInWork: boolean;
+  commentary: string | null; commentaryShimmers: boolean; answer: string | null; answerInWork: boolean; statusAfterAnswer: boolean; statusInWork: boolean;
 };
 
 async function drive<T>(t: test.TestContext, query: string): Promise<T> {
@@ -16,9 +16,11 @@ async function drive<T>(t: test.TestContext, query: string): Promise<T> {
 }
 
 test("a turn has one live line, folds the moment its final answer starts, and keeps that time through the end and a reload", { timeout: 120000 }, async (t) => {
-  const seen = await drive<Record<"thinking" | "thought" | "question" | "running" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
-    foldFirst: string; foldMs: number; actions: string[];
+  const seen = await drive<Record<"thinking" | "thought" | "question" | "running" | "justEnded" | "ended" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
+    foldFirst: string; foldMs: number; actions: string[]; firstHeader: string | null; commentaryAtOnce: string | null;
   }>(t, "drive=turn");
+  // The header is there from the turn's first frame.
+  assert.match(seen.firstHeader ?? "", /^Working/);
   // Nothing runs: the newest group's own row says "Thinking"; no line of its own under it.
   assert.deepEqual(
     [seen.thinking.groupLine, seen.thinking.groupTone, seen.thinking.shimmer, seen.thinking.status, seen.thinking.thinkingLive],
@@ -30,10 +32,15 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
   assert.deepEqual([seen.question.groupLine, seen.question.groupTone, seen.question.status, seen.question.thinkingLive], ["Waiting for your answer", "needsYou", null, 0]);
   // A step running says itself, shimmering: still one line.
   assert.deepEqual([seen.running.groupRow, seen.running.shimmer, seen.running.groupLine, seen.running.status], ["Running sleep 4", true, null, null]);
-  // A line between steps shimmers on one line while written, under the header, the group above summed up.
+  // A command that just ended still names its group for a second, then the group says "Thinking".
+  assert.deepEqual([seen.justEnded.groupRow, seen.justEnded.shimmer, seen.justEnded.groupLine], ["Running sleep 4", true, null]);
+  assert.deepEqual([seen.ended.groupLine, seen.ended.groupTone], ["Thinking", "busy"]);
+  // A line between steps streams as prose under the header, never shimmering, each piece shown
+  // the frame it arrives (never paced like the answer); the group above sums up.
+  assert.equal(seen.commentaryAtOnce, "I’ll fix the rounding next. Then run the tests again.");
   assert.deepEqual(
-    [seen.commentary.newest, seen.commentary.newestShimmers, seen.commentary.groupRow, seen.commentary.status, seen.commentary.header?.startsWith("Working for")],
-    ["I’ll fix the rounding next.", true, "Read files, ran commands", null, true],
+    [seen.commentary.commentary, seen.commentary.commentaryShimmers, seen.commentary.groupRow, seen.commentary.status, seen.commentary.header?.startsWith("Working for")],
+    ["I’ll fix the rounding next. Then run the tests again.", false, "Read files, ran commands", null, true],
   );
   // The final answer starts: the frame that shows it closes the work, gone within the 150ms
   // close and a frame or two.

@@ -21,7 +21,7 @@ export function describeLeadStep(step: LeadStep, tasks: Readonly<Record<string, 
   const { kind } = step;
   switch (kind.type) {
     case "tool":
-      return { words: toolStepWords(kind, tasks), status: kind.status, exit: kind.exit ?? null };
+      return { words: toolStepWords(kind, tasks), status: kind.status, exit: kind.exit ?? null, startedAtMs: step.atMs, endedAtMs: kind.endedAtMs };
     case "searchedWeb":
       return { words: { kind: "web", doing: `Searching the web for ${kind.query}`, done: `Searched the web for ${kind.query}`, web: true }, status: "completed" };
     case "readPage": {
