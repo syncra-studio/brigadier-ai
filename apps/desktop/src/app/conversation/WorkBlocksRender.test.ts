@@ -122,6 +122,13 @@ test("a message edited in place is a composer the column's width, its Cancel and
   assert.deepEqual([seen.cancel, seen.send], [{ round: true, border: 1 }, { round: true, border: 0 }]);
 });
 
+test("messages that fail to load say so above the composer, and Retry loads them", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ failed: { line: string | null; role: string | null; rows: number }; after: { line: string | null; rows: number } }>(t, "drive=loadfail");
+  assert.deepEqual(seen.failed, { line: "Couldn’t load messagesRetry", role: "alert", rows: 0 });
+  assert.equal(seen.after.line, null);
+  assert.ok(seen.after.rows > 0, `${seen.after.rows} messages after Retry`);
+});
+
 test("a message steered in before the turn did anything sits under the first, above its header", { timeout: 120000 }, async (t) => {
   const seen = await drive<{ bubble: string | null; above: boolean; header: string | null; status: string | null; stillAbove: boolean }>(t, "drive=early");
   assert.match(seen.bubble ?? "", /Use banker's rounding instead/);

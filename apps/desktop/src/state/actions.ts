@@ -137,6 +137,7 @@ export async function loadConversation(id: string): Promise<void> {
       ),
       hasMore: page.hasMore,
       loading: false,
+      loadError: null,
     }));
     // A copy live events changed while the view was read is newer (a new conversation is
     // renamed by its first message), and one they removed was deleted; whatever else the
@@ -150,7 +151,7 @@ export async function loadConversation(id: string): Promise<void> {
     updateBoard(id, (board) => boardFromView(view, board, events));
   } catch (error) {
     arrived();
-    updateThread(id, (thread) => ({ ...thread, loading: false }));
+    updateThread(id, (thread) => ({ ...thread, loading: false, loadError: error instanceof Error ? error.message : String(error) }));
     throw error;
   }
 }

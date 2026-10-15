@@ -119,12 +119,15 @@ function view(): View {
 }
 
 let settings = { followUp: "queue" } as Settings;
+let failLoads = drive === "loadfail";
 const calls: string[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
     case "getConversation":
+      // `drive=loadfail`: the daemon can't give the view until the driver lets it.
+      if (failLoads) throw new Error("The daemon did not answer.");
       return { method: req.method, view: view() };
     case "updateSettings":
       settings = req.settings;
@@ -531,6 +534,17 @@ async function driveEdit(): Promise<object> {
   };
 }
 
+/** The thread's messages fail to load: "Couldn't load messages" with Retry, which loads them. */
+async function driveLoadFail(): Promise<object> {
+  for (const end = performance.now() + 8000; performance.now() < end && !one("[data-slot=load-error]"); ) await frame();
+  const failed = { line: text(one("[data-slot=load-error]")), role: one("[data-slot=load-error]")?.getAttribute("role") ?? null, rows: all("[data-message-id]").length };
+  failLoads = false;
+  all<HTMLButtonElement>("[data-slot=load-error] button").find((button) => text(button) === "Retry")?.click();
+  for (const end = performance.now() + 8000; performance.now() < end && one("[data-slot=load-error]"); ) await frame();
+  await settle();
+  return { failed, after: { line: text(one("[data-slot=load-error]")), rows: all("[data-message-id]").length } };
+}
+
 async function driveQueue(): Promise<object> {
   await settle(600);
   // The composer's editor comes in its own chunk after a plain field and takes the focus a beat
@@ -612,7 +626,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

@@ -95,6 +95,7 @@ import {
   editQueued,
   interrupt,
   loadEarlier,
+  loadConversation,
   loadFullText,
   rateMessage,
   readAttachment,
@@ -1062,12 +1063,29 @@ const AboveComposer: FC = () => {
   const failure = runError !== null && runError.trim() !== turnError?.trim() ? runError : null;
   const [failureDismissed, setFailureDismissed] = useState<string | null>(null);
   const action = useAction();
+  // Its messages could not be loaded: said once, with Retry.
+  const loadError = useApp((s) => (conversationId ? (s.threads[conversationId]?.loadError ?? null) : null));
+  const reload = useAction();
   const archived = conversation?.lifecycle === "archived";
   const failed = failure !== null && failure !== failureDismissed;
   // Nothing at all when there is nothing to say, so the footer adds no gap for it.
-  if (!conversation || (shown.length === 0 && !failed && !archived)) return null;
+  if (!conversation || (shown.length === 0 && !failed && !archived && loadError === null)) return null;
   return (
     <div className="flex flex-col gap-1.5">
+      {loadError !== null && (
+        <p data-slot="load-error" role="alert" title={loadError} className={ABOVE_LINE}>
+          <Warning aria-hidden className="text-muted-foreground size-icon-xs mt-px shrink-0" />
+          <span className="min-w-0 flex-1">Couldn’t load messages</span>
+          <button
+            type="button"
+            disabled={reload.busy}
+            className="text-link hover:text-link/80 shrink-0"
+            onClick={() => reload.run(() => loadConversation(conversation.id))}
+          >
+            Retry
+          </button>
+        </p>
+      )}
       <Notices notices={shown} />
       {failed && (
         <p role="status" className={ABOVE_LINE}>
@@ -1086,7 +1104,7 @@ const AboveComposer: FC = () => {
       {archived ? (
         <div className="bg-muted rounded-control flex items-center gap-2 px-3 py-2 text-sm">
           <span className="min-w-0 flex-1">
-            Archived. Restore it to continue; the orchestrator restarts from its transcript.
+            Archived. Restore it to continue.
           </span>
           {action.error && (
             <span role="alert" className="text-destructive text-xs">

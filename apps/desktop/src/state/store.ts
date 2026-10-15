@@ -123,6 +123,8 @@ export type Thread = {
   loading: boolean;
   /** Full text of blob-backed messages, by message id. */
   fullText: Record<string, string>;
+  /** Its last load failed, with this error: the thread offers to try again. */
+  loadError?: string | null;
 };
 
 export type InspectorTab =
