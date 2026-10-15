@@ -1801,6 +1801,8 @@ mod honesty_tests;
 #[cfg(all(test, unix))]
 mod integrated_checks_tests;
 #[cfg(test)]
+mod interrupted_turn_tests;
+#[cfg(test)]
 mod lean_work_tests;
 #[cfg(test)]
 mod litter_tests;

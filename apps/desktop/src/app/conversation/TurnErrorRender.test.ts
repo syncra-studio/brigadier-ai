@@ -40,3 +40,16 @@ test("a failed session turn reads calmly: one row, raw words under Details, Try 
   assert.equal(seen.bare.details, 0);
   assert.equal(seen.bare.buttons, 0);
 });
+
+test("a turn Brigadier quit during reads interrupted, never as answered, and Continue resumes it", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(
+    await renderFixturePage(t, "turn-error.html?view=done&approvals=0&summary=0&sidebar=0&drive=1&interrupted=1", "turn-error-result", 10000),
+  ) as { header: string | null; summary: string | null; buttons: string[]; sent: string[]; resumed: number; destructive: boolean };
+  assert.match(seen.header ?? "", /^Interrupted after /);
+  assert.equal(seen.summary, "Interrupted: Brigadier quit while this was running. Continue picks it up where it stands.");
+  assert.equal(seen.destructive, false);
+  // Continue, not Try again; it resumes the request instead of sending a new message.
+  assert.deepEqual(seen.buttons, ["Continue"]);
+  assert.deepEqual(seen.sent, []);
+  assert.equal(seen.resumed, 1);
+});

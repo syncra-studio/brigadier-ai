@@ -21,9 +21,11 @@ export type ErrorStateProps = Omit<ComponentProps<"div">, "children" | "role" | 
   retrying?: boolean | undefined;
   /** Omitted where nothing can be tried again. */
   onRetry?: (() => void) | undefined;
+  /** The retry button's word: "Try again" unless the turn goes on instead ("Continue"). */
+  retryLabel?: string | undefined;
 };
 
-export function ErrorState({ summary, details, retrying = false, onRetry, className, ...props }: ErrorStateProps) {
+export function ErrorState({ summary, details, retrying = false, onRetry, retryLabel = "Try again", className, ...props }: ErrorStateProps) {
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   if (retrying) {
     return (
@@ -62,7 +64,7 @@ export function ErrorState({ summary, details, retrying = false, onRetry, classN
         {onRetry && (
           <Button variant="outline" size="xs" onClick={onRetry} className="ms-auto">
             <Regenerate aria-hidden />
-            Try again
+            {retryLabel}
           </Button>
         )}
       </div>

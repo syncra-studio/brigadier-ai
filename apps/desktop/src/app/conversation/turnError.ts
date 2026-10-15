@@ -12,7 +12,16 @@ const LIMIT = /usage limit|hit your limit|limit (was )?reached|limit exceeded|qu
 const NETWORK = /network|connection|disconnected|\beconn\w*|enetunreach|enotfound|etimedout|eai_again|timed? ?out|timeout|fetch failed|socket hang up|getaddrinfo|offline/i;
 const API = /api error|\b[45]\d\d\b|overloaded|server error|bad gateway|service unavailable|invalid_request|authentication_error/i;
 
+/** The daemon's words for a turn that was running when Brigadier quit (`INTERRUPTED_BY_QUIT`). */
+const INTERRUPTED = "Brigadier quit while this was running.";
+
+/** Whether a turn ended because Brigadier quit while it ran: it reads interrupted, with Continue. */
+export function interruptedByQuit(raw: string | null | undefined): boolean {
+  return raw?.trim() === INTERRUPTED;
+}
+
 export function describeTurnError(raw: string, provider = "Claude"): { summary: string } {
+  if (interruptedByQuit(raw)) return { summary: "Interrupted: Brigadier quit while this was running. Continue picks it up where it stands." };
   if (LIMIT.test(raw)) return { summary: `${provider}'s usage limit was reached.` };
   if (ENDED_UNEXPECTEDLY.test(raw)) return { summary: `${provider} stopped unexpectedly.` };
   if (NETWORK.test(raw)) return { summary: `Lost the connection to ${provider}.` };

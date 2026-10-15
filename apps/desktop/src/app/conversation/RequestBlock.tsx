@@ -61,7 +61,7 @@ import { HeldNote } from "@/app/conversation/HeldNote";
 import { AnsweredStatus, StatusLine, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
-import { describeTurnError } from "@/app/conversation/turnError";
+import { describeTurnError, interruptedByQuit } from "@/app/conversation/turnError";
 import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
@@ -80,7 +80,7 @@ import { formatDuration, formatSentAt } from "@/lib/format";
 import { VENDOR_LABELS } from "@/lib/routing";
 import { modelName, sameModel, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
-import { openConversation, send } from "@/state/actions";
+import { openConversation, resume, send } from "@/state/actions";
 import { readAloud, stopReading, useReading } from "@/state/readAloud";
 import { RETRYING, useBoard } from "@/state/board";
 import { useRevealing } from "@/state/reveal";
@@ -171,7 +171,7 @@ function useElapsed(from: number, to: number | null, live: boolean): number {
  * `waited`: how long it waited for the answers to its question cards, shown apart from the work
  * (BUILD-PLAN A9); `onCard`: a card waits for the user now.
  */
-function headerLabel(state: BlockState, elapsed: number, quota = false, waitingFor: readonly string[] = [], waited = 0, onCard = false): string {
+function headerLabel(state: BlockState, elapsed: number, quota = false, waitingFor: readonly string[] = [], waited = 0, onCard = false, interrupted = false): string {
   const time = formatDuration(elapsed);
   switch (state) {
     case "working": {
@@ -188,7 +188,7 @@ function headerLabel(state: BlockState, elapsed: number, quota = false, waitingF
       return `You stopped after ${time}`;
     // Said calmly: the error row under the turn tells what happened.
     case "failed":
-      return `Stopped after ${time}`;
+      return interrupted ? `Interrupted after ${time}` : `Stopped after ${time}`;
   }
 }
 
@@ -232,7 +232,11 @@ const WorkHeader: FC<{
   // Waiting on its own question card, the turn still reads as working, with the wait beside it.
   const onCard = !answering && waitsOnCard(meta);
   const state = answering ? "done" : onCard ? "working" : meta.state;
-  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota || meta.quotaWait, waitingFor, waited, onCard);
+  const interrupted = useAuiState((s) => {
+    const status = s.message.status;
+    return status?.type === "incomplete" && status.reason === "error" && interruptedByQuit(String(status.error ?? ""));
+  });
+  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota || meta.quotaWait, waitingFor, waited, onCard, interrupted);
   const text = (
     <span
       data-slot="request-work-label"
@@ -560,7 +564,14 @@ const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
   if (error === null) return null;
   const model = meta.texts.at(-1)?.model ?? meta.picked;
   const { summary } = describeTurnError(error, model ? VENDOR_LABELS[model.provider] : undefined);
+  // Brigadier quit while it ran: Continue picks the request up (UI audit H1).
+  const interrupted = interruptedByQuit(error);
   const again = (() => {
+    if (interrupted) {
+      if (live || !latest || !conversation || conversation.lifecycle === "archived" || action.busy) return undefined;
+      const id = conversation.id;
+      return () => action.run(() => resume(id));
+    }
     if (live || isRunRequest(meta.requestId)) return undefined;
     if (!meta.session) return meta.rework ? () => aui.message().reload() : undefined;
     if (!latest || !conversation || conversation.lifecycle === "archived" || action.busy) return undefined;
@@ -569,7 +580,7 @@ const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
   })();
   return (
     <div className="flex flex-col gap-1">
-      <ErrorState summary={summary} details={error} onRetry={again} />
+      <ErrorState summary={summary} details={interrupted ? null : error} onRetry={again} retryLabel={interrupted ? "Continue" : undefined} />
       {action.error && (
         <p role="alert" className="text-muted-foreground px-3 text-xs">
           Couldn’t send it: {action.error}

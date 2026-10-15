@@ -100,8 +100,10 @@ impl SessionManager {
             if conversation.deleting {
                 continue;
             }
-            // The thread's turn the restart cut off ran its calls no further.
+            // The thread's turn the restart cut off ran its calls no further, and its request
+            // reads interrupted, not answered.
             self.end_cut_off_calls(&conversation.id).await;
+            self.mark_cut_off_turn(&conversation.id).await;
             // Merge cards are retired: open ones close, and no card answer merges.
             if conversation.lifecycle != Lifecycle::Archived {
                 self.retire_merge_cards(&conversation.id).await;

@@ -121,6 +121,10 @@ pub(crate) struct Board {
     pub(crate) run: RunState,
     /// The request the running turn serves.
     pub(crate) run_request: Option<String>,
+    /// The request whose turn was still running when the daemon last stopped (a quit or a
+    /// crash cut it off): found when the board is first read after a start, and taken once by
+    /// the start-up recovery, which marks it interrupted.
+    pub(crate) cut_off_request: Option<String>,
     /// The last message of the branch shown, and the stream sequence that set it.
     pub(crate) head: Option<(String, i64)>,
     pub(crate) streaming: Option<StreamingMessage>,

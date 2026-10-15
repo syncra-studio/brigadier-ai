@@ -1915,6 +1915,14 @@ impl Core {
         Ok(queue)
     }
 
+    /// The request whose turn the daemon's last stop cut off, once (see
+    /// [`Board::cut_off_request`]).
+    pub(crate) async fn take_cut_off_request(&self, id: &ConversationId) -> Option<String> {
+        self.board(id).await.ok()?;
+        let mut boards = self.boards.lock().await;
+        boards.get_mut(id)?.cut_off_request.take()
+    }
+
     pub(crate) async fn board(&self, id: &ConversationId) -> Result<Board> {
         let mut boards = self.boards.lock().await;
         if let Some(board) = boards.get(id) {
@@ -1973,7 +1981,10 @@ impl Core {
         {
             board.head = Some((message.id, event.stream_seq));
         }
-        // Nothing runs across a daemon restart.
+        // Nothing runs across a daemon restart: a turn still running then was cut off.
+        if board.run == crate::work::RunState::Running {
+            board.cut_off_request = board.run_request.clone();
+        }
         board.run = match board.run {
             crate::work::RunState::Hibernated => crate::work::RunState::Hibernated,
             _ => crate::work::RunState::Idle,

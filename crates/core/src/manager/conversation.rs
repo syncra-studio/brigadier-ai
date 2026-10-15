@@ -118,6 +118,14 @@ const INLINE_TEXT_MAX_BYTES: usize = 200_000;
 const PASTE_HEAD_BYTES: usize = 150_000;
 const PASTE_TAIL_BYTES: usize = 50_000;
 const ENDED_UNEXPECTEDLY: &str = "The CLI session ended unexpectedly.";
+/// A request whose turn was running when Brigadier quit or stopped (H1). The app shows it as
+/// interrupted, with Continue.
+pub(crate) const INTERRUPTED_BY_QUIT: &str = "Brigadier quit while this was running.";
+
+/// Whether a request ended because Brigadier quit while its turn ran.
+pub(crate) fn interrupted_by_quit(state: &RequestState) -> bool {
+    matches!(state, RequestState::Failed { error } if error == INTERRUPTED_BY_QUIT)
+}
 /// Sent with every turn while the session is in plan mode.
 const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: they want a plan to decide on before anything changes. Change nothing. Look around yourself (read, search, project_map) or with scouts, ask_user only what only they can decide, then write the plan and propose it with propose_plan, in its shape: a short title, one summary sentence, then Changes, Checks and Assumptions. Reply [quiet] after it: the plan card is your answer. Their yes turns plan mode off and comes back as a message; build only then. Merging, landing and finish_session are refused until then.";
 
@@ -1911,6 +1919,50 @@ impl SessionManager {
         interrupted
     }
 
+    /// After a start: the request whose thread turn the daemon's last stop cut off (a quit
+    /// or a crash) ends interrupted, never as answered, and the thread's Continue picks it up.
+    pub(crate) async fn mark_cut_off_turn(&self, id: &ConversationId) {
+        let Some(request) = self.core.take_cut_off_request(id).await else {
+            return;
+        };
+        let live = self
+            .core
+            .board(id)
+            .await
+            .ok()
+            .and_then(|board| board.requests.get(&request).map(|r| r.state.clone()))
+            .is_some_and(|state| matches!(state, RequestState::Working | RequestState::Waiting));
+        if !live {
+            return;
+        }
+        let failed = RequestState::Failed {
+            error: INTERRUPTED_BY_QUIT.into(),
+        };
+        if let Err(err) = self
+            .core
+            .update_request(id, &request, failed, false, false, Vec::new(), None)
+            .await
+        {
+            tracing::warn!(conversation = %id, error = %err, "could not mark a cut-off turn");
+            return;
+        }
+        if let Ok(conv) = self.conv(id) {
+            conv.state.lock().await.outcomes.insert(
+                request.clone(),
+                RequestState::Failed {
+                    error: INTERRUPTED_BY_QUIT.into(),
+                },
+            );
+        }
+        self.set_run_for(
+            id,
+            RunState::Failed,
+            Some(INTERRUPTED_BY_QUIT.into()),
+            Some(request),
+        )
+        .await;
+    }
+
     /// Continues the latest request after the user stopped it: a turn for that request, in its
     /// block, telling the model to carry on. Workers are untouched (a stop never ends them);
     /// the queue unpauses and runs after this turn.
@@ -1925,22 +1977,29 @@ impl SessionManager {
             }
         }
         let board = self.core.board(&id).await?;
-        let request = match board.latest_request() {
-            Some(request) if request.state == RequestState::Stopped => request.id.clone(),
+        let (request, interrupted) = match board.latest_request() {
+            Some(request) if request.state == RequestState::Stopped => (request.id.clone(), false),
+            Some(request) if interrupted_by_quit(&request.state) => (request.id.clone(), true),
             _ => {
                 return Err(Error::Invalid(
-                    "only a stopped request can be resumed".into(),
+                    "only a stopped or interrupted request can be resumed".into(),
                 ));
             }
         };
         self.core.set_queue_paused(&id, false).await?;
+        let text = if interrupted {
+            "[Brigadier quit while you were working on this request, and the user asked you to \
+             continue. Your last steps may have finished after your record of them: check git \
+             status and git log first, then continue their request from where it stands.]"
+        } else {
+            "[The user stopped you, then asked you to resume. Continue their request from where \
+             you left off.]"
+        };
         let envelope = Envelope {
             kind: InjectionKind::Resume,
             label: "resume".into(),
             task_id: None,
-            text: "[The user stopped you, then asked you to resume. Continue their request from \
-                   where you left off.]"
-                .into(),
+            text: text.into(),
         };
         self.deliver_for(&id, envelope, Some(request)).await;
         Ok(())
@@ -3510,19 +3569,32 @@ impl SessionManager {
             state.busy = false;
             state.compacting = false;
             let mut failed = None;
+            // Brigadier quitting closed the CLI mid-turn: the turn reads interrupted, with
+            // Continue (H1). Other closes wait for the turn's end.
+            let quit = state.closing && !self.admitting.load(std::sync::atomic::Ordering::Acquire);
             if let Some(request) = state.request.take()
                 && was_busy
-                && !state.closing
+                && (!state.closing || quit)
             {
+                let error = if quit {
+                    INTERRUPTED_BY_QUIT
+                } else {
+                    ENDED_UNEXPECTEDLY
+                };
                 state.outcomes.insert(
                     request.clone(),
                     RequestState::Failed {
-                        error: ENDED_UNEXPECTEDLY.into(),
+                        error: error.into(),
                     },
                 );
                 failed = Some(request);
             }
-            (was_busy, state.closing, failed, jobs)
+            (
+                was_busy && (!state.closing || quit),
+                state.closing,
+                failed,
+                jobs,
+            )
         };
         self.end_compaction(&conv, ENDED_UNEXPECTEDLY.into()).await;
         cli.ended.cancel();
@@ -3530,15 +3602,29 @@ impl SessionManager {
             self.deliver_for(&conv.id, cut_jobs_envelope(&words, count), request)
                 .await;
         }
-        if was_busy && !closing {
+        if was_busy {
             // The run names the failed request, which says it in the thread.
-            self.set_run_for(
-                &conv.id,
-                RunState::Failed,
-                Some(ENDED_UNEXPECTEDLY.into()),
-                failed,
-            )
-            .await;
+            let error = if closing {
+                INTERRUPTED_BY_QUIT
+            } else {
+                ENDED_UNEXPECTEDLY
+            };
+            // Requests don't settle any more while Brigadier quits: the interrupted one is
+            // written as such now.
+            if closing && let Some(request) = &failed {
+                let state = RequestState::Failed {
+                    error: error.into(),
+                };
+                if let Err(err) = self
+                    .core
+                    .update_request(&conv.id, request, state, false, false, Vec::new(), None)
+                    .await
+                {
+                    tracing::warn!(conversation = %conv.id, error = %err, "could not mark the turn interrupted");
+                }
+            }
+            self.set_run_for(&conv.id, RunState::Failed, Some(error.into()), failed)
+                .await;
         } else if !closing {
             self.set_run(&conv.id, RunState::Idle, None).await;
         }

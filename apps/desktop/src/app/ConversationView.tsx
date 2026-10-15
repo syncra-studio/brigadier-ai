@@ -34,7 +34,7 @@ import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/Pin
 import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
 import { WorkerDiffs } from "@/app/conversation/WorkerSummary";
 import { latestRequest, reworkableRequest } from "@/app/conversation/rework";
-import { newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
+import { interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import { useSidePanel } from "@/app/conversation/SidePanel";
 import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
@@ -554,13 +554,13 @@ export function ConversationView({
       !!s.board &&
       latestRequest(s.board)?.state.type === "working",
   );
-  // The user stopped the latest request and nothing runs for it: the send button resumes it.
-  const stopped = useBoard(
-    (s) =>
-      s.board?.conversationId === conversationId &&
-      !!s.board &&
-      latestRequest(s.board)?.state.type === "stopped",
-  );
+  // The user stopped the latest request, or Brigadier quit while it ran, and nothing runs for
+  // it: the send button resumes it.
+  const stopped = useBoard((s) => {
+    if (s.board?.conversationId !== conversationId || !s.board) return false;
+    const state = latestRequest(s.board)?.state;
+    return state?.type === "stopped" || (state?.type === "failed" && interruptedByQuit(state.error));
+  });
   // Not while the orchestrator's turn for the request runs (the composer can stop it); a
   // request whose workers still run can be redone.
   const runRequest = digest?.runRequest ?? null;

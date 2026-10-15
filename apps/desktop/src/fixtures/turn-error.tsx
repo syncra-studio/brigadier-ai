@@ -2,7 +2,8 @@
  * A session turn that failed, through the real ConversationView (the phase-flow fixture, its
  * second request failed): the calm error row, its Details, Try again, and the notice that no
  * longer repeats the error above the composer. A bare ErrorState sits under it. `?drive=1`
- * writes what it saw into `#turn-error-result`; requests never reach a daemon.
+ * writes what it saw into `#turn-error-result`; requests never reach a daemon. With
+ * `?interrupted=1` the turn was cut off by Brigadier quitting instead (UI audit H1).
  */
 // oxlint-disable-next-line import/no-unassigned-import
 import "@/fixtures/flow";
@@ -13,7 +14,10 @@ import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import type { Notice, Request } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 
-const RAW = 'API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}';
+const INTERRUPTED = new URLSearchParams(location.search).has("interrupted");
+const RAW = INTERRUPTED
+  ? "Brigadier quit while this was running."
+  : 'API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}';
 const OTHER = "The sandbox isn't available here: commands run without it.";
 
 const calls: Request[] = [];
@@ -42,8 +46,8 @@ useBoard.setState(({ board }) => {
     board: {
       ...board,
       requests: { ...board.requests, r2: { ...failed, state: { type: "failed", error: RAW }, endedAtMs: failed.startedAtMs + 34_000 } },
-      run: "failed",
-      runError: RAW,
+      run: INTERRUPTED ? "idle" : "failed",
+      runError: INTERRUPTED ? null : RAW,
       runRequest: null,
       notices,
     },
@@ -84,11 +88,13 @@ async function drive() {
   await pause();
   seen.rawShownAfter = row.innerText.includes("Internal server error");
   seen.copy = details?.querySelector("button")?.textContent ?? null;
-  const again = [...row.querySelectorAll("button")].find((button) => button.textContent?.includes("Try again"));
+  seen.buttons = [...row.querySelectorAll("button")].map((button) => button.textContent?.trim());
+  const again = [...row.querySelectorAll("button")].find((button) => button.textContent?.includes(INTERRUPTED ? "Continue" : "Try again"));
   seen.tryAgain = !!again;
   again?.click();
   await pause(300);
   seen.sent = calls.flatMap((call) => (call.method === "sendMessage" ? [call.text] : []));
+  seen.resumed = calls.filter((call) => call.method === "resume").length;
   const plain = document.querySelector<HTMLElement>('[data-fixture="bare"]');
   seen.bare = {
     text: plain?.innerText ?? null,
