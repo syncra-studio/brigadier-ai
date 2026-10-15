@@ -13,7 +13,7 @@ use std::io::Read;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -32,7 +32,7 @@ const ICON_BYTES: u64 = 100 * 1024;
 const PAGE_BYTES: u64 = 256 * 1024;
 /// How long a site without an icon isn't asked again.
 const MISS_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-/// Each fetch's whole time.
+/// Each fetch's whole time, its redirects' too.
 const TIMEOUT: Duration = Duration::from_secs(3);
 /// Icons looked up in this run, kept in memory; past it the disk cache answers.
 const REMEMBERED: usize = 512;
@@ -262,17 +262,19 @@ fn fetch_icon(host: &str) -> Option<String> {
     if let Some(url) = fetch_image(&agent, &format!("https://{host}/favicon.ico")) {
         return Some(url);
     }
-    let page = fetch(&agent, &format!("https://{host}/"), PAGE_BYTES)?;
-    let href = icon_link(&String::from_utf8_lossy(&page.0))?;
-    fetch_image(&agent, &resolve(host, &href)?)
+    let (page, _, at) = fetch(&agent, &format!("https://{host}/"), PAGE_BYTES)?;
+    let href = icon_link(&String::from_utf8_lossy(&page))?;
+    fetch_image(&agent, &resolve(&at, &href)?)
 }
 
 /// Redirects a fetch follows.
 const REDIRECTS: usize = 3;
 
-/// A GET's body and its content type, when it answered 200 within `limit` bytes. Each address on
-/// the way, the first and every redirect's, must be a site by name.
-fn fetch(agent: &ureq::Agent, url: &str, limit: u64) -> Option<(Vec<u8>, String)> {
+/// A GET's body, its content type and the address that answered (after redirects), when it
+/// answered 200 within `limit` bytes and `TIMEOUT`. Each address on the way, the first and every
+/// redirect's, must be a site by name.
+fn fetch(agent: &ureq::Agent, url: &str, limit: u64) -> Option<(Vec<u8>, String, String)> {
+    let deadline = Instant::now() + TIMEOUT;
     let mut url = url.to_owned();
     let mut hops = 0;
     let response = loop {
@@ -280,7 +282,17 @@ fn fetch(agent: &ureq::Agent, url: &str, limit: u64) -> Option<(Vec<u8>, String)
         if !named(&uri) {
             return None;
         }
-        let response = agent.get(&url).call().ok()?;
+        // What is left of the fetch's time, for this hop and its body.
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())?;
+        let response = agent
+            .get(&url)
+            .config()
+            .timeout_global(Some(left))
+            .build()
+            .call()
+            .ok()?;
         if !response.status().is_redirection() {
             break response;
         }
@@ -289,7 +301,7 @@ fn fetch(agent: &ureq::Agent, url: &str, limit: u64) -> Option<(Vec<u8>, String)
         if hops > REDIRECTS {
             return None;
         }
-        url = resolve(uri.host()?, location)?;
+        url = resolve(&url, location)?;
     };
     if response.status().as_u16() != 200 {
         return None;
@@ -311,12 +323,12 @@ fn fetch(agent: &ureq::Agent, url: &str, limit: u64) -> Option<(Vec<u8>, String)
         .take(limit + 1)
         .read_to_end(&mut bytes)
         .ok()?;
-    (bytes.len() as u64 <= limit).then_some((bytes, kind))
+    (bytes.len() as u64 <= limit).then_some((bytes, kind, url))
 }
 
 /// An image at `url` as a `data:` URL, when it is one.
 fn fetch_image(agent: &ureq::Agent, url: &str) -> Option<String> {
-    let (bytes, kind) = fetch(agent, url, ICON_BYTES)?;
+    let (bytes, kind, _) = fetch(agent, url, ICON_BYTES)?;
     let mime = image_kind(&bytes, &kind)?;
     Some(format!("data:{mime};base64,{}", BASE64.encode(&bytes)))
 }
@@ -398,8 +410,10 @@ fn attribute(tag: &str, name: &str) -> Option<String> {
     None
 }
 
-/// An icon link resolved against the site: absolute HTTPS, protocol-relative, or a path.
-fn resolve(host: &str, href: &str) -> Option<String> {
+/// An icon link or a redirect's location resolved against the address it came from (`base`, an
+/// HTTPS address): absolute HTTPS, protocol-relative, a path from the site's root, or one from
+/// `base`'s folder.
+fn resolve(base: &str, href: &str) -> Option<String> {
     let href = href.trim();
     if href.starts_with("data:") {
         return None;
@@ -413,12 +427,16 @@ fn resolve(host: &str, href: &str) -> Option<String> {
     if href.contains("://") {
         return None;
     }
-    let path = href.strip_prefix("./").unwrap_or(href);
-    Some(if path.starts_with('/') {
-        format!("https://{host}{path}")
-    } else {
-        format!("https://{host}/{path}")
-    })
+    let base: Uri = base.parse().ok()?;
+    let host = base.host()?;
+    if href.starts_with('/') {
+        return Some(format!("https://{host}{href}"));
+    }
+    let path = base.path();
+    let folder = &path[..path.rfind('/').map_or(0, |at| at + 1)];
+    let folder = if folder.is_empty() { "/" } else { folder };
+    let href = href.strip_prefix("./").unwrap_or(href);
+    Some(format!("https://{host}{folder}{href}"))
 }
 
 #[cfg(test)]
@@ -454,7 +472,7 @@ mod tests {
         let href = icon_link(page).unwrap();
         assert_eq!(href, "/static/fav.png?v=2&x=1");
         assert_eq!(
-            resolve("nodejs.org", &href).as_deref(),
+            resolve("https://nodejs.org/", &href).as_deref(),
             Some("https://nodejs.org/static/fav.png?v=2&x=1")
         );
         assert_eq!(
@@ -462,15 +480,28 @@ mod tests {
             Some("touch.png")
         );
         assert_eq!(
-            resolve("a.dev", "touch.png").as_deref(),
+            resolve("https://a.dev/", "touch.png").as_deref(),
             Some("https://a.dev/touch.png")
         );
         assert_eq!(
-            resolve("a.dev", "//cdn.a.dev/i.ico").as_deref(),
+            resolve("https://a.dev/", "//cdn.a.dev/i.ico").as_deref(),
             Some("https://cdn.a.dev/i.ico")
         );
         // An HTTP icon isn't fetched.
-        assert_eq!(resolve("a.dev", "http://a.dev/i.ico"), None);
+        assert_eq!(resolve("https://a.dev/", "http://a.dev/i.ico"), None);
+        // A page or a redirect deeper in the site: a bare name is in its folder.
+        assert_eq!(
+            resolve("https://a.dev/assets/old.ico?v=1", "new.ico").as_deref(),
+            Some("https://a.dev/assets/new.ico")
+        );
+        assert_eq!(
+            resolve("https://a.dev/en/", "./i.png").as_deref(),
+            Some("https://a.dev/en/i.png")
+        );
+        assert_eq!(
+            resolve("https://a.dev/en/home", "/i.png").as_deref(),
+            Some("https://a.dev/i.png")
+        );
         assert_eq!(icon_link(r#"<link rel="preload" href="/x">"#), None);
     }
 
