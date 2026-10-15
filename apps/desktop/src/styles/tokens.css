@@ -713,6 +713,8 @@
   /* Live words ("Thinking", a running step): dim, with a brighter band sweeping across. */
   --live-text: color-mix(in oklab, var(--foreground) 38.5%, transparent);
   --live-text-highlight: color-mix(in oklab, var(--foreground) 75%, transparent);
+  /* Answer text the user added to the chat stays marked, a translucent blue. */
+  --annotation-highlight: oklch(0.62 0.2 255 / 40%);
   /* "Awaiting approval": live words, fainter than the work's. */
   --live-text-quiet: color-mix(in oklab, var(--foreground) 30%, transparent);
   /* The titlebar's icon buttons: the glyph at rest, and the wash while hovered, held down,

@@ -131,6 +131,23 @@ test("messages that fail to load say so above the composer, and Retry loads them
   assert.ok(seen.after.rows > 0, `${seen.after.rows} messages after Retry`);
 });
 
+test("text selected in an answer gets a pill: Add to chat quotes it into the composer and keeps it marked; Ask in side chat opens one with it", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{
+    pills: number; placed: { bottomGap: number; centre: number } | null; buttons: (string | null)[]; composer: string | null; marked: number;
+    afterAdd: { pill: boolean; collapsed: boolean | null }; sideChat: string[]; draft: string | null;
+  }>(t, "drive=select&kind=session");
+  // 8px above the selection, centred on it.
+  assert.ok(seen.placed && Math.abs(seen.placed.bottomGap - 8) <= 1 && Math.abs(seen.placed.centre) <= 1, JSON.stringify(seen.placed));
+  assert.deepEqual(seen.buttons, ["Add to chat", "Ask in side chat"]);
+  assert.match(seen.composer ?? "", /> Rounding now uses half-up everywhere\./);
+  assert.equal(seen.marked, 1);
+  assert.deepEqual(seen.afterAdd, { pill: false, collapsed: true });
+  // One side chat of this session (its tab asks for it again as it opens).
+  assert.equal(seen.pills, 1);
+  assert.deepEqual([...new Set(seen.sideChat)], ["openSideChat work-blocks"]);
+  assert.equal(seen.draft, "> Rounding now uses half-up everywhere.\n\n");
+});
+
 test("a message steered in before the turn did anything sits under the first, above its header", { timeout: 120000 }, async (t) => {
   const seen = await drive<{ bubble: string | null; above: boolean; header: string | null; status: string | null; stillAbove: boolean }>(t, "drive=early");
   assert.match(seen.bubble ?? "", /Use banker's rounding instead/);

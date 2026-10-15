@@ -52,6 +52,7 @@ import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
 import { PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
 import { ViewContext } from "@/app/conversation/viewContext";
+import { SelectionPill } from "@/app/conversation/SelectionPill";
 import { ComposerRail, ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import { ComposerAttachments } from "@/components/assistant-ui/elements/attachment";
 import { ModelSelector } from "@/components/assistant-ui/elements/model-selector";
@@ -176,6 +177,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
         )}
         {/* Kept while an approval has its place, so the draft and its caret stay. */}
         <ComposerPrimitive.Root className={cn("aui-composer-root relative flex w-full flex-col gap-1.5", slot && "hidden")}>
+          <SelectionPill />
           {/* The composer's card: lifted, an inner hairline for an edge, and no focus ring. */}
           <div
             ref={shell}

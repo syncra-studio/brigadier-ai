@@ -48,6 +48,7 @@ const query = new URLSearchParams(location.search);
 const drive = query.get("drive") ?? "turn";
 const ID = "work-blocks";
 const PEER = "work-blocks-peer";
+const SIDE = "work-blocks-side";
 const session = query.get("kind") === "session";
 const begun = Date.now() - 30_000;
 
@@ -134,6 +135,9 @@ mockIPC((command, payload) => {
       return { method: req.method, settings };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
+    case "openSideChat":
+      calls.push(`${req.method} ${req.conversationId}`);
+      return { method: req.method, conversation: { ...conversation(SIDE, "Side chat", "chat"), sideOf: ID } };
     case "stopBackgroundRun":
       calls.push(`${req.method} ${req.runId}`);
       return { method: req.method };
@@ -549,6 +553,52 @@ async function driveLoadFail(): Promise<object> {
   return { failed, after: { line: text(one("[data-slot=load-error]")), rows: all("[data-message-id]").length } };
 }
 
+/** Text selected in an answer: the pill over it adds it to the chat or asks about it in a side chat. */
+async function driveSelect(): Promise<object> {
+  await settle(600);
+  const answer: Message = {
+    id: "a1", conversationId: ID, seq: 2, role: "assistant", blob: null, createdAtMs: begun + 5000, attachments: [], mentions: [],
+    text: "Rounding now uses half-up everywhere.\n\nThe tests cover negative values too.", model: null, requestId: "r1", parentId: "r1", answerAtMs: begun + 5000,
+  };
+  daemon.messages = [...daemon.messages, answer];
+  daemon.run = "idle";
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change(() => ({ run: "idle", runRequest: null, head: "a1" }));
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 5000, worked: [{ fromMs: begun, toMs: begun + 5000 }] });
+  for (const end = performance.now() + 8000; performance.now() < end && !all("[data-role=assistant] p").some((p) => text(p)?.startsWith("Rounding")); ) await frame();
+  await settle();
+  const select = () => {
+    const paragraph = all("[data-role=assistant] p").find((p) => text(p)?.startsWith("Rounding"));
+    if (!paragraph) throw new Error("the answer's paragraph never showed");
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return range.getBoundingClientRect();
+  };
+  const pill = () => one("[data-slot=selection-pill]");
+  const box = select();
+  for (const end = performance.now() + 3000; performance.now() < end && !pill(); ) await frame();
+  const shown = pill();
+  const placed = shown ? { bottomGap: Math.round(box.top - shown.getBoundingClientRect().bottom), centre: Math.round(shown.getBoundingClientRect().left + shown.getBoundingClientRect().width / 2 - (box.left + box.width / 2)) } : null;
+  const buttons = all("button", shown ?? document.createElement("div")).map((button) => text(button));
+  const pills = all("[data-slot=selection-pill]").length;
+  all<HTMLButtonElement>("button", shown ?? document.createElement("div")).find((button) => text(button) === "Add to chat")?.click();
+  await settle();
+  const composer = text(one("[contenteditable=true][aria-label='Message input']"));
+  const marked = CSS.highlights.get("thread-annotation")?.size ?? 0;
+  const afterAdd = { pill: !!pill(), collapsed: document.getSelection()?.isCollapsed ?? null };
+  // Selected again: Ask in side chat.
+  select();
+  for (const end = performance.now() + 3000; performance.now() < end && !pill(); ) await frame();
+  all<HTMLButtonElement>("button", pill() ?? document.createElement("div")).find((button) => text(button) === "Ask in side chat")?.click();
+  for (const end = performance.now() + 3000; performance.now() < end && !calls.some((call) => call.startsWith("openSideChat")); ) await frame();
+  await settle();
+  const draft = JSON.parse(localStorage.getItem("brigadier.drafts") ?? "{}")[SIDE]?.text ?? null;
+  return { pills, placed, buttons, composer, marked, afterAdd, sideChat: calls.filter((call) => call.startsWith("openSideChat")), draft };
+}
+
 async function driveQueue(): Promise<object> {
   await settle(600);
   // The composer's editor comes in its own chunk after a plain field and takes the focus a beat
@@ -630,7 +680,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

@@ -412,6 +412,11 @@
   }
 }
 
+/* Answer text added to the chat (the selection pill's "Add to chat"). */
+::highlight(thread-annotation) {
+  background-color: var(--annotation-highlight);
+}
+
 /* A wait on the user's approval: the same sweep over fainter words. */
 @utility shimmer-quiet {
   --shimmer-base: var(--live-text-quiet);
