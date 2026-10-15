@@ -53,7 +53,7 @@ import { useNow } from "@/hooks/use-now";
 import { openFolder, request, revealPath } from "@/ipc/client";
 import type { ReviewDiff, ReviewFile, ReviewScope } from "@/ipc/generated";
 import { formatSentAt } from "@/lib/format";
-import { languageOf } from "@/lib/highlight";
+import { languageOf } from "@/lib/languages";
 import { type DiffLine, type DiffRow, filePatch, type PatchFile, parsePatch } from "@/lib/patch";
 import { LineText, lineKey, pairChanges, TINT, TokensContext, useSideTokens } from "@/app/conversation/diffLines";
 import { cn } from "@/lib/utils";

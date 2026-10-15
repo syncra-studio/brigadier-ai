@@ -6,7 +6,9 @@
 import { createHighlighterCore, type HighlighterCore, type LanguageRegistration } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 
-export type Token = { content: string; color: string | undefined; italic: boolean };
+import type { Token } from "@/lib/languages";
+
+export { HIGHLIGHT_CHARS, languageOf, type Token } from "@/lib/languages";
 
 type Grammar = () => Promise<{ default: LanguageRegistration[] }>;
 
@@ -68,17 +70,6 @@ const ALIASES: Record<string, string> = {
   ps1: "powershell",
   svg: "xml",
 };
-
-/** Text longer than this shows without colours, which would take too long to work out. */
-export const HIGHLIGHT_CHARS = 300_000;
-
-/** The grammar for a file: its extension, or its name for the ones known without one. */
-export function languageOf(path: string): string {
-  const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
-  if (name === "dockerfile" || name === "makefile") return name;
-  const dot = name.lastIndexOf(".");
-  return dot < 0 ? "" : name.slice(dot + 1);
-}
 
 let highlighter: Promise<HighlighterCore> | null = null;
 

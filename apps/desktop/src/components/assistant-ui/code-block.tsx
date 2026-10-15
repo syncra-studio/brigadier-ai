@@ -18,7 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import type { Token } from "@/lib/highlight";
+import type { Token } from "@/lib/languages";
 import { cn } from "@/lib/utils";
 
 /** How a block's language is named in its header ("Bash", "Diff", "TypeScript"). */

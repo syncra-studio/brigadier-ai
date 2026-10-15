@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 
-import { HIGHLIGHT_CHARS, highlight, languageOf, type Token } from "@/lib/highlight";
+import { HIGHLIGHT_CHARS, languageOf, type Token } from "@/lib/languages";
 import { type DiffLine, type DiffRow, wordSpans } from "@/lib/patch";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +29,9 @@ export function useSideTokens(path: string, rows: readonly DiffRow[] | undefined
     const afterText = news.map((line) => line.text).join("\n");
     if (beforeText.length + afterText.length > HIGHLIGHT_CHARS) return;
     let live = true;
-    Promise.all([highlight(beforeText, language), highlight(afterText, language)])
+    // shiki loads on demand, as for code blocks: never part of the first paint.
+    import("@/lib/highlight")
+      .then(({ highlight }) => Promise.all([highlight(beforeText, language), highlight(afterText, language)]))
       .then(([before, after]) => {
         if (!live || !before || !after) return;
         const tokens: LineTokens = new Map();
