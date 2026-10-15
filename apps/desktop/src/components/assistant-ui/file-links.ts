@@ -3,9 +3,7 @@
  * `markdown-text`, so the views that provide or share them don't load the markdown renderer
  * at startup (it loads lazily with the first message).
  */
-import { createContext } from "react";
-
-import { useContext } from "react";
+import { createContext, type ReactNode, useContext } from "react";
 
 import { selectedConversation, useApp } from "@/state/store";
 
@@ -27,6 +25,12 @@ export function useCheckoutRoot(): string | null {
 export const OpenFileContext = createContext<(path: string, line: number | null) => boolean>(
   () => false,
 );
+
+/**
+ * How a `@task-N` mention in the user's own message shows (`brigadier-task:N` links): its
+ * worker's chip. Without it the mention stays as written.
+ */
+export const TaskMentionContext = createContext<((number: number) => ReactNode) | null>(null);
 
 /** The conversation whose messages hold the links, where a view shows one that isn't selected. */
 export const LinkConversationContext = createContext<string | null>(null);

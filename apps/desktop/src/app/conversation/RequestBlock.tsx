@@ -22,7 +22,7 @@ import { ThinkingLine } from "@/app/conversation/ThinkingLine";
 import { WorkFold } from "@/app/conversation/WorkFold";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { InlineImageText } from "@/app/conversation/InlineImage";
-import { MentionText } from "@/app/conversation/Mentions";
+import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
@@ -444,8 +444,8 @@ const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly Attach
       data-slot="request-steer"
       className="group/steer flex max-w-7/10 min-w-0 flex-col items-end gap-y-1 self-end"
     >
-      <div className="bg-muted text-foreground rounded-bubble max-w-full min-w-0 px-4 py-2.5 whitespace-pre-wrap wrap-anywhere">
-        <InlineImageText text={text} attachments={attachments} Text={MentionText} />
+      <div className="bg-muted text-foreground rounded-bubble max-w-full min-w-0 px-4 py-2.5 wrap-anywhere [&_.aui-md-inline-code]:bg-foreground/10">
+        <InlineImageText text={text} attachments={attachments} Text={UserMarkdownText} />
       </div>
       {held && <HeldNote held={held} />}
       <div className="text-muted-foreground flex items-center gap-1 opacity-0 transition-opacity group-hover/steer:opacity-100 group-focus-within/steer:opacity-100">

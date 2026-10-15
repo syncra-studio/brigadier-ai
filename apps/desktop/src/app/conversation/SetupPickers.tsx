@@ -361,7 +361,7 @@ export function ConversationModelPicker({
         disabled={fixed || action.busy}
         open={open}
         onOpenChange={onOpenChange}
-        label={conversation.kind === "session" ? "Orchestrator model" : "Model"}
+        label="Model"
         onChange={(choice) =>
           action.run(() =>
             updateSetup(

@@ -10,6 +10,8 @@ import {
   ComposerMentions,
   type MentionOption,
 } from "@/components/assistant-ui/elements/composer-mentions";
+import { TaskMentionContext } from "@/components/assistant-ui/file-links";
+import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
 import { listFiles } from "@/state/actions";
 import { useBoard } from "@/state/board";
@@ -68,6 +70,24 @@ export const MentionText: FC<{ text: string }> = ({ text }) => {
   );
 };
 
+/** A worker the user @-mentioned, by its number: its chip, else the mention as written. */
+function TaskByNumber({ number }: { number: number }) {
+  const id = useBoard((s) => Object.values(s.board?.tasks ?? {}).find((task) => task.number === number)?.id ?? null);
+  return id ? <WorkerChip taskId={id} /> : <>@task-{number}</>;
+}
+
+const taskChip = (number: number) => <TaskByNumber number={number} />;
+
+/**
+ * The user's own words as they wrote them in Markdown (as the answer renders, without its
+ * streaming fade), each line break kept, and the workers they @-mentioned as chips.
+ */
+export const UserMarkdownText: FC<{ text: string }> = ({ text }) => (
+  <TaskMentionContext.Provider value={taskChip}>
+    <MarkdownBlock text={text.replace(TASK, (_, number: string) => `[@task-${number}](brigadier-task:${number})`)} breaks />
+  </TaskMentionContext.Provider>
+);
+
 /** A user message's text part, its @-mentioned workers as chips. */
 export const UserMessageText: FC<TextMessagePartProps> = ({ text }) => {
   const attachments = useAuiState((s) => s.message.metadata.custom["attachments"]) as AttachmentRef[] | undefined;
@@ -78,7 +98,7 @@ export const UserMessageText: FC<TextMessagePartProps> = ({ text }) => {
         From page: {page.title}
       </span>
     ))}
-    <InlineImageText text={text} attachments={attachments ?? []} Text={MentionText} />
+    <InlineImageText text={text} attachments={attachments ?? []} Text={UserMarkdownText} />
   </>;
 };
 

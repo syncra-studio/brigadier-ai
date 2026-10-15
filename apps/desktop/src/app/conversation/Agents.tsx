@@ -20,7 +20,6 @@ import { composerPill } from "@/components/assistant-ui/elements/surfaces";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import type { Task } from "@/ipc/generated";
-import { brainUseLabel, brainUseText } from "@/lib/brainUse";
 import { formatAgo, formatDuration } from "@/lib/format";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
@@ -63,17 +62,6 @@ function RowTime({ task }: { task: Task }) {
   </span>;
 }
 
-/** What the worker asked the Brain and taught it (SESSION-FIXES-PLAN.md Q6.6). */
-function BrainUseTag({ task }: { task: Task }) {
-  const label = brainUseLabel(task.brain);
-  if (!label) return null;
-  return (
-    <span data-slot="brain-use" title={brainUseText(task.brain)} className="text-foreground/50 shrink-0 text-xs tabular-nums">
-      {label}
-    </span>
-  );
-}
-
 const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
   const task = useBoard((s) => s.board?.tasks[taskId]);
   const name = useWorkerName(taskId);
@@ -96,7 +84,6 @@ const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-h-6 items-center gap-2">
             <span className="min-w-0 flex-1 truncate text-label">{name}</span>
-            <BrainUseTag task={task} />
             <RowTime task={task} />
           </span>
           {status && (

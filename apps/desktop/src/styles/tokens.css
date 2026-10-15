@@ -44,7 +44,7 @@
  *               max-h-composer-max            composer input maximum height (then it scrolls)
  *               max-h-queue-max               the queue card's maximum height (then it scrolls)
  *               scroll-mt-thread-turn         where a message row stops under the thread's top when scrolled to;
- *                                             thread-composer-gap, thread-fade-{bottom,top} (globals.css)
+ *                                             thread-composer-gap, thread-fade-{bottom,top}, thread-scroll-strip (globals.css)
  *               size-attachment-thumb, w-attachment-card  an image attachment, a file attachment
  *               mx-rail-inset, -mb-rail-tuck  the composer rail: its side inset, the tuck under the card
  *               {px,py,gap,size,h}-notice-*   the Full access card (nine tenths of a card), with
@@ -94,7 +94,7 @@
  *               browser-{pane,tab-min,tab-max,composer}  the Browser tab's pane, its tabs' least
  *                                             and most, its composer
  *               max-w-new-tab-tools           the New tab page's tool grid (--container-new-tab-tools)
- *               max-h-user-message            a long user message, clipped (about 15 lines)
+ *               max-h-user-message            a long user message, clipped (20 lines)
  *               max-h-peer-message            a message between sessions, folded (six lines)
  *               max-w-thread, max-w-{2xs,xs,sm,md,lg} readable column / surface widths
  *               max-w-settings                the Settings page's column
@@ -220,7 +220,10 @@
      over 30px above the composer and 20px under the top bar. */
   --spacing-thread-turn: 10.6875rem;
   --spacing-thread-composer-gap: 5.25rem;
-  --spacing-thread-fade-bottom: 1.875rem;
+  --spacing-thread-fade-bottom: 1.5rem;
+  /* The strip over the composer the scroll button sits in (its 1.5rem gap and 2rem circle):
+     solid background, so no text shows under the button. */
+  --spacing-thread-scroll-strip: 3.5rem;
   --spacing-thread-fade-top: 1.25rem;
   /* The composer grows with its text up to a quarter of the window, then scrolls. */
   --spacing-composer-max: 25dvh;
@@ -252,6 +255,8 @@
   --spacing-queue-max: 30dvh;
   /* Attachments: an image thumbnail's side, a file card's width. */
   --spacing-attachment-thumb: 7.625rem;
+  /* An image the user sent, above their bubble. */
+  --spacing-attachment-sent: 5rem;
   --spacing-attachment-card: 14rem;
   /* A mockup's tab (SESSION-FIXES-PLAN.md Q10): its header band, a floating control's height,
      a note's marker and the gap from it to the note's box, the box's width and heights
@@ -400,7 +405,7 @@
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;
   --spacing-agent-mark: 4.5rem;
-  --spacing-user-message: 22.5rem;
+  --spacing-user-message: 20lh;
   --spacing-peer-message: 6lh;
   /* Placeholder height for off-screen messages skipped by content-visibility. */
 
@@ -834,7 +839,6 @@
   --spacing-panel-tab: 13rem;
   --spacing-panel-tab-min: 4.75rem;
   --spacing-session-tab-separator-height: 0.625rem;
-  --spacing-user-message: 18.75rem;
 
   --radius-xs: 0.125rem;
   --radius-sm: 0.25rem;

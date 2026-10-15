@@ -32,7 +32,7 @@ export function MessageAttachments({
       {attachments.map((attachment) => (
         <li key={attachment.id} className="flex">
           {attachment.mime.startsWith("image/") ? (
-            <ImageTile source={{ ref: attachment }} name={attachment.name} />
+            <ImageTile source={{ ref: attachment }} name={attachment.name} sent />
           ) : (
             <FileTile
               name={attachment.name}

@@ -23,6 +23,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     chips: [string, string][];
     code: string[];
     asked: string[];
+    user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string };
   } & Record<"diff-patch" | "diff-edit" | "diff-empty" | "diff-missing", {
     name: string | null; counts: string | null; numbers: string[]; kinds: string[]; gaps: string[]; marks: string[]; empty: string | null; coloured: boolean;
   }>;
@@ -68,4 +69,9 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.deepEqual(seen.chips, [["src/cli.ts (line 64)", "/repo/src/cli.ts:64"], ["src/made-later.ts", "/repo/src/made-later.ts"]]);
   assert.deepEqual(seen.code, ["Math.round", "src/gone.ts"]);
   assert.deepEqual(seen.asked, ["/repo/src/gone.ts", "/repo/src/made-later.ts"]);
+  // The user's own Markdown renders, its line breaks kept; a mention of no known worker stays as written.
+  assert.deepEqual(seen.user, {
+    strong: ["1. CSV"], em: ["line"], breaks: 1, paragraphs: 2, code: ["round"],
+    text: "1. CSV — first line second line Ask @task-9 about round",
+  });
 });

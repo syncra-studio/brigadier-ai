@@ -68,7 +68,8 @@ test("an answered question reads as what it asked, in one line, and the answer",
   assert.equal(questionRowWords(watch), "Asking questions");
   const answered = { ...watch, answer: "Watch", answeredAtMs: 2 };
   assert.deepEqual(askedRow(answered), { asked: "Watch CI for `d177d69`?", more: 0, answer: "Watch" });
-  assert.equal(questionRowWords(answered), "Asked: Watch CI for `d177d69`? → Watch");
+  // Its one-line words (the row's label) leave the backticks out; the row shows them as code.
+  assert.equal(questionRowWords(answered), "Asked: Watch CI for d177d69? → Watch");
   // A round: its first question, and how many more.
   const round: Question = {
     ...watch, text: "First?\nSecond?\nThird?", options: [], recommended: null,
@@ -98,7 +99,7 @@ test("the answered question's row shows the question, its code, and the answer a
     assert.match(html, /<code[^>]*>d177d69<\/code>/);
     assert.match(html, /data-slot="question-answer"[^>]*><span class="truncate">Watch<\/span><\/span>/);
     // The whole question waits in the row's tooltip; the rest opens under it.
-    assert.match(html, /title="Watch CI for `d177d69`\? It will probably fail/);
+    assert.match(html, /title="Watch CI for d177d69\? It will probably fail/);
     assert.doesNotMatch(html, />Asked a question</);
     // Pending, it still says it asks.
     const pending = render(watch);

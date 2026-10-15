@@ -414,6 +414,8 @@ const steps = {
       // How far the fades reach: under the top bar, and above the floating footer.
       topFade: fade(".thread-top-fade"),
       bottomFade: round(fade(".thread-bottom-fade") - footer),
+      // Where the solid background starts above the composer (the fade's top plus its gradient), against the scroll button's top.
+      buttonOnSolid: round($(".aui-thread-scroll-to-bottom")!.getBoundingClientRect().top - ($(".thread-bottom-fade")!.getBoundingClientRect().top + 24)),
     };
   },
   /** The button's threshold and place: the last row 8px, then 9px, under the composer's top. */

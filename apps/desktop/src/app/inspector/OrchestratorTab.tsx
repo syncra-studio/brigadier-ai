@@ -212,7 +212,7 @@ function ContextMeter({
         <span className="flex-1 font-medium">
           Context{" "}
           <span className="text-muted-foreground font-normal">
-            · CLI generation {generation}
+            · CLI generation {generation + 1}
           </span>
         </span>
         <span className="text-muted-foreground tabular-nums">
@@ -302,7 +302,7 @@ function GenerationHeader({ generation, injections }: { generation: Generation; 
   const { rebirth } = generation;
   return (
     <div className="h-row-sm bg-muted/40 text-muted-foreground flex items-center gap-2 px-3 text-xs">
-      <span className="text-foreground font-medium">Generation {generation.generation}</span>
+      <span className="text-foreground font-medium">Generation {generation.generation + 1}</span>
       <span className="min-w-0 flex-1 truncate">
         {rebirth
           ? `reborn ${formatClock(rebirth.atMs)} at ${formatTokens(rebirth.record.atTokens)} tokens · briefing ${formatTokens(rebirth.record.briefingTokens)}`

@@ -226,6 +226,8 @@ test("a question card's row says what it asks, what it asked, and the recommende
   assert.deepEqual(questionAnswers(single), ["No"]);
   assert.equal(answerWords(item, "Yes"), "Yes (Recommended)");
   assert.equal(answerWords(item, "No"), "No");
+  // Skipped: said so.
+  assert.equal(answerWords(item, ""), "No answer provided");
   const merge = { ...single, kind: { type: "merge" as const, branch: "b", base: "main", conflicted: false, conflicts: [] }, answer: null, answeredAtMs: null };
   assert.equal(questionRowWords(merge), "Asking whether to merge into main");
 });

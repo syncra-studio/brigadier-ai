@@ -7,8 +7,10 @@ import {
   askedRow,
   questionAnswers,
   questionRound,
+  plainCode,
   questionRowWords,
 } from "@/app/conversation/cards/questionRound";
+import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { CHEVRON, OPENS, ROW, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -40,7 +42,7 @@ export const QuestionCardView = memo(function QuestionCardView({ cardId }: { car
   return (
     <Collapsible data-slot="question-row">
       <CollapsibleTrigger
-        title={round.map((item) => item.text).join("\n")}
+        title={round.map((item) => plainCode(item.text)).join("\n")}
         aria-label={words}
         className={cn(ROW, ROW_TOGGLE)}
       >
@@ -53,7 +55,7 @@ export const QuestionCardView = memo(function QuestionCardView({ cardId }: { car
             </span>
             <span aria-hidden className="text-foreground/40 shrink-0">→</span>
             <Badge data-slot="question-answer" variant="secondary" className="max-w-40">
-              <span className="truncate">{asked.answer}</span>
+              <span className="truncate"><CodeSpans text={asked.answer} /></span>
             </Badge>
           </>
         ) : (
@@ -65,9 +67,9 @@ export const QuestionCardView = memo(function QuestionCardView({ cardId }: { car
         <dl className="flex flex-col gap-3 pt-2 pb-1 text-sm">
           {round.map((item, index) => (
             <div key={index} className="flex flex-col gap-1">
-              <dt className="text-foreground/60 whitespace-pre-wrap wrap-anywhere"><CodeSpans text={item.text} /></dt>
+              <dt className="text-foreground/60 wrap-anywhere [&_.aui-md>:first-child]:mt-0 [&_.aui-md>:last-child]:mb-0"><MarkdownBlock text={item.text} /></dt>
               <dd className="text-foreground/30 whitespace-pre-wrap wrap-anywhere">
-                {answerWords(item, answers[index] ?? "")}
+                <CodeSpans text={answerWords(item, answers[index] ?? "")} />
               </dd>
             </div>
           ))}

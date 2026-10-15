@@ -14,6 +14,8 @@
  * - A web search: its `site:` operator after a bar, and nothing to open.
  * - Diffs: a real patch numbered, coloured and word-marked; an edit rebuilt from its call
  *   unnumbered; an empty and a missing diff's placeholders.
+ * - The user's own message: its Markdown rendered, each line break kept, an unknown worker's
+ *   mention left as written.
  * - An answer's inline code: a file of the checkout is a chip (from the file list, or asked by
  *   its exact path when the list is cut short), anything else stays code.
  */
@@ -27,6 +29,7 @@ import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { stepWords } from "@/app/conversation/activity/words";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
+import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, OrchestratorStep, Request } from "@/ipc/generated";
@@ -141,6 +144,9 @@ function Page() {
         <Case id="diff-missing">
           <InlineDiff path="src/math.js" diff={null} />
         </Case>
+        <Case id="user">
+          <UserMarkdownText text={"**1. CSV** — first *line*\nsecond line\n\nAsk @task-9 about `round`"} />
+        </Case>
         <Case id="chips">
           <MarkdownBlock text={answer} />
         </Case>
@@ -213,6 +219,15 @@ async function measure(): Promise<object> {
   out.chips = all("[data-slot=file-chip]", at("chips")).map((chip) => [text(chip), chip.getAttribute("href")]);
   out.code = all("code", at("chips")).map((code) => text(code));
   out.asked = asked.toSorted();
+  const user = at("user");
+  out.user = {
+    strong: all("strong", user).map((node) => text(node)),
+    em: all("em", user).map((node) => text(node)),
+    breaks: all("br", user).length,
+    paragraphs: all("p", user).length,
+    code: all("code", user).map((node) => text(node)),
+    text: text(user),
+  };
   const searchRow = at("search").firstElementChild;
   out.search = { row: text(searchRow), opens: !!one("[aria-expanded]", at("search")) || searchRow?.getAttribute("role") === "button" };
   return out;

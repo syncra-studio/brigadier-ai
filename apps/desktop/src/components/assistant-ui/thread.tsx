@@ -42,6 +42,7 @@ import { ThreadScroller } from "@/components/assistant-ui/thread-scroll";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
 import { formatDaySeparator, formatSentAt, sameDay } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -565,13 +566,14 @@ export const MessageText: FC<TextMessagePartProps> = (props) => (
 );
 
 /** Markdown outside a thread message, such as a worker's replies in its panel. */
-export const MarkdownBlock: FC<{ text: string; streaming?: boolean }> = ({
+export const MarkdownBlock: FC<{ text: string; streaming?: boolean; breaks?: boolean }> = ({
   text,
   streaming = false,
+  breaks = false,
 }) => (
   <TextMessagePartProvider text={text} isRunning={streaming}>
     <Suspense fallback={<p className="whitespace-pre-wrap">{text}</p>}>
-      <MarkdownText streaming={streaming} />
+      <MarkdownText streaming={streaming} breaks={breaks} />
     </Suspense>
   </TextMessagePartProvider>
 );
@@ -737,7 +739,9 @@ const UserMessageText: FC = () => {
       <div
         ref={ref}
         className={cn(
-          "whitespace-pre-wrap wrap-anywhere",
+          // Its own renderer (Markdown, in the conversation) lays the lines out; plain text keeps them.
+          "wrap-anywhere [&_.aui-md-inline-code]:bg-foreground/10",
+          !UserText && "whitespace-pre-wrap",
           !expanded && "max-h-user-message overflow-hidden",
         )}
       >
@@ -757,6 +761,17 @@ const UserMessageText: FC = () => {
   );
 };
 
+/** Copies the user's message; "Copied" with a check for a moment after. */
+const CopyMessage: FC = () => {
+  const text = useAuiState((s) => s.message.parts.map((part) => (part.type === "text" ? part.text : "")).join(""));
+  const { isCopied, copyToClipboard } = useCopyToClipboard({ copiedDuration: 1500 });
+  return (
+    <TooltipIconButton tooltip={isCopied ? "Copied" : "Copy"} className="aui-user-action-copy" onClick={() => copyToClipboard(text)}>
+      {isCopied ? <Check /> : <CopyIcon />}
+    </TooltipIconButton>
+  );
+};
+
 /** Whether the message may be edited or answered again now (the view decides, per message). */
 const canRework = (s: AssistantState) => s.message.metadata.custom["rework"] === true;
 
@@ -766,11 +781,7 @@ const UserActionBar: FC = () => {
   return (
     <ActionBarPrimitive.Root className="aui-user-action-bar-root text-muted-foreground flex items-center gap-1">
       <span className="pe-1 text-xs tabular-nums">{formatSentAt(sentAt, now)}</span>
-      <ActionBarPrimitive.Copy asChild>
-        <TooltipIconButton tooltip="Copy" className="aui-user-action-copy">
-          <CopyIcon />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Copy>
+      <CopyMessage />
       <AuiIf condition={canRework}>
         <ActionBarPrimitive.Edit asChild>
           <TooltipIconButton tooltip="Edit message" className="aui-user-action-edit">

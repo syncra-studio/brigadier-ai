@@ -39,7 +39,7 @@ const MachineRow: FC<{ kind: MachineWords }> = ({ kind }) => {
   );
 };
 
-/** "Decided: …", opening to why. */
+/** "Chose: …", opening to why. */
 const DecidedRow: FC<{ kind: DecidedStep }> = ({ kind }) => (
   <ThreadActivity
     data-slot="orchestrator-step"
@@ -61,7 +61,7 @@ const DecidedRow: FC<{ kind: DecidedStep }> = ({ kind }) => (
   >
     <CheckCircle aria-hidden className="size-4 shrink-0" />
     <span className="min-w-0 truncate">
-      Decided: <WorkerLine text={kind.what} />
+      Chose: <WorkerLine text={kind.what} />
     </span>
   </ThreadActivity>
 );

@@ -25,6 +25,7 @@ export function questionOpen(question: Question): boolean {
 
 /** An answer as the thread shows it: the recommended option says so. */
 export function answerWords(item: QuestionItem, answer: string): string {
+  if (!answer.trim()) return "No answer provided";
   const recommended = item.recommended === null ? undefined : item.options[item.recommended];
   return recommended?.label === answer ? `${answer} (Recommended)` : answer;
 }
@@ -48,10 +49,15 @@ export function askedRow(question: Question): { asked: string; more: number; ans
   return { asked: shortQuestion(round[0]?.text ?? ""), more: round.length - 1, answer: answer.split("\n")[0] ?? answer };
 }
 
+/** Text with its `code` spans' backticks left out, for where it can't show code (a tooltip, a label). */
+export function plainCode(text: string): string {
+  return codeParts(text).map((part) => part.text).join("");
+}
+
 /** The thread's row for a card: what it asks while open, what it asked once answered. */
 export function questionRowWords(question: Question): string {
   const row = askedRow(question);
-  if (row) return `Asked: ${row.asked}${row.more > 0 ? ` +${row.more} more` : ""} → ${row.answer}`;
+  if (row) return plainCode(`Asked: ${row.asked}${row.more > 0 ? ` +${row.more} more` : ""} → ${row.answer}`);
   const open = questionOpen(question);
   switch (question.kind.type) {
     case "merge":

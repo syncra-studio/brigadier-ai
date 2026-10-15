@@ -241,9 +241,12 @@ const RequestCapsule: FC<{ conversationId: string }> = ({ conversationId }) => {
   if (!requestId || (!diff && !running)) return null;
   const progress = running ? planProgress(running.plan, running.states) : null;
   const statuses = running ? running.plan.steps.map((_, index) => planStepStatus(running.states[index])) : [];
+  // A one-step plan counts nothing ("Phase 1 / 1"): its pill only says what needs saying.
+  const pill = !!progress && (statuses.length > 1 || progress.status === "review" || progress.status === "failed" || progress.status === "stopped");
+  if (!diff && !pill) return null;
   return (
     <Capsule>
-      {running && progress && (
+      {running && progress && pill && (
         <Pill
           label={`Plan steps: ${running.plan.title}`}
           tip={
@@ -278,7 +281,7 @@ const RequestCapsule: FC<{ conversationId: string }> = ({ conversationId }) => {
           )}
         </Pill>
       )}
-      {running && diff && <span aria-hidden>·</span>}
+      {running && pill && diff && <span aria-hidden>·</span>}
       {diff && <DiffPill diff={diff} />}
     </Capsule>
   );

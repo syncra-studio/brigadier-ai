@@ -215,17 +215,20 @@ export function ImageTile({
   source,
   name,
   busy = false,
+  sent = false,
   children,
 }: {
   source: AttachmentSource;
   name: string;
   /** Still being stored: dimmed, with a spinner passed in `children`. */
   busy?: boolean;
+  /** In a sent message: a smaller tile above the bubble. */
+  sent?: boolean;
   children?: ReactNode;
 }) {
   const url = useAttachmentUrl(source);
   return (
-    <div data-slot="attachment-image" className="group/tile size-attachment-thumb relative shrink-0">
+    <div data-slot="attachment-image" className={cn("group/tile relative shrink-0", sent ? "size-attachment-sent" : "size-attachment-thumb")}>
       <ImagePreview url={url} name={name}>
         <button
           type="button"

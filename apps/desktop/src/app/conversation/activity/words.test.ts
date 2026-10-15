@@ -214,3 +214,12 @@ test("a lead's call its denied approval stopped reads as declined, other failure
   assert.equal(denies([denied], { ...failed, status: "completed" }), false);
   assert.equal(denies([]), false);
 });
+
+test("Brigadier's own tools read in plain words, never as their internal names", () => {
+  const done = (name: string) => stepWords({ name: `mcp__brigadier__${name}`, detail: null, status: "completed" }).done;
+  assert.equal(done("record_findings"), "Noted what it found");
+  assert.equal(done("approve_outline"), "Checked a worker’s outline");
+  assert.equal(done("watch_ci"), "Watched CI");
+  // A web search's site operator reads after a bar.
+  assert.equal(stepWords({ name: "WebSearch", detail: "node lts site:nodejs.org", status: "completed" }).done, "Searched the web for node lts | nodejs.org");
+});

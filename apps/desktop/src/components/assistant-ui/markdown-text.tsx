@@ -20,6 +20,7 @@ import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
 import {
   LinkTimeContext,
   OpenFileContext,
+  TaskMentionContext,
   useCheckoutRoot,
   useLinkConversation,
 } from "@/components/assistant-ui/file-links";
@@ -47,7 +48,25 @@ type MarkdownTextProps = Partial<TextMessagePartProps> & {
    * still fading in: a line between the turn's steps is never held back.
    */
   paced?: boolean | undefined;
+  /** Each line break is a break, as the user typed it (the user's own messages). */
+  breaks?: boolean | undefined;
 };
+
+type MdNode = { type: string; value?: string; children?: MdNode[] };
+
+/** Line breaks inside a paragraph's text as breaks (code keeps its own lines). */
+function splitBreaks(node: MdNode): void {
+  if (!node.children) return;
+  node.children = node.children.flatMap((child): MdNode[] => {
+    if (child.type !== "text" || !child.value?.includes("\n")) {
+      splitBreaks(child);
+      return [child];
+    }
+    return child.value.split(/\r?\n/).flatMap((value, index) => [...(index > 0 ? [{ type: "break" }] : []), ...(value ? [{ type: "text", value }] : [])]);
+  });
+}
+
+const remarkBreaks = () => (tree: MdNode) => splitBreaks(tree);
 
 /**
  * The pace streaming text shows at: it trails what has arrived, steered so whatever waits
@@ -85,7 +104,7 @@ const useShallowStable = <T extends Record<string, unknown> | undefined>(
   return stable;
 };
 
-const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced = true }) => {
+const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced = true, breaks = false }) => {
   const stableComponents = useShallowStable(components);
   const markdownComponents = useMemo(() => {
     if (!stableComponents) return defaultComponents;
@@ -99,7 +118,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced 
 
   return (
     <MarkdownTextPrimitive
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={breaks ? [remarkGfm, remarkBreaks] : [remarkGfm]}
       rehypePlugins={rehypePlugins}
       // Only text that still streams is revealed as it arrives. Settled text shows whole at
       // once, also when it mounts again (the stored reply replacing the streamed one, a work
@@ -226,7 +245,10 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
 };
 
 /** Web links open where Settings › Browser say; anything else that isn't a page is a file. */
-const Link: FC<React.ComponentProps<"a">> = ({ className, href, children, ...props }) => {
+export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, children, ...props }) => {
+  const task = useContext(TaskMentionContext);
+  // A worker the user's message @-mentions: its chip.
+  if (href?.startsWith("brigadier-task:")) return <>{task?.(Number(href.slice("brigadier-task:".length))) ?? children}</>;
   if (href && !/^(https?:|mailto:|#)/i.test(href)) {
     return <FileChip href={href}>{children}</FileChip>;
   }
@@ -387,7 +409,7 @@ const defaultComponents = memoizeMarkdownComponents({
       {...props}
     />
   ),
-  a: Link,
+  a: MarkdownLink,
   blockquote: ({ className, ...props }) => (
     <blockquote
       className={cn(

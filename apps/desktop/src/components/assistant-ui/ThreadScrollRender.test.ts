@@ -16,7 +16,7 @@ function near(actual: number | null, expected: number, label: string): void {
 test("the thread keeps its place, follows from the bottom and places a sent turn in the conversation view", { timeout: 180000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1", "thread-scroll-result", 150000)) as {
     error?: string;
-    firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; bottomFade: number };
+    firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; bottomFade: number; buttonOnSolid: number };
     button: { at8: Button; at9: Button };
     switchBack: { top: number; restored: number; offset: number; restoredOffset: number | null; early: number[] };
     revealedBack: { offset: number; restoredOffset: number | null };
@@ -59,7 +59,10 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(firstOpen.button.shown, false);
   assert.equal(firstOpen.button.tabbable, false);
   near(firstOpen.topFade, 20, "fade under the top bar");
-  near(firstOpen.bottomFade, 30, "fade above the composer");
+  // Solid over the composer and the scroll button's 56px strip, then a 24px fade: no text shows
+  // under the button, and the last row, 84px above the composer, stays clear of the fade.
+  near(firstOpen.bottomFade, 80, "fade above the composer");
+  near(firstOpen.buttonOnSolid, 0, "the scroll button's top, on the solid background");
 
   // The button: hidden while the last row reaches at most 8px under the composer's top (the
   // 84px gap above the composer is in view), shown past it; a 32px circle 24px above the
