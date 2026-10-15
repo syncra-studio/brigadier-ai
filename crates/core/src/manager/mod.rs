@@ -340,6 +340,8 @@ impl SessionManager {
         // The thread engine's first start deletes the earlier engine's conversations, before
         // anything of theirs could resume.
         manager.switch_engine().await?;
+        // Before any session's instructions are written, which carry the preference.
+        manager.carry_short_replies().await;
         manager.recover_active_runs().await;
         manager.recover().await;
         manager.resume_runs().await;

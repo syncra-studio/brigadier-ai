@@ -45,7 +45,7 @@ test("search finds every merged setting on Configuration, and no Recent activity
       "Orchestrator",
       "Chat model",
       "Model for sessions",
-      "Short replies",
+      "Start workers on its own",
       "Show the Full access notice",
       "Use spare quota to deepen the Brain",
       "Memories",

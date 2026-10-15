@@ -49,10 +49,16 @@ showFullAccessNotice: boolean,
  */
 enrichBrain: boolean, 
 /**
- * The orchestrator, an overnight run's leads included, answers the user in a few plain
- * lines (PLAN.md §7). Off, it keeps the plain voice without the length limits.
+ * The old Short replies setting, no longer read: the voice is fixed (BUILD-PLAN §1.4). A
+ * stored `false` is copied once into the personal preference for longer answers, and then
+ * saved as `true`.
  */
 shortReplies: boolean, 
+/**
+ * The thread starts workers when they help, saying so in one line first; off, it asks
+ * first. A worker the user asks for starts either way (BUILD-PLAN §1.4).
+ */
+startWorkersOnOwn: boolean, 
 /**
  * Co-authored-by trailers that name an AI are left out of commit messages: the user's
  * own commits, what the agents write, and the commits Brigadier lands or keeps.

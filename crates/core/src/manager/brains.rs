@@ -42,6 +42,9 @@ use crate::work::{ArtifactKind, ArtifactRef, Report, Task, TaskKind};
 use crate::{Error, Result, now_ms};
 
 /// Removing a project waits at most this long for its code index scan to end.
+/// The personal preference a user's old Short replies off becomes.
+pub(crate) const LONGER_ANSWERS: &str = "Longer answers";
+
 const REMOVE_SCAN_WAIT: Duration = Duration::from_secs(120);
 /// The embedding model is freed after this long unused.
 const EMBEDDER_IDLE: Duration = Duration::from_secs(10 * 60);
@@ -1766,6 +1769,52 @@ impl SessionManager {
     ) -> Result<BrainGraph> {
         let (brain, _) = self.brain_for(project.as_ref()).await?;
         blocking(move || brain.graph(&filter).map_err(brain_error)).await
+    }
+
+    /// Brigadier no longer has a Short replies setting (BUILD-PLAN §1.4): a user who had it off
+    /// keeps their choice as a personal preference for longer answers, copied once, and the
+    /// setting is then saved as on, so it isn't copied again.
+    pub(super) async fn carry_short_replies(&self) {
+        let settings = self.core.settings();
+        if settings.short_replies {
+            return;
+        }
+        let kept = async {
+            let brain = self.personal_brain().await?;
+            let node = NewNode {
+                kind: NodeKind::Preference,
+                key: None,
+                title: LONGER_ANSWERS.into(),
+                body: "The user had turned Short replies off: write fuller answers than the \
+                       short default, with full detail where it helps."
+                    .into(),
+                provenance: Provenance {
+                    origin: Origin::User,
+                    session_id: None,
+                    task_id: None,
+                    job_id: None,
+                    worker: None,
+                    commit: None,
+                    recorded_at_ms: now_ms(),
+                    claim: None,
+                },
+                files: Vec::new(),
+                expires_at_ms: None,
+            };
+            blocking(move || brain.record(node).map_err(brain_error)).await?;
+            self.core
+                .update_settings(crate::model::Settings {
+                    short_replies: true,
+                    ..settings
+                })
+                .await
+        };
+        match kept.await {
+            Ok(_) => tracing::info!("kept Short replies off as the preference for longer answers"),
+            Err(err) => {
+                tracing::warn!(error = %err, "could not keep Short replies off as a preference")
+            }
+        }
     }
 
     /// The Personal Brain's memories, newest first.

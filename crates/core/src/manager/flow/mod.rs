@@ -1859,6 +1859,7 @@ mod review_hold_tests;
 mod review_switch_tests;
 #[cfg(test)]
 mod search_tests;
+mod settings_toggles_tests;
 #[cfg(test)]
 mod spare_worktree_tests;
 #[cfg(test)]

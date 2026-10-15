@@ -2804,6 +2804,10 @@ pub struct Told {
     pub today: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_replies: Option<bool>,
+    /// Settings' "Start workers on its own"; `None` counts as on, as every session's
+    /// instructions were before the setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_workers: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission: Option<crate::model::PermissionLevel>,
     /// Folder trust, which also controls the permission text's full-access suggestion.

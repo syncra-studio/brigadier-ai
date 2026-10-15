@@ -73,11 +73,11 @@ export const CONFIGURATION_ROWS = {
   fullAccess: levelRow("fullAccess"),
   reviewWork: {
     label: "Review the work",
-    description: "Choose whether another AI model reviews each change",
+    description: "Choose whether another AI model reviews bigger or risky changes",
   },
-  shortReplies: {
-    label: "Short replies",
-    description: "Choose whether sessions answer in a few plain lines",
+  startWorkersOnOwn: {
+    label: "Start workers on its own",
+    description: "Choose whether a session starts helpers when they help, or asks you first",
   },
   memories: {
     label: "Memories",
@@ -102,7 +102,7 @@ const ADVANCED_LABELS = [
 
 /**
  * How Brigadier works for the user: one card of the defaults new sessions and chats start with
- * (models, permission level, reviews, reply length), what Brigadier remembers, then display and
+ * (models, permission level, reviews, starting workers), what Brigadier remembers, then display and
  * Brain extras under Advanced. Each row says in a line what it chooses; its menu explains the
  * choices.
  */
@@ -137,7 +137,7 @@ export function ConfigurationPage() {
         />
         <PermissionRow value={permission} />
         <SwitchSetting setting="reviewWork" row={CONFIGURATION_ROWS.reviewWork} />
-        <SwitchSetting setting="shortReplies" row={CONFIGURATION_ROWS.shortReplies} />
+        <SwitchSetting setting="startWorkersOnOwn" row={CONFIGURATION_ROWS.startWorkersOnOwn} />
       </SettingsCard>
 
       <SettingsSection title="Memory">

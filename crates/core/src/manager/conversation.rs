@@ -2790,7 +2790,7 @@ impl SessionManager {
             .clone()
             .map(|fallback| fallback.choice);
         let mut grant_values = Vec::new();
-        let short = self.core.settings().short_replies;
+        let start_workers = self.core.settings().start_workers_on_own;
         let mut launch = None;
         let mut auto_review = false;
         let mut output_hook = None;
@@ -2826,7 +2826,7 @@ impl SessionManager {
                     self.repo_trust(&conv.id) != Some(false),
                     run.as_ref()
                         .map(|(workspace, restrictions)| (workspace, restrictions.clone())),
-                    short,
+                    start_workers,
                     preferences,
                     workspace.as_ref().map(super::thread::ThreadWorkspace::told),
                 );
@@ -3067,7 +3067,7 @@ impl SessionManager {
         } else {
             // A new one has them as they are now.
             let label = if conv.kind == ConversationKind::Session {
-                prompts::instructions_label(short)
+                prompts::instructions_label(true)
             } else {
                 prompts::ROLE_INSTRUCTIONS
             };
@@ -5709,7 +5709,7 @@ impl SessionManager {
                     self.repo_trust(&conv.id) != Some(false),
                     run.as_ref()
                         .map(|(workspace, restrictions)| (workspace, restrictions.clone())),
-                    self.core.settings().short_replies,
+                    self.core.settings().start_workers_on_own,
                     self.memory_lines(super::brain_jobs::MEMORY_BYTES).await,
                     workspace,
                 );

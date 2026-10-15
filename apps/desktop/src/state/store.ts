@@ -206,6 +206,7 @@ export const useApp = create<AppState>()(() => ({
     showFullAccessNotice: true,
     enrichBrain: true,
     shortReplies: true,
+    startWorkersOnOwn: true,
     onboarded: false,
     introSeen: false,
     userName: "",

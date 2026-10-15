@@ -60,8 +60,8 @@ pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: be
 pub(crate) const LONG_COMMANDS: &str = "A command still going after a minute goes on in the background by itself (@run, run_check): the call returns its run-N id and its result comes as a message in this request. Never background one yourself (`&`, nohup), and never run the full suite: the full checks run on their own (rerun_checks).";
 
 /// The session thread's role (THREAD-PLAN.md Q1), with the user's preferences from the Personal
-/// Brain. `provider`: the thread's CLI, which picks how it runs long commands; `short`: the
-/// user's Short replies setting.
+/// Brain. `provider`: the thread's CLI, which picks how it runs long commands; `start_workers`:
+/// the user's "Start workers on its own" setting (BUILD-PLAN §1.4).
 pub(crate) fn thread(
     conversation: &Conversation,
     project: Option<&Project>,
@@ -69,7 +69,7 @@ pub(crate) fn thread(
     run: Option<&crate::overnight::RunWorkspace>,
     workspace: Option<&str>,
     provider: ProviderKind,
-    short: bool,
+    start_workers: bool,
 ) -> String {
     let repo = match &conversation.setup {
         Some(Setup::Session { repo, .. }) => repo.as_str(),
@@ -118,6 +118,7 @@ How to work:
 - Each delegate_task names its effort: "medium" for small, bounded work (a file or two, a UI tweak or small feature, copy, a bug in a known place); "low" for a mechanical edit; "high" only for cross-area, risky or unclear work.
 - A brief is self-contained, since the worker sees nothing of this conversation: the request in the user's words (when one worker takes the whole request, set include_request and Brigadier adds it verbatim, with what was added to it since and who sent it: don't copy it into the spec), the constraints and settled decisions, what "done" means and how to check each part by its own checks only, never the full suite or an app build (screenshots in the chat only if the user asked), and the code pointers you already have (files and symbols the Brain or a quick search gave you). Scouts look around the repository, research tasks check current docs and operate tasks use apps on screen (over about five GUI steps, or exploring an app), when that is more than a quick look by you or the worker on the task. A job that only uses apps on screen, changing no code, is an operate task, which Brigadier gives to a fast GUI model; one that changes code and shows in an app stays one implementation task.{computer}
 {MOCKUPS}
+- {workers}
 - Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
 - Judge each report against its "done when" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Run checks (tests, lint, typecheck, build) with run_check rather than your shell. Never rerun a worker's checks after you land its work: its report covers its change, and the session's full checks run on their own after each landing, in a checkout of their own; a failure comes back as [checks failed …]. With no command it lists the checks your changes affect. {CHECK_PREFIXES}
@@ -137,7 +138,7 @@ How to work:
 - Brigadier cleans up after you; use clean_up only if the user asks. Never delete branches, worktrees or temp folders by hand: "Operation not permitted" on another session's branch or folder is Brigadier protecting it, so leave it.{GRILLING}
 
 How to talk to the user:
-- The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread. Don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
+- The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread. Besides the one line before workers start, don't announce what you delegated, don't repeat a task's spec, and don't restate reports.
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
 - {LEAD}
 - Even while work runs, write one line for: a failure of what you started (a preview, a dev app, a build, a check you awaited), in the same turn: what failed, its key error line, what you do about it; work the user didn't ask for, before it starts ("Starting 3 fixes from the review; about 20 min."); and [status due]: what runs, why, roughly what's left. Never say something compiles or runs without checking its process, or having a worker look.
@@ -146,16 +147,12 @@ How to talk to the user:
 - {LATE_EVENT} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.
 - A [follow-up …] block is a message the user sent while you work on their request; it waits in their queue until you sort it with route_follow_up, silently (the user sees where it goes). If it belongs to this work (a question about the same thing, a detail or a change for it), it joins it: it reaches you at once as the user's message, and your one final answer covers it too. If it is a request of its own, it waits and reaches you on its own once this work is done; don't act on it before.{voice}{orchestrator_voice}
-- {AUTHORITY}{short}{code_rules}{preferences}"#,
+- {AUTHORITY}{SHORT_REPLIES}{code_rules}{preferences}"#,
         today = today(),
         quiet = QUIET,
         voice = VOICE,
         orchestrator_voice = ORCHESTRATOR_VOICE,
-        short = if short {
-            SHORT_REPLIES
-        } else {
-            SHORT_REPLIES_OFF_NOW
-        },
+        workers = workers_rule(start_workers).replace("{quiet}", QUIET),
         code_rules = WORKER_CODE_RULES,
         preferences = preference_lines(preferences),
     );
@@ -364,20 +361,16 @@ const ORCHESTRATOR_VOICE: &str = "
 - This covers your own prose: replies to the user and your notes (remember, plans, handoff notes). Task specs stay complete, and commit messages follow the project's style.
 - When you write to the user, name a worker by its title, as the user sees it, never as task-N.";
 
-/// The Short replies setting (on by default, PLAN.md §7): what the user reads stays a few
-/// lines.
+/// The reply voice, fixed at the measured best default (PLAN.md §7, BUILD-PLAN §1.4): what the
+/// user reads stays a few lines. A user who wants longer or shorter answers says so, and that
+/// preference wins.
 const SHORT_REPLIES: &str = "
 
-Short replies (the user's setting):
-- What you write for the user: the outcome in the first line, then at most about five short lines or bullets, unless they ask for more. No headings or bold labels.
+Short replies:
+- What you write for the user: the outcome in the first line, then at most about five short lines or bullets, unless they ask for more or their preferences say otherwise. No headings or bold labels.
 - Never quote a reviewer's or verifier's text to the user: name what it found in a few words.
 - An overnight run's morning answer is at most three lines: what got done, what is left, and what waits on the user.
 - This doesn't shorten plans, handoff notes, task specs, exact commands and error text, evidence the user needs to decide, or instructions about security and order: those stay complete.";
-
-/// The Short replies setting, off.
-const SHORT_REPLIES_OFF_NOW: &str = "
-
-Short replies is off: the user wants fuller answers. Write by \"How to write\" alone.";
 
 /// How the log names role instructions: a Chat's and those without Short replies (sessions
 /// started before the setting existed too), and those with it.
@@ -385,6 +378,8 @@ pub(crate) const ROLE_INSTRUCTIONS: &str = "role instructions";
 const ROLE_INSTRUCTIONS_SHORT: &str = "role instructions, short replies";
 const SHORT_REPLIES_ON: &str = "short replies on";
 const SHORT_REPLIES_OFF: &str = "short replies off";
+const START_WORKERS_ON_LABEL: &str = "start workers on its own";
+const START_WORKERS_OFF_LABEL: &str = "ask before starting workers";
 
 /// The log label of an orchestrator's role instructions.
 pub(crate) fn instructions_label(short: bool) -> &'static str {
@@ -395,13 +390,23 @@ pub(crate) fn instructions_label(short: bool) -> &'static str {
     }
 }
 
-/// The log label of a note that the user switched Short replies.
-pub(crate) fn short_replies_label(short: bool) -> &'static str {
-    if short {
-        SHORT_REPLIES_ON
+/// What the thread does before it starts workers the user didn't ask for, by the user's "Start
+/// workers on its own" setting (BUILD-PLAN B1, §1.4).
+pub(crate) fn workers_rule(on: bool) -> &'static str {
+    if on {
+        "Before you start workers the user didn't ask for, say so in one line first: how many, for what and about how long (\"Starting 2 workers: the exporters and the CLI wiring; about 10 min.\"), then start them. A worker the user asks for starts at once."
     } else {
-        SHORT_REPLIES_OFF
+        "Before you start workers the user didn't ask for, ask first with ask_user, one card for the batch (how many, for what and about how long), then reply {quiet}; start them only on a yes, and otherwise do the work yourself. The user's setting \"Start workers on its own\" is off. A worker the user asks for starts at once."
     }
+}
+
+/// Tells a running thread the user switched "Start workers on its own".
+pub(crate) fn start_workers_note(on: bool) -> String {
+    format!(
+        "[settings] The user turned \"Start workers on its own\" {}. From now on: {} This replaces what your instructions say about starting workers. Don't mention this note.",
+        if on { "on" } else { "off" },
+        workers_rule(on).replace("{quiet}", QUIET)
+    )
 }
 
 /// Whether instructions logged under `label` had Short replies on (none: not about it).
@@ -413,19 +418,15 @@ pub(crate) fn short_in_label(label: &str) -> Option<bool> {
     }
 }
 
-/// Tells a running orchestrator the user switched Short replies: its CLI keeps the
-/// instructions it started with.
-pub(crate) fn short_replies_note(short: bool) -> String {
-    if short {
-        format!(
-            "[settings] The user turned Short replies on. From now on, follow these rules too; don't mention this note.{}",
-            SHORT_REPLIES
-                .trim_start_matches('\n')
-                .trim_start_matches("Short replies (the user's setting):")
-        )
-    } else {
-        "[settings] The user turned Short replies off. From now on, the \"Short replies\" rules no longer apply: write by \"How to write\" alone, with full detail where it helps. Don't mention this note.".to_owned()
-    }
+/// Tells a thread whose instructions had Short replies off (or said nothing of it) that the
+/// voice is now fixed: Brigadier no longer has the setting (BUILD-PLAN §1.4).
+pub(crate) fn fixed_voice_note() -> String {
+    format!(
+        "[settings] Brigadier no longer has a Short replies setting: replies always use the short voice below. A user who wants longer or shorter answers says so, and that is kept as their preference, which wins. From now on, follow these rules; don't mention this note.{}",
+        SHORT_REPLIES
+            .trim_start_matches('\n')
+            .trim_start_matches("Short replies:")
+    )
 }
 
 /// The instructions' contract. From version 1 on they say that Brigadier's notes replace what
@@ -794,7 +795,10 @@ pub(crate) fn worker_reviews_note(on: bool) -> &'static str {
 pub(crate) struct Current {
     pub chat: bool,
     pub today: String,
+    /// Always on for a session: the voice is fixed (BUILD-PLAN §1.4).
     pub short_replies: bool,
+    /// Settings' "Start workers on its own"; on unless set.
+    pub start_workers: bool,
     /// Whether the work is reviewed (Settings' "Review the work"); on unless set.
     pub review_work: bool,
     /// What the user's Git settings say about writing commits and pull requests
@@ -822,7 +826,7 @@ impl Current {
         conversation: &Conversation,
         trusted: bool,
         run: Option<(&crate::overnight::RunWorkspace, String)>,
-        short_replies: bool,
+        start_workers: bool,
         preferences: Vec<String>,
         workspace: Option<String>,
     ) -> Self {
@@ -842,7 +846,8 @@ impl Current {
         Self {
             chat: false,
             today: today(),
-            short_replies,
+            short_replies: true,
+            start_workers,
             review_work: true,
             git_writing: None,
             browser: true,
@@ -861,6 +866,7 @@ impl Current {
             chat: true,
             today: today(),
             short_replies: false,
+            start_workers: true,
             review_work: true,
             git_writing: None,
             browser: true,
@@ -886,6 +892,7 @@ impl Current {
             contract: Some(if self.chat { CHAT_CONTRACT } else { CONTRACT }),
             today: Some(self.today.clone()),
             short_replies: session.then_some(self.short_replies),
+            start_workers: session.then_some(self.start_workers),
             permission: session.then_some(self.permission),
             folder_trusted: session.then_some(self.folder_trusted),
             run: session.then(|| self.run_fingerprint()),
@@ -962,12 +969,28 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
                 },
             });
         }
-        if told.short_replies != Some(now.short_replies) {
+        // The voice is fixed: instructions with Short replies off, or from before it, hear so.
+        if told.short_replies != Some(true) {
             notes.push(Note {
-                text: short_replies_note(now.short_replies),
-                label: short_replies_label(now.short_replies),
+                text: fixed_voice_note(),
+                label: SHORT_REPLIES_ON,
                 told: Told {
-                    short_replies: Some(now.short_replies),
+                    short_replies: Some(true),
+                    ..Told::default()
+                },
+            });
+        }
+        // Instructions from before the setting started workers on their own, saying so.
+        if told.start_workers.unwrap_or(true) != now.start_workers {
+            notes.push(Note {
+                text: start_workers_note(now.start_workers),
+                label: if now.start_workers {
+                    START_WORKERS_ON_LABEL
+                } else {
+                    START_WORKERS_OFF_LABEL
+                },
+                told: Told {
+                    start_workers: Some(now.start_workers),
                     ..Told::default()
                 },
             });
@@ -1128,6 +1151,7 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
         told.today.clone_from(&older.today);
     }
     told.short_replies = told.short_replies.or(older.short_replies);
+    told.start_workers = told.start_workers.or(older.start_workers);
     told.permission = told.permission.or(older.permission);
     told.folder_trusted = told.folder_trusted.or(older.folder_trusted);
     if told.run.is_none() {
@@ -2584,7 +2608,7 @@ mod environment_tests {
     #[test]
     fn a_runs_thread_hears_the_sessions_sandbox() {
         let run = workspace();
-        let prompt = |permission: &str, short: bool| {
+        let prompt = |permission: &str, start_workers: bool| {
             thread(
                 &session(permission),
                 None,
@@ -2592,7 +2616,7 @@ mod environment_tests {
                 Some(&run),
                 None,
                 ProviderKind::Claude,
-                short,
+                start_workers,
             )
         };
         let full = prompt("fullAccess", true);
@@ -2601,16 +2625,14 @@ mod environment_tests {
         let sandboxed = prompt("approveForMe", true);
         assert!(sandboxed.contains("approves a request from you or a worker to leave the sandbox"));
         assert!(sandboxed.contains("You and the workers never do what only the user may do"));
-        // Short replies reach a run's thread, and its phase-end replies; off, the plain voice
-        // stays.
+        // Short replies reach a run's thread, and its phase-end replies, whatever the old
+        // setting said (the voice is fixed).
         assert!(full.contains("An overnight run's morning answer is at most three lines"));
-        let long = prompt("fullAccess", false);
-        assert!(!long.contains("Short replies (the user's setting)"));
-        assert!(long.contains("How to write:"));
-        assert!(long.contains("name a worker by its title"));
-        assert!(long.contains("Short replies is off"));
-        assert!(!full.contains("Short replies is off"));
-        assert!(long.contains(AUTHORITY));
+        let asks = prompt("fullAccess", false);
+        assert!(asks.contains("An overnight run's morning answer is at most three lines"));
+        assert!(asks.contains("How to write:"));
+        assert!(asks.contains("name a worker by its title"));
+        assert!(asks.contains(AUTHORITY));
         assert!(full.contains(AUTHORITY));
         assert!(chat(&[]).contains(CHAT_AUTHORITY));
     }
@@ -2843,8 +2865,9 @@ mod environment_tests {
         // the small change it makes itself, include_request and the review nobody waits for,
         // and what it does with its changes on the user's own checkout, where deliverables live,
         // how they are handed over and their known defects fixed, BUILD-PLAN A1, A2, A6, and that
-        // only a cited user message makes a decision settled, A11).
-        assert!(codex.len() < 19_500, "{}", codex.len());
+        // only a cited user message makes a decision settled, A11, and the line before workers
+        // start, B4).
+        assert!(codex.len() < 19_900, "{}", codex.len());
     }
 
     #[test]
@@ -2921,21 +2944,88 @@ mod environment_tests {
         assert!(notes(&chat.told(), &chat).is_empty());
     }
 
+    /// The voice is fixed (BUILD-PLAN §1.4): a thread whose instructions had Short replies off
+    /// hears it once, with the short rules; one started with them hears nothing, and the log's
+    /// old labels still say which a session had.
     #[test]
-    fn a_running_orchestrator_hears_short_replies_switched_and_the_log_says_which() {
-        // Sessions started before the setting have plain "role instructions": without it.
+    fn a_thread_told_short_replies_off_hears_once_that_the_voice_is_fixed() {
         assert_eq!(short_in_label("role instructions"), Some(false));
-        for short in [true, false] {
-            assert_eq!(short_in_label(instructions_label(short)), Some(short));
-            assert_eq!(short_in_label(short_replies_label(short)), Some(short));
-        }
+        assert_eq!(short_in_label(instructions_label(true)), Some(true));
+        assert_eq!(short_in_label(SHORT_REPLIES_OFF), Some(false));
         assert_eq!(short_in_label("transcript so far"), None);
-        let on = short_replies_note(true);
-        assert!(on.starts_with("[settings] The user turned Short replies on."));
-        assert!(on.contains("\n- What you write for the user: the outcome in the first line"));
-        assert!(on.contains("at most three lines"));
-        assert!(!on.contains("Short replies (the user's setting)"));
-        assert!(short_replies_note(false).contains("no longer apply"));
+        let conversation = session("fullAccess");
+        let now = Current::session(&conversation, true, None, true, vec![], None);
+        assert_eq!(now.told().short_replies, Some(true));
+        assert!(notes(&now.told(), &now).is_empty(), "a new thread has them");
+        let mut told = now.told();
+        told.short_replies = Some(false);
+        let fixed = notes(&told, &now);
+        assert_eq!(fixed.len(), 1, "{fixed:#?}");
+        assert_eq!(fixed[0].label, SHORT_REPLIES_ON);
+        let text = &fixed[0].text;
+        assert!(text.starts_with("[settings] Brigadier no longer has a Short replies setting"));
+        assert!(text.contains("\n- What you write for the user: the outcome in the first line"));
+        assert!(text.contains("kept as their preference"));
+        assert!(!text.contains("Short replies:\n"));
+        let mut after = fixed[0].told.clone();
+        fill_told(&mut after, &told);
+        assert!(notes(&after, &now).is_empty(), "told once");
+        // The prompt has the short rules whatever the old setting said.
+        let prompt = thread(
+            &conversation,
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(prompt.contains(SHORT_REPLIES));
+        assert!(!prompt.contains("the user's setting):"));
+    }
+
+    /// B4: "Start workers on its own" picks the thread's rule before workers start, and a
+    /// running thread hears a switch once; one told nothing of it counts as on.
+    #[test]
+    fn a_running_thread_hears_start_workers_switched_once() {
+        let conversation = session("fullAccess");
+        let prompt = |on| {
+            thread(
+                &conversation,
+                None,
+                &[],
+                None,
+                None,
+                ProviderKind::Claude,
+                on,
+            )
+        };
+        assert!(prompt(true).contains("say so in one line first"));
+        assert!(!prompt(true).contains("ask first with"));
+        let off = prompt(false);
+        assert!(off.contains("ask first with mcp__brigadier__ask_user, one card for the batch"));
+        assert!(off.contains(&format!("then reply {QUIET}")));
+        let mut now = Current::session(&conversation, true, None, true, vec![], None);
+        let mut told = now.told();
+        told.start_workers = None;
+        assert!(notes(&told, &now).is_empty(), "unknown counts as on");
+        now.start_workers = false;
+        let switched = notes(&told, &now);
+        assert_eq!(switched.len(), 1, "{switched:#?}");
+        assert!(
+            switched[0]
+                .text
+                .starts_with("[settings] The user turned \"Start workers on its own\" off.")
+        );
+        assert!(switched[0].text.contains("ask first with ask_user"));
+        let mut after = switched[0].told.clone();
+        fill_told(&mut after, &told);
+        assert!(notes(&after, &now).is_empty(), "told once");
+        now.start_workers = true;
+        let on = notes(&after, &now);
+        assert_eq!(on.len(), 1, "{on:#?}");
+        assert!(on[0].text.contains("say so in one line first"));
+        assert_eq!(now.told().start_workers, Some(true));
     }
 
     /// A running thread hears the user switched reviews, once; one told nothing yet of them

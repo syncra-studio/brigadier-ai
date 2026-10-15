@@ -315,7 +315,7 @@ impl SessionManager {
             run.as_ref(),
             workspace.map(ThreadWorkspace::told).as_deref(),
             provider,
-            self.core.settings().short_replies,
+            self.core.settings().start_workers_on_own,
         );
         // Without computer use nothing can look at an app live, so nothing is routed there.
         if !self.core.settings().computer_use {
