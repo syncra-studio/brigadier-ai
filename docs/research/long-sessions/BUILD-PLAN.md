@@ -703,6 +703,26 @@ checkout's dependency installs and build caches that a worker's worktree gets (`
 **C8. The review line, tuned from V1 (Q48).** V1 cases just under and just over the line (about 150 changed lines of
 code, 5 code files), and a small change marked risky, measure each review's cost and whether its findings would have
 been missed. The line is settled from those numbers, and the phase report says what was chosen and why.
+- **As measured** (V3, four new frozen asks `c8*`, warm, seeded, n=2 each, at `240a7506`; all 8 runs pass their
+  hidden checks):
+
+  | Ask | Code changed | Review | Codex (raw) | Findings |
+  |---|---|---|---|---|
+  | `c8u` csv export | 61–71 lines, 3 files | none (under the line) | 0 | — |
+  | `c8u-risky`, the same asked as risky | 61–72 lines, 3 files | marked risky by the thread | 75–95k | clean, twice |
+  | `c8o` credit notes | 309–317 lines, 6 files | over the line | 99–131k | 1 valid P2 (refunded tax could sum past the line's, from rounding each credit), fixed with a test; then clean |
+  | `c8r` data version | 20 lines, 1 file | marked risky by the thread, unasked (persistence) | 52–68k | 1 valid P2 (an explicit `null` version read as 1), fixed; then clean |
+
+  - **What a review costs.** It adds one thread turn. With the same `c8u` change and a review, the request used +17%
+    Claude and +85k Codex tokens at the median, about +38% in all, and the answer came 53 s later at the median.
+  - **What reviews would have missed.** Neither finding was something the hidden checks test, so no review turned a
+    failing check into a pass. Both were real bugs a user could hit.
+  - **The line stays at 150 changed code lines or more than 5 code files, plus the risky mark.**
+    - Under it, the forced reviews found nothing at about a third more tokens.
+    - Over it, and on the risky persistence change the thread marked by itself, they found real bugs at one turn and
+      50–130k Codex tokens.
+  - **The gap.** The runs left a gap between 72 and 309 lines, so the line's exact place in that band is not measured.
+    Bench T2 (141–146 code lines in 5 files) sits just under it. A follow-up adds cases at about 120 and 200 lines.
 
 **C9. The thread commits in the same call as its last check (added in phase C, Q50).**
 - **The user's answer (Q50).** The engine never commits for the thread: commits stay the thread's decision, with the
