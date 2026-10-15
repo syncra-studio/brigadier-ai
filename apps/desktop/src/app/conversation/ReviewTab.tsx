@@ -21,8 +21,8 @@ import {
 import {
   createContext,
   type FC,
-  Fragment,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -54,8 +54,8 @@ import { openFolder, request, revealPath } from "@/ipc/client";
 import type { ReviewDiff, ReviewFile, ReviewScope } from "@/ipc/generated";
 import { formatSentAt } from "@/lib/format";
 import { languageOf } from "@/lib/languages";
-import { type DiffLine, type DiffRow, filePatch, type PatchFile, parsePatch } from "@/lib/patch";
-import { LineText, lineKey, pairChanges, TINT, TokensContext, useSideTokens } from "@/app/conversation/diffLines";
+import { type DiffLine, fileSides, filePatch, type PatchFile, parsePatch } from "@/lib/patch";
+import { type DiffNote, type DiffSource, DiffView } from "@/app/conversation/diffView";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -226,13 +226,18 @@ export function ReviewTab({
     [fullReview, single],
   );
   const patches = useMemo(() => {
-    if (!fullReview) return new Map<string, PatchFile>();
+    if (!fullReview) return new Map<string, ReviewPatch>();
     const parsed = parsePatch(
       fullReview.patch,
       fullReview.files.map((file) => file.path),
       fullReview.fullFiles,
     );
-    return new Map(fullReview.files.map((file, index) => [file.path, parsed[index]!]));
+    return new Map(
+      fullReview.files.map((file, index): [string, ReviewPatch] => [
+        file.path,
+        { ...parsed[index]!, text: filePatch(fullReview.patch, file.path) },
+      ]),
+    );
   }, [fullReview]);
   const files = useMemo(() => review?.files ?? [], [review]);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
@@ -651,9 +656,12 @@ const FileList: FC<{ files: ReviewFile[]; onJump: (path: string) => void }> = ({
 };
 
 /** One file's diff under its sticky header: icon, path, counts, and on hover copy and fold. */
+/** A file's lines as the Review tab reads them, with its own part of the patch text. */
+type ReviewPatch = PatchFile & { text: string };
+
 const FileSection: FC<{
   file: ReviewFile;
-  patch: PatchFile | undefined;
+  patch: ReviewPatch | undefined;
   options: ReviewOptions;
   collapsed: boolean;
   onToggle: () => void;
@@ -810,14 +818,22 @@ const OpenInMenu: FC<{ file: ReviewFile }> = ({ file }) => {
   );
 };
 
-const FileBody: FC<{ file: ReviewFile; patch: PatchFile | undefined; options: ReviewOptions }> = ({
+/** Where a comment is being written: a line of the new file ("additions") or the old one. */
+type Commenting = { side: "additions" | "deletions"; lineNumber: number };
+
+const FileBody: FC<{ file: ReviewFile; patch: ReviewPatch | undefined; options: ReviewOptions }> = ({
   file,
   patch,
   options,
 }) => {
-  const [opened, setOpened] = useState<ReadonlySet<number>>(new Set());
-  const [commenting, setCommenting] = useState<string | null>(null);
-  const tokens = useSideTokens(file.path, patch?.binary ? undefined : patch?.rows);
+  const [commenting, setCommenting] = useState<Commenting | null>(null);
+  // With whole files the engine has both sides, so every unmodified stretch opens in place.
+  const source = useMemo<DiffSource | null>(() => {
+    if (!patch || patch.binary || patch.rows.length === 0) return null;
+    const sides = fileSides(patch.rows);
+    return sides ? { kind: "sides", path: file.path, ...sides } : { kind: "patch", patch: patch.text };
+  }, [patch, file.path]);
+  const onGutterClick = useCallback((line: Commenting) => setCommenting(line), []);
   if (!patch || file.binary || patch.binary) {
     return (
       <p className="text-muted-foreground px-3 py-2 text-sm">
@@ -825,171 +841,31 @@ const FileBody: FC<{ file: ReviewFile; patch: PatchFile | undefined; options: Re
       </p>
     );
   }
-  if (patch.rows.length === 0) {
+  if (!source) {
     return <p className="text-muted-foreground px-3 py-2 text-sm">No content changes</p>;
   }
-  // Opened stretches of unchanged lines show their lines in place.
-  const rows: DiffRow[] = patch.rows.flatMap((row) =>
-    row.kind === "gap" && row.lines && opened.has(row.id) ? row.lines : [row],
-  );
-  const open = (id: number) => setOpened((current) => new Set(current).add(id));
-  const pairs = options.wordDiffs ? pairChanges(rows) : new Map<DiffLine, DiffLine>();
+  const line = commenting && findLine(patch, commenting);
+  const notes: DiffNote<null>[] = commenting && line ? [{ ...commenting, metadata: null }] : [];
   return (
-    <TokensContext.Provider value={tokens}>
-      <div
-        className={cn(
-          "font-mono text-xs leading-5",
-          // Split sides share the width equally, so their lines wrap.
-          options.wrap || options.split
-            ? "whitespace-pre-wrap break-all"
-            : "w-max min-w-full whitespace-pre",
-        )}
-      >
-        {options.split ? (
-          <SplitRows
-            rows={rows}
-            pairs={pairs}
-            onOpen={open}
-          />
-        ) : (
-          rows.map((row, index) =>
-            row.kind === "gap" ? (
-              <GapRow key={`gap:${row.id}`} row={row} onOpen={open} />
-            ) : (
-              <Fragment key={`${row.kind}:${row.old}:${row.new}:${index}`}>
-                <LineRow
-                  line={row}
-                  partner={pairs.get(row) ?? null}
-                  onComment={() => setCommenting(lineKey(row))}
-                />
-                {commenting === lineKey(row) && (
-                  <CommentBox
-                    path={file.path}
-                    line={row}
-                    onClose={() => setCommenting(null)}
-                  />
-                )}
-              </Fragment>
-            ),
-          )
-        )}
-      </div>
-    </TokensContext.Provider>
+    <DiffView<null>
+      source={source}
+      look={{ numbered: true, split: options.split, wrap: options.wrap, words: options.wordDiffs }}
+      annotations={notes}
+      renderAnnotation={() => line && <CommentBox path={file.path} line={line} onClose={() => setCommenting(null)} />}
+      onGutterClick={onGutterClick}
+    />
   );
 };
 
-/** One line of a unified diff: its number, a "+" to comment on hover, and its text. */
-const LineRow: FC<{ line: DiffLine; partner: DiffLine | null; onComment: () => void }> = ({
-  line,
-  partner,
-  onComment,
-}) => (
-  <div
-    data-kind={line.kind}
-    className={cn("group/line flex border-s-2 border-transparent", TINT[line.kind])}
-  >
-    <span className="text-muted-foreground relative w-12 shrink-0 pe-3 text-end tabular-nums select-none">
-      {line.kind === "del" ? line.old : line.new}
-      <button
-        type="button"
-        aria-label="Add comment"
-        onClick={onComment}
-        className="bg-link text-background rounded-xs absolute start-0.5 top-0.5 hidden size-4 items-center justify-center group-hover/line:flex"
-      >
-        <Plus className="size-3" />
-      </button>
-    </span>
-    <span className="min-w-0 flex-1 pe-3">
-      <LineText line={line} partner={partner} />
-    </span>
-  </div>
-);
-
-/** "12 unmodified lines": a stretch of unchanged lines, opened by a click when loaded. */
-const GapRow: FC<{ row: Extract<DiffRow, { kind: "gap" }>; onOpen: (id: number) => void }> = ({
-  row,
-  onOpen,
-}) => {
-  const label = `${row.count} unmodified ${row.count === 1 ? "line" : "lines"}`;
-  const className =
-    "bg-muted/60 text-muted-foreground flex h-control-sm w-full items-center px-3 font-sans text-xs";
-  return row.lines ? (
-    <button type="button" onClick={() => onOpen(row.id)} className={cn(className, "hover:text-foreground")}>
-      {label}
-    </button>
-  ) : (
-    <div className={className}>{label}</div>
-  );
-};
-
-/** Split diff: the old file on the left, the new on the right, changes side by side. */
-const SplitRows: FC<{
-  rows: DiffRow[];
-  pairs: Map<DiffLine, DiffLine>;
-  onOpen: (id: number) => void;
-}> = ({ rows, pairs, onOpen }) => {
-  const lines: ReactNode[] = [];
-  let index = 0;
-  while (index < rows.length) {
-    const row = rows[index] as DiffRow;
-    if (row.kind === "gap") {
-      lines.push(<GapRow key={`gap:${row.id}`} row={row} onOpen={onOpen} />);
-      index += 1;
-      continue;
-    }
-    if (row.kind === "context") {
-      lines.push(<SplitLine key={`c:${index}`} left={row} right={row} pairs={pairs} />);
-      index += 1;
-      continue;
-    }
-    const deleted: DiffLine[] = [];
-    while (rows[index]?.kind === "del") deleted.push(rows[index++] as DiffLine);
-    const added: DiffLine[] = [];
-    while (rows[index]?.kind === "add") added.push(rows[index++] as DiffLine);
-    for (let pair = 0; pair < Math.max(deleted.length, added.length); pair += 1) {
-      lines.push(
-        <SplitLine
-          key={`p:${index}:${pair}`}
-          left={deleted[pair] ?? null}
-          right={added[pair] ?? null}
-          pairs={pairs}
-        />,
-      );
+/** The line a comment is about: by its number in the new file, or in the old one for a deleted line. */
+function findLine(patch: PatchFile, at: Commenting): DiffLine | null {
+  for (const row of patch.rows) {
+    for (const line of row.kind === "gap" ? (row.lines ?? []) : [row]) {
+      if (at.side === "deletions" ? line.kind !== "add" && line.old === at.lineNumber : line.kind !== "del" && line.new === at.lineNumber) return line;
     }
   }
-  return <>{lines}</>;
-};
-
-const SplitSide: FC<{ line: DiffLine | null; pairs: Map<DiffLine, DiffLine>; side: "old" | "new" }> = ({
-  line,
-  pairs,
-  side,
-}) => (
-  <div
-    className={cn(
-      "flex min-w-0 flex-1 basis-0 border-s-2 border-transparent",
-      line ? TINT[line.kind] : "bg-muted/30",
-    )}
-  >
-    <span className="text-muted-foreground w-12 shrink-0 pe-3 text-end tabular-nums select-none">
-      {line ? (side === "old" ? line.old : line.new) : ""}
-    </span>
-    <span className="min-w-0 flex-1 pe-3">
-      {line && <LineText line={line} partner={pairs.get(line) ?? null} />}
-    </span>
-  </div>
-);
-
-const SplitLine: FC<{
-  left: DiffLine | null;
-  right: DiffLine | null;
-  pairs: Map<DiffLine, DiffLine>;
-}> = ({ left, right, pairs }) => (
-  <div className="flex">
-    <SplitSide line={left} pairs={pairs} side="old" />
-    <SplitSide line={right} pairs={pairs} side="new" />
-  </div>
-);
+  return null;
+}
 
 /**
  * The box a line's "+" opens: the comment goes into the composer with the line quoted, to
@@ -1014,7 +890,7 @@ const CommentBox: FC<{ path: string; line: DiffLine; onClose: () => void }> = ({
     requestAnimationFrame(() => document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus());
   };
   return (
-    <div className="border-border bg-card my-1 ms-12 me-3 flex flex-col gap-2 rounded-xl border p-2 font-sans text-sm whitespace-normal">
+    <div className="border-border bg-card my-1 mx-3 flex flex-col gap-2 rounded-xl border p-2 font-sans text-sm whitespace-normal">
       <textarea
         autoFocus
         rows={2}

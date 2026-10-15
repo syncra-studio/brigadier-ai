@@ -61,10 +61,9 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   const patch = seen["diff-patch"];
   assert.deepEqual([patch.name, patch.counts], ["math.js", "+2 −1"]);
   assert.deepEqual(patch.numbers, ["1", "2", "2", "3", "4", "20", "21", "22"]);
-  assert.deepEqual(patch.kinds, ["context", "del", "add", "context", "context", "context", "add", "context"]);
-  assert.deepEqual(patch.gaps, ["⋯ 15 unchanged lines"]);
-  // (Marks are cut where syntax colours change.)
-  assert.equal(patch.marks.join(""), "(+ Number.EPSILON)");
+  assert.deepEqual(patch.kinds, ["context", "change-deletion", "change-addition", "context", "context", "context", "change-addition", "context"]);
+  assert.deepEqual(patch.gaps, ["15 unmodified lines"]);
+  assert.deepEqual(patch.marks, ["(", "+ Number.EPSILON) "]);
   assert.equal(patch.coloured, true);
   // An edit rebuilt from its call: no numbers, its changed word marked on both sides.
   assert.deepEqual([seen["diff-edit"].numbers, seen["diff-edit"].marks, seen["diff-edit"].counts], [[], ["1", "2"], "+1 −1"]);

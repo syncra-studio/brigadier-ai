@@ -1,2 +1,4 @@
 packages:
   - apps/*
+overrides:
+  "@shikijs/transformers": 4.4.3

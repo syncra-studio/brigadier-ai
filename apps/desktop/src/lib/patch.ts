@@ -199,24 +199,6 @@ export function parsePatch(patch: string, paths: string[], wholeFiles: boolean):
   });
 }
 
-/** A deleted line and the added line that replaced it: the part that differs, by offsets. */
-export function changedSpan(before: string, after: string): { before: [number, number]; after: [number, number] } {
-  let start = 0;
-  const limit = Math.min(before.length, after.length);
-  while (start < limit && before[start] === after[start]) start += 1;
-  let end = 0;
-  while (
-    end < limit - start &&
-    before[before.length - 1 - end] === after[after.length - 1 - end]
-  ) {
-    end += 1;
-  }
-  return {
-    before: [start, before.length - end],
-    after: [start, after.length - end],
-  };
-}
-
 /** The paths `patch` changes, in its order. */
 export function patchPaths(patch: string): string[] {
   return [...readFiles(patch).keys()];
@@ -259,61 +241,56 @@ export function diffCounts(rows: readonly DiffRow[]): { added: number; removed: 
   return { added, removed };
 }
 
-/** Words, runs of spaces and single marks: what a word diff compares. */
-function tokens(text: string): { text: string; at: number }[] {
-  return [...text.matchAll(/\w+|\s+|[^\w\s]/g)].map((match) => ({ text: match[0], at: match.index }));
+/**
+ * One file's diff text as a whole single-file patch the diff view reads. Git's hunks keep their
+ * numbers. Bare `-`/`+` lines (an edit rebuilt from its call's old and new text) get made-up
+ * hunks one line apart, so each edit stands apart and is drawn without numbers.
+ */
+export function singleFilePatch(path: string, diff: string): string {
+  const lines = diff.replace(/\n$/, "").split("\n");
+  const deleted = lines.some((line) => line === "+++ /dev/null" || line.startsWith("deleted file mode"));
+  const created = lines.some((line) => line === "--- /dev/null" || line.startsWith("new file mode"));
+  const body = lines.filter((line) => !/^(---|\+\+\+) /.test(line) && !line.startsWith("diff --git ") && !/^(index|new file mode|deleted file mode|similarity|rename) /.test(line));
+  const head = `diff --git a/${path} b/${path}\n--- ${created ? "/dev/null" : `a/${path}`}\n+++ ${deleted ? "/dev/null" : `b/${path}`}\n`;
+  if (body.some((line) => /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/.test(line))) return `${head}${body.join("\n")}\n`;
+  const hunks: string[][] = [[]];
+  for (const line of body) {
+    if (line.startsWith("@@")) hunks.push([]);
+    else if (/^[ +-]/.test(line)) hunks.at(-1)?.push(line);
+  }
+  let oldAt = 1;
+  let newAt = 1;
+  const out: string[] = [];
+  for (const hunk of hunks.filter((kept) => kept.length > 0)) {
+    const olds = hunk.filter((line) => line[0] !== "+").length;
+    const news = hunk.filter((line) => line[0] !== "-").length;
+    // An empty side starts at the line before it, as git writes it.
+    out.push(`@@ -${olds === 0 ? oldAt - 1 : oldAt},${olds} +${news === 0 ? newAt - 1 : newAt},${news} @@`, ...hunk);
+    oldAt += olds + 1;
+    newAt += news + 1;
+  }
+  return `${head}${out.join("\n")}\n`;
 }
 
-/** Lines longer than this in tokens are compared by `changedSpan` instead: a word diff costs their product. */
-const WORD_DIFF_TOKENS = 300;
+/** Whether a file's diff text deletes the file. */
+export function deletesFile(diff: string): boolean {
+  return /^(\+\+\+ \/dev\/null|deleted file mode)/m.test(diff);
+}
 
 /**
- * A deleted line and the added line that replaced it: the words that differ on each side, as
- * offset ranges, from the longest run of words they share. Spaces between two changed words join
- * them into one range.
+ * Both sides of a file whose patch holds all of it (whole files loaded): every line of the old
+ * file and of the new one, or `null` when a stretch was only counted.
  */
-export function wordSpans(before: string, after: string): { before: [number, number][]; after: [number, number][] } {
-  const a = tokens(before);
-  const b = tokens(after);
-  if (a.length > WORD_DIFF_TOKENS || b.length > WORD_DIFF_TOKENS) {
-    const span = changedSpan(before, after);
-    return {
-      before: span.before[0] < span.before[1] ? [span.before] : [],
-      after: span.after[0] < span.after[1] ? [span.after] : [],
-    };
-  }
-  // The longest common sequence of tokens, by its lengths from each end.
-  const lengths = Array.from({ length: a.length + 1 }, () => Array.from({ length: b.length + 1 }, () => 0));
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      lengths[i]![j] = a[i]!.text === b[j]!.text ? lengths[i + 1]![j + 1]! + 1 : Math.max(lengths[i + 1]![j]!, lengths[i]![j + 1]!);
+export function fileSides(rows: readonly DiffRow[]): { before: string; after: string } | null {
+  const before: string[] = [];
+  const after: string[] = [];
+  for (const row of rows) {
+    const shown = row.kind === "gap" ? row.lines : [row];
+    if (!shown) return null;
+    for (const line of shown) {
+      if (line.kind !== "add") before.push(line.text);
+      if (line.kind !== "del") after.push(line.text);
     }
   }
-  const keptA = new Set<number>();
-  const keptB = new Set<number>();
-  for (let i = 0, j = 0; i < a.length && j < b.length; ) {
-    if (a[i]!.text === b[j]!.text) {
-      keptA.add(i++);
-      keptB.add(j++);
-    } else if (lengths[i + 1]![j]! >= lengths[i]![j + 1]!) i++;
-    else j++;
-  }
-  return { before: ranges(a, keptA), after: ranges(b, keptB) };
-}
-
-const space = (token: { text: string }) => /^\s+$/.test(token.text);
-
-/** The changed tokens as ranges, joined across the spaces between them. */
-function ranges(side: { text: string; at: number }[], kept: ReadonlySet<number>): [number, number][] {
-  const out: [number, number][] = [];
-  let previous = -1;
-  side.forEach((token, index) => {
-    if (kept.has(index) || space(token)) return;
-    const end = token.at + token.text.length;
-    const last = out.at(-1);
-    if (last && side.slice(previous + 1, index).every(space)) last[1] = end;
-    else out.push([token.at, end]);
-    previous = index;
-  });
-  return out;
+  return { before: before.length ? `${before.join("\n")}\n` : "", after: after.length ? `${after.join("\n")}\n` : "" };
 }

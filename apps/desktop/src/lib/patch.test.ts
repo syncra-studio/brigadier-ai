@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { diffCounts, parseDiff, wordSpans } from "@/lib/patch";
+import { deletesFile, diffCounts, fileSides, parseDiff, singleFilePatch } from "@/lib/patch";
 
 const strip = (rows: ReturnType<typeof parseDiff>["rows"]) =>
   rows.map((row) => (row.kind === "gap" ? `gap ${row.count}` : `${row.kind} ${row.old ?? "-"} ${row.new ?? "-"} ${row.text}`));
@@ -22,13 +22,21 @@ test("an edit rebuilt from its call has no numbers", () => {
   assert.deepEqual(strip(rows), ["del - - old line", "add - - new line", "add - - another"]);
 });
 
-const mark = (text: string, ranges: [number, number][]) => ranges.map(([from, to]) => text.slice(from, to));
+test("an edit rebuilt from its call becomes a patch with made-up hunks one line apart", () => {
+  assert.equal(
+    singleFilePatch("src/a.ts", "-const a = 1;\n+const a = 2;\n@@\n+added();"),
+    "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,1 +1,1 @@\n-const a = 1;\n+const a = 2;\n@@ -2,0 +3,1 @@\n+added();\n",
+  );
+});
 
-test("a word diff marks only the words that changed, spaces between changed words joined", () => {
-  const spans = wordSpans("return Math.round(value * 100) / 100;", "return Math.round((value + Number.EPSILON) * 100) / 100;");
-  assert.deepEqual(mark("return Math.round(value * 100) / 100;", spans.before), []);
-  assert.deepEqual(mark("return Math.round((value + Number.EPSILON) * 100) / 100;", spans.after), ["(", "+ Number.EPSILON)"]);
-  const words = wordSpans("const total = sum(a, b);", "let total = add(a, b, c);");
-  assert.deepEqual(mark("const total = sum(a, b);", words.before), ["const", "sum"]);
-  assert.deepEqual(mark("let total = add(a, b, c);", words.after), ["let", "add", ", c"]);
+test("git's hunks keep their numbers, and a deleted file stays deleted", () => {
+  const diff = "diff --git a/x b/x\ndeleted file mode 100644\n--- a/x\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n";
+  assert.equal(singleFilePatch("x", diff), "diff --git a/x b/x\n--- a/x\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n");
+  assert.equal(deletesFile(diff), true);
+  assert.equal(deletesFile("-a\n+b"), false);
+});
+
+test("a whole file's rows give both of its sides", () => {
+  const rows = parseDiff("@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n").rows;
+  assert.deepEqual(fileSides(rows), { before: "a\nb\nc\n", after: "a\nB\nc\n" });
 });

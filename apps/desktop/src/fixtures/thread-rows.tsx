@@ -251,17 +251,21 @@ async function measure(): Promise<object> {
   trigger?.click();
   await wait(400);
   out.children = all("[data-slot=child]", at("group")).map((row) => text(row));
+  // The diff engine draws in its own shadow root.
+  const inside = (id: string, selector: string) =>
+    all("diffs-container", at(id)).flatMap((host) => (host.shadowRoot ? [...host.shadowRoot.querySelectorAll<HTMLElement>(selector)] : []));
   const diff = (id: string) => ({
     name: text(one("[data-slot=diff-name]", at(id))),
     counts: text(one("[data-slot=diff-counts]", at(id))),
-    numbers: all("[data-slot=diff-number]", at(id)).map((cell) => text(cell)),
-    kinds: all("[data-slot=diff-lines] [data-kind]", at(id)).map((row) => row.getAttribute("data-kind")),
-    gaps: all("[data-slot=diff-gap]", at(id)).map((row) => text(row)),
-    marks: all("mark", at(id)).map((mark) => mark.textContent),
+    // Numbers only where the gutter shows them.
+    numbers: inside(id, "[data-gutter] [data-line-number-content]").filter((cell) => cell.getBoundingClientRect().width > 0).map((cell) => cell.textContent?.trim() ?? ""),
+    kinds: inside(id, "[data-content] > [data-line-type]").map((row) => row.getAttribute("data-line-type")),
+    gaps: inside(id, "[data-gutter] [data-separator-content]").map((row) => row.textContent?.trim() ?? ""),
+    marks: inside(id, "[data-diff-span]").map((mark) => mark.textContent),
     empty: text(one("[data-slot=diff-empty]", at(id))),
-    coloured: all("[data-slot=diff-lines] span[style]", at(id)).length > 0,
+    coloured: inside(id, "[data-code] span[style]").length > 0,
   });
-  // Syntax colours come once the grammar loads.
+  // Syntax colours come once the engine and the grammar load.
   for (const end = performance.now() + 8000; performance.now() < end && !diff("diff-patch").coloured; ) await frame();
   for (const id of ["diff-patch", "diff-edit", "diff-empty", "diff-missing"]) out[id] = diff(id);
   // The answer's chips, once the checkout's files are known.
