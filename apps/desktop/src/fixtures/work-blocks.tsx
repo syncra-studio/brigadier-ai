@@ -212,6 +212,8 @@ function seen() {
     newestShimmers: !!newest && (newest.matches(".shimmer") || !!newest.querySelector(".shimmer")),
     fold: one("[data-slot=request-fold]", block ?? document)?.getAttribute("data-fold") ?? "gone",
     groupRow: text(one("button", group ?? document.createElement("div"))),
+    // Its row's icons: a step's icon and the chevron, or the chevron alone.
+    groupIcons: all("svg", one("button", group ?? document.createElement("div")) ?? document.createElement("div")).length,
     groupLine: text(one("[data-slot=group-live-line]", block ?? document)),
     groupTone: one("[data-slot=group-live-line]", block ?? document)?.getAttribute("data-tone") ?? null,
     shimmer: !!group?.querySelector(".shimmer"),

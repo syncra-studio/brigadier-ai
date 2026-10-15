@@ -180,7 +180,8 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   return (
     <Collapsible data-slot="work-group" open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
-        {head && <StepIcon words={head.words} />}
+        {/* The live line ("Thinking") is no step's: it shows without a step's icon. */}
+        {head && !(line && calm.shown === line.text) && <StepIcon words={head.words} />}
         {/* A live group's step changes in place: its words cross-fade, with no jump. */}
         <span
           key={live ? calm.shown : undefined}
