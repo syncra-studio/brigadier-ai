@@ -13,6 +13,7 @@ import type { ConversationId } from "./ConversationId";
 import type { ConversationKind } from "./ConversationKind";
 import type { FaultTarget } from "./FaultTarget";
 import type { ForkPlace } from "./ForkPlace";
+import type { InjectedError } from "./InjectedError";
 import type { Mention } from "./Mention";
 import type { NodeFilter } from "./NodeFilter";
 import type { OvernightRunId } from "./OvernightRunId";
@@ -121,7 +122,7 @@ metrics: boolean, } | { "method": "setMetricsStreaming", enabled: boolean, } | {
 /**
  * The window that runs out (`five_hour`, `seven_day`, `primary`, …).
  */
-window: string, resetInMinutes: number, afterToolCalls: number, } | { "method": "startRawSession", provider: ProviderKind, 
+window: string, resetInMinutes: number, afterToolCalls: number, } | { "method": "debugInjectError", target: FaultTarget, provider: ProviderKind, error: InjectedError, afterToolCalls: number, } | { "method": "debugPlantLearned", conversationId: ConversationId, text: string, } | { "method": "startRawSession", provider: ProviderKind, 
 /**
  * Absolute path of the working directory.
  */

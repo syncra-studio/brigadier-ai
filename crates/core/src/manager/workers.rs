@@ -3582,6 +3582,13 @@ impl SessionManager {
                     .join(", ")
             )));
         }
+        // A development build's planted `learned` line (the continuity battery's false claim).
+        #[cfg(debug_assertions)]
+        let input = {
+            let mut input = input;
+            input.learned.extend(self.planted_learned(conversation_id));
+            input
+        };
         // Everything it names is stored now, before its folders can go.
         let texts: Vec<String> = std::iter::once(&input.summary)
             .chain(&input.decisions)

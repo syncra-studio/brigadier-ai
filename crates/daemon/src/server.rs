@@ -2223,6 +2223,37 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             .await?;
             Response::DebugInjectLimit
         }
+        #[cfg(debug_assertions)]
+        Request::DebugInjectError {
+            target,
+            provider,
+            error,
+            after_tool_calls,
+        } => {
+            use brigadier_core::manager::fault::{FaultKey, InjectedError as Error};
+            use brigadier_ipc::protocol::{FaultTarget, InjectedError};
+            let key = match target {
+                FaultTarget::Task { task_id } => FaultKey::Task(task_id),
+                FaultTarget::Conversation { conversation_id } => {
+                    FaultKey::Conversation(conversation_id)
+                }
+            };
+            let error = match error {
+                InjectedError::ContextWindow => Error::ContextWindow,
+                InjectedError::Auth => Error::Auth,
+                InjectedError::Billing => Error::Billing,
+            };
+            heap(|| sessions.debug_inject_error(key, provider, error, after_tool_calls)).await?;
+            Response::DebugInjectError
+        }
+        #[cfg(debug_assertions)]
+        Request::DebugPlantLearned {
+            conversation_id,
+            text,
+        } => {
+            sessions.debug_plant_learned(conversation_id, text);
+            Response::DebugPlantLearned
+        }
         Request::StartRawSession {
             provider,
             cwd,

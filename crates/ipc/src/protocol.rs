@@ -52,6 +52,19 @@ pub enum FaultTarget {
     Conversation { conversation_id: ConversationId },
 }
 
+/// An error a development build can make a provider report.
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum InjectedError {
+    /// "Prompt is too long".
+    ContextWindow,
+    /// A failed sign-in.
+    Auth,
+    /// Credits run out.
+    Billing,
+}
+
 /// What an archive, restore or delete did to one of its conversations.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1026,6 +1039,24 @@ pub enum Request {
         reset_in_minutes: u32,
         after_tool_calls: u32,
     },
+    /// Development builds only: makes a provider end the running turn of one task or
+    /// conversation with an error after its next `afterToolCalls` tool calls (0: at once), as a
+    /// CLI that hit it would: a context window too small, a failed sign-in or credits run out.
+    /// Everything after that is the real path.
+    #[cfg(debug_assertions)]
+    DebugInjectError {
+        target: FaultTarget,
+        provider: ProviderKind,
+        error: InjectedError,
+        after_tool_calls: u32,
+    },
+    /// Development builds only: adds `text` to the `learned` items of the next report a worker
+    /// of the conversation submits (the continuity battery's false claim).
+    #[cfg(debug_assertions)]
+    DebugPlantLearned {
+        conversation_id: ConversationId,
+        text: String,
+    },
     /// Starts a raw CLI session in the background; its state arrives as `rawSessionUpdated`.
     StartRawSession {
         provider: ProviderKind,
@@ -1570,6 +1601,10 @@ pub enum Response {
     },
     #[cfg(debug_assertions)]
     DebugInjectLimit,
+    #[cfg(debug_assertions)]
+    DebugInjectError,
+    #[cfg(debug_assertions)]
+    DebugPlantLearned,
     StartRawSession {
         session: Box<RawSession>,
     },

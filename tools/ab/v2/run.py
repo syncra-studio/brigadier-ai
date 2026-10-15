@@ -21,7 +21,9 @@ usage:
   run.py cleanup --root R [--export DIR]                    (as tools/ab/v3/run.py cleanup)
 
 Seams (each forced at least twice between the plants and the probe):
-  size     the thread is reborn by size: BRIGADIER_REBIRTH_TOKENS (--rebirth-tokens, default 45000)
+  size     the thread is reborn by size: BRIGADIER_REBIRTH_TOKENS (--rebirth-tokens, default 45000),
+           with the briefing's cap at BRIGADIER_BRIEFING_TOKENS (--briefing-tokens, default 8000),
+           so a short battery's early messages leave the verbatim tail as a long session's do
   restart  the daemon is killed (SIGKILL) mid-request at each seam point, and started again
   kill     the thread's CLI process is killed (SIGKILL) mid-request at each seam point
   context  "prompt is too long" injected into the thread's turn at each seam point
@@ -49,6 +51,7 @@ MODELS = {"claude": "opus", "codex": "gpt-6.1-sol"}
 SEAMS = ["size", "restart", "kill", "context", "auth", "billing", "limit", "none"]
 INJECTED = {"context": "contextWindow", "auth": "auth", "billing": "billing"}
 DEFAULT_REBIRTH_TOKENS = 45_000
+DEFAULT_BRIEFING_TOKENS = 8_000
 
 
 # ---------------------------------------------------------------- the arm
@@ -248,7 +251,7 @@ def seam(arm, kind, conv, rid, sent_ms, deadline, record):
     log("seam", kind, json.dumps(entry)[:200])
 
 
-def one(root, b, seam_kind, n, tag, rebirth_tokens):
+def one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens=DEFAULT_BRIEFING_TOKENS):
     build = json.load(open(os.path.join(root, "build.json")))
     label = tag or build["label"]
     rid_ = f"{b['name']}-{seam_kind}-{build['provider']}-{label}-{n}"
@@ -260,7 +263,8 @@ def one(root, b, seam_kind, n, tag, rebirth_tokens):
     os.makedirs(run)
     shutil.copyfile(b["path"], os.path.join(run, "battery.md"))
     v3run.restore(root, "seeded")
-    debug_env = f"BRIGADIER_REBIRTH_TOKENS={rebirth_tokens}" if seam_kind == "size" else ""
+    debug_env = (f"BRIGADIER_REBIRTH_TOKENS={rebirth_tokens} BRIGADIER_BRIEFING_TOKENS={briefing_tokens}"
+                 if seam_kind == "size" else "")
     conditions = subprocess.run(["bash", "-c", "sysctl -n vm.loadavg; claude --version; codex --version; node --version"],
                                 capture_output=True, text=True).stdout.split("\n")
     arm = Arm(root, os.path.join(run, "rec"), run, debug_env)
@@ -372,9 +376,9 @@ def run_checks(root, run, harness):
 
 # ---------------------------------------------------------------- commands
 
-def attempt(root, b, seam_kind, n, tag, rebirth_tokens):
+def attempt(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens):
     try:
-        return one(root, b, seam_kind, n, tag, rebirth_tokens)
+        return one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens)
     except Exception as err:  # noqa: BLE001
         log(b["name"], "HARNESS ERROR", repr(err))
         with open(os.path.join(root, "results.jsonl"), "a") as f:
@@ -392,6 +396,7 @@ def main():
         p.add_argument("--root", required=True); p.add_argument("--battery", default="thread")
         p.add_argument("--seam", choices=SEAMS, required=True); p.add_argument("--tag")
         p.add_argument("--rebirth-tokens", type=int, default=DEFAULT_REBIRTH_TOKENS)
+        p.add_argument("--briefing-tokens", type=int, default=DEFAULT_BRIEFING_TOKENS)
         if name == "battery":
             p.add_argument("--n", type=int, default=1)
         else:
@@ -406,10 +411,10 @@ def main():
         root = v3run.check_root(a.root)
         b = load_battery(a.battery)
         if a.cmd == "battery":
-            one(root, b, a.seam, a.n, a.tag, a.rebirth_tokens)
+            one(root, b, a.seam, a.n, a.tag, a.rebirth_tokens, a.briefing_tokens)
         else:
             for r in range(a.first, a.first + a.reruns):
-                attempt(root, b, a.seam, r, a.tag, a.rebirth_tokens)
+                attempt(root, b, a.seam, r, a.tag, a.rebirth_tokens, a.briefing_tokens)
 
 
 if __name__ == "__main__":

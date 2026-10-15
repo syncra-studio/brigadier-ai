@@ -1796,6 +1796,8 @@ mod ending_tests;
 #[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
+mod fault_tests;
+#[cfg(test)]
 mod findings_tests;
 #[cfg(test)]
 mod gate_fixes_tests;

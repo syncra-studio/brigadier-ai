@@ -108,7 +108,8 @@ ruled-out approach, and a probe asks for every item.
   is copied into the session's workspace for `r4`–`r5` and deleted after them, so what it said can only be
   remembered.
 - **Seams:** forced at least twice between the last plant and the probe (`--seam`):
-  - `size`: `BRIGADIER_REBIRTH_TOKENS`, passed on by `startd.sh`'s `BRIG_DEBUG_ENV`;
+  - `size`: `BRIGADIER_REBIRTH_TOKENS`, with the briefing capped by `BRIGADIER_BRIEFING_TOKENS` so the early
+    messages leave its verbatim tail as in a long session; both passed on by `startd.sh`'s `BRIG_DEBUG_ENV`;
   - `restart`: the daemon is SIGKILLed mid-request and started again;
   - `kill`: the thread's CLI is SIGKILLed mid-request;
   - `context`, `auth`, `billing`: the error is injected mid-turn (`debugInjectError`);
