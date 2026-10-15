@@ -135,6 +135,24 @@ ruled-out approach, and a probe asks for every item.
 - **Also reported:** the "unknown instead of a guess" score (unknown ÷ (unknown + guessed) over the lost items),
   every briefing's size and sections, and the probe's tool calls.
 
+## V1 overnight-style task (`v1-overnight/`, E2)
+
+One overnight phase, "Invoice note" (`plan.json`), on the V3 fixture, with four "done when" criteria. Two of them
+(the CLI's `--note` and the README) are criteria no suite covers. The run goes from Start to the morning report with
+"Review the work" on or off. It is scored by hidden checks (`checks/p1-c*.mjs`, plus `npm run check`) at the tip the
+run accepted. **Pass** means the run said nothing false:
+- no criterion settled met while its check fails;
+- when the phase is done, every criterion has an evidence line;
+- the review line is right ("Review settled: …" with reviews on, "No review was run: reviews are off." with them
+  off);
+- the morning report carries both.
+
+**Completed** means every hidden check passes at the accepted tip. The harness runs on a V3 root (same template,
+same cleanup):
+
+    v1-overnight/selftest.py [--node-modules DIR]       # the scorer and checks on the reference and a partial result
+    v1-overnight/run.py set --root /tmp/v3-X --reruns 2 # on, off, off, on; runs/v1o-*/score.json, v1o-results.jsonl
+
 ## Final-answer audit (E3)
 
 `python3 tools/ab/answer_audit.py run <run-dir>` audits the last V3 request;

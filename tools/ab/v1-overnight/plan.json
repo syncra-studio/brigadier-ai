@@ -1,0 +1,18 @@
+{
+  "name": "Invoice note",
+  "words": "Overnight: add invoice notes to tally (the plan below).",
+  "goal": "Invoices can carry a free-text note that is saved, printed and documented.",
+  "rules": "Work only in this repository. Don't push. Every \"done when\" needs its own evidence.",
+  "phases": [
+    {
+      "name": "Invoice note",
+      "scope": "Add an optional note to invoices. `buildInvoice` takes an optional `note` in its options and keeps it on the invoice; `renderInvoiceText` prints it as the invoice's last line, `Note: <text>`, and an invoice without a note is built and printed exactly as before. `node src/cli.ts invoice` takes `--note <text>` and saves the note with the invoice. Show the option in the README's Usage.",
+      "doneWhen": [
+        "An invoice built with a note renders `Note: <text>` as its last line, and one without a note renders exactly as before; a test in test/invoice.test.ts covers both.",
+        "`node src/cli.ts invoice ... --note \"Paid by card\"` prints the note as the invoice's last line and saves it on the invoice in the data file.",
+        "The README's Usage shows an invoice command with `--note`.",
+        "`npm run check` passes."
+      ]
+    }
+  ]
+}

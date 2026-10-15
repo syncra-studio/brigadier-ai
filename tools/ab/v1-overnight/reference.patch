@@ -1,0 +1,125 @@
+diff --git a/README.md b/README.md
+index 2d7a37f..aef24e5 100644
+--- a/README.md
++++ b/README.md
+@@ -15,6 +15,7 @@ built from saved invoices. Data is a single JSON file: `{ "products": [...], "in
+ 
+     node src/cli.ts products --data examples/data.json
+     node src/cli.ts invoice --data examples/data.json --cart examples/cart.json --region ON --date 2024-03-15 --terms 30
++    node src/cli.ts invoice --data examples/data.json --cart examples/cart.json --region ON --date 2024-03-15 --note "Paid by card"
+     node src/cli.ts report --data examples/data.json
+ 
+ Requires Node 24+ (TypeScript runs directly via type stripping). Run `npm run check` to type-check and test.
+diff --git a/src/cli.ts b/src/cli.ts
+index b5b9aef..dd9d8d6 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -24,7 +24,7 @@ export const USAGE = `usage: node src/cli.ts <command> --data <file> [options]
+ 
+ commands:
+   products                              list the products in the data file
+-  invoice --cart <file> --region <code> --date <YYYY-MM-DD> [--terms <days>]
++  invoice --cart <file> --region <code> --date <YYYY-MM-DD> [--terms <days>] [--note <text>]
+                                         create an invoice, save it, print it
+   report [--from <date>] [--to <date>]  units and revenue per SKU
+   export [--format <name>]              write all invoices (default format: json)
+@@ -68,7 +68,8 @@ function commandInvoice(dataPath: string, values: Record<string, unknown>, io: I
+ 
+   const store = new MemoryStore(readDataFile(dataPath));
+   const cart = parseCart(JSON.parse(readFileSync(cartPath, 'utf8')));
+-  const invoice = createInvoiceFromCart(store, cart, { issueDate, termsDays: Number(termsText), region });
++  const note = typeof values.note === 'string' && values.note !== '' ? values.note : undefined;
++  const invoice = createInvoiceFromCart(store, cart, { issueDate, termsDays: Number(termsText), region, note });
+   writeDataFile(dataPath, store.toData());
+   io.out(renderInvoiceText(invoice));
+ }
+@@ -103,6 +104,7 @@ export function run(argv: string[], io: Io = processIo): number {
+         from: { type: 'string' },
+         to: { type: 'string' },
+         format: { type: 'string' },
++        note: { type: 'string' },
+         help: { type: 'boolean', short: 'h' },
+       },
+     });
+diff --git a/src/invoice.ts b/src/invoice.ts
+index 2e0cc3f..6139b36 100644
+--- a/src/invoice.ts
++++ b/src/invoice.ts
+@@ -22,6 +22,8 @@ export interface Invoice {
+   subtotal: number;
+   tax: number;
+   total: number;
++  /** A free-text note, printed as the invoice's last line. */
++  note?: string;
+ }
+ 
+ export interface InvoiceOptions {
+@@ -30,6 +32,8 @@ export interface InvoiceOptions {
+   /** Payment terms: the invoice is due this many days after the issue date. */
+   termsDays: number;
+   region: string;
++  /** A free-text note for the invoice. */
++  note?: string;
+ }
+ 
+ export function buildInvoice(cart: Cart, catalog: Catalog, opts: InvoiceOptions): Invoice {
+@@ -67,6 +71,7 @@ export function buildInvoice(cart: Cart, catalog: Catalog, opts: InvoiceOptions)
+     subtotal,
+     tax,
+     total: round2(subtotal + tax),
++    ...(opts.note ? { note: opts.note } : {}),
+   };
+ }
+ 
+@@ -114,5 +119,8 @@ export function renderInvoiceText(inv: Invoice): string {
+   out.push(totalLine('Subtotal:', formatMoney(inv.subtotal)));
+   out.push(totalLine('Tax:', formatMoney(inv.tax)));
+   out.push(totalLine('Total:', formatMoney(inv.total)));
++  if (inv.note) {
++    out.push(`Note: ${inv.note}`);
++  }
+   return `${out.join('\n')}\n`;
+ }
+diff --git a/src/services.ts b/src/services.ts
+index ab2e275..e8c7f07 100644
+--- a/src/services.ts
++++ b/src/services.ts
+@@ -31,6 +31,7 @@ export interface CreateInvoiceOptions {
+   region: string;
+   /** Defaults to `nextInvoiceNumber(store)`. */
+   number?: string;
++  note?: string;
+ }
+ 
+ /** Builds an invoice for `cart` from the store's catalog and saves it. */
+@@ -40,6 +41,7 @@ export function createInvoiceFromCart(store: Store, cart: Cart, opts: CreateInvo
+     issueDate: opts.issueDate,
+     termsDays: opts.termsDays,
+     region: opts.region,
++    note: opts.note,
+   });
+   store.saveInvoice(invoice);
+   return invoice;
+diff --git a/test/invoice.test.ts b/test/invoice.test.ts
+index a060a8d..9da50b3 100644
+--- a/test/invoice.test.ts
++++ b/test/invoice.test.ts
+@@ -83,3 +83,18 @@ describe('renderInvoiceText', () => {
+     assert.equal(line, 'TEA-200   An Extremely Long Pr...     1      8.75      8.75');
+   });
+ });
++
++describe('invoice notes', () => {
++  test('a note is kept and printed as the last line', () => {
++    const invoice = buildInvoice(sampleCart(), sampleCatalog(), { ...OPTS, note: 'Paid by card' });
++    assert.equal(invoice.note, 'Paid by card');
++    const lines = renderInvoiceText(invoice).trimEnd().split('\n');
++    assert.equal(lines.at(-1), 'Note: Paid by card');
++  });
++
++  test('without a note nothing changes', () => {
++    const invoice = buildInvoice(sampleCart(), sampleCatalog(), OPTS);
++    assert.equal('note' in invoice, false);
++    assert.doesNotMatch(renderInvoiceText(invoice), /Note:/);
++  });
++});
