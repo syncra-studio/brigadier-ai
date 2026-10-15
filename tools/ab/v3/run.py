@@ -102,6 +102,14 @@ def stop(pids, grace=15):
         except ProcessLookupError: pass
 
 
+def names_root(pid, root):
+    """Whether process `pid` is still one this root started: its command line names the root (a
+    daemon's data dir, a recorder's), so a recorded PID the system gave to another process since
+    is left alone."""
+    out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
+    return any(v + "/" in out for v in (root, root[len("/private"):] if root.startswith("/private/") else root))
+
+
 def _alive(p):
     try:
         os.kill(p, 0); return True
@@ -203,7 +211,7 @@ def template(a):
     os.makedirs(os.path.join(root, "seed"), exist_ok=True)
     seed = os.path.join(root, "seed", "brain.sqlite")
     if a.seed:
-        backup(a.seed, seed)
+        backup(a.seed, seed, frozen=True)
         for suffix in ("", "-wal", "-shm"):
             if os.path.exists(brains[0] + suffix): os.remove(brains[0] + suffix)
         backup(seed, brains[0])
@@ -215,9 +223,12 @@ def template(a):
     log("template ready:", json.load(open(os.path.join(root, "seed", "seed.json"))))
 
 
-def backup(src, dst):
-    """A consistent copy of a SQLite database (WAL included) through the backup API."""
-    s = sqlite3.connect(src); d = sqlite3.connect(dst)
+def backup(src, dst, frozen=False):
+    """A consistent copy of a SQLite database (WAL included) through the backup API. `frozen`: a
+    file nothing writes (the committed seed), opened read-only so no -wal or -shm file is left
+    beside it."""
+    s = sqlite3.connect(f"file:{src}?mode=ro&immutable=1", uri=True) if frozen else sqlite3.connect(src)
+    d = sqlite3.connect(dst)
     s.backup(d); d.close(); s.close()
 
 
@@ -618,7 +629,7 @@ def cmd_cleanup(a):
     root = check_root(a.root)
     pidf = os.path.join(root, "pids")
     if os.path.exists(pidf):
-        stop([int(x) for x in open(pidf).read().split()])
+        stop([p for p in (int(x) for x in open(pidf).read().split()) if names_root(p, root)])
     if a.export:
         os.makedirs(a.export, exist_ok=True)
         for run in sorted(glob.glob(os.path.join(root, "runs", "*"))):
@@ -643,16 +654,19 @@ def cmd_cleanup(a):
     if threads:
         subprocess.run([sys.executable, os.path.join(HERE, "codex_threads.py"), *threads])
     for v in {root, root[len("/private"):]}:
+        # Only the folders of sessions under this root's own paths (arm/, template-meta/), so a
+        # sibling root whose name starts with this one's (`/tmp/v3-A-next`) keeps its own.
         slug = re.sub(r"[^A-Za-z0-9]", "-", v)
         assert "-tmp-" in slug
-        for d in glob.glob(os.path.join(HOME, ".claude", "projects", glob.escape(slug) + "*")):
-            shutil.rmtree(d, ignore_errors=True); log("removed", d)
+        for sub in ("-arm-", "-template-meta-"):
+            for d in glob.glob(os.path.join(HOME, ".claude", "projects", glob.escape(slug + sub) + "*")):
+                shutil.rmtree(d, ignore_errors=True); log("removed", d)
     for d in glob.glob("/tmp/brigadier-*") + glob.glob("/private/tmp/brigadier-*"):
         try:
             text = open(os.path.join(d, ".brigadier-owner")).read()
         except OSError:
             continue
-        if root in text or root[len("/private"):] in text:
+        if root + "/" in text or root[len("/private"):] + "/" in text:
             shutil.rmtree(d, ignore_errors=True); log("removed", d)
     shutil.rmtree(root)
     log("removed", root)
