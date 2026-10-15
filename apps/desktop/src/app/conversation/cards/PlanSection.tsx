@@ -87,16 +87,18 @@ function PlanStepRow({
 
 /**
  * The plan's state in one short line under its title: its phase at work ("Phase 2 of 4"), how
- * many are done, or where its approval stands.
+ * many are done, or where its approval stands. A plan of one phase counts nothing ("In progress",
+ * never "Phase 1 of 1").
  */
 function statusLine(plan: Plan, statuses: readonly AgentPlanStepStatus[]): string {
   if (plan.state.type !== "approved") return planProgress(plan, []).label;
+  const one = statuses.length === 1;
   const failed = statuses.indexOf("failed");
-  if (failed !== -1) return `Phase ${failed + 1} failed`;
+  if (failed !== -1) return one ? "Failed" : `Phase ${failed + 1} failed`;
   const running = statuses.indexOf("active");
-  if (running !== -1) return `Phase ${running + 1} of ${statuses.length}`;
+  if (running !== -1) return one ? "In progress" : `Phase ${running + 1} of ${statuses.length}`;
   const stopped = statuses.indexOf("stopped");
-  if (stopped !== -1) return `Phase ${stopped + 1} stopped`;
+  if (stopped !== -1) return one ? "Stopped" : `Phase ${stopped + 1} stopped`;
   const done = statuses.filter((status) => status === "done").length;
   return done > 0 ? `${done} of ${statuses.length} done` : "Not started";
 }

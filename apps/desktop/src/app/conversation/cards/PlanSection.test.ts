@@ -73,6 +73,13 @@ test("a stopped phase reads Stopped, quietly, and an ended plan folds to one lin
     assert.match(ended, /data-folded="true"/);
     assert.match(ended, /· Phase 1 stopped/);
     assert.doesNotMatch(ended, /text-destructive/);
+    // A plan of one phase counts nothing: "In progress" and "Stopped", never "Phase 1 of 1".
+    plan.steps = plan.steps.slice(0, 1);
+    assert.match(render("done"), /· Stopped/);
+    task.state = "running";
+    const one = render("working");
+    assert.match(one, /In progress/);
+    assert.doesNotMatch(one, /Phase 1/);
   } finally {
     await server.close();
   }
