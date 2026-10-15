@@ -1,3 +1,4 @@
+import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import type * as React from "react";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 
@@ -62,4 +63,43 @@ function ContextMenuSeparator({
   );
 }
 
-export { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger };
+/** A row that opens a sub-menu ("Open in ›"). */
+function ContextMenuSub(props: React.ComponentProps<typeof ContextMenuPrimitive.Sub>) {
+  return <ContextMenuPrimitive.Sub data-slot="context-menu-sub" {...props} />;
+}
+
+function ContextMenuSubTrigger({ className, children, ...props }: React.ComponentProps<typeof ContextMenuPrimitive.SubTrigger>) {
+  return (
+    <ContextMenuPrimitive.SubTrigger
+      data-slot="context-menu-sub-trigger"
+      className={cn(itemBase, "data-[state=open]:bg-foreground/8 [&_svg:not([class*='text-'])]:text-muted-foreground", className)}
+      {...props}
+    >
+      {children}
+      <ChevronRight className="size-icon-md ms-auto rtl:rotate-180" />
+    </ContextMenuPrimitive.SubTrigger>
+  );
+}
+
+function ContextMenuSubContent({ className, ...props }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
+  return (
+    <ContextMenuPrimitive.Portal>
+      <ContextMenuPrimitive.SubContent
+        data-slot="context-menu-sub-content"
+        className={cn(menuSurface, "origin-(--radix-context-menu-content-transform-origin) overflow-hidden", className)}
+        {...props}
+      />
+    </ContextMenuPrimitive.Portal>
+  );
+}
+
+export {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+};

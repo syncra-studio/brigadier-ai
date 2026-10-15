@@ -339,8 +339,9 @@ fn open_folder(app: tauri::AppHandle, path: String, with: Option<String>) -> Res
         })
 }
 
-/// Opens a web link in the user's browser. Only http and https: the thread's links come from
-/// models and must not launch other handlers.
+/// Opens a web link in the user's browser, or an email link as a new message in their mail app
+/// (for them to send or not). Only http, https and mailto: the thread's links come from models
+/// and must not launch other handlers.
 #[tauri::command]
 fn open_url(app: tauri::AppHandle, url: String) -> Result<(), IpcError> {
     let invalid = |message: String| IpcError {
@@ -350,8 +351,8 @@ fn open_url(app: tauri::AppHandle, url: String) -> Result<(), IpcError> {
     let scheme = url
         .split_once(':')
         .map(|(scheme, _)| scheme.to_ascii_lowercase());
-    if !matches!(scheme.as_deref(), Some("http" | "https")) {
-        return Err(invalid(format!("only web links open: {url}")));
+    if !matches!(scheme.as_deref(), Some("http" | "https" | "mailto")) {
+        return Err(invalid(format!("only web and email links open: {url}")));
     }
     app.opener()
         .open_url(url, None::<&str>)

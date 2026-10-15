@@ -28,6 +28,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     boundary: { fallback: boolean; neighbour: string | null };
     mended: string | null;
     links: { before: string[]; after: string[]; asked: string[] };
+    linkExtras: { address: string | null; joined: boolean; dashed: boolean; menu: string[]; mailMenu: string[]; chipMenu: string[] };
     doneGroup: { row: string | null; icon: string | null };
     doneChildren: (string | null)[];
     loneRan: string | null;
@@ -97,9 +98,21 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // Web links: a globe until the site's icon comes, kept when the site has none, none for a
   // plain-HTTP link; a site is asked once however many links it has.
   assert.deepEqual(seen.links, {
-    before: ["globe", "globe", "globe", "none"],
-    after: ["icon", "icon", "globe", "none"],
+    before: ["globe", "globe", "globe", "none", "mail"],
+    after: ["icon", "icon", "globe", "none", "mail"],
     asked: ["https://nodejs.org", "https://none.example"],
+  });
+  // Its address on hover, its icon kept with its first word, a dashed underline on hover; a
+  // right-click opens it outside or copies it, and a file chip's opens it, shows it, copies its
+  // path or saves a copy.
+  assert.deepEqual(seen.linkExtras, {
+    address: "https://nodejs.org/en/about",
+    joined: true,
+    dashed: true,
+    menu: ["Open in external browser", "Copy link"],
+    mailMenu: ["Copy email address"],
+    // (The fixture names no platform: "Finder" on a Mac.)
+    chipMenu: ["Open in", "Show in file manager", "Copy path", "Download a copy"],
   });
   // A worker's diff opens as its files' diffs in a dialog within the window: the list scrolls,
   // each file's diff whole.

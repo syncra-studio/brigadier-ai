@@ -14,7 +14,7 @@ import {
   useState,
 } from "react";
 import type { TextMessagePartProps } from "@assistant-ui/react";
-import { Check, Copy, ExpandLg, Globe } from "@openai/apps-sdk-ui/components/Icon";
+import { Check, Copy, ExpandLg, Globe, Mail } from "@openai/apps-sdk-ui/components/Icon";
 
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
 import {
@@ -31,10 +31,20 @@ import { codePath, type CodePath, underRoot, useCodePathExists } from "@/compone
 import { httpsOrigin, useSiteIcon } from "@/components/assistant-ui/site-icons";
 import { createWordFade } from "@/components/assistant-ui/word-fade";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { openArtifact, request, revealPath, saveArtifact } from "@/ipc/client";
+import { openArtifact, openFolder, openUrl, request, revealPath, saveArtifact, saveCopy } from "@/ipc/client";
 import type { StoredCopy } from "@/ipc/generated";
 import { openLink } from "@/state/links";
 import { cn } from "@/lib/utils";
@@ -230,8 +240,10 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
   };
   return (
     <>
+      <ContextMenu>
       <Tooltip>
         <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>
           <a
             href={href}
             data-slot="file-chip"
@@ -245,9 +257,12 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
             {children}
             {line !== null && <span className="text-muted-foreground"> (line {line})</span>}
           </a>
+          </ContextMenuTrigger>
         </TooltipTrigger>
         <TooltipContent side="top">{path}</TooltipContent>
       </Tooltip>
+      <FileChipMenu path={path} line={line} />
+      </ContextMenu>
       {gone && (
         <span data-slot="file-chip-gone" className="text-muted-foreground">
           {" "}
@@ -275,6 +290,52 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
   );
 };
 
+/**
+ * A file chip's right-click menu (inside its `ContextMenu`): open it in the Files tab, its default app or Finder; show it in
+ * Finder; copy its path; save a copy to Downloads.
+ */
+function FileChipMenu({ path, line }: { path: string; line: number | null }) {
+  const openFile = useContext(OpenFileContext);
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const finder = mac ? "Finder" : "File manager";
+  const { copyToClipboard } = useCopyToClipboard();
+  const download = () => {
+    saveCopy({ name: path.split("/").pop() || "file", path, ask: false })
+      .then(() => toast("Saved a copy to Downloads"))
+      .catch(() => toast("Could not download a copy", { tone: "error" }));
+  };
+  return (
+      <ContextMenuContent data-slot="file-chip-menu">
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>Open in</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            <ContextMenuItem onSelect={() => openFile(path, line)}>Files tab</ContextMenuItem>
+            <ContextMenuItem onSelect={() => openFolder(path).catch(failed)}>Default app</ContextMenuItem>
+            <ContextMenuItem onSelect={() => revealPath(path).catch(failed)}>{finder}</ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuItem onSelect={() => revealPath(path).catch(failed)}>{mac ? "Show in Finder" : "Show in file manager"}</ContextMenuItem>
+        <ContextMenuItem onSelect={() => copyToClipboard(path)}>Copy path</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={download}>Download a copy</ContextMenuItem>
+      </ContextMenuContent>
+  );
+}
+
+/** A web link's right-click menu (inside its `ContextMenu`): open it in the system's browser, or copy it. */
+function LinkMenu({ href }: { href: string }) {
+  const { copyToClipboard } = useCopyToClipboard();
+  const web = /^https?:/i.test(href);
+  return (
+      <ContextMenuContent data-slot="link-menu">
+        {web && <ContextMenuItem onSelect={() => openUrl(href).catch(failed)}>Open in external browser</ContextMenuItem>}
+        <ContextMenuItem onSelect={() => copyToClipboard(web ? href : href.replace(/^mailto:/i, ""))}>
+          {web ? "Copy link" : "Copy email address"}
+        </ContextMenuItem>
+      </ContextMenuContent>
+  );
+}
+
 /** Web links open where Settings › Browser say; anything else that isn't a page is a file. */
 export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, children, ...props }) => {
   const task = useContext(TaskMentionContext);
@@ -285,7 +346,8 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
   if (href && !/^(https?:|mailto:|#)/i.test(href)) {
     return <FileChip href={href}>{children}</FileChip>;
   }
-  return (
+  const mail = !!href && /^mailto:/i.test(href);
+  const link = (
     <a
       {...props}
       href={href}
@@ -296,18 +358,38 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
           // A link within the answer: its target, when the answer has one by that id.
           document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ block: "start" });
         } else if (/^https?:/i.test(href)) {
-          // Only web pages: a model's link must not launch other handlers (mailto: included).
           openLink(href, { agent: true }).catch(failed);
+        } else if (mail) {
+          // A new message in the user's mail app, for them to send or not.
+          openUrl(href).catch(failed);
         }
       }}
       className={cn(
-        "aui-md-a text-link hover:text-link/80 font-medium underline-offset-2 hover:underline",
+        "aui-md-a text-link hover:text-link/80 font-medium underline-offset-2 hover:underline hover:decoration-dashed hover:decoration-0.5",
         className,
       )}
     >
+      {/* The icon stays on its first word's line: a word joiner holds them together. */}
       {href && httpsOrigin(href) && <SiteIcon href={href} />}
+      {mail && <Mail data-slot="site-icon" data-mail aria-hidden className="me-0.75 inline-block size-icon-sm align-text-bottom select-none" />}
+      {href && (httpsOrigin(href) || mail) && <span className="select-none">{"\u2060"}</span>}
       {children}
     </a>
+  );
+  if (!href || href.startsWith("#")) return link;
+  // Its address on hover, and a right-click menu.
+  return (
+    <ContextMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>{link}</ContextMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top" data-slot="link-address" className="max-w-sm break-all">
+          {mail ? href.replace(/^mailto:/i, "") : href}
+        </TooltipContent>
+      </Tooltip>
+      <LinkMenu href={href} />
+    </ContextMenu>
   );
 };
 

@@ -83,7 +83,7 @@ useApp.setState((state) => ({
 }));
 
 const patch = "--- a/src/math.js\n+++ b/src/math.js\n@@ -1,4 +1,4 @@\n export function round(value) {\n-  return Math.round(value * 100) / 100;\n+  return Math.round((value + Number.EPSILON) * 100) / 100;\n }\n \n@@ -20,2 +20,3 @@\n const a = 1;\n+const b = 2;\n const c = 3;\n";
-const links = "See [the release](https://nodejs.org/en/about) and [its schedule](https://nodejs.org/en/about/previous-releases), [a page](https://none.example/x) and [the dev server](http://localhost:3000).";
+const links = "See [the release](https://nodejs.org/en/about) and [its schedule](https://nodejs.org/en/about/previous-releases), [a page](https://none.example/x) and [the dev server](http://localhost:3000). Write to [the team](mailto:team@example.com).";
 const answer = "The CLI parses it in `src/cli.ts:64`, the new helper is `src/made-later.ts`, rounding uses `Math.round`, and `src/gone.ts` was removed.";
 
 const now = Date.now();
@@ -347,13 +347,33 @@ async function measure(): Promise<object> {
   // Web links: a globe until the daemon has the site's icon, kept when it has none; each site asked once.
   const icons = () => all("a", at("links")).map((link) => {
     const icon = one("[data-slot=site-icon]", link);
-    return icon ? (icon.tagName === "IMG" ? icon.getAttribute("src") === NODE_ICON ? "icon" : "img" : "globe") : "none";
+    return icon ? (icon.tagName === "IMG" ? icon.getAttribute("src") === NODE_ICON ? "icon" : "img" : icon.hasAttribute("data-mail") ? "mail" : "globe") : "none";
   });
   const before = icons();
   letIconsCome();
   for (const end = performance.now() + 3000; performance.now() < end && !icons().includes("icon"); ) await frame();
   await wait(100);
   out.links = { before, after: icons(), asked: siteAsks.toSorted() };
+  // A link's address on focus or hover; its icon held to its first word; a dashed underline on hover.
+  const firstLink = one<HTMLAnchorElement>("a", at("links"));
+  firstLink?.focus();
+  for (const end = performance.now() + 2000; performance.now() < end && !one("[data-slot=link-address]"); ) await frame();
+  const menuItems = async (target: Element | null | undefined, slot: string) => {
+    target?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
+    for (const end = performance.now() + 2000; performance.now() < end && !one(`[data-slot=${slot}]`); ) await frame();
+    const items = all("[role=menuitem]", one(`[data-slot=${slot}]`) ?? undefined).map((item) => text(item));
+    document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    for (const end = performance.now() + 2000; performance.now() < end && one(`[data-slot=${slot}]`); ) await frame();
+    return items;
+  };
+  out.linkExtras = {
+    address: text(one("[data-slot=link-address]")),
+    joined: firstLink?.querySelector("[data-slot=site-icon] + span")?.textContent === "\u2060",
+    dashed: firstLink?.className.includes("hover:decoration-dashed") ?? false,
+    menu: await menuItems(firstLink, "link-menu"),
+    mailMenu: await menuItems(all("a", at("links")).at(-1), "link-menu"),
+    chipMenu: await menuItems(one("[data-slot=file-chip]", at("chips")), "file-chip-menu"),
+  };
   // A worker's diff in its dialog: within the window, its files scrolling, none squashed.
   const host = document.createElement("div");
   document.body.append(host);

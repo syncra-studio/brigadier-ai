@@ -182,7 +182,7 @@ export async function openArtifact(id: string, fileName: string): Promise<void> 
   }
 }
 
-/** Opens a web link (http or https) in the user's browser. */
+/** Opens a web link (http or https) in the user's browser, or a mailto link in their mail app. */
 export async function openUrl(url: string): Promise<void> {
   try {
     await invoke("open_url", { url });
