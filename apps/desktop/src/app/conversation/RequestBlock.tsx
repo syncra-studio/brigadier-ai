@@ -22,7 +22,6 @@ import { useShallow } from "zustand/react/shallow";
 import { ThinkingLine } from "@/app/conversation/ThinkingLine";
 import { WorkFold } from "@/app/conversation/WorkFold";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
-import { InlineImageText } from "@/app/conversation/InlineImage";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
@@ -446,7 +445,7 @@ const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly Attach
       className="group/steer flex max-w-7/10 min-w-0 flex-col items-end gap-y-1 self-end"
     >
       <div className="bg-muted text-foreground rounded-bubble max-w-full min-w-0 px-4 py-2.5 wrap-anywhere [&_.aui-md-inline-code]:bg-foreground/10">
-        <InlineImageText text={text} attachments={attachments} Text={UserMarkdownText} />
+        <UserMarkdownText text={text} attachments={attachments} />
       </div>
       {held && <HeldNote held={held} />}
       <div className="text-muted-foreground flex items-center gap-1 opacity-0 transition-opacity group-hover/steer:opacity-100 group-focus-within/steer:opacity-100">

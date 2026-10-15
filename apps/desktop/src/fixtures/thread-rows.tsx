@@ -177,7 +177,10 @@ function Page() {
           <InlineDiff path="src/math.js" diff={null} />
         </Case>
         <Case id="user">
-          <UserMarkdownText text={"**1. CSV** — first *line*\nsecond line\n\nAsk @task-9 about `round`"} />
+          <UserMarkdownText
+            text={"**1. CSV** — first *line*\nsecond line\n\nAsk @task-9 about `round` and `@task-9`\n\nBefore [Image #1] after.\n\n```\nping @task-9\n```"}
+            attachments={[]}
+          />
         </Case>
         <Case id="boundary">
           <TurnBoundary>
@@ -292,7 +295,8 @@ async function measure(): Promise<object> {
     breaks: all("br", user).length,
     paragraphs: all("p", user).length,
     code: all("code", user).map((node) => text(node)),
-    text: text(user),
+    text: all("p", user).slice(0, 2).map((node) => text(node)).join(" "),
+    image: all("p", user).map((node) => (one("[data-slot=inline-image]", node) ? text(node) : null)).filter(Boolean),
   };
   // Web links: a globe until the daemon has the site's icon, kept when it has none; each site asked once.
   const icons = () => all("a", at("links")).map((link) => {

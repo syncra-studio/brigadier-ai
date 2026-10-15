@@ -28,7 +28,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     mended: string | null;
     links: { before: string[]; after: string[]; asked: string[] };
     diffDialog: { fits: boolean; files: number; scrolls: boolean; whole: boolean };
-    user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string };
+    user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string; image: string[] };
   } & Record<"diff-patch" | "diff-edit" | "diff-empty" | "diff-missing", {
     name: string | null; counts: string | null; numbers: string[]; kinds: string[]; gaps: string[]; marks: string[]; empty: string | null; coloured: boolean;
   }>;
@@ -93,9 +93,13 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // A turn that fails to render says so in its place, the rest stays; Try again renders it afresh.
   assert.deepEqual(seen.boundary, { fallback: true, neighbour: "The next turn" });
   assert.equal(seen.mended, "Rendered again");
-  // The user's own Markdown renders, its line breaks kept; a mention of no known worker stays as written.
+  // The user's own Markdown renders as one document, its line breaks kept; a mention of no known
+  // worker stays as written, and code keeps a mention's words as typed; a pasted image is a chip
+  // inside its sentence.
   assert.deepEqual(seen.user, {
-    strong: ["1. CSV"], em: ["line"], breaks: 1, paragraphs: 2, code: ["round"],
-    text: "1. CSV — first line second line Ask @task-9 about round",
+    strong: ["1. CSV"], em: ["line"], breaks: 1, paragraphs: 3,
+    code: ["round", "@task-9", "ping @task-9"],
+    text: "1. CSV — first line second line Ask @task-9 about round and @task-9",
+    image: ["Before Image #1 after."],
   });
 });

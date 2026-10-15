@@ -3,16 +3,17 @@ import { Chat, File } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { InlineImageText } from "@/app/conversation/InlineImage";
 import { WorkerChip, WorkerGlyph } from "@/app/conversation/WorkerChip";
 import type { ChipMention } from "@/components/assistant-ui/elements/composer-chips";
 import {
   ComposerMentions,
   type MentionOption,
 } from "@/components/assistant-ui/elements/composer-mentions";
-import { TaskMentionContext } from "@/components/assistant-ui/file-links";
+import { MessageInlineImage } from "@/components/assistant-ui/elements/inline-image";
+import { InlineImageContext, TaskMentionContext } from "@/components/assistant-ui/file-links";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
+import { normalizedImages } from "@/lib/inlineImages";
 import { listFiles } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -80,13 +81,22 @@ const taskChip = (number: number) => <TaskByNumber number={number} />;
 
 /**
  * The user's own words as they wrote them in Markdown (as the answer renders, without its
- * streaming fade), each line break kept, and the workers they @-mentioned as chips.
+ * streaming fade), as one document: each line break kept, the workers they @-mentioned as chips
+ * and the images they pasted as chips where they pasted them, never inside code.
  */
-export const UserMarkdownText: FC<{ text: string }> = ({ text }) => (
-  <TaskMentionContext.Provider value={taskChip}>
-    <MarkdownBlock text={text.replace(TASK, (_, number: string) => `[@task-${number}](brigadier-task:${number})`)} breaks />
-  </TaskMentionContext.Provider>
-);
+export const UserMarkdownText: FC<{ text: string; attachments: readonly AttachmentRef[] }> = ({ text, attachments }) => {
+  const normalized = useMemo(() => normalizedImages(text, attachments), [text, attachments]);
+  const imageChip = useCallback((n: number) => (
+    <MessageInlineImage image={normalized.attachments.find((ref) => ref.inline === n)} n={n} />
+  ), [normalized]);
+  return (
+    <TaskMentionContext.Provider value={taskChip}>
+      <InlineImageContext.Provider value={imageChip}>
+        <MarkdownBlock text={normalized.text} breaks />
+      </InlineImageContext.Provider>
+    </TaskMentionContext.Provider>
+  );
+};
 
 /** A user message's text part, its @-mentioned workers as chips. */
 export const UserMessageText: FC<TextMessagePartProps> = ({ text }) => {
@@ -98,7 +108,7 @@ export const UserMessageText: FC<TextMessagePartProps> = ({ text }) => {
         From page: {page.title}
       </span>
     ))}
-    <InlineImageText text={text} attachments={attachments ?? []} Text={UserMarkdownText} />
+    <UserMarkdownText text={text} attachments={attachments ?? []} />
   </>;
 };
 

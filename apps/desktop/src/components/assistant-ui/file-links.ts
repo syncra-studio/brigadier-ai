@@ -32,6 +32,12 @@ export const OpenFileContext = createContext<(path: string, line: number | null)
  */
 export const TaskMentionContext = createContext<((number: number) => ReactNode) | null>(null);
 
+/**
+ * How a pasted image shows in the user's own message (`brigadier-image:n` links): its chip,
+ * where it was pasted. Without it the `[Image #n]` stays as written.
+ */
+export const InlineImageContext = createContext<((n: number) => ReactNode) | null>(null);
+
 /** The conversation whose messages hold the links, where a view shows one that isn't selected. */
 export const LinkConversationContext = createContext<string | null>(null);
 

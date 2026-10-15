@@ -18,6 +18,7 @@ import { Check, Copy, ExpandLg, Globe } from "@openai/apps-sdk-ui/components/Ico
 
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
 import {
+  InlineImageContext,
   LinkTimeContext,
   OpenFileContext,
   TaskMentionContext,
@@ -50,25 +51,53 @@ type MarkdownTextProps = Partial<TextMessagePartProps> & {
    * still fading in: a line between the turn's steps is never held back.
    */
   paced?: boolean | undefined;
-  /** Each line break is a break, as the user typed it (the user's own messages). */
+  /**
+   * The user's own message: each line break is a break, as they typed it, and in its text (never
+   * in code) a `@task-N` is a `brigadier-task:N` link and a pasted `[Image #n]` a
+   * `brigadier-image:n` link, which `TaskMentionContext` and `InlineImageContext` show.
+   */
   breaks?: boolean | undefined;
 };
 
-type MdNode = { type: string; value?: string; children?: MdNode[] };
+type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] };
 
-/** Line breaks inside a paragraph's text as breaks (code keeps its own lines). */
-function splitBreaks(node: MdNode): void {
+/** A worker's `@task-N`, or a pasted image's `[Image #n]`. */
+const USER_TOKEN = /(@task-\d+\b|\[Image #\d+\])/;
+
+/** One piece of the user's text: a line break, a mention or an image as a link, else text. */
+function userPieces(value: string): MdNode[] {
+  return value.split(/\r?\n/).flatMap((line, index) => [
+    ...(index > 0 ? [{ type: "break" }] : []),
+    ...line.split(USER_TOKEN).flatMap((piece, at): MdNode[] => {
+      if (!piece) return [];
+      if (at % 2 === 0) return [{ type: "text", value: piece }];
+      const url = piece.startsWith("@") ? `brigadier-task:${piece.slice(6)}` : `brigadier-image:${piece.slice(8, -1)}`;
+      return [{ type: "link", url, children: [{ type: "text", value: piece }] }];
+    }),
+  ]);
+}
+
+/**
+ * The user's text in a paragraph: its line breaks as breaks, its mentions and images as links
+ * (code keeps its own lines and words, a link's words stay its own).
+ */
+function splitUserText(node: MdNode): void {
   if (!node.children) return;
-  node.children = node.children.flatMap((child): MdNode[] => {
-    if (child.type !== "text" || !child.value?.includes("\n")) {
-      splitBreaks(child);
-      return [child];
-    }
-    return child.value.split(/\r?\n/).flatMap((value, index) => [...(index > 0 ? [{ type: "break" }] : []), ...(value ? [{ type: "text", value }] : [])]);
+  // A `[Image #n]` may come in several text pieces (its brackets on their own).
+  const merged: MdNode[] = [];
+  for (const child of node.children) {
+    const last = merged.at(-1);
+    if (child.type === "text" && last?.type === "text") last.value = `${last.value ?? ""}${child.value ?? ""}`;
+    else merged.push(child.type === "text" ? { ...child } : child);
+  }
+  node.children = merged.flatMap((child): MdNode[] => {
+    if (child.type === "text") return userPieces(child.value ?? "");
+    if (child.type !== "link" && child.type !== "linkReference") splitUserText(child);
+    return [child];
   });
 }
 
-const remarkBreaks = () => (tree: MdNode) => splitBreaks(tree);
+const remarkUserText = () => (tree: MdNode) => splitUserText(tree);
 
 /**
  * The pace streaming text shows at: it trails what has arrived, steered so whatever waits
@@ -120,7 +149,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced 
 
   return (
     <MarkdownTextPrimitive
-      remarkPlugins={breaks ? [remarkGfm, remarkBreaks] : [remarkGfm]}
+      remarkPlugins={breaks ? [remarkGfm, remarkUserText] : [remarkGfm]}
       rehypePlugins={rehypePlugins}
       // Only text that still streams is revealed as it arrives. Settled text shows whole at
       // once, also when it mounts again (the stored reply replacing the streamed one, a work
@@ -249,8 +278,10 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
 /** Web links open where Settings › Browser say; anything else that isn't a page is a file. */
 export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, children, ...props }) => {
   const task = useContext(TaskMentionContext);
-  // A worker the user's message @-mentions: its chip.
+  const image = useContext(InlineImageContext);
+  // A worker the user's message @-mentions: its chip. An image pasted into it: its chip, there.
   if (href?.startsWith("brigadier-task:")) return <>{task?.(Number(href.slice("brigadier-task:".length))) ?? children}</>;
+  if (href?.startsWith("brigadier-image:")) return <>{image?.(Number(href.slice("brigadier-image:".length))) ?? children}</>;
   if (href && !/^(https?:|mailto:|#)/i.test(href)) {
     return <FileChip href={href}>{children}</FileChip>;
   }
