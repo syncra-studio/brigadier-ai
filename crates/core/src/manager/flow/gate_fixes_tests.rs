@@ -1,11 +1,12 @@
 //! Rule R for BUILD-PLAN C10's instruction changes: a session told the instructions before
-//! them (revision 35) hears revision 36 (its own shell's output whole up to 30 KB) once, at its
+//! them (revision 35) hears revisions 36 (its own shell's output whole up to 30 KB) and 37 (its
+//! last edit and check in one message, record_findings looked up alongside a fix) once, at its
 //! next turn, and goes on working.
 
 use std::sync::{Arc, Mutex};
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::manager::prompts::{SHELL_WHOLE_REVISION, revision_note};
+use crate::manager::prompts::{SAME_MESSAGE_REVISION, SHELL_WHOLE_REVISION, revision_note};
 use crate::model::DomainEvent;
 
 type Log = Arc<Mutex<Vec<String>>>;
@@ -71,8 +72,14 @@ async fn a_session_from_before_hears_the_gate_fixes_once_and_goes_on() {
     flow.say("And once more.").await;
     flow.settled().await;
 
+    assert_eq!(SAME_MESSAGE_REVISION, SHELL_WHOLE_REVISION + 1);
     let note = revision_note(SHELL_WHOLE_REVISION - 1, false).unwrap();
     assert!(note.contains("comes back whole up to 30 KB"), "{note}");
+    assert!(
+        note.contains("send your last edit and the run_check that checks it in the same message"),
+        "{note}"
+    );
+    assert!(note.contains("look up record_findings"), "{note}");
     let inputs = inputs.lock().unwrap().clone();
     let told: usize = inputs
         .iter()

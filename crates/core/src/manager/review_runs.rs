@@ -311,7 +311,7 @@ pub(crate) fn unverified(status: &FindingStatus) -> bool {
 /// record them.
 fn record_line(items: &[Finding]) -> String {
     format!(
-        "Its findings:\n{}\nRecord what became of each with record_findings, all in one call: fixed (in task-N, or by you, with how you checked it in the merged code), open, or dismissed and why. If your answer is already written: {}",
+        "Its findings:\n{}\nRecord what became of each with record_findings, all in one call: fixed (in task-N, or by you, with how you checked it in the merged code), open, or dismissed and why. If record_findings isn't in your tool list, look it up in the same message as your first fix or check, not in a call of its own. If your answer is already written: {}",
         listed(items),
         super::prompts::LATE_EVENT
     )
