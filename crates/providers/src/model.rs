@@ -1050,6 +1050,11 @@ pub struct SessionSpec {
     pub omit_ai_coauthors: bool,
     /// A Claude thread's output hook; Codex runs no hooks.
     pub output_hook: Option<OutputHook>,
+    /// Every tool call is refused before it runs, with this reason for the model: a Claude
+    /// `PreToolUse` hook that denies all tools, native and MCP. Hooks run in the client, so the
+    /// tool list (and the cached prefix it starts) stays the same; `--disallowedTools` would
+    /// change it (BUILD-PLAN B5, a thread's note fork). Codex runs no hooks: it ignores this.
+    pub deny_tools: Option<String>,
     /// What the session may never write (other sessions' branches, the base, Brigadier's
     /// bookkeeping; PLAN bug 6). Below Full access the CLI's sandbox grants none of it
     /// already, and Claude also gets it as `denyWrite` and file-tool deny rules (its file

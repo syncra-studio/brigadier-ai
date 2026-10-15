@@ -52,6 +52,13 @@ pub enum Role {
         conversation_id: ConversationId,
         tools: TabTools,
     },
+    /// A thread's note fork (BUILD-PLAN B5): it is shown the thread's own tools, so it shares
+    /// the thread's cached start, and every call of it is refused.
+    NoteFork {
+        conversation_id: ConversationId,
+        /// The thread's command tools, listed as the thread's are.
+        run: RunTools,
+    },
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`): it may only store the
     /// thread's command output, and calls no tools.
     OutputHook { conversation_id: ConversationId },

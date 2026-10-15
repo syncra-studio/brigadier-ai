@@ -386,7 +386,8 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
     static TAB_PAGE: OnceLock<Vec<Tool>> = OnceLock::new();
     static TAB_FILE: OnceLock<Vec<Tool>> = OnceLock::new();
     match role {
-        Role::Orchestrator { run, .. } => match run {
+        // A note fork lists the thread's tools, whose calls the host refuses.
+        Role::Orchestrator { run, .. } | Role::NoteFork { run, .. } => match run {
             RunTools::None => ORCHESTRATOR.get_or_init(orchestrator_tools),
             RunTools::Run => RUNNER.get_or_init(|| {
                 let mut tools = orchestrator_tools();
@@ -644,7 +645,7 @@ pub fn parse_call(
     let arguments = Value::Object(arguments);
     let unknown = || ParseError::UnknownTool(name.to_owned());
     match role {
-        Role::Orchestrator { run, .. } => {
+        Role::Orchestrator { run, .. } | Role::NoteFork { run, .. } => {
             let call = match name {
                 "delegate_task" => OrchestratorCall::DelegateTask(args(name, arguments)?),
                 "message_worker" => OrchestratorCall::MessageWorker(args(name, arguments)?),

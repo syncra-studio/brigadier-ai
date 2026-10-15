@@ -806,6 +806,7 @@ impl ToolHost for SessionManager {
                     },
                     ToolCall::TabChat(call),
                 ) => manager.tab_chat_call(conversation_id, call).await,
+                (Role::NoteFork { .. }, _) => ToolReply::error(rebirth::NOTE_FORK_REFUSAL),
                 _ => ToolReply::error("This tool is not available to this session."),
             }
         })

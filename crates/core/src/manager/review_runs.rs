@@ -1345,6 +1345,7 @@ impl SessionManager {
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            deny_tools: None,
             protection: Default::default(),
         };
         let counted_as = TaskId(review_owner(&review.id));

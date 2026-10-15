@@ -186,6 +186,9 @@ impl TurnChain {
     }
 }
 
+/// Where Brigadier's MCP server finds its grant, in its environment.
+pub(crate) const MCP_GRANT_ENV: &str = "BRIGADIER_MCP_GRANT";
+
 /// A live CLI session of a conversation or task.
 pub(crate) struct Cli {
     pub provider: ProviderKind,
@@ -388,6 +391,9 @@ struct ConvState {
     cache: Option<CacheMark>,
     /// A handoff note written while the cache was warm, for a rebirth once it has expired.
     checkpoint: Option<Arc<RebirthPrep>>,
+    /// What the thread's last CLI was started with, kept after it closes: its note fork starts
+    /// the same way, to share its cached start (BUILD-PLAN B5).
+    fork_base: Option<Arc<rebirth::ForkBase>>,
 }
 
 impl ConvState {
@@ -625,6 +631,11 @@ impl ConvLive {
     /// The conversation's CLI session, while one runs.
     pub(crate) async fn live_cli(&self) -> Option<Arc<Cli>> {
         self.state.lock().await.cli.clone()
+    }
+
+    /// What the thread's last CLI was started with, for its note fork.
+    pub(crate) async fn fork_base(&self) -> Option<Arc<rebirth::ForkBase>> {
+        self.state.lock().await.fork_base.clone()
     }
 
     fn native_ids(&self) -> std::sync::MutexGuard<'_, NativeIds> {
@@ -2775,6 +2786,7 @@ impl SessionManager {
         let mut launch = None;
         let mut auto_review = false;
         let mut output_hook = None;
+        let mut run_tools = None;
         let (choice, prompt, mcp, current) = match (&conversation.setup, conv.kind) {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = fallback.unwrap_or_else(|| orchestrator.clone());
@@ -2816,6 +2828,7 @@ impl SessionManager {
                 // A Codex thread runs long commands through `run`; a Claude thread's own Bash
                 // output is trimmed by its hook (THREAD-PLAN.md Q4).
                 let commands = super::run::run_tools(choice.provider, permission);
+                run_tools = Some(commands);
                 let grant = self.grants.issue(
                     &owner,
                     Role::Orchestrator {
@@ -2979,6 +2992,7 @@ impl SessionManager {
             auto_review,
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook,
+            deny_tools: None,
             protection: launch
                 .as_ref()
                 .map(|launch| launch.protection.clone())
@@ -2986,6 +3000,12 @@ impl SessionManager {
         };
         let mut resumed = resume.is_some();
         let tools_key = crate::routing::meter::tools_key(&spec);
+        let fork_base = run_tools.map(|run| {
+            Arc::new(rebirth::ForkBase {
+                spec: spec.clone(),
+                run,
+            })
+        });
         // Every account shares the CLI's session history: a conversation resumes on whichever
         // account it runs on now.
         let account = self.runtime.account_for(&choice);
@@ -3066,7 +3086,13 @@ impl SessionManager {
             ended: CancellationToken::new(),
             launch,
         });
-        conv.state.lock().await.cli = Some(cli.clone());
+        {
+            let mut state = conv.state.lock().await;
+            state.cli = Some(cli.clone());
+            if fork_base.is_some() {
+                state.fork_base = fork_base;
+            }
+        }
         let manager = self.arc();
         let pumped = cli.clone();
         let pumping = conv.clone();
@@ -3111,7 +3137,7 @@ impl SessionManager {
                 "--data-dir".into(),
                 self.data_dir.to_string_lossy().into_owned(),
             ],
-            env: vec![("BRIGADIER_MCP_GRANT".into(), grant)],
+            env: vec![(MCP_GRANT_ENV.into(), grant)],
             tool_timeout_secs: Some(timeout_secs),
             trusted: true,
             always_load,

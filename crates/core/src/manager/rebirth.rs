@@ -35,6 +35,7 @@ use crate::model::{
 };
 use crate::now_ms;
 use crate::routing::TokenMeter;
+use crate::tools::{Role, RunTools};
 use crate::work::{ApprovalSubject, CardState, OrchestratorEntry, PlanState, TaskState};
 
 /// About four bytes per token.
@@ -242,6 +243,94 @@ impl Part {
     }
 }
 
+/// What a thread's CLI was started with, kept for its note fork (BUILD-PLAN B5).
+pub(crate) struct ForkBase {
+    pub spec: SessionSpec,
+    /// The thread's command tools, which its Brigadier server lists.
+    pub run: RunTools,
+}
+
+/// What a note fork is told when it calls any tool: the deny hook's reason and Brigadier's
+/// tool server's answer to its grant.
+pub(crate) const NOTE_FORK_REFUSAL: &str = "This is the read-only note fork of the thread: no \
+tool runs here. Write the note from what you already know, in text.";
+
+/// A Claude thread's note fork: the thread's own start (tools, MCP servers, model, effort,
+/// instructions and settings), so its first call reads the thread's prefix from the cache.
+/// Only its origin, its life (ephemeral, unrecorded) and its folders' ownership change. It
+/// stays read-only, every tool call is refused before it runs by a client-side hook that leaves
+/// the tool list as it is, and Brigadier's server answers it under the fork's own `grant`.
+pub(crate) fn note_fork_spec(thread: &SessionSpec, native_id: String, grant: &str) -> SessionSpec {
+    let mcp_servers = thread
+        .mcp_servers
+        .iter()
+        .cloned()
+        .map(|mut server| {
+            for (name, value) in &mut server.env {
+                if name == super::conversation::MCP_GRANT_ENV {
+                    *value = grant.to_owned();
+                }
+            }
+            server
+        })
+        .collect();
+    SessionSpec {
+        origin: Origin::Fork { native_id },
+        ephemeral: true,
+        access: Access::ReadOnly,
+        mcp_servers,
+        record_to: None,
+        redactor: super::secrets::redactor(vec![grant.to_owned()]),
+        // The thread's live CLI works in the same folder (a fork finds its session by folder):
+        // sweeping the folder when the fork ends would end that CLI too, mid-turn. The fork's
+        // own process tree still ends with it.
+        owned_cwd: false,
+        sweep_dir: None,
+        // Its hook stores the output of commands, and no command runs here.
+        output_hook: None,
+        deny_tools: Some(NOTE_FORK_REFUSAL.into()),
+        ..thread.clone()
+    }
+}
+
+/// A note fork with no tools or MCP servers: a Codex thread's (its own shell and patch tools
+/// stay, read-only), or one whose thread start isn't known.
+fn plain_fork_spec(
+    cwd: std::path::PathBuf,
+    choice: &ModelChoice,
+    native_id: String,
+    prompt: String,
+) -> SessionSpec {
+    SessionSpec {
+        cwd,
+        model: choice.model.clone(),
+        effort: choice.effort.clone(),
+        fast: choice.fast == Some(true),
+        origin: Origin::Fork { native_id },
+        ephemeral: true,
+        access: Access::ReadOnly,
+        append_system_prompt: Some(prompt),
+        mcp_servers: Vec::new(),
+        tools: ToolSet::None,
+        skill_plugins: Vec::new(),
+        add_dirs: Vec::new(),
+        env: Vec::new(),
+        unset_env: Vec::new(),
+        low_priority: false,
+        record_to: None,
+        redactor: None,
+        owned_cwd: false,
+        sweep_dir: None,
+        auto_compact: false,
+        allowed_models: None,
+        auto_review: false,
+        omit_ai_coauthors: false,
+        output_hook: None,
+        deny_tools: None,
+        protection: Default::default(),
+    }
+}
+
 impl SessionManager {
     /// Starts writing the handoff note in a fork of the orchestrator's CLI session, whose
     /// context is `(tokens, window)`. The returned preparation is ready once the fork is done.
@@ -323,55 +412,61 @@ impl SessionManager {
         purpose: HandoffPurpose,
     ) -> Option<String> {
         let _turn = self.background_turn();
-        let conversation = self.core.conversation(id).ok()?;
-        let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
-        // The thread's own instructions, so the fork shares its cached start.
-        let prompt = self
-            .thread_prompt(
-                &conversation,
-                &preferences,
-                self.recorded_workspace(id).as_ref(),
-                provider,
-            )
-            .await;
-        let spec = SessionSpec {
-            cwd: self.owned_dir("orch", &id.0),
-            model: choice.model.clone(),
-            effort: choice.effort.clone(),
-            fast: choice.fast == Some(true),
-            origin: Origin::Fork { native_id },
-            ephemeral: true,
-            access: Access::ReadOnly,
-            append_system_prompt: Some(prompt),
-            mcp_servers: Vec::new(),
-            tools: ToolSet::None,
-            skill_plugins: Vec::new(),
-            add_dirs: Vec::new(),
-            env: Vec::new(),
-            unset_env: Vec::new(),
-            low_priority: false,
-            record_to: None,
-            redactor: None,
-            // The orchestrator's live CLI works in the same folder (a fork finds its session by
-            // folder): sweeping the folder when the fork ends would end that CLI too, mid-turn.
-            // The fork's own process tree still ends with it.
-            owned_cwd: false,
-            sweep_dir: None,
-            auto_compact: false,
-            allowed_models: None,
-            auto_review: false,
-            omit_ai_coauthors: false,
-            output_hook: None,
-            protection: Default::default(),
-        };
         let owner = format!("orch:{id}");
+        let live = self.convs_lock().get(id).cloned();
+        let base = match live {
+            Some(conv) => conv.fork_base().await,
+            None => None,
+        };
+        let mut grant = None;
+        let spec = match base.as_deref() {
+            // A Claude fork starts as the thread did, so it reads the thread's whole start from
+            // the cache; Brigadier's tools answer it under a grant of its own, which refuses them.
+            Some(base) if provider == ProviderKind::Claude => {
+                let issued = self.grants.issue(
+                    &owner,
+                    Role::NoteFork {
+                        conversation_id: id.clone(),
+                        run: base.run,
+                    },
+                );
+                let spec = note_fork_spec(&base.spec, native_id, &issued);
+                grant = Some(issued);
+                spec
+            }
+            // Codex is unchanged until its hooks can be shown to hold (BUILD-PLAN B5), and a
+            // thread whose CLI hasn't started since the daemon did has nothing to copy.
+            _ => {
+                if provider == ProviderKind::Claude {
+                    tracing::info!(conversation = %id, "no thread start to copy: the note fork starts on its own");
+                }
+                let conversation = self.core.conversation(id).ok()?;
+                let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
+                // The thread's own instructions.
+                let prompt = self
+                    .thread_prompt(
+                        &conversation,
+                        &preferences,
+                        self.recorded_workspace(id).as_ref(),
+                        provider,
+                    )
+                    .await;
+                plain_fork_spec(self.owned_dir("orch", &id.0), &choice, native_id, prompt)
+            }
+        };
         let account = self.runtime.account_for(&choice);
+        let revoke = |grants: &crate::tools::Grants| {
+            if let Some(grant) = &grant {
+                grants.revoke(std::slice::from_ref(grant));
+            }
+        };
         let Started {
             session,
             mut events,
         } = match self.runtime.start_hosted(&owner, &account, spec).await {
             Ok(started) => started,
             Err(err) => {
+                revoke(&self.grants);
                 tracing::warn!(conversation = %id, error = %err, "could not fork the orchestrator for its handoff note");
                 return None;
             }
@@ -443,6 +538,7 @@ impl SessionManager {
             .ok()
             .flatten();
         session.close().await;
+        revoke(&self.grants);
         note
     }
 

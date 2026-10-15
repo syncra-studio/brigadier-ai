@@ -56,11 +56,10 @@ impl CacheMark {
         idle >= from && idle < until
     }
 
-    /// The cache has expired: `lifetime` has passed since the last request, or since a later
-    /// request that read the cache (`refreshed_ms`).
-    fn expired(&self, lifetime: Duration, refreshed_ms: Option<i64>, now: i64) -> bool {
-        let since = refreshed_ms.map_or(self.at_ms, |at| at.max(self.at_ms));
-        now - since >= lifetime.as_millis() as i64
+    /// The cache has expired: `lifetime` has passed since the thread's last request. A
+    /// checkpoint's fork doesn't extend it (BUILD-PLAN B5, research A11).
+    fn expired(&self, lifetime: Duration, now: i64) -> bool {
+        now - self.at_ms >= lifetime.as_millis() as i64
     }
 }
 
@@ -161,13 +160,7 @@ impl SessionManager {
                 && checkpoint.old_native_id.as_deref() == Some(mark.native_id.as_str())
                 && checkpoint.started_at_ms >= mark.at_ms
         });
-        // The checkpoint's fork read the cache, and that refreshed its lifetime (measured on
-        // Claude Code 2.1.285: a resume 70 minutes after the last request, 20 after a fork,
-        // read the whole history from cache).
-        let refreshed = checkpoint
-            .as_ref()
-            .and_then(|checkpoint| checkpoint.ready_at_ms());
-        if !mark.expired(lifetime, refreshed, now)
+        if !mark.expired(lifetime, now)
             || mark.context < cold_rebirth_min_tokens(mark.provider, mark.window)
         {
             return None;
@@ -200,7 +193,7 @@ impl SessionManager {
         let Some(mark) = self.cache_mark_of(conv).await else {
             return false;
         };
-        cache_lifetime(mark.provider).is_some_and(|lifetime| mark.expired(lifetime, None, now_ms()))
+        cache_lifetime(mark.provider).is_some_and(|lifetime| mark.expired(lifetime, now_ms()))
     }
 
     /// The conversation's last model request: as seen live, or else recovered from the
@@ -299,20 +292,23 @@ mod tests {
     }
 
     #[test]
-    fn the_cache_expires_one_lifetime_after_the_last_request_that_read_it() {
+    fn the_cache_expires_one_lifetime_after_the_threads_last_request() {
         let hour = Duration::from_secs(3_600);
         let mark = mark();
-        assert!(!mark.expired(hour, None, 60 * MINUTE - 1));
-        assert!(mark.expired(hour, None, 60 * MINUTE));
-        // A checkpoint's fork at 50 minutes keeps it warm until 110.
-        assert!(!mark.expired(hour, Some(50 * MINUTE), 109 * MINUTE));
-        assert!(mark.expired(hour, Some(50 * MINUTE), 110 * MINUTE));
-        // A fork older than the last request refreshes nothing.
-        let later = CacheMark {
-            at_ms: 30 * MINUTE,
-            ..mark
-        };
-        assert!(!later.expired(hour, Some(10 * MINUTE), 89 * MINUTE));
-        assert!(later.expired(hour, Some(10 * MINUTE), 90 * MINUTE));
+        assert!(!mark.expired(hour, 60 * MINUTE - 1));
+        assert!(mark.expired(hour, 60 * MINUTE));
+    }
+
+    /// The checkpoint wait's test-only override (`BRIGADIER_CACHE_TTL_SECS`, read by a debug
+    /// build alone) is off unless set: Claude's cache lives an hour.
+    #[test]
+    fn the_cache_lifetime_is_an_hour_unless_a_debug_build_is_told_otherwise() {
+        if std::env::var_os("BRIGADIER_CACHE_TTL_SECS").is_none() {
+            assert_eq!(
+                cache_lifetime(ProviderKind::Claude),
+                Some(Duration::from_secs(3_600))
+            );
+        }
+        assert_eq!(cache_lifetime(ProviderKind::Codex), None);
     }
 }

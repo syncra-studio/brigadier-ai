@@ -1866,6 +1866,7 @@ impl SessionManager {
             auto_review: self.permission(&conversation_id) == PermissionLevel::ApproveForMe,
             omit_ai_coauthors,
             output_hook: None,
+            deny_tools: None,
             protection: protection.unwrap_or_default(),
         };
         let worktree = workspace.worktree.clone();

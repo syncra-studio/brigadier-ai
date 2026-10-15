@@ -758,6 +758,9 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
     if let Some(hooks) = output_hooks(spec) {
         settings["hooks"] = hooks;
     }
+    if let Some(reason) = &spec.deny_tools {
+        settings["hooks"]["PreToolUse"] = deny_hook(reason);
+    }
     // In auto mode Claude's classifier settles a command that leaves the sandbox: it refuses
     // what the protection keeps out, whatever the user said. `hard_deny` rules block whatever
     // the user intends, and `$defaults` keeps the built-in ones; the classifier reads `autoMode`
@@ -809,6 +812,28 @@ fn output_hooks(spec: &SessionSpec) -> Option<Value> {
         "hooks": [{ "type": "command", "command": command, "timeout": hook.timeout_secs }],
     }]);
     Some(json!({ "PostToolUse": entry, "PostToolUseFailure": entry }))
+}
+
+/// A `PreToolUse` hook that refuses every tool call, native and MCP, before it runs, telling
+/// the model `reason` ([`SessionSpec::deny_tools`]). The command reads the call's event and
+/// answers `permissionDecision: "deny"` (code.claude.com/docs/en/hooks, "PreToolUse decision
+/// control").
+fn deny_hook(reason: &str) -> Value {
+    let answer = json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        },
+    });
+    let command = format!(
+        "cat >/dev/null; printf '%s\\n' {}",
+        shell_quote(&answer.to_string())
+    );
+    json!([{
+        "matcher": "*",
+        "hooks": [{ "type": "command", "command": command }],
+    }])
 }
 
 /// `text` as one word for the shell Claude runs a hook command with.
@@ -1989,6 +2014,7 @@ mod tests {
             auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
+            deny_tools: None,
             protection: Default::default(),
         }
     }
@@ -2391,6 +2417,86 @@ mod tests {
             );
         }
         assert_eq!(shell_quote("it's"), r"'it'\''s'");
+    }
+
+    /// A note fork's hook refuses every tool, native and MCP, before it runs, with the reason
+    /// for the model; it keeps the thread's output hook, and nothing else the CLI is started
+    /// with changes: the tool list and the prompt stay the thread's (BUILD-PLAN B5).
+    #[test]
+    fn a_denied_session_refuses_every_tool_with_the_same_tools() {
+        let cwd = Temp::new();
+        let thread = SessionSpec {
+            tools: ToolSet::Thread,
+            allowed_models: None,
+            output_hook: Some(OutputHook {
+                command: PathBuf::from("/bin/true"),
+                args: Vec::new(),
+                env: Vec::new(),
+                timeout_secs: 60,
+            }),
+            ..spec(cwd.path(), &[])
+        };
+        let reason = "This is the read-only note fork: no tool runs. Answer in text.";
+        let fork = SessionSpec {
+            deny_tools: Some(reason.into()),
+            ..thread.clone()
+        };
+        let hooks = &settings(&fork, cwd.path(), &SubAgents::Any, false)["hooks"];
+        assert_eq!(hooks.as_object().map(Map::len), Some(3), "{hooks}");
+        assert_eq!(hooks["PreToolUse"][0]["matcher"], json!("*"));
+        let command = hooks["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .expect("command");
+        // The command answers a deny for any call it is given.
+        let out = std::process::Command::new("sh")
+            .args(["-c", command])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child
+                    .stdin
+                    .take()
+                    .expect("stdin")
+                    .write_all(br#"{"tool_name":"Bash","tool_input":{"command":"touch x"}}"#)?;
+                child.wait_with_output()
+            })
+            .expect("hook ran");
+        assert!(out.status.success());
+        let answer: Value = serde_json::from_slice(&out.stdout).expect("json");
+        assert_eq!(
+            answer,
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                },
+            })
+        );
+        // Everything but the settings is as the thread starts.
+        let without_settings = |spec: &SessionSpec| {
+            let mut args = Claude::session_args(
+                spec,
+                cwd.path(),
+                "00000000-0000-4000-8000-000000000000",
+                false,
+            )
+            .expect("args");
+            let at = args
+                .iter()
+                .position(|arg| arg == "--settings")
+                .expect("settings");
+            args.remove(at + 1);
+            args
+        };
+        assert_eq!(without_settings(&fork), without_settings(&thread));
+        assert!(
+            settings(&thread, cwd.path(), &SubAgents::Any, false)["hooks"]
+                .get("PreToolUse")
+                .is_none()
+        );
     }
 
     #[test]

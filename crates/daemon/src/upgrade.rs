@@ -23,6 +23,7 @@ use crate::server::Daemon;
 fn role_name(role: &Role) -> &'static str {
     match role {
         Role::Orchestrator { .. } => "orchestrator",
+        Role::NoteFork { .. } => "note fork",
         Role::Worker { .. } => "worker",
         Role::BrainJob { .. } => "brain job",
         Role::Chat { .. } => "chat",
@@ -38,6 +39,7 @@ pub async fn serve_mcp(daemon: Arc<Daemon>, grant: String, stream: RawStream) {
     let role = match host.role(&grant) {
         Some(
             role @ (Role::Orchestrator { .. }
+            | Role::NoteFork { .. }
             | Role::Worker { .. }
             | Role::BrainJob { .. }
             | Role::Chat { .. }

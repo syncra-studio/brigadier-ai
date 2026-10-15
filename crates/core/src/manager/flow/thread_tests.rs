@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use brigadier_providers::model::{Access, Origin, ToolSet};
+use brigadier_providers::model::{Access, Origin, SessionSpec, ToolSet};
 use brigadier_providers::{ApprovalDecision, Artifact, ProviderKind};
 
 use serde_json::json;
@@ -2388,6 +2388,154 @@ async fn a_cold_thread_over_150k_is_reborn_with_every_decision_whole() {
     for line in &decisions {
         assert!(briefing.contains(line.as_str()), "a decision cut: {line}");
     }
+    flow.stop().await;
+}
+
+/// A checkpoint's note fork of a `thread` session, whose model asks for `query_brain`: the
+/// fork's spec, the thread's first spec, the note and what the call was answered.
+async fn note_fork(name: &str, thread: ProviderKind) -> (Flow, SessionSpec, SessionSpec, String) {
+    let answers: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = answers.clone();
+    let flow = Flow::start(
+        name,
+        Options {
+            thread,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.input.contains("Write the handoff note") {
+                    let reply = turn
+                        .call("query_brain", json!({ "query": "the plan" }))
+                        .await;
+                    log.lock().unwrap().push(reply.text);
+                    return Reply::text("Goal and open threads: the first ask.");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("First.").await;
+    flow.settled().await;
+    let native = flow
+        .manager
+        .read_native_id(&flow.conversation, thread)
+        .await
+        .flatten()
+        .expect("a logged session start");
+    let Some(Setup::Session { orchestrator, .. }) =
+        flow.core.conversation(&flow.conversation).unwrap().setup
+    else {
+        panic!("a session");
+    };
+    let prep = flow.manager.prepare_rebirth(
+        &flow.conversation,
+        thread,
+        orchestrator,
+        Some(native.clone()),
+        (200_000, Some(1_000_000)),
+        crate::manager::rebirth::HandoffPurpose::Checkpoint,
+    );
+    let note = prep
+        .note(std::time::Duration::from_secs(30))
+        .await
+        .expect("a note");
+    assert_eq!(note, "Goal and open threads: the first ask.");
+    let fork = flow
+        .specs()
+        .into_iter()
+        .map(|(_, spec)| spec)
+        .find(|spec| matches!(spec.origin, Origin::Fork { .. }))
+        .expect("a fork");
+    assert_eq!(fork.origin, Origin::Fork { native_id: native });
+    // It stays read-only, whatever the thread may do.
+    assert_eq!(fork.access, Access::ReadOnly);
+    assert!(fork.ephemeral && !fork.owned_cwd && fork.sweep_dir.is_none());
+    let thread = flow.thread_specs()[0].1.clone();
+    let answered = answers.lock().unwrap().clone();
+    (flow, fork, thread, answered.join("\n"))
+}
+
+fn grant_of(spec: &SessionSpec) -> Option<String> {
+    spec.mcp_servers
+        .iter()
+        .flat_map(|server| &server.env)
+        .find(|(name, _)| name == "BRIGADIER_MCP_GRANT")
+        .map(|(_, grant)| grant.clone())
+}
+
+/// B5: a Claude thread's note fork starts as the thread did (tools, MCP server, model,
+/// instructions and the rest), so it reads the thread's prefix from the cache; only its
+/// origin, its life and its folders' ownership change. It stays read-only, a hook denies every
+/// tool, and Brigadier's server refuses its calls under a grant of its own, revoked when it ends.
+#[tokio::test]
+async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
+    let (flow, fork, thread, answered) = note_fork("note-fork-claude", ProviderKind::Claude).await;
+    assert_eq!(
+        fork.deny_tools.as_deref(),
+        Some(crate::manager::rebirth::NOTE_FORK_REFUSAL)
+    );
+    assert_eq!(answered, crate::manager::rebirth::NOTE_FORK_REFUSAL);
+    // The same server, under another grant.
+    assert_eq!(fork.mcp_servers.len(), thread.mcp_servers.len());
+    for (forked, own) in fork.mcp_servers.iter().zip(&thread.mcp_servers) {
+        assert_eq!(
+            (
+                &forked.name,
+                &forked.command,
+                &forked.args,
+                forked.always_load
+            ),
+            (&own.name, &own.command, &own.args, own.always_load)
+        );
+        assert_eq!(
+            (
+                &forked.prompt_tools,
+                forked.tool_timeout_secs,
+                forked.trusted
+            ),
+            (&own.prompt_tools, own.tool_timeout_secs, own.trusted)
+        );
+    }
+    let grant = grant_of(&fork).expect("the fork's grant");
+    assert_ne!(Some(&grant), grant_of(&thread).as_ref());
+    assert!(
+        flow.manager.grants().resolve(&grant).is_none(),
+        "revoked once the fork ended"
+    );
+    // Everything else is the thread's.
+    let unchanged = SessionSpec {
+        origin: thread.origin.clone(),
+        ephemeral: thread.ephemeral,
+        access: thread.access.clone(),
+        mcp_servers: thread.mcp_servers.clone(),
+        record_to: thread.record_to.clone(),
+        redactor: thread.redactor.clone(),
+        owned_cwd: thread.owned_cwd,
+        sweep_dir: thread.sweep_dir.clone(),
+        output_hook: thread.output_hook.clone(),
+        deny_tools: None,
+        ..fork.clone()
+    };
+    assert_eq!(format!("{unchanged:?}"), format!("{thread:?}"));
+    assert_eq!(fork.tools, ToolSet::Thread);
+    flow.stop().await;
+}
+
+/// B5: a Codex thread's note fork is as before, with no tools beyond Codex's own read-only
+/// ones and no MCP server, until a Codex hook probe shows its tools can be denied.
+#[tokio::test]
+async fn a_codex_note_fork_is_unchanged() {
+    let (flow, fork, _, answered) = note_fork("note-fork-codex", ProviderKind::Codex).await;
+    assert_eq!(fork.tools, ToolSet::None);
+    assert!(fork.mcp_servers.is_empty());
+    assert!(fork.deny_tools.is_none() && fork.output_hook.is_none());
+    assert!(
+        answered.contains("not available") || answered.contains("not valid"),
+        "{answered}"
+    );
     flow.stop().await;
 }
 
