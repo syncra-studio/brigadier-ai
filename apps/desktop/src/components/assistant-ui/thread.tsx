@@ -838,7 +838,9 @@ const EditComposer: FC = () => {
       data-role="user"
       className="scroll-mt-thread-turn flex flex-col px-2"
     >
-      <ComposerPrimitive.Root className="bg-muted rounded-thread ms-auto flex w-full flex-col gap-2 p-2">
+      {/* The bubble becomes a composer the column's width: its fill and corners, Cancel an
+          outlined pill and Send a filled one. */}
+      <ComposerPrimitive.Root data-slot="edit-composer" className="bg-composer rounded-composer ms-auto flex w-full flex-col gap-2 p-2">
         <ComposerPrimitive.Input
           autoFocus
           aria-label="Edit message"
@@ -846,12 +848,12 @@ const EditComposer: FC = () => {
         />
         <div className="flex items-center justify-end gap-2">
           <ComposerPrimitive.Cancel asChild>
-            <Button variant="ghost" size="sm">
+            <Button variant="ghost" size="sm" className="border-border rounded-capsule border font-normal">
               Cancel
             </Button>
           </ComposerPrimitive.Cancel>
           <ComposerPrimitive.Send asChild>
-            <Button size="sm">Send</Button>
+            <Button size="sm" className="rounded-capsule font-normal">Send</Button>
           </ComposerPrimitive.Send>
         </div>
       </ComposerPrimitive.Root>

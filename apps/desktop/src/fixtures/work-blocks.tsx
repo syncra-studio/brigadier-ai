@@ -501,6 +501,36 @@ async function driveClip(): Promise<object> {
   };
 }
 
+/** The user's message edited in place: a composer the column's width, Cancel and Send as pills. */
+async function driveEdit(): Promise<object> {
+  await settle(600);
+  daemon.run = "idle";
+  change(() => ({ run: "idle", runRequest: null }));
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 5000, worked: [{ fromMs: begun, toMs: begun + 5000 }] });
+  await settle();
+  const edit = one<HTMLButtonElement>(".aui-user-action-edit");
+  edit?.click();
+  await settle();
+  const box = one("[data-slot=edit-composer]");
+  const buttons = all<HTMLButtonElement>("button", box ?? document.createElement("div"));
+  const pill = (name: string) => {
+    const button = buttons.find((each) => text(each) === name);
+    if (!button) return null;
+    const style = getComputedStyle(button);
+    return { round: Number.parseFloat(style.borderTopLeftRadius) >= button.getBoundingClientRect().height / 2, border: Number.parseFloat(style.borderTopWidth) };
+  };
+  const column = one("[data-slot=aui_thread-column]");
+  return {
+    edit: !!edit,
+    // The same fill as the composer below the thread.
+    fill: box ? getComputedStyle(box).backgroundColor === getComputedStyle(all(".bg-composer").find((each) => each !== box) ?? document.body).backgroundColor : null,
+    radius: box ? Number.parseFloat(getComputedStyle(box).borderTopLeftRadius) : null,
+    wide: box && column ? box.getBoundingClientRect().width / column.getBoundingClientRect().width : null,
+    cancel: pill("Cancel"),
+    send: pill("Send"),
+  };
+}
+
 async function driveQueue(): Promise<object> {
   await settle(600);
   // The composer's editor comes in its own chunk after a plain field and takes the focus a beat
@@ -582,7 +612,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

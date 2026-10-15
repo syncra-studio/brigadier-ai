@@ -113,6 +113,15 @@ test("a long message is clipped at the end of a code block crossing its 20-line 
   assert.deepEqual([seen.more, seen.chevron], [true, true]);
 });
 
+test("a message edited in place is a composer the column's width, its Cancel and Send pills", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ edit: boolean; fill: boolean | null; radius: number | null; wide: number | null; cancel: { round: boolean; border: number } | null; send: { round: boolean; border: number } | null }>(t, "drive=edit");
+  assert.equal(seen.edit, true);
+  assert.equal(seen.fill, true);
+  assert.ok((seen.radius ?? 0) >= 18, `corners ${seen.radius}`);
+  assert.ok((seen.wide ?? 0) > 0.9, `width ${seen.wide}`);
+  assert.deepEqual([seen.cancel, seen.send], [{ round: true, border: 1 }, { round: true, border: 0 }]);
+});
+
 test("a message steered in before the turn did anything sits under the first, above its header", { timeout: 120000 }, async (t) => {
   const seen = await drive<{ bubble: string | null; above: boolean; header: string | null; status: string | null; stillAbove: boolean }>(t, "drive=early");
   assert.match(seen.bubble ?? "", /Use banker's rounding instead/);
