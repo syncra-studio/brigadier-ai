@@ -1292,6 +1292,7 @@ impl SessionManager {
                 TokenOwner::Task(&review.conversation_id, &TaskId(review_owner(&review.id))),
                 usage,
                 None,
+                &[],
             )
             .await;
         }
@@ -1381,6 +1382,7 @@ impl SessionManager {
                     ProviderEvent::Usage {
                         total,
                         last: latest,
+                        calls,
                     } => {
                         self.note_tokens(
                             &meter,
@@ -1389,6 +1391,7 @@ impl SessionManager {
                             TokenOwner::Task(&review.conversation_id, &counted_as),
                             &total,
                             latest.as_ref(),
+                            &calls,
                         )
                         .await;
                     }

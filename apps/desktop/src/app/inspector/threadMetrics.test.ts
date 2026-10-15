@@ -51,14 +51,35 @@ test("a request's summary reads its times and its tokens per provider and step, 
     landedMs: 362_000,
     settledMs: 421_000,
     providers: [
-      { provider: "claude", input: 10, cachedInput: 1_000_000, cacheWrite: 200_000, output: 100_000, raw: 1_300_010, rawWithoutCacheReads: 300_010, costUsd: 0.75 },
-      { provider: "codex", input: 5, cachedInput: 0, cacheWrite: 0, output: 5, raw: 10, rawWithoutCacheReads: 10, costUsd: null },
+      {
+        provider: "claude",
+        input: 10,
+        cachedInput: 1_000_000,
+        cacheWrite: 200_000,
+        cacheWrite1h: 180_000,
+        cacheWrite5m: 20_000,
+        output: 100_000,
+        raw: 1_300_010,
+        rawWithoutCacheReads: 300_010,
+        costUsd: 0.75,
+      },
+      { provider: "codex", input: 5, cachedInput: 0, cacheWrite: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 5, raw: 10, rawWithoutCacheReads: 10, costUsd: null },
     ],
     steps: [
       { step: "worker", raw: 1_000_000, calls: 3, turns: 0 },
       { step: "thread", raw: 300_020, calls: 9, turns: 2 },
       { step: "review", raw: 20, calls: 1, turns: 0 },
     ],
+    cache: {
+      missed: 300_000,
+      bigMisses: 2,
+      unestimatedCalls: 1,
+      causes: [
+        { cause: "note fork", sessions: 1, written: 180_000, missed: 252_000 },
+        { cause: "fresh start", sessions: 2, written: 15_000, missed: 0 },
+      ],
+      unexplained: 48_000,
+    },
   };
   const working: RequestSummary = {
     ...done,
@@ -70,6 +91,7 @@ test("a request's summary reads its times and its tokens per provider and step, 
     settledMs: null,
     providers: [],
     steps: [],
+    cache: { missed: 0, bigMisses: 0, unestimatedCalls: 0, causes: [], unexplained: 0 },
   };
   const [newest, oldest] = summaryRows([done, working], 8);
   assert.equal(newest!.label, "An earlier request");
@@ -77,9 +99,15 @@ test("a request's summary reads its times and its tokens per provider and step, 
   assert.deepEqual(newest!.providers, []);
   assert.equal(oldest!.times, "first 1.2 s · answer 6m 40s · landed 6m 2s · settled 7m 1s");
   assert.match(oldest!.providers[0]!, /^Claude 1\.3M raw, 300K without cache reads, \$0\.75$/);
-  assert.match(oldest!.providers[1]!, /^Codex 10 raw, 10 without cache reads$/);
+  assert.match(oldest!.providers[1]!, /^Codex 10 raw, 10 without cache reads, 0% of input cached$/);
   // The thread's turns and the model calls per step (BUILD-PLAN A0).
   assert.match(oldest!.steps, /^worker 1M \(3 calls\) · thread 300K \(2 turns, 9 calls\) · review 20$/);
+  // Where the cache writes came from, by lifetime and cause, the misses marked as estimates (BUILD-PLAN B0).
+  assert.equal(
+    oldest!.cache,
+    "cache writes 200K (1h 180K, 5m 20K) · note fork wrote 180K, missed ≈252K · fresh start ×2 wrote 15K · ≈48K missed, no known cause · 2 calls missed over 20K",
+  );
+  assert.equal(newest!.cache, "");
   assert.equal(summaryRows([done, working], 1).length, 1);
   // A request cut off by a quit says so instead of "answer" (UI audit H1).
   const [interrupted] = summaryRows([{ ...done, ended: "interrupted", landedMs: null }], 1);

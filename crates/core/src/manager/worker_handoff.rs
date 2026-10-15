@@ -236,6 +236,7 @@ impl SessionManager {
             (Some(tokens), _) => Some(tokens),
             (None, _) => self.last_worker_context(&task.id).await.0,
         };
+        live.next_start(crate::routing::WriteCause::Handoff);
         live.close_cli().await;
         let task = self.task_by_id(&task.conversation_id, &task.id).await?;
         if task.state.is_final() {

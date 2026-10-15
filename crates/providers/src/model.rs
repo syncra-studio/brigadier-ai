@@ -512,6 +512,35 @@ pub struct TokenUsage {
     /// Codex request. 0 where the CLI's reports don't show them.
     #[serde(default)]
     pub model_calls: i64,
+    /// Of `cache_write_tokens`, what was written for an hour and for five minutes (Claude's
+    /// `cache_creation`; 0 where the CLI doesn't split it).
+    #[serde(default)]
+    pub cache_write_1h_tokens: i64,
+    #[serde(default)]
+    pub cache_write_5m_tokens: i64,
+}
+
+/// One model call's prompt as its CLI reported it, to tell where cache writes come from
+/// (research P0.1). Within one CLI process the previous call's whole prompt should come back
+/// as this call's cache read; what didn't is the estimated missed prefix, worked out by
+/// Brigadier from these (a session's first call against the session it came from).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CallCache {
+    /// Input, cache read and cache write together: the prompt the call read. No output.
+    pub prompt: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+    /// The prompt of the call before it in the same process and chain (the main agent's, or
+    /// one subagent's); `None` for a chain's first call.
+    #[serde(default)]
+    pub previous_prompt: Option<i64>,
+    /// The first call after a compaction, whose prefix changed on purpose: reported apart.
+    #[serde(default)]
+    pub after_compaction: bool,
+    /// A subagent's call (Claude's Agent tool), a chain of its own.
+    #[serde(default)]
+    pub subagent: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -635,6 +664,9 @@ pub enum ProviderEvent {
         /// What the latest request used, when the CLI says (Codex).
         #[serde(default)]
         last: Option<TokenUsage>,
+        /// The model calls since the last report, each as it read its prompt.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        calls: Vec<CallCache>,
     },
     ContextSize {
         used_tokens: i64,

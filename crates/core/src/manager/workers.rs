@@ -57,7 +57,7 @@ use super::{
 use crate::model::{
     ConversationId, DomainEvent, Environment, ModelChoice, PermissionLevel, Setup, streams,
 };
-use crate::routing::TokenMeter;
+use crate::routing::{TokenMeter, WriteCause};
 use crate::runtime::{is_delta, merge_delta};
 use crate::tools::Role;
 use crate::work::{
@@ -276,6 +276,8 @@ pub(crate) struct TaskLive {
     /// What the worker was last told of Brigadier's built-in browser: its brief, or a note
     /// since. `None`: unknown, which counts as on, as no brief mentioned it before the setting.
     browser_told: std::sync::Mutex<Option<bool>>,
+    /// Why its next CLI starts, when that isn't a plain start or resume (BUILD-PLAN B0).
+    next_cause: std::sync::Mutex<Option<WriteCause>>,
 }
 
 /// [`TaskLive::reviews_told`]'s values.
@@ -284,6 +286,21 @@ const REVIEWS_TOLD_OFF: u8 = 1;
 const REVIEWS_TOLD_ON: u8 = 2;
 
 impl TaskLive {
+    /// Records why its next CLI starts (a hand-off, a reroute).
+    pub(crate) fn next_start(&self, cause: WriteCause) {
+        *self
+            .next_cause
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cause);
+    }
+
+    fn take_next_cause(&self) -> Option<WriteCause> {
+        self.next_cause
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
     /// Records that the worker was told reviews are `on` (its brief, or a note).
     pub(crate) fn told_reviews(&self, on: bool) {
         let told = if on {
@@ -694,6 +711,7 @@ impl TaskLive {
             reviews_told: std::sync::atomic::AtomicU8::new(REVIEWS_UNKNOWN),
             git_writing_told: std::sync::Mutex::new(None),
             browser_told: std::sync::Mutex::new(None),
+            next_cause: std::sync::Mutex::new(None),
         }
     }
 
@@ -1904,6 +1922,7 @@ impl SessionManager {
             && !matches!(spec.access, Access::Full | Access::ReadOnly))
         .then(|| spec.protection.clone());
         let account = self.runtime.account_for(&task.route.choice);
+        let tools_key = crate::routing::meter::tools_key(&spec);
         let Started { session, events } =
             match self.runtime.start_hosted(&owner, &account, spec).await {
                 Ok(started) => started,
@@ -1922,9 +1941,18 @@ impl SessionManager {
             self.release_session_files(&owner, &native_id).await;
             return Err(super::closing::closing_error());
         }
+        // Why this worker's CLI starts (BUILD-PLAN B0): a hand-off or a reroute said so.
+        let cause = live.take_next_cause().unwrap_or(if resumed {
+            WriteCause::Resume
+        } else {
+            WriteCause::FreshStart
+        });
         let cli = Arc::new(Cli {
             provider,
-            meter: TokenMeter::new(continues).on_account(account.account.clone()),
+            meter: TokenMeter::new(continues)
+                .on_account(account.account.clone())
+                .starting(cause)
+                .with_tools(tools_key),
             account,
             model: task.route.choice.clone(),
             chosen: None,
@@ -2830,7 +2858,7 @@ impl SessionManager {
                     .note_quota_snapshot(&cli.account, quota.clone())
                     .await;
             }
-            ProviderEvent::Usage { total, last } => {
+            ProviderEvent::Usage { total, last, calls } => {
                 self.note_tokens(
                     &cli.meter,
                     cli.provider,
@@ -2838,6 +2866,7 @@ impl SessionManager {
                     TokenOwner::Task(&live.conversation_id, &live.id),
                     total,
                     last.as_ref(),
+                    calls,
                 )
                 .await;
             }
@@ -2852,7 +2881,12 @@ impl SessionManager {
                 cli.meter.turn_started(now_ms());
                 live.state.lock().await.last_message = None;
             }
-            ProviderEvent::SessionStarted { native_id, .. } => {
+            ProviderEvent::SessionStarted {
+                native_id,
+                cli_version,
+                ..
+            } => {
+                cli.meter.session_started(cli_version.as_deref());
                 self.note_native_session(&live.conversation_id, &live.id, native_id)
                     .await;
             }

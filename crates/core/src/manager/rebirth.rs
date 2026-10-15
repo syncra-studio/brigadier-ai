@@ -377,8 +377,19 @@ impl SessionManager {
             }
         };
         // A forked Codex thread may carry its parent's totals: its first report is a baseline.
-        let meter =
-            TokenMeter::new(provider == ProviderKind::Codex).on_account(account.account.clone());
+        // Its first call should read the thread's last prompt back from the cache (BUILD-PLAN
+        // B0); the thread's rows say it when its CLI is gone.
+        let live = self.convs_lock().get(id).cloned();
+        let thread_prompt = match live {
+            Some(conv) => conv
+                .live_cli()
+                .await
+                .and_then(|cli| cli.meter.last_prompt()),
+            None => None,
+        };
+        let meter = TokenMeter::new(provider == ProviderKind::Codex)
+            .on_account(account.account.clone())
+            .starting_from(crate::routing::WriteCause::NoteFork, thread_prompt);
         let written = async {
             let prompt = match purpose {
                 HandoffPurpose::Threshold => HANDOFF_PROMPT,
@@ -398,7 +409,7 @@ impl SessionManager {
                             .note_quota_snapshot(&account, quota.clone())
                             .await;
                     }
-                    ProviderEvent::Usage { total, last } => {
+                    ProviderEvent::Usage { total, last, calls } => {
                         self.note_tokens(
                             &meter,
                             provider,
@@ -406,6 +417,7 @@ impl SessionManager {
                             TokenOwner::Handoff(id),
                             &total,
                             last.as_ref(),
+                            &calls,
                         )
                         .await
                     }

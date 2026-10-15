@@ -598,13 +598,14 @@ impl SessionManager {
                             .note_quota_snapshot(&account, quota.clone())
                             .await;
                         }
-                        ProviderEvent::Usage { total, last } => self.note_tokens(
+                        ProviderEvent::Usage { total, last, calls } => self.note_tokens(
                             &meter,
                             provider,
                             job.model.as_deref(),
                             TokenOwner::Project(&job.project_id),
                             &total,
                             last.as_ref(),
+&calls,
                         ).await,
                         ProviderEvent::ApprovalRequested { request } => {
                             // It stays inside its sandbox; nobody is asked on its behalf.

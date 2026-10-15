@@ -12,4 +12,9 @@ costUsd: number | null,
  * The model calls behind it: Claude's assistant messages (a subagent's included), each
  * Codex request. 0 where the CLI's reports don't show them.
  */
-modelCalls: number, };
+modelCalls: number, 
+/**
+ * Of `cache_write_tokens`, what was written for an hour and for five minutes (Claude's
+ * `cache_creation`; 0 where the CLI doesn't split it).
+ */
+cacheWrite1hTokens: number, cacheWrite5mTokens: number, };

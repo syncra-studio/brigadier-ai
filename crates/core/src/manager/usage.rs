@@ -2,13 +2,13 @@
 
 use std::time::{Duration, UNIX_EPOCH};
 
-use brigadier_providers::{ProviderKind, TokenUsage};
+use brigadier_providers::{CallCache, ProviderKind, TokenUsage};
 
 use super::SessionManager;
 use super::conversation::Cli;
 use crate::model::{ConversationId, ConversationKind, ProjectId};
 use crate::now_ms;
-use crate::routing::{StepKind, TokenMeter, TurnUsage};
+use crate::routing::{CacheTrace, LastSession, StepKind, TokenMeter, TurnUsage};
 use crate::work::TaskId;
 
 /// Whose turn a token report belongs to.
@@ -32,6 +32,7 @@ const CHILD_LOOK_SLACK: Duration = Duration::from_secs(10);
 impl SessionManager {
     /// Records what the turn just reported used, from `meter`'s view of the CLI session's
     /// running totals. Awaited, so an outcome recorded next counts it.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn note_tokens(
         &self,
         meter: &TokenMeter,
@@ -40,8 +41,9 @@ impl SessionManager {
         owner: TokenOwner<'_>,
         total: &TokenUsage,
         last: Option<&TokenUsage>,
+        calls: &[CallCache],
     ) {
-        self.note_use(meter, provider, model, owner, total, last, None)
+        self.note_use(meter, provider, model, owner, total, last, calls, None)
             .await;
     }
 
@@ -56,6 +58,7 @@ impl SessionManager {
         owner: TokenOwner<'_>,
         total: &TokenUsage,
         last: Option<&TokenUsage>,
+        calls: &[CallCache],
         context: Option<i64>,
     ) {
         let Some(used) = meter.delta(total, last) else {
@@ -77,12 +80,55 @@ impl SessionManager {
         turn.context = last.map(context_of).or(context);
         turn.model_calls = (used.model_calls > 0).then_some(used.model_calls);
         turn.opens_turn = meter.opens_turn();
+        turn.cache = self.cache_trace(meter, &owner, &used, calls).await;
         if let Err(err) = store.add_turn(turn).await {
             crate::logging::private_trace!(
                 matches!(&owner, TokenOwner::Conversation(id) | TokenOwner::Handoff(id) | TokenOwner::Task(id, _) if self.tab_chat_logs(id)),
                 warn, "could not record a turn's token use"; error = %err
             );
         }
+    }
+
+    /// Where the reported calls' cache writes came from (BUILD-PLAN B0). A session's first
+    /// report looks up the last session its first call carries on: the owner's own, or the
+    /// thread's for the fork that writes its note.
+    async fn cache_trace(
+        &self,
+        meter: &TokenMeter,
+        owner: &TokenOwner<'_>,
+        used: &TokenUsage,
+        calls: &[CallCache],
+    ) -> CacheTrace {
+        let mut last = None;
+        if !calls.is_empty()
+            && meter
+                .pending_start()
+                .is_some_and(|start| start.cause.continues())
+            && let Some(store) = self.runtime.routing_store().cloned()
+        {
+            let carried = match *owner {
+                TokenOwner::Conversation(id) => {
+                    let step = match self.core.conversation(id).map(|c| c.kind) {
+                        Ok(ConversationKind::Chat) => StepKind::Chat,
+                        _ => StepKind::Thread,
+                    };
+                    Some((id.0.clone(), step, None))
+                }
+                TokenOwner::Handoff(id) => Some((id.0.clone(), StepKind::Thread, None)),
+                TokenOwner::Task(id, task) => {
+                    Some((id.0.clone(), StepKind::Worker, Some(task.0.clone())))
+                }
+                TokenOwner::Project(_) | TokenOwner::Upkeep => None,
+            };
+            if let Some((conversation, step, task)) = carried {
+                last = store
+                    .last_session(conversation, step, task)
+                    .await
+                    .ok()
+                    .filter(|last: &LastSession| *last != LastSession::default());
+            }
+        }
+        meter.trace(used, calls, last.as_ref())
     }
 
     /// A row for `owner`'s use at `at_ms`, with no tokens yet: who, which step, which request.
@@ -109,12 +155,14 @@ impl SessionManager {
                     self.thread_request(id).await,
                 )
             }
+            // The fork writes the note of the thread's latest request, idle or not: its use
+            // is that request's, counted through settlement (BUILD-PLAN B0, research V1).
             TokenOwner::Handoff(id) => (
                 Some(id.0.clone()),
                 conversation(id).and_then(|c| c.project_id).map(|p| p.0),
                 None,
                 StepKind::Handoff,
-                None,
+                self.latest_request(id).await,
             ),
             TokenOwner::Task(id, task) => {
                 let escalation = task.0.starts_with(super::escalation::ESCALATION_OWNER);
@@ -167,7 +215,14 @@ impl SessionManager {
             account: None,
             model_calls: None,
             opens_turn: false,
+            cache: CacheTrace::default(),
         }
+    }
+
+    /// A conversation's newest request, from its board.
+    async fn latest_request(&self, id: &ConversationId) -> Option<String> {
+        let board = self.core.board(id).await.ok()?;
+        board.latest_request().map(|request| request.id.clone())
     }
 
     /// The request a conversation's running turn serves, without making its live state.
@@ -320,6 +375,7 @@ mod tests {
             account: None,
             model_calls: None,
             opens_turn: false,
+            cache: Default::default(),
         };
         let sessions = dir.join("sessions");
         let turn_end = || async {

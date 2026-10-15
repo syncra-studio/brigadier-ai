@@ -74,6 +74,11 @@ pub struct Parser {
     /// process started.
     reported_tokens: i64,
     model_calls: i64,
+    /// The last model request's prompt (input, cached included), in this process (research
+    /// P0.1).
+    last_prompt: Option<i64>,
+    /// A compaction ended: the next request starts from its summary.
+    compacted: bool,
     /// A session reported its own start; `thread/started` is then not a start.
     started: bool,
     turn_id: Option<String>,
@@ -286,8 +291,18 @@ impl Parser {
                 };
                 let usage = update.token_usage;
                 // One report per model request: a total that grew is one more call.
+                let mut calls = Vec::new();
                 if usage.total.total_tokens > self.reported_tokens {
                     self.model_calls += 1;
+                    let prompt = usage.last.input_tokens;
+                    calls.push(CallCache {
+                        prompt,
+                        cache_read: usage.last.cached_input_tokens,
+                        cache_write: usage.last.cache_write_input_tokens,
+                        previous_prompt: self.last_prompt.replace(prompt),
+                        after_compaction: std::mem::take(&mut self.compacted),
+                        subagent: false,
+                    });
                 }
                 self.reported_tokens = usage.total.total_tokens;
                 out.push(Output::Event(ProviderEvent::Usage {
@@ -299,6 +314,7 @@ impl Parser {
                         model_calls: 1,
                         ..token_usage(&usage.last)
                     }),
+                    calls,
                 }));
                 // The last request is what the model saw: the context in use. (What a
                 // compaction left counts only in its total.)
@@ -584,6 +600,7 @@ impl Parser {
             ThreadItem::ContextCompaction { .. } => {
                 let (automatic, tokens_before, tokens_after) =
                     self.compacting.take().unwrap_or((true, None, None));
+                self.compacted = true;
                 ProviderEvent::CompactionEnded {
                     automatic,
                     tokens_before,
@@ -1131,6 +1148,8 @@ fn token_usage(usage: &p::TokenUsageBreakdown) -> TokenUsage {
         reasoning_tokens: usage.reasoning_output_tokens,
         cost_usd: None,
         model_calls: 0,
+        cache_write_1h_tokens: 0,
+        cache_write_5m_tokens: 0,
     }
 }
 
@@ -1377,7 +1396,7 @@ mod tests {
             events
                 .into_iter()
                 .find_map(|event| match event {
-                    ProviderEvent::Usage { total, last } => {
+                    ProviderEvent::Usage { total, last, .. } => {
                         Some((total.model_calls, last.map(|last| last.model_calls)))
                     }
                     _ => None,
@@ -1388,6 +1407,68 @@ mod tests {
         assert_eq!(calls(events(&mut parser, &report(250, 150))), (2, Some(1)));
         // The same total again is no new request.
         assert_eq!(calls(events(&mut parser, &report(250, 150))).0, 2);
+    }
+
+    /// BUILD-PLAN B0: each request's prompt (its input, cached included) is kept against the
+    /// request before it, and a report that is no new request keeps none.
+    #[test]
+    fn each_requests_prompt_is_kept_against_the_one_before() {
+        let mut parser = Parser::live();
+        let breakdown = |input: i64, cached: i64, total: i64| {
+            json!({ "cachedInputTokens": cached, "inputTokens": input, "outputTokens": 0,
+                    "reasoningOutputTokens": 0, "totalTokens": total })
+        };
+        let report = |total: Value, last: Value| {
+            json!({ "method": "thread/tokenUsage/updated", "params": { "threadId": "t1", "turnId": "u1",
+                "tokenUsage": { "total": total, "last": last } } })
+        };
+        let cached = |events: Vec<ProviderEvent>| {
+            events
+                .into_iter()
+                .find_map(|event| match event {
+                    ProviderEvent::Usage { calls, .. } => Some(calls),
+                    _ => None,
+                })
+                .expect("a usage report")
+        };
+        let first = cached(events(
+            &mut parser,
+            &report(breakdown(10_000, 0, 10_000), breakdown(10_000, 0, 10_000)),
+        ));
+        assert_eq!(
+            first,
+            [CallCache {
+                prompt: 10_000,
+                cache_read: 0,
+                cache_write: 0,
+                previous_prompt: None,
+                after_compaction: false,
+                subagent: false,
+            }]
+        );
+        let second = cached(events(
+            &mut parser,
+            &report(
+                breakdown(22_000, 9_000, 22_000),
+                breakdown(12_000, 9_000, 12_000),
+            ),
+        ));
+        assert_eq!(
+            (
+                second[0].prompt,
+                second[0].cache_read,
+                second[0].previous_prompt
+            ),
+            (12_000, 9_000, Some(10_000))
+        );
+        let again = cached(events(
+            &mut parser,
+            &report(
+                breakdown(22_000, 9_000, 22_000),
+                breakdown(12_000, 9_000, 12_000),
+            ),
+        ));
+        assert!(again.is_empty());
     }
 
     fn events(parser: &mut Parser, line: &Value) -> Vec<ProviderEvent> {

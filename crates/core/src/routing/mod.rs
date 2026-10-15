@@ -9,4 +9,6 @@ pub mod store;
 pub use meter::TokenMeter;
 pub use monitor::QuotaMonitor;
 pub use registry::{Fetched, RegistryHolder};
-pub use store::{RoutingStore, StepKind, StoredEdits, TurnUsage};
+pub use store::{
+    BIG_MISS, CacheTrace, LastSession, RoutingStore, StepKind, StoredEdits, TurnUsage, WriteCause,
+};

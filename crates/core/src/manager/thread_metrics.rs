@@ -17,8 +17,8 @@ use brigadier_git::Oid;
 use super::{SessionManager, blocking, git_error};
 use crate::board::Board;
 use crate::model::{
-    ConversationId, ConversationKind, Environment, ProviderTokens, RequestContext, RequestEnd,
-    RequestSummary, Setup, StepTokens, ThreadEdits, ThreadMetrics,
+    CacheCauses, CauseTokens, ConversationId, ConversationKind, Environment, ProviderTokens,
+    RequestContext, RequestEnd, RequestSummary, Setup, StepTokens, ThreadEdits, ThreadMetrics,
 };
 use crate::routing::{StepKind, StoredEdits, TurnUsage};
 use crate::work::{OrchestratorStepKind, RequestState, UserRequest};
@@ -273,6 +273,7 @@ pub(crate) fn request_summaries(rows: &[TurnUsage], board: &Board) -> Vec<Reques
                 settled_ms: settled_ms.map(after),
                 providers: provider_tokens(&ours),
                 steps: step_tokens(&ours),
+                cache: cache_causes(&ours),
             }
         })
         .collect()
@@ -289,6 +290,8 @@ fn provider_tokens(rows: &[&TurnUsage]) -> Vec<ProviderTokens> {
                     input: 0,
                     cached_input: 0,
                     cache_write: 0,
+                    cache_write_1h: 0,
+                    cache_write_5m: 0,
                     output: 0,
                     raw: 0,
                     raw_without_cache_reads: 0,
@@ -301,6 +304,8 @@ fn provider_tokens(rows: &[&TurnUsage]) -> Vec<ProviderTokens> {
         tokens.input += row.input;
         tokens.cached_input += row.cached_input;
         tokens.cache_write += row.cache_write;
+        tokens.cache_write_1h += row.cache.write_1h;
+        tokens.cache_write_5m += row.cache.write_5m;
         tokens.output += row.output;
         tokens.raw += row.total();
         tokens.raw_without_cache_reads += row.total() - row.cached_input;
@@ -310,6 +315,41 @@ fn provider_tokens(rows: &[&TurnUsage]) -> Vec<ProviderTokens> {
     }
     by.sort_by_key(|tokens| std::cmp::Reverse(tokens.raw));
     by
+}
+
+/// Where the rows' cache writes came from: the estimated miss in all, each known cause's
+/// sessions with what their first call wrote and missed, and the miss left unexplained.
+pub(crate) fn cache_causes(rows: &[&TurnUsage]) -> CacheCauses {
+    let mut causes: Vec<CauseTokens> = Vec::new();
+    let mut summary = CacheCauses::default();
+    for row in rows {
+        let trace = &row.cache;
+        summary.missed += trace.missed;
+        summary.big_misses += u32::try_from(trace.missed_calls).unwrap_or(u32::MAX);
+        summary.unestimated_calls += u32::try_from(trace.unestimated_calls).unwrap_or(u32::MAX);
+        let Some(cause) = trace.cause else {
+            continue;
+        };
+        let name = cause.as_str();
+        match causes.iter_mut().find(|known| known.cause == name) {
+            Some(known) => {
+                known.sessions += 1;
+                known.written += trace.cause_write;
+                known.missed += trace.cause_missed;
+            }
+            None => causes.push(CauseTokens {
+                cause: name.to_owned(),
+                sessions: 1,
+                written: trace.cause_write,
+                missed: trace.cause_missed,
+            }),
+        }
+    }
+    let explained: i64 = causes.iter().map(|cause| cause.missed).sum();
+    summary.unexplained = (summary.missed - explained).max(0);
+    causes.sort_by_key(|cause| std::cmp::Reverse(cause.written + cause.missed));
+    summary.causes = causes;
+    summary
 }
 
 fn step_tokens(rows: &[&TurnUsage]) -> Vec<StepTokens> {
@@ -364,6 +404,7 @@ mod tests {
             account: None,
             model_calls: None,
             opens_turn: false,
+            cache: Default::default(),
         }
     }
 
@@ -537,6 +578,8 @@ mod tests {
                     input: 205,
                     cached_input: 2_000,
                     cache_write: 0,
+                    cache_write_1h: 0,
+                    cache_write_5m: 0,
                     output: 100,
                     raw: 2_305,
                     raw_without_cache_reads: 305,
@@ -547,6 +590,8 @@ mod tests {
                     input: 110,
                     cached_input: 1_100,
                     cache_write: 0,
+                    cache_write_1h: 0,
+                    cache_write_5m: 0,
                     output: 100,
                     raw: 1_310,
                     raw_without_cache_reads: 210,
@@ -630,6 +675,184 @@ mod tests {
                 "error": super::super::conversation::INTERRUPTED_BY_QUIT,
             })),
             Some(RequestEnd::Interrupted)
+        );
+    }
+
+    /// One Claude session's stream through the parser and the meter (BUILD-PLAN B0): each
+    /// call's usage as `message_start` carries it, then the turn's result. Returns the row.
+    fn replayed(
+        meter: &crate::routing::TokenMeter,
+        turns: &[&[(&str, i64, i64, i64)]],
+        last: Option<&crate::routing::LastSession>,
+        request: &str,
+        step: StepKind,
+    ) -> Vec<TurnUsage> {
+        use brigadier_providers::ProviderEvent;
+        use brigadier_providers::claude::parse::{Output, Parser};
+        use serde_json::json;
+        let usage = |input: i64, read: i64, write: i64| {
+            json!({ "input_tokens": input, "cache_read_input_tokens": read,
+                    "cache_creation_input_tokens": write, "output_tokens": 400,
+                    "cache_creation": { "ephemeral_1h_input_tokens": write,
+                                        "ephemeral_5m_input_tokens": 0 } })
+        };
+        let mut parser = Parser::live();
+        let mut rows = Vec::new();
+        for calls in turns {
+            let mut sum = (0, 0, 0);
+            for &(id, input, read, write) in *calls {
+                parser.feed(
+                    &json!({ "type": "stream_event", "parent_tool_use_id": null,
+                             "event": { "type": "message_start",
+                                        "message": { "id": id, "usage": usage(input, read, write) } } })
+                    .to_string(),
+                );
+                sum = (sum.0 + input, sum.1 + read, sum.2 + write);
+            }
+            let outputs = parser.feed(
+                &json!({ "type": "result", "subtype": "success", "is_error": false,
+                         "usage": usage(sum.0, sum.1, sum.2) })
+                .to_string(),
+            );
+            let (total, calls) = outputs
+                .into_iter()
+                .find_map(|output| match output {
+                    Output::Event(ProviderEvent::Usage { total, calls, .. }) => {
+                        Some((total, calls))
+                    }
+                    _ => None,
+                })
+                .expect("a usage report");
+            let used = meter.delta(&total, None).expect("a use");
+            let mut turn = row(
+                Some(request),
+                None,
+                used.input_tokens,
+                used.cached_input_tokens,
+            );
+            turn.provider = ProviderKind::Claude;
+            turn.step = Some(step);
+            turn.cache_write = used.cache_write_tokens;
+            turn.output = used.output_tokens;
+            turn.cache = meter.trace(&used, &calls, last);
+            rows.push(turn);
+        }
+        rows
+    }
+
+    fn board_with(request: &str) -> Board {
+        let request: UserRequest = serde_json::from_value(serde_json::json!({
+            "id": request,
+            "conversationId": "c",
+            "preview": "Look at the cart",
+            "state": { "type": "done" },
+            "startedAtMs": 0,
+            "endedAtMs": 1_000,
+        }))
+        .expect("a request");
+        let mut board = Board::default();
+        board.requests.insert(request.id.clone(), request);
+        board
+    }
+
+    /// BUILD-PLAN B0's done-when: the note fork of 2026-10-14 03:46 (WEAK-SPOTS C11) replayed.
+    /// The thread's last turn stood at 252,313; the fork's one call read 544 and wrote 216,616
+    /// (the row stored then; its lifetime split wasn't recorded, so the fixture writes it for
+    /// an hour). The report shows about 252K missed, under "note fork".
+    #[test]
+    fn the_c11_note_fork_shows_its_missed_prefix_under_its_cause() {
+        use crate::routing::{LastSession, TokenMeter, WriteCause};
+        // The thread's own session, as its rows recorded it: its last call's prompt.
+        let thread = LastSession {
+            last_prompt: Some(252_313),
+            session_key: None,
+        };
+        let fork = TokenMeter::new(false).starting_from(WriteCause::NoteFork, None);
+        let rows = replayed(
+            &fork,
+            &[&[("fork-1", 3, 544, 216_616)]],
+            Some(&thread),
+            "r1",
+            StepKind::Handoff,
+        );
+        let summary = &request_summaries(&rows, &board_with("r1"))[0];
+        assert_eq!(
+            summary.cache.causes,
+            [CauseTokens {
+                cause: "note fork".into(),
+                sessions: 1,
+                written: 216_616,
+                missed: 252_313 - 544,
+            }]
+        );
+        assert_eq!(
+            (
+                summary.cache.missed,
+                summary.cache.big_misses,
+                summary.cache.unexplained
+            ),
+            (251_769, 1, 0)
+        );
+        let claude = &summary.providers[0];
+        assert_eq!(
+            (
+                claude.cache_write,
+                claude.cache_write_1h,
+                claude.cache_write_5m
+            ),
+            (216_616, 216_616, 0)
+        );
+    }
+
+    /// Several calls in a turn, each compared with the call before it (Codex's review of the
+    /// B0 outline): a cold resume misses the session's last prompt on its first call, warm calls
+    /// miss nothing, and a later call that misses part of the prefix is left unexplained.
+    #[test]
+    fn each_call_is_compared_with_the_one_before_and_a_cause_explains_only_its_first() {
+        use crate::routing::{LastSession, TokenMeter, WriteCause};
+        let last = LastSession {
+            last_prompt: Some(80_000),
+            session_key: None,
+        };
+        let meter = TokenMeter::new(false).starting(WriteCause::ColdResume);
+        let rows = replayed(
+            &meter,
+            &[
+                // Cold: the whole history written again; then warm calls.
+                &[
+                    ("a1", 5, 0, 80_500),
+                    ("a2", 5, 80_505, 900),
+                    ("a3", 5, 81_410, 700),
+                ],
+                // Next turn: 30K of the prefix gone (an edit high in the prompt, say).
+                &[("a4", 5, 52_115, 30_000)],
+            ],
+            Some(&last),
+            "r1",
+            StepKind::Thread,
+        );
+        assert_eq!(rows[0].cache.cause, Some(WriteCause::ColdResume));
+        assert_eq!(rows[1].cache.cause, None);
+        assert_eq!(rows[0].cache.last_prompt, Some(82_115));
+        assert_eq!(rows[1].cache.missed, 82_115 - 52_115);
+        let cache = &request_summaries(&rows, &board_with("r1"))[0].cache;
+        assert_eq!(
+            cache.causes,
+            [CauseTokens {
+                cause: "cold resume".into(),
+                sessions: 1,
+                written: 80_500,
+                missed: 80_000,
+            }]
+        );
+        assert_eq!(
+            (
+                cache.missed,
+                cache.big_misses,
+                cache.unexplained,
+                cache.unestimated_calls
+            ),
+            (110_000, 2, 30_000, 0)
         );
     }
 }

@@ -51,7 +51,7 @@ use crate::model::{
     CardId, ConversationId, ConversationKind, ConversationStatus, DomainEvent, Lifecycle, Mention,
     Message, MessageRole, ModelChoice, ModelFallback, Notice, Setup, streams,
 };
-use crate::routing::TokenMeter;
+use crate::routing::{TokenMeter, WriteCause};
 use crate::runtime::{is_delta, merge_delta};
 use crate::sessions::{inline_image_tokens, push_block};
 use crate::tools::{Role, RunTools};
@@ -209,6 +209,8 @@ pub(crate) struct Cli {
 #[derive(Default)]
 struct ConvState {
     cli: Option<Arc<Cli>>,
+    /// Why its CLI was closed to start again, for the next one's cache trace (BUILD-PLAN B0).
+    restart_cause: Option<WriteCause>,
     /// What the thread read and searched in the running turn, recorded when it ends
     /// ([`super::reads`]).
     looked: Vec<ProviderEvent>,
@@ -720,6 +722,11 @@ impl ConvLive {
     /// Closes `cli` between turns, if it is still the conversation's and nothing runs: the
     /// next turn starts it again (resuming it). Returns once it has ended.
     pub(crate) async fn retire_cli(&self, cli: &Arc<Cli>) {
+        self.retire_cli_for(cli, None).await;
+    }
+
+    /// The same, recording `cause` as why the next CLI starts when this one closes.
+    pub(crate) async fn retire_cli_for(&self, cli: &Arc<Cli>, cause: Option<WriteCause>) {
         let taken = {
             let mut state = self.state.lock().await;
             let current = state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli));
@@ -727,6 +734,9 @@ impl ConvLive {
                 return;
             }
             state.closing = true;
+            if cause.is_some() {
+                state.restart_cause = cause;
+            }
             state.cli.take()
         };
         if let Some(cli) = taken {
@@ -734,6 +744,16 @@ impl ConvLive {
             cli.ended.cancelled().await;
         }
         self.state.lock().await.closing = false;
+    }
+
+    /// Records why the next CLI starts, before its CLI is closed (BUILD-PLAN B0).
+    pub(crate) async fn restarting(&self, cause: WriteCause) {
+        self.state.lock().await.restart_cause = Some(cause);
+    }
+
+    /// Takes why the CLI starts again, if it was recorded.
+    async fn take_restart_cause(&self) -> Option<WriteCause> {
+        self.state.lock().await.restart_cause.take()
     }
 
     /// Ends the CLI session, if any. Its files stay (it can be resumed).
@@ -2697,7 +2717,23 @@ impl SessionManager {
         if let Some(cli) = conv.idle_cli().await
             && cli.chosen != wanted
         {
-            conv.retire_cli(&cli).await;
+            // Only the effort changed: the same model reads the same cache, if it can.
+            let effort_only = match (&cli.chosen, &wanted) {
+                (Some(was), Some(now)) => {
+                    was.effort != now.effort
+                        && ModelChoice {
+                            effort: now.effort.clone(),
+                            ..was.clone()
+                        } == *now
+                }
+                _ => false,
+            };
+            let cause = if effort_only {
+                WriteCause::EffortChange
+            } else {
+                WriteCause::Reroute
+            };
+            conv.retire_cli_for(&cli, Some(cause)).await;
         }
     }
 
@@ -2949,6 +2985,7 @@ impl SessionManager {
                 .unwrap_or_default(),
         };
         let mut resumed = resume.is_some();
+        let tools_key = crate::routing::meter::tools_key(&spec);
         // Every account shares the CLI's session history: a conversation resumes on whichever
         // account it runs on now.
         let account = self.runtime.account_for(&choice);
@@ -3011,10 +3048,16 @@ impl SessionManager {
             self.log_told(&conv.id, label, prompt.len(), told).await;
         }
         let Started { session, events } = started;
+        // Why this CLI starts, for where its cache writes come from (BUILD-PLAN B0).
+        let restart = conv.take_restart_cause().await;
+        let cold = resumed && restart.is_none() && self.cache_gone_cold(conv).await;
+        let cause = start_cause(fresh, resumed, restart, cold);
         let cli = Arc::new(Cli {
             provider: choice.provider,
             meter: TokenMeter::new(resumed && choice.provider == ProviderKind::Codex)
-                .on_account(account.account.clone()),
+                .on_account(account.account.clone())
+                .starting(cause)
+                .with_tools(tools_key),
             account,
             model: choice,
             chosen: setup_choice(&conversation),
@@ -4334,6 +4377,9 @@ impl SessionManager {
                     .note_quota_snapshot(&cli.account, quota.clone())
                     .await;
             }
+            ProviderEvent::SessionStarted { cli_version, .. } => {
+                cli.meter.session_started(cli_version.as_deref());
+            }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
                 let started = {
@@ -4365,7 +4411,7 @@ impl SessionManager {
                         .await;
                 }
             }
-            ProviderEvent::Usage { total, last } => {
+            ProviderEvent::Usage { total, last, calls } => {
                 // Claude sums a turn's calls; the context its last call read came apart.
                 let context = conv.context_used().await;
                 self.note_use(
@@ -4375,6 +4421,7 @@ impl SessionManager {
                     TokenOwner::Conversation(&conv.id),
                     total,
                     last.as_ref(),
+                    calls,
                     context,
                 )
                 .await;
@@ -5051,6 +5098,7 @@ impl SessionManager {
             &format!("{reason}; continuing with {stand_in}."),
         )
         .await;
+        conv.restarting(WriteCause::Reroute).await;
         conv.close_cli().await;
         let fallback = ModelFallback {
             choice,
@@ -5109,6 +5157,7 @@ impl SessionManager {
             ),
         )
         .await;
+        conv.restarting(WriteCause::Reroute).await;
         conv.close_cli().await;
         if let Err(err) = self.run_on_account(&conv.id, &cli.model, &next).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not record the account it moved to"; conversation = %conv.id, error = %err);
@@ -5461,6 +5510,7 @@ impl SessionManager {
                 return;
             }
             state.closing = true;
+            state.restart_cause = Some(WriteCause::Reroute);
             state.cli.take()
         };
         if let Some(cli) = cli {
@@ -6596,6 +6646,18 @@ fn with_own_reset(
 }
 
 /// The model a conversation's setup picks: a session's orchestrator, a Chat's model.
+/// Why a thread's CLI starts (BUILD-PLAN B0): a rebirth, a new session, or a resume, told by
+/// why its last CLI closed (`restart`) or whether its cache has gone `cold` since.
+fn start_cause(fresh: bool, resumed: bool, restart: Option<WriteCause>, cold: bool) -> WriteCause {
+    match (fresh, resumed, restart) {
+        (true, _, _) => WriteCause::Rebirth,
+        (false, false, _) => WriteCause::FreshStart,
+        (false, true, Some(cause)) => cause,
+        (false, true, None) if cold => WriteCause::ColdResume,
+        (false, true, None) => WriteCause::Resume,
+    }
+}
+
 fn setup_choice(conversation: &crate::model::Conversation) -> Option<ModelChoice> {
     match &conversation.setup {
         Some(Setup::Session { orchestrator, .. }) => Some(orchestrator.clone()),
@@ -6804,5 +6866,26 @@ mod tests {
         ] {
             assert!(!asks_user(reply), "{reply}");
         }
+    }
+
+    /// BUILD-PLAN B0: why a thread's CLI starts, for where its cache writes come from.
+    #[test]
+    fn a_threads_start_is_told_by_why_its_last_cli_closed() {
+        assert_eq!(start_cause(true, false, None, false), WriteCause::Rebirth);
+        assert_eq!(
+            start_cause(false, false, None, false),
+            WriteCause::FreshStart
+        );
+        // A resume that failed and started over is a new session, whatever closed the last.
+        assert_eq!(
+            start_cause(false, false, Some(WriteCause::Reroute), false),
+            WriteCause::FreshStart
+        );
+        assert_eq!(start_cause(false, true, None, false), WriteCause::Resume);
+        assert_eq!(start_cause(false, true, None, true), WriteCause::ColdResume);
+        assert_eq!(
+            start_cause(false, true, Some(WriteCause::EffortChange), true),
+            WriteCause::EffortChange
+        );
     }
 }

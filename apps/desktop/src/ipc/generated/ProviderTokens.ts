@@ -4,7 +4,11 @@ import type { ProviderKind } from "./ProviderKind";
 /**
  * What one provider's models read and wrote for a request.
  */
-export type ProviderTokens = { provider: ProviderKind, input: number, cachedInput: number, cacheWrite: number, output: number, 
+export type ProviderTokens = { provider: ProviderKind, input: number, cachedInput: number, cacheWrite: number, 
+/**
+ * Of `cache_write`, what was written for an hour and for five minutes (Claude).
+ */
+cacheWrite1h: number, cacheWrite5m: number, output: number, 
 /**
  * All four together.
  */

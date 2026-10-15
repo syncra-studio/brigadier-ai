@@ -1577,6 +1577,7 @@ mod tests {
             account: None,
             model_calls: None,
             opens_turn: false,
+            cache: Default::default(),
         };
         let board = Board::default();
         assert!(counts_for(&turn("c", None), &run, &board));

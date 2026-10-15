@@ -140,6 +140,7 @@ impl SessionManager {
             .await
             .map(|cli| cli.account.clone())
             .unwrap_or_else(|| AccountRef::own(task.route.choice.provider));
+        live.next_start(crate::routing::WriteCause::Reroute);
         live.close_cli().await;
         // A new attempt: its stalls are counted afresh.
         live.reset_stalls().await;

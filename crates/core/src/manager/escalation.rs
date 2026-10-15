@@ -316,6 +316,7 @@ impl SessionManager {
                             ProviderEvent::Usage {
                                 total,
                                 last: latest,
+                                calls,
                             } => {
                                 self.note_tokens(
                                     &meter,
@@ -324,6 +325,7 @@ impl SessionManager {
                                     TokenOwner::Task(id, &counted_as),
                                     &total,
                                     latest.as_ref(),
+                                    &calls,
                                 )
                                 .await;
                             }

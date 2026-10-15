@@ -90,7 +90,8 @@ impl SessionManager {
             let Some(cli) = conv.live_cli().await.filter(|cli| cli.account == *account) else {
                 continue;
             };
-            conv.retire_cli(&cli).await;
+            conv.retire_cli_for(&cli, Some(crate::routing::WriteCause::Reroute))
+                .await;
             if conv
                 .live_cli()
                 .await

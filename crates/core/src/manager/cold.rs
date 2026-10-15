@@ -194,6 +194,15 @@ impl SessionManager {
         })
     }
 
+    /// Whether the conversation's last CLI session's cache has expired by now: a resume now is
+    /// a cold one (BUILD-PLAN B0).
+    pub(super) async fn cache_gone_cold(&self, conv: &Arc<ConvLive>) -> bool {
+        let Some(mark) = self.cache_mark_of(conv).await else {
+            return false;
+        };
+        cache_lifetime(mark.provider).is_some_and(|lifetime| mark.expired(lifetime, None, now_ms()))
+    }
+
     /// The conversation's last model request: as seen live, or else recovered from the
     /// orchestrator log (after a restart).
     async fn cache_mark_of(&self, conv: &Arc<ConvLive>) -> Option<CacheMark> {

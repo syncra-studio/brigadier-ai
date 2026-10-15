@@ -1596,6 +1596,38 @@ pub struct RequestSummary {
     pub providers: Vec<ProviderTokens>,
     /// Tokens per kind of step (thread, worker, review…), most first.
     pub steps: Vec<StepTokens>,
+    /// Where its cache writes came from.
+    pub cache: CacheCauses,
+}
+
+/// Where a request's cache writes came from (BUILD-PLAN B0, research P0.1), from each model
+/// call's prompt against the one before it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheCauses {
+    /// An estimate: what the calls didn't read back of the prompt before them.
+    pub missed: i64,
+    /// Calls that missed more than 20K.
+    pub big_misses: u32,
+    /// Calls with nothing to compare with (a new session's first, the first after a
+    /// compaction), reported apart.
+    pub unestimated_calls: u32,
+    /// Per known cause of a session start, most written first.
+    pub causes: Vec<CauseTokens>,
+    /// The estimated miss no known cause explains.
+    pub unexplained: i64,
+}
+
+/// What the sessions started for one cause wrote and missed with their first call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CauseTokens {
+    /// "note fork", "cold resume", "fresh start"…
+    pub cause: String,
+    pub sessions: u32,
+    pub written: i64,
+    /// An estimate.
+    pub missed: i64,
 }
 
 /// How a request ended without an answer (the Inspector's request report).
@@ -1616,6 +1648,9 @@ pub struct ProviderTokens {
     pub input: i64,
     pub cached_input: i64,
     pub cache_write: i64,
+    /// Of `cache_write`, what was written for an hour and for five minutes (Claude).
+    pub cache_write_1h: i64,
+    pub cache_write_5m: i64,
     pub output: i64,
     /// All four together.
     pub raw: i64,

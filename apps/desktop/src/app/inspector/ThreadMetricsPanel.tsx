@@ -96,6 +96,7 @@ export function ThreadMetricsPanel({ sessionId }: { sessionId: string }) {
                 </span>
               ))}
               {row.steps && <span className="text-muted-foreground ps-3">{row.steps}</span>}
+              {row.cache && <span className="text-muted-foreground ps-3">{row.cache}</span>}
             </li>
           ))}
         </ul>

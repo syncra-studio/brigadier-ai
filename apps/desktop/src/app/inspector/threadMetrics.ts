@@ -1,4 +1,4 @@
-import type { ProviderTokens, RequestContext, RequestSummary, ThreadEdits } from "@/ipc/generated";
+import type { CacheCauses, ProviderTokens, RequestContext, RequestSummary, ThreadEdits } from "@/ipc/generated";
 import { formatDuration, formatTokens } from "@/lib/format";
 
 /** The thread's own commits in a line: how many, and the lines they changed. */
@@ -62,7 +62,27 @@ export type SummaryRow = {
   providers: string[];
   /** "thread 1.3K · worker 2.2K (3 calls)". */
   steps: string;
+  /** Where its cache writes came from: "cache writes 217K (1h 217K) · note fork wrote 217K, missed ≈252K"; empty when it wrote and missed nothing. */
+  cache: string;
 };
+
+/** A request's cache writes, by lifetime and by the known cause of each session start, with the estimated missed prefix (BUILD-PLAN B0). Missed figures are estimates, marked ≈. */
+export function cacheLine(providers: readonly ProviderTokens[], cache: CacheCauses): string {
+  const written = providers.reduce((sum, tokens) => sum + tokens.cacheWrite, 0);
+  const hour = providers.reduce((sum, tokens) => sum + tokens.cacheWrite1h, 0);
+  const five = providers.reduce((sum, tokens) => sum + tokens.cacheWrite5m, 0);
+  if (written === 0 && cache.missed === 0) return "";
+  const lifetimes = [hour > 0 && `1h ${formatTokens(hour)}`, five > 0 && `5m ${formatTokens(five)}`].filter(Boolean);
+  const parts = [`cache writes ${formatTokens(written)}${lifetimes.length > 0 ? ` (${lifetimes.join(", ")})` : ""}`];
+  for (const cause of cache.causes) {
+    const times = cause.sessions > 1 ? ` ×${cause.sessions}` : "";
+    const missed = cause.missed > 0 ? `, missed ≈${formatTokens(cause.missed)}` : "";
+    parts.push(`${cause.cause}${times} wrote ${formatTokens(cause.written)}${missed}`);
+  }
+  if (cache.unexplained > 0) parts.push(`≈${formatTokens(cache.unexplained)} missed, no known cause`);
+  if (cache.bigMisses > 0) parts.push(`${cache.bigMisses} ${cache.bigMisses === 1 ? "call" : "calls"} missed over 20K`);
+  return parts.join(" · ");
+}
 
 /** Each request's time and tokens, newest first, at most `limit` of them. */
 export function summaryRows(summaries: readonly RequestSummary[], limit: number): SummaryRow[] {
@@ -83,7 +103,11 @@ export function summaryRows(summaries: readonly RequestSummary[], limit: number)
         times: times.join(" · "),
         providers: summary.providers.map((tokens) => {
           const cost = tokens.costUsd !== null ? `, $${tokens.costUsd.toFixed(2)}` : "";
-          return `${providerName(tokens.provider)} ${formatTokens(tokens.raw)} raw, ${formatTokens(tokens.rawWithoutCacheReads)} without cache reads${cost}`;
+          // Codex's cached share of its input, which its comparisons rely on (BUILD-PLAN B0).
+          const input = tokens.input + tokens.cachedInput;
+          const share =
+            tokens.provider === "codex" && input > 0 ? `, ${Math.round((tokens.cachedInput / input) * 100)}% of input cached` : "";
+          return `${providerName(tokens.provider)} ${formatTokens(tokens.raw)} raw, ${formatTokens(tokens.rawWithoutCacheReads)} without cache reads${cost}${share}`;
         }),
         steps: summary.steps
           .map((step) => {
@@ -95,6 +119,7 @@ export function summaryRows(summaries: readonly RequestSummary[], limit: number)
             return `${step.step} ${formatTokens(step.raw)}${counts.length > 0 ? ` (${counts.join(", ")})` : ""}`;
           })
           .join(" · "),
+        cache: cacheLine(summary.providers, summary.cache),
       };
     });
 }

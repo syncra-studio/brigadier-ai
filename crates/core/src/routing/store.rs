@@ -118,6 +118,23 @@ fn migrations() -> Migrations<'static> {
             "ALTER TABLE turn_usage ADD COLUMN model_calls INTEGER;
             ALTER TABLE turn_usage ADD COLUMN opens_turn INTEGER NOT NULL DEFAULT 0;",
         ),
+        // BUILD-PLAN B0 (research P0.1): where cache writes come from. What was written for an
+        // hour and for five minutes; the last call's prompt, which a later session of the same
+        // owner (or a fork of it) is compared with; the estimated missed prefix and its calls;
+        // a session's known cause on its first row, with what its first call wrote and missed;
+        // and the session's CLI version and tool set, to tell an upgrade or a tool change.
+        M::up(
+            "ALTER TABLE turn_usage ADD COLUMN write_1h INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN write_5m INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN last_prompt INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN missed INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN missed_calls INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN unestimated_calls INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN cause TEXT;
+            ALTER TABLE turn_usage ADD COLUMN cause_write INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN cause_missed INTEGER;
+            ALTER TABLE turn_usage ADD COLUMN session_key TEXT;",
+        ),
     ])
 }
 
@@ -220,6 +237,114 @@ pub struct TurnUsage {
     pub model_calls: Option<i64>,
     /// It is the first use reported in its turn (counted for a thread's or a review's turns).
     pub opens_turn: bool,
+    /// Where its cache writes came from (BUILD-PLAN B0). Default on rows stored before.
+    pub cache: CacheTrace,
+}
+
+/// Where a use's cache writes came from (BUILD-PLAN B0, research P0.1), worked out per model
+/// call and summed for the row.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CacheTrace {
+    /// Of the row's cache writes, what was written for an hour and for five minutes (Claude).
+    pub write_1h: i64,
+    pub write_5m: i64,
+    /// The prompt of its last call in the main chain: what the session's next call, or a
+    /// later session of the same owner or a fork of it, should read back from the cache.
+    pub last_prompt: Option<i64>,
+    /// An estimate: what its calls didn't read back of the prompt before them (the previous
+    /// prompt less the cache read), summed over the calls that had one to compare with.
+    pub missed: i64,
+    /// Its calls that missed more than [`BIG_MISS`].
+    pub missed_calls: i64,
+    /// Its calls with nothing to compare with, reported apart: a session's first call with
+    /// nothing to inherit, a subagent's first, the first after a compaction.
+    pub unestimated_calls: i64,
+    /// The session's known cause, on the session's first row.
+    pub cause: Option<WriteCause>,
+    /// What the session's first call wrote and (estimated) missed: the cause's share.
+    pub cause_write: i64,
+    pub cause_missed: i64,
+    /// The session's CLI version and tool set, on its first row: a later session of the same
+    /// owner that differs was an upgrade or a tool change.
+    pub session_key: Option<String>,
+}
+
+/// A call that missed more than this is flagged (research P0.1).
+pub const BIG_MISS: i64 = 20_000;
+
+/// Why a session started on a cache it may not share (BUILD-PLAN B0): the causes Brigadier
+/// knows. What is missed beyond them is unexplained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WriteCause {
+    /// A new session with nothing to inherit.
+    FreshStart,
+    /// The same session resumed while its cache should still live.
+    Resume,
+    /// The same session resumed after its cache's lifetime.
+    ColdResume,
+    /// A thread reborn: a new session from a briefing.
+    Rebirth,
+    /// The fork of a thread that writes its checkpoint or hand-off note.
+    NoteFork,
+    /// A worker handed on to a new session.
+    Handoff,
+    /// The same session moved to another model or account.
+    Reroute,
+    /// The same session resumed at another effort.
+    EffortChange,
+    /// Resumed with another tool set than its last session had.
+    ToolSetChange,
+    /// Resumed on another CLI version than its last session ran.
+    CliUpgrade,
+}
+
+impl WriteCause {
+    const ALL: [Self; 10] = [
+        Self::FreshStart,
+        Self::Resume,
+        Self::ColdResume,
+        Self::Rebirth,
+        Self::NoteFork,
+        Self::Handoff,
+        Self::Reroute,
+        Self::EffortChange,
+        Self::ToolSetChange,
+        Self::CliUpgrade,
+    ];
+
+    /// How it is stored and shown.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FreshStart => "fresh start",
+            Self::Resume => "resume",
+            Self::ColdResume => "cold resume",
+            Self::Rebirth => "rebirth",
+            Self::NoteFork => "note fork",
+            Self::Handoff => "hand-off",
+            Self::Reroute => "reroute",
+            Self::EffortChange => "effort change",
+            Self::ToolSetChange => "tool-set change",
+            Self::CliUpgrade => "CLI upgrade",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.as_str() == text)
+    }
+
+    /// Whether the session carries on an earlier one's conversation: its first call is
+    /// compared with that session's last prompt.
+    pub fn continues(self) -> bool {
+        !matches!(self, Self::FreshStart | Self::Rebirth | Self::Handoff)
+    }
+}
+
+/// The last session of an owner, as its rows recorded it: its last call's prompt and its
+/// CLI version and tool set.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LastSession {
+    pub last_prompt: Option<i64>,
+    pub session_key: Option<String>,
 }
 
 impl TurnUsage {
@@ -247,7 +372,8 @@ pub struct StoredEdits {
 /// The columns [`turn_of`] reads, after `provider`.
 const TURN_COLUMNS: &str = "at_ms, model, conversation_id, project_id, task_id, input, \
      cached_input, cache_write, output, step, duration_ms, request_id, context, child_thread, \
-     cost_usd, account, model_calls, opens_turn";
+     cost_usd, account, model_calls, opens_turn, write_1h, write_5m, last_prompt, missed, \
+     missed_calls, unestimated_calls, cause, cause_write, cause_missed, session_key";
 
 fn turn_of(provider: ProviderKind, row: &rusqlite::Row<'_>) -> rusqlite::Result<TurnUsage> {
     Ok(TurnUsage {
@@ -273,6 +399,21 @@ fn turn_of(provider: ProviderKind, row: &rusqlite::Row<'_>) -> rusqlite::Result<
         account: Some(row.get::<_, String>(16)?).filter(|account| !account.is_empty()),
         model_calls: row.get(17)?,
         opens_turn: row.get(18)?,
+        cache: CacheTrace {
+            write_1h: row.get::<_, Option<i64>>(19)?.unwrap_or_default(),
+            write_5m: row.get::<_, Option<i64>>(20)?.unwrap_or_default(),
+            last_prompt: row.get(21)?,
+            missed: row.get::<_, Option<i64>>(22)?.unwrap_or_default(),
+            missed_calls: row.get::<_, Option<i64>>(23)?.unwrap_or_default(),
+            unestimated_calls: row.get::<_, Option<i64>>(24)?.unwrap_or_default(),
+            cause: row
+                .get::<_, Option<String>>(25)?
+                .as_deref()
+                .and_then(WriteCause::parse),
+            cause_write: row.get::<_, Option<i64>>(26)?.unwrap_or_default(),
+            cause_missed: row.get::<_, Option<i64>>(27)?.unwrap_or_default(),
+            session_key: row.get(28)?,
+        },
     })
 }
 
@@ -280,9 +421,11 @@ fn insert_turn(conn: &Connection, turn: &TurnUsage) -> rusqlite::Result<()> {
     conn.prepare_cached(
         "INSERT INTO turn_usage (at_ms, provider, model, conversation_id, project_id, task_id,
              input, cached_input, cache_write, output, step, duration_ms, request_id, context,
-             child_thread, cost_usd, account, model_calls, opens_turn)
+             child_thread, cost_usd, account, model_calls, opens_turn, write_1h, write_5m,
+             last_prompt, missed, missed_calls, unestimated_calls, cause, cause_write,
+             cause_missed, session_key)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-                 ?19)",
+                 ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
     )?
     .execute(params![
         turn.at_ms,
@@ -304,6 +447,16 @@ fn insert_turn(conn: &Connection, turn: &TurnUsage) -> rusqlite::Result<()> {
         turn.account.as_deref().unwrap_or(""),
         turn.model_calls,
         turn.opens_turn,
+        turn.cache.write_1h,
+        turn.cache.write_5m,
+        turn.cache.last_prompt,
+        turn.cache.missed,
+        turn.cache.missed_calls,
+        turn.cache.unestimated_calls,
+        turn.cache.cause.map(WriteCause::as_str),
+        turn.cache.cause_write,
+        turn.cache.cause_missed,
+        turn.cache.session_key,
     ])?;
     Ok(())
 }
@@ -424,6 +577,41 @@ impl RoutingStore {
 
     pub async fn add_turn(self: &Arc<Self>, turn: TurnUsage) -> Result<()> {
         self.run(move |conn| insert_turn(conn, &turn)).await
+    }
+
+    /// The last session of an owner (a conversation's `step`, or a task's), from its newest
+    /// rows: its last call's prompt and its CLI version and tool set (BUILD-PLAN B0).
+    pub async fn last_session(
+        self: &Arc<Self>,
+        conversation_id: String,
+        step: StepKind,
+        task_id: Option<String>,
+    ) -> Result<LastSession> {
+        self.run(move |conn| {
+            let newest = |column: &str| -> rusqlite::Result<Option<rusqlite::types::Value>> {
+                conn.prepare_cached(&format!(
+                    "SELECT {column} FROM turn_usage
+                     WHERE conversation_id = ?1 AND step = ?2 AND task_id IS ?3
+                       AND {column} IS NOT NULL
+                     ORDER BY at_ms DESC, rowid DESC LIMIT 1"
+                ))?
+                .query_row(params![conversation_id, step.as_str(), task_id], |row| {
+                    row.get(0)
+                })
+                .optional()
+            };
+            Ok(LastSession {
+                last_prompt: match newest("last_prompt")? {
+                    Some(rusqlite::types::Value::Integer(prompt)) => Some(prompt),
+                    _ => None,
+                },
+                session_key: match newest("session_key")? {
+                    Some(rusqlite::types::Value::Text(key)) => Some(key),
+                    _ => None,
+                },
+            })
+        })
+        .await
     }
 
     /// A provider's turns since `since_ms`.
@@ -787,6 +975,7 @@ mod tests {
             account: None,
             model_calls: None,
             opens_turn: false,
+            cache: Default::default(),
         }
     }
 
@@ -930,5 +1119,88 @@ mod tests {
         store.add_turn(turn(Some("c1"), None)).await.unwrap();
         let read = store.conversation_turns("c1".into()).await.unwrap();
         assert_eq!(read, vec![counted, turn(Some("c1"), None)]);
+    }
+
+    /// BUILD-PLAN B0: a row's cache trace reads back, and an owner's last session is its
+    /// newest prompt and its newest CLI version and tool set, each its own owner's.
+    #[tokio::test]
+    async fn a_turns_cache_trace_and_its_owners_last_session_read_back() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-routing-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&*dir).unwrap();
+        let store = RoutingStore::open(&dir.join("routing.sqlite")).unwrap();
+        let thread = |at_ms: i64, cache: CacheTrace| TurnUsage {
+            at_ms,
+            step: Some(StepKind::Thread),
+            cache,
+            ..turn(Some("c1"), None)
+        };
+        let first = thread(
+            1,
+            CacheTrace {
+                write_1h: 900,
+                write_5m: 100,
+                last_prompt: Some(40_000),
+                missed: 25_000,
+                missed_calls: 1,
+                unestimated_calls: 0,
+                cause: Some(WriteCause::ColdResume),
+                cause_write: 1_000,
+                cause_missed: 25_000,
+                session_key: Some("2.1.300|Thread brigadier".into()),
+            },
+        );
+        let later = thread(
+            2,
+            CacheTrace {
+                last_prompt: Some(41_000),
+                ..CacheTrace::default()
+            },
+        );
+        store.add_turn(first.clone()).await.unwrap();
+        store.add_turn(later.clone()).await.unwrap();
+        // A worker's row of the same conversation is another owner.
+        store
+            .add_turn(TurnUsage {
+                at_ms: 3,
+                step: Some(StepKind::Worker),
+                cache: CacheTrace {
+                    last_prompt: Some(9),
+                    ..CacheTrace::default()
+                },
+                ..turn(Some("c1"), Some("t1"))
+            })
+            .await
+            .unwrap();
+        let read = store
+            .step_turns("c1".into(), StepKind::Thread)
+            .await
+            .unwrap();
+        assert_eq!(read, vec![first, later]);
+        assert_eq!(
+            store
+                .last_session("c1".into(), StepKind::Thread, None)
+                .await
+                .unwrap(),
+            LastSession {
+                last_prompt: Some(41_000),
+                session_key: Some("2.1.300|Thread brigadier".into()),
+            }
+        );
+        assert_eq!(
+            store
+                .last_session("c1".into(), StepKind::Worker, Some("t1".into()))
+                .await
+                .unwrap()
+                .last_prompt,
+            Some(9)
+        );
+        assert_eq!(
+            store
+                .last_session("c2".into(), StepKind::Thread, None)
+                .await
+                .unwrap(),
+            LastSession::default()
+        );
     }
 }

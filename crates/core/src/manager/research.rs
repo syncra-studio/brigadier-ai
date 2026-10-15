@@ -282,7 +282,7 @@ impl SessionManager {
                             .note_quota_snapshot(&account, quota.clone())
                             .await;
                     }
-                    ProviderEvent::Usage { total, last } => {
+                    ProviderEvent::Usage { total, last, calls } => {
                         self.note_tokens(
                             &meter,
                             runs_on,
@@ -290,6 +290,7 @@ impl SessionManager {
                             TokenOwner::Upkeep,
                             &total,
                             last.as_ref(),
+                            &calls,
                         )
                         .await;
                     }

@@ -95,6 +95,15 @@ pub struct Parser {
     /// The model calls since the last result: its assistant messages' ids, a subagent's
     /// included.
     turn_calls: HashSet<String>,
+    /// Each model call's prompt since the last result, as first reported (research P0.1).
+    turn_cache: Vec<CallCache>,
+    /// The calls already in `turn_cache` or an earlier result's: a call's usage repeats on
+    /// each of its lines.
+    cache_seen: HashSet<String>,
+    /// The last call's prompt per chain: the main agent's (`None`) and each subagent's.
+    chain_prompts: HashMap<Option<String>, i64>,
+    /// A compaction ended: the main agent's next call starts from its summary.
+    compacted: bool,
     interrupting: bool,
     turn_active: bool,
     /// Messages written to Claude that it has not taken yet (echoed back).
@@ -176,6 +185,12 @@ impl Parser {
                     && value.pointer("/event/type").and_then(Value::as_str) == Some("message_start")
                 {
                     self.begin_turn(&mut out);
+                }
+                if let (Some(id), Some(usage)) = (
+                    value.pointer("/event/message/id").and_then(Value::as_str),
+                    value.pointer("/event/message/usage"),
+                ) {
+                    self.call_seen(id, usage, str_of(&value, "parent_tool_use_id"));
                 }
                 if let Some(event) = value.get("event") {
                     self.stream_event(event, &mut out);
@@ -317,6 +332,30 @@ impl Parser {
         }
     }
 
+    /// A model call's usage seen (on its `message_start` or a line of its message), in the
+    /// main agent's chain or a subagent's (`parent`): its prompt is kept once, against the
+    /// chain's call before it (research P0.1). A usage with no prompt yet is not its call's.
+    fn call_seen(&mut self, id: &str, usage: &Value, parent: Option<&str>) {
+        if self.cache_seen.contains(id) {
+            return;
+        }
+        let used = token_usage(usage);
+        let prompt = used.input_tokens + used.cached_input_tokens + used.cache_write_tokens;
+        if prompt == 0 {
+            return;
+        }
+        self.cache_seen.insert(id.to_owned());
+        let previous_prompt = self.chain_prompts.insert(parent.map(str::to_owned), prompt);
+        self.turn_cache.push(CallCache {
+            prompt,
+            cache_read: used.cached_input_tokens,
+            cache_write: used.cache_write_tokens,
+            previous_prompt,
+            after_compaction: parent.is_none() && std::mem::take(&mut self.compacted),
+            subagent: parent.is_some(),
+        });
+    }
+
     fn block_item_id(&self, index: u64) -> String {
         format!(
             "{}:{index}",
@@ -352,6 +391,7 @@ impl Parser {
                 self.subagent_usage
                     .insert(id.to_owned(), token_usage(usage));
                 self.turn_calls.insert(id.to_owned());
+                self.call_seen(id, usage, str_of(value, "parent_tool_use_id"));
             }
             progress(value, out);
             return;
@@ -360,6 +400,9 @@ impl Parser {
         self.begin_turn(out);
         if let Some(id) = str_of(&message, "id") {
             self.turn_calls.insert(id.to_owned());
+            if let Some(usage) = message.get("usage") {
+                self.call_seen(id, usage, None);
+            }
         }
         let message_id = str_of(&message, "id").unwrap_or("message").to_owned();
         let Some(blocks) = message.get("content").and_then(Value::as_array) else {
@@ -700,6 +743,7 @@ impl Parser {
                     .take()
                     .unwrap_or_else(|| str_of(metadata, "trigger") == Some("auto"));
                 let tokens_after = metadata.get("post_tokens").and_then(Value::as_i64);
+                self.compacted = true;
                 out.push(Output::Event(ProviderEvent::CompactionEnded {
                     automatic,
                     tokens_before: metadata.get("pre_tokens").and_then(Value::as_i64),
@@ -810,6 +854,8 @@ impl Parser {
                 turn.cache_write_tokens += sub.cache_write_tokens;
                 turn.output_tokens += sub.output_tokens;
                 turn.reasoning_tokens += sub.reasoning_tokens;
+                turn.cache_write_1h_tokens += sub.cache_write_1h_tokens;
+                turn.cache_write_5m_tokens += sub.cache_write_5m_tokens;
                 self.subagent_counted.insert(id);
             }
             turn
@@ -821,11 +867,14 @@ impl Parser {
             self.totals.output_tokens += turn.output_tokens;
             self.totals.reasoning_tokens += turn.reasoning_tokens;
             self.totals.model_calls += turn.model_calls;
+            self.totals.cache_write_1h_tokens += turn.cache_write_1h_tokens;
+            self.totals.cache_write_5m_tokens += turn.cache_write_5m_tokens;
             // `total_cost_usd` is cumulative for the session.
             self.totals.cost_usd = turn.cost_usd.or(self.totals.cost_usd);
             out.push(Output::Event(ProviderEvent::Usage {
                 total: self.totals.clone(),
                 last: None,
+                calls: std::mem::take(&mut self.turn_cache),
             }));
         }
 
@@ -1191,6 +1240,14 @@ fn token_usage(usage: &Value) -> TokenUsage {
             .unwrap_or_default(),
         cost_usd: None,
         model_calls: 0,
+        cache_write_1h_tokens: usage
+            .pointer("/cache_creation/ephemeral_1h_input_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        cache_write_5m_tokens: usage
+            .pointer("/cache_creation/ephemeral_5m_input_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
     }
 }
 
@@ -1829,5 +1886,98 @@ mod tests {
             (25_905 + 15_626, 4 + 4)
         );
         assert_eq!(second.model_calls, 1);
+    }
+
+    /// Each model call's prompt is kept once, before the turn sums them, against the call
+    /// before it in its own chain, with the lifetime of what it wrote (research P0.1). Shapes
+    /// as Claude Code streams them: `message_start` carries the prompt's usage, and each of the
+    /// message's lines repeats it.
+    #[test]
+    fn each_calls_prompt_is_kept_against_the_call_before_it() {
+        let mut parser = Parser::live();
+        let usage = |input: i64, read: i64, write: i64, hour: i64| {
+            json!({ "input_tokens": input, "cache_read_input_tokens": read,
+                    "cache_creation_input_tokens": write, "output_tokens": 50,
+                    "cache_creation": { "ephemeral_1h_input_tokens": hour,
+                                        "ephemeral_5m_input_tokens": write - hour } })
+        };
+        let start = |id: &str, parent: Value, usage: Value| {
+            json!({ "type": "stream_event", "parent_tool_use_id": parent,
+                    "event": { "type": "message_start",
+                               "message": { "id": id, "usage": usage } } })
+            .to_string()
+        };
+        let line = |id: &str, usage: Value| {
+            json!({ "type": "assistant", "parent_tool_use_id": null,
+                    "message": { "id": id, "content": [{ "type": "text", "text": "…" }],
+                                 "usage": usage } })
+            .to_string()
+        };
+        let report = |outputs: Vec<Output>| {
+            outputs
+                .into_iter()
+                .find_map(|output| match output {
+                    Output::Event(ProviderEvent::Usage { total, calls, .. }) => {
+                        Some((total, calls))
+                    }
+                    _ => None,
+                })
+                .expect("a usage report")
+        };
+        let result = |main: Value| {
+            json!({ "type": "result", "subtype": "success", "is_error": false, "usage": main })
+                .to_string()
+        };
+        // A first call writes the whole prompt for an hour; the second reads it back and
+        // writes its new tail; a subagent's call is its own chain.
+        parser.feed(&start("a1", Value::Null, usage(3, 0, 20_000, 20_000)));
+        parser.feed(&line("a1", usage(3, 0, 20_000, 20_000)));
+        parser.feed(&start("s1", json!("toolu_1"), usage(2, 0, 5_000, 0)));
+        parser.feed(&start("a2", Value::Null, usage(2, 20_003, 1_500, 1_500)));
+        parser.feed(&line("a2", usage(2, 20_003, 1_500, 1_500)));
+        let (total, calls) = report(parser.feed(&result(usage(5, 20_003, 21_500, 21_500))));
+        assert_eq!(
+            (total.cache_write_1h_tokens, total.cache_write_5m_tokens),
+            (21_500, 0)
+        );
+        let main = |prompt: i64, read: i64, write: i64, previous: Option<i64>| CallCache {
+            prompt,
+            cache_read: read,
+            cache_write: write,
+            previous_prompt: previous,
+            after_compaction: false,
+            subagent: false,
+        };
+        assert_eq!(
+            calls,
+            [
+                main(20_003, 0, 20_000, None),
+                CallCache {
+                    subagent: true,
+                    ..main(5_002, 0, 5_000, None)
+                },
+                main(21_505, 20_003, 1_500, Some(20_003)),
+            ]
+        );
+        // The next turn's call missed part of the prefix: kept as reported, against the last.
+        parser.feed(&start("a3", Value::Null, usage(2, 4_000, 18_000, 18_000)));
+        let (_, calls) = report(parser.feed(&result(usage(2, 4_000, 18_000, 18_000))));
+        assert_eq!(calls, [main(22_002, 4_000, 18_000, Some(21_505))]);
+        // After a compaction the next call is reported apart.
+        parser.feed(
+            &json!({ "type": "system", "subtype": "compact_boundary",
+                     "compact_metadata": { "trigger": "auto", "pre_tokens": 22_002,
+                                           "post_tokens": 3_000 } })
+            .to_string(),
+        );
+        parser.feed(&start("a4", Value::Null, usage(3_000, 0, 0, 0)));
+        let (_, calls) = report(parser.feed(&result(usage(3_000, 0, 0, 0))));
+        assert_eq!(
+            calls,
+            [CallCache {
+                after_compaction: true,
+                ..main(3_000, 0, 0, Some(22_002))
+            }]
+        );
     }
 }

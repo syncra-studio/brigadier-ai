@@ -284,7 +284,9 @@ impl SessionManager {
         };
         if launch.outdated(&now) {
             tracing::info!(conversation = %conv.id, workspace = ?now.workspace.as_ref().map(|w| &w.path), permission = ?now.permission, "the thread starts again for its new workspace or level");
-            conv.retire_cli(&cli).await;
+            // A new level gives the thread another tool set (BUILD-PLAN B0).
+            conv.retire_cli_for(&cli, Some(crate::routing::WriteCause::ToolSetChange))
+                .await;
         }
     }
 

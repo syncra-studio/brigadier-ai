@@ -294,6 +294,8 @@ fn codex_usage(usage: &Value) -> TokenUsage {
         reasoning_tokens: count("reasoning_output_tokens"),
         cost_usd: None,
         model_calls: 0,
+        cache_write_1h_tokens: 0,
+        cache_write_5m_tokens: 0,
     }
 }
 
@@ -782,6 +784,7 @@ exit 1"#
                 reasoning_tokens: 0,
                 cost_usd: None,
                 model_calls: 0,
+                ..TokenUsage::default()
             })
         );
     }
@@ -842,6 +845,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_token
                 reasoning_tokens: 40,
                 cost_usd: None,
                 model_calls: 0,
+                ..TokenUsage::default()
             })
         );
         assert_eq!(
@@ -936,6 +940,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_token
                 reasoning_tokens: 121,
                 cost_usd: None,
                 model_calls: 0,
+                ..TokenUsage::default()
             })
         );
         assert_eq!(
