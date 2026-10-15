@@ -226,6 +226,8 @@ impl TurnChain {
 /// Where Brigadier's MCP server finds its grant, in its environment.
 pub(crate) const MCP_GRANT_ENV: &str = "BRIGADIER_MCP_GRANT";
 
+mod watchdog;
+
 /// A live CLI session of a conversation or task.
 pub(crate) struct Cli {
     pub provider: ProviderKind,
@@ -248,6 +250,7 @@ pub(crate) struct Cli {
 
 #[derive(Default)]
 struct ConvState {
+    watchdog: watchdog::ThreadWatch,
     cli: Option<Arc<Cli>>,
     /// Why its CLI was closed to start again, for the next one's cache trace (BUILD-PLAN B0).
     restart_cause: Option<WriteCause>,
@@ -2599,6 +2602,7 @@ impl SessionManager {
             conv.scratch_used
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             state.landed = false;
+            state.watchdog.begin(now_ms());
             state.limit_hit = None;
             state.turn_error = None;
             state.unshown_error = None;
@@ -2685,7 +2689,12 @@ impl SessionManager {
             .turn_input(&conv, &unsent, &[user_notes, notes.clone()].concat())
             .await;
         if unsent.len() < users.len() {
-            input.prepend_text(prompts::CONTINUE_ON_ACCOUNT);
+            let stalled = conv.state.lock().await.watchdog.take_carry_note();
+            input.prepend_text(if stalled {
+                watchdog::CARRY_ON
+            } else {
+                prompts::CONTINUE_ON_ACCOUNT
+            });
         }
         // Notes about messages between sessions (a late reply, the user's answer to a send).
         let late = std::mem::take(&mut conv.state.lock().await.peer_notes);
@@ -3675,6 +3684,9 @@ impl SessionManager {
         cli: Arc<Cli>,
         mut events: mpsc::Receiver<ProviderEvent>,
     ) {
+        let timing = super::watchdog::Timing::current();
+        let mut watchdog_tick = tokio::time::interval(timing.tick);
+        watchdog_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut deltas: Vec<ProviderEvent> = Vec::new();
         let mut deadline: Option<tokio::time::Instant> = None;
         let mut quiet = Quiet::new(conv.kind == ConversationKind::Session);
@@ -3688,7 +3700,9 @@ impl SessionManager {
                 }
             };
             tokio::select! {
-                event = events.recv() => match event {
+                event = events.recv() => {
+                    self.note_thread_progress(&conv, &cli, event.as_ref()).await;
+                    match event {
                     // Never stored.
                     Some(ProviderEvent::Progress { .. }) => {}
                     Some(ProviderEvent::BackgroundJobs { running }) => {
@@ -3768,7 +3782,14 @@ impl SessionManager {
                         }
                     }
                     None => break,
+                    }
                 },
+                _ = watchdog_tick.tick() => {
+                    let manager = self.clone();
+                    let conv = conv.clone();
+                    let cli = cli.clone();
+                    self.spawn(async move { manager.watch_thread(&conv, &cli, now_ms()).await; });
+                }
                 () = flush_at => {
                     deadline = None;
                     self.store_deltas(&conv, quiet.pass(std::mem::take(&mut deltas))).await;
@@ -3804,13 +3825,14 @@ impl SessionManager {
             state.lingering_request = None;
             let jobs = (!words.is_empty() || count > 0).then_some((words, count, request));
             let was_busy = state.busy;
-            state.busy = false;
+            state.busy = state.watchdog.recovering();
             state.compacting = false;
             let mut failed = None;
             // Brigadier quitting closed the CLI mid-turn: the turn reads interrupted, with
             // Continue (H1). Other closes wait for the turn's end.
             let quit = state.closing && !self.admitting.load(std::sync::atomic::Ordering::Acquire);
-            if let Some(request) = state.request.take()
+            if !state.watchdog.recovering()
+                && let Some(request) = state.request.take()
                 && was_busy
                 && (!state.closing || quit)
             {
@@ -3828,8 +3850,8 @@ impl SessionManager {
                 failed = Some(request);
             }
             (
-                was_busy && (!state.closing || quit),
-                state.closing,
+                was_busy && (!state.closing || quit) && !state.watchdog.recovering(),
+                state.closing || state.watchdog.recovering(),
                 failed,
                 jobs,
             )
@@ -4761,6 +4783,7 @@ impl SessionManager {
     }
 
     async fn turn_completed(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, status: TurnStatus) {
+        conv.state.lock().await.watchdog.acknowledge();
         // A turn that ended before its CLI said it began starts nothing more.
         conv.state.lock().await.awaiting_start = false;
         let unfinished = match status {
@@ -4824,6 +4847,9 @@ impl SessionManager {
                 .unwrap_or_default(),
             _ => HashSet::new(),
         };
+        if self.finish_thread_stall(conv).await {
+            return;
+        }
         let in_run = self.overnight.active.get(&conv.id).is_some();
         let (limit_hit, ended, landed, carried, asked, served, end_commands, unshown) = {
             let mut state = conv.state.lock().await;

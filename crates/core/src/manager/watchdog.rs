@@ -6,7 +6,13 @@
 //!   orchestrator, a permission card, quota). Reported, reviewing, ready-to-land, paused,
 //!   blocked, hibernated and stopping workers are never touched; gate members (reviewers and
 //!   verifiers) are workers like any other while they run. Silence is measured from the
-//!   worker's last event, or the start of its turn.
+//!   worker's last progress event, or the start of its turn.
+//!
+//! Defaults are 3 minutes without progress, 2 more after a steer (5 to recovery).
+//! Foreground servers get 2 minutes, ordinary commands 5, builds 30 without output.
+//! Fault injection exercises each boundary and proves output extends a build and chatter
+//! does not extend a stall. This catches silence within the outside 5-minute reference,
+//! while a quiet compiler has 30 minutes and a printing build has no total-time cap.
 //!   - Silent for [`Timing::silent`] (or [`Timing::command`] while one of its commands or
 //!     tool calls runs): it is nudged, a steer asking it to carry on or report.
 //!   - Still silent [`Timing::after_nudge`] later: it continues in a fresh session of the
@@ -29,6 +35,8 @@
 //! "Decided for you". A debug build scales every threshold with `BRIGADIER_STALL_SECS` (the
 //! silence before a nudge, in seconds), so the watchdog can be tried live.
 
+pub(crate) mod progress;
+
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -49,7 +57,7 @@ use crate::work::{
 };
 
 /// The silence before a nudge, in seconds; every other threshold follows from it.
-const UNIT_SECS: u64 = 10 * 60;
+const UNIT_SECS: u64 = 3 * 60;
 
 /// How long things may stay still before the watchdog acts, in ms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +66,8 @@ pub(crate) struct Timing {
     pub silent: i64,
     /// … this long while one of its commands or tool calls runs.
     pub command: i64,
+    pub server: i64,
+    pub build: i64,
     /// Still silent this long after the nudge: a fresh session.
     pub after_nudge: i64,
     /// A card unanswered this long waits on the user.
@@ -70,9 +80,8 @@ pub(crate) struct Timing {
 }
 
 impl Timing {
-    /// The thresholds in force: 10 minutes of silence (40 while a command runs), 10 more after
-    /// the nudge, 30 for a card. A debug build takes `BRIGADIER_STALL_SECS` instead of the
-    /// 10 minutes.
+    /// Three minutes of silence, two more after the nudge; command-specific allowances.
+    /// A debug build takes `BRIGADIER_STALL_SECS` instead of the three minutes.
     pub(crate) fn current() -> Self {
         if cfg!(debug_assertions)
             && let Some(secs) = std::env::var("BRIGADIER_STALL_SECS")
@@ -85,15 +94,17 @@ impl Timing {
         Self::scaled(UNIT_SECS)
     }
 
-    fn scaled(unit_secs: u64) -> Self {
+    pub(crate) fn scaled(unit_secs: u64) -> Self {
         let unit = i64::try_from(unit_secs.min(24 * 60 * 60)).unwrap_or(0) * 1_000;
         let tick = u64::try_from(unit / 4).unwrap_or(0).clamp(5_000, 60_000);
         Self {
             silent: unit,
-            command: unit * 4,
-            after_nudge: unit,
-            card: unit * 3,
-            grace: (unit / 5).max(1_000),
+            command: unit * 5 / 3,
+            server: unit * 2 / 3,
+            build: unit * 10,
+            after_nudge: unit * 2 / 3,
+            card: unit * 10,
+            grace: (unit * 2 / 3).max(1_000),
             tick: Duration::from_millis(tick),
         }
     }
@@ -114,6 +125,9 @@ pub(crate) struct WorkerWatch {
     pub question: bool,
     /// One of its commands or tool calls runs.
     pub command_running: bool,
+    pub command_kind: Option<progress::CommandKind>,
+    pub command_due_ms: Option<i64>,
+    pub waiting: bool,
     pub last_event_ms: i64,
     /// When the watchdog nudged this CLI session.
     pub nudged_at_ms: Option<i64>,
@@ -167,14 +181,15 @@ pub(crate) fn stall_verdict(
                 .is_some_and(|since| now - since >= timing.grace);
         return lost.then_some(StallVerdict::Replace(Replaced::Exited));
     }
-    if !watch.busy || watch.question || card_open {
+    if !watch.busy || watch.question || watch.waiting || card_open {
         return None;
     }
     // A nudge counts until the worker shows it works again.
-    if let Some(nudged) = watch
-        .nudged_at_ms
-        .filter(|nudged| *nudged >= watch.last_event_ms)
-    {
+    if let Some(nudged) = watch.nudged_at_ms.filter(|nudged| {
+        *nudged >= watch.last_event_ms
+            || (watch.command_kind == Some(progress::CommandKind::Server)
+                && watch.command_due_ms.is_some_and(|at| at <= *nudged))
+    }) {
         if now - nudged < timing.after_nudge {
             return None;
         }
@@ -184,12 +199,20 @@ pub(crate) fn stall_verdict(
             StallVerdict::HandOver
         });
     }
-    let quiet = if watch.command_running {
-        timing.command
-    } else {
-        timing.silent
-    };
-    (now - watch.last_event_ms >= quiet).then_some(StallVerdict::Nudge)
+    let quiet = watch
+        .command_kind
+        .map(|kind| kind.deadline(timing))
+        .unwrap_or_else(|| {
+            if watch.command_running {
+                timing.command
+            } else {
+                timing.silent
+            }
+        });
+    watch
+        .command_due_ms
+        .map_or(now - watch.last_event_ms >= quiet, |at| now >= at)
+        .then_some(StallVerdict::Nudge)
 }
 
 /// Whether `decided`, the action decided on the worker as `seen`, still holds for it as it
@@ -437,10 +460,14 @@ impl SessionManager {
         let n = task.number;
         match verdict {
             StallVerdict::Nudge => {
-                let text = format!(
-                    "[Brigadier] Nothing has come from you for {}. If a command is hanging, stop it and run it again with a timeout, or in the background. If you are stuck, say why in submit_report. Otherwise carry on.",
-                    spoken(silent)
-                );
+                let text = if seen.command_kind == Some(progress::CommandKind::Server) {
+                    "[Brigadier] A foreground server has kept this turn open past its deadline. Stop it and run it in the background or with a timeout, then carry on.".into()
+                } else {
+                    format!(
+                        "[Brigadier] Nothing has come from you for {}. If a command is hanging, stop it and run it again with a timeout, or in the background. If you are stuck, say why in submit_report. Otherwise carry on.",
+                        spoken(silent)
+                    )
+                };
                 let Some((state, quota_wait, card)) = self.task_now(live).await else {
                     return;
                 };
@@ -457,7 +484,7 @@ impl SessionManager {
                         self.watchdog_notice(
                             task,
                             format!(
-                                "No activity for {}: asked the worker to carry on or report.",
+                                "The watchdog deadline was reached ({} since the last progress): asked the worker to carry on or report.",
                                 spoken(silent)
                             ),
                         )
@@ -676,14 +703,14 @@ mod tests {
         let t = timing();
         assert_eq!(
             (t.silent, t.command, t.after_nudge, t.card),
-            (10 * MIN, 40 * MIN, 10 * MIN, 30 * MIN)
+            (3 * MIN, 5 * MIN, 2 * MIN, 30 * MIN)
         );
         assert_eq!(t.grace, 2 * MIN);
-        assert_eq!(t.tick, Duration::from_secs(60));
+        assert_eq!(t.tick, Duration::from_secs(45));
         let fast = Timing::scaled(60);
         assert_eq!(
             (fast.silent, fast.command, fast.card, fast.grace),
-            (MIN, 4 * MIN, 3 * MIN, 12_000)
+            (MIN, 100_000, 10 * MIN, 40_000)
         );
         assert_eq!(fast.tick, Duration::from_secs(15));
         assert_eq!(Timing::scaled(1).tick, Duration::from_secs(5));
@@ -692,26 +719,26 @@ mod tests {
     #[test]
     fn a_silent_worker_is_nudged_then_handed_over_then_replaced() {
         let mut watch = working();
-        assert_eq!(verdict(TaskState::Running, &watch, 9 * MIN), None);
+        assert_eq!(verdict(TaskState::Running, &watch, 2 * MIN), None);
         assert_eq!(
-            verdict(TaskState::Running, &watch, 10 * MIN),
+            verdict(TaskState::Running, &watch, 3 * MIN),
             Some(StallVerdict::Nudge)
         );
         assert_eq!(
-            verdict(TaskState::Starting, &watch, 10 * MIN),
+            verdict(TaskState::Starting, &watch, 3 * MIN),
             Some(StallVerdict::Nudge)
         );
-        // Nudged at 10: nothing until 10 minutes later, then a fresh session.
-        watch.nudged_at_ms = Some(10 * MIN);
-        assert_eq!(verdict(TaskState::Running, &watch, 19 * MIN), None);
+        // Nudged at 3: two minutes to answer, then a fresh session.
+        watch.nudged_at_ms = Some(3 * MIN);
+        assert_eq!(verdict(TaskState::Running, &watch, 4 * MIN), None);
         assert_eq!(
-            verdict(TaskState::Running, &watch, 20 * MIN),
+            verdict(TaskState::Running, &watch, 5 * MIN),
             Some(StallVerdict::HandOver)
         );
         // A second stall in the same attempt: another model.
         watch.stalls = 1;
         assert_eq!(
-            verdict(TaskState::Running, &watch, 20 * MIN),
+            verdict(TaskState::Running, &watch, 5 * MIN),
             Some(StallVerdict::Replace(Replaced::Stalled))
         );
     }
@@ -719,11 +746,11 @@ mod tests {
     #[test]
     fn a_worker_that_answers_the_nudge_starts_over() {
         let mut watch = working();
-        watch.nudged_at_ms = Some(10 * MIN);
-        watch.last_event_ms = 12 * MIN;
-        assert_eq!(verdict(TaskState::Running, &watch, 21 * MIN), None);
+        watch.nudged_at_ms = Some(3 * MIN);
+        watch.last_event_ms = 4 * MIN;
+        assert_eq!(verdict(TaskState::Running, &watch, 6 * MIN), None);
         assert_eq!(
-            verdict(TaskState::Running, &watch, 22 * MIN),
+            verdict(TaskState::Running, &watch, 7 * MIN),
             Some(StallVerdict::Nudge)
         );
     }
@@ -732,9 +759,9 @@ mod tests {
     fn a_running_command_gets_longer() {
         let mut watch = working();
         watch.command_running = true;
-        assert_eq!(verdict(TaskState::Running, &watch, 39 * MIN), None);
+        assert_eq!(verdict(TaskState::Running, &watch, 4 * MIN), None);
         assert_eq!(
-            verdict(TaskState::Running, &watch, 40 * MIN),
+            verdict(TaskState::Running, &watch, 5 * MIN),
             Some(StallVerdict::Nudge)
         );
     }
@@ -827,22 +854,22 @@ mod tests {
         // Recorded at the time the nudge began, even when its CLI never took it: the
         // hand-over follows the grace.
         let mut watch = working();
-        watch.nudged_at_ms = Some(10 * MIN);
+        watch.nudged_at_ms = Some(3 * MIN);
         assert_eq!(
-            verdict(TaskState::Running, &watch, 20 * MIN),
+            verdict(TaskState::Running, &watch, 5 * MIN),
             Some(StallVerdict::HandOver)
         );
         // Heard from while the nudge was on its way: it isn't stuck.
-        watch.last_event_ms = 10 * MIN + 1;
-        assert_eq!(verdict(TaskState::Running, &watch, 20 * MIN), None);
+        watch.last_event_ms = 3 * MIN + 1;
+        assert_eq!(verdict(TaskState::Running, &watch, 5 * MIN), None);
     }
 
     #[test]
     fn an_action_is_taken_only_while_it_still_holds() {
         let t = timing();
-        let now = 20 * MIN;
+        let now = 5 * MIN;
         let seen = WorkerWatch {
-            nudged_at_ms: Some(10 * MIN),
+            nudged_at_ms: Some(3 * MIN),
             ..working()
         };
         let due = |current: &WorkerWatch, state: TaskState, quota_wait: bool, card: bool| {
@@ -976,5 +1003,92 @@ mod tests {
         assert_eq!(spoken(10 * MIN), "10 minutes");
         assert_eq!(spoken(2 * MIN), "2 minutes");
         assert_eq!(spoken(1_000), "1 second");
+    }
+    #[test]
+    fn watchdog_hung_foreground_server_and_plain_command_hit_their_own_deadlines() {
+        use super::progress::{CommandKind, command_kind};
+        for (command, minutes, kind) in [
+            ("pnpm dev", 2, CommandKind::Server),
+            ("sleep 999999", 5, CommandKind::Normal),
+        ] {
+            assert_eq!(command_kind(command), kind);
+            let mut watch = WorkerWatch {
+                command_running: true,
+                command_kind: Some(kind),
+                command_due_ms: Some(kind.deadline(&timing())),
+                ..working()
+            };
+            assert_eq!(verdict(TaskState::Running, &watch, minutes * MIN - 1), None);
+            assert_eq!(
+                verdict(TaskState::Running, &watch, minutes * MIN),
+                Some(StallVerdict::Nudge)
+            );
+            watch.nudged_at_ms = Some(minutes * MIN);
+            if kind == CommandKind::Server {
+                watch.last_event_ms = (minutes + 1) * MIN;
+            }
+            assert_eq!(
+                verdict(TaskState::Running, &watch, (minutes + 2) * MIN),
+                Some(StallVerdict::HandOver)
+            );
+        }
+    }
+
+    #[test]
+    fn watchdog_long_builds_printing_or_quiet_under_thirty_minutes_are_not_stalled() {
+        use brigadier_providers::ItemStatus;
+        let mut evidence = progress::Progress::default();
+        let mut watch = working();
+        let event = ProviderEvent::Command {
+            item_id: "c".into(),
+            command: "cargo test".into(),
+            cwd: None,
+            status: ItemStatus::InProgress,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+        };
+        assert!(evidence.observe(&event, 0));
+        watch.command_running = true;
+        watch.command_kind = evidence.command();
+        watch.command_due_ms = evidence.command_deadline(&timing());
+        assert_eq!(verdict(TaskState::Running, &watch, 30 * MIN - 1), None);
+        for minute in 1..=120 {
+            let event = ProviderEvent::CommandOutputDelta {
+                item_id: "c".into(),
+                text: format!("test {minute} passed"),
+            };
+            assert!(evidence.observe(&event, minute * MIN));
+            watch.last_event_ms = minute * MIN;
+            watch.command_due_ms = evidence.command_deadline(&timing());
+            assert_eq!(verdict(TaskState::Running, &watch, minute * MIN), None);
+        }
+    }
+
+    #[test]
+    fn watchdog_notice_and_status_chatter_still_stalls_at_three_minutes() {
+        let mut evidence = progress::Progress::default();
+        let mut watch = working();
+        for minute in 1..=3 {
+            for event in [
+                ProviderEvent::Notice {
+                    level: NoticeLevel::Info,
+                    message: format!("status {minute}"),
+                },
+                ProviderEvent::Progress {
+                    item_id: "heartbeat".into(),
+                },
+                ProviderEvent::BackgroundJobs { running: 1 },
+            ] {
+                if evidence.observe(&event, minute * MIN) {
+                    watch.last_event_ms = minute * MIN;
+                }
+            }
+        }
+        assert_eq!(watch.last_event_ms, 0);
+        assert_eq!(
+            verdict(TaskState::Running, &watch, 3 * MIN),
+            Some(StallVerdict::Nudge)
+        );
     }
 }

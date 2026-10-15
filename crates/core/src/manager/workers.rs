@@ -180,6 +180,7 @@ struct TaskLiveState {
     /// When the worker last showed it works (an event from its CLI, or a turn started); the
     /// stall watchdog measures silence from it.
     last_event_ms: i64,
+    progress: super::watchdog::progress::Progress,
     /// The commands and tool calls the worker started that have not finished.
     running_items: std::collections::HashSet<String>,
     /// Its CLI's own background jobs still running (`ProviderEvent::BackgroundJobs`): each
@@ -228,6 +229,17 @@ impl TaskLiveState {
     fn begin_turn(&mut self) {
         self.busy = true;
         self.last_event_ms = now_ms();
+        self.progress = super::watchdog::progress::Progress::default();
+    }
+
+    /// Progress accounting takes explicit time so transport chatter can be fault-injected.
+    fn note_progress(&mut self, event: &ProviderEvent, now: i64) {
+        if matches!(event, ProviderEvent::TurnStarted { .. }) && !self.busy {
+            self.progress = super::watchdog::progress::Progress::default();
+        }
+        if self.progress.observe(event, now) {
+            self.last_event_ms = now;
+        }
     }
 
     /// Whether the CLI session started with looser model limits than `now` (a rule took a
@@ -504,6 +516,7 @@ impl TaskLive {
         if !state.cli.as_ref().is_some_and(|c| Arc::ptr_eq(c, cli)) {
             return;
         }
+        state.note_progress(event, now_ms());
         let (item_id, status) = match event {
             ProviderEvent::Message {
                 role: brigadier_providers::Role::User,
@@ -534,7 +547,7 @@ impl TaskLive {
             // A turn its CLI started on its own (a background job ended) runs like one we
             // started.
             ProviderEvent::TurnStarted { .. } => {
-                state.begin_turn();
+                state.busy = true;
                 state.background_waiting = false;
                 (None, None)
             }
@@ -547,7 +560,6 @@ impl TaskLive {
                 state.running_items.remove(item_id);
             }
         }
-        state.last_event_ms = now_ms();
     }
 
     /// What the stall watchdog needs to know of the worker at `now`. A task live without a
@@ -574,6 +586,11 @@ impl TaskLive {
             stopping: state.stopping,
             question: state.question.is_some(),
             command_running: !state.running_items.is_empty(),
+            command_kind: state.progress.command(),
+            command_due_ms: state
+                .progress
+                .command_deadline(&super::watchdog::Timing::current()),
+            waiting: state.progress.waiting(),
             last_event_ms: state.last_event_ms,
             nudged_at_ms: state.stall_nudged_at_ms,
             stalls: state.stalls,
@@ -5509,6 +5526,40 @@ fn is_late_findings(summary: &str, message: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn watchdog_worker_progress_clock_ignores_chatter_and_repeated_content() {
+        use brigadier_providers::NoticeLevel;
+        let mut state = super::TaskLiveState {
+            busy: true,
+            ..Default::default()
+        };
+        for now in [60_000, 120_000, 180_000] {
+            state.note_progress(
+                &brigadier_providers::ProviderEvent::Notice {
+                    level: NoticeLevel::Info,
+                    message: format!("status at {now}"),
+                },
+                now,
+            );
+            state.note_progress(
+                &brigadier_providers::ProviderEvent::Progress {
+                    item_id: "t".into(),
+                },
+                now,
+            );
+            assert_eq!(state.last_event_ms, 0);
+        }
+        let event = brigadier_providers::ProviderEvent::MessageDelta {
+            item_id: "m".into(),
+            text: "new content".into(),
+            phase: None,
+        };
+        state.note_progress(&event, 200_000);
+        assert_eq!(state.last_event_ms, 200_000);
+        state.note_progress(&event, 300_000);
+        assert_eq!(state.last_event_ms, 200_000);
+    }
+
     use super::*;
 
     /// A folder in the temp directory, removed when dropped however the test ends.
