@@ -114,7 +114,9 @@ test("a long message is clipped at the end of a code block crossing its 20-line 
 });
 
 test("a message edited in place is a composer the column's width, its Cancel and Send pills", { timeout: 120000 }, async (t) => {
-  const seen = await drive<{ edit: boolean; fill: boolean | null; radius: number | null; wide: number | null; cancel: { round: boolean; border: number } | null; send: { round: boolean; border: number } | null }>(t, "drive=edit");
+  const seen = await drive<{ latest: string | null; edit: boolean; fill: boolean | null; radius: number | null; wide: number | null; cancel: { round: boolean; border: number } | null; send: { round: boolean; border: number } | null }>(t, "drive=edit");
+  // A screen reader's "Latest response" took the focus to the newest answer.
+  assert.equal(seen.latest, "assistant");
   assert.equal(seen.edit, true);
   assert.equal(seen.fill, true);
   assert.ok((seen.radius ?? 0) >= 18, `corners ${seen.radius}`);

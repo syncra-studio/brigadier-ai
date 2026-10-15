@@ -511,6 +511,9 @@ async function driveEdit(): Promise<object> {
   change(() => ({ run: "idle", runRequest: null }));
   request("r1", { state: { type: "done" }, endedAtMs: begun + 5000, worked: [{ fromMs: begun, toMs: begun + 5000 }] });
   await settle();
+  // A screen reader's "Latest response" moves the focus to the newest answer.
+  one<HTMLButtonElement>("[data-slot=latest-response]")?.click();
+  const latest = document.activeElement?.getAttribute("data-role") ?? null;
   const edit = one<HTMLButtonElement>(".aui-user-action-edit");
   edit?.click();
   await settle();
@@ -524,6 +527,7 @@ async function driveEdit(): Promise<object> {
   };
   const column = one("[data-slot=aui_thread-column]");
   return {
+    latest,
     edit: !!edit,
     // The same fill as the composer below the thread.
     fill: box ? getComputedStyle(box).backgroundColor === getComputedStyle(all(".bg-composer").find((each) => each !== box) ?? document.body).backgroundColor : null,

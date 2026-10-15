@@ -35,6 +35,7 @@ import {
   useSyncExternalStore,
   type ComponentType,
   type FC,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 
@@ -360,6 +361,7 @@ const ThreadRoot: FC<{
               <ThreadScrollToBottom />
               {Capsule && <Capsule />}
               <div className="pointer-events-auto flex flex-col gap-4">
+                <LatestResponse />
                 {AboveComposer && <AboveComposer />}
                 <ComposerComponent autoFocus={autoFocus} placeholder={placeholder} />
               </div>
@@ -686,6 +688,28 @@ const UserMessage: FC = () => {
         </div>
       </div>
     </MessagePrimitive.Root>
+  );
+};
+
+/**
+ * For a screen reader, before the composer: "Latest response" moves the focus to the newest
+ * answer, or says there is none yet. Seen by no one else.
+ */
+const LatestResponse: FC = () => {
+  const [none, setNone] = useState(false);
+  const focus = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    const thread = event.currentTarget.closest(".aui-thread-root") ?? document;
+    const answer = [...thread.querySelectorAll<HTMLElement>("[data-role=assistant]")].at(-1);
+    setNone(!answer);
+    answer?.focus();
+  };
+  return (
+    <h2 className="sr-only">
+      <button type="button" data-slot="latest-response" onClick={focus}>
+        Latest response
+      </button>
+      <span role="status">{none ? "No response available" : ""}</span>
+    </h2>
   );
 };
 
