@@ -289,6 +289,7 @@ impl SessionManager {
             &tail,
             pending,
         );
+        let text = self.with_constraints(&task.conversation_id, text).await;
         let size = match why {
             Handover::Size => tokens.map_or_else(String::new, |tokens| {
                 format!(" at about {}k tokens", tokens / 1_000)
@@ -300,6 +301,7 @@ impl SessionManager {
                 )
             }
             Handover::Interrupted => " after its process ended".to_owned(),
+            Handover::ContextWindow => " after its context passed the model's limit".to_owned(),
         };
         self.record_worker_event(
             &task.id,
@@ -629,7 +631,14 @@ pub(crate) enum Handover {
     Stalled { silent: i64 },
     /// Its process ended before it reported, and its session couldn't be resumed.
     Interrupted,
+    /// Its model refused the context as too long ("prompt is too long"): the same model goes
+    /// on in a fresh session, never another model (BUILD-PLAN D1.3).
+    ContextWindow,
 }
+
+/// What Brigadier keeps of each tool output in a transcript, in KiB (`OUTPUT_CLIP` in the
+/// providers' parsers): what a context-window hand-off's successor is told may be cut.
+const CLIPPED_KIB: usize = 8;
 
 /// What the fresh session's first message says about the hand-over.
 struct HandoverFacts {
@@ -676,6 +685,13 @@ fn handover_text(
         Handover::Interrupted => "Your earlier session's process ended before it reported, and \
              the session couldn't be resumed. Check what was running (its output may be lost)"
             .to_owned(),
+        Handover::ContextWindow => format!(
+            "Your earlier session's context passed the model's limit (\"prompt is too long\"), so \
+             it was closed. This hand-off is not lossless: transcript.md clips each tool output at \
+             {} KiB, so a detail you need may be cut there. Re-read or rerun what you need, and \
+             where you can't, say it is unknown rather than guess it",
+            CLIPPED_KIB
+        ),
     };
     let mut text = format!(
         "[Brigadier] You are continuing task-{} in a fresh session. {why}; you are the same \

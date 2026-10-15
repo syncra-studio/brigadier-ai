@@ -797,6 +797,11 @@ pub struct Task {
     /// tasks: the commit message it was accepted with.
     #[serde(default)]
     pub landing: Option<String>,
+    /// The target's tip its commits were put on top of, recorded right before the target
+    /// moves: a restart that cuts the landing off finds them landed from it (BUILD-PLAN D1.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub landing_from: Option<String>,
     /// The landed commit.
     pub landed: Option<String>,
     /// Why it is blocked, paused or cannot land yet.
@@ -2904,6 +2909,16 @@ pub enum OrchestratorEntry {
     /// (PLAN.md §2: the orchestrator never compacts).
     ContractBreach {
         message: String,
+    },
+    /// A checkpoint's handoff note was written while the thread idled with a warm cache: kept
+    /// so a rebirth after a daemon restart still has it (BUILD-PLAN D1.4).
+    Checkpoint {
+        /// The CLI session it covers.
+        old_native_id: String,
+        /// When its fork started: it covers what that session did before.
+        started_at_ms: i64,
+        /// The note (blob hash).
+        note_blob: String,
     },
 }
 

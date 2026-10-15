@@ -534,9 +534,26 @@ pub enum MemoryKind {
     Preference,
     /// An interface between parts or services that both sides rely on.
     Contract,
+    /// A standing rule the user set ("never touch X", "always Y", "except in tests"), kept in
+    /// their own words: cite their message in `user_message`, with `quote` for the exact part
+    /// of it that is the rule (the whole message without it), and give its `scope`.
+    Constraint,
 }
 
-/// `remember`: record a decision, convention, preference or contract in the Brain.
+/// How long a constraint holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ConstraintScope {
+    /// Only while the request it was said in is open.
+    Request,
+    /// For the rest of this session.
+    Session,
+    /// For every session of this project.
+    Project,
+}
+
+/// `remember`: record a decision, convention, preference, contract or standing constraint in the
+/// Brain.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Remember {
@@ -554,9 +571,14 @@ pub struct Remember {
     /// lines that show it.
     #[serde(default)]
     pub files: Vec<String>,
-    /// The id of an earlier decision this one replaces.
+    /// The id of an earlier decision this one replaces. For a constraint, only when the user's
+    /// new words replace the old rule entirely: an exception or a narrowing is a constraint of
+    /// its own, and the old one stays.
     #[serde(default)]
     pub replaces: Option<String>,
+    /// A constraint's scope: `request`, `session` (the default) or `project`.
+    #[serde(default)]
+    pub scope: Option<ConstraintScope>,
     /// The user's message that settled it: `latest`, or its number as search_transcript
     /// shows it (`#12`). Needed for a preference; without it, anything else is kept as your
     /// own claim, unverified.

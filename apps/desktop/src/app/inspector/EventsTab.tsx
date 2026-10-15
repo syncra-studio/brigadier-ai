@@ -147,6 +147,8 @@ function summary(event: DomainEvent): string {
           return `rebirth ${event.entry.record.generation}`;
         case "contractBreach":
           return event.entry.message;
+        case "checkpoint":
+          return `checkpoint for ${event.entry.oldNativeId.slice(0, 8)}`;
       }
       break;
     case "brainJobUpdated":

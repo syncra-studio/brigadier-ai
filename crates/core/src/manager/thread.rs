@@ -329,7 +329,7 @@ impl SessionManager {
             self.core.settings().browser_enabled,
         ));
         if let Some(workspace) = workspace {
-            prompt.push_str(&super::instructions::for_thread(&workspace.path).await);
+            prompt.push_str(&super::instructions::for_thread(&workspace.path, provider).await);
         }
         // Claude's attribution settings hold its commits to it; Codex is told.
         if provider == ProviderKind::Codex && self.core.settings().omit_ai_coauthors {

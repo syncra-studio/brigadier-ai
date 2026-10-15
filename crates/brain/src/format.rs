@@ -79,6 +79,7 @@ fn kind_label(kind: NodeKind) -> &'static str {
         NodeKind::Report => "report",
         NodeKind::Research => "research",
         NodeKind::Contract => "contract",
+        NodeKind::Constraint => "constraint",
     }
 }
 

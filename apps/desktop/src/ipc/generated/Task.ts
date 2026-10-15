@@ -102,6 +102,11 @@ gateLink: GateLink | null,
  */
 landing: string | null, 
 /**
+ * The target's tip its commits were put on top of, recorded right before the target
+ * moves: a restart that cuts the landing off finds them landed from it (BUILD-PLAN D1.4).
+ */
+landingFrom?: string, 
+/**
  * The landed commit.
  */
 landed: string | null, 

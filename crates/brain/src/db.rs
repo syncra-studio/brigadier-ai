@@ -136,6 +136,7 @@ pub(crate) fn kind_str(kind: NodeKind) -> &'static str {
         NodeKind::Report => "report",
         NodeKind::Research => "research",
         NodeKind::Contract => "contract",
+        NodeKind::Constraint => "constraint",
     }
 }
 
@@ -151,6 +152,7 @@ pub(crate) fn parse_kind(text: &str) -> Option<NodeKind> {
         "report" => NodeKind::Report,
         "research" => NodeKind::Research,
         "contract" => NodeKind::Contract,
+        "constraint" => NodeKind::Constraint,
         _ => return None,
     })
 }

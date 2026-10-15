@@ -78,6 +78,8 @@ const NUDGE_TIMEOUT: Duration = Duration::from_secs(30);
 const TURN_END_WAIT: Duration = Duration::from_secs(30);
 /// How long `ask_orchestrator` waits for the orchestrator's answer.
 const QUESTION_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// How a task waiting on its question to the orchestrator says so; the question follows.
+pub(crate) const ASKED_THE_ORCHESTRATOR: &str = "Asked the orchestrator: ";
 /// How long a worker waiting for its own background jobs may stay silent before its wait
 /// counts as a turn without a report. A background sub-agent shows its steps; a background
 /// command says nothing until it ends.
@@ -1304,6 +1306,7 @@ impl SessionManager {
             role: extra.role,
             phase: extra.phase,
             landing: None,
+            landing_from: None,
             landed: None,
             error: None,
             kept: None,
@@ -1465,6 +1468,13 @@ impl SessionManager {
             None => None,
         };
         let mut text = String::new();
+        // The user's standing constraints first, word for word (BUILD-PLAN D1.1).
+        if let Some(section) =
+            super::constraints::brief_text(&self.active_constraints(&conversation_id).await)
+        {
+            text.push_str(&section);
+            text.push_str("\n\n");
+        }
         if let Some((section, facts)) = &brain {
             text.push_str(section);
             text.push_str("\n\n");
@@ -1691,7 +1701,7 @@ impl SessionManager {
             low_priority: true,
         }));
         let native = match &workspace.worktree {
-            Some(worktree) => instructions::for_worker(provider, worktree).await,
+            Some(worktree) => instructions::for_worker(provider, worktree, &task.spec).await,
             None => String::new(),
         };
         let mut extra = match (&task.kind, subject) {
@@ -3450,7 +3460,7 @@ impl SessionManager {
         let question = self.redact_for(&live, &question).await;
         let (tx, rx) = oneshot::channel();
         live.state.lock().await.question = Some((question.clone(), tx));
-        self.set_task_blocked(task_id, Some(format!("Asked the orchestrator: {question}")))
+        self.set_task_blocked(task_id, Some(format!("{ASKED_THE_ORCHESTRATOR}{question}")))
             .await;
         self.deliver(
             conversation_id,
@@ -3497,9 +3507,56 @@ impl SessionManager {
                 task.number
             )));
         };
-        let _ = waiter.send(answer.clone());
+        if waiter.send(answer.clone()).is_err() {
+            self.answer_after_restart(&live, task, &question, &answer)
+                .await?;
+        }
         self.record_answer(task, question, answer, why).await;
         Ok(format!("Answered task-{}; it continues.", task.number))
+    }
+
+    /// After a restart, the thread hears again the question a worker asked before it: the
+    /// worker's call ended with its CLI, so the answer resumes its session
+    /// ([`Self::answer_after_restart`]) (BUILD-PLAN D1.4).
+    pub(crate) async fn ask_again(&self, live: &Arc<TaskLive>, task: &Task, question: &str) {
+        let (waiter, _) = oneshot::channel();
+        live.state.lock().await.question = Some((question.to_owned(), waiter));
+        self.deliver(
+            &task.conversation_id,
+            Envelope {
+                kind: InjectionKind::WorkerQuestion,
+                label: format!("question from task-{}", task.number),
+                task_id: Some(task.id.clone()),
+                text: format!(
+                    "[question from task-{} \"{}\"]\n{question}\n[/question] It asked this before Brigadier restarted and still waits. Answer it now with answer_worker (task-{}): the worker's recommendation if it fits, else what the brief implies; never reopen a settled decision.",
+                    task.number, task.title, task.number
+                ),
+            },
+        )
+        .await;
+    }
+
+    /// The answer to a question whose call ended (Brigadier restarted while the worker
+    /// waited): its session resumes with the answer, and the task runs again. If it can't,
+    /// the question stays open.
+    async fn answer_after_restart(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        question: &str,
+        answer: &str,
+    ) -> Result<()> {
+        let text = format!(
+            "[Brigadier] Brigadier restarted while you waited. The orchestrator's answer to your question \"{question}\":\n{answer}\nContinue the task."
+        );
+        // Boxed: a session's start is a big future, and answers come in from tool calls.
+        if let Err(err) = crate::heap(|| self.revive_worker(live, task, text)).await {
+            let (waiter, _) = oneshot::channel();
+            live.state.lock().await.question = Some((question.to_owned(), waiter));
+            return Err(err);
+        }
+        self.set_task_blocked(&task.id, None).await;
+        Ok(())
     }
 
     /// Logs an answer to a worker's question: the thread's "Answered" row, and the ledger's
@@ -4167,7 +4224,10 @@ impl SessionManager {
         let mut state = live.state.lock().await;
         if answers && let Some((question, waiter)) = state.question.take() {
             drop(state);
-            let _ = waiter.send(text.clone());
+            if waiter.send(text.clone()).is_err() {
+                self.answer_after_restart(&live, task, &question, &text)
+                    .await?;
+            }
             // An answer, however it was sent: the thread shows it as one.
             self.record_answer(task, question, text, "steer".into())
                 .await;
@@ -4621,11 +4681,31 @@ impl SessionManager {
         }
         let cli = {
             let mut state = live.state.lock().await;
-            state.begin_turn();
-            state.nudged = false;
-            state.cli.clone()
-        }
-        .ok_or_else(|| Error::Invalid("the worker has ended".into()))?;
+            let cli = state.cli.clone();
+            if cli.is_some() {
+                state.begin_turn();
+                state.nudged = false;
+            }
+            cli
+        };
+        let Some(cli) = cli else {
+            // Paused before Brigadier restarted: no CLI runs, so its session starts again
+            // (BUILD-PLAN D1.4). Any other task without a CLI (taken over in a terminal,
+            // ended) has nothing to resume here.
+            if task.state != TaskState::Paused {
+                return Err(Error::Invalid("the worker has ended".into()));
+            }
+            self.set_task_state(&conversation_id, &task_id, TaskState::Running)
+                .await?;
+            let revived =
+                crate::heap(|| self.revive_worker(&live, &task, "Continue the task.".into())).await;
+            if revived.is_err() {
+                let _ = self
+                    .set_task_state(&conversation_id, &task_id, TaskState::Paused)
+                    .await;
+            }
+            return revived;
+        };
         self.set_task_state(&conversation_id, &task_id, TaskState::Running)
             .await?;
         cli.session

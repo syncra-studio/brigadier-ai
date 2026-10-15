@@ -5,7 +5,7 @@
  */
 export type BriefingSection = { 
 /**
- * `framing`, `handoff`, `decisions`, `state`, `brain`, `recent`, `search`.
+ * `framing`, `constraints`, `handoff`, `decisions`, `state`, `brain`, `recent`, `search`.
  */
 name: string, 
 /**

@@ -104,12 +104,16 @@ read the code yourself. It answers with what holds now (`history` adds earlier v
 the next results).";
 
 const REMEMBER: &str = "Keep something that later work must respect: a decision the user \
-settled or you made, a convention of this project, a contract between parts, or (personal) a \
-preference of the user's that holds in every project. One clear line in `title`, the why in \
-`detail`. What the user settled cites their message in `user_message` (`latest`, or the #N \
-search_transcript shows) with their words in `quote`: Brigadier checks both, and a preference \
-needs them. Anything else is kept as your claim, unverified, with the evidence you name \
-(`files` as path:lines, `check`). Do it silently: don't tell the user you remembered it. \
+settled or you made, a convention of this project, a contract between parts, a standing rule \
+of the user's (kind constraint), or (personal) a preference of the user's that holds in every \
+project. One clear line in `title`, the why in `detail`. What the user settled cites their \
+message in `user_message` (`latest`, or the #N search_transcript shows) with their words in \
+`quote`: Brigadier checks both, and a preference or a constraint needs them. A constraint keeps \
+the user's exact words (the quoted span, or their whole message) with its `scope` (request, \
+session or project); an exception is a constraint of its own, and `replaces` only when their \
+new words replace the old rule entirely. Anything else is kept as your claim, unverified, with \
+the evidence you name (`files` as path:lines, `check`). Do it silently: don't tell the user you \
+remembered it. \
 Returns the node id; pass it as `replaces` to correct it, or a claim you find wrong.";
 
 const SEARCH_TRANSCRIPT: &str = "Search this conversation's full transcript (the user's \

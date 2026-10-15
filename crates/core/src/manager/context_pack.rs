@@ -10,6 +10,11 @@
 //! have read an older version), numbered like a file read. Files outside the thread's
 //! workspace, and files the worktree doesn't have, are left out.
 //!
+//! Only the reads that bear on the task go in (BUILD-PLAN D1.6): the files its spec names,
+//! the files beside them and those it mentions by name, with the searches that found them or
+//! that its spec repeats, and the ledger's decisions that name its files; a spec that touches
+//! none of what the thread read gets all of it, as before.
+//!
 //! Before the pack, the brief carries what the project's Brain knows about the task
 //! (SESSION-FIXES-PLAN.md Q6.6): the Brain is asked about its title, spec and named files, and
 //! the best matches go in one line each, with their node ids.
@@ -77,9 +82,15 @@ impl SessionManager {
             .recorded_workspace(&task.conversation_id)
             .map(|workspace| workspace.path);
         let index = self.task_index(&task.conversation_id).await.ok();
+        let decisions = match self.core.board(&task.conversation_id).await {
+            Ok(board) => board.decisions,
+            Err(_) => Vec::new(),
+        };
         let (spec, worktree) = (task.spec.clone(), worktree.to_owned());
         let made = super::blocking(move || {
             let named = named_files(&spec, &worktree);
+            // The reads of this task's files, not the whole conversation's (BUILD-PLAN D1.6).
+            let reads = task_reads(&reads, &spec, workspace.as_deref());
             let outlines: Vec<(String, Vec<SymbolHit>)> = match &index {
                 Some(index) => named
                     .iter()
@@ -90,7 +101,16 @@ impl SessionManager {
                     .collect(),
                 None => Vec::new(),
             };
-            let pack = build(&reads, workspace.as_deref(), &worktree, &outlines);
+            let mut pack = build(&reads, workspace.as_deref(), &worktree, &outlines);
+            let decided = decisions_about(&decisions, &named);
+            if !decided.is_empty() {
+                if pack.is_empty() {
+                    pack.push_str(HEADER.trim_end());
+                }
+                pack.push_str("\n\n");
+                pack.push_str(DECISIONS_HEADING);
+                pack.push_str(&decided);
+            }
             Ok::<_, crate::Error>((!pack.is_empty()).then_some(pack))
         })
         .await;
@@ -174,7 +194,8 @@ fn brain_lines(hits: &[BrainHit]) -> Option<(String, u32)> {
     let mut count = 0;
     for hit in hits {
         let node = &hit.node;
-        if matches!(node.state, NodeState::Superseded { .. }) {
+        // A constraint has a section of its own, in the user's words (BUILD-PLAN D1.1).
+        if matches!(node.state, NodeState::Superseded { .. }) || node.kind == NodeKind::Constraint {
             continue;
         }
         let kind = match node.kind {
@@ -188,6 +209,7 @@ fn brain_lines(hits: &[BrainHit]) -> Option<(String, u32)> {
             NodeKind::Report => "report",
             NodeKind::Research => "research",
             NodeKind::Contract => "contract",
+            NodeKind::Constraint => "constraint",
         };
         let stale = match &node.state {
             NodeState::Stale { reason, .. } => format!(" (may be out of date: {reason})"),
@@ -220,6 +242,111 @@ const HEADER: &str = "# Context pack\n\nWhat the orchestrator already looked at 
 
 /// The pack's text, at most [`PACK_MAX`] bytes: the thread's searches, the files it read, then
 /// the definitions in the files the task names (`outlines`). Empty when there is nothing.
+/// The heading of the pack's decisions about the task's files.
+const DECISIONS_HEADING: &str = "## Decisions about these files\n\n";
+/// Bytes of the decisions at most.
+const DECISIONS_MAX: usize = 2 * 1024;
+
+/// What the thread read and searched that bears on this task: the files its spec names, the
+/// files beside them, and files whose name it mentions, and the searches its spec repeats or
+/// that found those files. A spec that touches none of what the thread read gets all of it,
+/// as before (the pack is then the thread's working set).
+fn task_reads(reads: &ThreadReads, spec: &str, workspace: Option<&Path>) -> ThreadReads {
+    let real = workspace.and_then(brigadier_providers::policy::real_path);
+    let relative = |path: &str| -> Option<String> {
+        let path = Path::new(path);
+        [workspace, real.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(|root| path.strip_prefix(root).ok())
+            .map(|rel| rel.to_string_lossy().into_owned())
+            .filter(|rel| !rel.is_empty())
+    };
+    let lower = spec.to_lowercase();
+    let named: Vec<&str> = spec
+        .split(|c: char| {
+            c.is_whitespace() || matches!(c, '`' | '"' | '\'' | '(' | ')' | ',' | '[' | ']')
+        })
+        .map(|word| {
+            let word = word
+                .trim_end_matches(['.', ':', ';'])
+                .trim_start_matches("./");
+            word.split(':').next().unwrap_or(word)
+        })
+        .filter(|word| word.contains('/') && !word.starts_with('/'))
+        .collect();
+    let applies = |rel: &str| -> bool {
+        let path = Path::new(rel);
+        let beside = named.iter().any(|named| {
+            let named = Path::new(named);
+            path == named || (named.extension().is_some() && path.parent() == named.parent())
+        });
+        let mentioned = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_lowercase())
+            .is_some_and(|stem| stem.len() >= 4 && lower.contains(&stem));
+        beside || mentioned
+    };
+    let files: Vec<_> = reads
+        .files
+        .iter()
+        .filter(|file| relative(&file.path).is_some_and(|rel| applies(&rel)))
+        .cloned()
+        .collect();
+    if files.is_empty() {
+        return reads.clone();
+    }
+    let searches = reads
+        .searches
+        .iter()
+        .filter(|search| {
+            search
+                .pattern
+                .as_deref()
+                .is_some_and(|pattern| lower.contains(&pattern.to_lowercase()))
+                || search
+                    .hits
+                    .iter()
+                    .any(|hit| relative(hit).is_some_and(|rel| applies(&rel)))
+        })
+        .cloned()
+        .collect();
+    ThreadReads {
+        files,
+        searches,
+        dropped_files: 0,
+        dropped_searches: 0,
+    }
+}
+
+/// The ledger's decisions that name one of the task's files (its path, or its file name), most
+/// recent first, one line each, at most [`DECISIONS_MAX`] bytes.
+fn decisions_about(decisions: &[crate::work::Decision], named: &[String]) -> String {
+    let names: Vec<&str> = named
+        .iter()
+        .flat_map(|path| {
+            let name = Path::new(path).file_name().and_then(|name| name.to_str());
+            [Some(path.as_str()), name].into_iter().flatten()
+        })
+        .collect();
+    let mut text = String::new();
+    for decision in decisions.iter().rev() {
+        let said = format!("{} {}", decision.what, decision.why);
+        if !names.iter().any(|name| said.contains(name)) {
+            continue;
+        }
+        let line = match decision.why.trim() {
+            "" => format!("- {}\n", decision.what),
+            why => format!("- {} ({why})\n", decision.what),
+        };
+        if text.len() + line.len() > DECISIONS_MAX {
+            break;
+        }
+        text.push_str(&line);
+    }
+    text
+}
+
 fn build(
     reads: &ThreadReads,
     workspace: Option<&Path>,
@@ -711,6 +838,88 @@ mod tests {
             pack.contains("### src/a_rather_long_module_name_000.rs"),
             "{pack}"
         );
+    }
+
+    /// D1.6: a worker's pack carries the thread's reads of its own files (named, beside a
+    /// named one, or mentioned by name) and the searches that bear on them, not the whole
+    /// conversation's; a spec that names nothing it read gets them all, as before.
+    #[test]
+    fn a_pack_carries_the_tasks_own_reads() {
+        let search = |pattern: &str, hits: &[&str]| ThreadSearch {
+            kind: SearchKind::Content,
+            pattern: Some(pattern.into()),
+            scope: "/ws".into(),
+            glob: None,
+            hits: hits.iter().map(|hit| (*hit).to_owned()).collect(),
+            more_hits: 0,
+            outside: false,
+        };
+        let reads = ThreadReads {
+            files: vec![
+                file("/ws/apps/web/src/page.tsx", true, Vec::new()),
+                file("/ws/apps/web/src/nav.tsx", true, Vec::new()),
+                file("/ws/packages/api/routes.ts", true, Vec::new()),
+                file("/ws/packages/api/billing.ts", true, Vec::new()),
+                file("/ws/README.md", true, Vec::new()),
+            ],
+            searches: vec![
+                search("healthCheck", &["/ws/packages/api/routes.ts"]),
+                search("NavLink", &["/ws/apps/web/src/nav.tsx"]),
+                search("invoice", &["/ws/packages/api/billing.ts"]),
+            ],
+            dropped_files: 3,
+            dropped_searches: 0,
+        };
+        let spec = "Add a health route to `packages/api/routes.ts`; the invoice code stays.";
+        let mine = task_reads(&reads, spec, Some(Path::new("/ws")));
+        let paths: Vec<&str> = mine.files.iter().map(|file| file.path.as_str()).collect();
+        // Named, and beside the named file; the web's and the README aren't this task's.
+        assert_eq!(
+            paths,
+            ["/ws/packages/api/routes.ts", "/ws/packages/api/billing.ts"]
+        );
+        let patterns: Vec<&str> = mine
+            .searches
+            .iter()
+            .filter_map(|search| search.pattern.as_deref())
+            .collect();
+        assert_eq!(patterns, ["healthCheck", "invoice"]);
+        // A file mentioned by name only counts too.
+        let named = task_reads(&reads, "Tidy the billing totals.", Some(Path::new("/ws")));
+        assert_eq!(named.files.len(), 1);
+        assert_eq!(named.files[0].path, "/ws/packages/api/billing.ts");
+        // Nothing it read applies: the whole working set, as before.
+        assert_eq!(
+            task_reads(&reads, "Bump the version.", Some(Path::new("/ws"))),
+            reads
+        );
+    }
+
+    /// D1.6: the ledger's decisions that name a task's files go in its pack, newest first.
+    #[test]
+    fn a_pack_carries_the_decisions_that_name_its_files() {
+        let decision = |what: &str, why: &str| crate::work::Decision {
+            id: what.into(),
+            request_id: None,
+            source: crate::work::DecisionSource::Orchestrator,
+            what: what.into(),
+            kind: Default::default(),
+            why: why.into(),
+            at_ms: 0,
+            position: 0,
+            short: None,
+        };
+        let decisions = [
+            decision("Kept routes.ts's v1 paths", "clients still call them"),
+            decision("Landed task-2", ""),
+            decision("Moved the billing tests", "packages/api/billing.ts grew"),
+        ];
+        let named = ["packages/api/routes.ts".to_owned()];
+        assert_eq!(
+            decisions_about(&decisions, &named),
+            "- Kept routes.ts's v1 paths (clients still call them)\n"
+        );
+        assert_eq!(decisions_about(&decisions, &[]), "");
     }
 
     #[test]

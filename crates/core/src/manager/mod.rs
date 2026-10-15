@@ -32,6 +32,7 @@ mod cold;
 mod computer_host;
 pub use computer_host::ComputerNews;
 mod computer_use;
+mod constraints;
 mod context_pack;
 mod conversation;
 pub(crate) mod decisions;
@@ -245,6 +246,11 @@ pub struct SessionManager {
     pub(crate) quiet_window: std::sync::Mutex<Option<std::time::Duration>>,
     /// Background model turns, for maintenance's idle check.
     activity: Arc<quiet::Activity>,
+    /// The subfolder rules each thread's CLI session was given by its output hook, by its
+    /// hook's grant (BUILD-PLAN D1.6).
+    rules_given: std::sync::Mutex<
+        std::collections::HashMap<ConversationId, (String, std::collections::HashSet<String>)>,
+    >,
 }
 
 impl SessionManager {
@@ -343,6 +349,7 @@ impl SessionManager {
             #[cfg(test)]
             quiet_window: std::sync::Mutex::new(None),
             activity: Arc::default(),
+            rules_given: std::sync::Mutex::default(),
         });
         manager.install_worktree_remover();
         // Each step's future is polled from the heap: made in this frame, they took half a

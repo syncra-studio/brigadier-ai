@@ -20,7 +20,11 @@ const CURRENT_EDGES: &str = "'contains', 'about', 'dependsOn', 'implements', 'co
 fn keeps_history(kind: NodeKind) -> bool {
     matches!(
         kind,
-        NodeKind::Decision | NodeKind::Convention | NodeKind::Contract | NodeKind::Preference
+        NodeKind::Decision
+            | NodeKind::Convention
+            | NodeKind::Contract
+            | NodeKind::Preference
+            | NodeKind::Constraint
     )
 }
 

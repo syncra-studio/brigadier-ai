@@ -200,6 +200,8 @@ export function deriveLog(entries: readonly OrchestratorLogEntry[]): DerivedLog 
       case "contractBreach":
         breaches.push({ streamSeq, atMs, message: entry.message });
         break;
+      case "checkpoint":
+        break;
     }
   }
   return {

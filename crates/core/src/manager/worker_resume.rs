@@ -11,7 +11,7 @@ use super::SessionManager;
 use super::conversation::Envelope;
 use super::overnight::{Interrupted, interrupted, interrupted_hand_off};
 use super::worker_handoff::Handover;
-use super::workers::TaskLive;
+use super::workers::{ASKED_THE_ORCHESTRATOR, TaskLive};
 use crate::now_ms;
 use crate::overnight::OvernightRun;
 use crate::work::{InjectionKind, Task, TaskState};
@@ -224,6 +224,36 @@ impl SessionManager {
                 manager.dispose_task(&task, TaskState::Stopped).await;
             }
         });
+    }
+
+    /// After a restart, a task whose worker waited, or that the user paused, when Brigadier
+    /// stopped (BUILD-PLAN D1.4): no CLI runs, but its worktree and session stay, and it
+    /// carries on from its wait. `active`: its conversation runs (not hibernated), so a
+    /// worker whose wait ended with Brigadier resumes now; otherwise it waits for a message.
+    pub(crate) async fn recover_waiting(&self, task: &Task, active: bool) {
+        let live = self.task_live(task);
+        match task.state {
+            // The user's resume starts its session again (`resume_task`).
+            TaskState::Paused => {}
+            // The go-ahead resumes its session (`go_ahead` sends it as a message).
+            TaskState::Blocked if Self::waits_for_go_ahead(task) => {}
+            TaskState::Blocked => {
+                let asked = task
+                    .blocked_reason
+                    .as_deref()
+                    .and_then(|why| why.strip_prefix(ASKED_THE_ORCHESTRATOR));
+                match asked {
+                    // Its call ended with its CLI: the thread hears the question again, and
+                    // its answer resumes the session.
+                    Some(question) => self.ask_again(&live, task, question).await,
+                    // What it waited on (its review, an approval card, a free worker) ended
+                    // with Brigadier: it resumes and looks again.
+                    None if active => self.resume_after_restart(task).await,
+                    None => {}
+                }
+            }
+            _ => {}
+        }
     }
 
     /// An interrupted run task that may not resume (its run is past its cutoff, stopped or

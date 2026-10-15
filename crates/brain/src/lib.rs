@@ -84,6 +84,9 @@ pub enum NodeKind {
     /// Dated research (freshness): expires after its TTL.
     Research,
     Contract,
+    /// A standing constraint the user set, in their own words (the whole message or an exact
+    /// span of it), with its scope in its key: it is briefed verbatim while it holds.
+    Constraint,
 }
 
 /// Whether a node can be trusted as it stands.
@@ -247,7 +250,7 @@ fn settled_first(hits: &mut [BrainHit]) {
 fn is_rule(kind: NodeKind) -> bool {
     matches!(
         kind,
-        NodeKind::Decision | NodeKind::Convention | NodeKind::Contract
+        NodeKind::Decision | NodeKind::Convention | NodeKind::Contract | NodeKind::Constraint
     )
 }
 

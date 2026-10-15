@@ -51,6 +51,8 @@ const BRIEFING_MAX: usize = 25_000 * BYTES_PER_TOKEN;
 struct Exchange {
     text: String,
     messages: u32,
+    /// Its first message's number (`#N`, as search_transcript shows it).
+    first: i64,
 }
 /// Section budgets.
 const HANDOFF_BUDGET: usize = 3_000 * BYTES_PER_TOKEN;
@@ -85,8 +87,11 @@ answers to cards), the live board (tasks, plan, open cards, queued messages) and
 verbatim. Write the handoff note it needs beyond that, in plain text under these headings: Goal \
 and open threads; Decisions not kept yet (every decision or user preference settled in this \
 conversation that is not in the Brain yet, one line each with the reason and, for what the user \
-settled, their words in double quotes, or None); Promises made to the user; What to do next (and what you are waiting for). At most about 1,500 words. Don't \
-call any tool. Reply with the note only.";
+settled, their words in double quotes, or None); Ruled out (each approach tried or rejected, and \
+why); Failed checks (each with its command and exact error line, and whether it was fixed); Exact \
+identifiers in use (commit hashes, paths with line numbers, ids, numbers with their units, copied \
+exactly); Promises made to the user; What to do next (and what you are waiting for). At most about \
+1,500 words. Don't call any tool. Reply with the note only.";
 /// A checkpoint's prompt: the same note, written while the conversation idles and its prompt
 /// cache is still warm, for a rebirth once the cache has expired.
 const CHECKPOINT_PROMPT: &str = "[Brigadier] This conversation has been idle for a while. If it \
@@ -97,13 +102,19 @@ answers to cards), the live board (tasks, plan, open cards, queued messages) and
 verbatim. Write the handoff note it needs beyond that, in plain text under these headings: Goal \
 and open threads; Decisions not kept yet (every decision or user preference settled in this \
 conversation that is not in the Brain yet, one line each with the reason and, for what the user \
-settled, their words in double quotes, or None); Promises made to the user; What to do next (and what you are waiting for). At most about 1,500 words. Don't \
-call any tool. Reply with the note only.";
+settled, their words in double quotes, or None); Ruled out (each approach tried or rejected, and \
+why); Failed checks (each with its command and exact error line, and whether it was fixed); Exact \
+identifiers in use (commit hashes, paths with line numbers, ids, numbers with their units, copied \
+exactly); Promises made to the user; What to do next (and what you are waiting for). At most about \
+1,500 words. Don't call any tool. Reply with the note only.";
 
 /// The note's headings, lowercase, as [`note_decisions`] finds them.
 const NOTE_HEADINGS: &[&str] = &[
     "goal and open threads",
     "decisions not kept yet",
+    "ruled out",
+    "failed checks",
+    "exact identifiers in use",
     "promises made to the user",
     "what to do next",
 ];
@@ -182,9 +193,9 @@ impl RebirthPrep {
     }
 }
 
-#[cfg(all(test, unix))]
 impl RebirthPrep {
-    /// A checkpoint whose fork wrote `note` at `at_ms`, for the session `old_native_id`.
+    /// A checkpoint whose fork wrote `note` at `at_ms`, for the session `old_native_id` (one
+    /// taken back from the log after a restart, or a test's).
     pub(crate) fn written(note: &str, old_native_id: &str, at_ms: i64) -> Arc<Self> {
         let (_, note) = watch::channel(Some(Some(note.to_owned())));
         Arc::new(Self {
@@ -354,9 +365,10 @@ impl SessionManager {
         } else {
             (None, None)
         };
+        let started_at_ms = now_ms();
         let prep = Arc::new(RebirthPrep {
             id: uuid::Uuid::now_v7().to_string(),
-            started_at_ms: now_ms(),
+            started_at_ms,
             at_tokens,
             window,
             old_native_id: native_id.clone(),
@@ -374,14 +386,22 @@ impl SessionManager {
             {
                 return;
             }
-            let written = match native_id {
+            let written = match &native_id {
                 Some(native_id) => {
                     manager
-                        .write_handoff(&id, provider, choice, native_id, purpose)
+                        .write_handoff(&id, provider, choice, native_id.clone(), purpose)
                         .await
                 }
                 None => None,
             };
+            // A checkpoint outlives a daemon restart (BUILD-PLAN D1.4).
+            if purpose == HandoffPurpose::Checkpoint
+                && let (Some(native_id), Some(note)) = (&native_id, &written)
+            {
+                manager
+                    .keep_checkpoint(&id, native_id, started_at_ms, note)
+                    .await;
+            }
             tracing::info!(conversation = %id, bytes = written.as_ref().map_or(0, String::len), ?purpose, "handoff note written");
             // Its decisions are kept now, even if a swap that could not wait went ahead
             // without the note: every later briefing carries them. A checkpoint's are kept
@@ -575,12 +595,25 @@ impl SessionManager {
             handoff_part.truncated = note.len() > HANDOFF_BUDGET;
         }
         let (mut decisions, decisions_in_full) = self.decision_part(id).await;
+        // A compact index over every decision, the replaced ones too, on top of the active
+        // ones' whole bodies (BUILD-PLAN D1.2, Q41.1): nothing is paged out.
+        let index = self.decision_index_part(id).await;
         if from_note > 0
             && let Some(note) = &mut decisions.note
         {
             note.push_str(&format!("; {from_note} kept from the handoff note"));
         }
         let state = self.state_part(id).await;
+        // Every constraint in force, verbatim, whatever else must be cut (BUILD-PLAN D1.1).
+        let active = self.active_constraints(id).await;
+        let mut constraints = Part::new(
+            "constraints",
+            super::constraints::briefing_text(&active),
+            active.len() as u32,
+        );
+        constraints.truncated = active
+            .iter()
+            .any(|constraint| constraint.words.len() > super::constraints::WORDS_MAX);
         let search = Part::new(
             "search",
             "[Older context] search_transcript searches this conversation's whole transcript; query_brain finds decisions (by id or words), reports and findings; read_report gives a task's report in full.".into(),
@@ -591,6 +624,8 @@ impl SessionManager {
         let (target, max) = briefing_budget();
 
         let fixed = FRAMING.len()
+            + constraints.text.len()
+            + index.text.len()
             + handoff_part.text.len()
             + decisions.text.len()
             + state.text.len()
@@ -630,12 +665,21 @@ impl SessionManager {
                 String::new()
             } else {
                 format!(
-                    "[The conversation's latest messages, verbatim]\n{}",
+                    "[The conversation's latest messages, verbatim]\n{}{}",
                     chosen
                         .iter()
                         .map(|exchange| exchange.text.as_str())
                         .collect::<Vec<_>>()
-                        .join("\n\n")
+                        .join("\n\n"),
+                    // Every cut names what it leaves out (BUILD-PLAN D1.1).
+                    chosen
+                        .first()
+                        .filter(|oldest| oldest.first > 1)
+                        .map(|oldest| format!(
+                            "\n[Messages #1–#{} aren't carried here; search_transcript finds them]",
+                            oldest.first - 1
+                        ))
+                        .unwrap_or_default()
                 )
             },
             chosen.iter().map(|exchange| exchange.messages).sum(),
@@ -650,7 +694,9 @@ impl SessionManager {
         let framing = Part::new("framing", FRAMING.into(), 0);
         let parts = [
             framing,
+            constraints,
             handoff_part,
+            index,
             decisions,
             state,
             brain,
@@ -784,6 +830,49 @@ impl SessionManager {
             }
         ));
         (part, nodes.len() as u32)
+    }
+
+    /// The decision index: one line per decision, convention or contract of this conversation,
+    /// replaced ones included, oldest first: its id, scope, status and what it replaced. Empty
+    /// without any, or when the ledger can't be read (the decisions part says so).
+    async fn decision_index_part(&self, id: &ConversationId) -> Part {
+        let Some(project) = self.project_of(id) else {
+            return Part::new("decision-index", String::new(), 0);
+        };
+        let brain = match self.project_brain(&project).await {
+            Ok(project) => project.brain.clone(),
+            Err(_) => return Part::new("decision-index", String::new(), 0),
+        };
+        let session = id.0.clone();
+        let nodes = blocking(move || {
+            brain
+                .nodes(&NodeFilter {
+                    kinds: vec![NodeKind::Decision, NodeKind::Convention, NodeKind::Contract],
+                    session_id: Some(session),
+                    current_only: false,
+                    text: None,
+                    limit: Some(LEDGER_MAX),
+                })
+                .map_err(brain_error)
+        })
+        .await;
+        match nodes {
+            Ok(mut nodes) if !nodes.is_empty() => {
+                nodes.sort_by(|a, b| (a.created_at_ms, &a.id).cmp(&(b.created_at_ms, &b.id)));
+                let text = decision_index(&nodes);
+                let mut part = Part::new("decision-index", text, nodes.len() as u32);
+                let replaced = nodes
+                    .iter()
+                    .filter(|node| matches!(node.state, NodeState::Superseded { .. }))
+                    .count();
+                part.note = Some(format!(
+                    "{} active, {replaced} replaced",
+                    nodes.len() - replaced
+                ));
+                part
+            }
+            _ => Part::new("decision-index", String::new(), 0),
+        }
     }
 
     /// The live board, exactly (no model wrote it).
@@ -1108,10 +1197,12 @@ impl SessionManager {
         let start = branch.len().saturating_sub(RECENT_SCAN);
         let mut exchanges: Vec<Exchange> = Vec::new();
         let mut current: Vec<String> = Vec::new();
-        let close = |current: &mut Vec<String>, exchanges: &mut Vec<Exchange>| {
+        let mut first = 0;
+        let close = |current: &mut Vec<String>, exchanges: &mut Vec<Exchange>, first: i64| {
             exchanges.push(Exchange {
                 text: current.join("\n\n"),
                 messages: current.len() as u32,
+                first,
             });
             current.clear();
         };
@@ -1128,7 +1219,10 @@ impl SessionManager {
             // A peer's message starts an exchange as the user's does, but stays a peer's.
             let input = matches!(message.role, MessageRole::User | MessageRole::Peer);
             if input && !current.is_empty() {
-                close(&mut current, &mut exchanges);
+                close(&mut current, &mut exchanges, first);
+            }
+            if current.is_empty() {
+                first = message.seq;
             }
             let full = self.full_words(message).await;
             let max = if input {
@@ -1136,10 +1230,10 @@ impl SessionManager {
             } else {
                 MESSAGE_BYTES
             };
-            current.push(format!("{who}: {}", carried_text(&full, max)));
+            current.push(format!("{who}: {}", carried_text(&full, max, message.seq)));
         }
         if !current.is_empty() {
-            close(&mut current, &mut exchanges);
+            close(&mut current, &mut exchanges, first);
         }
         exchanges.reverse();
         exchanges
@@ -1200,14 +1294,18 @@ fn briefing_budget() -> (usize, usize) {
 }
 
 /// A message carried verbatim, up to `max` bytes; a longer one says it was cut.
-fn carried_text(text: &str, max: usize) -> String {
+fn carried_text(text: &str, max: usize, seq: i64) -> String {
     if text.len() <= max {
         return text.to_owned();
     }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
     format!(
-        "{}\n[cut here: {} more bytes; search_transcript finds the rest]",
-        cut(text, max),
-        text.len() - max
+        "{}…\n[cut here: message #{seq}, bytes {end}–{} not shown; search_transcript finds the rest]",
+        &text[..end],
+        text.len()
     )
 }
 
@@ -1310,6 +1408,44 @@ fn decision_text(nodes: &[Node]) -> String {
                 text.push_str(&format!("    {}\n", body.replace('\n', "\n    ")));
             }
         }
+    }
+    text.trim_end().to_owned()
+}
+
+/// The decision index's text for `nodes` (oldest first): one line each, `- <id> · <scope> ·
+/// <status>[ · replaces <ids>] · <title>`.
+fn decision_index(nodes: &[Node]) -> String {
+    let mut text = String::from(
+        "[Decision index: every decision, convention and contract of this conversation, oldest first, replaced ones too. Id · scope · status · what it replaced · what it is. The active ones follow in full; query_brain <id> gives a replaced one]\n",
+    );
+    for node in nodes {
+        let scope = match node.kind {
+            NodeKind::Decision => "session",
+            _ => "project",
+        };
+        let status = match &node.state {
+            NodeState::Superseded { by, .. } => format!("replaced by {by}"),
+            NodeState::Stale { .. } => "may be out of date".to_owned(),
+            NodeState::Fresh if brigadier_brain::unverified(node.kind, &node.provenance) => {
+                "claim, unverified".to_owned()
+            }
+            NodeState::Fresh => "holds".to_owned(),
+        };
+        let replaced: Vec<&str> = nodes
+            .iter()
+            .filter(|old| matches!(&old.state, NodeState::Superseded { by, .. } if *by == node.id))
+            .map(|old| old.id.as_str())
+            .collect();
+        let replaces = if replaced.is_empty() {
+            String::new()
+        } else {
+            format!(" · replaces {}", replaced.join(", "))
+        };
+        text.push_str(&format!(
+            "- {} · {scope} · {status}{replaces} · {}\n",
+            node.id,
+            one_line(&node.title, 80)
+        ));
     }
     text.trim_end().to_owned()
 }

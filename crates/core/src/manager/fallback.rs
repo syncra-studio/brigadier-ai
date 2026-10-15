@@ -18,6 +18,13 @@
 //! - **Waiting.** With nothing eligible, the task is paused with what it waits for; a timer
 //!   routes it again after the earliest known reset (or every half hour when none is known).
 //!   Resuming it by hand routes it again at once.
+//! - **The same session where it can go on (BUILD-PLAN D1.3).** When the route is the same
+//!   model after a usage or credits limit or a sign-in error (another account of the provider,
+//!   whose CLI home shares the session history, or the same account after its reset), the
+//!   worker's own CLI session resumes, its whole context kept, told to carry on; the hand-off
+//!   above is for another model, or a session that can't be resumed. "Prompt is too long" is
+//!   no reroute: the same model goes on in a fresh session from the size hand-off
+//!   ([`super::worker_handoff`]), told what may be cut.
 //! - **Quiet.** The orchestrator is not woken for any of this: the task's report (or failure)
 //!   says which models ran it and why they changed.
 
@@ -32,6 +39,7 @@ use brigadier_providers::{
 use brigadier_store::StreamPage;
 
 use super::SessionManager;
+use super::worker_handoff::Handover;
 use super::workers::TaskLive;
 use crate::accounts::AccountRef;
 use crate::model::{DomainEvent, ModelChoice, streams};
@@ -122,6 +130,25 @@ impl SessionManager {
         if task.state.is_final() || task.state == TaskState::TakenOver || ended {
             return;
         }
+        // "Prompt is too long": the same model goes on in a fresh session from the size
+        // hand-off, never another model by a reroute (BUILD-PLAN D1.3).
+        if matches!(
+            end,
+            AttemptEnd::Error {
+                kind: ErrorKind::ContextWindow,
+                ..
+            }
+        ) {
+            let from = live.generation().await;
+            if let Err(err) = self
+                .hand_over_held(live, &task, from, Handover::ContextWindow)
+                .await
+            {
+                let reason = format!("The task could not continue in a fresh session: {err}");
+                self.worker_failed(&task, &reason).await;
+            }
+            return;
+        }
         let errors = task
             .attempts
             .iter()
@@ -165,13 +192,60 @@ impl SessionManager {
                 .await;
             }
         }
-        if matches!(
-            &end,
+        // Credits run out or a failed sign-in, with another account of the provider to go on:
+        // the account counts as stopped, so routing moves the task there and its own session
+        // resumes (BUILD-PLAN D1.3).
+        let account_bound = match &end {
+            AttemptEnd::Error {
+                kind: ErrorKind::Billing,
+                ..
+            } => Some(LimitKind::Credits),
             AttemptEnd::Error {
                 kind: ErrorKind::Auth,
                 ..
-            }
-        ) {
+            } => Some(LimitKind::SpendControl),
+            _ => None,
+        };
+        let switched = match account_bound {
+            Some(kind) => match self.runtime.switch_target(&account, from.model.as_deref()) {
+                Some(next) => {
+                    self.runtime
+                        .note_limit(
+                            &account,
+                            LimitHit {
+                                window: None,
+                                resets_at_ms: None,
+                                kind,
+                            },
+                        )
+                        .await;
+                    let why = if kind == LimitKind::Credits {
+                        "ran out of credits"
+                    } else {
+                        "could not sign in"
+                    };
+                    let text = format!(
+                        "{} {why} on {}; task {} continues on {}.",
+                        from.provider.label(),
+                        self.runtime.account_label(&account),
+                        task.number,
+                        self.runtime.account_label(&next),
+                    );
+                    self.notice(
+                        &task.conversation_id,
+                        brigadier_providers::NoticeLevel::Info,
+                        &text,
+                    )
+                    .await;
+                    true
+                }
+                None => false,
+            },
+            None => false,
+        };
+        // A failed sign-in is checked again, unless another account took over: a fresh read
+        // would lift the account's stop before the task moved.
+        if account_bound == Some(LimitKind::SpendControl) && !switched {
             self.runtime.refresh_providers(Some(from.provider));
         }
         let ended = self
@@ -263,6 +337,34 @@ impl SessionManager {
                     self.worker_failed(&task, &err.to_string()).await;
                 }
                 return;
+            }
+            if let Some(native_id) = resumable(&task) {
+                let subject = match &task.subject {
+                    Some(id) => self.task_by_id(&task.conversation_id, id).await.ok(),
+                    None => None,
+                };
+                live.allow_revival().await;
+                live.clear_transient().await;
+                let resumed = self
+                    .launch_worker(
+                        live,
+                        &task,
+                        subject.as_ref(),
+                        brigadier_providers::Origin::Resume { native_id },
+                        TurnInput::text(CONTINUE_SAME_SESSION),
+                    )
+                    .await;
+                match resumed {
+                    Ok(()) => {
+                        tracing::info!(task = %task.id, "the task resumes its own session");
+                        return;
+                    }
+                    // Its session can't be resumed after all: a successor starts from the
+                    // hand-off.
+                    Err(err) => {
+                        tracing::warn!(task = %task.id, error = %err, "the task's session couldn't be resumed; handing it on");
+                    }
+                }
             }
             let launched = async {
                 let first = self.write_task_handoff(&task).await?;
@@ -470,7 +572,7 @@ impl SessionManager {
             text.push_str(". Read them first, don't redo what is done, then finish the task");
         }
         text.push_str(". Report with submit_report as your rules say.");
-        Ok(text)
+        Ok(self.with_constraints(&task.conversation_id, text).await)
     }
 
     /// Writes `<scratch>/handoff/`: spec.md, progress.md and, for a write task, diff.patch.
@@ -657,6 +759,33 @@ fn progress_line(event: &ProviderEvent) -> Option<String> {
 
 /// How long work waiting for quota sleeps before it is routed again: until just after the
 /// reset that could free it, and at most [`WAIT_RETRY`].
+/// What a worker's resumed session is told after its limit or sign-in error.
+pub(crate) const CONTINUE_SAME_SESSION: &str = "[Brigadier] Your model was cut off (a usage or credits limit, or a sign-in error) and this same session now continues, on another account of your provider or after the limit's reset. Everything you did and read is still here: carry on from where you stopped, without redoing what is done, and report with submit_report as your rules say.";
+
+/// The CLI session a task resumes in, after an attempt cut off by a limit or a sign-in error,
+/// when its new attempt runs the same model: `None` for another model, another cause, or a
+/// task without a session.
+fn resumable(task: &Task) -> Option<String> {
+    let [.., before, now] = task.attempts.as_slice() else {
+        return None;
+    };
+    let cut_off = matches!(
+        before.end,
+        Some(
+            AttemptEnd::Limit { .. }
+                | AttemptEnd::Error {
+                    kind: ErrorKind::Auth | ErrorKind::Billing,
+                    ..
+                }
+        )
+    );
+    let same = before.route.choice.provider == now.route.choice.provider
+        && before.route.choice.model == now.route.choice.model;
+    (cut_off && same)
+        .then(|| task.native_session.clone())
+        .flatten()
+}
+
 pub(super) fn retry_delay(resets_at_ms: Option<i64>) -> Duration {
     match resets_at_ms {
         Some(at) => Duration::from_millis(u64::try_from(at - now_ms()).unwrap_or(0)) + AFTER_RESET,

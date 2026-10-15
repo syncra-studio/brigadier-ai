@@ -110,6 +110,7 @@ impl SessionManager {
                 t.state = TaskState::Landing;
                 t.blocked_reason = None;
                 t.landing = Some(t.title.clone());
+                t.landing_from = None;
                 if later.is_some() {
                     t.request_id = later;
                 }
@@ -142,6 +143,7 @@ impl SessionManager {
             .update_task(&task.conversation_id, &task.id, |t| {
                 t.state = TaskState::Landing;
                 t.blocked_reason = None;
+                t.landing_from = None;
             })
             .await
         else {
@@ -173,6 +175,70 @@ impl SessionManager {
             )
             .await;
         }
+    }
+
+    /// After a restart, a landing the restart cut off once the target had moved: its commits
+    /// are on the target, above the tip recorded before it moved, so it is recorded as landed
+    /// and the orchestrator hears so (BUILD-PLAN D1.4). False when nothing of it landed.
+    pub(crate) async fn landed_before_restart(&self, task: &Task) -> bool {
+        let Some(from) = task.landing_from.clone().map(Oid) else {
+            return false;
+        };
+        let Some(workspace) = &task.workspace else {
+            return false;
+        };
+        let (Some(target), Some(branch)) = (workspace.target.clone(), workspace.branch.clone())
+        else {
+            return false;
+        };
+        let Ok(repo) = self.task_repo(task) else {
+            return false;
+        };
+        let git = self.git.clone();
+        let (since, into) = (from.clone(), target.clone());
+        let found = blocking(move || {
+            let repo = git.open(&repo).map_err(git_error)?;
+            let (Some(tip), Some(now)) = (
+                repo.branch_tip(&branch).map_err(git_error)?,
+                repo.branch_tip(&into).map_err(git_error)?,
+            ) else {
+                return Ok(None);
+            };
+            let landed = tip != since
+                && repo.ancestor(&since, &tip).map_err(git_error)?
+                && repo.ancestor(&tip, &now).map_err(git_error)?;
+            if !landed {
+                return Ok(None);
+            }
+            let commits = repo.count_commits(&since, &tip).map_err(git_error)?;
+            Ok(Some((tip, commits)))
+        })
+        .await;
+        let (tip, commits) = match found {
+            Ok(Some(found)) => found,
+            Ok(None) => return false,
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "could not check an interrupted landing");
+                return false;
+            }
+        };
+        self.landed(task, &target, &from, &tip, commits).await;
+        self.deliver(
+            &task.conversation_id,
+            Envelope {
+                kind: InjectionKind::Decision,
+                label: format!("landed task-{}", task.number),
+                task_id: Some(task.id.clone()),
+                text: format!(
+                    "[landed task-{}] Brigadier restarted as it landed: {} on `{target}` (at {}).",
+                    task.number,
+                    commits_word(commits),
+                    short(&tip)
+                ),
+            },
+        )
+        .await;
+        true
     }
 
     /// The verifier that works on top of `task`'s commits and lands them, while it lives.
@@ -239,9 +305,13 @@ impl SessionManager {
             })
             .await?
         } else {
-            self.land_commits(
-                task, git, worktree, repo, base, target, reported, &workspace,
-            )
+            // Boxed: its loop holds a task update and two blocking calls, too big a frame for
+            // the landing's stack.
+            crate::heap(|| {
+                self.land_commits(
+                    task, git, worktree, repo, base, target, reported, &workspace,
+                )
+            })
             .await?
         };
         // The merge worker moved the task branch (the engine's own rewrite was recorded as it
@@ -271,14 +341,26 @@ impl SessionManager {
         ));
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
         let (records, branch) = (self.ref_records.clone(), workspace.branch.clone());
-        #[cfg(test)]
-        let rewritten = self.landing_rewritten.lock().unwrap().clone();
-        blocking(move || {
-            let repo = git.open(&repo).map_err(git_error)?;
-            let worktree = git.open_worktree(&worktree).map_err(git_error)?;
-            let mut tries = 0;
-            loop {
-                tries += 1;
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            #[cfg(test)]
+            let rewritten = self.landing_rewritten.lock().unwrap().clone();
+            let prepared = {
+            let (git, repo, worktree, target, reported, leftovers, records, branch) = (
+                git.clone(),
+                repo.clone(),
+                worktree.clone(),
+                target.clone(),
+                reported.clone(),
+                leftovers.clone(),
+                records.clone(),
+                branch.clone(),
+            );
+            let base = base.clone();
+            blocking(move || {
+                let repo = git.open(&repo).map_err(git_error)?;
+                let worktree = git.open_worktree(&worktree).map_err(git_error)?;
                 let mut excluded = Vec::new();
                 let onto = repo
                     .branch_tip(&target)
@@ -294,7 +376,7 @@ impl SessionManager {
                             .commit_candidate(&include, &leftovers)
                             .map_err(git_error)?
                     {
-                        return Ok(Moved::HookFailed { output });
+                        return Ok(Err(Moved::HookFailed { output }));
                     }
                     // 2. Litter over the whole range: a committed new file needs a report
                     // that names it, as an untracked one does.
@@ -386,7 +468,7 @@ impl SessionManager {
                     };
                     match rewritten_now? {
                         Ok(done) => done,
-                        Err(conflicts) => return Ok(conflicts),
+                        Err(conflicts) => return Ok(Err(conflicts)),
                     }
                 };
                 #[cfg(test)]
@@ -394,30 +476,50 @@ impl SessionManager {
                     rewritten();
                 }
                 if commits == 0 {
-                    return Ok(Moved::Nothing { excluded });
+                    return Ok(Err(Moved::Nothing { excluded }));
                 }
-                // 4. Fast-forward, rebased or not: the session's full checks run on what
-                // lands (§11).
-                let request = LandRequest {
-                    branch: target.clone(),
-                    expected_tip: onto.clone(),
-                    commit: tip,
-                };
-                match repo.land(&request).map_err(git_error)? {
-                    LandOutcome::Landed { new_tip } => {
-                        return Ok(Moved::Landed {
-                            from: onto,
-                            tip: new_tip,
-                            commits,
-                            excluded,
-                        });
-                    }
-                    LandOutcome::Blocked(LandBlock::TipMoved { .. }) if tries < LAND_TRIES => {}
-                    LandOutcome::Blocked(block) => return Ok(Moved::Blocked(block)),
-                }
+                Ok(Ok((onto, tip, commits, excluded)))
+            })
             }
-        })
-        .await
+            .await?;
+            let (onto, tip, commits, excluded) = match prepared {
+                Ok(ready) => ready,
+                Err(moved) => return Ok(moved),
+            };
+            // Recorded before the target moves: a restart between here and the landing's
+            // record finds it landed, or not, by the target's ancestry (BUILD-PLAN D1.4).
+            self.update_task(&task.conversation_id, &task.id, |t| {
+                t.landing_from = Some(onto.0.clone());
+            })
+            .await?;
+            // 4. Fast-forward, rebased or not: the session's full checks run on what lands
+            // (§11).
+            let request = LandRequest {
+                branch: target.clone(),
+                expected_tip: onto.clone(),
+                commit: tip,
+            };
+            let (git, repo) = (git.clone(), repo.clone());
+            let outcome = blocking(move || {
+                git.open(&repo)
+                    .map_err(git_error)?
+                    .land(&request)
+                    .map_err(git_error)
+            })
+            .await?;
+            match outcome {
+                LandOutcome::Landed { new_tip } => {
+                    return Ok(Moved::Landed {
+                        from: onto,
+                        tip: new_tip,
+                        commits,
+                        excluded,
+                    });
+                }
+                LandOutcome::Blocked(LandBlock::TipMoved { .. }) if tries < LAND_TRIES => {}
+                LandOutcome::Blocked(block) => return Ok(Moved::Blocked(block)),
+            }
+        }
     }
 
     /// Acts on what moving the commits came to; returns the outcome for the orchestrator.
@@ -780,6 +882,7 @@ impl SessionManager {
                 .update_task(&landed.conversation_id, &landed.id, |t| {
                     t.landed = Some(new_tip.0.clone());
                     t.landing = None;
+                    t.landing_from = None;
                 })
                 .await;
             // Its report enters the Brain now, at the commit that landed.

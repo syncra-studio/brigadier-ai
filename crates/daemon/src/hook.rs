@@ -13,6 +13,11 @@
 //! - **Failure**: the event holds only the CLI's excerpt of the output (`error`), which the
 //!   daemon stores as such. Nothing is printed, so the model gets the excerpt untrimmed; a
 //!   failure's hook can't replace the output anyway.
+//! - **A file tool's success** (`Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, run by
+//!   a second `PostToolUse` entry): the touched file's path goes to the daemon, which answers
+//!   with the rules of its folders the thread hasn't had yet (a subfolder's `CLAUDE.md` or
+//!   `AGENTS.md`, left out of its instructions); the hook prints them as
+//!   `hookSpecificOutput.additionalContext`, which follows the call's result (BUILD-PLAN D1.6).
 //!
 //! The grant (in [`HOOK_GRANT_ENV`], from the CLI's environment) can only store this thread's
 //! output. Whatever goes wrong, the hook prints nothing and exits 0: the tool call never
@@ -41,6 +46,9 @@ enum Plan {
     },
     /// A failing call's excerpt, stored as it is.
     Store { excerpt: Vec<u8>, status: String },
+    /// A file a `Read`, `Edit` or `Write` call touched: the rules of its folders the thread
+    /// hasn't had yet follow the call's result (BUILD-PLAN D1.6).
+    Rules { path: String },
 }
 
 /// Runs the hook with the arguments after `hook`.
@@ -87,6 +95,7 @@ fn handle(
                 excerpt: false,
                 status,
                 bytes: output.len() as u64,
+                touched: None,
             };
             let replacement = send(&header, &output)?.replacement?;
             response.insert("stdout".into(), Value::String(replacement));
@@ -109,17 +118,54 @@ fn handle(
                 excerpt: true,
                 status,
                 bytes: excerpt.len() as u64,
+                touched: None,
             };
             send(&header, &excerpt);
             None
         }
+        Plan::Rules { path } => {
+            let header = HookOutput {
+                excerpt: false,
+                status: String::new(),
+                bytes: 0,
+                touched: Some(path),
+            };
+            let context = send(&header, &[])?.context?;
+            Some(
+                json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PostToolUse",
+                        "additionalContext": context,
+                    }
+                })
+                .to_string(),
+            )
+        }
     }
 }
 
-/// What to do with a hook event: only `Bash` calls, a success when its whole output is longer
-/// than [`BASH_WHOLE_MAX`] bytes, a failure always.
+/// The file tools whose calls bring the rules of the touched file's folders (BUILD-PLAN D1.6).
+const FILE_TOOLS: [&str; 5] = ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"];
+
+/// What to do with a hook event: a `Bash` call's success when its whole output is longer than
+/// [`BASH_WHOLE_MAX`] bytes, its failure always; a file tool's success, for its file's rules.
 fn plan(event: &Value) -> Option<Plan> {
-    if event.get("tool_name").and_then(Value::as_str) != Some("Bash") {
+    let tool = event.get("tool_name").and_then(Value::as_str)?;
+    if FILE_TOOLS.contains(&tool) {
+        if event.get("hook_event_name").and_then(Value::as_str)? != "PostToolUse" {
+            return None;
+        }
+        let input = event.get("tool_input")?;
+        let path = input
+            .get("file_path")
+            .or_else(|| input.get("notebook_path"))?
+            .as_str()
+            .filter(|path| !path.is_empty())?;
+        return Some(Plan::Rules {
+            path: path.to_owned(),
+        });
+    }
+    if tool != "Bash" {
         return None;
     }
     match event.get("hook_event_name").and_then(Value::as_str)? {
@@ -279,6 +325,7 @@ mod tests {
             *sent.borrow_mut() = Some((header.clone(), bytes.to_vec()));
             Some(HookReply {
                 replacement: Some("exit 0 [full output: read_artifact out-1, …]".into()),
+                context: None,
             })
         }
     }
@@ -391,7 +438,12 @@ mod tests {
         let long = success(json!({ "stdout": "y\n".repeat(20_000), "stderr": "" }));
         assert_eq!(handle(&long, |_, _| None), None);
         assert_eq!(
-            handle(&long, |_, _| Some(HookReply { replacement: None })),
+            handle(&long, |_, _| {
+                Some(HookReply {
+                    replacement: None,
+                    context: None,
+                })
+            }),
             None
         );
         let read = json!({
@@ -406,8 +458,76 @@ mod tests {
             excerpt: false,
             status: String::new(),
             bytes: 0,
+            touched: None,
         };
         assert_eq!(send(None, None, &header, b""), None);
         assert_eq!(send(Some(""), None, &header, b""), None);
+    }
+
+    /// A file tool's call asks for the rules of its file's folders, and the daemon's rules
+    /// follow the call's result; with none to give, nothing is printed (BUILD-PLAN D1.6).
+    #[test]
+    fn a_file_tools_call_brings_the_rules_of_its_folders() {
+        let event = |tool: &str, input: Value| {
+            json!({
+                "hook_event_name": "PostToolUse",
+                "tool_name": tool,
+                "tool_input": input,
+                "tool_response": {},
+            })
+            .to_string()
+        };
+        let sent = std::cell::RefCell::new(Vec::new());
+        let printed = handle(
+            &event("Edit", json!({ "file_path": "/repo/apps/web/page.tsx" })),
+            |header, bytes| {
+                assert!(bytes.is_empty());
+                sent.borrow_mut().push(header.clone());
+                Some(HookReply {
+                    replacement: None,
+                    context: Some("### apps/web/CLAUDE.md\nUse pnpm.".into()),
+                })
+            },
+        )
+        .expect("the rules");
+        let header = sent.borrow()[0].clone();
+        assert_eq!(header.touched.as_deref(), Some("/repo/apps/web/page.tsx"));
+        assert_eq!(header.bytes, 0);
+        let printed: Value = serde_json::from_str(&printed).unwrap();
+        assert_eq!(
+            printed,
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": "### apps/web/CLAUDE.md\nUse pnpm.",
+                }
+            })
+        );
+        // A notebook's path counts too; nothing new to give prints nothing.
+        let printed = handle(
+            &event("NotebookEdit", json!({ "notebook_path": "/repo/a.ipynb" })),
+            |header, _| {
+                assert_eq!(header.touched.as_deref(), Some("/repo/a.ipynb"));
+                Some(HookReply {
+                    replacement: None,
+                    context: None,
+                })
+            },
+        );
+        assert_eq!(printed, None);
+        // A failed call, or another tool, asks nothing.
+        let failed = json!({
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Write",
+            "tool_input": { "file_path": "/repo/x" },
+            "error": "denied",
+        });
+        assert_eq!(handle(&failed.to_string(), |_, _| panic!("failed")), None);
+        assert_eq!(
+            handle(&event("Glob", json!({ "pattern": "*" })), |_, _| panic!(
+                "Glob"
+            )),
+            None
+        );
     }
 }

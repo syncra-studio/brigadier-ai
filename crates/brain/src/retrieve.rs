@@ -82,7 +82,11 @@ fn expands(kind: NodeKind) -> bool {
 fn has_history(kind: NodeKind) -> bool {
     matches!(
         kind,
-        NodeKind::Decision | NodeKind::Convention | NodeKind::Contract | NodeKind::Preference
+        NodeKind::Decision
+            | NodeKind::Convention
+            | NodeKind::Contract
+            | NodeKind::Preference
+            | NodeKind::Constraint
     )
 }
 
@@ -302,9 +306,11 @@ enum Family {
 
 fn family(kind: NodeKind) -> Family {
     match kind {
-        NodeKind::Decision | NodeKind::Convention | NodeKind::Contract | NodeKind::Preference => {
-            Family::Facts
-        }
+        NodeKind::Decision
+        | NodeKind::Convention
+        | NodeKind::Contract
+        | NodeKind::Preference
+        | NodeKind::Constraint => Family::Facts,
         NodeKind::Module | NodeKind::Service | NodeKind::FileSummary => Family::Entities,
         NodeKind::Report | NodeKind::Task | NodeKind::Research => Family::Passages,
     }

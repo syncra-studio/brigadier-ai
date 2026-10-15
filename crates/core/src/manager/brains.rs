@@ -661,7 +661,7 @@ impl SessionManager {
     }
 
     /// The project a conversation belongs to, if it has one.
-    fn project_of(&self, id: &ConversationId) -> Option<ProjectId> {
+    pub(super) fn project_of(&self, id: &ConversationId) -> Option<ProjectId> {
         self.core.conversation(id).ok()?.project_id
     }
 
@@ -789,7 +789,8 @@ impl SessionManager {
         Ok(reply)
     }
 
-    /// `remember`: a decision, convention, preference or contract (BUILD-PLAN A11). What
+    /// `remember`: a decision, convention, preference or contract (BUILD-PLAN A11), or a
+    /// standing constraint ([`super::constraints`], D1.1). What
     /// cites the user's message, checked here, is the user's decision; a preference needs
     /// that. Anything else is the thread's claim, unverified, with the evidence it names.
     pub(crate) async fn remember_tool(
@@ -801,12 +802,16 @@ impl SessionManager {
         if title.is_empty() {
             return Err(Error::Invalid("say what to remember in `title`".into()));
         }
+        if args.kind == MemoryKind::Constraint {
+            return crate::heap(|| self.remember_constraint(id, args, title)).await;
+        }
         let personal = args.personal || args.kind == MemoryKind::Preference;
         let kind = match args.kind {
             MemoryKind::Decision => NodeKind::Decision,
             MemoryKind::Convention => NodeKind::Convention,
             MemoryKind::Preference => NodeKind::Preference,
             MemoryKind::Contract => NodeKind::Contract,
+            MemoryKind::Constraint => NodeKind::Constraint,
         };
         let cited = match args.user_message.as_deref() {
             Some(reference) => Some(
@@ -989,7 +994,9 @@ impl SessionManager {
         }
         Ok(UserWords {
             seq: message.seq,
+            id: message.id.clone(),
             quote: quote.map(str::to_owned),
+            words,
         })
     }
 
@@ -2448,7 +2455,11 @@ fn floor_boundary(text: &str, max: usize) -> usize {
 #[derive(Debug, Clone)]
 pub(crate) struct UserWords {
     pub seq: i64,
+    /// The message's id: the id of the request it started, when it started one.
+    pub id: String,
     pub quote: Option<String>,
+    /// The whole message, as the user wrote it.
+    pub words: String,
 }
 
 impl UserWords {

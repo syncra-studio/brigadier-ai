@@ -154,6 +154,19 @@ impl SessionManager {
                         self.keep_waiting(&task).await;
                         continue;
                     }
+                    // Waiting (on its outline's go-ahead, an answer, a review, an approval) or
+                    // paused by the user: its worktree and session stay, and it carries on from
+                    // its wait (BUILD-PLAN D1.4).
+                    TaskState::Blocked | TaskState::Paused
+                        if conversation.lifecycle != Lifecycle::Archived
+                            && task.native_session.is_some() =>
+                    {
+                        // Boxed, as each big await here: recovery runs on a runtime thread's
+                        // stack.
+                        let active = conversation.lifecycle == Lifecycle::Active;
+                        crate::heap(|| self.recover_waiting(&task, active)).await;
+                        continue;
+                    }
                     // A read task that reported is done.
                     TaskState::Reported => {
                         self.dispose_task(&task, TaskState::Done).await;
@@ -162,11 +175,17 @@ impl SessionManager {
                     // The landing was interrupted (older stores: its checks, or its card):
                     // nothing landed, and the orchestrator lands it again.
                     TaskState::Landing if task.kind.writes() => {
+                        // Unless its commits reached the target before the restart: then it
+                        // landed (BUILD-PLAN D1.4).
+                        if crate::heap(|| self.landed_before_restart(&task)).await {
+                            continue;
+                        }
                         let _ = self
                             .update_task(&conversation.id, &task.id, |t| {
                                 t.state = TaskState::Reported;
                                 t.candidate = None;
                                 t.landing = None;
+                                t.landing_from = None;
                             })
                             .await;
                         // The orchestrator was promised the landing's outcome as a message.

@@ -8,7 +8,11 @@
 //!
 //! Without a current checkpoint the turn resumes as before, so nothing said since is lost. A
 //! Codex orchestrator always resumes: how long Codex keeps its cache through the app-server is
-//! not measured ([`cache_lifetime`]).
+//! not measured ([`cache_lifetime`]), and no lifetime is guessed for it.
+//!
+//! A checkpoint is kept in the orchestrator log when its note is written
+//! ([`OrchestratorEntry::Checkpoint`]) and taken back from there after a daemon restart, so a
+//! restart neither loses it nor writes it again (BUILD-PLAN D1.4).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -114,7 +118,7 @@ impl SessionManager {
             {
                 continue;
             }
-            if let Some(checkpoint) = conv.checkpoint().await
+            if let Some(checkpoint) = self.checkpoint_of(&conv).await
                 && checkpoint.old_native_id.as_deref() == Some(mark.native_id.as_str())
                 && checkpoint.started_at_ms >= mark.at_ms
             {
@@ -155,7 +159,7 @@ impl SessionManager {
         let mark = self.cache_mark_of(conv).await?;
         let lifetime = cache_lifetime(mark.provider)?;
         let now = now_ms();
-        let checkpoint = conv.checkpoint().await.filter(|checkpoint| {
+        let checkpoint = self.checkpoint_of(conv).await.filter(|checkpoint| {
             checkpoint.ready()
                 && checkpoint.old_native_id.as_deref() == Some(mark.native_id.as_str())
                 && checkpoint.started_at_ms >= mark.at_ms
@@ -194,6 +198,94 @@ impl SessionManager {
             return false;
         };
         cache_lifetime(mark.provider).is_some_and(|lifetime| mark.expired(lifetime, now_ms()))
+    }
+
+    /// Keeps a checkpoint's note in the orchestrator log.
+    pub(super) async fn keep_checkpoint(
+        &self,
+        id: &crate::model::ConversationId,
+        old_native_id: &str,
+        started_at_ms: i64,
+        note: &str,
+    ) {
+        let kept = async {
+            let blob = self
+                .core
+                .store()
+                .blobs()
+                .put(note.as_bytes().to_vec())
+                .await?
+                .to_string();
+            self.core
+                .record(vec![(
+                    streams::orchestrator(id),
+                    DomainEvent::OrchestratorLogged {
+                        conversation_id: id.clone(),
+                        entry: OrchestratorEntry::Checkpoint {
+                            old_native_id: old_native_id.to_owned(),
+                            started_at_ms,
+                            note_blob: blob,
+                        },
+                    },
+                )])
+                .await
+                .map(drop)
+        }
+        .await;
+        if let Err(err) = kept {
+            tracing::warn!(conversation = %id, error = %err, "could not keep the checkpoint");
+        }
+    }
+
+    /// The conversation's checkpoint: as written live, or else the newest one its log keeps
+    /// (after a restart), taken back into the live state.
+    async fn checkpoint_of(
+        &self,
+        conv: &Arc<ConvLive>,
+    ) -> Option<Arc<super::rebirth::RebirthPrep>> {
+        if let Some(checkpoint) = conv.checkpoint().await {
+            return Some(checkpoint);
+        }
+        let page = self
+            .core
+            .store()
+            .read_stream(
+                streams::orchestrator(&conv.id),
+                StreamPage {
+                    before: None,
+                    kinds: vec!["orchestrator.logged".into()],
+                    limit: RECOVER_SCAN,
+                },
+            )
+            .await
+            .ok()?;
+        // Newest first.
+        let (old_native_id, started_at_ms, note_blob) = page.iter().find_map(|stored| {
+            match serde_json::from_str::<DomainEvent>(stored.payload.get()) {
+                Ok(DomainEvent::OrchestratorLogged {
+                    entry:
+                        OrchestratorEntry::Checkpoint {
+                            old_native_id,
+                            started_at_ms,
+                            note_blob,
+                        },
+                    ..
+                }) => Some((old_native_id, started_at_ms, note_blob)),
+                _ => None,
+            }
+        })?;
+        let note = self
+            .core
+            .store()
+            .blobs()
+            .get(note_blob.parse().ok()?)
+            .await
+            .ok()??;
+        let note = String::from_utf8(note).ok()?;
+        let checkpoint = super::rebirth::RebirthPrep::written(&note, &old_native_id, started_at_ms);
+        tracing::info!(conversation = %conv.id, "took the checkpoint back from the log");
+        conv.set_checkpoint(checkpoint.clone()).await;
+        Some(checkpoint)
     }
 
     /// The conversation's last model request: as seen live, or else recovered from the

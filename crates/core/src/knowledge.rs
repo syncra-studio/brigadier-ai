@@ -110,7 +110,7 @@ impl<'de> Deserialize<'de> for RebirthTrigger {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BriefingSection {
-    /// `framing`, `handoff`, `decisions`, `state`, `brain`, `recent`, `search`.
+    /// `framing`, `constraints`, `handoff`, `decisions`, `state`, `brain`, `recent`, `search`.
     pub name: String,
     /// About four bytes per token.
     pub tokens: u64,

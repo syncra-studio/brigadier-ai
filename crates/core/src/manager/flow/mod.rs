@@ -1790,6 +1790,10 @@ mod commit_on_pass_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod computer_host_tests;
 #[cfg(test)]
+mod constraints_tests;
+#[cfg(test)]
+mod decision_index_tests;
+#[cfg(test)]
 mod deliverable_tests;
 #[cfg(test)]
 mod ending_tests;
@@ -1860,6 +1864,8 @@ mod quiet_wake_tests;
 #[cfg(test)]
 mod reads_tests;
 #[cfg(test)]
+mod restart_waits_tests;
+#[cfg(test)]
 mod resume_tests;
 #[cfg(test)]
 mod review_hold_tests;
@@ -1870,12 +1876,16 @@ mod review_switch_tests;
 #[cfg(test)]
 mod review_tiers_tests;
 #[cfg(test)]
+mod same_session_tests;
+#[cfg(test)]
 mod search_tests;
 mod settings_toggles_tests;
 #[cfg(test)]
 mod spare_worktree_tests;
 #[cfg(test)]
 mod status_tests;
+#[cfg(test)]
+mod subfolder_rules_tests;
 #[cfg(test)]
 mod tab_chat_tests;
 #[cfg(test)]

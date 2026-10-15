@@ -125,7 +125,7 @@ How to work:
 - {own_commits}
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Run dev servers and apps with start_preview, never with `&`.
-- Keep a ledger in the Brain. Ask query_brain before you ask the user or start a worker. When the user settles something later work must respect, keep it with @remember citing their message (user_message, quote; personal: true for a preference across projects), silently; your own decisions are kept as unverified claims. Outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision; check an unverified Brain line before relying on it. code_search, code_refs and project_map find code faster than grepping.
+- Keep a ledger in the Brain. Ask query_brain before you ask the user or start a worker. When the user settles something later work must respect, keep it with @remember citing their message (user_message, quote; personal: true for a preference across projects), silently; your own decisions are kept as unverified claims. A standing rule the user sets (never X, always Y, an exception to one) is kind constraint, with scope request, session or project; an exception is a constraint of its own, and replaces only when their new words replace the old rule entirely: Brigadier carries every constraint in force, in their words, into every briefing and worker brief. Outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision; check an unverified Brain line before relying on it. code_search, code_refs and project_map find code faster than grepping.
 - Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
 - Pushing, publishing, deploying and opening pull requests happen only when the user asks for exactly that, at every permission level; otherwise say so in your answer. After your own `git push`, call ci_status and do what it says. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session, which says when.
@@ -702,6 +702,16 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, run_check's commit reply names the commit's files and lines and what git status still shows after it (\"Nothing is left uncommitted.\" or the paths left): that is the record, so don't check the commit again with git. Try anything by hand before that last run_check, in the same message as an edit, not after the commit.",
         worker: "",
     },
+    Revision {
+        number: CONSTRAINTS_REVISION,
+        thread: "From now on, keep a standing rule the user sets (never X, always Y, an exception to one) with remember, kind constraint: cite their message (user_message, and quote for the exact words that are the rule), and give its scope, request, session or project. An exception is a constraint of its own; replaces only when their new words replace the old rule entirely. Brigadier keeps their words exactly and carries every constraint in force into every briefing and worker brief.",
+        worker: "From now on, a brief may open with the user's standing constraints, in their own words: follow every one, and if your task can't be done within one, stop and say so in your report.",
+    },
+    Revision {
+        number: SUBFOLDER_RULES_REVISION,
+        thread: "From now on, your instructions may list a subfolder's rules (its CLAUDE.md or AGENTS.md) instead of showing them: a listed one comes to you with the first file you read or change under its folder; before you change files there with the shell, read it yourself.",
+        worker: "From now on, a brief shows whole only the repository rules for the folders its spec names and lists the others: read a listed one before you change files under its folder.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -906,6 +916,14 @@ pub(crate) const SAME_MESSAGE_REVISION: u32 = 37;
 /// run_check's commit reply names the commit's files and what git status still shows, so the
 /// thread spends no call checking its commit (BUILD-PLAN C10).
 pub(crate) const COMMIT_RECORD_REVISION: u32 = 38;
+
+/// The user's standing rules are kept as constraints in their own words, carried verbatim into
+/// every briefing and worker brief (BUILD-PLAN D1.1). Revisions 40–49 are phase D1's.
+pub(crate) const CONSTRAINTS_REVISION: u32 = 40;
+
+/// A subfolder's rules are listed rather than shown, and come with the first file touched
+/// under it (BUILD-PLAN D1.6).
+pub(crate) const SUBFOLDER_RULES_REVISION: u32 = 41;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3949,14 +3967,19 @@ mod environment_tests {
         );
     }
 
-    /// Revisions are numbered 1, 2, 3… with no gap or repeat, so a told number names exactly
-    /// the notes a session has heard.
+    /// Revisions are numbered 1, 2, 3… with no repeat, so a told number names exactly the
+    /// notes a session has heard. Below 40 with no gap; phases built side by side take their
+    /// own ranges from there (D1's 40–49), which the integration closes up.
     #[test]
     fn revisions_are_numbered_from_one_without_gaps_or_repeats() {
         let numbers: Vec<u32> = REVISIONS.iter().map(|revision| revision.number).collect();
-        let expected: Vec<u32> = (1..=REVISIONS.len() as u32).collect();
-        assert_eq!(numbers, expected);
-        assert_eq!(revision(), REVISIONS.len() as u32);
+        let shared: Vec<u32> = numbers.iter().copied().filter(|n| *n < 40).collect();
+        assert_eq!(shared, (1..=shared.len() as u32).collect::<Vec<u32>>());
+        assert!(
+            numbers.windows(2).all(|pair| pair[0] < pair[1]),
+            "{numbers:?}"
+        );
+        assert_eq!(revision(), *numbers.last().unwrap());
     }
 
     /// The thread's own instructions carry the offer that the note tells open threads.

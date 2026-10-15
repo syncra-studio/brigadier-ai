@@ -4396,13 +4396,28 @@ impl SessionManager {
                 .await;
             }
             ProviderEvent::Error { error } => {
-                let limited = error.kind == ErrorKind::UsageLimit && !error.will_retry;
+                // Credits run out or a failed sign-in, where another account of the provider
+                // can go on: handled as a limit, so the same session resumes there (BUILD-PLAN
+                // D1.3). Without one, the request fails with the error as before.
+                let account_bound = matches!(error.kind, ErrorKind::Billing | ErrorKind::Auth)
+                    && !error.will_retry
+                    && self
+                        .runtime
+                        .switch_target(&cli.account, cli.model.model.as_deref())
+                        .is_some();
+                let limited =
+                    (error.kind == ErrorKind::UsageLimit && !error.will_retry) || account_bound;
                 if limited {
                     conv.state.lock().await.limit_hit =
                         Some(error.limit.clone().unwrap_or(LimitHit {
                             window: None,
                             resets_at_ms: None,
-                            kind: brigadier_providers::LimitKind::UsageWindow,
+                            kind: match error.kind {
+                                ErrorKind::Billing => brigadier_providers::LimitKind::Credits,
+                                // Lifted by a fresh read that shows the login works again.
+                                ErrorKind::Auth => brigadier_providers::LimitKind::SpendControl,
+                                _ => brigadier_providers::LimitKind::UsageWindow,
+                            },
                         }));
                 }
                 // A limit another account of the provider takes over from: the chat goes on
@@ -5016,9 +5031,10 @@ impl SessionManager {
                 // Its turn goes on there. Not from inside the CLI's own event pump: closing the
                 // CLI waits for it.
                 let (manager, conv, cli) = (self.arc(), conv.clone(), cli.clone());
+                let why = limit.kind;
                 self.spawn(async move {
                     manager
-                        .switch_account(&conv, &cli, next, carried, landed)
+                        .switch_account(&conv, &cli, next, carried, landed, why)
                         .await;
                 });
                 return;
@@ -5382,16 +5398,24 @@ impl SessionManager {
         next: crate::accounts::AccountRef,
         carried: Vec<Message>,
         landed: bool,
+        why: brigadier_providers::LimitKind,
     ) {
         let (from, to) = (
             self.runtime.account_label(&cli.account),
             self.runtime.account_label(&next),
         );
+        let stopped = match why {
+            brigadier_providers::LimitKind::UsageWindow => "hit its usage limit",
+            brigadier_providers::LimitKind::Credits => "ran out of credits",
+            brigadier_providers::LimitKind::SpendControl => {
+                "was stopped by a spend limit or a failed sign-in"
+            }
+        };
         self.notice(
             &conv.id,
             brigadier_providers::NoticeLevel::Info,
             &format!(
-                "{} hit its usage limit on {from}; continuing on {to}.",
+                "{} {stopped} on {from}; continuing on {to}.",
                 cli.provider.label()
             ),
         )

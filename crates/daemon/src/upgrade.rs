@@ -85,6 +85,19 @@ pub async fn serve_hook(
         tracing::warn!("refused an output hook: not a hook grant");
         return;
     }
+    // A file tool's call: no output follows, and the answer is its folders' rules.
+    if let Some(path) = &output.touched {
+        let context = daemon.sessions.hook_rules(&grant, path).await.flatten();
+        answer_hook(
+            &mut stream,
+            &HookReply {
+                replacement: None,
+                context,
+            },
+        )
+        .await;
+        return;
+    }
     let Some(len) = usize::try_from(output.bytes)
         .ok()
         .filter(|len| *len <= OUTPUT_MAX_BYTES + 1024)
@@ -124,7 +137,19 @@ pub async fn serve_hook(
             None
         }
     };
-    let Ok(frame) = brigadier_ipc::encode_frame(&HookReply { replacement }) else {
+    answer_hook(
+        &mut stream,
+        &HookReply {
+            replacement,
+            context: None,
+        },
+    )
+    .await;
+}
+
+/// Sends a hook its answer; a hook that left before it is no matter.
+async fn answer_hook(stream: &mut RawStream, reply: &HookReply) {
+    let Ok(frame) = brigadier_ipc::encode_frame(reply) else {
         return;
     };
     if let Err(err) = stream.write_all(&frame).await {

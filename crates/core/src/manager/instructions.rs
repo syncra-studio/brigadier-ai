@@ -18,49 +18,183 @@
 //! Precedence, stated in the prompt: the task spec wins over repository instructions, and a
 //! file in a subfolder wins over one higher up for the files under that folder.
 //!
-//! The session's thread works from its own folder outside the repository, so it gets every
-//! instruction file of its workspace in its prompt, the root `AGENTS.md` too, whatever its
+//! The session's thread works from its own folder outside the repository, so it gets the
+//! instruction files of its workspace in its prompt, the root `AGENTS.md` too, whatever its
 //! vendor (THREAD-PLAN.md Q1).
+//!
+//! Only what applies is loaded (BUILD-PLAN D1.6): the root's files (and `.claude`'s) always
+//! come whole; a subfolder's come whole to a worker whose spec names a path under it, and to
+//! a Claude thread with the first file it reads or changes there (its output hook,
+//! [`SessionManager::hook_rules`]). The rest are listed by path, so none is unknown. A Codex
+//! thread, with no hook, gets them all.
 
 use std::path::{Path, PathBuf};
 
 use brigadier_providers::ProviderKind;
 
+use super::SessionManager;
+use crate::tools::Role;
+
 /// Bytes of instructions carried at most.
 const MAX_BYTES: usize = 32 * 1024;
 
 /// The instruction files `provider` does not load itself, formatted for the worker prompt.
-pub(crate) async fn for_worker(provider: ProviderKind, worktree: &Path) -> String {
-    let worktree = worktree.to_owned();
+/// Rules of a subfolder come whole only when the task's spec names a path under it; the
+/// others are listed, to read before changing files there (BUILD-PLAN D1.6).
+pub(crate) async fn for_worker(provider: ProviderKind, worktree: &Path, spec: &str) -> String {
+    let (worktree, named) = (worktree.to_owned(), named_paths(spec));
     tokio::task::spawn_blocking(move || {
-        if provider == ProviderKind::Claude {
-            collect_files(&worktree, true, "The task spec wins over them")
-        } else {
-            collect(&worktree)
-        }
+        let rules = found_rules(&worktree, provider == ProviderKind::Claude);
+        let (pinned, left_out): (Vec<Rule>, Vec<Rule>) = rules.into_iter().partition(|rule| {
+            rule.folder
+                .as_ref()
+                .is_none_or(|folder| named.iter().any(|path| Path::new(path).starts_with(folder)))
+        });
+        format_rules(
+            &pinned,
+            &left_out,
+            "The task spec wins over them",
+            "Read one before you change files under its folder.",
+        )
     })
     .await
     .unwrap_or_default()
 }
 
-/// Every instruction file of the workspace, formatted for the thread's prompt: its working
-/// directory is its own folder outside the repository, so neither CLI finds them itself.
-pub(crate) async fn for_thread(workspace: &Path) -> String {
+/// The workspace's instruction files, formatted for the thread's prompt: its working
+/// directory is its own folder outside the repository, so neither CLI finds them itself. A
+/// Claude thread gets the root's whole and a subfolder's listed: its output hook gives it a
+/// subfolder's rules with the first file it reads or changes there ([`rules_for`],
+/// BUILD-PLAN D1.6). A Codex thread has no such hook and gets them all.
+pub(crate) async fn for_thread(workspace: &Path, provider: ProviderKind) -> String {
     let workspace = workspace.to_owned();
     tokio::task::spawn_blocking(move || {
-        collect_files(&workspace, true, "The user's request wins over them")
+        let rules = found_rules(&workspace, true);
+        let (pinned, left_out): (Vec<Rule>, Vec<Rule>) = if provider == ProviderKind::Claude {
+            rules.into_iter().partition(|rule| rule.folder.is_none())
+        } else {
+            (rules, Vec::new())
+        };
+        format_rules(
+            &pinned,
+            &left_out,
+            "The user's request wins over them",
+            SUBFOLDER_RULES_COME,
+        )
     })
     .await
     .unwrap_or_default()
 }
 
-fn collect(worktree: &Path) -> String {
-    collect_files(worktree, false, "The task spec wins over them")
+/// How the thread gets a subfolder's rules it was only told of.
+pub(crate) const SUBFOLDER_RULES_COME: &str = "Each comes to you with the first file you read or change under its folder; before you change files there with the shell, read it yourself.";
+
+/// The rules of the subfolders that hold `touched` (a path in `workspace`, or through its
+/// real path), outermost first: (their path in the workspace, their section).
+pub(crate) fn rules_for(workspace: &Path, touched: &Path) -> Vec<(String, String)> {
+    let real = brigadier_providers::policy::real_path(workspace);
+    let Some(rel) = [Some(workspace), real.as_deref()]
+        .into_iter()
+        .flatten()
+        .find_map(|root| touched.strip_prefix(root).ok())
+    else {
+        return Vec::new();
+    };
+    let mut rules: Vec<Rule> = found_rules(workspace, true)
+        .into_iter()
+        .filter(|rule| {
+            rule.folder
+                .as_ref()
+                .is_some_and(|folder| rel.starts_with(folder))
+        })
+        .collect();
+    rules.sort_by_key(|rule| rule.rel.components().count());
+    rules
+        .iter()
+        .map(|rule| (rule.rel.display().to_string(), rule.section()))
+        .collect()
 }
 
-/// The instruction files in `worktree` (`root_agents`: its root `AGENTS.md` too), each once;
-/// `precedence` says what wins over them.
-fn collect_files(worktree: &Path, root_agents: bool, precedence: &str) -> String {
+impl SessionManager {
+    /// What a thread's output hook asks after a file tool's call (`brigadierd hook
+    /// post-tool-use`): the rules of the touched file's subfolders its session hasn't had
+    /// yet, each once per CLI session (a new session's hook has a new grant). `None` from
+    /// the grant: it isn't a live hook grant.
+    pub async fn hook_rules(&self, grant: &str, touched: &str) -> Option<Option<String>> {
+        let Some(Role::OutputHook { conversation_id }) = self.grants.resolve(grant) else {
+            return None;
+        };
+        let Some(workspace) = self
+            .recorded_workspace(&conversation_id)
+            .map(|workspace| workspace.path)
+        else {
+            return Some(None);
+        };
+        let touched = PathBuf::from(touched);
+        let found = tokio::task::spawn_blocking(move || rules_for(&workspace, &touched))
+            .await
+            .unwrap_or_default();
+        let new: Vec<String> = {
+            let mut given = self.rules_given.lock().unwrap();
+            let (of, had) = given.entry(conversation_id).or_default();
+            if of != grant {
+                *of = grant.to_owned();
+                had.clear();
+            }
+            found
+                .into_iter()
+                .filter(|(rel, _)| had.insert(rel.clone()))
+                .map(|(_, section)| section)
+                .collect()
+        };
+        if new.is_empty() {
+            return Some(None);
+        }
+        Some(Some(format!(
+            "[Brigadier] Repository rules for the folder of the file you just touched. Follow them for the files under it; the user's request wins over them, and a file in a subfolder wins over one higher up:{}",
+            new.concat()
+        )))
+    }
+}
+
+/// One instruction file to carry.
+struct Rule {
+    /// Its path in the workspace.
+    rel: PathBuf,
+    /// The subfolder whose files it applies to; `None` for the root's (and `.claude`'s).
+    folder: Option<PathBuf>,
+    content: String,
+}
+
+impl Rule {
+    fn section(&self) -> String {
+        let scope = self
+            .folder
+            .as_ref()
+            .map(|p| format!(" (applies to files under {}/)", p.display()))
+            .unwrap_or_default();
+        format!("\n\n### {}{scope}\n{}", self.rel.display(), self.content)
+    }
+}
+
+/// The paths a task's spec names (words with a `/` in them, relative to the worktree).
+fn named_paths(spec: &str) -> Vec<String> {
+    spec.split(|c: char| {
+        c.is_whitespace() || matches!(c, '`' | '"' | '\'' | '(' | ')' | ',' | '[' | ']')
+    })
+    .map(|word| {
+        let word = word
+            .trim_end_matches(['.', ':', ';'])
+            .trim_start_matches("./");
+        word.split(':').next().unwrap_or(word)
+    })
+    .filter(|word| word.contains('/') && !word.starts_with('/') && !word.contains(".."))
+    .map(str::to_owned)
+    .collect()
+}
+
+/// The instruction files in `worktree` (`root_agents`: its root `AGENTS.md` too), each once.
+fn found_rules(worktree: &Path, root_agents: bool) -> Vec<Rule> {
     let mut found = Vec::new();
     find(worktree, 0, &mut found);
     let rules = worktree.join(".claude").join("rules");
@@ -91,7 +225,7 @@ fn collect_files(worktree: &Path, root_agents: bool, precedence: &str) -> String
     } else {
         root_text
     };
-    let mut text = String::new();
+    let mut rules = Vec::new();
     for path in found {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
@@ -109,19 +243,44 @@ fn collect_files(worktree: &Path, root_agents: bool, precedence: &str) -> String
         if !native_root.is_empty() && content == native_root.trim() {
             continue;
         }
-        let relative = path.strip_prefix(worktree).unwrap_or(&path);
-        let folder = relative
+        let rel = path.strip_prefix(worktree).unwrap_or(&path).to_owned();
+        let folder = rel
             .parent()
-            .filter(|p| !p.as_os_str().is_empty() && !p.starts_with(".claude"));
-        let scope = folder
-            .map(|p| format!(" (applies to files under {}/)", p.display()))
-            .unwrap_or_default();
-        let block = format!("\n\n### {}{scope}\n{content}", relative.display());
+            .filter(|p| !p.as_os_str().is_empty() && !p.starts_with(".claude"))
+            .map(Path::to_owned);
+        rules.push(Rule {
+            rel,
+            folder,
+            content: content.to_owned(),
+        });
+    }
+    rules
+}
+
+/// The prompt's section: the `pinned` rules whole, then the `left_out` ones named, with `how`
+/// they are had; `precedence` says what wins over them.
+fn format_rules(pinned: &[Rule], left_out: &[Rule], precedence: &str, how: &str) -> String {
+    let mut text = String::new();
+    for rule in pinned {
+        let block = rule.section();
         if text.len() + block.len() > MAX_BYTES {
             text.push_str("\n\n[more instruction files were left out for length; read them in the repository]");
             break;
         }
         text.push_str(&block);
+    }
+    if !left_out.is_empty() {
+        let names: Vec<String> = left_out
+            .iter()
+            .map(|rule| {
+                let folder = rule.folder.as_deref().unwrap_or(Path::new("."));
+                format!("{} (files under {}/)", rule.rel.display(), folder.display())
+            })
+            .collect();
+        text.push_str(&format!(
+            "\n\nRules for subfolders, not shown here: {}. {how}",
+            names.join(", ")
+        ));
     }
     if text.is_empty() {
         return text;
@@ -206,12 +365,15 @@ mod tests {
             "Keep components small.\n",
         )
         .unwrap();
-        let thread = for_thread(&dir).await;
+        // A Codex thread has no hook to bring a subfolder's rules: it gets them all.
+        let thread = for_thread(&dir, ProviderKind::Codex).await;
         assert!(thread.contains("### AGENTS.md\nUse pnpm."), "{thread}");
         assert_eq!(thread.matches("Use pnpm.").count(), 1, "{thread}");
         assert!(thread.contains("### app/CLAUDE.md (applies to files under app/)"));
         assert!(thread.contains("The user's request wins over them"));
-        let worker = for_worker(ProviderKind::Codex, &dir).await;
+        // A worker whose spec names a path under app/ gets app's rules whole.
+        let spec = "Fix app/button.tsx.";
+        let worker = for_worker(ProviderKind::Codex, &dir, spec).await;
         assert!(
             !worker.contains("Use pnpm."),
             "Codex loads the root file itself: {worker}"
@@ -219,9 +381,73 @@ mod tests {
         assert!(worker.contains("Keep components small."));
         assert!(worker.contains("The task spec wins over them"));
         // A Claude worker starts outside its worktree: it gets every file, the root's too.
-        let claude = for_worker(ProviderKind::Claude, &dir).await;
+        let claude = for_worker(ProviderKind::Claude, &dir, spec).await;
         assert_eq!(claude.matches("Use pnpm.").count(), 1, "{claude}");
         assert!(claude.contains("Keep components small."));
         assert!(claude.contains("The task spec wins over them"));
+    }
+
+    /// Done when (D1.6, in part): a Claude thread in a monorepo starts with the root's rules
+    /// whole and a sub-package's only named, so its first call is smaller; the sub-package's
+    /// rules come with the first file it touches there, outermost first. A worker on another
+    /// package gets that package's rules and only names the rest.
+    #[tokio::test]
+    async fn only_the_rules_that_apply_are_loaded_and_the_rest_are_listed() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-instr-{}", uuid::Uuid::new_v4())));
+        let web = dir.join("apps").join("web");
+        let api = dir.join("packages").join("api");
+        std::fs::create_dir_all(web.join("src")).unwrap();
+        std::fs::create_dir_all(&api).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "Use pnpm.\n").unwrap();
+        std::fs::write(
+            dir.join("apps").join("AGENTS.md"),
+            "Apps ship on Fridays.\n",
+        )
+        .unwrap();
+        let web_rules = "Web components stay under 200 lines.\n".repeat(200);
+        std::fs::write(web.join("CLAUDE.md"), &web_rules).unwrap();
+        std::fs::write(api.join("CLAUDE.md"), "Every handler logs its route.\n").unwrap();
+        let lean = for_thread(&dir, ProviderKind::Claude).await;
+        let whole = for_thread(&dir, ProviderKind::Codex).await;
+        assert!(lean.contains("### AGENTS.md\nUse pnpm."), "{lean}");
+        assert!(!lean.contains("Web components"), "{lean}");
+        assert!(!lean.contains("Every handler"), "{lean}");
+        for listed in [
+            "apps/AGENTS.md (files under apps/)",
+            "apps/web/CLAUDE.md (files under apps/web/)",
+            "packages/api/CLAUDE.md (files under packages/api/)",
+        ] {
+            assert!(lean.contains(listed), "{listed}: {lean}");
+        }
+        assert!(lean.contains(SUBFOLDER_RULES_COME));
+        assert!(
+            lean.len() * 4 < whole.len(),
+            "smaller first call: {} bytes instead of {}",
+            lean.len(),
+            whole.len()
+        );
+        // Touching a file under apps/web brings apps' rules, then apps/web's.
+        let touched = rules_for(&dir, &web.join("src").join("page.tsx"));
+        let names: Vec<&str> = touched.iter().map(|(rel, _)| rel.as_str()).collect();
+        assert_eq!(names, ["apps/AGENTS.md", "apps/web/CLAUDE.md"]);
+        assert!(
+            touched[1]
+                .1
+                .contains("Web components stay under 200 lines.")
+        );
+        assert!(rules_for(&dir, &dir.join("README.md")).is_empty());
+        assert!(rules_for(Path::new("/elsewhere"), &web.join("x")).is_empty());
+        // A worker on packages/api gets its rules whole and the web's only named.
+        let worker = for_worker(
+            ProviderKind::Claude,
+            &dir,
+            "Add a health route in `packages/api/routes.ts`.",
+        )
+        .await;
+        assert!(worker.contains("Every handler logs its route."), "{worker}");
+        assert!(!worker.contains("Web components"), "{worker}");
+        assert!(worker.contains("apps/web/CLAUDE.md (files under apps/web/)"));
+        assert!(worker.contains("Read one before you change files under its folder."));
     }
 }

@@ -3,4 +3,4 @@
 /**
  * The node types of PLAN.md §6 Phase 4.
  */
-export type NodeKind = "module" | "service" | "fileSummary" | "decision" | "convention" | "preference" | "task" | "report" | "research" | "contract";
+export type NodeKind = "module" | "service" | "fileSummary" | "decision" | "convention" | "preference" | "task" | "report" | "research" | "contract" | "constraint";

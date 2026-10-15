@@ -810,7 +810,9 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
 /// passed with `--settings` hold under `--setting-sources project`, and a successful call's
 /// output is replaced by the hook's `hookSpecificOutput.updatedToolOutput` (code.claude.com/
 /// docs/en/hooks, "PostToolUse decision control"; checked on 2.1.292,
-/// docs/evidence/2026-10-07-thread-phase2-contracts.md §2).
+/// docs/evidence/2026-10-07-thread-phase2-contracts.md §2). A successful file tool's call runs
+/// it too, and its `hookSpecificOutput.additionalContext` (the touched folder's rules) follows
+/// the call's result (BUILD-PLAN D1.6).
 fn output_hooks(spec: &SessionSpec) -> Option<Value> {
     let hook = spec
         .output_hook
@@ -821,12 +823,17 @@ fn output_hooks(spec: &SessionSpec) -> Option<Value> {
         .map(|part| shell_quote(&part))
         .collect::<Vec<_>>()
         .join(" ");
-    let entry = json!([{
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": command, "timeout": hook.timeout_secs }],
-    }]);
-    Some(json!({ "PostToolUse": entry, "PostToolUseFailure": entry }))
+    let run = json!({ "type": "command", "command": command, "timeout": hook.timeout_secs });
+    let entry = json!([{ "matcher": "Bash", "hooks": [run.clone()] }]);
+    // A file tool's call brings its folder's rules (BUILD-PLAN D1.6).
+    let files = json!({ "matcher": FILE_TOOLS_MATCHER, "hooks": [run] });
+    let mut success = entry.clone();
+    success.as_array_mut()?.push(files);
+    Some(json!({ "PostToolUse": success, "PostToolUseFailure": entry }))
 }
+
+/// The file tools whose successful calls also run a thread's output hook.
+const FILE_TOOLS_MATCHER: &str = "Read|Edit|Write|MultiEdit|NotebookEdit";
 
 /// A `PreToolUse` hook that refuses every tool call, native and MCP, before it runs, telling
 /// the model `reason` ([`SessionSpec::deny_tools`]). The command reads the call's event and
@@ -2543,8 +2550,13 @@ for line in sys.stdin:
                 "timeout": 60,
             }],
         }]);
-        assert_eq!(hooks["PostToolUse"], expected);
         assert_eq!(hooks["PostToolUseFailure"], expected);
+        // A successful file tool's call runs it too, for its folder's rules (BUILD-PLAN D1.6).
+        let mut success = expected.clone();
+        let mut files = expected[0].clone();
+        files["matcher"] = json!("Read|Edit|Write|MultiEdit|NotebookEdit");
+        success.as_array_mut().unwrap().push(files);
+        assert_eq!(hooks["PostToolUse"], success);
         assert_eq!(hooks.as_object().map(Map::len), Some(2));
         let args = Claude::session_args(
             &thread,
