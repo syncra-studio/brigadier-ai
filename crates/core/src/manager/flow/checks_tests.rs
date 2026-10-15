@@ -400,3 +400,54 @@ async fn a_threads_checks_and_commands_bind_sockets_in_their_short_temporary_fol
         flow.stop().await;
     }
 }
+
+/// A pass's long output reaches the thread as its warnings and summary, its whole output one
+/// read_artifact away; a failure's still comes as the full digest (BUILD-PLAN C1).
+#[tokio::test]
+async fn a_passing_checks_long_output_comes_short_and_a_failure_whole() {
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "checks-pass-short",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                for command in [
+                    "i=0; while [ $i -lt 200 ]; do echo \"test case_$i ... ok\"; i=$((i+1)); done; \
+                     echo 'warning: slow test'; echo 'Tests  200 passed (200)'",
+                    "i=0; while [ $i -lt 200 ]; do echo \"test case_$i ... ok\"; i=$((i+1)); done; \
+                     echo 'FAIL case_7'; exit 1",
+                ] {
+                    let reply = turn.call("run_check", json!({ "command": command })).await;
+                    log.lock().unwrap().push(reply.text);
+                }
+                Reply::text("Checked.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Check it.").await;
+    flow.settled().await;
+    let replies = replies.lock().unwrap().clone();
+    let pass = &replies[0];
+    assert!(pass.len() < 1_500, "{} {pass}", pass.len());
+    assert!(
+        pass.starts_with("exit 0 [full output: read_artifact out-"),
+        "{pass}"
+    );
+    assert!(
+        pass.contains("\n[lines with a warning]\nwarning: slow test\n"),
+        "{pass}"
+    );
+    assert!(pass.contains("Tests  200 passed (200)"), "{pass}");
+    assert!(!pass.contains("case_0 ... ok"), "{pass}");
+    let fail = &replies[1];
+    assert!(
+        fail.starts_with("[exit 1]\n") || fail.starts_with("exit 1"),
+        "{fail}"
+    );
+    assert!(fail.contains("test case_0 ... ok"), "{fail}");
+    assert!(fail.contains("FAIL case_7"), "{fail}");
+    flow.stop().await;
+}

@@ -322,5 +322,5 @@ async fn the_thread_has_no_computer_tools_while_workers_do() {
     assert!(spec.skill_plugins.is_empty());
     let prompt = spec.append_system_prompt.as_deref().unwrap();
     assert!(!prompt.contains(crate::manager::prompts::COMPUTER_USE));
-    assert!(prompt.contains("use it with the computer tools; you can't"));
+    assert!(prompt.contains("use them with the computer tools; you can't"));
 }

@@ -223,6 +223,7 @@ impl SessionManager {
                         live.output,
                         false,
                         false,
+                        false,
                     )
                     .await
                 {

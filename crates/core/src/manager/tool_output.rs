@@ -57,7 +57,7 @@ impl SessionManager {
     ) -> Result<(StoredOutput, String)> {
         // A Codex thread reads `run`'s result JSON-escaped inside its code-mode tool's output.
         let wrapped = source == OutputSource::Run;
-        self.store_output_as(id, source, status, output, trimmed, wrapped)
+        self.store_output_as(id, source, status, output, trimmed, wrapped, false)
             .await
     }
 
@@ -78,7 +78,8 @@ impl SessionManager {
     }
 
     /// [`Self::store_output`], its digest sized for a model that reads it JSON-escaped when
-    /// `wrapped`.
+    /// `wrapped`, or a passing check's reply ([`crate::digest::passed`]) when `passed`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn store_output_as(
         &self,
         id: &ConversationId,
@@ -87,6 +88,7 @@ impl SessionManager {
         output: Vec<u8>,
         trimmed: bool,
         wrapped: bool,
+        passed: bool,
     ) -> Result<(StoredOutput, String)> {
         let board = self.core.board(id).await?;
         let alias = loop {
@@ -99,7 +101,9 @@ impl SessionManager {
             }
         };
         let output = self.hide_secrets(id, output).await;
-        let digest = if wrapped {
+        let digest = if passed {
+            crate::digest::passed(status, &output, &alias)
+        } else if wrapped {
             wrapped_digest(status, &output, &alias)
         } else {
             digest(status, &output, &alias)

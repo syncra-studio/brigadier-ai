@@ -12,7 +12,7 @@ use serde_json::json;
 use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::board::Board;
-use crate::manager::prompts::{THREAD_WORKS_REVISION, revision_note};
+use crate::manager::prompts::{FIRST_USE_REVISION, THREAD_WORKS_REVISION, revision_note};
 use crate::model::{DomainEvent, MessageRole};
 use crate::work::{QuestionKind, RequestState, ReviewState, TaskState};
 
@@ -170,6 +170,26 @@ async fn parts_that_run_at_once(start_workers_on_own: bool) {
         Some("The three exporters are written."),
         "{shown:#?} {:#?}",
         inputs.lock().unwrap()
+    );
+    // How workers are handled isn't in the instructions: it comes once, with the first
+    // worker's message, before the thread acts on it (BUILD-PLAN C1).
+    assert!(!rule.contains("answer_worker"), "{rule}");
+    let heard = inputs.lock().unwrap().clone();
+    let told: Vec<usize> = heard
+        .iter()
+        .enumerate()
+        .filter(|(_, input)| input.contains("[instructions] How you handle workers"))
+        .map(|(at, _)| at)
+        .collect();
+    let first_report = heard
+        .iter()
+        .position(|input| input.contains("[report task-"))
+        .expect("a report reached the thread");
+    assert_eq!(told, vec![first_report], "{heard:#?}");
+    let input = &heard[first_report];
+    assert!(
+        input.find("How you handle workers").unwrap() < input.find("[report task-").unwrap(),
+        "{input}"
     );
     flow.stop().await;
 }
@@ -349,5 +369,103 @@ async fn a_session_from_before_hears_the_change_once_and_does_the_work_itself() 
         "{shown:#?}"
     );
     assert!(!shown.iter().any(|text| text == "[quiet]"), "{shown:#?}");
+    flow.stop().await;
+}
+
+/// Rule R for C1 (BUILD-PLAN C1): a session told the instructions of revision 32, which still
+/// hold the rules for workers, resumes after the change and hears revision 33's note once; its
+/// first worker report then brings no note of those rules, since it has them. A new session's
+/// first report brings them (`parts_that_run_at_once`).
+#[tokio::test]
+async fn a_session_from_before_the_first_use_rules_hears_no_rules_it_already_has() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let heard = inputs.clone();
+    let mut flow = Flow::start(
+        "works-first-use-r",
+        Options::default(),
+        script(move |turn| {
+            let heard = heard.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "Looked.", "verification": "Read it."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reported.");
+                }
+                heard.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("Ask a scout.") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "low", "title": "Look around", "kind": "scout",
+                                   "spec": "Look around."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                Reply::text("Fine.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Look around.").await;
+    flow.settled().await;
+    flow.core
+        .record(vec![(
+            crate::model::streams::orchestrator(&flow.conversation),
+            DomainEvent::OrchestratorLogged {
+                conversation_id: flow.conversation.clone(),
+                entry: crate::work::OrchestratorEntry::Injection {
+                    injection: crate::work::ContextInjection {
+                        kind: crate::work::InjectionKind::Instructions,
+                        bytes: 100,
+                        tokens_estimate: 25,
+                        label: "instructions revision".into(),
+                        task_id: None,
+                        told: Some(crate::work::Told {
+                            revision: Some(FIRST_USE_REVISION - 1),
+                            ..crate::work::Told::default()
+                        }),
+                    },
+                },
+            },
+        )])
+        .await
+        .unwrap();
+    flow.restart().await;
+    flow.say("Ask a scout.").await;
+    flow.until("the scout's report", |board| {
+        board.tasks.len() == 1
+            && board
+                .latest_request()
+                .is_some_and(|request| request.state == RequestState::Done)
+    })
+    .await;
+    flow.settled().await;
+    let heard = inputs.lock().unwrap().clone();
+    let revision = revision_note(FIRST_USE_REVISION - 1, false).unwrap();
+    assert_eq!(
+        heard
+            .iter()
+            .filter(|input| input.contains(&revision))
+            .count(),
+        1,
+        "{heard:#?}"
+    );
+    assert!(
+        heard.iter().any(|input| input.contains("[report task-")),
+        "{heard:#?}"
+    );
+    assert!(
+        !heard
+            .iter()
+            .any(|input| input.contains("[instructions] How you handle workers")),
+        "{heard:#?}"
+    );
     flow.stop().await;
 }

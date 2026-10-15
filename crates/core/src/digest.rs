@@ -52,6 +52,74 @@ pub fn digest(status: &str, output: &[u8], artifact: &str) -> String {
     digest_within(status, output, artifact, DIGEST_MAX)
 }
 
+/// Most bytes of a passing check's output that reach the model whole; a longer one comes as
+/// [`passed`] (BUILD-PLAN C1).
+pub const PASS_WHOLE_MAX: usize = 1024;
+/// Most bytes [`passed`] shows of a passing check's warning lines …
+const PASS_WARNINGS_MAX: usize = 1024;
+/// … and of its last lines, where test runners print their summary.
+const PASS_TAIL_MAX: usize = 768;
+
+/// What a check that passed (`status` "exit 0") reaches the model as when its output is over
+/// [`PASS_WHOLE_MAX`] bytes: the header, the lines with a warning, and the last lines (the
+/// runner's summary). Nothing in a passing output needs acting on but its warnings, and the
+/// whole of it stays one `read_artifact` away: a 6 kB test log read back on every later call
+/// costs more than the check (BUILD-PLAN C1).
+pub fn passed(status: &str, output: &[u8], artifact: &str) -> String {
+    let text = String::from_utf8_lossy(output);
+    let lines = split_lines(&text);
+    let mut out = header(status, artifact, lines.len(), output.len());
+    let warnings: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.to_ascii_lowercase().contains("warning"))
+        .collect();
+    let mut shown = 0;
+    let mut used = 0;
+    for line in &warnings {
+        let line = clip(line, LINE_MAX);
+        if used + line.len() + 1 > PASS_WARNINGS_MAX {
+            break;
+        }
+        if shown == 0 {
+            out.push_str("\n[lines with a warning]");
+        }
+        out.push('\n');
+        out.push_str(&line);
+        used += line.len() + 1;
+        shown += 1;
+    }
+    if warnings.len() > shown {
+        out.push_str(&format!(
+            "\n[+{} more lines with a warning in the full output]",
+            warnings.len() - shown
+        ));
+    }
+    let mut tail = Vec::new();
+    let mut used = 0;
+    for line in lines.iter().rev() {
+        let line = clip(line, LINE_MAX.min(PASS_TAIL_MAX));
+        if used + line.len() + 1 > PASS_TAIL_MAX {
+            break;
+        }
+        used += line.len() + 1;
+        tail.push(line);
+    }
+    if !tail.is_empty() {
+        let omitted = lines.len() - tail.len();
+        out.push_str(&format!("\n[the last {} lines", tail.len()));
+        if omitted > 0 {
+            out.push_str(&format!(", {omitted} before them left out"));
+        }
+        out.push(']');
+        for line in tail.iter().rev() {
+            out.push('\n');
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// The same digest for a reader that gets it JSON-escaped inside a wrapper (a Codex thread's
 /// `run`): its escaped length plus [`JSON_WRAPPER`] is at most [`DIGEST_MAX`] bytes.
 pub fn wrapped_digest(status: &str, output: &[u8], artifact: &str) -> String {
@@ -286,6 +354,27 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"
+    }
+
+    #[test]
+    fn a_passing_checks_long_output_comes_as_its_warnings_and_summary() {
+        let mut log = passing_log(150);
+        log.push_str("warning: unused variable `x`\n");
+        log.push_str(&passing_log(30));
+        log.push_str(" Test Files  12 passed (12)\n      Tests  213 passed (213)\n");
+        assert!(log.len() > 5_000);
+        let reply = passed("exit 0", log.as_bytes(), "out-1a2b3c4d");
+        assert!(reply.len() < 2_000, "{}", reply.len());
+        assert!(reply.starts_with(&format!(
+            "exit 0 [full output: read_artifact out-1a2b3c4d, 183 lines, {} bytes]\n[lines with a warning]\nwarning: unused variable `x`\n[the last ",
+            log.len()
+        )), "{reply}");
+        assert!(reply.ends_with("      Tests  213 passed (213)"), "{reply}");
+        assert!(!reply.contains("case_00000"), "{reply}");
+        // Within its budget, however long the lines.
+        let wide = format!("{}\n", "x".repeat(5_000)).repeat(20);
+        let reply = passed("exit 0", wide.as_bytes(), "out-1");
+        assert!(reply.len() < 1_100, "{}", reply.len());
     }
 
     #[test]

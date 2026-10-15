@@ -173,6 +173,19 @@ impl Envelope {
     }
 }
 
+/// The rules left out of the thread's instructions that this turn's messages call for
+/// (BUILD-PLAN C1): a worker's message.
+fn first_use_due(envelopes: &[(Envelope, Option<String>)]) -> Vec<prompts::FirstUse> {
+    if envelopes
+        .iter()
+        .any(|(envelope, _)| envelope.task_id.is_some())
+    {
+        vec![prompts::FirstUse::Workers]
+    } else {
+        Vec::new()
+    }
+}
+
 /// The chain a turn's newest input belongs to, which a message it sends carries on
 /// (SESSION-MESSAGING-PLAN.md §5.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2631,7 +2644,8 @@ impl SessionManager {
         // What changed in its instructions since the session last heard (the date, a setting,
         // the overnight run): a resumed CLI keeps its first instructions, so the change goes
         // with this turn, logged once the CLI took it.
-        let instruction_notes = self.instruction_notes(&conv).await;
+        let due = first_use_due(&envelopes);
+        let instruction_notes = self.instruction_notes(&conv, due).await;
         if !instruction_notes.is_empty() {
             let text = instruction_notes
                 .iter()
@@ -2671,7 +2685,6 @@ impl SessionManager {
             self.fail_turn(&conv, users, envelopes, &message).await;
             return;
         }
-        self.told_notes(&conv, instruction_notes).await;
         #[cfg(test)]
         if envelopes
             .iter()
@@ -2690,6 +2703,8 @@ impl SessionManager {
         for message_id in seen {
             self.peer_seen(&conv.id, message_id).await;
         }
+        // After the messages it carries are seen: a CLI answers them as soon as it has them.
+        self.told_notes(&conv, instruction_notes).await;
         if let Some((_, record)) = reborn {
             crate::logging::private_trace!(conv.private_logs, info, "orchestrator reborn"; conversation = %conv.id, generation = record.generation, tokens = record.briefing_tokens, trigger = ?record.trigger);
             self.log_orchestrator(
@@ -5716,7 +5731,12 @@ impl SessionManager {
 
     /// The notes the conversation's CLI session needs before its next turn: what changed in
     /// its instructions since it was last told (see [`prompts::notes`]).
-    async fn instruction_notes(&self, conv: &Arc<ConvLive>) -> Vec<prompts::Note> {
+    /// `due`: the rules this turn's messages call for ([`prompts::FirstUse`]).
+    async fn instruction_notes(
+        &self,
+        conv: &Arc<ConvLive>,
+        due: Vec<prompts::FirstUse>,
+    ) -> Vec<prompts::Note> {
         let current = match conv.kind {
             ConversationKind::Session => {
                 let Ok(conversation) = self.core.conversation(&conv.id) else {
@@ -5742,6 +5762,10 @@ impl SessionManager {
                 current.review_work = self.reviews_on();
                 current.git_writing = prompts::git_writing(&self.core.settings());
                 current.browser = self.core.settings().browser_enabled;
+                current.due = due;
+                if let Some(cli) = conv.live_cli().await {
+                    current.provider = cli.provider;
+                }
                 current
             }
             ConversationKind::Chat => {

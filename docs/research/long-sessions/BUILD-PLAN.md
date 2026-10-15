@@ -593,6 +593,25 @@ Scope: the per-call fixed cost, thread wakes and background spend, measured with
 - **(c)** tool descriptions that repeat the instructions shortened (`crates/mcp-server/src/catalog.rs`, 19 kB of
   descriptions).
 
+- **(d), added in phase C (approved):** the rules only a worker job, a follow-up or another session needs leave the
+  instructions. Where each goes:
+  - **`delegate_task`'s description** (kept under Claude Code's 4,096-character cut while it loads up front):
+    batches and dependent parts, efforts, the self-contained brief with `include_request`, no /tmp paths in a spec,
+    task kinds with operate, the live look and the mockup flow, `subject`, and "merge it when done" while workers
+    write. Its fields keep one line each;
+  - **a note with the first worker message** (report, question, outline or landing) in each CLI session: answering
+    and steering workers, judging reports, landing at once, approving an outline, worker reviews, findings checked in
+    the merged code, fix tasks, and not restating reports;
+  - **the follow-up block and another session's message themselves:** both may come into a running turn, where no
+    note goes, so each carries the few rules it needs;
+  - **their tools:** previews and their sandbox rules in `start_preview`, a failed CI's fix in `ci_status`, when to
+    write to another session in `message_session`.
+
+  The instructions keep a one-line pointer to each. A session on instructions from before has the rules already: its
+  revision note marks them told.
+- **(e), added in phase C (approved):** a passing `run_check` whose output is over 1 kB replies with its warning lines
+  and its last lines, the whole output one `read_artifact` away. A failure comes back as before.
+
 Target: 3–5k fewer tokens per thread call.
 - **Done when:**
   - first-call context is measured before and after (P0.1);
@@ -636,6 +655,17 @@ is built in D1.0.
 - B7, a verified scout brief.
 
 Each ships only if V1 or V3 shows a gain at equal quality.
+
+**C7. The session's own worktree starts warm (added in phase C, approved).** It gets the copy-on-write copies of the
+checkout's dependency installs and build caches that a worker's worktree gets (`warm`), and the thread hears so in a
+`[workspace]` note. Every Brigadier bench run at phase B's head lost two calls to a first check failing on a missing
+`node_modules`, then `npm ci`, then the check again: about 70k tokens on T1.
+- **Done when:** a flow test shows the thread's worktree holding the checkout's `node_modules`, with the note on its
+  first turn only.
+
+**C8. The review line, tuned from V1 (Q48).** V1 cases just under and just over the line (about 150 changed lines of
+code, 5 code files), and a small change marked risky, measure each review's cost and whether its findings would have
+been missed. The line is settled from those numbers, and the phase report says what was chosen and why.
 
 **Validation:**
 - **Bench T1–T6 and T7L,** n = 3, cold and warm (T7L's plain-arm runs are made first, since it is frozen and not run

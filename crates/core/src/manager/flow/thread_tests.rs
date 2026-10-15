@@ -1019,7 +1019,10 @@ async fn starts_over_on_older_instructions(thread: ProviderKind) {
         .append_system_prompt
         .clone()
         .unwrap();
-    assert!(rules.contains("started in one batch"), "{rules}");
+    assert!(
+        rules.contains("delegate_task says how to brief them"),
+        "{rules}"
+    );
     assert!(
         rules.contains("Interview the user when they invite questions"),
         "{rules}"

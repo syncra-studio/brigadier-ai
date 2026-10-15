@@ -662,14 +662,15 @@ impl SessionManager {
             label: format!("peer {message_id}"),
             task_id: None,
             text: format!(
-                "{}\n{text}",
+                "{}\n{text}\n{}",
                 header(
                     &title,
                     &project,
                     &record.peer,
                     message_id,
                     record.reply_to.as_deref()
-                )
+                ),
+                super::prompts::PEER_RULES
             ),
         };
         let chain = TurnChain {

@@ -19,15 +19,49 @@ use serde_json::Value;
 
 use crate::schema::{input_schema, no_arguments};
 
-const DELEGATE_TASK: &str = "Start a worker on one task. Returns at once with the task id \
-(e.g. \"task-3\"); the worker runs in the background and its final report arrives later as a \
-message in this conversation. Never wait, sleep or poll for it: end your turn, and carry on \
-when the report or the user's next message arrives. You can delegate several independent tasks \
-at once. The worker sees nothing of this conversation but `spec` (and the listed attachments), \
-so make the spec self-contained. `implement` and `merge` tasks change code in their own git \
-worktree, commit their own steps and land only through land_phase; the other kinds only read \
-and report. An `operate` task uses apps on this Mac to reach `end_state` in `target`, and \
-reports what it did and how it checked.";
+/// `delegate_task`'s description, which carries the rules for briefing and routing workers
+/// (BUILD-PLAN C1): the thread does normal work itself, so they are read when it delegates,
+/// not on every call. Under [`DESCRIPTION_MAX`] characters, where Claude Code cuts a
+/// description it loads up front.
+const DELEGATE_TASK: &str = "Start a worker on one task. Returns at once with its id (\"task-3\"); \
+its report arrives later as a message. Never wait or poll: end your turn and carry on when the \
+report or the user's next message arrives.
+
+When: parts that can run at once, very long jobs, work needing tools you lack (a look at a \
+running app), or the user's ask. Independent parts (separate questions, writers on separate \
+files) start in one batch, several calls in one message, each one job with its own \"done \
+when\"; dependent parts run one after another (plan_phases). Meanwhile do your own part.
+
+The brief (`spec`) is self-contained: the worker sees nothing of this conversation. Give the \
+constraints and settled decisions, what \"done\" means and how to check each part by its own \
+checks only (never the full suite or an app build; screenshots only if the user asked), and the \
+code pointers you have. With `include_request` Brigadier adds the user's request verbatim, with \
+what was added since: don't copy it into the spec. Never tell a worker to write outside its \
+worktree and scratch folder, nor name a /tmp path: files for you or the user go in its outputs \
+folder.
+
+Kinds: `scout` looks around the repository; `research` checks current docs and the web; \
+`implement` changes code in its own worktree, commits its steps and lands only through \
+land_phase; `operate` uses apps on this Mac (over about five GUI steps) to reach `end_state` in \
+`target`, changing no code, on a fast GUI model; a job that changes code and shows in an app \
+stays one implement task. `review`, `merge` and `verify` read and report.
+
+Apps: with computer use on, every worker can open an app on this Mac, look at it and use it; \
+you can't. A visible UI change, however small, is looked at live once on the landed work: \
+[checks passed …] asks for one task with `live_look`; workers use scripted UI checks, and a \
+mockup's final comparison is a live capture. A visible UI change that isn't a small fix: first ask_user \"Want a mockup \
+first?\" (Yes / Skip; say if part of it can't be faked). Yes: a task with `mockup`, then ask \
+only what its screenshots can't show; the user's marked notes go to that worker (message_worker \
+with their attachments). On their yes to the work, land the mockup, then delegate with \
+`matches_mockup`; if they drop it, stop the mockup.
+
+`subject`: a review's task; a merge task's conflicting task (none merges the session's base \
+into its branch); a fix's task: after a phase's verifier it continues that work and lands it \
+with its own, after a landing it takes the task's open review findings and resumes its worker's \
+session.
+
+\"Merge it when done\" while workers write is consent: call finish_session with those words; \
+it holds the merge until they land.";
 
 const MESSAGE_WORKER: &str = "Send text to a worker: an instruction that steers its current \
 work, or sends a reported worker back to work. Answer a worker's question with answer_worker. \
@@ -207,7 +241,9 @@ items itself: don't repeat them. Returns at once.";
 const CI_STATUS: &str = "After a push of yours (`git push`), say which commit and branch went \
 to which remote: it answers at once whether this repository's CI can be watched from here \
 (GitHub Actions, gh signed in), can't be (another CI, or gh missing or signed out; with a link \
-when there is one), or has no CI, and what to tell the user.";
+when there is one), or has no CI, and what to tell the user. On [ci … failed], fix it on that branch (`main` only \
+through the usual merge into it here), push it and call watch_ci again without asking: the \
+user's yes to watching covers that, nothing else.";
 
 const WATCH_CI: &str = "Watch the GitHub Actions runs of a push, once the user said yes to \
 watching it: it returns at once, the user sees the runs live, and the result comes later as a \
@@ -308,7 +344,13 @@ port answers, or an app's window opens): until preview_log says it is running, t
 it is starting, not that it runs. `kind` \"app\" (inferred for `tauri dev` and Electron) is a \
 desktop app with its own window and no URL; for \"web\" tell the user where to look (the URL \
 and port). It stops when you call stop_preview, when the user presses Stop, and when the \
-session is merged, archived or deleted; for one-off commands use your shell instead.";
+session is merged, archived or deleted; for one-off commands use your shell instead. Users may \
+pause previews; preview_log gives the logs. Running Brigadier itself, use a new \
+BRIGADIER_DATA_DIR under /tmp and a dev identity, never ai.brigadier.app. macOS GUI previews below \
+Full access stay confined with private temp space. Chromium/Electron may need `--no-sandbox`; \
+Brigadier still confines their helpers. Mach rendezvous IDs: ai.brigadier.dev, \
+com.github.Electron, org.chromium.Chromium, com.google.chrome.for.testing; other packaged IDs need \
+a dev identity or Full access. Put browser profiles in writable roots.";
 
 const STOP_PREVIEW: &str = "Stop a preview (`id`, e.g. \"preview-1\") or, without an id, \
 every running one: SIGTERM, then a kill after a few seconds. It is removed from the user's \
@@ -447,11 +489,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
 
 fn orchestrator_tools() -> Vec<Tool> {
     vec![
-        tool(
-            "delegate_task",
-            DELEGATE_TASK,
-            input_schema::<DelegateTask>(),
-        ),
+        tool("delegate_task", DELEGATE_TASK, delegate_task_schema()),
         tool(
             "message_worker",
             MESSAGE_WORKER,
@@ -607,6 +645,95 @@ fn chat_tools() -> Vec<Tool> {
         SAVE_MEMORY,
         input_schema::<SaveMemory>(),
     )]
+}
+
+/// The most characters of a tool's description Claude Code keeps for a tool loaded up front.
+#[cfg(test)]
+const DESCRIPTION_MAX: usize = 4096;
+
+/// `delegate_task`'s fields in one line each (BUILD-PLAN C1): the rules behind them are in its
+/// description, and the shared types' own docs stay as they are.
+const DELEGATE_TASK_FIELDS: &[(&str, &str)] = &[
+    (
+        "title",
+        "A plain 2–4 word job name, unique in this chat (\"Add JSON output\"); no roles, phases or ids.",
+    ),
+    (
+        "kind",
+        "What it does: scout, research, implement, review, merge, verify or operate.",
+    ),
+    (
+        "spec",
+        "The self-contained brief: goal, context, constraints, \"done when\" and how to check it.",
+    ),
+    (
+        "provider",
+        "Optional \"claude\" or \"codex\"; leave it out to let Brigadier route.",
+    ),
+    ("model", "Optional model id, from that provider's list."),
+    (
+        "effort",
+        "\"low\" for a mechanical edit, \"medium\" for small bounded work, \"high\" for cross-area, risky or unclear work.",
+    ),
+    (
+        "subject",
+        "The task it acts on (\"task-2\"): a review's, a merge's or a fix's.",
+    ),
+    (
+        "target",
+        "operate: the app, dev build path or URL, and the window.",
+    ),
+    (
+        "end_state",
+        "operate: what must be true on screen at the end.",
+    ),
+    (
+        "attachments",
+        "Ids of the user's attachments it gets as files.",
+    ),
+    (
+        "include_request",
+        "True when it takes the whole request: Brigadier adds the user's message verbatim.",
+    ),
+    (
+        "areas",
+        "Optional parts it touches (\"frontend\", \"backend\", \"infra\", \"docs\", \"tests\") when the spec's paths don't say; routing goes by them.",
+    ),
+    (
+        "quality",
+        "Optional \"high\" when it needs the best models (hard or risky work).",
+    ),
+    ("image_generation", "True when it must generate images."),
+    ("phase", "The plan phase it works on (plan_phases), from 1."),
+    (
+        "role",
+        "lead (an implement task's default), parallel (its own files next to the lead), verifier, fix, merge or reviewer.",
+    ),
+    (
+        "mockup",
+        "True for a mockup the user asked for: screenshots from the real components with fake data; it lands only on their yes.",
+    ),
+    (
+        "matches_mockup",
+        "The mockup's task, for the real change built after it.",
+    ),
+    (
+        "live_look",
+        "True for the one task that looks at the landed visible changes live in the session tip's dev app; it changes nothing.",
+    ),
+];
+
+/// [`DelegateTask`]'s schema with [`DELEGATE_TASK_FIELDS`]' descriptions.
+fn delegate_task_schema() -> JsonObject {
+    let mut schema = input_schema::<DelegateTask>();
+    if let Some(Value::Object(properties)) = schema.get_mut("properties") {
+        for (field, description) in DELEGATE_TASK_FIELDS {
+            if let Some(Value::Object(property)) = properties.get_mut(*field) {
+                property.insert("description".into(), (*description).into());
+            }
+        }
+    }
+    schema
 }
 
 fn tool(name: &'static str, description: &'static str, schema: JsonObject) -> Tool {
@@ -780,6 +907,88 @@ pub const SUBMIT_REPORT_EXAMPLE: &str = r#"{"summary": "Set Level to 37 through 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every tool fits where Claude Code cuts a description loaded up front, and
+    /// `delegate_task` keeps one short line per field, each for a field it has (BUILD-PLAN C1).
+    #[test]
+    fn descriptions_fit_and_delegate_tasks_fields_are_one_line_each() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::WithEscalation,
+        };
+        for role in [thread, worker(false), worker(true)] {
+            for tool in tools_for(&role) {
+                let description = tool.description.as_deref().unwrap_or_default();
+                assert!(
+                    description.chars().count() <= DESCRIPTION_MAX,
+                    "{}: {} characters",
+                    tool.name,
+                    description.chars().count()
+                );
+            }
+        }
+        let schema = delegate_task_schema();
+        let properties = schema["properties"].as_object().unwrap();
+        assert_eq!(properties.len(), DELEGATE_TASK_FIELDS.len());
+        for (field, line) in DELEGATE_TASK_FIELDS {
+            assert_eq!(properties[*field]["description"], *line, "{field}");
+            assert!(line.len() <= 140, "{field}: {}", line.len());
+        }
+        assert_eq!(
+            properties["kind"]["enum"],
+            serde_json::json!([
+                "scout",
+                "research",
+                "implement",
+                "review",
+                "merge",
+                "verify",
+                "operate"
+            ])
+        );
+        let bytes =
+            serde_json::to_string(&Value::Object(schema)).unwrap().len() + DELEGATE_TASK.len();
+        assert!(bytes < 6_000, "delegate_task is {bytes} bytes");
+    }
+
+    /// What the thread's instructions no longer say is in the tool it applies to, read when
+    /// the thread uses it (BUILD-PLAN C1).
+    #[test]
+    fn the_rules_left_out_of_the_threads_instructions_are_in_their_tools() {
+        for said in [
+            "start in one batch, several calls in one message, each one job with its own",
+            "dependent parts run one after another (plan_phases)",
+            "how to check each part by its own checks only (never the full suite or an app build; screenshots only if the user asked)",
+            "With `include_request` Brigadier adds the user's request verbatim",
+            "nor name a /tmp path",
+            "`operate` uses apps on this Mac (over about five GUI steps)",
+            "a job that changes code and shows in an app stays one implement task",
+            "[checks passed …] asks for one task with `live_look`",
+            "first ask_user \"Want a mockup first?\" (Yes / Skip",
+            "message_worker with their attachments",
+            "land the mockup, then delegate with `matches_mockup`",
+            "after a landing it takes the task's open review findings and resumes its worker's session",
+            "\"Merge it when done\" while workers write is consent",
+        ] {
+            assert!(DELEGATE_TASK.contains(said), "{said}");
+        }
+        let effort = &delegate_task_schema()["properties"]["effort"]["description"];
+        assert!(
+            effort
+                .as_str()
+                .unwrap()
+                .starts_with("\"low\" for a mechanical edit")
+        );
+        assert!(START_PREVIEW.contains(
+            "use a new BRIGADIER_DATA_DIR under /tmp and a dev identity, never ai.brigadier.app"
+        ));
+        assert!(START_PREVIEW.contains("Mach rendezvous IDs: ai.brigadier.dev"));
+        assert!(CI_STATUS.contains("(`main` only through the usual merge into it here), push it and call watch_ci again without asking"));
+        assert!(
+            MESSAGE_SESSION
+                .contains("only when that session owns the code or the decision you need")
+        );
+    }
 
     fn worker(checks: bool) -> Role {
         Role::Worker {

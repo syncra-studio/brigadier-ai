@@ -780,7 +780,9 @@ impl SessionManager {
     }
 
     /// Stores a check's whole output for `caller`'s conversation; returns the reply (the
-    /// output itself up to [`TRIM_ABOVE`] bytes, else its digest) and the output's alias.
+    /// output itself up to [`TRIM_ABOVE`] bytes, else its digest; a pass's over
+    /// [`crate::digest::PASS_WHOLE_MAX`] bytes as its warnings and summary) and the output's
+    /// alias.
     async fn check_reply(
         &self,
         caller: &Caller,
@@ -795,7 +797,9 @@ impl SessionManager {
                 super::secrets::redactor(self.grants.secrets()),
             ],
         );
-        let trimmed = output.len() > TRIM_ABOVE;
+        // A pass's long output comes as its warnings and summary (BUILD-PLAN C1).
+        let passed = status == "exit 0" && output.len() > crate::digest::PASS_WHOLE_MAX;
+        let trimmed = passed || output.len() > TRIM_ABOVE;
         let short = (!trimmed).then(|| format!("[{status}]\n{}", String::from_utf8_lossy(&output)));
         let whole = (trimmed && caller.task_id.is_some()).then(|| output.clone());
         let (stored, digest) = self
@@ -806,6 +810,7 @@ impl SessionManager {
                 output,
                 trimmed,
                 caller.provider == ProviderKind::Codex,
+                passed,
             )
             .await?;
         let mut reply = short.unwrap_or(digest);

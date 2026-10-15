@@ -2874,6 +2874,10 @@ pub struct Told {
     /// as no instructions mentioned it before the switch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<bool>,
+    /// The rules sent in a note when they first apply (BUILD-PLAN C1) that this CLI session
+    /// has had: `workers`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_use: Option<Vec<String>>,
 }
 
 /// One entry of the orchestrator log shown in the Inspector.
