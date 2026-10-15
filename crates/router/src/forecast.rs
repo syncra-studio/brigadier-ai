@@ -2,14 +2,17 @@
 //! costs a model's routing score. Pure: the daemon's quota monitor keeps the samples and calls
 //! these with the time.
 //!
-//! - **Rate:** an exponentially weighted average of Δused/Δt over the last hour for windows of
-//!   5 hours or less, the last day for longer ones (a window of unknown length counts as short).
+//! - **Rate:** the use over the time it took, over the last hour for windows of 5 hours or less,
+//!   the last day for longer ones (a window of unknown length counts as short), each interval
+//!   weighted by how recent it is (time constant: a third of the look-back). Weighing use and
+//!   time alike keeps one short busy interval from setting the pace (BUILD-PLAN A10).
 //!   Samples are taken as a step function (the monitor stores a value when it changes), so the
 //!   value at the start of the look-back is the last sample before it. A drop of more than a
 //!   point is a reset and that interval is skipped; smaller drops count as no use, and only a
 //!   rise past the highest value since the last reset counts as use (Claude's two reports can
-//!   round the same use a point apart, so the reading can flicker 14, 15, 14, 15). Recent
-//!   intervals weigh more (time constant: a third of the look-back).
+//!   round the same use a point apart, so the reading can flicker 14, 15, 14, 15). When the
+//!   samples start inside the look-back with no reset among them, the time before the first
+//!   counts at the window's own pace so far (its use over the time since it began).
 //! - **Forecast:** `projected_at_reset = used + rate × time left`, and "runs out at" when that
 //!   passes 100. Absent until the samples span 10 minutes (short windows) or an hour.
 //! - **Heat:** Limited when a limit names the window or it is 97% used; Hot when projected at 90%
@@ -229,13 +232,17 @@ fn forecast(
     }
 
     let tau = lookback as f64 / 3.0;
-    let mut rate: Option<f64> = None;
+    // How much an interval ending `to` and lasting `dt` counts: recent ones more.
+    let weight = |to: i64, dt: f64| (-((now_ms - to) as f64 + dt / 2.0) / tau).exp();
+    let (mut use_sum, mut time_sum) = (0.0, 0.0);
+    let mut reset = false;
     // The highest reading since the last reset: a flicker back up to it is not new use.
     let mut peak = first.used_percent;
     for pair in points.windows(2) {
         let dt = (pair[1].at_ms - pair[0].at_ms) as f64;
         if pair[1].used_percent - pair[0].used_percent < -RESET_DROP {
             peak = pair[1].used_percent;
+            reset = true;
             continue;
         }
         if dt <= 0.0 {
@@ -243,15 +250,34 @@ fn forecast(
         }
         let used = (pair[1].used_percent - peak).max(0.0);
         peak = peak.max(pair[1].used_percent);
-        let this = used / (dt / HOUR_MS);
-        let alpha = 1.0 - (-dt / tau).exp();
-        rate = Some(rate.map_or(this, |rate| rate + alpha * (this - rate)));
+        let w = weight(pair[1].at_ms, dt);
+        use_sum += w * used;
+        time_sum += w * dt / HOUR_MS;
     }
-    let rate = rate?;
     let used = window.used_percent;
     let hours_left = window
         .resets_at_ms
         .map(|reset| ((reset - now_ms).max(0)) as f64 / HOUR_MS);
+    // The look-back's time before the first sample, at the window's own pace so far.
+    let began_hours_ago = window
+        .window_minutes
+        .zip(hours_left)
+        .map(|(minutes, left)| minutes as f64 / 60.0 - left)
+        .filter(|hours| *hours > 0.0);
+    if let Some(began) = began_hours_ago
+        && !reset
+    {
+        let gap = ((first.at_ms - cutoff) as f64 / HOUR_MS).min(began);
+        if gap > 0.0 {
+            let w = weight(first.at_ms, gap * HOUR_MS);
+            use_sum += w * gap * (used / began);
+            time_sum += w * gap;
+        }
+    }
+    if time_sum <= 0.0 {
+        return None;
+    }
+    let rate = use_sum / time_sum;
     let projected = used + rate * hours_left.unwrap_or(0.0);
     let runs_out_at_ms = (rate > 0.0 && projected > 100.0).then(|| {
         let hours = ((100.0 - used) / rate).max(0.0);
@@ -342,5 +368,52 @@ mod tests {
             "rate {}",
             forecast.rate_per_hour
         );
+    }
+
+    /// One busy moment is not the week's pace (BUILD-PLAN A10): a point used in two minutes,
+    /// with nothing used in the hour since and five days to the weekly reset, once read as a
+    /// window "projected at" thousands of percent and sent work to the other vendor.
+    #[test]
+    fn one_busy_moment_does_not_project_the_week() {
+        let hour = 3_600_000;
+        let now = weekly(21.0).resets_at_ms.unwrap() - 5 * 24 * hour;
+        let history = samples(&[(now - hour, 20.0), (now - hour + 120_000, 21.0)]);
+        let state = window_state(&weekly(21.0), &history, now, false, now);
+        let forecast = state.forecast.expect("an hour of samples gives a forecast");
+        assert!(
+            forecast.projected_at_reset < HOT_PROJECTED,
+            "projected {}",
+            forecast.projected_at_reset
+        );
+        // A busy hour after a quiet day, the same.
+        let history = samples(&[
+            (now - 30 * hour, 17.0),
+            (now - 45 * 60_000, 18.0),
+            (now - 30 * 60_000, 19.0),
+            (now - 15 * 60_000, 20.0),
+            (now, 21.0),
+        ]);
+        let state = window_state(&weekly(21.0), &history, now, false, now);
+        let forecast = state.forecast.expect("a day of samples gives a forecast");
+        assert!(
+            forecast.projected_at_reset < HOT_PROJECTED,
+            "projected {}",
+            forecast.projected_at_reset
+        );
+        // A whole day at two points an hour is the pace, and runs hot.
+        let history: Vec<QuotaSample> = (0..=48)
+            .map(|step| QuotaSample {
+                at_ms: now - 24 * hour + step * hour / 2,
+                used_percent: 20.0 + step as f64,
+            })
+            .collect();
+        let state = window_state(&weekly(68.0), &history, now, false, now);
+        let forecast = state.forecast.expect("a day of samples gives a forecast");
+        assert!(
+            (forecast.rate_per_hour - 2.0).abs() < 1e-6,
+            "rate {}",
+            forecast.rate_per_hour
+        );
+        assert_eq!(state.heat, Heat::Hot);
     }
 }

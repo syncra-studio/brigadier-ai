@@ -354,9 +354,16 @@ fn resolve(
 
 /// `path` made absolute against `base`, `.` and `..` resolved, symlinks resolved as far as
 /// the file system has it: by the file system itself for a path that exists, as a `..` after
-/// a symlink leaves the symlink's target, which resolving it by name gets wrong.
+/// a symlink leaves the symlink's target, which resolving it by name gets wrong. A leading `~`
+/// is the user's home, as the shell reads it, never a folder named `~` under `base`.
 fn absolute(base: &Path, path: &str) -> PathBuf {
-    let path = Path::new(path);
+    let home = match path.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+            std::env::home_dir().map(|home| home.join(rest.trim_start_matches('/')))
+        }
+        _ => None,
+    };
+    let path = home.as_deref().unwrap_or(Path::new(path));
     let joined = if path.is_absolute() {
         path.to_owned()
     } else {
@@ -591,5 +598,24 @@ mod tests {
                 outside: true
             }]
         );
+    }
+
+    #[test]
+    fn a_leading_tilde_is_the_users_home_not_a_folder_in_the_workspace() {
+        let home = std::env::home_dir().expect("a home");
+        let base = Path::new("/tmp/reads-tilde-workspace");
+        let name = "reads-tilde-test-no-such-file.md";
+        assert_eq!(
+            absolute(base, &format!("~/{name}")),
+            absolute(Path::new("/"), &home.join(name).display().to_string())
+        );
+        assert_eq!(
+            absolute(base, "~"),
+            absolute(Path::new("/"), &home.display().to_string())
+        );
+        // Only a leading `~` alone or before a slash: `~x` and `a/~` are names.
+        let named = |name: &str| absolute(Path::new("/"), &base.join(name).display().to_string());
+        assert_eq!(absolute(base, "~x"), named("~x"));
+        assert_eq!(absolute(base, "a/~"), named("a/~"));
     }
 }
