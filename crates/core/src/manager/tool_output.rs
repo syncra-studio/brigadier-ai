@@ -16,7 +16,7 @@
 //!   tool's output, so that digest is sized for it ([`crate::digest::wrapped_digest`]).
 
 use super::SessionManager;
-use crate::digest::{TRIM_ABOVE, digest, wrapped_digest};
+use crate::digest::{BASH_WHOLE_MAX, digest, wrapped_digest};
 use crate::model::{ConversationId, DomainEvent};
 use crate::tools::Role;
 use crate::work::{OutputSource, StoredOutput};
@@ -136,7 +136,7 @@ impl SessionManager {
 
     /// What a thread's output hook sends (`brigadierd hook post-tool-use`): a successful
     /// call's whole output, or a failing call's excerpt. Returns what replaces the output for
-    /// the model: the digest of a whole output over [`TRIM_ABOVE`] bytes; nothing for a
+    /// the model: the digest of a whole output over [`BASH_WHOLE_MAX`] bytes; nothing for a
     /// shorter one or an excerpt. `None` from the grant: it isn't a live hook grant.
     pub async fn hook_output(
         &self,
@@ -149,7 +149,7 @@ impl SessionManager {
             return None;
         };
         Some(match kind {
-            HookOutput::Full if output.len() <= TRIM_ABOVE => Ok(None),
+            HookOutput::Full if output.len() <= BASH_WHOLE_MAX => Ok(None),
             HookOutput::Full => self
                 .store_output(&conversation_id, OutputSource::Bash, status, output, true)
                 .await

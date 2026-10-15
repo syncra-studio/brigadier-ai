@@ -21,6 +21,10 @@
 pub const DIGEST_MAX: usize = 4096;
 /// Outputs up to this size reach the model as they are; longer ones as a digest.
 pub const TRIM_ABOVE: usize = 8192;
+/// A Claude thread's own `Bash` outputs up to this size reach its model as they are, the CLI's
+/// own limit: what it prints with a command is mostly source it asked to read (`cat` of a few
+/// files), and every digest of one cost a call that read the files again (BUILD-PLAN C10).
+pub const BASH_WHOLE_MAX: usize = 30_000;
 /// Most bytes the header takes.
 const HEADER_MAX: usize = 200;
 /// Most bytes the matching lines take, their label included.

@@ -216,7 +216,7 @@ const CODEX_COMMANDS: &str = "\n- Use @run for builds, tests, logs and long list
 /// whole, a failure's included; where its own shell starts (its CLI runs in its scratch
 /// folder, so a workspace change can resume the same session) and what that shell's long
 /// output looks like (its output hook trims it).
-const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix: the name without it doesn't exist. One named here that isn't in your tool list yet loads through ToolSearch: search for it by name, then call it.\n- Use @run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it, a failure's too. Below Full access, when the sandbox blocks a command, run_unsandboxed runs it outside once it is approved for you.\n- Your own shell starts in a scratch folder, not in your workspace: run a command there as `cd <your workspace> && …`. Its output over 8 KB comes back as a digest too; a failing command's output comes as the CLI's own excerpt.";
+const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix: the name without it doesn't exist. One named here that isn't in your tool list yet loads through ToolSearch: search for it by name, then call it.\n- Use @run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it, a failure's too. Below Full access, when the sandbox blocks a command, run_unsandboxed runs it outside once it is approved for you.\n- Your own shell starts in a scratch folder, not in your workspace: run a command there as `cd <your workspace> && …`. Its output up to 30 KB comes back whole, a longer one as a digest; a failing command's output comes as the CLI's own excerpt.";
 
 /// Command tools supplied by the CLI when Brigadier has no supported sandbox wrapper.
 const NATIVE_COMMANDS: &str = "\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
@@ -687,6 +687,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, on your session's own worktree, give your last run_check `commit: \"<message>\"` to save a step: when the check passes, Brigadier commits all your changes with your message and your trailer in that same call, and when it fails nothing is committed. A commit that fixes review findings still goes through git with both trailers. On the user's own checkout nothing changes.",
         worker: "",
     },
+    Revision {
+        number: SHELL_WHOLE_REVISION,
+        thread: "From now on, on a Claude thread, your own shell's output comes back whole up to 30 KB (it came as a digest over 8 KB): read a few files with one command and use what it prints, without reading them again.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -879,6 +884,10 @@ pub(crate) const LAZY_TOOLS_REVISION: u32 = 34;
 /// The thread may commit in the same call as its last check, `run_check`'s `commit`
 /// (BUILD-PLAN C9, Q50): its decision, carried out only on a pass.
 pub(crate) const COMMIT_ON_PASS_REVISION: u32 = 35;
+
+/// A Claude thread's own shell output comes back whole up to 30 KB, the CLI's own limit, where
+/// it came as a digest over 8 KB (BUILD-PLAN C10).
+pub(crate) const SHELL_WHOLE_REVISION: u32 = 36;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

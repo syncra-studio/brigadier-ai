@@ -4,7 +4,7 @@
 //! from Brigadier's `--settings`), with the call's event on stdin
 //! (docs/evidence/2026-10-07-thread-phase2-contracts.md §1–3):
 //!
-//! - **Success** over [`TRIM_ABOVE`] bytes: the whole output (the CLI's own copy at
+//! - **Success** over [`BASH_WHOLE_MAX`] bytes: the whole output (the CLI's own copy at
 //!   `tool_response.persistedOutputPath` when it made one, else `stdout` and `stderr`) goes to
 //!   the daemon, which stores it and answers with its digest. The hook prints the same
 //!   `tool_response` object with `stdout` replaced by the digest, `stderr` emptied and the
@@ -23,7 +23,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use brigadier_core::digest::TRIM_ABOVE;
+use brigadier_core::digest::BASH_WHOLE_MAX;
 use brigadier_core::manager::{HOOK_GRANT_ENV, OUTPUT_MAX_BYTES};
 use brigadier_ipc::protocol::{ClientFrame, HookOutput, HookReply};
 use brigadier_sandbox::PlatformOptions;
@@ -117,7 +117,7 @@ fn handle(
 }
 
 /// What to do with a hook event: only `Bash` calls, a success when its whole output is longer
-/// than [`TRIM_ABOVE`] bytes, a failure always.
+/// than [`BASH_WHOLE_MAX`] bytes, a failure always.
 fn plan(event: &Value) -> Option<Plan> {
     if event.get("tool_name").and_then(Value::as_str) != Some("Bash") {
         return None;
@@ -126,7 +126,7 @@ fn plan(event: &Value) -> Option<Plan> {
         "PostToolUse" => {
             let response = event.get("tool_response")?.as_object()?.clone();
             let output = whole_output(&response)?;
-            if output.len() <= TRIM_ABOVE {
+            if output.len() <= BASH_WHOLE_MAX {
                 return None;
             }
             // A success has no exit code: exit 0, or a benign non-zero exit the CLI
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn a_long_success_is_replaced_by_its_digest_in_the_same_shape() {
-        let stdout = "ok\n".repeat(5000);
+        let stdout = "ok\n".repeat(12_000);
         let sent = std::cell::RefCell::default();
         let printed = handle(
             &success(json!({
@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn a_short_success_is_left_alone_without_reaching_the_daemon() {
         let printed = handle(
-            &success(json!({ "stdout": "x".repeat(TRIM_ABOVE), "stderr": "" })),
+            &success(json!({ "stdout": "x".repeat(BASH_WHOLE_MAX), "stderr": "" })),
             |_, _| panic!("nothing to store"),
         );
         assert_eq!(printed, None);
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn an_unreachable_daemon_or_another_tool_prints_nothing() {
-        let long = success(json!({ "stdout": "y\n".repeat(10_000), "stderr": "" }));
+        let long = success(json!({ "stdout": "y\n".repeat(20_000), "stderr": "" }));
         assert_eq!(handle(&long, |_, _| None), None);
         assert_eq!(
             handle(&long, |_, _| Some(HookReply { replacement: None })),

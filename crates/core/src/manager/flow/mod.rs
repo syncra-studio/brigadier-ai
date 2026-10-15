@@ -1798,6 +1798,8 @@ mod engine_tests;
 #[cfg(test)]
 mod findings_tests;
 #[cfg(test)]
+mod gate_fixes_tests;
+#[cfg(test)]
 mod git_writing_tests;
 #[cfg(test)]
 mod held_merge_tests;

@@ -161,6 +161,16 @@ async fn a_trimmed_output_is_read_back_whole_by_its_own_session_only() {
             .await,
         Some(Ok(None))
     ));
+    // A `cat` of a few source files, 20 kB, reaches the model whole, as the CLI's own limit
+    // has it (BUILD-PLAN C10).
+    let source = "export const x = 1;\n".repeat(1_000).into_bytes();
+    assert!(source.len() > 16_000 && source.len() <= crate::digest::BASH_WHOLE_MAX);
+    assert!(matches!(
+        flow.manager
+            .hook_output(&hook, HookOutput::Full, "exit 0", source)
+            .await,
+        Some(Ok(None))
+    ));
     assert!(flow.board().await.outputs.is_empty());
 
     let digest = flow
