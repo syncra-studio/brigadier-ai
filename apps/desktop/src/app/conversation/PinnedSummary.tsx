@@ -757,8 +757,8 @@ export function SummaryFloat({ children }: { children: ReactNode }) {
 }
 
 /** Whether the branch changes anything its base lacks: "Merge into ‹base›" shows only then. */
-export function hasWork(diff: DiffStat | null): boolean {
-  return diff !== null && diff.files.length > 0;
+export function hasWork(diff: DiffStat | null | undefined): boolean {
+  return (diff?.files.length ?? 0) > 0;
 }
 
 /** The branch the session's work is on, with its +N −N once known. */
