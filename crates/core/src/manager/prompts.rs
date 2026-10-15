@@ -216,11 +216,11 @@ const CODEX_COMMANDS: &str = "\n- Use @run for builds, tests, logs and long list
 /// whole, a failure's included; where its own shell starts (its CLI runs in its scratch
 /// folder, so a workspace change can resume the same session) and what that shell's long
 /// output looks like (its output hook trims it).
-const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix: the name without it doesn't exist.\n- Use @run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it, a failure's too. Below Full access, when the sandbox blocks a command, run_unsandboxed runs it outside once it is approved for you.\n- Your own shell starts in a scratch folder, not in your workspace: run a command there as `cd <your workspace> && …`. Its output over 8 KB comes back as a digest too; a failing command's output comes as the CLI's own excerpt.";
+const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix: the name without it doesn't exist. One named here that isn't in your tool list yet loads through ToolSearch: search for it by name, then call it.\n- Use @run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it, a failure's too. Below Full access, when the sandbox blocks a command, run_unsandboxed runs it outside once it is approved for you.\n- Your own shell starts in a scratch folder, not in your workspace: run a command there as `cd <your workspace> && …`. Its output over 8 KB comes back as a digest too; a failing command's output comes as the CLI's own excerpt.";
 
 /// Command tools supplied by the CLI when Brigadier has no supported sandbox wrapper.
 const NATIVE_COMMANDS: &str = "\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
-const CLAUDE_NATIVE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix: the name without it doesn't exist.\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
+const CLAUDE_NATIVE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix: the name without it doesn't exist. One named here that isn't in your tool list yet loads through ToolSearch: search for it by name, then call it.\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
 
 /// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its commits get
 /// their own one-shot review.
@@ -677,6 +677,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, a passing run_check whose output is long returns its warnings and its last lines (where a test runner prints its summary); read_artifact with its out-… id gives the whole output. A failing one comes back as before.",
         worker: "From now on, a passing run_check whose output is long returns its warnings and its last lines (where a test runner prints its summary), with where the whole output is. A failing one comes back as before.",
     },
+    Revision {
+        number: LAZY_TOOLS_REVISION,
+        thread: "From now on, on a Claude thread, Brigadier's rarer tools (workers, plans, previews, CI, other sessions, findings, merging) may not be in your tool list until you look them up: when one these instructions name isn't there, search for it by name with ToolSearch, then call it. The everyday ones (run, run_check, read_artifact, ask_user, note_for_user, query_brain, remember, code_search, code_refs) are always there.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -861,6 +866,10 @@ impl FirstUse {
 /// The revision whose instructions leave [`FirstUse`]'s rules to their notes: a session told
 /// an earlier one has them in its instructions.
 pub(crate) const FIRST_USE_REVISION: u32 = 33;
+
+/// A Claude thread's rarer Brigadier tools wait behind its tool search (BUILD-PLAN C2, Q40):
+/// the new tool set reaches an open session at its next resume or rebirth.
+pub(crate) const LAZY_TOOLS_REVISION: u32 = 34;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

@@ -72,8 +72,10 @@ SendMessage,TaskStop,Monitor,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlan
 /// Claude's built-in tool that starts a sub-agent (`Task` is its older name).
 const SUB_AGENT_TOOLS: &str = "Agent,Task";
 /// A thread's built-in tools ([`ToolSet::Thread`]): no sub-agents (`Agent`/`Task`) and nothing
-/// that runs on in the background (`Monitor`, scheduling); its workers are Brigadier's.
-const THREAD_TOOLS: &str = "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch";
+/// that runs on in the background (`Monitor`, scheduling); its workers are Brigadier's. Tool
+/// search stays (BUILD-PLAN C2): Brigadier marks its everyday tools to load from the start, and
+/// the rest wait behind the search until the thread needs one.
+const THREAD_TOOLS: &str = "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch";
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 /// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
@@ -2363,7 +2365,7 @@ for line in sys.stdin:
             };
             assert_eq!(
                 after("--tools").as_deref(),
-                Some("Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch")
+                Some("Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch")
             );
             assert_eq!(after("--permission-mode").as_deref(), Some(mode));
             assert_eq!(

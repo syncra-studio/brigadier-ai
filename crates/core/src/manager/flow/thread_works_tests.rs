@@ -12,7 +12,9 @@ use serde_json::json;
 use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::board::Board;
-use crate::manager::prompts::{FIRST_USE_REVISION, THREAD_WORKS_REVISION, revision_note};
+use crate::manager::prompts::{
+    FIRST_USE_REVISION, LAZY_TOOLS_REVISION, THREAD_WORKS_REVISION, revision_note,
+};
 use crate::model::{DomainEvent, MessageRole};
 use crate::work::{QuestionKind, RequestState, ReviewState, TaskState};
 
@@ -467,5 +469,87 @@ async fn a_session_from_before_the_first_use_rules_hears_no_rules_it_already_has
             .any(|input| input.contains("[instructions] How you handle workers")),
         "{heard:#?}"
     );
+    flow.stop().await;
+}
+
+/// Rule R for C2 (BUILD-PLAN C2): a session told revision 33 resumes on the new tool set and
+/// hears once that rarer tools load through the tool search, then makes a tiny edit itself.
+#[tokio::test]
+async fn a_session_from_before_lazy_tools_hears_it_once_and_still_works_itself() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let heard = inputs.clone();
+    let mut flow = Flow::start(
+        "works-lazy-r",
+        Options::default(),
+        script(move |turn| {
+            let heard = heard.clone();
+            async move {
+                heard.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("Fix the typo in the README.") {
+                    commit_in_workspace(&turn, "README.md", "fixed\n", "Fix the README typo");
+                    return Reply::text("Fixed the typo in README.md.");
+                }
+                Reply::text("Fine.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Look around.").await;
+    flow.settled().await;
+    flow.core
+        .record(vec![(
+            crate::model::streams::orchestrator(&flow.conversation),
+            DomainEvent::OrchestratorLogged {
+                conversation_id: flow.conversation.clone(),
+                entry: crate::work::OrchestratorEntry::Injection {
+                    injection: crate::work::ContextInjection {
+                        kind: crate::work::InjectionKind::Instructions,
+                        bytes: 100,
+                        tokens_estimate: 25,
+                        label: "instructions revision".into(),
+                        task_id: None,
+                        told: Some(crate::work::Told {
+                            revision: Some(LAZY_TOOLS_REVISION - 1),
+                            ..crate::work::Told::default()
+                        }),
+                    },
+                },
+            },
+        )])
+        .await
+        .unwrap();
+    flow.restart().await;
+    flow.say("Fix the typo in the README.").await;
+    flow.until("the typo's answer", |board| {
+        board.requests.len() == 2
+            && board
+                .requests
+                .values()
+                .all(|request| request.state == RequestState::Done)
+    })
+    .await;
+    let board = flow.settled().await;
+    assert!(board.tasks.is_empty(), "{:#?}", board.tasks);
+    let heard = inputs.lock().unwrap().clone();
+    let note = revision_note(LAZY_TOOLS_REVISION - 1, false).unwrap();
+    assert!(
+        note.contains("search for it by name with ToolSearch"),
+        "{note}"
+    );
+    assert_eq!(
+        heard.iter().filter(|input| input.contains(&note)).count(),
+        1,
+        "{heard:#?}"
+    );
+    // The resumed thread's instructions name the search too (its CLI starts on them).
+    let rules = flow
+        .thread_specs()
+        .last()
+        .unwrap()
+        .1
+        .append_system_prompt
+        .clone()
+        .unwrap();
+    assert!(rules.contains("loads through ToolSearch"), "{rules}");
     flow.stop().await;
 }

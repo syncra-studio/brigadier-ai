@@ -13,7 +13,7 @@ use brigadier_core::tools::{
     StopPreview, StopWorker, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools,
     TaskRef, ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
-use rmcp::model::{JsonObject, Tool};
+use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -430,11 +430,11 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
     match role {
         // A note fork lists the thread's tools, whose calls the host refuses.
         Role::Orchestrator { run, .. } | Role::NoteFork { run, .. } => match run {
-            RunTools::None => ORCHESTRATOR.get_or_init(orchestrator_tools),
+            RunTools::None => ORCHESTRATOR.get_or_init(|| loading(orchestrator_tools())),
             RunTools::Run => RUNNER.get_or_init(|| {
                 let mut tools = orchestrator_tools();
                 tools.push(tool("run", RUN, input_schema::<RunCommand>()));
-                tools
+                loading(tools)
             }),
             RunTools::WithEscalation => ESCALATING.get_or_init(|| {
                 let mut tools = orchestrator_tools();
@@ -444,7 +444,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
                     RUN_UNSANDBOXED,
                     input_schema::<RunUnsandboxed>(),
                 ));
-                tools
+                loading(tools)
             }),
         },
         Role::Worker { checks: false, .. } => WORKER.get_or_init(worker_tools),
@@ -645,6 +645,54 @@ fn chat_tools() -> Vec<Tool> {
         SAVE_MEMORY,
         input_schema::<SaveMemory>(),
     )]
+}
+
+/// The thread's everyday tools, in the model's list from the start (Q40, BUILD-PLAN C2): a
+/// Claude thread finds the rest with its tool search when it needs one, which keeps every
+/// call's fixed start near plain Claude Code's. Codex reads no such mark and loads them all.
+pub const THREAD_ALWAYS_LOADED: &[&str] = &[
+    "run",
+    "run_check",
+    "read_artifact",
+    "ask_user",
+    "note_for_user",
+    "query_brain",
+    "remember",
+    "code_search",
+    "code_refs",
+];
+
+/// What the tool search matches a deferred tool on besides its name and description.
+const SEARCH_HINTS: &[(&str, &str)] = &[
+    ("delegate_task", "start a worker, delegate, parallel jobs"),
+    ("message_worker", "worker"),
+    ("answer_worker", "worker question"),
+    ("read_report", "worker report"),
+];
+
+/// The thread's tools marked for Claude Code's tool search: [`THREAD_ALWAYS_LOADED`] load up
+/// front, every other one waits behind the search. The marks are the same on every call, so
+/// the cached prefix stays the same; a tool found later goes into the conversation, not the
+/// prefix.
+fn loading(tools: Vec<Tool>) -> Vec<Tool> {
+    tools
+        .into_iter()
+        .map(|mut tool| {
+            let mut meta = JsonObject::new();
+            if THREAD_ALWAYS_LOADED.contains(&tool.name.as_ref()) {
+                meta.insert("anthropic/alwaysLoad".into(), true.into());
+            } else if let Some((_, hint)) = SEARCH_HINTS
+                .iter()
+                .find(|(name, _)| *name == tool.name.as_ref())
+            {
+                meta.insert("anthropic/searchHint".into(), (*hint).into());
+            }
+            if !meta.is_empty() {
+                tool.meta = Some(MetaObject(meta));
+            }
+            tool
+        })
+        .collect()
 }
 
 /// The most characters of a tool's description Claude Code keeps for a tool loaded up front.
@@ -949,6 +997,57 @@ mod tests {
         let bytes =
             serde_json::to_string(&Value::Object(schema)).unwrap().len() + DELEGATE_TASK.len();
         assert!(bytes < 6_000, "delegate_task is {bytes} bytes");
+    }
+
+    /// A thread's everyday tools load up front and the rest wait behind Claude Code's tool
+    /// search, the same marks on every listing (the cached prefix stays the same); a worker's
+    /// tools carry no mark (BUILD-PLAN C2).
+    #[test]
+    fn a_threads_everyday_tools_load_up_front_and_the_rest_wait_for_the_search() {
+        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+            let thread = Role::Orchestrator {
+                conversation_id: brigadier_core::model::ConversationId("c1".into()),
+                run,
+            };
+            let tools = tools_for(&thread);
+            let loaded: Vec<&str> = tools
+                .iter()
+                .filter(|tool| {
+                    tool.meta
+                        .as_ref()
+                        .and_then(|meta| meta.0.get("anthropic/alwaysLoad"))
+                        == Some(&Value::Bool(true))
+                })
+                .map(|tool| tool.name.as_ref())
+                .collect();
+            let expected: Vec<&str> = THREAD_ALWAYS_LOADED
+                .iter()
+                .copied()
+                .filter(|name| *name != "run" || run != RunTools::None)
+                .collect();
+            let mut sorted = loaded.clone();
+            sorted.sort_unstable();
+            let mut want = expected.clone();
+            want.sort_unstable();
+            assert_eq!(sorted, want, "{run:?}");
+            assert!(loaded.len() * 4 < tools.len(), "most wait: {}", tools.len());
+            let delegate = tools
+                .iter()
+                .find(|tool| tool.name == "delegate_task")
+                .unwrap();
+            assert_eq!(
+                delegate.meta.as_ref().unwrap().0["anthropic/searchHint"],
+                "start a worker, delegate, parallel jobs"
+            );
+            let listed = serde_json::to_value(delegate).unwrap();
+            assert!(
+                listed["_meta"]["anthropic/searchHint"].is_string(),
+                "{listed}"
+            );
+        }
+        for tool in tools_for(&worker(false)) {
+            assert!(tool.meta.is_none(), "{}", tool.name);
+        }
     }
 
     /// What the thread's instructions no longer say is in the tool it applies to, read when
