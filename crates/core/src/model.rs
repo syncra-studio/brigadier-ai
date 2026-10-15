@@ -2106,6 +2106,11 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         branch: String,
         tip: String,
+        /// The thread made the commits from this one to `tip` itself (in its turn, or with its
+        /// trailer): the record of who wrote them, since a commit it makes on the user's own
+        /// checkout carries no trailer (UI audit M6).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authored_from: Option<String>,
     },
     /// A command output of the thread's was stored whole; the model got a digest of it, or
     /// (a failing Claude `Bash` call) the CLI's excerpt (THREAD-PLAN.md Q4).

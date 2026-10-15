@@ -122,6 +122,7 @@ Everything else in PLAN.md stands. That includes §7's rules: no caps, lossless,
 **Q4: the thread mostly delegates; tiny edits itself; tool output trimmed losslessly.**
 - The tiny-edit rule lives in `prompts::thread`: a few lines, in files it has already read, with a quick check.
 - Thread commits carry the trailer `Brigadier-Author: thread`, using the git crate's `crates/git/src/trailers.rs`. They land on the branch of the effective workspace: the session branch, or the run branch overnight. So they get the Q12 review like any landed change.
+  - **Superseded for the user's own checkout (UI audit M6, revision 29, 2026-10-15):** on a local checkout the thread doesn't commit unless the user asks, and leaves its change uncommitted with one line saying so ("Changed 1 file, not committed."). A commit the user asks for has a plain message with no Brigadier trailer. The store records the author instead: the commit scan files the thread's own range as `ThreadCommitsSeen.authored_from`. Worktree sessions and overnight run branches keep the trailer. The self-edit metric below still counts only trailer commits.
 - **The digest has a byte budget of 4,096 bytes**, built in this order and cut at line boundaries:
   1. a header (≤ 200 B) with the exit status and `[full output: read_artifact out-<id>, N lines, M bytes]`;
   2. lines matching error/warning/FAIL/panic, up to 2,048 B, then `[+K more matching lines in the full output]`;

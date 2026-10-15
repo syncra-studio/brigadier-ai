@@ -1,0 +1,155 @@
+//! On the user's own checkout the thread doesn't commit unless asked (UI audit M6): it leaves
+//! its change uncommitted and says so, and a commit the user asks for carries no Brigadier
+//! trailer; the store records that the thread wrote it. Rule R: a session from before the
+//! change hears it once.
+
+use std::sync::{Arc, Mutex};
+
+use super::thread_tests::commit_in_workspace;
+use super::{Flow, Options, Reply, Script, Turn, git};
+use crate::manager::prompts::{LOCAL_COMMIT_REVISION, revision_note};
+use crate::model::{
+    ConversationKind, DomainEvent, EnvironmentRequest, ModelChoice, PermissionLevel, SetupRequest,
+};
+
+fn script<F, Fut>(f: F) -> Script
+where
+    F: Fn(Turn) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Reply> + Send + 'static,
+{
+    Arc::new(move |turn| Box::pin(f(turn)))
+}
+
+/// A session told the instructions before this change, on the user's own checkout: it hears
+/// the note once, its edit stays uncommitted, and the commit the user then asks for has no
+/// trailer and is recorded as the thread's.
+#[tokio::test]
+async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_trailer() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let heard = inputs.clone();
+    let mut flow = Flow::start(
+        "local-commit",
+        Options::default(),
+        script(move |turn| {
+            let heard = heard.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("");
+                }
+                heard.lock().unwrap().push(turn.input.clone());
+                let workspace = turn.add_dirs[0].clone();
+                if turn.input.contains("Fix the typo.") {
+                    std::fs::write(workspace.join("README.md"), "fixed\n").unwrap();
+                    return Reply::text("Fixed the typo.\nChanged 1 file, not committed.");
+                }
+                if turn.input.contains("Commit it.") {
+                    commit_in_workspace(
+                        &turn,
+                        "README.md",
+                        "fixed\n",
+                        "Fix the typo in the README",
+                    );
+                    return Reply::text("Committed.");
+                }
+                Reply::text("Fine.")
+            }
+        }),
+    )
+    .await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id;
+    flow.conversation = flow
+        .manager
+        .create_conversation(
+            ConversationKind::Session,
+            project,
+            Some("Local".into()),
+            Some(SetupRequest::Session {
+                repo: flow.repo.display().to_string(),
+                environment: EnvironmentRequest::LocalCheckout {
+                    branch: "main".into(),
+                    create_from: None,
+                },
+                permission: PermissionLevel::FullAccess,
+                orchestrator: ModelChoice {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    model: Some("claude-opus-5-5".into()),
+                    effort: None,
+                    fast: None,
+                    account: None,
+                },
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+    flow.say("Look around.").await;
+    flow.settled().await;
+    // It was told the instructions of the revision before.
+    flow.core
+        .record(vec![(
+            crate::model::streams::orchestrator(&flow.conversation),
+            DomainEvent::OrchestratorLogged {
+                conversation_id: flow.conversation.clone(),
+                entry: crate::work::OrchestratorEntry::Injection {
+                    injection: crate::work::ContextInjection {
+                        kind: crate::work::InjectionKind::Instructions,
+                        bytes: 100,
+                        tokens_estimate: 25,
+                        label: "instructions revision".into(),
+                        task_id: None,
+                        told: Some(crate::work::Told {
+                            revision: Some(LOCAL_COMMIT_REVISION - 1),
+                            ..crate::work::Told::default()
+                        }),
+                    },
+                },
+            },
+        )])
+        .await
+        .unwrap();
+    flow.restart().await;
+    let start = git(&flow.repo, &["rev-parse", "HEAD"]);
+    flow.say("Fix the typo.").await;
+    flow.settled().await;
+    let note = revision_note(LOCAL_COMMIT_REVISION - 1, false).unwrap();
+    assert!(
+        note.contains("don't commit your own changes unless the user asks"),
+        "{note}"
+    );
+    // Nothing was committed on its own: the change waits in the user's checkout.
+    assert_eq!(git(&flow.repo, &["rev-parse", "HEAD"]), start);
+    assert_eq!(git(&flow.repo, &["status", "--porcelain"]), "M README.md");
+    flow.say("Commit it.").await;
+    flow.settled().await;
+    let tip = git(&flow.repo, &["rev-parse", "HEAD"]);
+    assert_ne!(tip, start);
+    let message = git(&flow.repo, &["log", "-1", "--format=%B"]);
+    assert!(!message.contains("Brigadier-"), "{message}");
+    // The store says who wrote it.
+    let authored: Vec<(String, String)> = flow
+        .events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            DomainEvent::ThreadCommitsSeen {
+                tip,
+                authored_from: Some(from),
+                ..
+            } => Some((from, tip)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(authored, vec![(start, tip)]);
+    let inputs = inputs.lock().unwrap().clone();
+    let told: usize = inputs
+        .iter()
+        .map(|input| input.matches(&note).count())
+        .sum();
+    assert_eq!(told, 1, "{inputs:?}");
+    flow.stop().await;
+}

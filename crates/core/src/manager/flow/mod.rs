@@ -1807,6 +1807,8 @@ mod lean_work_tests;
 #[cfg(test)]
 mod litter_tests;
 #[cfg(test)]
+mod local_commit_tests;
+#[cfg(test)]
 mod merge_by_user_tests;
 #[cfg(test)]
 mod mockup_tests;

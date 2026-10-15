@@ -66,7 +66,13 @@ requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, 
 /**
  * The answer: a message id, or `task:<id>` for a worker's report.
  */
-subject: string, rating: Rating, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: ReviewRun, } | { "type": "integratedCheckUpdated", check: IntegratedCheck, } | { "type": "backgroundRunUpdated", run: BackgroundRun, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "checkRan", conversationId: ConversationId, 
+subject: string, rating: Rating, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: ReviewRun, } | { "type": "integratedCheckUpdated", check: IntegratedCheck, } | { "type": "backgroundRunUpdated", run: BackgroundRun, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, 
+/**
+ * The thread made the commits from this one to `tip` itself (in its turn, or with its
+ * trailer): the record of who wrote them, since a commit it makes on the user's own
+ * checkout carries no trailer (UI audit M6).
+ */
+authoredFrom?: string | null, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "checkRan", conversationId: ConversationId, 
 /**
  * The worker's task; none for the thread.
  */

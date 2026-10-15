@@ -609,7 +609,7 @@ impl SessionManager {
         let in_turn = self.thread_turn_running(id).await;
         self.scan_branch(id, repo, branch, Some(from.clone()), in_turn)
             .await;
-        self.record_thread_tip(id, branch, tip).await;
+        self.record_thread_tip(id, branch, tip, None).await;
     }
 
     /// Looks at `branch` from its recorded tip to `upto` (its tip now by default), with
@@ -659,7 +659,8 @@ impl SessionManager {
         match found {
             Ok(Some((tip, base))) => {
                 let theirs = base.is_some();
-                if let Some(base) = base {
+                if let Some(base) = &base {
+                    let base = base.clone();
                     // Commits that only fix review findings get no review of their own, and a
                     // held merge's consent covers them (SESSION-FIXES-PLAN.md Q3.4, Q6.1).
                     match self.thread_fixes(id, repo, &base, &tip).await {
@@ -682,7 +683,8 @@ impl SessionManager {
                         }
                     }
                 }
-                self.record_thread_tip(id, branch, &tip).await;
+                self.record_thread_tip(id, branch, &tip, base.as_ref())
+                    .await;
                 // The thread's own commits make the session's full checks due, as a landing
                 // does (SESSION-FIXES-PLAN.md §11).
                 if theirs {
@@ -697,7 +699,15 @@ impl SessionManager {
         }
     }
 
-    async fn record_thread_tip(&self, id: &ConversationId, branch: &str, tip: &Oid) {
+    /// Records `branch` looked at up to `tip`, and the commits from `authored_from` to it as
+    /// the thread's own.
+    async fn record_thread_tip(
+        &self,
+        id: &ConversationId,
+        branch: &str,
+        tip: &Oid,
+        authored_from: Option<&Oid>,
+    ) {
         if let Err(err) = self
             .core
             .record_conversation(
@@ -706,6 +716,7 @@ impl SessionManager {
                     conversation_id: id.clone(),
                     branch: branch.to_owned(),
                     tip: tip.0.clone(),
+                    authored_from: authored_from.map(|from| from.0.clone()),
                 }],
             )
             .await

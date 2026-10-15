@@ -77,6 +77,15 @@ pub(crate) fn thread(
     };
     let trusted = project.and_then(|project| project.trusts(repo)) != Some(false);
     let (environment, permission) = setting_texts(conversation, trusted, run);
+    let local = run.is_none()
+        && matches!(
+            &conversation.setup,
+            Some(Setup::Session {
+                environment: Environment::LocalCheckout { .. },
+                ..
+            })
+        );
+    let own_commits = own_commits(local);
     let project = project.map_or("(no project)", |p| p.name.as_str());
     let workspace = workspace.map_or_else(|| "(none yet)".to_owned(), workspace_text);
     let level = match &conversation.setup {
@@ -116,7 +125,7 @@ How to work:
 - You decide what extra care work needs; none of it is a fixed step, and most work needs none. A lead of multi-step or risky work sends an outline and waits: judge it and call approve_outline at once, with corrections (the brief wins). review_plan has a plan reviewed in the background; start_verifier puts a fresh verifier on top of a lead's work; plan_phases records parts that must run one after another.
 - Land finished work with land_phase (no phase needed), each report at once. Each landing and commit of yours queues the session's full checks, run once in the background on everyone's work; never run them yourself or ask the user how much to check. [checks failed …]: one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix the cause, then rerun_checks. Each landing and each commit of yours gets one background review by the other vendor (a tip already reviewed isn't reviewed again); its findings come later as a [review …] message. A worker never waits for its own review: land a report whose review still runs, and its findings come to you. A finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason (mention it to the user if it matters). Record what became of each finding with record_findings, in one call (fixed in task-N, open, or dismissed and why; `high` if its fix needs a re-check): the review line and finish_session show only that. Record one fixed only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list. What only the user can settle goes on a card (ask_user).
 - "Merge it when done" while workers write is consent: call finish_session with those words; it holds the merge ([merge held]). [merge] means the user clicked "Merge into main": call finish_session without user_words. Then [merge due]: call finish_session, never ask again; [merge waiting]: record the findings it names; [merge stopped]: tell the user why and ask; [merge cancelled by the user]: don't merge.
-- Your own changes stay small (the size above): read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch with `git commit --trailer "{THREAD_TRAILER}"`. One fixing only findings adds `--trailer "{FIXES_TRAILER}: R2.2, R2.3"`; a held merge covers it.
+- {own_commits}
 - Never answer "I can't" for something a shell can do: do it. Run builds, tests and the app, read logs, check files and open ports yourself.{commands}{PREVIEWS}
 - Keep a ledger in the Brain. Ask query_brain before you ask the user or start a scout. When the user settles something later work must respect, or you decide or answer something for them, keep it with @remember (personal: true for a preference that holds in every project), silently; outline go-aheads and ask_user answers are kept for you. Never reopen a settled decision. code_search, code_refs and project_map find code faster than grepping.
 - Ask the user only what only they can decide, only with ask_user (a card, never a question in your text), then reply {quiet}; the answers come back in this request. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is the workers' job and yours, never the user's.
@@ -236,6 +245,19 @@ pub(crate) const THREAD_TRAILER: &str = "Brigadier-Author: thread";
 /// (`R2.2, R2.3`): such a commit gets no review of its own, only the re-check of those the
 /// thread recorded high, and a held merge's consent covers it.
 pub(crate) const FIXES_TRAILER: &str = "Brigadier-Fixes";
+
+/// What the thread does with its own changes: on the user's own checkout (`local`) they stay
+/// uncommitted unless the user asks (UI audit M6), elsewhere it commits them with the trailer.
+fn own_commits(local: bool) -> String {
+    if local {
+        "Your own changes stay small (the size above): read the code they touch, make the change, run the checks of what you changed. This is the user's own checkout: don't commit them unless the user asks. Leave them uncommitted and end your answer with one line saying so, for example \"Changed 1 file, not committed.\" When the user asks you to commit, write a plain message in the project's style with no Brigadier trailer: Brigadier records that the commit is yours."
+            .to_owned()
+    } else {
+        format!(
+            "Your own changes stay small (the size above): read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch with `git commit --trailer \"{THREAD_TRAILER}\"`. One fixing only findings adds `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
+        )
+    }
+}
 
 /// How the instructions and the `[workspace]` note name the thread's workspace (`<path> @
 /// <branch>`, as [`Told::workspace`] keeps it).
@@ -470,6 +492,9 @@ pub(crate) const LEAN_WORK_REVISION: u32 = 27;
 /// merge comes only from the side panel's "Merge into main" or the user's words, and the
 /// session keeps its worktree and branch through it.
 pub(crate) const MERGE_BY_USER_REVISION: u32 = 28;
+/// On the user's own checkout the thread leaves its changes uncommitted unless the user asks,
+/// and a commit they ask for carries no Brigadier trailer (UI audit M6).
+pub(crate) const LOCAL_COMMIT_REVISION: u32 = 29;
 
 /// Every revision since notes carried them, oldest first. Add one entry per instruction
 /// change, in the commit that changes the instructions; never renumber.
@@ -625,6 +650,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: MERGE_BY_USER_REVISION,
         thread: "From now on, there are no merge cards: propose_merge is retired, and an answer on an old merge card is never consent. When the work is ready to merge you may say so once, in plain text. Merge only when the user clicks \"Merge into main\" on the side panel (you hear [merge]: call finish_session without user_words) or asks in their own words (finish_session with user_words). After a merge the session keeps its worktree and branch: the branch moves to the merge, and you go on working there.",
+        worker: "",
+    },
+    Revision {
+        number: LOCAL_COMMIT_REVISION,
+        thread: "From now on, on a local checkout (the user's own checkout), don't commit your own changes unless the user asks: leave them uncommitted and end your answer with one line saying so, for example \"Changed 1 file, not committed.\" When the user asks you to commit, write a plain message in the project's style with no Brigadier trailer: Brigadier records that the commit is yours. On a session's own worktree nothing changes: commit there with the trailer as before.",
         worker: "",
     },
 ];
@@ -2530,6 +2560,35 @@ mod environment_tests {
         assert!(chat(&[]).contains(CHAT_AUTHORITY));
     }
 
+    /// UI audit M6: a session's own worktree keeps the thread's commits with the trailer; the
+    /// user's own checkout gets none unless they ask, and then no trailer.
+    #[test]
+    fn the_thread_commits_on_its_worktree_but_not_on_the_users_checkout() {
+        let worktree = worktree_session("fullAccess");
+        let prompt = |conversation: &Conversation| {
+            thread(
+                conversation,
+                None,
+                &[],
+                None,
+                Some("/work/session @ main"),
+                ProviderKind::Claude,
+                true,
+            )
+        };
+        let own = prompt(&worktree);
+        assert!(own.contains(&format!("git commit --trailer \"{THREAD_TRAILER}\"")));
+        assert!(!own.contains("not committed"));
+        let local = prompt(&session("fullAccess"));
+        assert!(!local.contains(THREAD_TRAILER));
+        assert!(!local.contains(FIXES_TRAILER));
+        assert!(local.contains("When the user asks you to commit, write a plain message in the project's style with no Brigadier trailer"));
+        // Rule R: an open session hears it once, in plain words.
+        let note = revision_note(LOCAL_COMMIT_REVISION - 1, false).unwrap();
+        assert!(note.contains("on a local checkout (the user's own checkout), don't commit your own changes unless the user asks"));
+        assert!(revision_note(LOCAL_COMMIT_REVISION - 1, true).is_none());
+    }
+
     #[test]
     fn the_thread_does_small_changes_itself_and_decides_the_extra_care_itself() {
         for permission in ["askForApproval", "approveForMe", "fullAccess"] {
@@ -2559,7 +2618,16 @@ mod environment_tests {
                     assert!(prompt.contains(&callable(MOCKUPS, provider)));
                     assert!(prompt.contains("Never answer \"I can't\""));
                     assert!(prompt.contains("Your own changes stay small (the size above)"));
-                    assert!(prompt.contains(&format!("--trailer \"{THREAD_TRAILER}\"")));
+                    // On the user's own checkout the thread's changes stay uncommitted unless
+                    // they ask, and carry no trailer; an overnight run's branch is its own.
+                    assert_eq!(
+                        prompt.contains(&format!("--trailer \"{THREAD_TRAILER}\"")),
+                        run.is_some()
+                    );
+                    assert_eq!(
+                        prompt.contains("This is the user's own checkout: don't commit them unless the user asks. Leave them uncommitted and end your answer with one line saying so, for example \"Changed 1 file, not committed.\""),
+                        run.is_none()
+                    );
                     assert!(prompt.contains("How to write code:"));
                     assert!(prompt.contains("a tip already reviewed isn't reviewed again"));
                     assert!(prompt.contains("none of it is a fixed step"));
@@ -2709,8 +2777,9 @@ mod environment_tests {
         // sessions, §11's landing at once with the full checks run once, and the long-step
         // line, the readiness answer first and long commands through Brigadier's runs, and
         // findings fixed only once checked and the thread's scratch in its temp folder, and
-        // the small change it makes itself, include_request and the review nobody waits for).
-        assert!(codex.len() < 18_800, "{}", codex.len());
+        // the small change it makes itself, include_request and the review nobody waits for,
+        // and what it does with its changes on the user's own checkout).
+        assert!(codex.len() < 18_950, "{}", codex.len());
     }
 
     #[test]
@@ -2915,6 +2984,20 @@ mod environment_tests {
             }
         }))
         .unwrap()
+    }
+
+    /// [`session`] on a worktree of its own.
+    fn worktree_session(permission: &str) -> Conversation {
+        let mut conversation = session(permission);
+        if let Some(Setup::Session { environment, .. }) = &mut conversation.setup {
+            *environment = Environment::NewWorktree {
+                base: "main".into(),
+                branch: "brigadier/flow".into(),
+                path: Some("/work/session".into()),
+                start: None,
+            };
+        }
+        conversation
     }
 
     fn workspace() -> crate::overnight::RunWorkspace {
@@ -3358,7 +3441,7 @@ mod environment_tests {
         );
         assert!(fixes.thread.contains("never ask them again"));
         let prompt = thread(
-            &session("fullAccess"),
+            &worktree_session("fullAccess"),
             None,
             &[],
             None,
@@ -3597,7 +3680,7 @@ mod environment_tests {
         assert!(notes(&told, &now).is_empty());
         // The instructions name it the same way.
         let prompt = thread(
-            &session("fullAccess"),
+            &worktree_session("fullAccess"),
             None,
             &[],
             None,
