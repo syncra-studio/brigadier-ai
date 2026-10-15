@@ -87,7 +87,12 @@ def resolves(link, freeze, run, rec):
     if h and os.path.exists(os.path.join(run, "blobs", h.group(0))):
         return True
     p = freeze["probe"].get(link)
-    return bool(p and p["exists"])
+    if p and p["exists"]:
+        return True
+    # Harness revision 2: what the app opens on a click (a link into a disposed scratch folder, or
+    # outputs/x, opens the copy Brigadier stored), when that copy is a blob this run stored.
+    r = freeze.get("resolved", {}).get(link)
+    return bool(r and r["stored"] and os.path.exists(os.path.join(run, "blobs", r["stored"])))
 
 
 def score_links(rule, rec, run, freeze):

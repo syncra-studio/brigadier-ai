@@ -474,6 +474,7 @@ def freeze(root, run, ask, arm, before):
         if os.path.isfile(full) and os.path.getsize(full) < 5 << 20:
             probe[p]["sha256"] = sha256(full)
     name = (ask["rule"] or {}).get("file")
+    resolved = resolve_links(arm, rec, texts, name) if name else {}
     linked = ensure(os.path.join(run, "linked"))
     if name:
         for p, v in probe.items():
@@ -502,12 +503,39 @@ def freeze(root, run, ask, arm, before):
                "status": g("status", "--porcelain").splitlines()}
     after_listing = listing()
     new = {d: sorted(set(after_listing[d] or []) - set(before["listing"][d] or [])) for d in WATCHED}
-    json.dump({"at_ms": now_ms(), "probe": probe, "stored_outputs": stored, "workspace": ws, "git": git,
+    json.dump({"at_ms": now_ms(), "probe": probe, "resolved": resolved, "stored_outputs": stored, "workspace": ws, "git": git,
                "home_new_entries": new, "clipboard_changed": clipboard_hash() != before["clipboard"]},
               open(os.path.join(run, "freeze.json"), "w"), indent=1, sort_keys=True)
     for d, names in new.items():
         if names:
             log(f"NOTE: new entries in {d} during the run: {names} (left as they are; check by hand)")
+
+
+def resolve_links(arm, rec, texts, name):
+    """What the app opens for each link to `name` (harness revision 2): the daemon's own
+    resolveFileLink, as a file chip's click asks it, with the path the chip would pass (a relative
+    link joins the session workspace). {link: {"exists": bool, "stored": blob or None}}; links the
+    daemon can't answer (a build without the request) are left out, so they score as before."""
+    ws = rec.workspace() or ""
+    links = set()
+    for t in texts:
+        links |= {l for l in v3lib.links_to(t, name) if not re.fullmatch(r"out-[0-9a-f]{8}", l)}
+    out = {}
+    for link in sorted(links):
+        path = os.path.expanduser(link)
+        if not os.path.isabs(path):
+            path = os.path.join(ws, path)
+        try:
+            r = req(arm.data, {"method": "resolveFileLink", "conversationId": rec.conv, "link": link, "path": path})
+        except Exception as e:  # noqa: BLE001 - an old daemon, or none: the link scores as before
+            log("resolveFileLink:", link, e)
+            continue
+        v = r.get("value") if isinstance(r, dict) else None
+        if not isinstance(v, dict) or "exists" not in v:
+            continue
+        stored = ((v.get("stored") or {}).get("artifact") or {}).get("id")
+        out[link] = {"exists": bool(v["exists"]), "stored": stored}
+    return out
 
 
 def run_checks(root, run, ask):
