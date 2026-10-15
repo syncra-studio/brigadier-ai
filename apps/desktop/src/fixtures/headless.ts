@@ -5,6 +5,8 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
 
+import type { FixtureInput } from "@/fixtures/input";
+
 // Use the existing browser installation, or CHROME_BIN on a verifier's machine. No downloads.
 function chromium(): string {
   const candidates = [
@@ -204,6 +206,18 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
   return serialized;
 }
 
+/** CDP's description of a key the keyboard sends: Enter, Escape, Tab, the arrows, a digit or a letter. */
+function keyEvent(key: string): { key: string; code: string; windowsVirtualKeyCode: number; text?: string | undefined } {
+  const named: Record<string, [number, string?]> = {
+    Enter: [13, "\r"], Escape: [27], Tab: [9], ArrowLeft: [37], ArrowUp: [38], ArrowRight: [39], ArrowDown: [40],
+  };
+  const found = named[key];
+  if (found) return { key, code: key, windowsVirtualKeyCode: found[0], text: found[1] };
+  if (/^[0-9]$/.test(key)) return { key, code: `Digit${key}`, windowsVirtualKeyCode: key.charCodeAt(0), text: key };
+  if (/^[a-z]$/i.test(key)) return { key, code: `Key${key.toUpperCase()}`, windowsVirtualKeyCode: key.toUpperCase().charCodeAt(0), text: key };
+  throw new Error(`fixtureInput doesn't know the key ${JSON.stringify(key)}`);
+}
+
 /**
  * Like `renderFixturePage`, for a fixture that measures motion: Chromium runs in real time (its
  * frames, animation callbacks and resize observers run as in the app, which virtual time stops),
@@ -288,17 +302,34 @@ export async function renderFixtureLive(t: TestContext, page: string, resultId: 
       socket.send(JSON.stringify({ id: asked, method, params }));
     });
   // What a page can't do itself, done for it as a user's input would be (`fixtureInput`, in
-  // fixtures/input.ts): a wheel turned over a point, or the window resized.
+  // fixtures/input.ts): a wheel turned over a point, the window resized, a key pressed (to
+  // whatever has focus, so focus handling is what's tested), a click or a pointer move.
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data)) as { method?: string; params?: { name: string; payload: string } };
     if (message.method !== "Runtime.bindingCalled" || message.params?.name !== "fixtureInput") return;
-    const asked = JSON.parse(message.params.payload) as
-      { id: number; type: "wheel"; x: number; y: number; deltaX?: number; deltaY?: number } | { id: number; type: "viewport"; width: number; height: number };
+    const asked = JSON.parse(message.params.payload) as { id: number } & FixtureInput;
     const done = () => call("Runtime.evaluate", { expression: `window.fixtureInputDone?.(${asked.id})` });
-    const act = asked.type === "wheel"
-      ? call("Input.dispatchMouseEvent", { type: "mouseWheel", x: asked.x, y: asked.y, deltaX: asked.deltaX ?? 0, deltaY: asked.deltaY ?? 0 })
-      : call("Emulation.setDeviceMetricsOverride", { width: asked.width, height: asked.height, deviceScaleFactor: 1, mobile: false });
-    void act.then(done);
+    const act = async () => {
+      switch (asked.type) {
+        case "wheel":
+          return call("Input.dispatchMouseEvent", { type: "mouseWheel", x: asked.x, y: asked.y, deltaX: asked.deltaX ?? 0, deltaY: asked.deltaY ?? 0 });
+        case "viewport":
+          return call("Emulation.setDeviceMetricsOverride", { width: asked.width, height: asked.height, deviceScaleFactor: 1, mobile: false });
+        case "key": {
+          const key = keyEvent(asked.key);
+          // A key that types (Enter's "\r", a digit) is a keyDown with its text, as a keyboard's.
+          await call("Input.dispatchKeyEvent", { ...key, type: key.text ? "keyDown" : "rawKeyDown" });
+          return call("Input.dispatchKeyEvent", { ...key, type: "keyUp", text: undefined });
+        }
+        case "click":
+          await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: asked.x, y: asked.y });
+          await call("Input.dispatchMouseEvent", { type: "mousePressed", x: asked.x, y: asked.y, button: "left", buttons: 1, clickCount: 1 });
+          return call("Input.dispatchMouseEvent", { type: "mouseReleased", x: asked.x, y: asked.y, button: "left", buttons: 0, clickCount: 1 });
+        case "pointer":
+          return call("Input.dispatchMouseEvent", { type: "mouseMoved", x: asked.x, y: asked.y });
+      }
+    };
+    void act().then(done);
   });
   await call("Runtime.enable", {});
   await call("Runtime.addBinding", { name: "fixtureInput" });

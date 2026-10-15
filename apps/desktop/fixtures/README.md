@@ -116,6 +116,23 @@ its full scope. `?drive=1` exercises the session buttons and Enter/Esc and write
 `#approvals-result`; `ApprovalRender.test.ts` checks it. IPC stays mocked and never reaches
 a daemon. This entry is absent from the production build.
 
+# Decision card keys
+
+`/fixtures/card-keys.html` mounts the production merge question, "Implement this plan?" and a
+phase plan's rail link, one fresh mount per case, and drives them with the browser's real keys
+and clicks: nothing is lit at first, Enter answers only from the focused card, a digit only
+lights, and the phase plan takes no Enter. It writes JSON into `#card-keys-result`;
+`CardKeysRender.test.ts` checks it. IPC stays mocked. This entry is absent from the production
+build.
+
+# Merge button
+
+`/fixtures/merge-button.html` renders the side panel's branch row with its Git actions for a
+worktree session with work, one without, and a session with no workspace: "Merge into main"
+shows only on the first, "Close workspace…" only with a workspace, and a click sends
+`mergeSession`. It writes JSON into `#merge-button-result`; `MergeButtonRender.test.ts` checks
+it. IPC stays mocked. This entry is absent from the production build.
+
 # Closing while hidden
 
 `/fixtures/hidden-exit.html` renders the app's dialog and popover with the page-hidden mark the app
