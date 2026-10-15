@@ -36,6 +36,7 @@ import { stepWords } from "@/app/conversation/activity/words";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
+import { CompactionRow } from "@/app/conversation/RequestBlock";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
@@ -220,6 +221,12 @@ function Page() {
         <Case id="search">
           <StepRow {...describeLeadStep(search)} />
         </Case>
+        <Case id="compaction-new">
+          <CompactionRow compaction={{ id: "c1", inTurn: true, automatic: true, state: "running", error: null, position: 1, startedAtMs: now, endedAtMs: null }} />
+        </Case>
+        <Case id="compaction-slow">
+          <CompactionRow compaction={{ id: "c2", inTurn: true, automatic: true, state: "running", error: null, position: 1, startedAtMs: now - 11_000, endedAtMs: null }} />
+        </Case>
         <Case id="tool-json">
           <ToolResult name="lookup" status="completed" input={'{"id":7}'} output={'{"ok":true,"items":[1,2]}'} />
         </Case>
@@ -319,6 +326,8 @@ async function measure(): Promise<object> {
   await wait(300);
   for (let index = 0; index < 5; index++) await frame();
   const out: Record<string, unknown> = {};
+  // A compaction: a new one's words alone (read first, well within its 10 s), a long one says it may take a while.
+  out.compaction = [text(at("compaction-new")), text(at("compaction-slow"))];
   for (const id of ["shell-long", "shell-failed", "shell-running", "shell-clipped", "shell-command"]) out[id] = shell(id);
   one<HTMLElement>("[data-slot=shell-command]", at("shell-command"))?.click();
   await frame();

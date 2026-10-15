@@ -410,7 +410,7 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: boolean
 function compactionLabel({ automatic, state }: BlockCompaction): string {
   switch (state) {
     case "running":
-      return automatic ? "Context automatically compacting" : "Compacting context";
+      return "Compacting context";
     case "done":
       return automatic ? "Context automatically compacted" : "Context compacted";
     case "failed":
@@ -418,16 +418,32 @@ function compactionLabel({ automatic, state }: BlockCompaction): string {
   }
 }
 
-/** The compaction line: "Compacting context" shimmers while it runs, then stays grey. */
-const CompactionRow: FC<{ compaction: BlockCompaction }> = ({ compaction }) => (
-  <div data-slot="compaction" data-state={compaction.state} className={ROW}>
-    <TextShorterConcise aria-hidden className="size-4 shrink-0" />
-    <span className={cn("min-w-0 truncate", compaction.state === "running" && "shimmer")}>
-      {compactionLabel(compaction)}
-      {compaction.error && ` · ${compaction.error}`}
-    </span>
-  </div>
-);
+/** After this long a compaction says it may take a while. */
+const SLOW_COMPACTION_MS = 10_000;
+
+/**
+ * The compaction line: "Compacting context" shimmers while it runs (after 10 s, "· This can take
+ * a few minutes"), then stays grey.
+ */
+export const CompactionRow: FC<{ compaction: BlockCompaction }> = ({ compaction }) => {
+  const running = compaction.state === "running";
+  const [slow, setSlow] = useState(() => running && Date.now() - compaction.startedAtMs >= SLOW_COMPACTION_MS);
+  useEffect(() => {
+    if (!running || slow) return;
+    const timer = window.setTimeout(() => setSlow(true), compaction.startedAtMs + SLOW_COMPACTION_MS - Date.now());
+    return () => window.clearTimeout(timer);
+  }, [running, slow, compaction.startedAtMs]);
+  return (
+    <div data-slot="compaction" data-state={compaction.state} className={ROW}>
+      <TextShorterConcise aria-hidden className="size-4 shrink-0" />
+      <span className={cn("min-w-0 truncate", running && "shimmer")}>
+        {compactionLabel(compaction)}
+        {running && slow && " · This can take a few minutes"}
+        {compaction.error && ` · ${compaction.error}`}
+      </span>
+    </div>
+  );
+};
 
 /**
  * A compaction the user asked for between turns, after the answer it followed: while it runs
