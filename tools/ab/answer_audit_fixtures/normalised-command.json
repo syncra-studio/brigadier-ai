@@ -1,0 +1,9 @@
+{
+  "checks": [
+    {
+      "command": "cargo\n test",
+      "status": "exit 0"
+    }
+  ],
+  "review": "none"
+}

@@ -1,0 +1,24 @@
+{
+  "args": [
+    "text",
+    "{fixtures}/missing-review.md",
+    "{fixtures}/missing-review.json"
+  ],
+  "exit": 2,
+  "output": [
+    {
+      "checks_listed_vs_recorded": {
+        "none_with_passed_checks": false,
+        "unlisted_commands": []
+      },
+      "checks_part": true,
+      "details": true,
+      "hedged_claims": [],
+      "not_checked_part": true,
+      "ok": false,
+      "request": null,
+      "review_part": false,
+      "unchecked_claims": []
+    }
+  ]
+}

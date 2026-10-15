@@ -1,0 +1,4 @@
+{"seq": 1, "atMs": 100, "event": {"type": "requestUpdated", "request": {"id": "integrated", "conversationId": "audit-conv", "startedAtMs": 100, "endedAtMs": null, "state": {"type": "running"}}}}
+{"seq": 2, "atMs": 190, "event": {"type": "messageAppended", "message": {"id": "message-1", "seq": 1, "conversationId": "audit-conv", "requestId": "integrated", "role": "assistant", "text": "It works.\n\n### Details\nChecks: none run\nReview: none (tiny edit)\nNot checked: nothing"}}}
+{"seq": 3, "atMs": 200, "event": {"type": "integratedCheckUpdated", "check": {"conversationId": "audit-conv", "requests": ["integrated"], "state": {"type": "passed", "commands": ["cargo test"]}}}}
+{"seq": 4, "atMs": 201, "event": {"type": "requestUpdated", "request": {"id": "integrated", "conversationId": "audit-conv", "startedAtMs": 100, "endedAtMs": 200, "state": {"type": "done"}}}}

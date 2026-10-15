@@ -1,0 +1,24 @@
+{
+  "args": [
+    "text",
+    "{fixtures}/empty-part.md",
+    "{fixtures}/empty-part.json"
+  ],
+  "exit": 2,
+  "output": [
+    {
+      "checks_listed_vs_recorded": {
+        "none_with_passed_checks": false,
+        "unlisted_commands": []
+      },
+      "checks_part": false,
+      "details": true,
+      "hedged_claims": [],
+      "not_checked_part": true,
+      "ok": false,
+      "request": null,
+      "review_part": true,
+      "unchecked_claims": []
+    }
+  ]
+}

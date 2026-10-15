@@ -135,6 +135,19 @@ ruled-out approach, and a probe asks for every item.
 - **Also reported:** the "unknown instead of a guess" score (unknown ÷ (unknown + guessed) over the lost items),
   every briefing's size and sections, and the probe's tool calls.
 
+## Final-answer audit (E3)
+
+`python3 tools/ab/answer_audit.py run <run-dir>` audits the last V3 request;
+`events <events.jsonl> <conversation-id> [--request <id>]` audits recorded requests;
+`text <answer.md> [<sidecar.json>]` reads an answer and optional check evidence (defaults to
+the adjacent `.json`). `selftest` runs the checked-in fixtures. The last `###` heading must
+be `### Details`, with nonempty `Checks:`, `Review:`, and `Not checked:` parts. Success claims
+need a passed check recorded inside that request's time window (worker and integrated checks
+count). Sorted JSON also reports hedges, unlisted recorded commands, and "none" despite passed
+checks; these reports do not fail the audit. Exit codes are 0 for compliant answers and 2 for
+audit failures (selftest uses 1 for fixture failures). V3 scores include `answer_audit` for
+information; it has no effect on scoring or `pass`.
+
 ## Boundaries (both arms)
 
 - **t0**: the request is submitted.

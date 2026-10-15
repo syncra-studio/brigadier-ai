@@ -1,0 +1,26 @@
+{
+  "args": [
+    "text",
+    "{fixtures}/should-compile.md",
+    "{fixtures}/should-compile.json"
+  ],
+  "exit": 0,
+  "output": [
+    {
+      "checks_listed_vs_recorded": {
+        "none_with_passed_checks": false,
+        "unlisted_commands": []
+      },
+      "checks_part": true,
+      "details": true,
+      "hedged_claims": [
+        "It should compile."
+      ],
+      "not_checked_part": true,
+      "ok": true,
+      "request": null,
+      "review_part": true,
+      "unchecked_claims": []
+    }
+  ]
+}

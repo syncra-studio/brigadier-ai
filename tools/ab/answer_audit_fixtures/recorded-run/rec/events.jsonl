@@ -1,0 +1,17 @@
+{"seq": 1, "atMs": 100, "event": {"type": "requestUpdated", "request": {"id": "request-1", "conversationId": "audit-conv", "startedAtMs": 100, "endedAtMs": null, "state": {"type": "running"}}}}
+{"seq": 2, "atMs": 125, "event": {"type": "checkRan", "conversationId": "audit-conv", "taskId": "worker-1", "command": "cargo test -p brigadier-brain", "status": "exit 0"}}
+{"seq": 3, "atMs": 190, "event": {"type": "messageAppended", "message": {"id": "message-2", "seq": 2, "conversationId": "audit-conv", "requestId": "request-1", "role": "assistant", "text": "It compiles."}}}
+{"seq": 4, "atMs": 200, "event": {"type": "requestUpdated", "request": {"id": "request-1", "conversationId": "audit-conv", "startedAtMs": 100, "endedAtMs": 200, "state": {"type": "done"}}}}
+{"seq": 5, "atMs": 210, "event": {"type": "requestUpdated", "request": {"id": "request-1", "conversationId": "audit-conv", "startedAtMs": 100, "endedAtMs": null, "state": {"type": "running"}}}}
+{"seq": 6, "atMs": 220, "event": {"type": "checkRan", "conversationId": "audit-conv", "taskId": null, "command": "cargo check", "status": "exit 0"}}
+{"seq": 7, "atMs": 240, "event": {"type": "messageAppended", "message": {"id": "message-6", "seq": 6, "conversationId": "audit-conv", "requestId": "request-1", "role": "assistant", "text": "### Details\nChecks: `cargo test -p brigadier-brain` passed; `cargo check` passed\nReview: done\nNot checked: UI"}}}
+{"seq": 8, "atMs": 250, "event": {"type": "requestUpdated", "request": {"id": "request-1", "conversationId": "audit-conv", "startedAtMs": 100, "endedAtMs": 250, "state": {"type": "done"}}}}
+{"seq": 9, "atMs": 275, "event": {"type": "checkRan", "conversationId": "audit-conv", "taskId": null, "command": "old check", "status": "exit 0"}}
+{"seq": 10, "atMs": 300, "event": {"type": "requestUpdated", "request": {"id": "request-2", "conversationId": "audit-conv", "startedAtMs": 300, "endedAtMs": null, "state": {"type": "running"}}}}
+{"seq": 11, "atMs": 325, "event": {"type": "checkRan", "conversationId": "audit-conv", "taskId": "worker-2", "command": "cargo test", "status": "exit 1"}}
+{"seq": 12, "atMs": 350, "event": {"type": "checkRan", "conversationId": "another-conv", "taskId": null, "command": "foreign check", "status": "exit 0"}}
+{"seq": 13, "atMs": 360, "event": {"type": "integratedCheckUpdated", "check": {"conversationId": "another-conv", "state": {"type": "passed", "commands": ["foreign integrated"]}}}}
+{"seq": 14, "atMs": 370, "event": {"type": "integratedCheckUpdated", "check": {"conversationId": "audit-conv", "state": {"type": "failed", "command": "cargo test", "status": "exit 1"}}}}
+{"seq": 15, "atMs": 390, "event": {"type": "messageAppended", "message": {"id": "message-14", "seq": 14, "conversationId": "audit-conv", "requestId": "request-2", "role": "assistant", "text": "It works.\n\n### Details\nChecks: `cargo test` failed\nReview: none\nNot checked: UI"}}}
+{"seq": 16, "atMs": 400, "event": {"type": "requestUpdated", "request": {"id": "request-2", "conversationId": "audit-conv", "startedAtMs": 300, "endedAtMs": 400, "state": {"type": "done"}}}}
+{"seq": 17, "atMs": 401, "event": {"type": "checkRan", "conversationId": "audit-conv", "taskId": null, "command": "too late", "status": "exit 0"}}

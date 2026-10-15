@@ -1,0 +1,25 @@
+{
+  "args": [
+    "run",
+    "{fixtures}/recorded-run"
+  ],
+  "exit": 2,
+  "output": [
+    {
+      "checks_listed_vs_recorded": {
+        "none_with_passed_checks": false,
+        "unlisted_commands": []
+      },
+      "checks_part": true,
+      "details": true,
+      "hedged_claims": [],
+      "not_checked_part": true,
+      "ok": false,
+      "request": "request-2",
+      "review_part": true,
+      "unchecked_claims": [
+        "It works."
+      ]
+    }
+  ]
+}

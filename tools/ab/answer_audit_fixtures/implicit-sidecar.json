@@ -1,0 +1,9 @@
+{
+  "checks": [
+    {
+      "command": "cargo test -p brigadier-brain",
+      "status": "exit 0"
+    }
+  ],
+  "review": "none"
+}

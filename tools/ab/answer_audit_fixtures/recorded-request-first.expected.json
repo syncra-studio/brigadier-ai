@@ -1,0 +1,26 @@
+{
+  "args": [
+    "events",
+    "{fixtures}/recorded-run/rec/events.jsonl",
+    "audit-conv",
+    "--request",
+    "request-1"
+  ],
+  "exit": 0,
+  "output": [
+    {
+      "checks_listed_vs_recorded": {
+        "none_with_passed_checks": false,
+        "unlisted_commands": []
+      },
+      "checks_part": true,
+      "details": true,
+      "hedged_claims": [],
+      "not_checked_part": true,
+      "ok": true,
+      "request": "request-1",
+      "review_part": true,
+      "unchecked_claims": []
+    }
+  ]
+}

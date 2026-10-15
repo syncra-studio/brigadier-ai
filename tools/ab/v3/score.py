@@ -28,6 +28,7 @@ import collections, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import v3lib  # noqa: E402
+import answer_audit  # noqa: E402
 
 TEMP = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/", "/dev/")
 
@@ -362,6 +363,7 @@ def main():
                    "complete": recon.get("complete", False), "background": tokens.get("background"),
                    "other_in_window": tokens.get("other_in_window")},
         "interventions": len(interventions), "warmup": bool(rec.start.get("warmup")),
+        "answer_audit": answer_audit.audit_run(run),
     }
     print(json.dumps(out, indent=1, sort_keys=True))
 
