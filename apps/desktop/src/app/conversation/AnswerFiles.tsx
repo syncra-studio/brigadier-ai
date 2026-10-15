@@ -18,11 +18,11 @@ function failed(error: unknown): void {
 /**
  * Under a finished answer: each file its request's workers left in their outputs folders, as a
  * chip that opens it and its "Save…" (BUILD-PLAN A2), so a deliverable has a home without a
- * copy on the Desktop.
+ * copy on the Desktop. A file the answer links a corrected copy of isn't offered (BUILD-PLAN A6).
  */
-export const AnswerFiles: FC<{ requestIds: readonly string[] }> = ({ requestIds }) => {
+export const AnswerFiles: FC<{ requestIds: readonly string[]; answer: string }> = ({ requestIds, answer }) => {
   const tasks = useBoard((s) => s.board?.tasks ?? NONE);
-  const files = useMemo(() => answerFiles(Object.values(tasks), requestIds), [tasks, requestIds]);
+  const files = useMemo(() => answerFiles(Object.values(tasks), requestIds, answer), [tasks, requestIds, answer]);
   if (files.length === 0) return null;
   return (
     <ul data-slot="answer-files" aria-label="Files from this answer" className="flex flex-wrap gap-2 pt-2">

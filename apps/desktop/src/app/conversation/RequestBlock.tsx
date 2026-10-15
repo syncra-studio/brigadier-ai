@@ -341,6 +341,15 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
   );
 };
 
+/** The files under the answer at `index`, which it may link corrected copies of. */
+const AnswerFilesOf: FC<{ index: number; requestIds: readonly string[] }> = ({ index, requestIds }) => {
+  const answer = useAuiState((s) => {
+    const part = s.message.parts[index];
+    return part?.type === "text" ? part.text : "";
+  });
+  return <AnswerFiles requestIds={requestIds} answer={answer} />;
+};
+
 /**
  * A line between the turn's steps while it is written: one shimmering line of it so far, like
  * the step rows; it settles into its paragraph once whole.
@@ -771,7 +780,7 @@ export const RequestBlock: FC = () => {
       </div>
       {/* A run's work is merged from its card, never undone behind the run's back. */}
       {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestId={meta.requestId} />}
-      {!live && answer !== null && <AnswerFiles requestIds={meta.requestIds} />}
+      {!live && answer !== null && <AnswerFilesOf index={answer} requestIds={meta.requestIds} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
       <BlockError meta={meta} live={live} />
       {!live && last >= 0 && !phase && (
