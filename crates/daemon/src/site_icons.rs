@@ -3,11 +3,14 @@
 //! in a small cache in the data folder.
 //!
 //! Only HTTPS sites by name are asked (never an address, `localhost` or a name without a dot), with
-//! no cookies, no referrer and short timeouts. A site with no icon, or one that can't be reached,
-//! is remembered for a week, so a thread's renders never ask it again meanwhile.
+//! no cookies, no referrer and short timeouts. The same holds for every connection on the way, an
+//! icon link's or a redirect's, and each name must resolve to public addresses only, so no page
+//! can point the daemon at this machine or the local network. A site with no icon, or one that
+//! can't be reached, is remembered for a week, so a thread's renders never ask it again meanwhile.
 
 use std::collections::HashMap;
 use std::io::Read;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -16,6 +19,10 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
+use ureq::config::Config;
+use ureq::http::Uri;
+use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 
 /// The cache stays under this many bytes: the oldest icons go first.
 const CACHE_BYTES: u64 = 5 * 1024 * 1024;
@@ -169,13 +176,78 @@ fn trim(dir: &Path) {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
+    let config = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
         .https_only(true)
         .max_redirects(3)
         .http_status_as_error(false)
-        .build()
-        .into()
+        .build();
+    ureq::Agent::with_parts(config, DefaultConnector::default(), PublicSites::default())
+}
+
+/// The agent's name lookups: every connection it makes, a redirect's or an icon link's too, goes
+/// only to a site by name (`host_of`) whose addresses are all public. Checked at connect time, so a
+/// name that changes its address between two lookups can't slip through either.
+#[derive(Debug, Default)]
+struct PublicSites(DefaultResolver);
+
+impl Resolver for PublicSites {
+    fn resolve(
+        &self,
+        uri: &Uri,
+        config: &Config,
+        timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        if !named(uri) {
+            return Err(ureq::Error::HostNotFound);
+        }
+        let addresses = self.0.resolve(uri, config, timeout)?;
+        if addresses.iter().all(|address| public(address.ip())) {
+            Ok(addresses)
+        } else {
+            Err(ureq::Error::HostNotFound)
+        }
+    }
+}
+
+/// An HTTPS address of a site by name, as `host_of` allows.
+fn named(uri: &Uri) -> bool {
+    uri.scheme_str() == Some("https")
+        && uri
+            .authority()
+            .is_some_and(|authority| host_of(&format!("https://{authority}")).is_some())
+}
+
+/// An address on the internet at large: not this machine, the local network, a carrier's shared
+/// range, a link's own or a multicast group's.
+fn public(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                || a == 0
+                || (a == 100 && (64..128).contains(&b))
+                || (a == 198 && (b == 18 || b == 19))
+                || a >= 240)
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return public(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80)
+        }
+    }
 }
 
 /// The site's `/favicon.ico`, else the icon its home page links to.
@@ -373,6 +445,52 @@ mod tests {
         // An HTTP icon isn't fetched.
         assert_eq!(resolve("a.dev", "http://a.dev/i.ico"), None);
         assert_eq!(icon_link(r#"<link rel="preload" href="/x">"#), None);
+    }
+
+    #[test]
+    fn only_public_addresses_of_sites_by_name_are_connected_to() {
+        for address in ["93.184.216.34", "2606:2800:220:1::1", "1.1.1.1"] {
+            assert!(public(address.parse().unwrap()), "{address}");
+        }
+        for address in [
+            "127.0.0.1",
+            "10.0.0.8",
+            "172.16.4.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+            "::ffff:192.168.0.2",
+        ] {
+            assert!(!public(address.parse().unwrap()), "{address}");
+        }
+        // An icon link or a redirect to an address, `localhost` or a port is refused before any
+        // lookup, as a link in an answer is.
+        assert!(named(
+            &"https://nodejs.org/static/favicon.png".parse().unwrap()
+        ));
+        for url in [
+            "https://127.0.0.1/favicon.ico",
+            "https://localhost/favicon.ico",
+            "https://example.com:8443/favicon.ico",
+            "https://[::1]/favicon.ico",
+            "https://router.local/favicon.ico",
+            "http://example.com/favicon.ico",
+        ] {
+            assert!(!named(&url.parse().unwrap()), "{url}");
+        }
+    }
+
+    /// Over the network: `cargo test -p brigadier-daemon site_icons -- --ignored`.
+    #[test]
+    #[ignore]
+    fn a_real_site_s_icon_comes_through_the_checks() {
+        assert!(fetch_icon("nodejs.org").is_some_and(|url| url.starts_with("data:image/")));
+        assert!(fetch_icon("www.rust-lang.org").is_some());
     }
 
     #[test]
