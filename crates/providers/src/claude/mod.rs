@@ -78,6 +78,8 @@ const SUB_AGENT_TOOLS: &str = "Agent,Task";
 const THREAD_TOOLS: &str = "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch";
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
+/// A Brain job's built-in tools ([`ToolSet::Reader`]).
+const READER_TOOLS: &str = "Read,Grep,Glob";
 /// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
 /// everything else is denied, and nothing prompts.
 const REVIEW_ALLOWED: &str = "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)";
@@ -324,6 +326,13 @@ impl Claude {
                 args.push(REVIEW_TOOLS.into());
                 args.push("--allowedTools".into());
                 args.push(REVIEW_ALLOWED.into());
+            }
+            ToolSet::Reader => {
+                args.push("--tools".into());
+                args.push(READER_TOOLS.into());
+                // The working folder, git status and the like go in the first message, so
+                // the system prompt is the same for every job and their start is cached once.
+                args.push("--exclude-dynamic-system-prompt-sections".into());
             }
         }
         args.push("--settings".into());
@@ -736,12 +745,15 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
             },
         },
     });
-    // A worker or a thread needs none of what ships with Claude Code for a person at the
+    // A worker, a thread or a Brain job needs none of what ships with Claude Code for a person at the
     // keyboard, and each of it is in every request or connects at start: bundled skills and
     // workflows, claude.ai's MCP connectors, the Artifact tool, Remote Control
     // (SESSION-FIXES-PLAN.md Q6.5). Each key is in 2.1.296's settings schema; `enableArtifact:
     // false` replaces the deprecated `disableArtifact`, and set in `--settings` it wins.
-    if matches!(spec.tools, ToolSet::Lean | ToolSet::Thread) {
+    if matches!(
+        spec.tools,
+        ToolSet::Lean | ToolSet::Thread | ToolSet::Reader
+    ) {
         settings["disableBundledSkills"] = json!(true);
         settings["disableClaudeAiConnectors"] = json!(true);
         settings["enableArtifact"] = json!(false);
@@ -2194,6 +2206,7 @@ for line in sys.stdin:
                 ToolSet::Web,
                 ToolSet::Thread,
                 ToolSet::Review,
+                ToolSet::Reader,
             ] {
                 spec.tools = tools;
                 let args = Claude::session_args(&spec, dir.path(), native_id, false).unwrap();
@@ -2847,13 +2860,44 @@ for line in sys.stdin:
         );
     }
 
+    /// BUILD-PLAN C5: a Brain job reads and searches only, and its system prompt has no
+    /// per-session sections, so every job of a batch starts on the same cached prefix.
+    #[test]
+    fn a_brain_job_reads_only_on_a_system_prompt_every_job_shares() {
+        let cwd = Temp::new();
+        let session = SessionSpec {
+            tools: ToolSet::Reader,
+            ..spec(cwd.path(), &[])
+        };
+        let args = Claude::session_args(&session, cwd.path(), "n", false).unwrap();
+        let tools = args
+            .iter()
+            .position(|arg| arg == "--tools")
+            .expect("--tools");
+        assert_eq!(args[tools + 1], "Read,Grep,Glob");
+        assert!(
+            args.iter()
+                .any(|arg| arg == "--exclude-dynamic-system-prompt-sections")
+        );
+        let worker = SessionSpec {
+            tools: ToolSet::Lean,
+            ..spec(cwd.path(), &[])
+        };
+        let args = Claude::session_args(&worker, cwd.path(), "n", false).unwrap();
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "--exclude-dynamic-system-prompt-sections")
+        );
+    }
+
     /// SESSION-FIXES-PLAN.md Q6.5: workers and threads start without what ships for a person
     /// at the keyboard, and workers can't open Claude's own questions or plan mode.
     #[test]
     fn workers_and_threads_start_without_bundled_extras_and_workers_without_questions() {
         let cwd = Temp::new();
         let cwd = cwd.path();
-        for tools in [ToolSet::Lean, ToolSet::Thread] {
+        for tools in [ToolSet::Lean, ToolSet::Thread, ToolSet::Reader] {
             let session = SessionSpec {
                 tools,
                 ..spec(cwd, &[])
@@ -2894,6 +2938,7 @@ for line in sys.stdin:
             ToolSet::Web,
             ToolSet::Thread,
             ToolSet::Review,
+            ToolSet::Reader,
         ] {
             let session = SessionSpec {
                 tools,

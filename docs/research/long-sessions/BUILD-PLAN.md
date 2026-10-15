@@ -652,6 +652,24 @@ is built in D1.0.
 - **If the weekly window pays more than spare five-hour quota,** report the numbers to the user: when it runs is their
   setting.
 - **Done when:** a week of P0.1 data names its share, and `turn_usage` shows fewer writes per job.
+- **As built:**
+  - **The measurement.** From a read-only copy of the user's `turn_usage` (14 days to 2026-10-14), 37 Claude Brain
+    jobs wrote 2.98M and read 54M cached tokens. Each job is a fresh Haiku session of 6–92 calls, and every call read
+    Claude Code's whole default start: every built-in tool, bundled skills, connectors and the Artifact tool.
+  - **The change.** A job gets only `Read`, `Grep` and `Glob` besides its own tools, with the lean start's settings
+    (`ToolSet::Reader`). Claude's per-session system prompt sections (`--exclude-dynamic-system-prompt-sections`)
+    move into its first message. An enrichment job's role, place and index digest are its system prompt, so the
+    jobs of a batch share one cached start, and only its targets are its message.
+  - **The skeleton pass keeps the digest in its message.** With the digest in the system prompt it recorded 11 and
+    9 nodes against 18 and 19, and a skeleton runs once per project, so there is no start to share.
+  - **The result** on the V3 fixture, with a dev daemon on Haiku, 4 enrichment jobs before and 8 after:
+    - writes per job 30.7k → 23.2k on average (−24%);
+    - reads per call 31–36k → 14–25k;
+    - cached reads per recorded node 55k → 27.5k;
+    - the skeleton pass recorded 18 and 19 nodes before and 21 and 16 after.
+  - **Rule R doesn't apply.** A Brain job is a one-shot session that ends with its turn, so no open session carries
+    the old start.
+  - **Follow-up issue:** the week of P0.1 data. It can't exist inside the phase.
 
 **C6. Later in C, each with its probe first (PLAN §5):**
 - B4, `--exclude-dynamic-system-prompt-sections` (cold and warm apart);

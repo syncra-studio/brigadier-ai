@@ -317,7 +317,7 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     let mut args: Vec<String> = vec!["app-server".into()];
     let tools = session.map(|session| session.tools).unwrap_or_default();
     let role_features: &[&str] = match tools {
-        ToolSet::Default | ToolSet::Lean => &[],
+        ToolSet::Default | ToolSet::Lean | ToolSet::Reader => &[],
         ToolSet::Thread => THREAD_FEATURES,
         ToolSet::None | ToolSet::Web | ToolSet::Review => RESTRICTED_FEATURES,
     };
@@ -1185,7 +1185,7 @@ async fn thread_config(
         );
     }
     match spec.tools {
-        ToolSet::Default | ToolSet::Lean => {}
+        ToolSet::Default | ToolSet::Lean | ToolSet::Reader => {}
         ToolSet::None | ToolSet::Review => {
             config.insert("web_search".into(), json!("disabled"));
         }

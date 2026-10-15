@@ -517,7 +517,7 @@ impl SessionManager {
         model: String,
         effort: Option<String>,
         root: PathBuf,
-        prompt: String,
+        prompt: JobPrompt,
         cancel: CancellationToken,
     ) -> Result<()> {
         let owner = format!("brain:{}", job.id);
@@ -553,9 +553,9 @@ impl SessionManager {
                 deny_read: vec![run_dir],
                 unix_sockets: self.socket_path().into_iter().collect(),
             },
-            append_system_prompt: Some(JOB_ROLE.to_owned()),
+            append_system_prompt: Some(prompt.system),
             mcp_servers: vec![self.brigadier_server(grant.clone(), JOB_TOOL_TIMEOUT_SECS, true)],
-            tools: ToolSet::Default,
+            tools: ToolSet::Reader,
             skill_plugins: Vec::new(),
             add_dirs: Vec::new(),
             env: vec![("TMPDIR".into(), scratch.to_string_lossy().into_owned())],
@@ -589,7 +589,7 @@ impl SessionManager {
             let meter = TokenMeter::default().on_account(account.account.clone());
             let turn = async {
                 session
-                    .send(TurnInput::text(prompt))
+                    .send(TurnInput::text(prompt.task))
                     .await
                     .map_err(|err| Error::Provider(format!("the job didn't start: {err}")))?;
                 while let Some(event) = events.recv().await {
@@ -1315,13 +1315,21 @@ of exploring it again. You only read; never change a file. Record what you learn
 to a few plain sentences of what a newcomer needs: what it is for, how it fits, what to watch out \
 for. Record only what you read in the code, never guesses. When you are done, reply `done`.";
 
+/// A Brain job's prompt (BUILD-PLAN C5): what every enrichment job on the project at this
+/// index shares goes in the system prompt, the role, the place and the digest, so the jobs of
+/// a batch start on one cached prefix; only the job's own task is its message.
+pub(super) struct JobPrompt {
+    pub system: String,
+    pub task: String,
+}
+
 fn job_prompt(
     kind: BrainJobKind,
     provider: ProviderKind,
     root: &std::path::Path,
     digest: &str,
     targets: &str,
-) -> String {
+) -> JobPrompt {
     let place = match provider {
         ProviderKind::Codex => format!(
             "The repository is at {} (read it by path; your working folder is a scratch folder).",
@@ -1347,5 +1355,59 @@ summarize the most used files not yet summarized (`fileSummary` with `path`); th
 contracts not yet known. Record as you go; you may be stopped at any time."
         ),
     };
-    format!("{place}\n\n{task}\n\nThe code index's digest of the repository:\n\n{digest}")
+    let digest = format!("The code index's digest of the repository:\n\n{digest}");
+    match kind {
+        // Once per project, so there is no start to share; it maps fewer modules when the
+        // digest it maps is not in its message (measured, BUILD-PLAN C5).
+        BrainJobKind::Skeleton => JobPrompt {
+            system: format!("{JOB_ROLE}\n\n{place}"),
+            task: format!("{task}\n\n{digest}"),
+        },
+        BrainJobKind::Enrichment => JobPrompt {
+            system: format!("{JOB_ROLE}\n\n{place}\n\n{digest}"),
+            task,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BUILD-PLAN C5: the enrichment jobs of a batch share their system prompt (role, place,
+    /// digest), the cached start; only the task, with its targets, differs.
+    #[test]
+    fn jobs_on_one_index_share_their_start_and_differ_only_in_their_task() {
+        let root = std::path::Path::new("/repo");
+        let first = job_prompt(
+            BrainJobKind::Enrichment,
+            ProviderKind::Claude,
+            root,
+            "src/ (12 files)",
+            "Stale: a",
+        );
+        let second = job_prompt(
+            BrainJobKind::Enrichment,
+            ProviderKind::Claude,
+            root,
+            "src/ (12 files)",
+            "Stale: b",
+        );
+        let skeleton = job_prompt(
+            BrainJobKind::Skeleton,
+            ProviderKind::Claude,
+            root,
+            "src/ (12 files)",
+            "",
+        );
+        assert_eq!(first.system, second.system);
+        assert!(first.system.starts_with(JOB_ROLE));
+        assert!(first.system.ends_with("src/ (12 files)"));
+        assert!(first.task.contains("Stale: a") && second.task.contains("Stale: b"));
+        assert!(!first.task.contains("src/ (12 files)"));
+        // The skeleton pass maps the digest in its message.
+        assert!(skeleton.system.starts_with(JOB_ROLE));
+        assert!(!skeleton.system.contains("src/ (12 files)"));
+        assert!(skeleton.task.ends_with("src/ (12 files)"));
+    }
 }

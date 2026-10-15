@@ -988,6 +988,10 @@ pub enum ToolSet {
     /// and the web, with no sub-agents and nothing that runs in the background. Codex: its
     /// usual tools less sub-agents.
     Thread,
+    /// A Brain job's (BUILD-PLAN C5): reading and searching files only, with the lean start's
+    /// settings and a system prompt with no per-session sections, so the jobs of a batch share
+    /// one cached start. Codex: as `Default` (it reads through its shell).
+    Reader,
 }
 
 /// An MCP server a session gets, launched by the CLI over stdio.
