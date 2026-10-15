@@ -1,11 +1,15 @@
 name: CI
 
-# Docs, the license and the repository's community files (issue forms, CODEOWNERS, the PR gate)
-# don't affect the build, so a push that changes only those skips CI.
+# Every push to main and every pull request: formatting, bindings, typecheck and lint, the app's
+# and the Rust workspace's tests, Linux and Windows clippy, and the Linux app's build and launch
+# smoke check, in parallel jobs. The macOS and Windows builds and their smoke checks run nightly
+# (nightly.yml), which also runs on release tags.
+#
+# Docs, the license and the repository's community files (issue forms, CODEOWNERS, the PR gate,
+# the nightly workflow) don't affect this run, so a push that changes only those skips it.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
     paths-ignore:
       - "**.md"
       - "docs/**"
@@ -13,6 +17,7 @@ on:
       - .github/ISSUE_TEMPLATE/**
       - .github/CODEOWNERS
       - .github/workflows/pr-gate.yml
+      - .github/workflows/nightly.yml
   pull_request:
     paths-ignore:
       - "**.md"
@@ -21,6 +26,7 @@ on:
       - .github/ISSUE_TEMPLATE/**
       - .github/CODEOWNERS
       - .github/workflows/pr-gate.yml
+      - .github/workflows/nightly.yml
   workflow_dispatch:
 
 # A push cancels an older push's run, never a run someone started by hand.
@@ -34,6 +40,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.98.1"
+  # Debug builds only serve clippy and the tests; omit their symbols to cut compile and cache I/O.
+  CARGO_PROFILE_DEV_DEBUG: "0"
   # Shared runners are noisy neighbours. The smoke check multiplies timing budgets (cold start,
   # ingest to paint, frame gaps, the stall threshold) by this factor; size budgets such as core
   # idle RSS are never relaxed. Locally the factor is 1.
@@ -43,7 +51,7 @@ jobs:
   checks:
     name: Format, bindings, typecheck, lint
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
@@ -53,6 +61,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: checks
+          save-if: ${{ github.event_name != 'pull_request' }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -68,42 +77,40 @@ jobs:
           test -z "$(git status --porcelain -- apps/desktop/src/ipc/generated)"
       - run: pnpm typecheck
       - run: pnpm lint
+
+  app-tests:
+    name: App tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: pnpm test
 
-  build:
-    name: Build, clippy, smoke (${{ matrix.name }})
-    timeout-minutes: 60
+  clippy:
+    name: Clippy (${{ matrix.name }})
+    # Each platform's clippy sees the code gated to it: dead code under another platform's cfg
+    # shows up only here.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Release tags build the universal app and DMG; other runs the native (arm64) app,
-          # which compiles once instead of twice.
-          - name: macOS
-            os: macos-latest
-            rust-targets: ${{ startsWith(github.ref, 'refs/tags/v') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-            tauri-args: ${{ startsWith(github.ref, 'refs/tags/v') && '--target universal-apple-darwin --bundles app,dmg' || '--bundles app' }}
-            app: ${{ startsWith(github.ref, 'refs/tags/v') && 'target/universal-apple-darwin/release/bundle/macos/Brigadier.app/Contents/MacOS/brigadier' || 'target/release/bundle/macos/Brigadier.app/Contents/MacOS/brigadier' }}
-          - name: Windows
-            os: windows-latest
-            rust-targets: ""
-            tauri-args: --bundles nsis
-            app: ../dev-drive/target/release/brigadier.exe
           - name: Linux
             os: ubuntu-24.04
-            rust-targets: ""
-            tauri-args: --bundles deb
-            app: target/release/brigadier
+          - name: Windows
+            os: windows-latest
     runs-on: ${{ matrix.os }}
-    env:
-      # Debug sidecars only serve clippy; omit their symbols to cut compile and cache I/O.
-      CARGO_PROFILE_DEV_DEBUG: "0"
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-
       - name: Windows Cargo files on ReFS
         if: runner.os == 'Windows'
         uses: samypr100/setup-dev-drive@562171fe8df7401fdf582d766cd3b6ab80d5b1a0 # v4
@@ -116,30 +123,19 @@ jobs:
           env-mapping: |
             CARGO_HOME,{{ DEV_DRIVE }}/.cargo
             CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
-
-      - name: Faster release builds outside release tags
-        if: "!startsWith(github.ref, 'refs/tags/v')"
-        # Keep release optimizations, but avoid cross-crate LTO and parallelize code generation.
-        # Cargo passes these settings to the app and its sidecar builds alike.
-        run: |
-          echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"
-          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16" >> "$GITHUB_ENV"
-
       - name: Linux system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus
-
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: ${{ matrix.rust-targets }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: build-${{ matrix.name }}
+          shared-key: clippy-${{ matrix.name }}
           # Mount beside the checkout so this stays relative to the Cargo workspace.
           # The cache saves files before setup-dev-drive's post step dismounts the volume.
           workspaces: . -> ${{ runner.os == 'Windows' && '../dev-drive/target' || 'target' }}
@@ -151,152 +147,91 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-
       - name: Clippy (whole workspace, including the app shell)
         run: |
           pnpm build
           pnpm --filter @brigadier/desktop stage-sidecar --debug
           cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: Computer-use helper (format, clippy, tests)
-        if: runner.os == 'macOS'
-        working-directory: helpers/computer-use
-        # Beside the main build's output, so the cache keeps it and stage-sidecar's build is reused.
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/target/computer-use
+  rust-tests:
+    name: Rust tests (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Linux system dependencies
         run: |
-          cargo fmt --all --check
-          cargo clippy --locked --workspace --all-targets -- -D warnings
-          cargo test --locked --workspace
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-tests
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Tests
+        # The app shell's build script wants the built frontend and the daemon beside it.
+        run: |
+          pnpm build
+          pnpm --filter @brigadier/desktop stage-sidecar --debug
+          cargo test --locked --workspace --lib --bins --tests
 
+  linux-app:
+    name: Linux app, launch smoke check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # Keep release optimizations, but avoid cross-crate LTO and parallelize code generation.
+      # Cargo passes these settings to the app and its sidecar builds alike.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-app
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Build the app bundle
-        # Signing and notarization use the APPLE_* secrets when they are configured; without
-        # them the bundle is built unsigned. Empty variables must not be exported: the bundler
-        # treats a set-but-empty certificate as one to import.
-        env:
-          SECRET_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          SECRET_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
-          SECRET_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
-                      APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            secret="SECRET_$name"
-            if [ -n "${!secret}" ]; then export "$name=${!secret}"; fi
-          done
-          pnpm tauri build ${{ matrix.tauri-args }}
-
+        # Both packages in one build, as stage-sidecar's build of the daemon: the workspace
+        # compiles once for the two.
+        run: pnpm tauri build --bundles deb -- -p brigadier-desktop -p brigadier-daemon
       - name: Launch smoke check
-        run: |
-          smoke() {
-            if [ "$RUNNER_OS" = "Linux" ]; then
-              # A desktop session has a D-Bus session bus (the single-instance lock and the tray
-              # use it); xvfb-run alone has none. Without DRI3, WebKitGTK needs the DMA-BUF
-              # renderer off to draw at all.
-              WEBKIT_DISABLE_DMABUF_RENDERER=1 dbus-run-session -- xvfb-run -a "${{ matrix.app }}" --smoke
-            else
-              "${{ matrix.app }}" --smoke
-            fi
-          }
-          # The release build just used every core. On macOS wait for the host to settle before
-          # each launch, with a cap so a persistently busy runner still runs and reports the
-          # unchanged budgets. loadavg is normalized by the runner's actual CPU count.
-          wait_for_idle() {
-            if [ "$RUNNER_OS" != "macOS" ]; then return; fi
-            local elapsed=0 load
-            while true; do
-              load="$(node -p 'require("node:os").loadavg()[0] / require("node:os").cpus().length')"
-              if awk -v load="$load" 'BEGIN { exit !(load < 0.75) }'; then
-                echo "macOS 1-minute load/core $load (< 0.75) after ${elapsed}s"
-                return
-              fi
-              if [ "$elapsed" -ge 120 ]; then
-                echo "macOS 1-minute load/core $load still >= 0.75 after ${elapsed}s; running with diagnostics"
-                return
-              fi
-              sleep 10
-              elapsed=$((elapsed + 10))
-            done
-          }
-          diagnostics() {
-            echo "Runner snapshot before $1: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-            if [ "$RUNNER_OS" = "Windows" ]; then
-              # $_ is PowerShell's current process, not a shell variable.
-              # shellcheck disable=SC2016
-              powershell.exe -NoProfile -Command 'Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Where-Object { $_.Name -ne "_Total" -and $_.Name -ne "Idle" } | Sort-Object PercentProcessorTime -Descending | Select-Object -First 12 Name,IDProcess,PercentProcessorTime,WorkingSetPrivate | Format-Table -AutoSize' || true
-            elif [ "$RUNNER_OS" = "macOS" ]; then
-              uptime
-              ps -Ao pid,ppid,%cpu,%mem,comm -r | head -n 16 || true
-            else
-              uptime
-              ps -Ao pid,ppid,%cpu,%mem,comm --sort=-%cpu | head -n 16 || true
-            fi
-          }
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            # GitHub's disposable macOS VM permits sudo. Stop Spotlight indexing during the
-            # timed launches; a failure is visible but does not bypass smoke validation.
-            sudo -n mdutil -a -i off || echo "Spotlight indexing could not be disabled"
-          fi
-          # Two throwaway launches prime loader and webview caches, including WebView2 on
-          # Windows. Each uses a fresh data directory and prints its own smoke report.
-          for warmup in 1 2; do
-            echo "::group::Warm-up launch $warmup (not judged)"
-            wait_for_idle
-            diagnostics "warm-up $warmup"
-            if BRIGADIER_DATA_DIR="$RUNNER_TEMP/brigadier-warmup-$warmup" \
-              BRIGADIER_SMOKE_REPORT="$RUNNER_TEMP/warmup-report-$warmup.json" smoke; then
-              echo "Warm-up $warmup completed"
-            else
-              echo "Warm-up $warmup exited nonzero; judged launches will still run"
-            fi
-            echo "::endgroup::"
-          done
-          # Then three pairs of launches: a first launch on a new data directory, then a second
-          # launch on the same directory, each judged against its own startup budget. On shared
-          # runners the window and webview creation before the page loads swings by seconds
-          # between identical launches, so each startup budget is judged by the median of its
-          # three launches against the same limit; every other check is judged on the first
-          # launch, as the app judged it.
-          launches=()
-          for pair in 1 2 3; do
-            for kind in first second; do
-              echo "::group::Judged launch $pair ($kind on its data directory)"
-              wait_for_idle
-              diagnostics "judged launch $pair $kind"
-              report="$RUNNER_TEMP/smoke-launch-$pair-$kind.json"
-              launches+=("$report")
-              if BRIGADIER_DATA_DIR="$RUNNER_TEMP/brigadier-smoke-$pair" \
-                BRIGADIER_SMOKE_REPORT="$report" smoke; then
-                echo "Judged launch $pair $kind completed"
-              else
-                echo "Judged launch $pair $kind exited nonzero; its report will still be judged"
-              fi
-              echo "::endgroup::"
-            done
-          done
-          node apps/desktop/scripts/judge-smoke.mjs "$RUNNER_TEMP/smoke-report.json" "${launches[@]}"
-
+        run: tools/ci/smoke.sh target/release/brigadier
       - name: Smoke report
         if: always()
         run: cat "${{ runner.temp }}/smoke-report.json" || echo "no smoke report was written"
-
       - name: No processes left behind
         if: always()
         run: |
           sleep 2
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            if tasklist //FI "IMAGENAME eq brigadierd.exe" | grep -qi brigadierd; then
-              echo "brigadierd is still running"; exit 1
-            fi
-          elif pgrep -fl brigadierd; then
+          if pgrep -fl brigadierd; then
             echo "brigadierd is still running"; exit 1
           fi
-
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: smoke-report-${{ matrix.name }}
+          name: smoke-report-Linux
           path: ${{ runner.temp }}/smoke-report.json
           if-no-files-found: warn

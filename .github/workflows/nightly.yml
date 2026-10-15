@@ -1,0 +1,420 @@
+name: Nightly
+
+# Every night, and by hand (Actions › Nightly › Run workflow): main's full macOS, Windows and Linux
+# builds with their launch smoke checks, macOS clippy and the computer-use helper's checks, which
+# the per-push run (ci.yml) leaves out. The macOS app is built as released (full optimization),
+# signed with the Developer ID, notarized and published as the `nightly` prerelease, which
+# installed nightly builds update themselves from. Without the signing secrets
+# (msgs/w03-secrets.md lists them) it is built unsigned and nothing is published.
+#
+# A release tag (v*) runs the same builds, the macOS one universal, and publishes nothing.
+#
+# A failed run opens one issue labelled `nightly`, or comments on the one already open; the next
+# good run closes it.
+on:
+  schedule:
+    # 01:30 UTC, early morning in Europe.
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.98.1"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  # See ci.yml.
+  BRIGADIER_BUDGET_TOLERANCE: "3"
+
+jobs:
+  gate:
+    name: Anything new
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        # A scheduled run skips a commit the last good nightly already built.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          last="$(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main \
+            --status success --limit 1 --json headSha --jq '.[0].headSha // ""')"
+          if [ "$EVENT" = schedule ] && [ "$last" = "$GITHUB_SHA" ]; then
+            echo "The last good nightly already built $GITHUB_SHA"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  macos:
+    name: macOS app, clippy, smoke, signing
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 120
+    outputs:
+      publish: ${{ steps.signing.outputs.publish }}
+    env:
+      UNIVERSAL: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ startsWith(github.ref, 'refs/tags/v') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nightly-macOS
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Clippy (whole workspace, including the app shell)
+        run: |
+          pnpm build
+          pnpm --filter @brigadier/desktop stage-sidecar --debug
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Computer-use helper (format, clippy, tests)
+        working-directory: helpers/computer-use
+        # Beside the main build's output, so the cache keeps it and stage-sidecar's build is reused.
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/computer-use
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
+
+      - name: Signing keychain and nightly settings
+        id: signing
+        # Everything below needs all of these. Without them the app is built unsigned, smoke
+        # checked, and not published. Only main's scheduled or hand-started runs publish.
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          UPDATER_PUBKEY: ${{ secrets.UPDATER_PUBKEY }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID \
+                      APPLE_PASSWORD APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY \
+                      TAURI_SIGNING_PRIVATE_KEY_PASSWORD UPDATER_PUBKEY; do
+            if [ -z "${!name}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::notice::Built unsigned and not published; missing secrets: ${missing[*]}"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The Developer ID goes into a keychain of its own before the build, because
+          # stage-sidecar signs the computer-use helper before Tauri signs the app.
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -hex 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          # shellcheck disable=SC2046 # one keychain path per word
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+          # The nightly's version sorts after every earlier nightly of the same release, and its
+          # updater reads the feed the publish job writes.
+          base="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
+          stamp="$(date -u +%Y%m%d%H%M)"
+          version="$base-nightly.$stamp"
+          feed="https://github.com/$GITHUB_REPOSITORY/releases/download/nightly/latest.json"
+          jq -n --arg version "$version" --arg bundleVersion "$stamp" --arg pubkey "$UPDATER_PUBKEY" \
+            --arg feed "$feed" '{
+              version: $version,
+              bundle: { createUpdaterArtifacts: true, macOS: { bundleVersion: $bundleVersion } },
+              plugins: { updater: { pubkey: $pubkey, endpoints: [$feed] } }
+            }' > "$RUNNER_TEMP/nightly.conf.json"
+          cat "$RUNNER_TEMP/nightly.conf.json"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF" = refs/heads/main ] && [ "$UNIVERSAL" != true ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the app bundle and DMG
+        # The release profile as shipped. Empty variables must not be exported: the bundler
+        # treats a set-but-empty identity as one to use.
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SECRET_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SECRET_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          SECRET_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          args=(--bundles "app,dmg")
+          if [ "$UNIVERSAL" = true ]; then args+=(--target universal-apple-darwin); fi
+          if [ "$SIGNED" = true ]; then
+            for name in APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID \
+                        TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+              secret="SECRET_$name"
+              export "$name=${!secret}"
+            done
+            args+=(--config "$RUNNER_TEMP/nightly.conf.json")
+          fi
+          # Both packages in one build, as stage-sidecar's build of the daemon: the workspace
+          # compiles once for the two.
+          pnpm tauri build "${args[@]}" -- -p brigadier-desktop -p brigadier-daemon
+
+      - name: Launch smoke check
+        run: |
+          if [ "$UNIVERSAL" = true ]; then dir=target/universal-apple-darwin/release; else dir=target/release; fi
+          tools/ci/smoke.sh "$dir/bundle/macos/Brigadier.app/Contents/MacOS/brigadier"
+
+      - name: Smoke report
+        if: always()
+        run: cat "${{ runner.temp }}/smoke-report.json" || echo "no smoke report was written"
+
+      - name: No processes left behind
+        if: always()
+        run: |
+          sleep 2
+          if pgrep -fl brigadierd; then
+            echo "brigadierd is still running"; exit 1
+          fi
+
+      - name: Notarize the DMG
+        if: steps.signing.outputs.signed == 'true'
+        # Tauri notarizes and staples the app inside; the disk image is signed, notarized and
+        # stapled here, so it opens without a warning when downloaded.
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ "$UNIVERSAL" = true ]; then dir=target/universal-apple-darwin/release; else dir=target/release; fi
+          dmg="$(ls "$dir"/bundle/dmg/*.dmg)"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$dmg"
+
+      - name: Nightly files
+        if: steps.signing.outputs.publish == 'true'
+        # The updater archive is named by its version, so the feed never points at another
+        # build's archive while the assets are being replaced.
+        env:
+          VERSION: ${{ steps.signing.outputs.version }}
+        run: |
+          out="$RUNNER_TEMP/nightly"
+          mkdir -p "$out"
+          archive="Brigadier-$VERSION-aarch64.app.tar.gz"
+          cp target/release/bundle/macos/Brigadier.app.tar.gz "$out/$archive"
+          cp target/release/bundle/dmg/*.dmg "$out/Brigadier-nightly-aarch64.dmg"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/nightly/$archive"
+          jq -n --arg version "$VERSION" --arg sha "$GITHUB_SHA" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --rawfile signature target/release/bundle/macos/Brigadier.app.tar.gz.sig \
+            --arg url "$url" '{
+              version: $version,
+              notes: ("Nightly build of " + $sha),
+              pub_date: $date,
+              platforms: { "darwin-aarch64": { signature: $signature, url: $url } }
+            }' > "$out/latest.json"
+          cat "$out/latest.json"
+          ls -l "$out"
+
+      - uses: actions/upload-artifact@v7
+        if: steps.signing.outputs.publish == 'true'
+        with:
+          name: nightly-macOS
+          path: ${{ runner.temp }}/nightly
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-report-macOS
+          path: ${{ runner.temp }}/smoke-report.json
+          if-no-files-found: warn
+
+  others:
+    name: ${{ matrix.name }} app, smoke
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            tauri-args: --bundles nsis
+            app: ../dev-drive/target/release/brigadier.exe
+          - name: Linux
+            os: ubuntu-24.04
+            tauri-args: --bundles deb
+            app: target/release/brigadier
+    runs-on: ${{ matrix.os }}
+    env:
+      # Keep release optimizations, but avoid cross-crate LTO and parallelize code generation.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Windows Cargo files on ReFS
+        if: runner.os == 'Windows'
+        uses: samypr100/setup-dev-drive@562171fe8df7401fdf582d766cd3b6ab80d5b1a0 # v4
+        with:
+          drive-size: 64GB
+          drive-type: Dynamic
+          drive-format: ReFS
+          mount-path: ${{ github.workspace }}/../dev-drive
+          env-mapping: |
+            CARGO_HOME,{{ DEV_DRIVE }}/.cargo
+            CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nightly-${{ matrix.name }}
+          workspaces: . -> ${{ runner.os == 'Windows' && '../dev-drive/target' || 'target' }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the app bundle
+        run: pnpm tauri build ${{ matrix.tauri-args }} -- -p brigadier-desktop -p brigadier-daemon
+      - name: Launch smoke check
+        run: tools/ci/smoke.sh "${{ matrix.app }}"
+      - name: Smoke report
+        if: always()
+        run: cat "${{ runner.temp }}/smoke-report.json" || echo "no smoke report was written"
+      - name: No processes left behind
+        if: always()
+        run: |
+          sleep 2
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            if tasklist //FI "IMAGENAME eq brigadierd.exe" | grep -qi brigadierd; then
+              echo "brigadierd is still running"; exit 1
+            fi
+          elif pgrep -fl brigadierd; then
+            echo "brigadierd is still running"; exit 1
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-report-${{ matrix.name }}
+          path: ${{ runner.temp }}/smoke-report.json
+          if-no-files-found: warn
+
+  publish:
+    name: Publish the nightly
+    needs: macos
+    if: needs.macos.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: nightly-macOS
+          path: nightly
+      - name: Move the nightly tag and replace its files
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          if gh api "repos/$repo/git/ref/tags/nightly" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$repo/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+          else
+            gh api -X POST "repos/$repo/git/refs" -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" > /dev/null
+          fi
+          notes="Built every night from main ($GITHUB_SHA). Installed nightly builds update themselves."
+          if gh release view nightly -R "$repo" > /dev/null 2>&1; then
+            gh release edit nightly -R "$repo" --prerelease --title Nightly --notes "$notes"
+          else
+            gh release create nightly -R "$repo" --prerelease --verify-tag --title Nightly --notes "$notes"
+          fi
+          # The archive and the DMG first, the feed that names them last.
+          gh release upload nightly -R "$repo" --clobber nightly/*.tar.gz nightly/*.dmg
+          gh release upload nightly -R "$repo" --clobber nightly/latest.json
+          # Then the earlier nightlies' archives go.
+          keep="$(basename nightly/*.tar.gz)"
+          gh release view nightly -R "$repo" --json assets --jq '.assets[].name' |
+            while read -r name; do
+              case "$name" in
+                *.app.tar.gz) if [ "$name" != "$keep" ]; then gh release delete-asset nightly "$name" -R "$repo" -y; fi ;;
+              esac
+            done
+
+  report:
+    name: Failure issue
+    needs: [gate, macos, others, publish]
+    if: always() && needs.gate.outputs.run == 'true' && !startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+      PASSED: ${{ needs.macos.result == 'success' && needs.others.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          open="$(gh issue list -R "$repo" --label nightly --state open --limit 1 --json number --jq '.[0].number // ""')"
+          if [ "$FAILED" = true ]; then
+            body="The nightly build of $GITHUB_SHA failed: $RUN_URL"
+            if [ -n "$open" ]; then
+              gh issue comment "$open" -R "$repo" --body "$body"
+            else
+              gh label create nightly -R "$repo" --color B60205 \
+                --description "The nightly build failed" 2> /dev/null || true
+              gh issue create -R "$repo" --label nightly --title "Nightly build failed" --body "$body"
+            fi
+          elif [ "$PASSED" = true ] && [ -n "$open" ]; then
+            gh issue close "$open" -R "$repo" --comment "The nightly build of $GITHUB_SHA passed: $RUN_URL"
+          fi
