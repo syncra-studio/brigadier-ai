@@ -1,7 +1,7 @@
 //! `clean_up` (SESSION-FIXES-PLAN.md bug 6): the thread's way to clean up when the user asks.
 //! Brigadier already removes what a session's finished work leaves; this retries what it
 //! couldn't and removes what is no longer in use, going only by its records of this
-//! conversation: the cleanup ledger's owners of its tasks, reviews and session, and its tasks'
+//! conversation: the cleanup ledger's owners of its tasks and reviews, and its tasks'
 //! branches. Nothing found by name is touched, so another session's work never is.
 
 use std::path::PathBuf;
@@ -58,11 +58,9 @@ impl SessionManager {
             }
             owners.push((owner, format!("review {}", review.number)));
         }
-        // The session's own worktree is in use, unless a merge's removal of it didn't finish.
-        let session = format!("session:{id}");
-        if ledger.disposing().contains(&session) {
-            owners.push((session, "the merged session".into()));
-        }
+        // The session's own worktree is never this tool's: a merge keeps it, Close workspace
+        // removes it, and a Close whose removal failed leaves a folder the user may still work
+        // in (phase A verify).
         for (owner, name) in owners {
             let artifacts = ledger.artifacts(&owner);
             if artifacts.is_empty() {

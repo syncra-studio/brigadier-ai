@@ -521,6 +521,32 @@ async fn an_archived_sessions_unfinished_removal_still_goes() {
     flow.stop().await;
 }
 
+/// A Close workspace whose removal failed leaves the `session:` owner disposing while the
+/// session still works in its folder: the thread's clean_up never takes that folder (phase A
+/// verify).
+#[tokio::test]
+async fn clean_up_keeps_a_workspace_whose_close_failed() {
+    let (flow, _) = session("merge-close-failed-clean-up").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let (path, _) = workspace(&flow);
+    let path = path.unwrap();
+    flow.core
+        .record(vec![(
+            crate::model::streams::CLEANUP.to_owned(),
+            DomainEvent::CleanupRequested {
+                owner: format!("session:{}", flow.conversation),
+            },
+        )])
+        .await
+        .unwrap();
+    std::fs::write(path.join("DRAFT.md"), "draft\n").unwrap();
+    let text = flow.manager.clean_up(&flow.conversation).await.unwrap();
+    assert!(path.join(".git").exists(), "{text}");
+    assert!(path.join("DRAFT.md").exists(), "{text}");
+    flow.stop().await;
+}
+
 /// "Close workspace" removes the session's worktree only when the user asks; its branch keeps
 /// work the base lacks, and the next change makes a fresh worktree in the same folder.
 #[tokio::test]
