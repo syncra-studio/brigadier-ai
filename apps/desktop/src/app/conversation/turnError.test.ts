@@ -19,7 +19,14 @@ test("a failed turn reads as one plain line, chosen from the raw error", () => {
     summary('API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}'),
     "This turn stopped because of an error on Claude's side.",
   );
-  assert.equal(summary('API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}'), "This turn stopped because of an error on Claude's side.");
+  assert.equal(summary('API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}'), "Claude is overloaded right now.");
+  // By kind, as a worker's error is: a rate limit (no usage limit), a context too long, a sign-in.
+  assert.equal(summary("API Error: 429 rate_limit_error: Rate limit exceeded"), "Claude is limiting how fast it takes requests. Try again in a moment.");
+  assert.equal(describeTurnError("Rate limit exceeded").limit, undefined);
+  assert.equal(summary("API Error: 400 prompt is too long: 210000 tokens > 200000 maximum"), "The conversation grew too long for Claude's context.");
+  assert.equal(summary("context_length_exceeded", "Codex"), "The conversation grew too long for Codex's context.");
+  assert.equal(summary('API Error: 401 {"type":"error","error":{"type":"authentication_error"}}'), "Claude needs you to sign in again.");
+  assert.equal(summary("Not logged in · Please run /login"), "Claude needs you to sign in again.");
   assert.equal(summary("The reply failed."), "This turn stopped because of an error.");
   assert.equal(summary(""), "This turn stopped because of an error.");
 });

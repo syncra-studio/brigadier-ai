@@ -8,6 +8,10 @@ import type { Notice, UserRequest } from "@/ipc/generated";
 
 /** The daemon's words when the CLI's process went away mid-turn (`ENDED_UNEXPECTEDLY`). */
 const ENDED_UNEXPECTEDLY = /cli session ended unexpectedly|ended unexpectedly|\bkilled\b|crash|terminated by signal|\bsig(kill|term|segv|abrt)\b/i;
+const RATE = /rate.?limit|too many requests|\b429\b/i;
+const CONTEXT = /context (window|length)|prompt is too long|too long for the (model|context)|maximum context|context_length_exceeded|out of context/i;
+const AUTH = /not (logged|signed) in|log ?in again|sign ?in again|unauthori[sz]ed|\b401\b|invalid (api|x-api) key|authentication_error|oauth token (has )?expired/i;
+const OVERLOADED = /overloaded|\b529\b/i;
 const LIMIT = /usage limit|hit your limit|limit (was )?reached|limit exceeded|quota|out of (usage|credits)/i;
 const NETWORK = /network|connection|disconnected|\beconn\w*|enetunreach|enotfound|etimedout|eai_again|timed? ?out|timeout|fetch failed|socket hang up|getaddrinfo|offline/i;
 const API = /api error|\b[45]\d\d\b|overloaded|server error|bad gateway|service unavailable|invalid_request|authentication_error/i;
@@ -23,9 +27,14 @@ export function interruptedByQuit(raw: string | null | undefined): boolean {
 /** `limit`: the provider's usage limit stopped it, which the thread shows as a divider, not an error. */
 export function describeTurnError(raw: string, provider = "Claude"): { summary: string; limit?: true } {
   if (interruptedByQuit(raw)) return { summary: "Interrupted: Brigadier quit while this was running. Continue picks it up where it stands." };
+  // A rate limit reads "limit exceeded" too, and is no usage limit: it passes in a moment.
+  if (RATE.test(raw)) return { summary: `${provider} is limiting how fast it takes requests. Try again in a moment.` };
   if (LIMIT.test(raw)) return { summary: `${provider}'s usage limit was reached.`, limit: true };
+  if (CONTEXT.test(raw)) return { summary: `The conversation grew too long for ${provider}'s context.` };
+  if (AUTH.test(raw)) return { summary: `${provider} needs you to sign in again.` };
   if (ENDED_UNEXPECTEDLY.test(raw)) return { summary: `${provider} stopped unexpectedly.` };
   if (NETWORK.test(raw)) return { summary: `Lost the connection to ${provider}.` };
+  if (OVERLOADED.test(raw)) return { summary: `${provider} is overloaded right now.` };
   if (API.test(raw)) return { summary: `This turn stopped because of an error on ${provider}'s side.` };
   return { summary: "This turn stopped because of an error." };
 }
