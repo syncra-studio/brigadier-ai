@@ -814,6 +814,8 @@ impl SessionManager {
             format!("Branch `{branch}` stays.")
         };
         if let Ok(conv) = self.conv(id) {
+            conv.workspace_closed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             conv.note(format!(
                 "[workspace closed] The user closed this session's workspace: its folder {path} is removed. {branch_line} The next change makes a fresh worktree in the same folder."
             ))

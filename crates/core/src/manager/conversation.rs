@@ -588,6 +588,9 @@ pub(crate) struct ConvLive {
     /// Reviews that ended and whose findings aren't queued for the thread yet: the session's
     /// full checks wait for these as for a running review (BUILD-PLAN C3).
     pub(super) reviews_telling: std::sync::atomic::AtomicUsize,
+    /// The thread was told the user closed the session's workspace, and that the next change
+    /// makes a fresh one in the same folder: that fresh one is no news to it (#39).
+    pub(super) workspace_closed: std::sync::atomic::AtomicBool,
     /// A turn ran since the thread's scratch was last swept: the next time its requests are
     /// all over, it is swept ([`super::thread_scratch`]).
     pub(super) scratch_used: std::sync::atomic::AtomicBool,
@@ -650,6 +653,7 @@ impl ConvLive {
             merge_lock: tokio::sync::Mutex::new(()),
             merge_told: std::sync::Mutex::new(None),
             reviews_due: std::sync::atomic::AtomicUsize::new(0),
+            workspace_closed: std::sync::atomic::AtomicBool::new(false),
             reviews_telling: std::sync::atomic::AtomicUsize::new(0),
             scratch_used: std::sync::atomic::AtomicBool::new(false),
             held_moves: tokio::sync::Mutex::new(HashMap::new()),

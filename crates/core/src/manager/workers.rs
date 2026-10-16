@@ -2657,10 +2657,15 @@ impl SessionManager {
                 if made.is_some() {
                     self.note_branch_made(repo, branch).await;
                 }
-                // A session's worktree made again (after Close workspace, or a restore): the
-                // thread hears it is new and its own, or it takes it for a leftover and removes
-                // it (bug 5).
+                // A session's worktree made again (after a restore, or the thread removed it):
+                // the thread hears it is new and its own, or it takes it for a leftover and
+                // removes it (bug 5). After Close workspace it heard so already (#39).
+                let closed = self.conv(conversation_id).is_ok_and(|conv| {
+                    conv.workspace_closed
+                        .swap(false, std::sync::atomic::Ordering::SeqCst)
+                });
                 if let Some(start) = made
+                    && !closed
                     && let Ok(board) = self.core.board(conversation_id).await
                     && board
                         .orchestrator_steps

@@ -614,6 +614,40 @@ async fn close_workspace_removes_it_only_when_asked() {
     flow.stop().await;
 }
 
+/// Close workspace after a merge takes the branch too (all its work is on the base); the next
+/// change makes a fresh one in the same folder. The thread heard so with the close, so no
+/// "[workspace] A fresh branch" note follows it (#39).
+#[tokio::test]
+async fn close_workspace_after_a_merge_tells_the_thread_once() {
+    let (flow, log) = session("merge-close-fresh").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    flow.say("Now just merge it.").await;
+    let board = flow.settled().await;
+    assert_eq!(merged(&board), 1, "{:#?}", log.lock().unwrap());
+    let (path, branch) = workspace(&flow);
+    let path = path.unwrap();
+    let reply = flow
+        .manager
+        .close_workspace(&flow.conversation)
+        .await
+        .unwrap();
+    assert!(
+        reply.contains(&format!("Branch `{branch}` went too")),
+        "{reply}"
+    );
+    flow.say("Add more notes.").await;
+    flow.settled().await;
+    assert_eq!(
+        logged(&log, "worked in: "),
+        [format!("worked in: {}", path.display())]
+    );
+    let input = logged(&log, "Add more notes.").pop().unwrap();
+    assert!(input.contains("[workspace closed]"), "{input}");
+    assert!(!input.contains("[workspace] A fresh branch"), "{input}");
+    flow.stop().await;
+}
+
 /// Close workspace waits for the session's workers: while a scout runs, the folder stays and
 /// the user hears why; once it has ended, the workspace closes (Codex review, phase A verify).
 #[tokio::test]
