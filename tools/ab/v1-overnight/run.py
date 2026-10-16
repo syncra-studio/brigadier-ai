@@ -33,6 +33,21 @@ import score as scorer  # noqa: E402
 QUIET_AFTER_S = 1800  # after the run finished: at most this long for the conversation to go quiet
 
 
+def data_size(data):
+    """The data dir's size and its stored outputs' (BUILD-PLAN D2's disk-growth measure), in bytes."""
+    def size(d):
+        total = files = 0
+        for dirpath, _, names in os.walk(d):
+            for f in names:
+                try:
+                    total += os.lstat(os.path.join(dirpath, f)).st_size; files += 1
+                except OSError:
+                    pass
+        return total, files
+    (data_bytes, _), (blob_bytes, blob_files) = size(data), size(os.path.join(data, "blobs"))
+    return {"data_bytes": data_bytes, "blob_bytes": blob_bytes, "blob_files": blob_files}
+
+
 def attempt(root, reviews, n, tag, timeout_min):
     build = json.load(open(os.path.join(root, "build.json")))
     label = tag or build["label"]
@@ -45,6 +60,7 @@ def attempt(root, reviews, n, tag, timeout_min):
     os.makedirs(run)
     shutil.copyfile(os.path.join(HERE, "plan.json"), os.path.join(run, "plan.json"))
     v3.restore(root, "seeded")
+    disk = {"before": data_size(os.path.join(root, "arm", "data"))}
     arm = v3.Arm(root, os.path.join(run, "rec"), run)
     start = {"arm": "brigadier", "task": "v1-overnight", "reviews": reviews, "n": n, "build": build, "label": label,
              "regime": "warm"}
@@ -71,6 +87,9 @@ def attempt(root, reviews, n, tag, timeout_min):
         json.dump(start, open(os.path.join(run, "start.json"), "w"), indent=1)
     finally:
         arm.close()
+    disk["after"] = data_size(os.path.join(root, "arm", "data"))
+    start["disk"] = disk
+    json.dump(start, open(os.path.join(run, "start.json"), "w"), indent=1)
     try:
         v3.after(run)
     except Exception as err:  # noqa: BLE001  (usage is kept apart from the verdict)
