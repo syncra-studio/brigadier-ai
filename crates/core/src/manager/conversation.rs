@@ -1473,6 +1473,16 @@ impl SessionManager {
             working
         };
         drop(state);
+        // The rest of the turn's file changes are the steered request's: its record starts
+        // here, as a turn's start begins its request's.
+        if steered {
+            self.refresh_changes(
+                &conv.id,
+                message.request_id.as_deref(),
+                super::request_changes::Refresh::Start,
+            )
+            .await;
+        }
         self.note_steered(conv, message.request_id.as_deref(), into)
             .await;
         if let (Some(held), Some(request)) = (held, &message.request_id) {

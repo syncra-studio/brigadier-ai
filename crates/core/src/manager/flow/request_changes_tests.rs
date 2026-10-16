@@ -1438,3 +1438,90 @@ async fn request_changes_background_runs_keep_a_late_link_to_their_call() {
     );
     flow.stop().await;
 }
+
+/// A message steered into a running turn starts its own request: the edits the rest of the
+/// turn makes are that request's, with their counts and Undo.
+#[tokio::test]
+async fn request_changes_record_a_steered_requests_edits() {
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w79-steered",
+        options(ProviderKind::Claude),
+        script(move |turn| async move {
+            let id = turn.conversation().unwrap();
+            let call = |status| ProviderEvent::ToolCall {
+                kept: None,
+                item_id: "bash-1".into(),
+                name: "Bash".into(),
+                input: Some("{\"command\":\"sleep 5\"}".into()),
+                output: (status == ItemStatus::Completed).then(|| "ok".into()),
+                status,
+            };
+            turn.emit(call(ItemStatus::InProgress)).await;
+            tokio::time::timeout(super::PATIENCE, async {
+                loop {
+                    let board = turn.host.core.board(&id).await.unwrap();
+                    if board.requests.values().any(|r| r.steered_into.is_some()) {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            turn.emit(call(ItemStatus::Completed)).await;
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            edit(
+                &turn,
+                &workspace.join("a.txt"),
+                "edit-a",
+                "base\n",
+                "base\nthread a\n",
+            )
+            .await;
+            observed(&turn, 1).await;
+            Reply::text("Changed a, as you asked.")
+        }),
+    )
+    .await;
+    flow.say("Look around.").await;
+    flow.until("the turn to go on working", |board| {
+        board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, OrchestratorStepKind::Tool { status, .. } if *status == ItemStatus::InProgress)
+        })
+    })
+    .await;
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "Also edit a.".into(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+    let board = flow
+        .until("settled changes", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled && !c.stat.files.is_empty())
+        })
+        .await;
+    let request = board.latest_request().unwrap();
+    assert!(request.steered_into.is_some(), "{request:?}");
+    let changes = request.changes.as_ref().unwrap();
+    assert_eq!(changes.stat.files[0].path, "a.txt");
+    assert!(changes.held.is_empty(), "{:?}", changes.held);
+    flow.manager
+        .undo_request(flow.conversation.clone(), request.id.clone(), false)
+        .await
+        .unwrap();
+    let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "base\n"
+    );
+    flow.stop().await;
+}
