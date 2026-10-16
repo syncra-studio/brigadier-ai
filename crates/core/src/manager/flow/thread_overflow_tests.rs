@@ -514,12 +514,12 @@ async fn a_session_from_before_the_short_start_is_told_once() {
     .await;
 }
 
-/// Rule R for a Claude thread's `run` and `note_for_user` behind its tool search (BUILD-PLAN O5).
+/// Rule R for a Claude thread's `run` behind its tool search (BUILD-PLAN O5).
 #[tokio::test]
 async fn a_session_from_before_the_lean_tools_is_told_once() {
     told_once(
         LEAN_TOOLS_REVISION,
-        "load one through ToolSearch by its name",
+        "load it through ToolSearch by its name",
     )
     .await;
 }

@@ -643,12 +643,13 @@ fn chat_tools() -> Vec<Tool> {
 /// The thread's everyday tools, in the model's list from the start (Q40, BUILD-PLAN C2): a
 /// Claude thread finds the rest with its tool search when it needs one, which keeps every
 /// call's fixed start near plain Claude Code's. Codex reads no such mark and loads them all.
-/// `run` and `note_for_user` wait too (BUILD-PLAN O5): the thread's own shell keeps outputs up
-/// to 30 KB whole, and no bench or V3 run called either.
+/// `run` waits too (BUILD-PLAN O5): the thread's own shell keeps outputs up to 30 KB whole, and
+/// no bench run called it.
 pub const THREAD_ALWAYS_LOADED: &[&str] = &[
     "run_check",
     "read_artifact",
     "ask_user",
+    "note_for_user",
     "query_brain",
     "remember",
     "code_search",
@@ -662,7 +663,6 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
     ("answer_worker", "worker question"),
     ("read_report", "worker report"),
     ("run", "shell command, long output, background"),
-    ("note_for_user", "decided for you, judgement call"),
 ];
 
 /// The thread's tools marked for Claude Code's tool search: [`THREAD_ALWAYS_LOADED`] load up
@@ -1016,7 +1016,7 @@ mod tests {
                 .map(|tool| tool.name.as_ref())
                 .collect();
             let expected: Vec<&str> = THREAD_ALWAYS_LOADED.to_vec();
-            assert!(!expected.contains(&"run") && !expected.contains(&"note_for_user"));
+            assert!(!expected.contains(&"run"));
             let mut sorted = loaded.clone();
             sorted.sort_unstable();
             let mut want = expected.clone();

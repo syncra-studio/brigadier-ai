@@ -120,7 +120,7 @@ How to work:
 - A big job (many parts, several workers, or hours of work): one plan reviewed with review_plan before building, and start_verifier at the end.
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. ask_user answers and outline go-aheads are kept for you. Never reopen a settled decision.
-- Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided. Checking it in the app by hand is your job or a worker's, never the user's.
+- Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last run_check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
 - Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
@@ -745,7 +745,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: LEAN_TOOLS_REVISION,
-        thread: "From now on, on a Claude thread, run builds, tests, logs and listings in your own shell (`cd <your workspace> && …`; output up to 30 KB comes back whole). run and note_for_user leave your tool list from the start, at your next resume: load one through ToolSearch by its name when you need it.",
+        thread: "From now on, on a Claude thread, run builds, tests, logs and listings in your own shell (`cd <your workspace> && …`; output up to 30 KB comes back whole). run leaves your tool list from the start, at your next resume: load it through ToolSearch by its name when you need it. Send a note_for_user in the same message as your last run_check, never in a call of its own.",
         worker: "",
     },
 ];
@@ -1003,8 +1003,8 @@ pub(crate) const COMMIT_FIRST_REVISION: u32 = 63;
 /// O's.
 pub(crate) const SHORT_START_REVISION: u32 = 70;
 
-/// A Claude thread's `run` and `note_for_user` wait behind its tool search, and it runs its
-/// commands in its own shell (BUILD-PLAN O5).
+/// A Claude thread's `run` waits behind its tool search, it runs its commands in its own shell,
+/// and its note_for_user goes with its last check (BUILD-PLAN O5).
 pub(crate) const LEAN_TOOLS_REVISION: u32 = 71;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
