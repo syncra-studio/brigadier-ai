@@ -137,6 +137,8 @@ function summary(event: DomainEvent): string {
       return `${event.queue.items.length} queued${event.queue.paused ? ", paused" : ""}`;
     case "workerEvent":
       return event.event.type;
+    case "outputKept":
+      return `${event.file.path} ${event.file.error ?? `${event.file.bytes} B`}`;
     case "orchestratorLogged":
       switch (event.entry.type) {
         case "injection":
@@ -149,6 +151,8 @@ function summary(event: DomainEvent): string {
           return event.entry.message;
         case "checkpoint":
           return `checkpoint for ${event.entry.oldNativeId.slice(0, 8)}`;
+        case "stoppedForRebirth":
+          return `stopped for a rebirth at ${event.entry.atTokens} tokens: ${event.entry.reason}`;
       }
       break;
     case "brainJobUpdated":

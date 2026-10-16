@@ -44,6 +44,8 @@ pub(crate) struct Export {
     pub gaps: Vec<String>,
     /// Whole outputs copied to `outputs/`.
     pub outputs: usize,
+    /// The last command or tool call, in a line: the step a stopped turn was in.
+    pub last_step: Option<String>,
 }
 
 impl Export {
@@ -111,7 +113,6 @@ pub(crate) fn worker_event(stored: &StoredEvent) -> Decoded {
 }
 
 /// A thread's CLI event (`orch:` stream).
-#[allow(dead_code)] // The thread's mid-turn rebirth uses it next (BUILD-PLAN D2.3b).
 pub(crate) fn thread_event(stored: &StoredEvent) -> Decoded {
     if stored.kind != "orchestrator.logged" {
         return Decoded::Skip;
@@ -150,7 +151,6 @@ impl SessionManager {
     }
 
     /// Exports the conversation's thread transcript likewise.
-    #[allow(dead_code)] // The thread's mid-turn rebirth uses it next (BUILD-PLAN D2.3b).
     pub(crate) async fn export_thread_transcript(&self, id: &ConversationId, dir: &Path) -> Export {
         self.export_stream(streams::orchestrator(id), thread_event, "The thread", dir)
             .await
@@ -269,6 +269,9 @@ where
             {
                 tail.push(text.clone());
             }
+            if let Some(step) = step_line(&event) {
+                export.last_step = Some(step);
+            }
             let mut text = String::new();
             entry(&mut text, &event, actor);
             if let Some(kept) = kept_of(&event) {
@@ -362,6 +365,48 @@ async fn late_copies(store: &brigadier_store::Store, stream: &str) -> HashMap<St
         }
     }
     late
+}
+
+/// A command or tool call, in a line, with how it stood.
+fn step_line(event: &ProviderEvent) -> Option<String> {
+    let (what, status) = match event {
+        ProviderEvent::Command {
+            command, status, ..
+        } => (format!("running `{}`", one_line(command, 300)), status),
+        ProviderEvent::ToolCall {
+            name,
+            input,
+            status,
+            ..
+        } => (
+            format!(
+                "calling {name}{}",
+                input
+                    .as_deref()
+                    .map(|input| format!(" with {}", one_line(input, 300)))
+                    .unwrap_or_default()
+            ),
+            status,
+        ),
+        _ => return None,
+    };
+    let how = match status {
+        ItemStatus::InProgress => "still running when it was stopped",
+        ItemStatus::Completed => "finished",
+        ItemStatus::Failed => "failed or was cut off",
+        ItemStatus::Declined => "declined",
+    };
+    Some(format!("{what} ({how})"))
+}
+
+/// `text` on one line, cut at `max` characters.
+fn one_line(text: &str, max: usize) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() > max {
+        format!("{}…", line.chars().take(max).collect::<String>())
+    } else {
+        line
+    }
 }
 
 /// A finished command's or tool call's kept output.

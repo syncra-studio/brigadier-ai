@@ -83,6 +83,9 @@ pub enum RebirthTrigger {
     /// Its prompt cache had expired when the next turn came: resuming would have sent the
     /// whole history again at the cache-write price (PLAN.md §7).
     CacheExpired,
+    /// Its turn was stopped near its model's limit and the request continued in the fresh
+    /// session (BUILD-PLAN D2.3b).
+    MidTurn,
 }
 
 /// A rebirth's trigger as stored, older names included: an earlier run's per-phase restart
@@ -93,6 +96,7 @@ enum StoredRebirthTrigger {
     Threshold,
     Recovery,
     CacheExpired,
+    MidTurn,
     Phase,
 }
 
@@ -102,6 +106,7 @@ impl<'de> Deserialize<'de> for RebirthTrigger {
             StoredRebirthTrigger::Threshold => Self::Threshold,
             StoredRebirthTrigger::Recovery | StoredRebirthTrigger::Phase => Self::Recovery,
             StoredRebirthTrigger::CacheExpired => Self::CacheExpired,
+            StoredRebirthTrigger::MidTurn => Self::MidTurn,
         })
     }
 }

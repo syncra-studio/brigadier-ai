@@ -226,6 +226,7 @@ impl TurnChain {
 /// Where Brigadier's MCP server finds its grant, in its environment.
 pub(crate) const MCP_GRANT_ENV: &str = "BRIGADIER_MCP_GRANT";
 
+mod overflow;
 mod watchdog;
 
 /// A live CLI session of a conversation or task.
@@ -408,6 +409,11 @@ struct ConvState {
     /// The running turn failed on a usage limit (which window, and its reset, when the CLI
     /// said).
     limit_hit: Option<LimitHit>,
+    /// The running turn is being stopped near its model's limit (at this context), to be
+    /// reborn at once with its request going on (BUILD-PLAN D2.3b).
+    stopping_for_rebirth: Option<i64>,
+    /// The context the thread was last asked, this turn, to commit at (BUILD-PLAN D2.3b).
+    steered_at: Option<i64>,
     /// The running turn is one of its own that compacts the context: messages sent meanwhile
     /// wait for the next turn.
     compacting: bool,
@@ -606,6 +612,10 @@ pub(crate) struct ConvLive {
     #[cfg(test)]
     pub(super) hand_over_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// Tests: what a stop for a rebirth waits for once it is recorded, before the turn stops.
+    #[cfg(test)]
+    pub(super) rebirth_stop_pause:
+        std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl ConvLive {
@@ -645,6 +655,8 @@ impl ConvLive {
             review_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             hand_over_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            rebirth_stop_pause: std::sync::Mutex::new(None),
         }
     }
 
@@ -2604,6 +2616,7 @@ impl SessionManager {
             state.landed = false;
             state.watchdog.begin(now_ms());
             state.limit_hit = None;
+            state.steered_at = None;
             state.turn_error = None;
             state.unshown_error = None;
             state.last_reply = None;
@@ -2668,6 +2681,7 @@ impl SessionManager {
             let briefing = briefing.or_else(|| {
                 (reseed && session).then(|| BriefingPlan {
                     swap_started_at_ms: now_ms(),
+                    stopped: None,
                     trigger: RebirthTrigger::Recovery,
                     prep: None,
                     at_tokens: state.context.map_or(0, |(used, _)| used),
@@ -4413,6 +4427,16 @@ impl SessionManager {
                 )
                 .await;
             }
+            // "Prompt is too long" on a session thread: reborn, never a failed request (D2.3b).
+            ProviderEvent::Error { error }
+                if conv.kind == ConversationKind::Session
+                    && error.kind == ErrorKind::ContextWindow
+                    && !error.will_retry =>
+            {
+                let tokens = conv.state.lock().await.context.map_or(0, |(used, _)| used);
+                self.stop_for_rebirth(conv, cli, tokens, overflow::StopWhy::ContextWindow)
+                    .await;
+            }
             ProviderEvent::Error { error } => {
                 // Credits run out or a failed sign-in, where another account of the provider
                 // can go on: handled as a limit, so the same session resumes there (BUILD-PLAN
@@ -4657,6 +4681,7 @@ impl SessionManager {
                         state.busy = true;
                         state.interrupted = false;
                         state.limit_hit = None;
+                        state.steered_at = None;
                         state.turn_error = None;
                         state.unshown_error = None;
                         state.last_reply = None;
@@ -4692,18 +4717,30 @@ impl SessionManager {
                 used_tokens,
                 window_tokens,
             } => {
-                let mut state = conv.state.lock().await;
-                let window = window_tokens.or(state.context.and_then(|(_, window)| window));
-                state.context = Some((*used_tokens, window));
+                let window = {
+                    let mut state = conv.state.lock().await;
+                    let window = window_tokens.or(state.context.and_then(|(_, window)| window));
+                    state.context = Some((*used_tokens, window));
+                    if conv.kind == ConversationKind::Session {
+                        state.cache = Some(CacheMark {
+                            native_id: cli.session.native_id(),
+                            provider: cli.provider,
+                            at_ms: now_ms(),
+                            context: *used_tokens,
+                            window,
+                        });
+                    }
+                    window
+                };
+                // Mid-turn, near the model's limit: commit, or stop and be reborn (D2.3b).
                 if conv.kind == ConversationKind::Session {
-                    state.cache = Some(CacheMark {
-                        native_id: cli.session.native_id(),
-                        provider: cli.provider,
-                        at_ms: now_ms(),
-                        context: *used_tokens,
-                        window,
-                    });
+                    self.thread_context(conv, cli, *used_tokens, window).await;
                 }
+            }
+            ProviderEvent::CompactionRefused if conv.kind == ConversationKind::Session => {
+                let tokens = conv.state.lock().await.context.map_or(0, |(used, _)| used);
+                self.stop_for_rebirth(conv, cli, tokens, overflow::StopWhy::CompactionRefused)
+                    .await;
             }
             ProviderEvent::CompactionStarted { automatic }
                 if conv.kind == ConversationKind::Session =>
@@ -4885,6 +4922,7 @@ impl SessionManager {
             return;
         }
         let in_run = self.overnight.active.get(&conv.id).is_some();
+        let reborn;
         let (limit_hit, ended, landed, carried, asked, served, end_commands, unshown) = {
             let mut state = conv.state.lock().await;
             // A Codex command still running when its turn ended goes on as its CLI's job.
@@ -4947,7 +4985,14 @@ impl SessionManager {
             // interrupts it first. Its request isn't over until a hand-over is chosen: it goes
             // on elsewhere, or waits for quota, or fails then. No turn starts meanwhile.
             let limited = limit_hit.filter(|_| status != TurnStatus::Completed);
-            if limited.is_some() {
+            // A turn stopped near its model's limit: its request goes on after the rebirth.
+            reborn = state.stopping_for_rebirth.take();
+            state.steered_at = None;
+            if reborn.is_some() {
+                state.turn_error = None;
+                state.unshown_error = None;
+            }
+            if limited.is_some() || reborn.is_some() {
                 state.hand_over = Some(HandOver {
                     request: served.clone(),
                     stopped: false,
@@ -4956,6 +5001,7 @@ impl SessionManager {
             if let Some(request) = &served
                 && let Some(ended) = ended.clone()
                 && limited.is_none()
+                && reborn.is_none()
             {
                 state.outcomes.insert(request.clone(), ended);
             }
@@ -5031,6 +5077,14 @@ impl SessionManager {
         // Follow-ups the turn left undecided wait in the queue for their own turn.
         if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);
+        }
+        if let Some(tokens) = reborn {
+            // Not from inside the CLI's own event pump: closing the CLI waits for it.
+            let (manager, conv, cli) = (self.arc(), conv.clone(), cli.clone());
+            self.spawn(async move {
+                manager.rebirth_mid_turn(&conv, &cli, tokens, carried).await;
+            });
+            return;
         }
         if let Some(limit) = limit_hit {
             self.runtime.note_limit(&cli.account, limit.clone()).await;
@@ -5249,6 +5303,7 @@ impl SessionManager {
             window: prep.window,
             prep: Some(prep),
             swap_started_at_ms,
+            stopped: None,
         });
     }
 

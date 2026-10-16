@@ -221,6 +221,8 @@ pub(crate) struct BriefingPlan {
     pub window: Option<i64>,
     /// When the swap began: the old CLI was retired from here on.
     pub swap_started_at_ms: i64,
+    /// A turn stopped mid-request: where it stood (BUILD-PLAN D2.3b), carried first.
+    pub stopped: Option<String>,
 }
 
 /// A briefing section while it is put together.
@@ -624,8 +626,11 @@ impl SessionManager {
         let mut brain = self.brain_part(id, carried).await;
         let exchanges = self.recent_exchanges(id, carried).await;
         let (target, max) = briefing_budget();
+        // A turn stopped mid-request: where it stood, carried whole (BUILD-PLAN D2.3b).
+        let stopped = Part::new("stopped", plan.stopped.clone().unwrap_or_default(), 0);
 
         let fixed = FRAMING.len()
+            + stopped.text.len()
             + constraints.text.len()
             + index.text.len()
             + handoff_part.text.len()
@@ -696,6 +701,7 @@ impl SessionManager {
         let framing = Part::new("framing", FRAMING.into(), 0);
         let parts = [
             framing,
+            stopped,
             constraints,
             handoff_part,
             index,

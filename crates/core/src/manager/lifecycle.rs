@@ -107,7 +107,11 @@ impl SessionManager {
             // The thread's turn the restart cut off ran its calls no further, and its request
             // reads interrupted, not answered.
             self.end_cut_off_calls(&conversation.id).await;
-            self.mark_cut_off_turn(&conversation.id).await;
+            // A turn stopped for a rebirth the restart cut off is reborn now and its request
+            // goes on (BUILD-PLAN D2.3b); any other cut-off turn reads interrupted.
+            if !self.recover_stopped_rebirth(&conversation.id).await {
+                self.mark_cut_off_turn(&conversation.id).await;
+            }
             // Merge cards are retired: open ones close, and no card answer merges.
             if conversation.lifecycle != Lifecycle::Archived {
                 self.retire_merge_cards(&conversation.id).await;

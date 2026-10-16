@@ -201,6 +201,7 @@ export function deriveLog(entries: readonly OrchestratorLogEntry[]): DerivedLog 
         breaches.push({ streamSeq, atMs, message: entry.message });
         break;
       case "checkpoint":
+      case "stoppedForRebirth":
         break;
     }
   }

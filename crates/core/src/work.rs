@@ -2919,6 +2919,17 @@ pub enum OrchestratorEntry {
     ContractBreach {
         message: String,
     },
+    /// The thread's turn was stopped mid-request near its model's limit, to be reborn at once
+    /// (BUILD-PLAN D2.3b). Recorded before its CLI is stopped: a restart before the rebirth
+    /// finishes it and continues the request.
+    StoppedForRebirth {
+        /// The request the turn served.
+        request_id: Option<String>,
+        /// The context when it was stopped.
+        at_tokens: i64,
+        /// Why, in words.
+        reason: String,
+    },
     /// A checkpoint's handoff note was written while the thread idled with a warm cache: kept
     /// so a rebirth after a daemon restart still has it (BUILD-PLAN D1.4).
     Checkpoint {

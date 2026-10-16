@@ -20,8 +20,9 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
-/// An error injected into the thread's running turn ends that turn as the CLI's own error would:
-/// the request fails with "Prompt is too long".
+/// An error injected into the thread's running turn ends that turn as the CLI's own error would.
+/// "Prompt is too long" on the thread no longer fails the request: the thread is reborn and the
+/// request goes on in the fresh session (BUILD-PLAN D2.3b).
 #[tokio::test]
 async fn an_injected_context_window_error_ends_the_threads_turn() {
     let (started, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
@@ -32,6 +33,11 @@ async fn an_injected_context_window_error_ends_the_threads_turn() {
         script(move |turn| {
             let (on_start, on_go) = (on_start.clone(), on_go.clone());
             async move {
+                if turn.is_orchestrator()
+                    && turn.input.contains("[Where your earlier session stopped]")
+                {
+                    return Reply::text("Read it in the fresh session.");
+                }
                 if turn.is_orchestrator() && turn.input.contains("Read the file.") {
                     on_start.notify_one();
                     on_go.notified().await;
@@ -69,13 +75,8 @@ async fn an_injected_context_window_error_ends_the_threads_turn() {
         })
         .await;
     let ended: Vec<_> = board.requests.values().map(|r| r.state.clone()).collect();
-    assert!(
-        ended.iter().any(|state| matches!(
-            state,
-            RequestState::Failed { error } if error.contains("Prompt is too long")
-        )),
-        "{ended:?}"
-    );
+    // Its first turn failed on the error; the fresh session's answer ended it.
+    assert_eq!(ended, vec![RequestState::Done]);
     flow.stop().await;
 }
 

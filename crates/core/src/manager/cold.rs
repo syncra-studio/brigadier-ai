@@ -188,6 +188,7 @@ impl SessionManager {
             window: mark.window,
             prep: Some(checkpoint),
             swap_started_at_ms: now,
+            stopped: None,
         })
     }
 

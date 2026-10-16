@@ -7,7 +7,19 @@ import type { RebirthRecord } from "./RebirthRecord";
 /**
  * One entry of the orchestrator log shown in the Inspector.
  */
-export type OrchestratorEntry = { "type": "injection", injection: ContextInjection, } | { "type": "provider", provider: ProviderKind, event: ProviderEvent, } | { "type": "rebirth", record: RebirthRecord, } | { "type": "contractBreach", message: string, } | { "type": "checkpoint", 
+export type OrchestratorEntry = { "type": "injection", injection: ContextInjection, } | { "type": "provider", provider: ProviderKind, event: ProviderEvent, } | { "type": "rebirth", record: RebirthRecord, } | { "type": "contractBreach", message: string, } | { "type": "stoppedForRebirth", 
+/**
+ * The request the turn served.
+ */
+requestId: string | null, 
+/**
+ * The context when it was stopped.
+ */
+atTokens: number, 
+/**
+ * Why, in words.
+ */
+reason: string, } | { "type": "checkpoint", 
 /**
  * The CLI session it covers.
  */

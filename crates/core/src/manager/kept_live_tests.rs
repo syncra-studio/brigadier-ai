@@ -135,6 +135,7 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         auto_review: false,
         omit_ai_coauthors: false,
         output_hook: None,
+        stop_hook: None,
         deny_tools: None,
         protection: Default::default(),
     };
