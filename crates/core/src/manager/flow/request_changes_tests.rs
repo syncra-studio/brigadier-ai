@@ -1250,3 +1250,65 @@ async fn request_changes_give_an_edit_back_from_a_command_snapshot_that_read_it(
     );
     flow.stop().await;
 }
+
+/// In a work folder, an edit the thread left uncommitted stays uncommitted through Undo and
+/// Reapply: after the Undo the file equals HEAD again, and Reapply must not take that for a
+/// committed change and commit it.
+#[tokio::test]
+async fn request_changes_reapply_leaves_an_uncommitted_edit_uncommitted() {
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w79-reapply-uncommitted",
+        options(ProviderKind::Codex),
+        script(move |turn| async move {
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            edit(
+                &turn,
+                &workspace.join("a.txt"),
+                "edit-a",
+                "base\n",
+                "base\nthread a\n",
+            )
+            .await;
+            observed(&turn, 1).await;
+            Reply::text("Changed a.")
+        }),
+    )
+    .await;
+    flow.say("Edit a.").await;
+    let board = flow
+        .until("settled changes", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled)
+        })
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+    let head = git(&workspace, &["rev-parse", "HEAD"]);
+    let undone = flow
+        .manager
+        .undo_request(flow.conversation.clone(), request.clone(), false)
+        .await
+        .unwrap();
+    assert_eq!(undone.restored, ["a.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "base\n"
+    );
+    flow.manager
+        .undo_request(flow.conversation.clone(), request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "base\nthread a\n"
+    );
+    assert_eq!(git(&workspace, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        git(&workspace, &["status", "--porcelain", "--", "a.txt"]).trim(),
+        "M a.txt"
+    );
+    flow.stop().await;
+}

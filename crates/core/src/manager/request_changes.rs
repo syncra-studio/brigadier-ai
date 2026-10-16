@@ -132,6 +132,10 @@ pub(super) struct Record {
     pub(super) commit: String,
     paths: BTreeMap<String, OwnedPath>,
     restored: Vec<String>,
+    /// What Undo put back by a commit (its change was committed): Reapply commits those back
+    /// and leaves the rest in the working files, as they were.
+    #[serde(default)]
+    committed: BTreeSet<String>,
     settled: bool,
     seen: BTreeSet<String>,
 }
@@ -853,7 +857,8 @@ impl SessionManager {
         let verb = if reapply { "Reapply" } else { "Undo" };
         let message = format!("{verb} \"{}\"", request.preview);
         let git = self.git.clone();
-        let (restored, commit) = blocking(move || {
+        let undone_by_commit = record.committed.clone();
+        let (restored, committed, commit) = blocking(move || {
             let repo = git.open(&checkout).map_err(git_error)?;
             let mut refused = Vec::new();
             let mut restores = BTreeMap::new();
@@ -876,11 +881,17 @@ impl SessionManager {
             }
             let restored = restores.keys().cloned().collect();
             let mut commit = None;
+            let mut committed_paths = BTreeSet::new();
             if let Some(branch) = branch {
                 let head = repo.resolve("HEAD").map_err(git_error)?;
                 let head_files = repo.file_blobs(&head).map_err(git_error)?;
                 let mut committed = BTreeMap::new();
                 for (path, target) in &restores {
+                    // After an Undo every file equals HEAD again, committed change or not: only
+                    // what Undo committed is committed back.
+                    if reapply && !undone_by_commit.contains(path) {
+                        continue;
+                    }
                     let current = repo.checkout_blob(path).map_err(git_error)?;
                     if current.as_ref() == head_files.get(path) {
                         committed.insert(path.clone(), target.clone());
@@ -900,9 +911,10 @@ impl SessionManager {
                     }
                     restores.retain(|path, _| !committed.contains_key(path));
                 }
+                committed_paths = committed.into_keys().collect();
             }
             repo.restore_file_blobs(&restores).map_err(git_error)?;
-            Ok((restored, commit))
+            Ok((restored, committed_paths, commit))
         })
         .await?;
         let outcome = crate::work::UndoOutcome {
@@ -911,6 +923,7 @@ impl SessionManager {
         };
         if !reapply {
             record.restored.clone_from(&outcome.restored);
+            record.committed = committed;
         }
         self.save_change_record(id, request_id, &record).await?;
         let mut undo = request.undo.clone().unwrap_or(crate::work::RequestUndo {
