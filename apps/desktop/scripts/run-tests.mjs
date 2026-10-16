@@ -7,7 +7,7 @@
 //
 // Under CI (CI=true) a test file that fails is run once more, and the run passes if it passes
 // then: shared runners make some render tests miss a timing now and then. A test that fails both
-// tries is skipped in its file and listed in the app-test flakes issue.
+// tries is skipped in its file and listed in issue #85.
 import { spawn } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
