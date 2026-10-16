@@ -254,3 +254,35 @@ test("messages to other sessions and the waits for their replies, next to each o
     { type: "peerSent", messageIds: [], waits: [waitCall("w2")] },
   ]);
 });
+
+/** A lead's tool step, as the board keeps it. */
+const toolStep = (position: number, itemId: string, name: string, item: "image" | "command" | "files"): BlockOrchestratorStep => ({
+  position,
+  kind: { type: "tool", itemId, name, detail: null, status: "completed", throughPosition: 0, item, logSeq: position, turn: 1 },
+});
+
+test("an image the thread looked at or made is a row of its own that ends the group; looks in a row are one row", () => {
+  const sequence = blockSequence({
+    texts: [],
+    cards: [],
+    steers: [],
+    compactions: [],
+    rows: [],
+    orchestratorSteps: [
+      toolStep(1, "run", "shell", "command"),
+      toolStep(2, "view-1", "view_image", "image"),
+      toolStep(3, "view-2", "Read", "image"),
+      toolStep(4, "made", "imagegen", "image"),
+      toolStep(5, "edit", "apply_patch", "files"),
+    ],
+  });
+  const shapes = turnActivity(sequence).map((item) =>
+    item.type === "group"
+      ? `[${item.items.map((inner) => (inner.step.kind.type === "tool" ? inner.step.kind.itemId : "?")).join(" ")}]`
+      : item.entry.kind === "orchestrator"
+        ? `(${item.entry.steps.map((step) => (step.kind.type === "tool" ? step.kind.itemId : "?")).join(" ")})`
+        : item.entry.kind,
+  );
+  // Two looks are one row; a made image stands apart from them; the work around them groups.
+  assert.deepEqual(shapes, ["[run]", "(view-1 view-2)", "(made)", "[edit]"]);
+});
