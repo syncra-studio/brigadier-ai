@@ -591,6 +591,13 @@ impl SessionManager {
                         (_, whole) => whole,
                     };
                 }
+                // The file before an edit is evidence for the request's record, not for the
+                // page: whole files would make a page of edits too big to send.
+                ProviderEvent::FileChanges { changes, .. } => {
+                    for change in changes {
+                        change.original = None;
+                    }
+                }
                 _ => {}
             }
             let running = *status == ItemStatus::InProgress;

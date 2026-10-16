@@ -1163,6 +1163,26 @@ async fn request_changes_read_a_redacted_original_from_the_diff() {
         .await
         .unwrap();
     assert!(diff.patch.contains("+mode = b"), "{}", diff.patch);
+    // The page of the thread's calls shows the edit without the whole file it came from.
+    let page = flow
+        .manager
+        .thread_items(&flow.conversation, &request, None, None, 100)
+        .await
+        .unwrap();
+    let edits: Vec<_> = page
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            ProviderEvent::FileChanges { changes, .. } => Some(changes),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(!edits.is_empty());
+    assert!(
+        edits.iter().all(|change| change.original.is_none()),
+        "{edits:?}"
+    );
     assert!(
         !diff.patch.contains("-token") && !diff.patch.contains(brigadier_providers::REDACTED),
         "{}",
