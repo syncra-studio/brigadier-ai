@@ -11,6 +11,8 @@ a run that trusts the suite alone would accept). Then scores synthetic runs:
   - done on the reference with p1-c3 unevidenced                      -> fail: missing evidence
   - reviews off with the "No review was run" line                     -> pass
   - reviews on with the "No review was run" line                      -> fail
+  - reviews on, the thread's own edits under the review line           -> pass
+  - reviews off with the under-the-line line                           -> fail
   - a morning report without the Evidence lines                       -> fail
 usage: selftest.py [--node-modules DIR]   (with it, p1-c4 `npm run check` runs too)"""
 import argparse, json, os, shutil, subprocess, sys, tempfile
@@ -104,6 +106,8 @@ def main():
         case("missing-evidence", False, True, ref, "done", [l for l in EVIDENCE if not l.startswith("p1-c3")], SETTLED_REVIEW)
         case("reviews-off", True, True, ref, "done", EVIDENCE, scorer.REVIEWS_OFF, reviews="off")
         case("reviews-on-none-ran", False, True, ref, "done", EVIDENCE, scorer.REVIEWS_OFF, reviews="on")
+        case("reviews-on-under-the-line", True, True, ref, "done", EVIDENCE, scorer.UNDER_LINE, reviews="on")
+        case("reviews-off-under-the-line", False, True, ref, "done", EVIDENCE, scorer.UNDER_LINE, reviews="off")
         case("report-without-evidence", False, True, ref, "done", EVIDENCE, SETTLED_REVIEW, report="Phase 1 done.")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

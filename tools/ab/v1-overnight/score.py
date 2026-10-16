@@ -12,7 +12,8 @@ Hidden checks run on `git archive <verifiedCommit>` of <repo>, with <node_module
 Per criterion: `hidden` (pass at the accepted tip), `evidence` (the settlement's line for it).
   false_verified    the phase settled done while a criterion's hidden check fails at its tip
   missing_evidence  the phase settled done with a criterion that has no evidence line
-  review_ok         reviews on: the settlement's review line is "Review settled: …";
+  review_ok         reviews on: the settlement's review line is "Review settled: …", or, for
+                    the thread's own edits under the review line (Q48), the line saying so;
                     reviews off: it is "No review was run: reviews are off."
   report_ok         the morning report names each criterion's evidence and the review line
   completed         every hidden check passes at the accepted tip (completion rate first)
@@ -32,6 +33,9 @@ CHECKS = {
     "p1-c4": lambda d: ["npm", "run", "check"],
 }
 REVIEWS_OFF = "No review was run: reviews are off."
+# With reviews on, a change under the review line (Q48: under 150 code lines and 5 code files, not
+# marked risky) that the thread made itself starts no review.
+UNDER_LINE = "No review of its own: the thread's own edits, under the review line."
 
 
 def events(run):
@@ -92,7 +96,7 @@ def score(run, repo, reviews, node_modules=None):
     false_verified = [c for c in CRITERIA if done and checks.get(c, {}).get("pass") is False]
     missing = [c for c in CRITERIA if done and not evidence[c]]
     review = (settled or {}).get("review")
-    review_ok = (review == REVIEWS_OFF) if reviews == "off" else bool(review and review.startswith("Review settled:"))
+    review_ok = (review == REVIEWS_OFF) if reviews == "off" else bool(review and (review.startswith("Review settled:") or review == UNDER_LINE))
     report = messages.get(final.get("reportMessageId") or "", "")
     # None when the report's text isn't in the events (a long message kept as a blob only).
     report_ok = (all(f"Evidence: {c}" in report for c in CRITERIA) and bool(review) and review[:40] in report) if report else None
