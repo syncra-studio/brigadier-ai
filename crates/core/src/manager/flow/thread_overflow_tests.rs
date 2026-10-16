@@ -15,8 +15,8 @@ use super::{Flow, Options, Reply, Script, Turn};
 use crate::knowledge::RebirthTrigger;
 use crate::manager::fault::{FaultKey, InjectedError};
 use crate::manager::prompts::{
-    ANSWER_DETAILS_REVISION, COMMIT_FIRST_REVISION, OVERFLOW_REVISION, THREAD_STEPS_REVISION,
-    revision_note,
+    ANSWER_DETAILS_REVISION, COMMIT_FIRST_REVISION, OVERFLOW_REVISION, SHORT_START_REVISION,
+    THREAD_STEPS_REVISION, revision_note,
 };
 use crate::model::{DomainEvent, streams};
 use crate::work::{OrchestratorEntry, RequestState};
@@ -499,6 +499,17 @@ async fn a_session_from_before_commit_on_the_first_check_is_told_once() {
     told_once(
         COMMIT_FIRST_REVISION,
         "on the first check you expect to pass",
+    )
+    .await;
+}
+
+/// Rule R for the shorter instructions, whose findings and merge rules moved into the messages
+/// that need them (BUILD-PLAN O2).
+#[tokio::test]
+async fn a_session_from_before_the_short_start_is_told_once() {
+    told_once(
+        SHORT_START_REVISION,
+        "where they say more than your instructions, follow them",
     )
     .await;
 }

@@ -1024,7 +1024,7 @@ async fn starts_over_on_older_instructions(thread: ProviderKind) {
         "{rules}"
     );
     assert!(
-        rules.contains("Interview the user when they invite questions"),
+        rules.contains("When the user invites questions"),
         "{rules}"
     );
     assert!(rules.contains("propose_plan), never in text"), "{rules}");

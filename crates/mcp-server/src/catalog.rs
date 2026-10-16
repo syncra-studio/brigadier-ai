@@ -84,9 +84,9 @@ reads on the thread's \"Stopped\" row (e.g. \"No longer needed: the user dropped
 
 const ASK_USER: &str = "Ask the user what only they can decide (a product choice, an unclear \
 requirement) on one card: 1 to 6 questions, each with 2 to 4 options and the one you recommend; \
-they can always type their own answer. The only way to ask the user anything, never in your \
-text. Returns at once: reply with exactly [quiet]; the answers come as an [answer] message in \
-this request. `task`: the task that waits for them, so other work continues.";
+they can always type their own answer. Returns at once: reply with exactly [quiet]; the answers \
+come as an [answer] message in this request. `task`: the task that waits for them, so other work \
+continues.";
 
 const READ_REPORT: &str = "Read a task's final report again: summary, changes, decisions, \
 verification, open questions and artifact ids. A report from another session of this project \
@@ -103,19 +103,13 @@ where it came from. Fast and cheap: ask it first; when it has nothing or marks a
 read the code yourself. It answers with what holds now (`history` adds earlier versions; `page` \
 the next results).";
 
-const REMEMBER: &str = "Keep something that later work must respect: a decision the user \
-settled or you made, a convention of this project, a contract between parts, a standing rule \
-of the user's (kind constraint), or (personal) a preference of the user's that holds in every \
-project. One clear line in `title`, the why in `detail`. What the user settled cites their \
-message in `user_message` (`latest`, or the #N search_transcript shows) with their words in \
-`quote`: Brigadier checks both, and a preference or a constraint needs them. A constraint keeps \
-the user's exact words (the quoted span, or their whole message) with its `scope` (request, \
-session or project); an exception is a constraint of its own, and `replaces` only when their \
-new words replace the old rule entirely. Anything else is kept as your claim, unverified, with \
-the evidence you name (`files` as path:lines, `check` as an out-… id, or a review `finding`) \
-and the exact words it shows in `quote`, re-read whenever the claim is used. Do it silently: \
-don't tell the user you remembered it. \
-Returns the node id; pass it as `replaces` to correct it, or a claim you find wrong.";
+const REMEMBER: &str = "Keep what later work must respect: a decision the user \
+settled or you made, a convention of this project, a contract between parts, a standing rule of \
+the user's (kind constraint, in their exact words with its `scope`), or (personal) a preference \
+of theirs across projects. What the user settled cites their message (`user_message`, with their \
+words in `quote`): Brigadier checks both. Anything else is kept as your claim, unverified, with \
+its evidence (`files`, `check` or `finding`, and the words it shows in `quote`), re-read whenever \
+the claim is used. Do it silently. Returns the node id, for `replaces`.";
 
 const SEARCH_TRANSCRIPT: &str = "Search this conversation's full transcript (the user's \
 messages, your answers, reports and decisions, and the commands you ran, files you read and \
@@ -323,12 +317,11 @@ returns its run-N id and the result comes as a message in this request; never wa
 run it again.";
 
 const RUN_CHECK: &str = "Run a check (tests, lint, typecheck, build, formatting) in your \
-checkout, rather than in your shell. One that already ran on the same files answers from the \
-cache and says so (`rerun` runs it again). With no `command` it lists the checks your changes \
-call for and runs nothing. A pass with a long output comes back as its warnings and last lines, \
-a failure over 8 KB as a digest of its errors, each with where the whole output is. The \
-thread's check still going after a minute goes on in the background: the call returns its \
-run-N id and the result comes as a message in this request.";
+checkout. One that already ran on the same files answers from the cache (`rerun` runs it again); \
+with no `command` it lists the checks your changes call for and runs nothing. A long passing \
+output comes back as its warnings and last lines, a failure over 8 KB as a digest of its errors, \
+each with where the whole output is. One still going after a minute goes on in the background: \
+the call returns its run-N id and the result comes as a message in this request.";
 
 const RUN_UNSANDBOXED: &str = "Like run, but outside the sandbox, for a command the sandbox \
 blocked (the network, files outside the workspace): it waits for approval first, decided on \
@@ -1635,5 +1628,23 @@ mod tests {
             Ok(ToolCall::Orchestrator(OrchestratorCall::StopWorker(args)))
                 if args.task == "task-2" && args.reason == "No longer needed"
         ));
+    }
+
+    /// A full-access thread's tool list as the CLI gets it, written to
+    /// `BRIGADIER_DUMP_TOOLS` when it is set, for measuring it.
+    #[test]
+    fn dump_thread_tools() {
+        let Ok(path) = std::env::var("BRIGADIER_DUMP_TOOLS") else {
+            return;
+        };
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::Run,
+        };
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(tools_for(&thread)).unwrap(),
+        )
+        .unwrap();
     }
 }
