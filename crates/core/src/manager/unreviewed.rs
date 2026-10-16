@@ -218,8 +218,9 @@ impl SessionManager {
         }
     }
 
-    /// Where the thread's newest check stands: "running", "passed" or "failed".
-    #[cfg(test)]
+    /// Where the thread's newest check stands: "running", "passed" or "failed" (for the flow
+    /// tests, which run on unix only).
+    #[cfg(all(test, unix))]
     pub(crate) fn thread_check_state(&self, id: &ConversationId) -> Option<&'static str> {
         self.thread_checks
             .lock()
