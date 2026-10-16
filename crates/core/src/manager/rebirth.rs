@@ -840,6 +840,18 @@ impl SessionManager {
         (part, nodes.len() as u32)
     }
 
+    /// A worker's hand-off's decisions (BUILD-PLAN D2.4): the decision index, then every
+    /// settled decision in full, as a rebirth briefing carries them; empty without any.
+    pub(crate) async fn decision_index_text(&self, id: &ConversationId) -> String {
+        let index = self.decision_index_part(id).await.text;
+        let (settled, _) = self.decision_part(id).await;
+        [index, settled.text]
+            .into_iter()
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
     /// The decision index: one line per decision, convention or contract of this conversation,
     /// replaced ones included, oldest first: its id, scope, status and what it replaced. Empty
     /// without any, or when the ledger can't be read (the decisions part says so).

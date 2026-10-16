@@ -1084,6 +1084,16 @@ impl Provider for Claude {
                 Origin::Resume { native_id } => native_id.clone(),
                 Origin::New | Origin::Fork { .. } => uuid::Uuid::new_v4().to_string(),
             };
+            // A session whose saved transcript is gone can't be resumed: said here, rather than
+            // by a CLI that starts and dies, so the caller goes on from its own record.
+            if let Origin::Resume { native_id } | Origin::Fork { native_id } = &spec.origin
+                && let Some(config) = self.history_dir()
+                && files::session_missing(&config, native_id)
+            {
+                return Err(Error::Spawn(format!(
+                    "no saved Claude session {native_id} to resume"
+                )));
+            }
             let args = Self::session_args(&spec, &cwd, &native_id, self.main_config.is_some())?;
 
             // Recorded before the CLI can create them.
@@ -1801,6 +1811,21 @@ fn approval_response(input: Value, decision: &ApprovalDecision) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A resume is refused up front only when the config's projects folder is there and no
+    /// project holds the session's transcript (BUILD-PLAN D2.4).
+    #[test]
+    fn a_session_is_missing_only_when_no_project_holds_its_transcript() {
+        let dir = Temp::new();
+        let id = "0b9a3c52-6a43-4f2f-9b1e-1c0f2b7d5e10";
+        // No projects folder: unknown, not missing.
+        assert!(!files::session_missing(dir.path(), id));
+        let project = dir.path().join("projects").join("-tmp-work");
+        std::fs::create_dir_all(&project).unwrap();
+        assert!(files::session_missing(dir.path(), id));
+        std::fs::write(project.join(format!("{id}.jsonl")), "{}\n").unwrap();
+        assert!(!files::session_missing(dir.path(), id));
+    }
 
     #[tokio::test]
     async fn inline_content_preserves_text_image_text_order() {

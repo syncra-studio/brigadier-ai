@@ -1910,6 +1910,8 @@ mod stop_hook_tests;
 #[cfg(test)]
 mod subfolder_rules_tests;
 #[cfg(test)]
+mod successor_tests;
+#[cfg(test)]
 mod tab_chat_tests;
 #[cfg(test)]
 mod takeover_tests;

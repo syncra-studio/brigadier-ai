@@ -295,54 +295,13 @@ impl SessionManager {
         if task.state.is_final() {
             return Ok(());
         }
-        self.keep_saved_files(&task.id).await;
-        let (dir, has_diff) = self.write_handoff_files(&task).await?;
-        let export = self.export_handoff_transcript(&task, &dir).await;
-        let checks = self.passed_checks(&task).await;
         // A turn that ended before the ask reached it has no note: its last message is in the
         // tail anyway.
         let note = note.filter(|note| note.to_lowercase().contains("next steps"));
-        let has_checks = !checks.is_empty();
-        {
-            let (dir, note) = (dir.clone(), note.clone());
-            super::blocking(move || {
-                let io =
-                    |err: std::io::Error| Error::Invalid(format!("writing the hand-off: {err}"));
-                if has_checks {
-                    std::fs::write(dir.join("checks.md"), checks_text(&checks)).map_err(io)?;
-                } else if let Err(err) = std::fs::remove_file(dir.join("checks.md"))
-                    && err.kind() != std::io::ErrorKind::NotFound
-                {
-                    return Err(io(err));
-                }
-                match note {
-                    Some(note) => std::fs::write(dir.join("note.md"), note).map_err(io)?,
-                    None => match std::fs::remove_file(dir.join("note.md")) {
-                        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
-                            return Err(io(err));
-                        }
-                        _ => {}
-                    },
-                }
-                Ok(())
-            })
-            .await?;
-        }
+        let files = self.write_successor_files(&task, note).await?;
+        let dir = files.dir.clone();
         let waits = pending.is_some();
-        let text = handover_text(
-            &task,
-            &dir,
-            HandoverFacts {
-                why,
-                tokens,
-                has_note: note.is_some(),
-                has_diff,
-                has_checks,
-                transcript: export.summary("transcript.md"),
-            },
-            &export.tail,
-            pending,
-        );
+        let text = handover_text(&task, HandoverFacts { why, tokens }, &files, pending);
         let text = self.with_constraints(&task.conversation_id, text).await;
         let size = match why {
             Handover::Size => tokens.map_or_else(String::new, |tokens| {
@@ -355,6 +314,9 @@ impl SessionManager {
                 )
             }
             Handover::Interrupted => " after its process ended".to_owned(),
+            Handover::Restarted => {
+                " after Brigadier restarted and its session couldn't be resumed".to_owned()
+            }
             Handover::ContextWindow => " after its context passed the model's limit".to_owned(),
             Handover::NearLimit(_) => {
                 " after its turn was stopped near the model's limit".to_owned()
@@ -368,7 +330,7 @@ impl SessionManager {
             },
         )
         .await;
-        tracing::info!(task = %task.id, ?tokens, ?why, with_note = note.is_some(), "worker handed over to a fresh session");
+        tracing::info!(task = %task.id, ?tokens, ?why, with_note = files.has_note, "worker handed over to a fresh session");
         let workspace = task
             .workspace
             .as_ref()
@@ -414,6 +376,95 @@ impl SessionManager {
             first,
         )
         .await
+    }
+
+    /// Writes a successor's whole hand-off (BUILD-PLAN D2.4), the same for a size hand-off, a
+    /// crash, a restart without the CLI's files and a move to another model: spec.md,
+    /// progress.md and diff.patch ([`Self::write_handoff_files`]), the streamed transcript
+    /// with every kept output, checks.md, decisions.md, and `note` as note.md, or without one
+    /// state.md, the state of work built from the transcript and marked unchecked.
+    pub(crate) async fn write_successor_files(
+        &self,
+        task: &Task,
+        note: Option<String>,
+    ) -> Result<SuccessorFiles> {
+        // The model before may be on another provider, whose files go with its session.
+        self.keep_saved_files(&task.id).await;
+        let (dir, has_diff) = self.write_handoff_files(task).await?;
+        let export = self.export_handoff_transcript(task, &dir).await;
+        let checks = self.passed_checks(task).await;
+        let decisions = self.decision_index_text(&task.conversation_id).await;
+        let state = match &note {
+            Some(_) => None,
+            None => {
+                let commit = match task
+                    .workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.worktree.clone())
+                {
+                    Some(worktree) => self.last_commit(PathBuf::from(worktree)).await,
+                    None => None,
+                };
+                Some(state_text(task, &export, commit, has_diff))
+            }
+        };
+        let files = SuccessorFiles {
+            dir: dir.clone(),
+            has_diff,
+            export,
+            has_note: note.is_some(),
+            has_state: state.is_some(),
+            has_checks: !checks.is_empty(),
+            has_decisions: !decisions.is_empty(),
+        };
+        let checks = (!checks.is_empty()).then(|| checks_text(&checks));
+        let decisions = (!decisions.is_empty()).then(|| {
+            format!(
+                "# The session's decisions, oldest first\n\nReplaced ones are marked; the active \
+                 ones still hold.\n\n{decisions}\n"
+            )
+        });
+        super::blocking(move || {
+            let io = |err: std::io::Error| Error::Invalid(format!("writing the hand-off: {err}"));
+            // Each file is this hand-off's, or gone: one an earlier hand-off left would mislead.
+            for (name, text) in [
+                ("checks.md", checks),
+                ("note.md", note),
+                ("state.md", state),
+                ("decisions.md", decisions),
+            ] {
+                match text {
+                    Some(text) => std::fs::write(dir.join(name), text).map_err(io)?,
+                    None => match std::fs::remove_file(dir.join(name)) {
+                        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                            return Err(io(err));
+                        }
+                        _ => {}
+                    },
+                }
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(files)
+    }
+
+    /// The last commit at `path` (a worktree), in a line: its short hash and subject.
+    pub(crate) async fn last_commit(&self, path: PathBuf) -> Option<String> {
+        let git = self.git.clone();
+        super::blocking(move || {
+            let worktree = git.open_worktree(&path).map_err(super::git_error)?;
+            let head = worktree.head().map_err(super::git_error)?;
+            let repo = git.open(&path).map_err(super::git_error)?;
+            let log = repo.log(&head, 1).map_err(super::git_error)?;
+            Ok(log.first().map(|commit| {
+                let hash = &commit.commit.0;
+                format!("{} {}", &hash[..12.min(hash.len())], commit.subject)
+            }))
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     /// The checks the task's workers ran whose latest result passed, newest first, each with
@@ -567,6 +618,9 @@ pub(crate) enum Handover {
     Stalled { silent: i64 },
     /// Its process ended before it reported, and its session couldn't be resumed.
     Interrupted,
+    /// Brigadier restarted while it worked, and its session couldn't be resumed (its CLI's
+    /// files were gone, BUILD-PLAN D2.4).
+    Restarted,
     /// Its model refused the context as too long ("prompt is too long"): the same model goes
     /// on in a fresh session, never another model (BUILD-PLAN D1.3).
     ContextWindow,
@@ -588,30 +642,103 @@ struct HandoverFacts {
     why: Handover,
     /// The earlier session's context size, when known.
     tokens: Option<i64>,
-    has_note: bool,
-    has_diff: bool,
-    /// `checks.md` lists the checks that passed.
-    has_checks: bool,
-    /// What the fresh session is told of transcript.md ([`super::export::Export::summary`]).
-    transcript: String,
+}
+
+/// A successor's hand-off folder, as [`SessionManager::write_successor_files`] wrote it.
+pub(crate) struct SuccessorFiles {
+    pub dir: PathBuf,
+    /// diff.patch holds changes.
+    pub has_diff: bool,
+    /// transcript.md and outputs/, and what couldn't be exported.
+    pub export: super::export::Export,
+    /// note.md is the earlier session's own note.
+    pub has_note: bool,
+    /// state.md is the state of work Brigadier built from the transcript (no note).
+    pub has_state: bool,
+    /// checks.md lists the checks that passed.
+    pub has_checks: bool,
+    /// decisions.md lists the session's decisions.
+    pub has_decisions: bool,
+}
+
+impl SuccessorFiles {
+    /// The folder's files, as a successor's first message names them: "spec.md (…), … and
+    /// diff.patch (…)".
+    pub(crate) fn listing(&self, writes: bool) -> String {
+        let mut text = String::new();
+        if self.has_note {
+            text.push_str(
+                "note.md (its own handoff note: read it first, including its traps learned and \
+                 how to verify), ",
+            );
+        }
+        if self.has_state {
+            text.push_str(
+                "state.md (where the work stood, built by Brigadier from the transcript because \
+                 there is no note: unchecked, so check it against the worktree), ",
+            );
+        }
+        text.push_str(
+            "spec.md (the task and every later instruction from the orchestrator), progress.md (a \
+             short log of what it did), transcript.md (the whole transcript, word for word: search \
+             it with rg for any detail instead of redoing work; each tool output cut there at 8 \
+             KiB names its whole copy in outputs/)",
+        );
+        if self.has_decisions {
+            text.push_str(
+                ", decisions.md (the session's decisions, replaced ones marked: the active ones \
+                 still hold)",
+            );
+        }
+        if self.has_checks {
+            text.push_str(
+                ", checks.md (the checks that passed and the files changed since each one: rerun \
+                 only those the changes since cover, not the whole suite again)",
+            );
+        }
+        if writes {
+            text.push_str(if self.has_diff {
+                " and diff.patch (the changes so far, as the worktree holds them)"
+            } else {
+                ". There are no changes in the worktree yet"
+            });
+        }
+        text
+    }
+
+    /// The transcript's completeness and the earlier session's last messages, word for word,
+    /// for the end of a successor's first message.
+    pub(crate) fn push_tail(&self, text: &mut String) {
+        let _ = write!(text, "\n\n{}", self.export.summary("transcript.md"));
+        let tail = &self.export.tail;
+        if tail.is_empty() {
+            return;
+        }
+        text.push_str("\n\nThe earlier session's last messages, oldest first, word for word:");
+        for said in tail {
+            let said = if said.len() > TAIL_MESSAGE_BYTES {
+                let mut end = TAIL_MESSAGE_BYTES;
+                while !said.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{} […cut; the rest is in transcript.md]", &said[..end])
+            } else {
+                said.clone()
+            };
+            let _ = write!(text, "\n\n---\n{said}");
+        }
+        text.push_str("\n\n---");
+    }
 }
 
 /// The fresh session's first message.
 fn handover_text(
     task: &Task,
-    dir: &std::path::Path,
     facts: HandoverFacts,
-    tail: &[String],
+    files: &SuccessorFiles,
     pending: Option<String>,
 ) -> String {
-    let HandoverFacts {
-        why,
-        tokens,
-        has_note,
-        has_diff,
-        has_checks,
-        transcript,
-    } = facts;
+    let HandoverFacts { why, tokens } = facts;
     let why = match why {
         Handover::Size => {
             let size = tokens.map_or_else(String::new, |tokens| {
@@ -631,6 +758,10 @@ fn handover_text(
         Handover::Interrupted => "Your earlier session's process ended before it reported, and \
              the session couldn't be resumed. Check what was running (its output may be lost)"
             .to_owned(),
+        Handover::Restarted => "Brigadier restarted while your earlier session was working, \
+             and that session couldn't be resumed (its CLI's files were gone). Check what was \
+             running (its output may be lost)"
+            .to_owned(),
         Handover::ContextWindow => "Your earlier session's context passed the model's limit \
              (\"prompt is too long\"), so it was closed"
             .to_owned(),
@@ -642,61 +773,71 @@ fn handover_text(
     };
     let mut text = format!(
         "[Brigadier] You are continuing task-{} in a fresh session. {why}; you are the same \
-         model, in the same place, and nothing in the worktree was touched. Its hand-off is in {}: ",
+         model, in the same place, and nothing in the worktree was touched. Its hand-off is in {}: \
+         {}",
         task.number,
-        dir.display()
+        files.dir.display(),
+        files.listing(task.kind.writes()),
     );
-    if has_note {
-        text.push_str(
-            "note.md (its own handoff note: read it first, including its traps learned and how \
-             to verify), ",
-        );
-    }
-    text.push_str(
-        "spec.md (the task and every later instruction from the orchestrator), progress.md (a \
-         short log of what it did) and transcript.md (the whole transcript, word for word: search \
-         it with rg for any detail instead of redoing work; each tool output cut there at 8 KiB \
-         names its whole copy in outputs/)",
-    );
-    if has_checks {
-        text.push_str(
-            ", checks.md (the checks that passed and the files changed since each one: rerun only \
-             those the changes since cover, not the whole suite again)",
-        );
-    }
-    if task.kind.writes() {
-        text.push_str(if has_diff {
-            ", and diff.patch (the changes so far, as the worktree holds them). Keep the work \
-             already done unless it is wrong, and don't redo it"
-        } else {
-            ". There are no changes in the worktree yet"
-        });
+    text.push_str(if task.kind.writes() && files.has_diff {
+        ". Keep the work already done unless it is wrong, and don't redo it"
+    } else if task.kind.writes() {
+        ""
     } else {
-        text.push_str(". Don't redo what is done");
-    }
+        ". Don't redo what is done"
+    });
     text.push_str(
         ". Decisions and commitments made earlier still hold. Then carry on with the task and \
          report with submit_report as your rules say.",
     );
-    let _ = write!(text, "\n\n{transcript}");
-    if !tail.is_empty() {
-        text.push_str("\n\nThe earlier session's last messages, oldest first, word for word:");
-        for said in tail {
-            let said = if said.len() > TAIL_MESSAGE_BYTES {
-                let mut end = TAIL_MESSAGE_BYTES;
-                while !said.is_char_boundary(end) {
-                    end -= 1;
-                }
-                format!("{} […cut; the rest is in transcript.md]", &said[..end])
-            } else {
-                said.clone()
-            };
-            let _ = write!(text, "\n\n---\n{said}");
-        }
-        text.push_str("\n\n---");
-    }
+    files.push_tail(&mut text);
     if let Some(pending) = pending {
         let _ = write!(text, "\n\nWaiting for you now:\n{pending}");
+    }
+    text
+}
+
+/// state.md: where the work stood, from the transcript, for a successor with no note.
+fn state_text(
+    task: &Task,
+    export: &super::export::Export,
+    commit: Option<String>,
+    has_diff: bool,
+) -> String {
+    let mut text = format!(
+        "# Where task-{} stood\n\nBuilt by Brigadier from the transcript, with no note from the \
+         session that did the work: unchecked. Check it against the worktree before you rely on \
+         it.\n\n",
+        task.number
+    );
+    let _ = writeln!(
+        text,
+        "- The last step it took: {}",
+        export.last_step.as_deref().unwrap_or("unknown")
+    );
+    if task.kind.writes() {
+        let _ = writeln!(
+            text,
+            "- The last commit in the worktree: {}",
+            commit.as_deref().unwrap_or("unknown")
+        );
+        text.push_str(if has_diff {
+            "- Changes since the task's base: in diff.patch (committed or not).\n"
+        } else {
+            "- Changes since the task's base: none.\n"
+        });
+    }
+    if let Some(last) = export.tail.last() {
+        let mut end = last.len().min(TAIL_MESSAGE_BYTES);
+        while !last.is_char_boundary(end) {
+            end -= 1;
+        }
+        let _ = write!(text, "\n## Its last message\n\n{}\n", &last[..end]);
+    }
+    if !export.complete() {
+        text.push_str(
+            "\nThe transcript is not complete: see the first message for what is missing.\n",
+        );
     }
     text
 }

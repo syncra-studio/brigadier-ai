@@ -234,9 +234,10 @@ async fn check_with(flow: &Flow, grant: &str) -> crate::tools::ToolReply {
 #[tokio::test]
 async fn a_worker_opens_in_a_terminal_and_reports_what_was_done_there() {
     for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-        // Past the hand-off size: a revival would start a fresh session.
+        // Past the hand-off size: a revival would start a fresh session. Below the hard line
+        // (BUILD-PLAN D2.3), past which its turn would be stopped and handed off at once.
         let (flow, host, heard, _) =
-            start(&format!("takeover-{provider}"), provider, 950_000).await;
+            start(&format!("takeover-{provider}"), provider, 600_000).await;
         let id = task_id(&flow).await;
         let before = worker_specs(&flow);
         let native = flow.board().await.tasks[&id]

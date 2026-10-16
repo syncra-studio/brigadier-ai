@@ -216,12 +216,28 @@ impl SessionManager {
                 manager.resume_interrupted(&live, &task, note).await
             };
             if let Err(err) = resumed {
-                tracing::warn!(task = %task.id, error = %err, "could not resume a worker after a restart");
-                let reason = format!("Brigadier quit while this task was running, and its session couldn't be resumed: {err}");
-                let _ = manager
-                    .update_task(&task.conversation_id, &task.id, |t| t.error = Some(reason))
-                    .await;
-                manager.dispose_task(&task, TaskState::Stopped).await;
+                // Its CLI's files are gone, say: a fresh session of the same model carries on
+                // from the whole hand-off rather than the task stopping (BUILD-PLAN D2.4).
+                tracing::warn!(task = %task.id, error = %err, "could not resume a worker after a restart; handing it over");
+                let handed = async {
+                    let _handing = live.reroute.lock().await;
+                    let task = manager.task_by_id(&task.conversation_id, &task.id).await?;
+                    if task.state.is_final() || live.cli().await.is_some() {
+                        return Ok(());
+                    }
+                    let from = live.generation().await;
+                    manager
+                        .hand_over_held(&live, &task, from, Handover::Restarted)
+                        .await
+                }
+                .await;
+                if let Err(handed) = handed {
+                    let reason = format!("Brigadier quit while this task was running, and its session couldn't be resumed: {err}; nor could it continue in a fresh session: {handed}");
+                    let _ = manager
+                        .update_task(&task.conversation_id, &task.id, |t| t.error = Some(reason))
+                        .await;
+                    manager.dispose_task(&task, TaskState::Stopped).await;
+                }
             }
         });
     }

@@ -103,6 +103,22 @@ pub(super) fn remove(config: &Path, artifacts: &[Artifact]) -> Result<()> {
     }
 }
 
+/// Whether the session's saved transcript (`projects/<project>/<id>.jsonl`) is known to be gone:
+/// the config's projects folder exists and no project holds it. Unknown (no projects folder,
+/// an unreadable one) is not missing.
+pub(super) fn session_missing(config: &Path, id: &str) -> bool {
+    if check_session_id(id).is_err() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(config.join("projects")) else {
+        return false;
+    };
+    let file = format!("{id}.jsonl");
+    !entries
+        .flatten()
+        .any(|entry| entry.path().join(&file).is_file())
+}
+
 fn remove_session(config: &Path, id: &str) -> Result<()> {
     check_session_id(id)?;
     let projects = config.join("projects");

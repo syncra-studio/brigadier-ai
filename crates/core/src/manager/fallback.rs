@@ -537,11 +537,11 @@ impl SessionManager {
         self.continue_task(live, task).await;
     }
 
-    /// Writes the successor's hand-off files and answers its first message.
+    /// Writes the successor's hand-off and answers its first message: another model, or the
+    /// same one where its session couldn't go on, gets what a size hand-off gets (BUILD-PLAN
+    /// D2.4).
     async fn write_task_handoff(&self, task: &Task) -> Result<String> {
-        // The model before may be on another provider, whose files go with its session.
-        self.keep_saved_files(&task.id).await;
-        let (dir, has_diff) = self.write_handoff_files(task).await?;
+        let files = self.write_successor_files(task, None).await?;
         let before = task
             .attempts
             .iter()
@@ -555,25 +555,24 @@ impl SessionManager {
             None => ("another model".to_owned(), String::new()),
         };
         let mut text = format!(
-            "You are taking over task-{} from {who}, which stopped{why}. Its hand-off is in {}: \
-             spec.md (the task and every later instruction from the orchestrator) and \
-             progress.md (what it did, in order)",
+            "You are taking over task-{} from {who}, which stopped{why}. Its hand-off is in {}: {}",
             task.number,
-            dir.display()
+            files.dir.display(),
+            files.listing(task.kind.writes()),
         );
-        if task.kind.writes() {
-            text.push_str(if has_diff {
-                ", and diff.patch (its changes against the task's base, as the worktree holds \
-                 them now). Read them first and check the worktree: keep its work unless it is \
-                 wrong, don't redo what is done, then finish the task and verify it"
-            } else {
-                ". It left no changes in the worktree yet. Read them first, then do the task \
-                 and verify it"
-            });
+        text.push_str(if task.kind.writes() && files.has_diff {
+            ". Read them first and check the worktree: keep its work unless it is wrong, don't \
+             redo what is done, then finish the task and verify it"
+        } else if task.kind.writes() {
+            ". Read them first, then do the task and verify it"
         } else {
-            text.push_str(". Read them first, don't redo what is done, then finish the task");
-        }
-        text.push_str(". Report with submit_report as your rules say.");
+            ". Read them first, don't redo what is done, then finish the task"
+        });
+        text.push_str(
+            ". Decisions and commitments made earlier still hold. Report with submit_report as \
+             your rules say.",
+        );
+        files.push_tail(&mut text);
         Ok(self.with_constraints(&task.conversation_id, text).await)
     }
 
