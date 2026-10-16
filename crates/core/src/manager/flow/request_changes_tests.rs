@@ -1312,3 +1312,60 @@ async fn request_changes_reapply_leaves_an_uncommitted_edit_uncommitted() {
     );
     flow.stop().await;
 }
+
+/// A Codex patch that deletes an executable file: the file rebuilt from the patch has the
+/// snapshot's mode, so the deletion stays the thread's own and Undo brings the file back
+/// executable.
+#[tokio::test]
+async fn request_changes_undo_a_deleted_executable_with_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut flow = Flow::start(
+        "20261015-0226-rebuild-wow-w79-deleted-executable",
+        options(ProviderKind::Codex),
+        script(move |turn| async move {
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            let path = workspace.join("a.txt");
+            std::fs::remove_file(&path).unwrap();
+            turn.emit(ProviderEvent::FileChanges {
+                item_id: "delete-a".into(),
+                changes: vec![FileChange::counted(
+                    path.to_string_lossy().into_owned(),
+                    FileChangeKind::Delete,
+                    Some("@@ -1,1 +0,0 @@\n-base\n"),
+                    usize::MAX,
+                )],
+                status: ItemStatus::Completed,
+            })
+            .await;
+            observed(&turn, 1).await;
+            Reply::text("Deleted a.")
+        }),
+    )
+    .await;
+    local(&mut flow).await;
+    let file = flow.repo.join("a.txt");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    flow.say("Delete a.").await;
+    let board = flow
+        .until("settled changes", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled)
+        })
+        .await;
+    let request = board.latest_request().unwrap();
+    let changes = request.changes.as_ref().unwrap();
+    assert!(changes.held.is_empty(), "{:?}", changes.held);
+    flow.manager
+        .undo_request(flow.conversation.clone(), request.id.clone(), false)
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "base\n");
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o111,
+        0o111
+    );
+    flow.stop().await;
+}

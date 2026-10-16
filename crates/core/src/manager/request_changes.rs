@@ -624,6 +624,15 @@ impl SessionManager {
                 let path = edit.path.as_str();
                 let previous_blob = previous.get(path).cloned().map(Blob::from);
                 let (before, weak) = match edit.before {
+                    // A file rebuilt from a patch (a deleted one) gets a plain file's mode: the
+                    // same bytes as the snapshot's are that file, with its mode.
+                    Before::Known(Some(before))
+                        if previous_blob.as_ref().is_some_and(|previous| {
+                            previous.oid == before.oid && previous.mode != before.mode
+                        }) =>
+                    {
+                        (previous_blob.clone(), false)
+                    }
                     Before::Known(before) => (before, false),
                     Before::Unverified => (previous_blob.clone(), true),
                 };
