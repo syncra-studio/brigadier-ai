@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use brigadier_brain::{NewNode, NodeKind, Origin, Provenance};
-use brigadier_providers::{ItemStatus, ProviderEvent};
+use brigadier_providers::{ItemStatus, KeptOutput, ProviderEvent};
 use serde_json::json;
 use tokio::sync::Notify;
 
@@ -27,6 +27,21 @@ where
 /// What the first session read: only its transcript keeps it.
 const PLANTED: &str = "The vendor's ticket is VT-55107.";
 const DECIDED: &str = "Tickets are filed under the vendor's own number.";
+/// The last line of a long output, past the 8 KiB its event keeps.
+const LAST_LINE: &str = "CHECK-END-7731";
+
+/// A long output ending with [`LAST_LINE`], and its event's text: cut, with the whole waiting.
+fn long_output() -> (String, String) {
+    let mut whole = "file line filler text filler text\n".repeat(600);
+    whole.push_str(LAST_LINE);
+    whole.push('\n');
+    let cut = format!(
+        "{}… [{} more bytes]",
+        &whole[..8 * 1024],
+        whole.len() - 8 * 1024
+    );
+    (whole, cut)
+}
 
 /// The successor's first message and its hand-off folder's files.
 #[derive(Default, Clone)]
@@ -128,6 +143,22 @@ fn scout(
                 kept: None,
             })
             .await;
+            let (whole, cut) = long_output();
+            turn.emit(ProviderEvent::Command {
+                item_id: "cmd-2".into(),
+                command: "cat bulk.txt".into(),
+                cwd: None,
+                status: ItemStatus::Completed,
+                exit_code: Some(0),
+                output: Some(cut),
+                duration_ms: None,
+                kept: Some(Box::new(KeptOutput {
+                    bytes: whole.len() as u64,
+                    whole: Some(whole.as_str().into()),
+                    ..KeptOutput::default()
+                })),
+            })
+            .await;
             let check = turn
                 .call("run_check", json!({"command": "echo checked"}))
                 .await;
@@ -204,6 +235,9 @@ fn assert_whole(successor: &Successor) {
     assert!(!input.contains("note.md ("), "no note was written: {input}");
     let transcript = successor.file("transcript.md").expect("transcript.md");
     assert!(transcript.contains(PLANTED), "{transcript}");
+    // The progress log ends a cut output with its real last line, read from the whole copy.
+    let progress = successor.file("progress.md").expect("progress.md");
+    assert!(progress.contains(LAST_LINE), "{progress}");
     let state = successor.file("state.md").expect("state.md");
     assert!(state.contains("unchecked"), "{state}");
     assert!(state.contains("The last step it took:"), "{state}");

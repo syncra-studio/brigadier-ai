@@ -643,14 +643,34 @@ impl SessionManager {
             )
             .await
             .unwrap_or_default();
-        let mut lines: Vec<String> = page
+        let events: Vec<ProviderEvent> = page
             .iter()
             .rev()
             .filter_map(|stored| serde_json::from_str::<DomainEvent>(stored.payload.get()).ok())
             .filter_map(|event| match event {
-                DomainEvent::WorkerEvent { event, .. } => progress_line(&event),
+                DomainEvent::WorkerEvent { event, .. } => Some(event),
                 _ => None,
             })
+            .collect();
+        // A cut output's last lines (where a command says how it ended) are only in its whole
+        // copy: the clipped text ends at its first 8 KiB.
+        let blobs = self.core.store().blobs().clone();
+        let wholes: Vec<Option<PathBuf>> = events
+            .iter()
+            .map(|event| whole_copy(event).map(|hash| blobs.file_of(&hash)))
+            .collect();
+        let ends = super::blocking(move || {
+            Ok(wholes
+                .into_iter()
+                .map(|file| file.and_then(|file| file_end(&file)))
+                .collect::<Vec<_>>())
+        })
+        .await
+        .unwrap_or_default();
+        let mut lines: Vec<String> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(i, event)| progress_line(event, ends.get(i).and_then(Option::as_deref)))
             .collect();
         let mut size: usize = lines.iter().map(|line| line.len() + 1).sum();
         let mut cut = 0;
@@ -674,8 +694,41 @@ impl SessionManager {
     }
 }
 
-/// One progress-log line for a worker event worth knowing about.
-fn progress_line(event: &ProviderEvent) -> Option<String> {
+/// The kept whole copy of a finished command's output the event shows only part of: the file a
+/// CLI saved it to (a preview was shown), or Brigadier's own copy of an output it cut.
+fn whole_copy(event: &ProviderEvent) -> Option<brigadier_store::BlobHash> {
+    let ProviderEvent::Command {
+        output: Some(output),
+        kept: Some(kept),
+        status: brigadier_providers::ItemStatus::Completed | brigadier_providers::ItemStatus::Failed,
+        ..
+    } = event
+    else {
+        return None;
+    };
+    let hash = match kept.file.as_ref().and_then(|file| file.blob.as_ref()) {
+        Some(hash) => hash,
+        None if super::export::was_cut(output) => kept.blob.as_ref()?,
+        None => return None,
+    };
+    hash.parse().ok()
+}
+
+/// The last 2 KiB of `file`, as text.
+fn file_end(file: &std::path::Path) -> Option<String> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let mut file = std::fs::File::open(file).ok()?;
+    let size = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(size.saturating_sub(2048))).ok()?;
+    let mut end = Vec::new();
+    file.read_to_end(&mut end).ok()?;
+    // A cut inside a character shows as one replacement character, which the tail drops.
+    Some(String::from_utf8_lossy(&end).into_owned())
+}
+
+/// One progress-log line for a worker event worth knowing about; `whole_end` is the end of the
+/// whole output of a command whose recorded output is cut.
+fn progress_line(event: &ProviderEvent, whole_end: Option<&str>) -> Option<String> {
     use brigadier_providers::{ItemStatus, Role};
     let one = |text: &str, max: usize| {
         let text = text.trim().replace('\n', " ⏎ ");
@@ -713,8 +766,13 @@ fn progress_line(event: &ProviderEvent) -> Option<String> {
             if let Some(code) = exit_code {
                 let _ = write!(line, " (exit {code})");
             }
-            if let Some(output) = output.as_deref().filter(|output| !output.trim().is_empty()) {
-                let tail: String = output
+            if let Some(output) = whole_end
+                .or(output.as_deref())
+                .filter(|output| !output.trim().is_empty())
+            {
+                // The last 300 characters once on one line, so its last line is always there.
+                let flat = output.trim().replace('\n', " ⏎ ");
+                let tail: String = flat
                     .chars()
                     .rev()
                     .take(300)
@@ -722,7 +780,7 @@ fn progress_line(event: &ProviderEvent) -> Option<String> {
                     .into_iter()
                     .rev()
                     .collect();
-                let _ = write!(line, ": …{}", one(&tail, 300));
+                let _ = write!(line, ": …{tail}");
             }
             line
         }
