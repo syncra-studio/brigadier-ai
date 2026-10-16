@@ -1934,6 +1934,89 @@ async fn stop_all_stops_every_running_worker_and_tells_the_orchestrator_once() {
     flow.stop().await;
 }
 
+/// The user stops a worker while the thread is idle and the request waits on that worker:
+/// the thread gets a turn on the stop, so the request ends on its word, not silently (#65).
+#[tokio::test]
+async fn stopping_a_worker_while_the_thread_is_idle_gets_the_request_an_answer() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let heard = inputs.clone();
+    let flow = Flow::start(
+        "stop-while-idle",
+        super::Options::default(),
+        script(move |turn| {
+            let heard = heard.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    std::future::pending::<()>().await;
+                    return Reply::text("");
+                }
+                heard.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("Scout it.") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Fix uploads", "kind": "scout", "spec": "Look around."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("The user stopped task-1") {
+                    return Reply::text("Stopped the scout before it found anything.");
+                }
+                Reply::text("Fine.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Scout it.").await;
+    let board = flow
+        .until("the worker to run", |board| {
+            board.tasks.len() == 1
+                && board
+                    .tasks
+                    .values()
+                    .all(|task| task.state == crate::work::TaskState::Running)
+        })
+        .await;
+    let request = board.requests.values().next().unwrap().id.clone();
+    flow.manager
+        .stop_task_by_user(Flow::task(&board, 1).id.clone())
+        .await
+        .unwrap();
+    let said = inputs.clone();
+    flow.until("the thread to hear the stop", move |_| {
+        said.lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("The user stopped task-1"))
+    })
+    .await;
+    let board = flow.settled().await;
+    assert_eq!(
+        board.requests[&request].state,
+        crate::work::RequestState::Done
+    );
+    let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
+    assert!(
+        messages.iter().any(|message| {
+            message.text == "Stopped the scout before it found anything."
+                && message.request_id.as_deref() == Some(request.as_str())
+        }),
+        "{messages:#?}"
+    );
+    // Told once: the user's next message doesn't carry it again.
+    flow.say("What now?").await;
+    flow.settled().await;
+    let inputs = inputs.lock().unwrap().clone();
+    let told = inputs
+        .iter()
+        .filter(|input| input.contains("The user stopped task-1"))
+        .count();
+    assert_eq!(told, 1, "{inputs:#?}");
+    flow.stop().await;
+}
+
 /// The user's stops reach the thread inside its running turn (UI audit H2): one worker's Stop,
 /// then Stop all, each steered in as it happens. From then on the thread can't message, answer
 /// or approve a worker the user stopped, and `list_tasks` says who stopped it.

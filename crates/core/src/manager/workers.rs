@@ -4626,21 +4626,71 @@ impl SessionManager {
     }
 
     /// The user's Stop for one worker (its row, its view, or the stop of a turn): stops it
-    /// for good, files "Stopped by the user", and tells the thread at once (into its running
-    /// turn, else before its next one).
+    /// for good, files "Stopped by the user", and tells the thread at once: into its running
+    /// turn; with a turn of its own when it is idle and the worker's request is still open,
+    /// so that request ends on the thread's word (#65); else before its next turn.
     pub async fn stop_task_by_user(&self, task_id: TaskId) -> Result<()> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         self.mark_user_stop(&task.id);
-        if self
-            .stop_worker(&conversation_id, &task, USER_STOP_REASON.to_owned())
-            .await?
-            && let Ok(conv) = self.conv(&conversation_id)
-        {
-            self.tell_thread_now(&conv, stopped_note(&[task], false))
-                .await;
+        let conv = self.conv(&conversation_id).ok();
+        let wake = match &conv {
+            Some(conv) if !conv.turn_running().await => self.request_open(&task).await,
+            _ => false,
+        };
+        // The request keeps working from the stop to the thread's turn on it.
+        if wake {
+            self.announcing(&task).await;
         }
+        let stopped = self
+            .stop_worker(&conversation_id, &task, USER_STOP_REASON.to_owned())
+            .await;
+        let Some(conv) = conv else {
+            return stopped.map(drop);
+        };
+        if !matches!(stopped, Ok(true)) {
+            if wake {
+                conv.not_announcing(&task.id).await;
+            }
+            return stopped.map(drop);
+        }
+        let note = stopped_note(std::slice::from_ref(&task), false);
+        if !wake || conv.turn_running().await {
+            if wake {
+                conv.not_announcing(&task.id).await;
+            }
+            self.tell_thread_now(&conv, note).await;
+            return Ok(());
+        }
+        self.deliver(
+            &conversation_id,
+            Envelope {
+                kind: InjectionKind::Decision,
+                label: format!("stopped task-{}", task.number),
+                task_id: Some(task.id.clone()),
+                text: format!("{note} Tell the user in a line what this leaves of their request."),
+            },
+        )
+        .await;
         Ok(())
+    }
+
+    /// Whether `task`'s request is still open: working or waiting, not answered and over.
+    async fn request_open(&self, task: &Task) -> bool {
+        let Some(request) = &task.request_id else {
+            return false;
+        };
+        self.core
+            .board(&task.conversation_id)
+            .await
+            .is_ok_and(|board| {
+                board.requests.get(request).is_some_and(|request| {
+                    matches!(
+                        request.state,
+                        crate::work::RequestState::Working | crate::work::RequestState::Waiting
+                    )
+                })
+            })
     }
 
     /// The user's Stop all: stops every worker of the conversation that runs or waits (to

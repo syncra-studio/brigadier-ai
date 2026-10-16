@@ -970,6 +970,11 @@ impl ConvLive {
         }
     }
 
+    /// `task`'s news, marked on its way ([`SessionManager::announcing`]), isn't coming.
+    pub(super) async fn not_announcing(&self, task: &TaskId) {
+        self.state.lock().await.announcing.remove(task);
+    }
+
     /// Holds new turns until [`Self::carry`].
     pub(super) async fn hold(&self) {
         self.state.lock().await.held = true;
