@@ -144,6 +144,16 @@ pub(crate) fn progress(event: &ProviderEvent, previous: Option<&ProviderEvent>) 
     }
 }
 
+/// `event` without the whole output it may carry on its way to the store (up to 64 MiB, see
+/// `KeptOutput`): what is compared is the event as shown, and the history keeps no copy of it.
+fn light(event: &ProviderEvent) -> ProviderEvent {
+    let mut event = event.clone();
+    if let ProviderEvent::Command { kept, .. } | ProviderEvent::ToolCall { kept, .. } = &mut event {
+        *kept = None;
+    }
+    event
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Progress {
     previous: HashMap<String, ProviderEvent>,
@@ -167,9 +177,10 @@ impl Progress {
             _ => "",
         };
         let key = format!("{:?}:{item}", std::mem::discriminant(event));
-        let moved = progress(event, self.previous.get(&key));
+        let light = light(event);
+        let moved = progress(&light, self.previous.get(&key));
         if moved {
-            self.previous.insert(key, event.clone());
+            self.previous.insert(key, light);
         }
         let running = match event {
             ProviderEvent::Command {
@@ -245,6 +256,7 @@ impl Progress {
         ) {
             self.commands.clear();
             self.waits.clear();
+            self.previous.clear();
         }
         moved
     }
