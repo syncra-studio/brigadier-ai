@@ -44,7 +44,7 @@
  *               max-h-composer-max            composer input maximum height (then it scrolls)
  *               max-h-queue-max               the queue card's maximum height (then it scrolls)
  *               scroll-mt-thread-turn         where a message row stops under the thread's top when scrolled to;
- *                                             thread-composer-gap, thread-fade-{bottom,top} (globals.css)
+ *                                             thread-composer-gap, thread-fade-{bottom,top}, thread-scroll-strip (globals.css)
  *               w-rail-marker, h-rail-marker-height  a marker of the thread's message rail (36×10), its
  *               rail-line(-hover), h-rail-line-height  line at rest and hovered (6px / 26px, 2px tall),
  *               max-h-rail-list, rail-fade    the rail's list (then it scrolls) and its faded ends;
@@ -226,10 +226,14 @@
   --spacing-composer: 2.75rem;
   /* The thread's scroll: a sent message settles 171px under the view's top;
      at the bottom the last content ends 84px above the floating composer; the thread fades out
-     over the 20px above the composer and 20px under the top bar. */
+     over the 20px above the scroll button's strip and 20px under the top bar. */
   --spacing-thread-turn: 10.6875rem;
   --spacing-thread-composer-gap: 5.25rem;
   --spacing-thread-fade-bottom: 1.25rem;
+  /* The strip over the composer the scroll button sits in (its 1.5rem gap and 2rem circle, and
+     0.5rem more above it): solid background, so no text, not even a fading line, meets the
+     button. The fade above it ends where the last content does. */
+  --spacing-thread-scroll-strip: 4rem;
   --spacing-thread-fade-top: 1.25rem;
   /* The rail of the user's messages beside the thread: a 36×10 marker per message holding a 2px
      line, 6px wide at rest and 26px hovered; the list shows up to 70% of the window's height

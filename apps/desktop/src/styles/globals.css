@@ -122,10 +122,10 @@
   height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-composer-gap));
 }
 
-/* Behind the floating footer the background is solid, then fades out above it; the scroll
-   button floats over the text above. */
+/* Behind the floating footer and the scroll button's strip above it the background is solid,
+   then fades out above that: text never shows under the button. */
 @utility thread-bottom-fade {
-  height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-fade-bottom));
+  height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-scroll-strip) + var(--spacing-thread-fade-bottom));
   background-image: linear-gradient(
     to top,
     var(--color-background) 0%,
