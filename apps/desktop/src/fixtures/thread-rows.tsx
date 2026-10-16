@@ -355,6 +355,8 @@ function shell(id: string) {
   return {
     command: text(one("[data-slot=shell-command]", box)),
     clamped: !!one("[data-slot=shell-command].line-clamp-2", box),
+    // WebKit squeezes a box that can shrink: the command line never can.
+    shrinks: getComputedStyle(one("[data-slot=shell-command]", box)!).flexShrink,
     outputLines: output?.textContent?.split("\n").length ?? 0,
     output: output ? (output.textContent ?? "") : null,
     colored: all("[data-slot=shell-output] span[style]", box).map((span) => [span.textContent, span.style.color]),

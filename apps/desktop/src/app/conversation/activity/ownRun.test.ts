@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ownRunOutput } from "@/app/conversation/activity/ownRun";
+import { cliRunOutput, ownRunOutput } from "@/app/conversation/activity/ownRun";
 
 test("an own command's [exit N] line is its exit code, not output", () => {
   assert.deepEqual(ownRunOutput("[exit 0]\n\n> tally@0.4.0 typecheck\n"), { exit: 0, output: "\n> tally@0.4.0 typecheck\n" });
@@ -11,4 +11,11 @@ test("an own command's [exit N] line is its exit code, not output", () => {
   assert.deepEqual(ownRunOutput("[killed by signal 9]\npartial\n"), { exit: null, output: "[killed by signal 9]\npartial\n" });
   assert.deepEqual(ownRunOutput("ok [exit 0]\n"), { exit: null, output: "ok [exit 0]\n" });
   assert.deepEqual(ownRunOutput(null), { exit: null, output: null });
+});
+
+test("a CLI Bash call's failed reply starts with its exit code, which is read, not shown", () => {
+  assert.deepEqual(cliRunOutput("Exit code 1\n.gitignore\nREADME.md"), { exit: 1, output: ".gitignore\nREADME.md" });
+  assert.deepEqual(cliRunOutput("Exit code 127"), { exit: 127, output: "" });
+  assert.deepEqual(cliRunOutput("ok\nExit code 1"), { exit: null, output: "ok\nExit code 1" });
+  assert.deepEqual(cliRunOutput(null), { exit: null, output: null });
 });

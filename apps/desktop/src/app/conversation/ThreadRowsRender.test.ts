@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
 type Shell = {
-  command: string | null; clamped: boolean; outputLines: number; output: string | null; colored: [string, string][];
+  command: string | null; clamped: boolean; shrinks: string; outputLines: number; output: string | null; colored: [string, string][];
   ending: string | null; clipped: string | null; folded: boolean;
 };
 
@@ -62,6 +62,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.equal(seen["shell-clipped"].clipped, "Only the start was kept: 12 KB more not shown");
   // A long command: two lines until clicked.
   assert.deepEqual([seen["shell-command"].clamped, seen.commandClicked], [true, false]);
+  assert.equal(seen["shell-command"].shrinks, "0");
   // A command the user's Stop cut: "Stopped … after 4s", no shimmer; its box ends "Stopped".
   assert.deepEqual(seen.stopped, { row: "Stopped sleep 30 after 4s", state: "stopped", shimmer: false });
   assert.equal(seen.stoppedShell, "Stopped");

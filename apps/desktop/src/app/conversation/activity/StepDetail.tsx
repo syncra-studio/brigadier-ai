@@ -3,7 +3,7 @@ import { type ReactNode, useContext, useEffect, useState } from "react";
 
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
-import { OWN_RUNS, ownRunOutput } from "@/app/conversation/activity/ownRun";
+import { cliRunOutput, OWN_RUNS, ownRunOutput } from "@/app/conversation/activity/ownRun";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
@@ -26,7 +26,8 @@ import { getThreadItem } from "@/state/actions";
 const BOX = "border-border bg-code-surface rounded-control mt-1 flex flex-col border text-sm";
 
 /** A command's box: a faint card, its command up to two lines, and the end of its output. */
-const SHELL = "border-foreground/16 bg-foreground/8 rounded-shell mt-1 flex flex-col overflow-hidden border";
+// Its parts keep their heights: WebKit squeezed a clamped two-line command under the output.
+const SHELL = "border-foreground/16 bg-foreground/8 rounded-shell mt-1 flex flex-col overflow-hidden border *:shrink-0";
 const SHELL_TEXT = "text-code font-mono whitespace-pre-wrap wrap-anywhere";
 const BODY = "text-code max-h-60 overflow-auto px-3 py-1 font-mono whitespace-pre-wrap";
 
@@ -286,6 +287,10 @@ function callDetail(name: string, status: ItemStatus, call: { input: string | nu
     if (command && OWN_RUNS.has(short)) {
       const own = ownRunOutput(call.output);
       return <ShellBox command={command} output={own.output} status={status} exit={call.exit ?? own.exit} />;
+    }
+    if (command && short === "Bash") {
+      const cli = cliRunOutput(call.output);
+      return <ShellBox command={command} output={cli.output} status={status} exit={call.exit ?? cli.exit} />;
     }
     if (command) return <ShellBox command={command} output={call.output} status={status} exit={call.exit} />;
   }
