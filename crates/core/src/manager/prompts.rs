@@ -239,7 +239,7 @@ fn own_commits(local: bool) -> String {
             .to_owned()
     } else {
         format!(
-            "For your own changes, read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch: give your last run_check `commit: \"<message>\"` to commit all your changes with your trailer when it passes, in that same call, or use `git commit --trailer \"{THREAD_TRAILER}\"`. Its reply names the commit's files and what git status still shows: that is the record, so don't check the commit again with git, and try anything by hand before that last run_check, not after it. One fixing only findings goes through git with both trailers, adding `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
+            "For your own changes, read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch: give your last run_check `commit: \"<message>\"` to commit all your changes with your trailer when it passes, in that same call: put it on the first check you expect to pass, not on a second run of one that just passed, as a check that fails commits nothing and you fix and run it again. Or use `git commit --trailer \"{THREAD_TRAILER}\"`. Its reply names the commit's files and what git status still shows: that is the record, so don't check the commit again with git, and try anything by hand before that last run_check, not after it. One fixing only findings goes through git with both trailers, adding `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
         )
     }
 }
@@ -747,6 +747,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, every final answer ends with its `### Details` and their three labelled lines (`Checks:`, `Review:`, `Not checked:`), an answer to a question or an explanation of an error too.",
         worker: "",
     },
+    Revision {
+        number: COMMIT_FIRST_REVISION,
+        thread: "From now on, put run_check's `commit` on the first check you expect to pass, not on a second run of one that just passed: a check that fails commits nothing, and you fix and run it again.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -992,6 +997,10 @@ pub(crate) const THREAD_STEPS_REVISION: u32 = 61;
 /// The final answer's `### Details` closes an answer to a question or an explained error too,
 /// not only finished work (BUILD-PLAN E3, found by the gate's answer audit).
 pub(crate) const ANSWER_DETAILS_REVISION: u32 = 62;
+
+/// The thread's commit rides on its first check expected to pass, not on a rerun of a check
+/// that just passed, which costs a model call (the gate's bench, T4).
+pub(crate) const COMMIT_FIRST_REVISION: u32 = 63;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3558,6 +3567,14 @@ mod environment_tests {
         assert_eq!(labels(&sent), vec![REVISION_LABEL]);
         took(&mut older, &sent);
         assert_eq!(notes(&older, &now), Vec::new());
+    }
+
+    /// On its own worktree the thread commits with the first check it expects to pass, not with
+    /// a second run of one that just passed (revision 63); its user's checkout never commits.
+    #[test]
+    fn the_commit_rides_on_the_first_check_expected_to_pass() {
+        assert!(super::own_commits(false).contains("put it on the first check you expect to pass"));
+        assert!(!super::own_commits(true).contains("first check you expect to pass"));
     }
 
     #[test]

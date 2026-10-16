@@ -15,7 +15,8 @@ use super::{Flow, Options, Reply, Script, Turn};
 use crate::knowledge::RebirthTrigger;
 use crate::manager::fault::{FaultKey, InjectedError};
 use crate::manager::prompts::{
-    ANSWER_DETAILS_REVISION, OVERFLOW_REVISION, THREAD_STEPS_REVISION, revision_note,
+    ANSWER_DETAILS_REVISION, COMMIT_FIRST_REVISION, OVERFLOW_REVISION, THREAD_STEPS_REVISION,
+    revision_note,
 };
 use crate::model::{DomainEvent, streams};
 use crate::work::{OrchestratorEntry, RequestState};
@@ -490,6 +491,16 @@ async fn a_session_from_before_thread_steps_in_search_is_told_once() {
 #[tokio::test]
 async fn a_session_from_before_details_on_every_answer_is_told_once() {
     told_once(ANSWER_DETAILS_REVISION, "an explanation of an error too").await;
+}
+
+/// Rule R for the commit on the first check expected to pass (the gate's bench, T4).
+#[tokio::test]
+async fn a_session_from_before_commit_on_the_first_check_is_told_once() {
+    told_once(
+        COMMIT_FIRST_REVISION,
+        "on the first check you expect to pass",
+    )
+    .await;
 }
 
 /// A session told the instructions at the revision before `revision` hears its note (which
