@@ -46,6 +46,18 @@ test("what run_check says after the output reads as notes in plain words", () =>
     output: "[the last 1 lines, 89 before them left out]\npassed\n",
     notes: ['Committed 1a2b3c4 "Fix rounding": 2 files changed, 3 insertions(+) (src/a.ts, src/a.test.ts). Nothing is left uncommitted.', "Codex is reviewing this change."],
   });
+  // A reviewer named in two words, and a review followed by the refusal on the user's own checkout.
+  assert.deepEqual(ownRunOutput(`[exit 0]\nok\n\n[review running] Claude Code reviews your change for this request.\nNot committed: this is the user's own checkout, where you commit only when they ask, with git yourself.`), {
+    exit: 0,
+    output: "ok\n",
+    notes: ["Claude Code is reviewing this change.", "Not committed: this is your own checkout, where commits wait for you to ask."],
+  });
+  // A review alone after a long output's whole text, as the daemon gives it back.
+  assert.deepEqual(ownRunOutput("exit 0 [full output: read_artifact out-1, 3 lines, 30 bytes]\none\npassed\n\n[review running] Codex reviews your change in the background."), {
+    exit: 0,
+    output: "one\npassed\n",
+    notes: ["Codex is reviewing this change."],
+  });
   // A line of the command's own that looks like one stays output.
   assert.deepEqual(ownRunOutput("[exit 0]\nCommitted to memory\n"), { exit: 0, output: "Committed to memory\n", notes: [] });
 });

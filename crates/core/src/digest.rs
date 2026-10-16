@@ -238,7 +238,9 @@ pub(crate) fn whole_reply(reply: &str, whole: &str) -> String {
         if !text.ends_with('\n') {
             text.push('\n');
         }
-        text.push_str(notes.trim_start_matches('\n'));
+        // One line end of the notes' own is the one just ensured; a blank line before a review
+        // note stays.
+        text.push_str(notes.strip_prefix('\n').unwrap_or(notes));
     }
     text
 }
@@ -415,6 +417,12 @@ mod tests {
         assert_eq!(
             whole_reply(plain, "one\nFAIL a.test.js"),
             "exit 1 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\nFAIL a.test.js"
+        );
+        // A review note alone keeps the blank line before it.
+        let review = "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\n\n[review running] Claude Code reviews your change for this request in the background.";
+        assert_eq!(
+            whole_reply(review, "one\ntwo\npassed\n"),
+            "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\n\n[review running] Claude Code reviews your change for this request in the background."
         );
         assert!(own_run("mcp__brigadier__run_check") && own_run("run") && !own_run("Bash"));
     }
