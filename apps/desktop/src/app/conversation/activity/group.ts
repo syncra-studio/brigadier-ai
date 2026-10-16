@@ -1,4 +1,4 @@
-import type { BlockOrchestratorStep, SequenceEntry } from "@/app/conversation/blocks";
+import { type BlockOrchestratorStep, isImageStep, type SequenceEntry } from "@/app/conversation/blocks";
 import { isPlumbing } from "@/app/conversation/activity/words";
 import type { ThreadEntry } from "@/components/transcript/activity";
 
@@ -127,7 +127,8 @@ function groupLead(sequence: readonly SequenceEntry[]): Activity<LeadStep, Seque
         return { type: "skip" };
       case "orchestrator": {
         const [step] = entry.steps;
-        if (!step || entry.steps.length > 1) return { type: "break" };
+        // An image the thread looked at or made is a row of its own that ends the group.
+        if (!step || entry.steps.length > 1 || isImageStep(step)) return { type: "break" };
         const work = leadWork(step);
         if (work === "hidden") return { type: "skip" };
         return work === "work" ? { type: "step", key: `step:${step.position}`, step } : { type: "break" };

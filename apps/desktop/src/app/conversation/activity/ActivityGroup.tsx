@@ -42,13 +42,13 @@ function StepIcon({ words, stopped = false }: { words: StepWords; stopped?: bool
 }
 
 /** A step's words in two tones: the verb in the row's, what it acts on a step fainter; white together on hover. */
-function Words({ words, label }: { words: StepWords; label: string }) {
+function Words({ words, label, objectNode }: { words: StepWords; label: string; objectNode?: ReactNode }) {
   const { verb, object, rest } = labelParts(words, label);
   if (!object) return <>{label}</>;
   return (
     <>
       {verb}
-      <span className="text-row-object group-hover:text-foreground group-focus-visible:text-foreground">{object}</span>
+      {objectNode ?? <span className="text-row-object group-hover:text-foreground group-focus-visible:text-foreground">{object}</span>}
       {rest}
     </>
   );
@@ -75,15 +75,20 @@ export function stoppedLabel(words: StepWords, startedAtMs: number | undefined, 
  * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test" ("in 41s" inside an opened group); the verb shimmers while it
  * runs. It opens to `detail` when there is one, also while it runs.
  */
-export function StepRow({ words: said, status, exit = null, startedAtMs, detail, suffix, slot }: Described & {
+export function StepRow({ words: said, status, exit = null, startedAtMs, detail, suffix, slot, objectNode, trail }: Described & {
   detail?: ReactNode;
   /** After the words: "in 41s". */
   suffix?: ReactNode;
   slot?: string;
+  /** What the step acts on, drawn in place of its words' object (an edited file's link). */
+  objectNode?: ReactNode;
+  /** After the words, in and out of a group: an edit's "+7 −2". */
+  trail?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  // An edit opened to its diff, which names the file itself: the row reads "Edited file".
-  const words = open && said.kind === "edit" && status === "completed" && said.object ? { kind: said.kind, doing: said.doing, done: "Edited file" } : said;
+  // An edit opened to its diff, which names the file itself: the row reads "Edited file" ("Created file").
+  const opened = open && said.kind === "edit" && status === "completed" && said.object;
+  const words = opened ? { kind: said.kind, doing: said.doing, done: `${said.done.slice(0, said.done.indexOf(" "))} file` } : said;
   const stoppedBy = useContext(StoppedBy);
   // Still running when the user's Stop ended its thread: it was stopped, not running.
   const stopped = status === "inProgress" && stoppedBy !== null;
@@ -110,11 +115,12 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, detail,
         ) : running ? (
           stepLabel(words, status, exit)
         ) : (
-          <Words words={words} label={stepLabel(words, status, exit)} />
+          <Words words={words} label={stepLabel(words, status, exit)} objectNode={opened ? undefined : objectNode} />
         )}
       </span>
       {/* "in 41s" only on a row inside an opened group: a row on its own says what it did. */}
       {suffix && inGroup && <span className="shrink-0 tabular-nums">{suffix}</span>}
+      {trail}
     </ThreadActivity>
   );
 }

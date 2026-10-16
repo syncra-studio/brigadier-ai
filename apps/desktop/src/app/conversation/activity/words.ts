@@ -31,6 +31,8 @@ export type StepWords = {
   waiting?: boolean;
   /** It lists a folder's files (drawn with a folder, where a search has a magnifier). */
   list?: boolean;
+  /** The files an edit changed, when known: a summary counts files, not calls ("Edited files"). */
+  paths?: readonly string[];
 };
 
 export type ToolStep = Extract<OrchestratorStepKind, { type: "tool" }>;
@@ -512,13 +514,26 @@ export function summarize(steps: readonly StepWords[]): string {
   return parts.map((part, index) => (index === 0 ? part : part.charAt(0).toLowerCase() + part.slice(1))).join(", ");
 }
 
-/** A run of steps by summary segment, in the summary's order: each segment's first step and how many. */
+/**
+ * A run of steps by summary segment, in the summary's order: each segment's first step and how
+ * many. Edits that name their files count the distinct files: two edits of one file are "Edited
+ * a file", one patch of two files "Edited files".
+ */
 function segments(steps: readonly StepWords[]): [string, { words: StepWords; count: number }][] {
   const counts = new Map<string, { words: StepWords; count: number }>();
+  const paths = new Map<string, Set<string>>();
   for (const words of steps) {
     const key = words.kind === "other" ? `other:${words.phrase ?? words.done}` : words.kind === "code" ? "read" : words.kind;
     const known = counts.get(key);
-    counts.set(key, { words: known?.words ?? words, count: (known?.count ?? 0) + 1 });
+    let count = (known?.count ?? 0) + 1;
+    if (words.paths?.length) {
+      const seen = paths.get(key) ?? new Set<string>();
+      const before = seen.size;
+      for (const path of words.paths) seen.add(path);
+      paths.set(key, seen);
+      count = (known?.count ?? 0) + (seen.size - before);
+    }
+    counts.set(key, { words: known?.words ?? words, count });
   }
   return [...counts.entries()].toSorted(([a], [b]) => summaryRank(a) - summaryRank(b));
 }

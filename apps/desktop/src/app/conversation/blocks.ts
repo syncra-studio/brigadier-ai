@@ -111,6 +111,8 @@ export type BlockOrchestratorStep = {
   position: number;
   /** When the step began (a tool call: when it was first seen). */
   atMs?: number;
+  /** The request it served: a tool call's row reads its call with the request's calls. */
+  requestId?: string | null;
 };
 
 /**
@@ -512,7 +514,7 @@ export function buildBlocks(
       kind: "orchestrator",
       position: step.position,
       requestId: step.requestId,
-      step: { kind: step.kind, position: step.position, atMs: step.atMs },
+      step: { kind: step.kind, position: step.position, atMs: step.atMs, requestId: step.requestId },
       atMs: step.atMs,
     });
   }
@@ -984,10 +986,27 @@ export type SequenceEntry =
   | { kind: "compaction"; compaction: BlockCompaction; position: number }
   | { kind: "row"; row: BlockRow; position: number };
 
+/** Whether a lead's step is an image the thread looked at or made: its row stands apart from the work. */
+export function isImageStep(step: BlockOrchestratorStep): boolean {
+  return step.kind.type === "tool" && step.kind.item === "image";
+}
+
+/** Whether a lead's image step made the image (rather than looked at it). */
+export function madeImage(step: BlockOrchestratorStep): boolean {
+  return step.kind.type === "tool" && toolName(step.kind.name) === "imagegen";
+}
+
+/** Whether an entry is only images the thread looked at (or only images it made): one row says them all. */
+function imageEntry(entry: SequenceEntry): "viewed" | "made" | null {
+  if (entry.kind !== "orchestrator" || !entry.steps.every(isImageStep)) return null;
+  if (entry.steps.every(madeImage)) return "made";
+  return entry.steps.some(madeImage) ? null : "viewed";
+}
+
 /**
  * The block's replies, cards, rows and orchestrator steps in order, one entry each; adjacent
- * "started working" rows share one sentence. The lead's work steps are grouped by
- * `activity/group.ts`.
+ * "started working" rows share one sentence, adjacent images the thread looked at one row
+ * ("Viewed 3 images"). The lead's work steps are grouped by `activity/group.ts`.
  */
 export function blockSequence(source: SequenceSource): SequenceEntry[] {
   const entries: SequenceEntry[] = [
@@ -1017,6 +1036,11 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     const previous = merged.at(-1);
     if (entry.kind === "row" && previous?.kind === "row" && lifecycleWord(entry.row.kind) === lifecycleWord(previous.row.kind)) {
       previous.row = { ...previous.row, taskIds: [...new Set([...(previous.row.taskIds ?? [previous.row.taskId]), entry.row.taskId])] };
+      continue;
+    }
+    const images = imageEntry(entry);
+    if (images && previous?.kind === "orchestrator" && entry.kind === "orchestrator" && imageEntry(previous) === images) {
+      previous.steps = [...previous.steps, ...entry.steps];
       continue;
     }
     merged.push(entry);

@@ -1,4 +1,6 @@
 import { type Described, StepRow } from "@/app/conversation/activity/ActivityGroup";
+import { BackgroundRunRow } from "@/app/conversation/activity/BackgroundRunRow";
+import { EditedFileRows, editedFiles } from "@/app/conversation/activity/EditedFiles";
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { leadStepDetail } from "@/app/conversation/activity/StepDetail";
 import { basename, type StepWords, toolStepWords, webSearchWords } from "@/app/conversation/activity/words";
@@ -19,8 +21,12 @@ function hostOf(url: string): string {
 export function describeLeadStep(step: LeadStep, tasks: Readonly<Record<string, Task>> = {}): Described {
   const { kind } = step;
   switch (kind.type) {
-    case "tool":
-      return { words: toolStepWords(kind, tasks), status: kind.status, exit: kind.exit ?? null, startedAtMs: step.atMs, endedAtMs: kind.endedAtMs };
+    case "tool": {
+      const words = toolStepWords(kind, tasks);
+      // A file change names its files: its summary counts them.
+      const paths = kind.item === "files" ? kind.files?.map((file) => file.path) : undefined;
+      return { words: paths?.length ? { ...words, paths } : words, status: kind.status, exit: kind.exit ?? null, startedAtMs: step.atMs, endedAtMs: kind.endedAtMs };
+    }
     case "searchedWeb":
       return { words: webSearchWords(kind.query), status: "completed" };
     case "readPage": {
@@ -50,7 +56,14 @@ export function LeadStepRow({ step }: { step: LeadStep }) {
   const tasks = useBoard((s) => s.board?.tasks);
   const conversationId = useViewConversation()?.id ?? null;
   const described = describeLeadStep(step, tasks);
+  // A command that went on in the background: its run's row, which says how it stands now.
+  const itemId = step.kind.type === "tool" ? step.kind.itemId : null;
+  const run = useBoard((s) => (itemId === null ? undefined : Object.values(s.board?.backgroundRuns ?? {}).find((each) => each.itemId === itemId)));
+  if (run) return <BackgroundRunRow run={run} />;
+  // A file change with its files counted: a row per file, each with its link and "+7 −2".
+  const files = editedFiles(step);
+  if (files) return <EditedFileRows step={step} files={files} conversationId={conversationId} />;
   // A search the thread made has no results kept: its row says it all, with nothing to open.
-  const detail = step.kind.type === "searchedWeb" ? undefined : leadStepDetail(conversationId, step);
+  const detail = step.kind.type === "searchedWeb" ? undefined : leadStepDetail(conversationId, step, described.words.kind);
   return <StepRow {...described} detail={detail} suffix={tookFor(step)} slot="orchestrator-step" />;
 }

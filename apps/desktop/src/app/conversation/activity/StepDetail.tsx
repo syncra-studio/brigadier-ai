@@ -12,10 +12,12 @@ import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/
 import { searchResults, WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import type { TranscriptItem } from "@/components/transcript/transcript";
 import type { ItemStatus, ThreadItem } from "@/ipc/generated";
 import { ansiRuns, stripAnsi } from "@/lib/ansi";
 import { cn } from "@/lib/utils";
 import { getThreadItem } from "@/state/actions";
+import { useCallItems } from "@/state/threadItems";
 
 /**
  * What a step of the thread opens to (THREAD-UX-PLAN.md §3.2), the same for the lead's row and a
@@ -292,7 +294,7 @@ const SHELLS = new Set(["Bash", "run", "run_unsandboxed", "shell", "exec_command
 const EDITS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"]);
 
 /** A call's detail from what it was given and what it gave back. */
-function callDetail(name: string, status: ItemStatus, call: { input: string | null; output: string | null; exit: number | null; command?: string | null }): ReactNode {
+export function callDetail(name: string, status: ItemStatus, call: { input: string | null; output: string | null; exit: number | null; command?: string | null }): ReactNode {
   const short = toolName(name);
   if (SHELLS.has(short)) {
     const given = parsedInput(call.input)?.["command"];
@@ -376,13 +378,79 @@ function LeadToolDetail({ conversationId, kind }: { conversationId: string; kind
   return <span className="text-muted-foreground text-xs">Nothing more was kept of this step.</span>;
 }
 
-/** Whether a lead's step has a detail to open to. */
-export function leadStepOpens(step: LeadStep): boolean {
-  return step.kind.type === "tool" && step.kind.status !== "inProgress";
+/**
+ * A lead's call as one action, from its items: a command's, a file change's, an image's, or a
+ * tool's; a shell tool still running with output printed so far (Brigadier's own `run`) is a
+ * command whose output grows.
+ */
+export function leadAction(items: readonly TranscriptItem[], kind: ToolStep): ActionItem | null {
+  const tool = items.find((item) => item.kind === "tool");
+  const command = items.find((item) => item.kind === "command");
+  if (tool?.kind === "tool" && command?.kind === "command" && tool.status === "inProgress" && SHELLS.has(toolName(tool.name))) {
+    const given = parsedInput(tool.input)?.["command"];
+    return {
+      kind: "command",
+      key: tool.key,
+      command: typeof given === "string" ? given : (kind.detail ?? ""),
+      cwd: null,
+      status: "inProgress",
+      exitCode: null,
+      output: command.output,
+      durationMs: null,
+    };
+  }
+  const found = tool ?? command ?? items.find((item) => item.kind === "files" || item.kind === "image");
+  return found && (found.kind === "tool" || found.kind === "command" || found.kind === "files" || found.kind === "image") ? found : null;
 }
 
-/** What a lead's step opens to, in its conversation. */
-export function leadStepDetail(conversationId: string | null, step: LeadStep): ReactNode {
-  if (!conversationId || step.kind.type !== "tool" || !leadStepOpens(step)) return undefined;
+/** How a lead's call stands, as its items are read again when it changes: its end, or more output. */
+export function callStood(kind: ToolStep): string {
+  return `${kind.status}|${kind.outputBytes ?? ""}|${kind.endedAtMs ?? ""}|${kind.logSeq ?? ""}`;
+}
+
+/** A lead's call's items, read from the thread's calls when its row opens and again as it moves on. */
+export function useLeadItems(conversationId: string, requestId: string | null, kind: ToolStep) {
+  return useCallItems(conversationId, requestId, kind.turn ?? null, kind.itemId, callStood(kind));
+}
+
+/**
+ * What a lead's call opens to, the same as a worker's action (`actionDetail`): read with the
+ * request's calls, while it runs too, its Shell box following the output as it comes.
+ */
+function LeadItemDetail({ conversationId, requestId, kind }: { conversationId: string; requestId: string | null; kind: ToolStep }) {
+  const { items, error } = useLeadItems(conversationId, requestId, kind);
+  if (error && !items) return <p className="text-destructive text-xs">{error}</p>;
+  if (!items) return <span className="shimmer text-xs">Loading</span>;
+  const item = leadAction(items, kind);
+  // Not among the request's calls (a row from before they were kept): read on its own.
+  if (!item) return kind.status === "inProgress" ? null : <LeadToolDetail conversationId={conversationId} kind={kind} />;
+  if (item.kind === "tool") {
+    const short = toolName(item.name);
+    // A CLI's own command gives its command line as plain text, not a call's JSON.
+    const command = SHELLS.has(short) && parsedInput(item.input) === null ? item.input || kind.detail : null;
+    const detail = callDetail(item.name, kind.status, { input: item.input, output: item.output, exit: kind.exit ?? null, command });
+    if (detail) return <>{detail}</>;
+    if (short === "WebSearch" || short === "web_search") return null;
+    return <span className="text-muted-foreground text-xs">Nothing more was kept of this step.</span>;
+  }
+  if (item.kind === "command") return <ShellBox command={item.command || (kind.detail ?? "")} output={item.output || null} status={kind.status} exit={item.exitCode ?? kind.exit ?? null} />;
+  return <>{actionDetail(item)}</>;
+}
+
+/** The kinds of work whose row opens while it runs: a command, to its Shell box as the output comes. */
+const OPEN_WHILE_RUNNING = new Set(["run", "checks"]);
+
+/** Whether a lead's step has a detail to open to; `kind` is its words' kind. */
+export function leadStepOpens(step: LeadStep, kind?: string): boolean {
+  if (step.kind.type !== "tool") return false;
+  if (step.kind.status !== "inProgress") return true;
+  return step.kind.logSeq !== undefined && kind !== undefined && OPEN_WHILE_RUNNING.has(kind);
+}
+
+/** What a lead's step opens to, in its conversation; `kind` is its words' kind. */
+export function leadStepDetail(conversationId: string | null, step: LeadStep, kind?: string): ReactNode {
+  if (!conversationId || step.kind.type !== "tool" || !leadStepOpens(step, kind)) return undefined;
+  // A call kept with the request's calls (BUILD-PLAN B1b) opens as a worker's does; an older one as it was kept.
+  if (step.kind.logSeq !== undefined) return <LeadItemDetail conversationId={conversationId} requestId={step.requestId ?? null} kind={step.kind} />;
   return <LeadToolDetail conversationId={conversationId} kind={step.kind} />;
 }

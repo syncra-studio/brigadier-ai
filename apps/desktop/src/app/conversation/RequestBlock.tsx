@@ -23,6 +23,7 @@ import { ThinkingLine } from "@/app/conversation/ThinkingLine";
 import { WorkFold } from "@/app/conversation/WorkFold";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
+import { ImagesRow, MadeImages } from "@/app/conversation/activity/ImageRows";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
@@ -47,6 +48,7 @@ import {
   blockSequence,
   foldsAway,
   isFinal,
+  isImageStep,
   isLive,
   isRunRequest,
   type SequenceEntry as Entry,
@@ -401,6 +403,7 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: boolean
       if (entry.peer) return <PeerMessageBlock peer={entry.peer} text={entry.text} atMs={entry.atMs} />;
       return <SteerBubble text={entry.text} atMs={entry.atMs} attachments={entry.attachments} requestId={entry.requestId} />;
     case "orchestrator":
+      if (entry.steps.length > 0 && entry.steps.every(isImageStep)) return <ImagesRow steps={entry.steps} />;
       return <>{entry.steps.map((step) => <ThreadStep key={step.position} step={step} />)}</>;
     case "compaction":
       return <CompactionRow compaction={entry.compaction} />;
@@ -876,6 +879,7 @@ export const RequestBlock: FC = () => {
       </div>
       </StoppedBy.Provider>
       {/* A run's work is merged from its card, never undone behind the run's back. */}
+      {!live && <MadeImages steps={meta.orchestratorSteps} />}
       {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestIds={meta.requestIds} />}
       {!live && answer !== null && <AnswerFilesOf index={answer} requestIds={meta.requestIds} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
