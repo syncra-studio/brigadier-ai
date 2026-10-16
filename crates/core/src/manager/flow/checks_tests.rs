@@ -362,6 +362,12 @@ async fn a_threads_checks_and_commands_bind_sockets_in_their_short_temporary_fol
             script(move |turn| {
                 let log = log.clone();
                 async move {
+                    // A command that outlives the call (a loaded machine) sends its result
+                    // in a later turn: it is logged, and nothing runs again.
+                    if !turn.input.contains("Bind a socket.") {
+                        log.lock().unwrap().push(turn.input.clone());
+                        return Reply::text("[quiet]");
+                    }
                     for (tool, args) in [
                         ("run_check", json!({ "command": BIND })),
                         ("run", json!({ "command": BIND })),
@@ -384,9 +390,18 @@ async fn a_threads_checks_and_commands_bind_sockets_in_their_short_temporary_fol
             "{tmp}"
         );
         let replies = replies.lock().unwrap().clone();
-        assert_eq!(replies.len(), 2, "{permission:?}");
-        for reply in replies {
-            assert_eq!(reply, format!("[exit 0]\n{tmp}\nbound\n"), "{permission:?}");
+        // Each command bound its socket in the short folder, in its call or from the background.
+        let bound: usize = replies
+            .iter()
+            .map(|reply| reply.matches(&format!("{tmp}\nbound\n")).count())
+            .sum();
+        assert_eq!(bound, 2, "{permission:?}: {replies:#?}");
+        for reply in replies.iter().filter(|reply| reply.starts_with("[exit")) {
+            assert_eq!(
+                reply,
+                &format!("[exit 0]\n{tmp}\nbound\n"),
+                "{permission:?}"
+            );
         }
         // The folder goes with the session.
         flow.manager
