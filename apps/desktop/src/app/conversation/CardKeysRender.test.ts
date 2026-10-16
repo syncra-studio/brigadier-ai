@@ -7,10 +7,10 @@ type Seen = Record<string, unknown> & { calls: unknown[]; error?: string };
 const square = (text: string) => ({ text, size: [20, 20], radius: 6, border: 1 });
 const merge = (answer: string, input: string) => ({ method: "answerQuestion", cardId: "merge", answers: [answer], input });
 
-test("consequential cards light nothing until the user moves to an answer and take Enter only on the focused card; the phase plan's rail takes no Enter", { timeout: 90000 }, async (t) => {
+test("every question card takes Enter only on the focused card, and consequential ones light nothing until the user moves to an answer; the phase plan's rail takes no Enter", { timeout: 90000 }, async (t) => {
   const results = JSON.parse(await renderFixtureLive(t, "card-keys.html", "card-keys-result", 60000)) as Record<string, Seen>;
   for (const [name, seen] of Object.entries(results)) assert.equal(seen.error, undefined, `${name}: ${seen.error}`);
-  const { mountEnter, arrowEnter, click, enterOutside, digitUnfocused, digitFocused, phasePlan, implementPlan } = results as Record<string, Seen>;
+  const { mountEnter, arrowEnter, click, enterOutside, plainEnterOutside, plainEnterFocused, digitUnfocused, digitFocused, phasePlan, implementPlan } = results as Record<string, Seen>;
 
   // The dangerous one: the merge card focuses itself with its recommended answer, yet nothing
   // is lit, the pointer passing over lights nothing, and an Enter right after mount sends nothing.
@@ -32,6 +32,14 @@ test("consequential cards light nothing until the user moves to an answer and ta
   assert.deepEqual(enterOutside!.targets, ["thread", "side", "titlebar"]);
   assert.deepEqual(enterOutside!.calls, []);
   assert.deepEqual(enterOutside!.litAfter, [1]);
+
+  // A plain question lights its recommended answer, yet a click in the thread and Enter sends
+  // nothing; Enter on the focused card sends it.
+  assert.deepEqual(plainEnterOutside!.lit, [1]);
+  assert.equal(plainEnterOutside!.focused, "thread");
+  assert.deepEqual(plainEnterOutside!.calls, []);
+  assert.deepEqual(plainEnterOutside!.litAfter, [1]);
+  assert.deepEqual(plainEnterFocused!.calls, [{ method: "answerQuestion", cardId: "ask", answers: ["Percent off"], input: "enter" }]);
 
   assert.equal(digitUnfocused!.focused, "thread");
   assert.deepEqual(digitUnfocused!.lit, []);

@@ -27,6 +27,17 @@ const merge: Question = {
   }],
   answer: null, answers: [], createdAtMs: 0, answeredAtMs: null,
 };
+// A plain question: its recommended answer is lit at once, and only the focused card takes Enter.
+const ask: Question = {
+  ...merge,
+  id: "ask",
+  kind: { type: "orchestrator" },
+  items: [{
+    text: "Which discount kinds?",
+    options: [{ label: "Percent off", description: null }, { label: "Fixed amount", description: null }],
+    recommended: 0,
+  }],
+};
 const plan = (id: string, body: string | null): Plan => ({
   id, conversationId, requestId: null, position: 1, title: "Windows support", body,
   steps: [], state: { type: "proposed" }, createdAtMs: 0, decidedAtMs: null,
@@ -35,7 +46,7 @@ useBoard.setState({
   board: {
     ...emptyBoard(conversationId),
     loaded: true,
-    questions: { merge },
+    questions: { merge, ask },
     plans: { document: plan("document", "Handle drive letters, then run the platform checks."), phases: plan("phases", null) },
   },
 });
@@ -176,6 +187,25 @@ const results = {
     }
     await settle();
     seen.litAfter = lit();
+  }),
+  // A plain question lit at once: a click in the thread, then Enter, answers nothing.
+  plainEnterOutside: await run(async (seen) => {
+    // The pointer off the answers: passing over one lights it on a plain card.
+    await fixtureInput({ type: "pointer", x: 4, y: 4 });
+    await mountCard({ type: "question", id: "ask" });
+    seen.lit = lit();
+    await fixtureClick(region("thread").querySelector("p")!);
+    seen.focused = focused();
+    await key("Enter");
+    await settle();
+    seen.litAfter = lit();
+  }),
+  plainEnterFocused: await run(async () => {
+    await fixtureInput({ type: "pointer", x: 4, y: 4 });
+    await mountCard({ type: "question", id: "ask" });
+    const from = calls.length;
+    await key("Enter");
+    await until("the answer", sent(from));
   }),
   digitUnfocused: await run(async (seen) => {
     await mountCard(question);

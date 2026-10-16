@@ -156,8 +156,8 @@ function inField(target: EventTarget | null): boolean {
  * Esc puts the card aside, and Enter answers it, from anywhere in its view: not from a text
  * field (the composer sends), not Enter on a focused button or link (that clicks it), and not
  * while a menu or dialog is open (they take their keys first). A side chat's keys are its own.
- * A card whose answer is hard to undo has no window-wide Enter: without `enter` Enter is left
- * alone, and with `within` it answers only from inside that element (the focused card).
+ * Without `enter` Enter is left alone, and with `within` it answers only from inside that
+ * element (the focused card).
  */
 function useCardKeys(
   enabled: boolean,
@@ -671,10 +671,11 @@ function clickInput(event: MouseEvent): AnswerInput {
  * with Skip, which turns into Submit once something is typed (Next, before a round's last
  * question; ←/→ page through the round). Esc or × puts it aside.
  *
- * A `consequential` card (a choice that is hard to undo: a merge, building a plan) lights
- * nothing until the user moves to an answer, even when it took focus on its own: ↑/↓ or 1–9
- * light one (the pointer passing over lights nothing), and Enter picks the lit answer only from
- * the focused card, never from elsewhere in the window. A click on an answer picks it.
+ * Enter picks the lit answer only from the focused card, never from elsewhere in the window: a
+ * click in the thread and Enter answers nothing. A `consequential` card (a choice that is hard
+ * to undo: a merge, building a plan) also lights nothing until the user moves to an answer, even
+ * when it took focus on its own: ↑/↓ or 1–9 light one (the pointer passing over lights nothing).
+ * A click on an answer picks it.
  */
 /**
  * The free-text row's microphone: dictates into the row, as the composer's does into the
@@ -817,7 +818,7 @@ function ChoiceCard({
       },
       escape: onDismiss,
     },
-    consequential ? card : undefined,
+    card,
   );
   const onKeyDown = (event: KeyboardEvent) => {
     if (
