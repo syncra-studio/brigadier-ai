@@ -46,6 +46,7 @@ impl SessionManager {
         };
         // "Last Turn" is what a request's workers landed: the given request, or the latest
         // that landed anything.
+        let mut recorded_range = None;
         let (scope, landed) = match scope {
             ReviewScope::LastTurn { request_id } => {
                 let board = self.core.board(id).await?;
@@ -61,10 +62,17 @@ impl SessionManager {
                     board
                         .requests
                         .values()
-                        .filter(|request| !landed_by(&request.id).is_empty())
+                        .filter(|request| {
+                            request.changes.is_some() || !landed_by(&request.id).is_empty()
+                        })
                         .max_by_key(|request| request.started_at_ms)
                         .map(|request| request.id.clone())
                 });
+                if let Some(request) = &request_id
+                    && let Some(record) = self.change_record(id, request).await?
+                {
+                    recorded_range = Some(record.commit);
+                }
                 let landed = request_id.as_deref().map(landed_by).unwrap_or_default();
                 (ReviewScope::LastTurn { request_id }, landed)
             }
@@ -85,6 +93,13 @@ impl SessionManager {
             };
             let mut untracked = BTreeSet::new();
             let range: Option<(Oid, Oid)> = match &scope {
+                ReviewScope::LastTurn { .. } if recorded_range.is_some() => {
+                    let tip = recorded_range.as_ref().expect("record range");
+                    Some((
+                        repo.resolve(&format!("{tip}^")).map_err(git_error)?,
+                        Oid(tip.clone()),
+                    ))
+                }
                 ReviewScope::LastTurn { .. } if landed.is_empty() => None,
                 ReviewScope::LastTurn { .. } => Some(repo.changes_of(&landed).map_err(git_error)?),
                 ReviewScope::Uncommitted | ReviewScope::Unstaged | ReviewScope::Staged => {

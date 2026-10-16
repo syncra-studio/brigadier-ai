@@ -148,7 +148,29 @@ impl SessionManager {
                 started_at_ms: now_ms(),
                 ended_at_ms: None,
                 state: BackgroundRunState::Running,
-                item_id: None,
+                item_id: self.core.board(id).await.ok().and_then(|board| {
+                    let detail: String = command.chars().take(240).collect();
+                    let mut matches =
+                        board
+                            .orchestrator_steps
+                            .iter()
+                            .filter_map(|step| match &step.kind {
+                                crate::work::OrchestratorStepKind::Tool {
+                                    item_id,
+                                    name,
+                                    detail: Some(words),
+                                    status: brigadier_providers::ItemStatus::InProgress,
+                                    ..
+                                } if crate::digest::bare_tool_name(name) == tool
+                                    && words == &detail =>
+                                {
+                                    Some(item_id.clone())
+                                }
+                                _ => None,
+                            });
+                    let item = matches.next();
+                    if matches.next().is_none() { item } else { None }
+                }),
             };
             self.background_runs
                 .running
@@ -236,6 +258,15 @@ impl SessionManager {
             Ok(done) => done,
             Err(err) => ("couldn't run".to_owned(), format!("[couldn't run: {err}]")),
         };
+        if let Ok(event) = brigadier_store::NewEvent::new(
+            format!("background-output:{}:{}", run.conversation_id, run.id),
+            "background.output",
+            now_ms(),
+            &text,
+        ) && let Err(err) = self.core.store().append(vec![event]).await
+        {
+            tracing::warn!(run = %run.id, error = %err, "could not store background output");
+        }
         run.state = BackgroundRunState::Finished { status };
         let envelope = Envelope {
             kind: InjectionKind::BackgroundRun,
@@ -263,6 +294,103 @@ impl SessionManager {
         if let Some(conv) = conv {
             self.kick(&conv);
         }
+    }
+
+    /// Links a call whose background reply arrived before its start row was observed.
+    pub(super) async fn background_item(
+        &self,
+        id: &ConversationId,
+        event: &brigadier_providers::ProviderEvent,
+    ) {
+        let brigadier_providers::ProviderEvent::ToolCall {
+            item_id,
+            output: Some(output),
+            ..
+        } = event
+        else {
+            return;
+        };
+        let Some(start) = output.find("[run-") else {
+            return;
+        };
+        let Some(run_id) = output[start + 1..]
+            .split_whitespace()
+            .next()
+            .filter(|id| id.starts_with("run-"))
+        else {
+            return;
+        };
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        if let Some(mut run) = board.background_runs.get(run_id).cloned()
+            && run.item_id.as_deref() != Some(item_id)
+        {
+            run.item_id = Some(item_id.clone());
+            self.store_background_run(&run).await;
+        }
+    }
+
+    /// The runner owns its pipes privately; once ended, the existing stored result is read whole
+    /// and only its end is returned. A running or interrupted run has no final result yet.
+    pub async fn read_background_run(
+        &self,
+        id: &ConversationId,
+        run_id: &str,
+    ) -> Result<(String, u64)> {
+        let board = self.core.board(id).await?;
+        if !board.background_runs.contains_key(run_id) {
+            return Err(crate::Error::NotFound(format!("background run {run_id}")));
+        }
+        let events = self
+            .core
+            .store()
+            .read_stream(
+                format!("background-output:{id}:{run_id}"),
+                brigadier_store::StreamPage {
+                    limit: 1,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let Some(event) = events.first() else {
+            return Ok((String::new(), 0));
+        };
+        let mut output: String =
+            serde_json::from_str(event.payload.get()).map_err(|source| crate::Error::Corrupt {
+                seq: event.seq,
+                source,
+            })?;
+        let mut bytes = output.len() as u64;
+        if let Some(alias) = crate::digest::digest_alias(&output)
+            && let Some(whole) = self.core.stored_output_text(id, alias).await
+        {
+            bytes = board
+                .outputs
+                .get(alias)
+                .map_or(whole.len() as u64, |stored| stored.bytes);
+            output = whole;
+        }
+        let mut start = output.len().saturating_sub(256 * 1024);
+        while !output.is_char_boundary(start) {
+            start += 1;
+        }
+        Ok((output[start..].to_owned(), bytes))
+    }
+
+    pub(super) async fn delete_background_output(&self, id: &ConversationId) -> Result<()> {
+        let board = self.core.board(id).await?;
+        self.core
+            .store()
+            .delete_streams(
+                board
+                    .background_runs
+                    .keys()
+                    .map(|run| format!("background-output:{id}:{run}"))
+                    .collect(),
+            )
+            .await?;
+        Ok(())
     }
 
     /// Ends the session's background runs (the user's Stop, an archive or delete): each is

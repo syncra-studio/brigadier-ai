@@ -1,0 +1,795 @@
+//! Evidence for the files each request changed, retained independently of its checkout's history.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use brigadier_git::{FileBlob, Oid};
+use brigadier_providers::{FileChangeKind, ItemStatus, ProviderEvent};
+use brigadier_store::{NewEvent, StreamPage};
+use serde::{Deserialize, Serialize};
+
+use super::{SessionManager, blocking, git_error};
+use crate::model::{ConversationId, Environment, Setup};
+use crate::work::{HeldPath, RequestChanges, RequestState};
+use crate::{Error, Result};
+
+#[derive(Default)]
+pub(super) struct ChangeRecords {
+    locks: std::sync::Mutex<HashMap<ConversationId, Arc<tokio::sync::Mutex<SnapshotClock>>>>,
+}
+
+#[derive(Default)]
+pub(super) struct SnapshotClock {
+    at: Option<tokio::time::Instant>,
+    slow: bool,
+}
+
+impl ChangeRecords {
+    pub(super) fn lock(&self, id: &ConversationId) -> Arc<tokio::sync::Mutex<SnapshotClock>> {
+        self.locks
+            .lock()
+            .unwrap()
+            .entry(id.clone())
+            .or_default()
+            .clone()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Blob {
+    oid: String,
+    mode: String,
+}
+impl From<FileBlob> for Blob {
+    fn from(blob: FileBlob) -> Self {
+        Self {
+            oid: blob.oid,
+            mode: blob.mode,
+        }
+    }
+}
+impl From<Blob> for FileBlob {
+    fn from(blob: Blob) -> Self {
+        Self {
+            oid: blob.oid,
+            mode: blob.mode,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct OwnedPath {
+    first: Option<Blob>,
+    last: Option<Blob>,
+    by: BTreeSet<String>,
+    held: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(super) struct Record {
+    latest: String,
+    pub(super) commit: String,
+    paths: BTreeMap<String, OwnedPath>,
+    restored: Vec<String>,
+    settled: bool,
+    seen: BTreeSet<String>,
+}
+
+pub(super) enum Refresh<'a> {
+    Start,
+    Event(&'a ProviderEvent),
+    Landing { from: &'a Oid, tip: &'a Oid },
+    Settle,
+    Recover,
+}
+
+fn stream(id: &ConversationId, request: &str) -> String {
+    format!("changes:{id}:{request}")
+}
+fn prefix(id: &ConversationId, request: &str) -> String {
+    format!("refs/brigadier/changes/{id}/{request}")
+}
+fn user_reason(path: &str) -> String {
+    format!("You changed {path} during this request too, so Undo leaves it as it is.")
+}
+fn command_reason(path: &str) -> String {
+    format!(
+        "A command changed {path}, and Brigadier can't tell that change from yours, so Undo leaves it as it is."
+    )
+}
+
+impl Record {
+    fn own(
+        &mut self,
+        path: &str,
+        before: Option<Blob>,
+        after: Option<Blob>,
+        previous: Option<Blob>,
+        by: &str,
+        weak: bool,
+    ) {
+        let owned = self
+            .paths
+            .entry(path.to_owned())
+            .or_insert_with(|| OwnedPath {
+                first: before.clone(),
+                last: previous,
+                by: BTreeSet::new(),
+                held: None,
+            });
+        if owned.last != before {
+            owned.held = Some(user_reason(path));
+        }
+        if by == "command" {
+            owned.held = Some(command_reason(path));
+        }
+        if weak && owned.held.is_none() {
+            owned.held = Some(format!(
+                "Brigadier could not verify the original contents of {path}, so Undo leaves it as it is."
+            ));
+        }
+        owned.last = after;
+        owned.by.insert(by.to_owned());
+    }
+
+    fn trees(
+        &self,
+    ) -> (
+        BTreeMap<String, Option<FileBlob>>,
+        BTreeMap<String, Option<FileBlob>>,
+    ) {
+        let before = self
+            .paths
+            .iter()
+            .map(|(path, owned)| (path.clone(), owned.first.clone().map(Into::into)))
+            .collect();
+        let after = self
+            .paths
+            .iter()
+            .map(|(path, owned)| (path.clone(), owned.last.clone().map(Into::into)))
+            .collect();
+        (before, after)
+    }
+    fn held(&self) -> Vec<HeldPath> {
+        self.paths
+            .iter()
+            .filter(|(_, owned)| owned.first != owned.last)
+            .filter_map(|(path, owned)| {
+                owned.held.as_ref().map(|reason| HeldPath {
+                    path: path.clone(),
+                    reason: reason.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+impl SessionManager {
+    /// Both session environments count, but overnight workspaces and Chats do not.
+    pub(super) fn changes_checkout(
+        &self,
+        id: &ConversationId,
+    ) -> Option<(PathBuf, Option<String>)> {
+        if self
+            .overnight
+            .active
+            .get(id)
+            .and_then(|active| active.workspace)
+            .is_some()
+        {
+            return None;
+        }
+        match self.core.conversation(id).ok()?.setup? {
+            Setup::Session {
+                repo,
+                environment: Environment::LocalCheckout { .. },
+                ..
+            } => Some((repo.into(), None)),
+            Setup::Session {
+                environment:
+                    Environment::NewWorktree {
+                        path: Some(path),
+                        branch,
+                        ..
+                    },
+                ..
+            } => Some((path.into(), Some(branch))),
+            _ => None,
+        }
+    }
+
+    pub(super) async fn change_record(
+        &self,
+        id: &ConversationId,
+        request: &str,
+    ) -> Result<Option<Record>> {
+        let events = self
+            .core
+            .store()
+            .read_stream(
+                stream(id, request),
+                StreamPage {
+                    limit: 1,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        events
+            .first()
+            .map(|event| {
+                serde_json::from_str(event.payload.get()).map_err(|source| Error::Corrupt {
+                    seq: event.seq,
+                    source,
+                })
+            })
+            .transpose()
+    }
+
+    async fn save_change_record(
+        &self,
+        id: &ConversationId,
+        request: &str,
+        record: &Record,
+    ) -> Result<()> {
+        self.core
+            .store()
+            .append(vec![NewEvent::new(
+                stream(id, request),
+                "request.change_record",
+                crate::now_ms(),
+                record,
+            )?])
+            .await?;
+        Ok(())
+    }
+
+    /// One lock per session serializes snapshots and the evidence they explain.
+    pub(super) async fn refresh_changes(
+        &self,
+        id: &ConversationId,
+        request: Option<&str>,
+        refresh: Refresh<'_>,
+    ) {
+        let Some(request) = request else { return };
+        if let Err(err) = self.refresh_changes_inner(id, request, refresh).await {
+            tracing::warn!(conversation = %id, error = %err, "could not refresh request changes");
+        }
+    }
+
+    async fn refresh_changes_inner(
+        &self,
+        id: &ConversationId,
+        request: &str,
+        refresh: Refresh<'_>,
+    ) -> Result<()> {
+        let Some((checkout, _)) = self.changes_checkout(id) else {
+            return Ok(());
+        };
+        let lock = self.change_records.lock(id);
+        let mut clock = lock.lock().await;
+        let stored = self.change_record(id, request).await?;
+        if matches!(refresh, Refresh::Start) && stored.is_some() {
+            return Ok(());
+        }
+        if stored.is_none() && !matches!(refresh, Refresh::Start) {
+            return Ok(());
+        }
+        let mut record = stored.unwrap_or_default();
+        if matches!(refresh, Refresh::Settle) && record.settled {
+            return Ok(());
+        }
+        let command = match &refresh {
+            Refresh::Event(ProviderEvent::Command { status, .. }) => {
+                *status != ItemStatus::InProgress
+            }
+            Refresh::Event(ProviderEvent::ToolCall { name, status, .. }) => {
+                *status != ItemStatus::InProgress
+                    && (crate::digest::is_shell_tool(name) || crate::digest::own_run(name))
+            }
+            _ => false,
+        };
+        let event_key = match &refresh {
+            Refresh::Event(ProviderEvent::FileChanges {
+                item_id,
+                status: ItemStatus::Completed,
+                ..
+            }) => Some(format!("edit:{item_id}")),
+            Refresh::Event(ProviderEvent::Command { item_id, .. }) if command => {
+                Some(format!("command:{item_id}"))
+            }
+            Refresh::Event(ProviderEvent::ToolCall { item_id, .. }) if command => {
+                Some(format!("command:{item_id}"))
+            }
+            Refresh::Event(ProviderEvent::TurnCompleted { .. }) => None,
+            Refresh::Event(_) => return Ok(()),
+            Refresh::Landing { tip, .. } => Some(format!("landing:{}", tip.0)),
+            _ => None,
+        };
+        if event_key
+            .as_ref()
+            .is_some_and(|key| record.seen.contains(key))
+        {
+            return Ok(());
+        }
+        let edit = match refresh {
+            Refresh::Event(ProviderEvent::FileChanges { changes, .. }) => changes.clone(),
+            _ => Vec::new(),
+        };
+        let landing = match refresh {
+            Refresh::Landing { from, tip } => Some((from.clone(), tip.clone())),
+            _ => None,
+        };
+        let recovering = matches!(refresh, Refresh::Recover);
+        let settled = matches!(refresh, Refresh::Settle)
+            || (matches!(refresh, Refresh::Recover)
+                && self
+                    .core
+                    .board(id)
+                    .await?
+                    .requests
+                    .get(request)
+                    .is_some_and(|request| {
+                        !matches!(request.state, RequestState::Working | RequestState::Waiting)
+                    }));
+        if clock.slow
+            && let Some(at) = clock.at
+        {
+            tokio::time::sleep_until(at + std::time::Duration::from_secs(1)).await;
+        }
+        clock.at = Some(tokio::time::Instant::now());
+        let evidence_seen = event_key.is_some();
+        let previous_paths = record.paths.clone();
+        let (git, id_owned, request_owned) = (self.git.clone(), id.clone(), request.to_owned());
+        let (record, changes, changed, cost) = blocking(move || {
+            let repo = git.open(&checkout).map_err(git_error)?;
+            let started = std::time::Instant::now();
+            let latest = repo.snapshot_files().map_err(git_error)?;
+            let cost = started.elapsed();
+            let previous = if record.latest.is_empty() {
+                BTreeMap::new()
+            } else {
+                repo.file_blobs(&Oid(record.latest.clone()))
+                    .map_err(git_error)?
+            };
+            let current = repo.file_blobs(&latest).map_err(git_error)?;
+            let mut explained = BTreeSet::new();
+            for change in edit {
+                let given = Path::new(&change.path);
+                let relative = if given.is_absolute() {
+                    given
+                        .strip_prefix(repo.root())
+                        .ok()
+                        .or_else(|| given.strip_prefix(&checkout).ok())
+                } else {
+                    Some(given)
+                };
+                let Some(path) = relative.and_then(Path::to_str) else {
+                    continue;
+                };
+                let after = repo.checkout_blob(path).map_err(git_error)?;
+                let (before, weak) = if let Some(original) = change.original {
+                    let mode = after.as_ref().map_or("100644", |blob| blob.mode.as_str());
+                    (
+                        Some(
+                            repo.store_file_blob(original.as_bytes(), mode)
+                                .map_err(git_error)?,
+                        ),
+                        false,
+                    )
+                } else if change.kind == FileChangeKind::Add {
+                    (None, false)
+                } else if let Some(before) = change
+                    .diff
+                    .as_deref()
+                    .filter(|diff| !diff.contains(" more bytes]"))
+                    .and_then(|diff| repo.before_patch(path, after.as_ref(), diff).ok())
+                {
+                    (before, false)
+                } else {
+                    (previous.get(path).cloned(), true)
+                };
+                record.own(
+                    path,
+                    before.map(Into::into),
+                    after.clone().map(Into::into),
+                    previous.get(path).cloned().map(Into::into),
+                    "edit",
+                    weak,
+                );
+                if current.get(path) == after.as_ref() {
+                    explained.insert(path.to_owned());
+                }
+            }
+            if let Some((from, tip)) = landing {
+                let before = repo.file_blobs(&from).map_err(git_error)?;
+                let after = repo.file_blobs(&tip).map_err(git_error)?;
+                for path in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
+                    if before.get(path) == after.get(path) {
+                        continue;
+                    }
+                    record.own(
+                        path,
+                        before.get(path).cloned().map(Into::into),
+                        after.get(path).cloned().map(Into::into),
+                        previous.get(path).cloned().map(Into::into),
+                        "landing",
+                        false,
+                    );
+                    if current.get(path) == after.get(path) {
+                        explained.insert(path.to_owned());
+                    }
+                }
+            }
+            if !record.latest.is_empty() {
+                for path in previous
+                    .keys()
+                    .chain(current.keys())
+                    .collect::<BTreeSet<_>>()
+                {
+                    if previous.get(path) == current.get(path) || explained.contains(path) {
+                        continue;
+                    }
+                    // A prior edit or landing can already explain this version.
+                    if record.paths.get(path).is_some_and(|owned| {
+                        owned.last == current.get(path).cloned().map(Into::into)
+                    }) {
+                        continue;
+                    }
+                    if command {
+                        record.own(
+                            path,
+                            previous.get(path).cloned().map(Into::into),
+                            current.get(path).cloned().map(Into::into),
+                            previous.get(path).cloned().map(Into::into),
+                            "command",
+                            false,
+                        );
+                    } else if let Some(owned) = record.paths.get_mut(path) {
+                        owned.held = Some(user_reason(path));
+                    }
+                }
+            }
+            let changed = record.latest != latest.0
+                || record.paths != previous_paths
+                || record.settled != settled
+                || record.commit.is_empty();
+            if let Some(key) = event_key {
+                record.seen.insert(key);
+            }
+            record.latest = latest.0.clone();
+            record.settled = settled;
+            if changed {
+                let (before, after) = record.trees();
+                record.commit = repo
+                    .retain_change_record(
+                        &prefix(&id_owned, &request_owned),
+                        &before,
+                        &after,
+                        &latest,
+                    )
+                    .map_err(git_error)?
+                    .0;
+            }
+            let from = repo
+                .resolve(&format!("{}^", record.commit))
+                .map_err(git_error)?;
+            let stat = repo
+                .diff_stat(&from, &Oid(record.commit.clone()))
+                .map_err(git_error)?;
+            let changes = RequestChanges {
+                stat: super::landing::diff_stat_of(&stat),
+                held: record.held(),
+                settled,
+            };
+            Ok((record, changes, changed, cost))
+        })
+        .await?;
+        clock.slow |= cost > std::time::Duration::from_millis(300);
+        if changed || evidence_seen {
+            self.save_change_record(id, request, &record).await?;
+        }
+        if changed || recovering {
+            self.core.set_request_changes(id, request, changes).await?;
+        }
+        Ok(())
+    }
+
+    /// Old local-checkout requests have landing evidence but no record. Turning that evidence
+    /// into a record keeps their Undo in working files, as every local-checkout restore must.
+    pub(super) async fn record_legacy_local_changes(
+        &self,
+        id: &ConversationId,
+        request: &crate::work::UserRequest,
+        commits: Vec<Oid>,
+    ) -> Result<()> {
+        let Some((checkout, None)) = self.changes_checkout(id) else {
+            return Ok(());
+        };
+        let lock = self.change_records.lock(id);
+        let _guard = lock.lock().await;
+        if self.change_record(id, &request.id).await?.is_some() {
+            return Ok(());
+        }
+        let (git, id_owned, request_owned) = (self.git.clone(), id.clone(), request.id.clone());
+        let reverted = request.undo.as_ref().is_some_and(|undo| undo.reverted);
+        let record = blocking(move || {
+            let repo = git.open(&checkout).map_err(git_error)?;
+            let (from, to) = repo.changes_of(&commits).map_err(git_error)?;
+            let before = repo.file_blobs(&from).map_err(git_error)?;
+            let after = repo.file_blobs(&to).map_err(git_error)?;
+            let mut record = Record {
+                settled: true,
+                latest: repo.snapshot_files().map_err(git_error)?.0,
+                ..Default::default()
+            };
+            for path in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
+                if before.get(path) == after.get(path) {
+                    continue;
+                }
+                record.own(
+                    path,
+                    before.get(path).cloned().map(Into::into),
+                    after.get(path).cloned().map(Into::into),
+                    before.get(path).cloned().map(Into::into),
+                    "landing",
+                    false,
+                );
+            }
+            if reverted {
+                record.restored = record.paths.keys().cloned().collect();
+            }
+            let (before, after) = record.trees();
+            record.commit = repo
+                .retain_change_record(
+                    &prefix(&id_owned, &request_owned),
+                    &before,
+                    &after,
+                    &Oid(record.latest.clone()),
+                )
+                .map_err(git_error)?
+                .0;
+            Ok(record)
+        })
+        .await?;
+        self.save_change_record(id, &request.id, &record).await
+    }
+
+    pub(super) async fn undo_record(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        reapply: bool,
+    ) -> Result<crate::work::UndoOutcome> {
+        let lock = self.change_records.lock(id);
+        let _guard = lock.lock().await;
+        let mut record = self
+            .change_record(id, request_id)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("request changes {request_id}")))?;
+        let board = self.core.board(id).await?;
+        let request = board
+            .requests
+            .get(request_id)
+            .ok_or_else(|| Error::NotFound(format!("request {request_id}")))?;
+        if matches!(request.state, RequestState::Working | RequestState::Waiting) {
+            return Err(Error::Invalid("its work is still going".into()));
+        }
+        let reverted = request.undo.as_ref().is_some_and(|undo| undo.reverted);
+        if reverted != reapply {
+            return Err(Error::Invalid(
+                if reapply {
+                    "its changes are not reverted"
+                } else {
+                    "its changes are already reverted"
+                }
+                .into(),
+            ));
+        }
+        let (checkout, branch) = self
+            .changes_checkout(id)
+            .ok_or_else(|| Error::Invalid("the session's checkout is unavailable".into()))?;
+        let selected: BTreeMap<_, _> = record
+            .paths
+            .iter()
+            .filter(|(path, owned)| {
+                owned.held.is_none()
+                    && owned.first != owned.last
+                    && (!reapply || record.restored.contains(path))
+            })
+            .map(|(path, owned)| {
+                (
+                    path.clone(),
+                    if reapply {
+                        (owned.first.clone(), owned.last.clone())
+                    } else {
+                        (owned.last.clone(), owned.first.clone())
+                    },
+                )
+            })
+            .collect();
+        let verb = if reapply { "Reapply" } else { "Undo" };
+        let message = format!("{verb} \"{}\"", request.preview);
+        let git = self.git.clone();
+        let (restored, commit) = blocking(move || {
+            let repo = git.open(&checkout).map_err(git_error)?;
+            let mut refused = Vec::new();
+            let mut restores = BTreeMap::new();
+            for (path, (expected, target)) in selected {
+                let current = repo
+                    .checkout_blob(&path)
+                    .map_err(git_error)?
+                    .map(Blob::from);
+                if current == expected {
+                    restores.insert(path, target.map(FileBlob::from));
+                } else if current != target {
+                    refused.push(path);
+                }
+            }
+            if !refused.is_empty() {
+                return Err(Error::Invalid(format!(
+                    "Later changes touch the same files ({})",
+                    refused.join(", ")
+                )));
+            }
+            let restored = restores.keys().cloned().collect();
+            let mut commit = None;
+            if let Some(branch) = branch {
+                let head = repo.resolve("HEAD").map_err(git_error)?;
+                let head_files = repo.file_blobs(&head).map_err(git_error)?;
+                let mut committed = BTreeMap::new();
+                for (path, target) in &restores {
+                    let current = repo.checkout_blob(path).map_err(git_error)?;
+                    if current.as_ref() == head_files.get(path) {
+                        committed.insert(path.clone(), target.clone());
+                    }
+                }
+                if !committed.is_empty() {
+                    match repo
+                        .land_file_restore(&branch, &head, &committed, &message)
+                        .map_err(git_error)?
+                    {
+                        brigadier_git::LandOutcome::Landed { new_tip } => {
+                            commit = Some(new_tip.0);
+                        }
+                        brigadier_git::LandOutcome::Blocked(block) => {
+                            return Err(Error::Invalid(block.to_string()));
+                        }
+                    }
+                    restores.retain(|path, _| !committed.contains_key(path));
+                }
+            }
+            repo.restore_file_blobs(&restores).map_err(git_error)?;
+            Ok((restored, commit))
+        })
+        .await?;
+        let outcome = crate::work::UndoOutcome {
+            restored,
+            held: record.held(),
+        };
+        if !reapply {
+            record.restored.clone_from(&outcome.restored);
+        }
+        self.save_change_record(id, request_id, &record).await?;
+        let mut undo = request.undo.clone().unwrap_or(crate::work::RequestUndo {
+            reverted: false,
+            commits: Vec::new(),
+        });
+        undo.reverted = !reapply;
+        if let Some(commit) = commit {
+            undo.commits.push(commit);
+        }
+        self.core.set_request_undo(id, request_id, undo).await?;
+        self.conv(id)?
+            .note(format!(
+                "The user {} request \"{}\". Restored: {}. Left as they are: {}.",
+                if reapply { "reapplied" } else { "undid" },
+                request.preview,
+                if outcome.restored.is_empty() {
+                    "none".to_owned()
+                } else {
+                    outcome.restored.join(", ")
+                },
+                if outcome.held.is_empty() {
+                    "none".to_owned()
+                } else {
+                    outcome
+                        .held
+                        .iter()
+                        .map(|held| held.path.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            ))
+            .await;
+        Ok(outcome)
+    }
+
+    pub(super) async fn changes_event(&self, id: &ConversationId, event: &ProviderEvent) {
+        let request = self.conv(id).ok();
+        let request = match request {
+            Some(conv) => conv.running_request().await,
+            None => None,
+        };
+        self.refresh_changes(id, request.as_deref(), Refresh::Event(event))
+            .await;
+    }
+
+    pub(super) async fn recover_change_records(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        for request in board.requests.values() {
+            let Ok(Some(record)) = self.change_record(id, &request.id).await else {
+                continue;
+            };
+            if !record.settled
+                || request
+                    .changes
+                    .as_ref()
+                    .is_none_or(|changes| !changes.settled)
+            {
+                self.refresh_changes(id, Some(&request.id), Refresh::Recover)
+                    .await;
+            }
+        }
+    }
+
+    pub(super) async fn removed_worktree_changes(&self, checkout: &Path) {
+        let ids: Vec<_> = self
+            .core
+            .catalog()
+            .conversations
+            .into_iter()
+            .filter_map(|conversation| match conversation.setup {
+                Some(Setup::Session {
+                    environment:
+                        Environment::NewWorktree {
+                            path: Some(path), ..
+                        },
+                    ..
+                }) if Path::new(&path) == checkout
+                    || Path::new(&path)
+                        .canonicalize()
+                        .ok()
+                        .zip(checkout.canonicalize().ok())
+                        .is_some_and(|(a, b)| a == b) =>
+                {
+                    Some(conversation.id)
+                }
+                _ => None,
+            })
+            .collect();
+        for id in ids {
+            if let Err(err) = self.delete_change_records(&id).await {
+                tracing::warn!(conversation = %id, error = %err, "could not remove a worktree's request records");
+            }
+        }
+    }
+
+    pub(super) async fn delete_change_records(&self, id: &ConversationId) -> Result<()> {
+        if let Some(Setup::Session { repo, .. }) = self.core.conversation(id)?.setup
+            && Path::new(&repo).exists()
+        {
+            let (git, id) = (self.git.clone(), id.to_string());
+            blocking(move || {
+                git.open(Path::new(&repo))
+                    .and_then(|repo| repo.delete_change_records(&id))
+                    .map_err(git_error)
+            })
+            .await?;
+        }
+        let board = self.core.board(id).await?;
+        self.core
+            .store()
+            .delete_streams(
+                board
+                    .requests
+                    .keys()
+                    .map(|request| stream(id, request))
+                    .collect(),
+            )
+            .await?;
+        Ok(())
+    }
+}

@@ -1,0 +1,847 @@
+//! Request records through the real event loop, store, git and restart, with both provider shapes.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use brigadier_providers::{FileChange, FileChangeKind, ItemStatus, ProviderEvent, ProviderKind};
+
+use super::{Flow, Options, Reply, Script, Turn, git};
+use crate::board::Board;
+use crate::model::Setup;
+use crate::work::{OrchestratorStepKind, ReviewScope};
+
+fn script<F, Fut>(f: F) -> Script
+where
+    F: Fn(Turn) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Reply> + Send + 'static,
+{
+    Arc::new(move |turn| Box::pin(f(turn)))
+}
+
+async fn observed(turn: &Turn, files: usize) -> Board {
+    let id = turn.conversation().unwrap();
+    tokio::time::timeout(super::PATIENCE, async {
+        loop {
+            let board = turn.host.core.board(&id).await.unwrap();
+            if board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.stat.files.len() == files)
+            {
+                return board;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap()
+}
+
+async fn edit(turn: &Turn, path: &Path, item: &str, before: &str, after: &str) {
+    std::fs::write(path, after).unwrap();
+    let diff = format!(
+        "@@ -1,{} +1,{} @@\n{}{}",
+        before.lines().count(),
+        after.lines().count(),
+        before
+            .lines()
+            .map(|line| format!("-{line}\n"))
+            .collect::<String>(),
+        after
+            .lines()
+            .map(|line| format!("+{line}\n"))
+            .collect::<String>()
+    );
+    let mut change = FileChange::counted(
+        path.to_string_lossy().into_owned(),
+        FileChangeKind::Update,
+        Some(&diff),
+        usize::MAX,
+    );
+    if turn.provider == ProviderKind::Claude {
+        change.original = Some(before.into());
+    }
+    turn.emit(ProviderEvent::FileChanges {
+        item_id: item.into(),
+        changes: vec![change],
+        status: ItemStatus::Completed,
+    })
+    .await;
+}
+
+async fn local(flow: &mut Flow) {
+    let conversation = flow.core.conversation(&flow.conversation).unwrap();
+    let Setup::Session {
+        repo,
+        permission,
+        orchestrator,
+        plan_mode,
+        ..
+    } = conversation.setup.unwrap()
+    else {
+        unreachable!()
+    };
+    flow.conversation = flow
+        .manager
+        .create_conversation(
+            crate::model::ConversationKind::Session,
+            conversation.project_id,
+            Some("Local changes".into()),
+            Some(crate::model::SetupRequest::Session {
+                repo,
+                permission,
+                orchestrator,
+                plan_mode,
+                environment: crate::model::EnvironmentRequest::LocalCheckout {
+                    branch: "main".into(),
+                    create_from: None,
+                },
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+}
+
+fn options(provider: ProviderKind) -> Options {
+    Options {
+        thread: provider,
+        files: vec![
+            ("a.txt", "base\n"),
+            ("b.txt", "base\n"),
+            ("other.txt", "base\n"),
+        ],
+        ..Default::default()
+    }
+}
+
+/// The live pill, pre-request saves, command ownership, whole output, direct diffs, restart,
+/// private retention and a later-save refusal all exercise the same request in each provider.
+#[tokio::test]
+async fn request_changes_local_edits_commands_restart_and_undo_preserve_user_files_and_index() {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let mut flow = Flow::start(
+            "20261015-0226-rebuild-wow-w69-record-local",
+            options(provider),
+            script(move |turn| async move {
+                let id = turn.conversation().unwrap();
+                let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+                edit(
+                    &turn,
+                    &workspace.join("a.txt"),
+                    "edit-a",
+                    "user before\n",
+                    "user before\nthread a\n",
+                )
+                .await;
+                let board = observed(&turn, 1).await;
+                let request = board.latest_request().unwrap();
+                assert_eq!(request.changes.as_ref().unwrap().stat.insertions, 1);
+                assert_eq!(request.changes.as_ref().unwrap().stat.deletions, 0);
+                let refused = turn
+                    .host
+                    .undo_request(id.clone(), request.id.clone(), false)
+                    .await
+                    .unwrap_err();
+                assert!(refused.to_string().contains("its work is still going"));
+                edit(
+                    &turn,
+                    &workspace.join("b.txt"),
+                    "edit-b",
+                    "base\n",
+                    "base\nthread b\n",
+                )
+                .await;
+                observed(&turn, 2).await;
+                std::fs::write(workspace.join("command.txt"), "command wrote this\n").unwrap();
+                let output = "command output\n".repeat(1000);
+                if provider == ProviderKind::Codex {
+                    turn.emit(ProviderEvent::CommandOutputDelta {
+                        item_id: "command".into(),
+                        text: output.clone(),
+                    })
+                    .await;
+                }
+                turn.emit(ProviderEvent::Command {
+                    item_id: "command".into(),
+                    command: "print and write".into(),
+                    cwd: None,
+                    status: ItemStatus::Completed,
+                    exit_code: Some(0),
+                    output: Some(if provider == ProviderKind::Codex {
+                        output[..8192].to_owned()
+                    } else {
+                        output
+                    }),
+                    duration_ms: None,
+                })
+                .await;
+                observed(&turn, 3).await;
+                Reply::text("Changed the two files.")
+            }),
+        )
+        .await;
+        local(&mut flow).await;
+        std::fs::write(flow.repo.join("a.txt"), "user before\n").unwrap();
+        std::fs::write(flow.repo.join("other.txt"), "unrelated user save\n").unwrap();
+        git(&flow.repo, &["add", "a.txt"]);
+        let index_path = flow.repo.join(".git/index");
+        let index = std::fs::read(&index_path).unwrap();
+        let head = git(&flow.repo, &["rev-parse", "HEAD"]);
+        let branches = git(&flow.repo, &["branch"]);
+        let log = git(&flow.repo, &["log", "--oneline"]);
+        flow.say("Edit a and b, and print.").await;
+        let board = flow
+            .until("settled changes", |board| {
+                board
+                    .latest_request()
+                    .and_then(|r| r.changes.as_ref())
+                    .is_some_and(|c| c.settled)
+            })
+            .await;
+        let request = board.latest_request().unwrap().id.clone();
+        let changes = board.latest_request().unwrap().changes.as_ref().unwrap();
+        assert_eq!(changes.stat.files.len(), 3);
+        assert_eq!(changes.held.len(), 1);
+        assert!(
+            changes.held[0]
+                .reason
+                .starts_with("A command changed command.txt")
+        );
+        let items = flow
+            .manager
+            .thread_items(&flow.conversation, &request, None, None, 100)
+            .await
+            .unwrap();
+        assert!(items.entries.iter().any(|entry| matches!(&entry.event, ProviderEvent::Command { output: Some(output), .. } if output == &"command output\n".repeat(1000))));
+        let scope = ReviewScope::LastTurn {
+            request_id: Some(request.clone()),
+        };
+        let diff = flow
+            .manager
+            .review_diff(&flow.conversation, scope.clone(), false, false)
+            .await
+            .unwrap();
+        let record_ref = format!(
+            "refs/brigadier/changes/{}/{request}/record",
+            flow.conversation
+        );
+        let actual_patch = git(
+            &flow.repo,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--find-renames",
+                "--unified=3",
+                &format!("{record_ref}^"),
+                &record_ref,
+                "--",
+            ],
+        );
+        assert_eq!(diff.patch.trim(), actual_patch);
+        assert_eq!(
+            flow.manager
+                .review_diff(
+                    &flow.conversation,
+                    ReviewScope::LastTurn { request_id: None },
+                    false,
+                    false
+                )
+                .await
+                .unwrap()
+                .patch,
+            diff.patch
+        );
+        assert_eq!(diff.files.len(), 3);
+        assert!(diff.patch.contains("+thread a"));
+        assert!(!diff.patch.contains("-base\n+user before"));
+        assert!(!diff.patch.contains("other.txt"));
+        assert_eq!(git(&flow.repo, &["branch"]), branches);
+        assert_eq!(git(&flow.repo, &["log", "--oneline"]), log);
+        git(&flow.repo, &["gc", "--prune=now"]);
+        flow.restart().await;
+        assert_eq!(
+            flow.manager
+                .review_diff(&flow.conversation, scope, false, false)
+                .await
+                .unwrap()
+                .patch,
+            diff.patch
+        );
+        let outcome = flow
+            .manager
+            .undo_request(flow.conversation.clone(), request.clone(), false)
+            .await
+            .unwrap();
+        assert_eq!(outcome.restored, ["a.txt", "b.txt"]);
+        assert_eq!(outcome.held.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(flow.repo.join("a.txt")).unwrap(),
+            "user before\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(flow.repo.join("other.txt")).unwrap(),
+            "unrelated user save\n"
+        );
+        assert!(
+            flow.board().await.requests[&request]
+                .undo
+                .as_ref()
+                .unwrap()
+                .reverted
+        );
+        let outcome = flow
+            .manager
+            .undo_request(flow.conversation.clone(), request.clone(), true)
+            .await
+            .unwrap();
+        assert_eq!(outcome.restored, ["a.txt", "b.txt"]);
+        assert!(
+            !flow.board().await.requests[&request]
+                .undo
+                .as_ref()
+                .unwrap()
+                .reverted
+        );
+        assert_eq!(
+            std::fs::read_to_string(flow.repo.join("a.txt")).unwrap(),
+            "user before\nthread a\n"
+        );
+        assert_eq!(git(&flow.repo, &["rev-parse", "HEAD"]), head);
+        assert_eq!(std::fs::read(&index_path).unwrap(), index);
+        std::fs::write(flow.repo.join("a.txt"), "later save\n").unwrap();
+        let err = flow
+            .manager
+            .undo_request(flow.conversation.clone(), request.clone(), false)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Later changes touch the same files (a.txt)")
+        );
+        assert_eq!(
+            std::fs::read_to_string(flow.repo.join("b.txt")).unwrap(),
+            "base\nthread b\n"
+        );
+        let refs = git(
+            &flow.repo,
+            &[
+                "for-each-ref",
+                "--format=%(refname)",
+                "refs/brigadier/changes/",
+            ],
+        );
+        assert!(refs.contains("/record") && refs.contains("/latest"));
+        flow.manager
+            .delete_conversation(flow.conversation.clone(), false, false)
+            .await
+            .unwrap();
+        assert!(
+            git(
+                &flow.repo,
+                &[
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    "refs/brigadier/changes/"
+                ]
+            )
+            .is_empty()
+        );
+        flow.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn request_changes_mid_request_saves_are_held_or_unowned() {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let flow = Flow::start(
+            "20261015-0226-rebuild-wow-w69-record-held",
+            options(provider),
+            script(|turn| async move {
+                let id = turn.conversation().unwrap();
+                let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+                edit(
+                    &turn,
+                    &workspace.join("a.txt"),
+                    "first",
+                    "base\n",
+                    "base\nthread\n",
+                )
+                .await;
+                observed(&turn, 1).await;
+                std::fs::write(workspace.join("other.txt"), "user unrelated\n").unwrap();
+                std::fs::write(workspace.join("a.txt"), "user and thread\n").unwrap();
+                edit(
+                    &turn,
+                    &workspace.join("a.txt"),
+                    "second",
+                    "user and thread\n",
+                    "user and thread\nthread again\n",
+                )
+                .await;
+                tokio::time::timeout(super::PATIENCE, async {
+                    loop {
+                        let board = turn.host.core.board(&id).await.unwrap();
+                        if board
+                            .latest_request()
+                            .and_then(|r| r.changes.as_ref())
+                            .is_some_and(|c| !c.held.is_empty())
+                        {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                edit(
+                    &turn,
+                    &workspace.join("b.txt"),
+                    "third",
+                    "base\n",
+                    "thread b\n",
+                )
+                .await;
+                observed(&turn, 2).await;
+                Reply::text("Finished.")
+            }),
+        )
+        .await;
+        flow.say("Edit files.").await;
+        let board = flow
+            .until("settled held record", |b| {
+                b.latest_request()
+                    .and_then(|r| r.changes.as_ref())
+                    .is_some_and(|c| c.settled)
+            })
+            .await;
+        let request = board.latest_request().unwrap();
+        assert_eq!(request.changes.as_ref().unwrap().stat.files.len(), 2);
+        let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+        let outcome = flow
+            .manager
+            .undo_request(flow.conversation.clone(), request.id.clone(), false)
+            .await
+            .unwrap();
+        assert_eq!(outcome.restored, ["b.txt"]);
+        assert_eq!(
+            outcome.held[0].reason,
+            "You changed a.txt during this request too, so Undo leaves it as it is."
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+            "user and thread\nthread again\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("other.txt")).unwrap(),
+            "user unrelated\n"
+        );
+        flow.manager
+            .undo_request(flow.conversation.clone(), request.id.clone(), true)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("b.txt")).unwrap(),
+            "thread b\n"
+        );
+        flow.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn request_changes_worktree_commits_and_late_worker_landing_round_trip() {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let mut flow = Flow::start("20261015-0226-rebuild-wow-w69-record-landing", options(provider), script(|turn| async move {
+            if !turn.is_orchestrator() {
+                turn.write("worker.txt", "worker landed\n");
+                let reply = turn.call("submit_report", serde_json::json!({"summary": "Added worker.txt", "changes": ["worker.txt"]})).await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Reported.");
+            }
+            if turn.input.contains("[report task-1") {
+                let reply = turn.call("land_phase", serde_json::json!({"task": "task-1"})).await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Both edits and worker are in.");
+            }
+            if turn.earlier > 0 { return Reply::text("Finished."); }
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            edit(&turn, &workspace.join("a.txt"), "edit-a", "base\n", "thread a\n").await;
+            observed(&turn, 1).await;
+            edit(&turn, &workspace.join("b.txt"), "edit-b", "base\n", "thread b\n").await;
+            observed(&turn, 2).await;
+            git(&workspace, &["add", "a.txt", "b.txt"]);
+            git(&workspace, &["commit", "-q", "-m", "Thread edits"]);
+            turn.emit(ProviderEvent::Command { item_id: "last-command".into(), command: "commit edits".into(), cwd: None, status: ItemStatus::Completed, exit_code: Some(0), output: Some("done".into()), duration_ms: None }).await;
+            let reply = turn.call("delegate_task", serde_json::json!({"effort": "high", "title": "Add worker file", "kind": "implement", "spec": "Create worker.txt.", "provider": "codex"})).await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("[quiet]")
+        })).await;
+        flow.say("Edit a and b and start a worker.").await;
+        let board = flow
+            .until("late landing and settled record", |b| {
+                b.tasks.values().any(|t| t.landed.is_some())
+                    && b.latest_request()
+                        .and_then(|r| r.changes.as_ref())
+                        .is_some_and(|c| c.settled)
+            })
+            .await;
+        let request = board.latest_request().unwrap();
+        assert_eq!(request.changes.as_ref().unwrap().stat.files.len(), 3);
+        assert!(
+            request.changes.as_ref().unwrap().held.is_empty(),
+            "{:?}",
+            request.changes
+        );
+        let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+        git(&workspace, &["gc", "--prune=now"]);
+        flow.restart().await;
+        let before = git(&workspace, &["rev-parse", "HEAD"]);
+        let outcome = flow
+            .manager
+            .undo_request(flow.conversation.clone(), request.id.clone(), false)
+            .await
+            .unwrap();
+        assert_eq!(outcome.restored, ["a.txt", "b.txt", "worker.txt"]);
+        assert_ne!(git(&workspace, &["rev-parse", "HEAD"]), before);
+        assert!(git(&workspace, &["log", "-1", "--format=%s"]).starts_with("Undo \""));
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+            "base\n"
+        );
+        assert!(!workspace.join("worker.txt").exists());
+        flow.manager
+            .undo_request(flow.conversation.clone(), request.id.clone(), true)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("worker.txt")).unwrap(),
+            "worker landed\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("b.txt")).unwrap(),
+            "thread b\n"
+        );
+        assert!(git(&workspace, &["status", "--porcelain"]).is_empty());
+        flow.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn request_changes_generated_and_viewed_images_are_conversation_scoped_and_retained() {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let flow = Flow::start(
+            "20261015-0226-rebuild-wow-w69-images",
+            options(provider),
+            script(|turn| async move {
+                let generated = turn.cwd.join("generated.png");
+                let viewed = turn.cwd.join("viewed.png");
+                std::fs::write(&generated, b"generated image").unwrap();
+                std::fs::write(&viewed, b"viewed image").unwrap();
+                turn.emit(ProviderEvent::Image {
+                    item_id: "generated".into(),
+                    status: ItemStatus::Completed,
+                    path: Some(generated.display().to_string()),
+                    prompt: Some("A picture".into()),
+                })
+                .await;
+                let (name, input) = if turn.provider == ProviderKind::Claude {
+                    (
+                        "Read",
+                        serde_json::json!({"file_path": viewed.display().to_string()}).to_string(),
+                    )
+                } else {
+                    (
+                        "view_image",
+                        serde_json::json!({"path": viewed.display().to_string()}).to_string(),
+                    )
+                };
+                turn.emit(ProviderEvent::ToolCall {
+                    item_id: "viewed".into(),
+                    name: name.into(),
+                    input: Some(input),
+                    status: ItemStatus::Completed,
+                    output: None,
+                })
+                .await;
+                let oversized = turn.cwd.join("oversized.png");
+                std::fs::File::create(&oversized)
+                    .unwrap()
+                    .set_len(20 * 1024 * 1024 + 1)
+                    .unwrap();
+                turn.emit(ProviderEvent::ToolCall {
+                    item_id: "oversized".into(),
+                    name: "view_image".into(),
+                    input: Some(oversized.display().to_string()),
+                    status: ItemStatus::Completed,
+                    output: None,
+                })
+                .await;
+                Reply::text("Images ready.")
+            }),
+        )
+        .await;
+        flow.say("Make and view images.").await;
+        let board = flow
+            .until("images settled", |b| {
+                b.latest_request()
+                    .and_then(|r| r.changes.as_ref())
+                    .is_some_and(|c| c.settled)
+            })
+            .await;
+        let request = board.latest_request().unwrap();
+        let items = flow
+            .manager
+            .thread_items(&flow.conversation, &request.id, None, None, 100)
+            .await
+            .unwrap();
+        let generated = items
+            .entries
+            .iter()
+            .find_map(|entry| match &entry.event {
+                ProviderEvent::Image { path, .. } => path.clone(),
+                _ => None,
+            })
+            .unwrap();
+        assert!(generated.contains("thread-images/"));
+        assert!(board.orchestrator_steps.iter().any(|step| step.request_id.as_deref() == Some(&request.id) && matches!(&step.kind, OrchestratorStepKind::Tool { name, detail, turn: Some(_), .. } if name == "imagegen" && detail.as_deref() == Some("A picture"))));
+        let scratch = flow.manager.owned_dir("orch", &flow.conversation.0);
+        std::fs::remove_file(scratch.join("generated.png")).unwrap();
+        let (data, mime) = flow
+            .manager
+            .read_thread_image(&flow.conversation, "generated")
+            .await
+            .unwrap();
+        assert_eq!(data, brigadier_providers::image_base64(b"generated image"));
+        assert_eq!(mime, "image/png");
+        let (data, _) = flow
+            .manager
+            .read_thread_image(&flow.conversation, "viewed")
+            .await
+            .unwrap();
+        assert_eq!(data, brigadier_providers::image_base64(b"viewed image"));
+        std::fs::remove_file(scratch.join("viewed.png")).unwrap();
+        assert!(
+            flow.manager
+                .read_thread_image(&flow.conversation, "viewed")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("This image is no longer there")
+        );
+        assert!(
+            flow.manager
+                .read_thread_image(&flow.conversation, "oversized")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("over 20 MB")
+        );
+        assert!(
+            flow.manager
+                .read_thread_image(&flow.conversation, "unknown")
+                .await
+                .is_err()
+        );
+        let peer = flow.add_session("Other", None, provider).await;
+        assert!(
+            flow.manager
+                .read_thread_image(&peer, "generated")
+                .await
+                .is_err()
+        );
+        flow.manager
+            .delete_conversation(flow.conversation.clone(), false, false)
+            .await
+            .unwrap();
+        assert!(!Path::new(&generated).exists());
+        flow.stop().await;
+    }
+}
+
+/// Recovery may see the request's terminal state before its final file refresh was recorded.
+#[tokio::test]
+async fn request_changes_recovery_finalizes_an_unsettled_record_without_owning_user_saves() {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let mut flow = Flow::start(
+            "20261015-0226-rebuild-wow-w69-recovery",
+            options(provider),
+            script(|turn| async move {
+                let (workspace, _) = turn
+                    .host
+                    .changes_checkout(&turn.conversation().unwrap())
+                    .unwrap();
+                edit(
+                    &turn,
+                    &workspace.join("a.txt"),
+                    "edit",
+                    "base\n",
+                    "thread\n",
+                )
+                .await;
+                observed(&turn, 1).await;
+                Reply::text("Finished.")
+            }),
+        )
+        .await;
+        local(&mut flow).await;
+        flow.say("Edit a.").await;
+        let board = flow
+            .until("final record", |b| {
+                b.latest_request()
+                    .and_then(|r| r.changes.as_ref())
+                    .is_some_and(|c| c.settled)
+            })
+            .await;
+        let mut request = board.latest_request().unwrap().clone();
+        let mut unpublished = request.clone();
+        unpublished.changes = None;
+        flow.core
+            .record_conversation(
+                &flow.conversation,
+                vec![crate::model::DomainEvent::RequestUpdated {
+                    request: unpublished,
+                }],
+            )
+            .await
+            .unwrap();
+        flow.restart().await;
+        assert!(
+            flow.board().await.requests[&request.id]
+                .changes
+                .as_ref()
+                .unwrap()
+                .settled
+        );
+
+        request.changes.as_mut().unwrap().settled = false;
+        let stream = format!("changes:{}:{}", flow.conversation, request.id);
+        let events = flow
+            .core
+            .store()
+            .read_stream(
+                stream.clone(),
+                brigadier_store::StreamPage {
+                    limit: 1,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let mut record: serde_json::Value = serde_json::from_str(events[0].payload.get()).unwrap();
+        record["settled"] = serde_json::json!(false);
+        flow.core
+            .store()
+            .append(vec![
+                brigadier_store::NewEvent::new(
+                    stream,
+                    "request.change_record",
+                    crate::now_ms(),
+                    &record,
+                )
+                .unwrap(),
+            ])
+            .await
+            .unwrap();
+        flow.core
+            .record_conversation(
+                &flow.conversation,
+                vec![crate::model::DomainEvent::RequestUpdated {
+                    request: request.clone(),
+                }],
+            )
+            .await
+            .unwrap();
+        std::fs::write(flow.repo.join("a.txt"), "user saved after edit\n").unwrap();
+        std::fs::write(flow.repo.join("other.txt"), "another user save\n").unwrap();
+        flow.restart().await;
+        let board = flow.board().await;
+        let changes = board.requests[&request.id].changes.as_ref().unwrap();
+        assert!(changes.settled);
+        assert_eq!(changes.stat.files.len(), 1);
+        assert_eq!(changes.held[0].path, "a.txt");
+        let outcome = flow
+            .manager
+            .undo_request(flow.conversation.clone(), request.id, false)
+            .await
+            .unwrap();
+        assert!(outcome.restored.is_empty());
+        assert_eq!(outcome.held.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(flow.repo.join("a.txt")).unwrap(),
+            "user saved after edit\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(flow.repo.join("other.txt")).unwrap(),
+            "another user save\n"
+        );
+        flow.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn request_changes_background_runs_keep_the_starting_item_and_return_the_final_tail() {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let proceed = release.clone();
+        let flow = Flow::start("20261015-0226-rebuild-wow-w69-background", options(provider), script(move |turn| {
+            let release = proceed.clone();
+            async move {
+                if turn.earlier > 0 { return Reply::text("The background run finished."); }
+                let id = turn.conversation().unwrap();
+                turn.emit(ProviderEvent::ToolCall { item_id: "background-call".into(), name: "mcp__brigadier__run".into(), input: Some("{\"command\":\"controlled output\"}".into()), status: ItemStatus::InProgress, output: None }).await;
+                tokio::time::timeout(super::PATIENCE, async {
+                    loop {
+                        let board = turn.host.core.board(&id).await.unwrap();
+                        if board.orchestrator_steps.iter().any(|step| matches!(&step.kind, OrchestratorStepKind::Tool { item_id, .. } if item_id == "background-call")) { break; }
+                        tokio::task::yield_now().await;
+                    }
+                }).await.unwrap();
+                let reply = turn.host.in_foreground(&id, "run", "controlled output", tokio_util::sync::CancellationToken::new(), tokio_util::sync::CancellationToken::new(), async move {
+                    release.notified().await;
+                    Ok(("exit 0".into(), "é".repeat(160_000)))
+                }).await.unwrap();
+                turn.emit(ProviderEvent::ToolCall { item_id: "background-call".into(), name: "mcp__brigadier__run".into(), input: None, status: ItemStatus::Completed, output: Some(reply) }).await;
+                Reply::text("[quiet]")
+            }
+        })).await;
+        flow.say("Run the controlled background command.").await;
+        flow.until("background item", |b| {
+            b.background_runs
+                .get("run-1")
+                .is_some_and(|r| r.item_id.as_deref() == Some("background-call"))
+        })
+        .await;
+        assert_eq!(
+            flow.manager
+                .read_background_run(&flow.conversation, "run-1")
+                .await
+                .unwrap(),
+            (String::new(), 0)
+        );
+        assert!(
+            flow.manager
+                .read_background_run(&flow.conversation, "missing")
+                .await
+                .is_err()
+        );
+        release.notify_one();
+        flow.until("background finished", |b| {
+            b.background_runs.get("run-1").is_some_and(|r| {
+                matches!(r.state, crate::work::BackgroundRunState::Finished { .. })
+            })
+        })
+        .await;
+        let (output, bytes) = flow
+            .manager
+            .read_background_run(&flow.conversation, "run-1")
+            .await
+            .unwrap();
+        assert_eq!(bytes, 320_000);
+        assert!(output.len() <= 256 * 1024);
+        assert_eq!(output, "é".repeat(128 * 1024));
+        flow.stop().await;
+    }
+}

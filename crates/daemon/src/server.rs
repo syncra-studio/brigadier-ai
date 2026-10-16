@@ -1724,14 +1724,25 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             request_id,
             reapply,
         } => {
-            heap(|| sessions.undo_request(conversation_id, request_id, reapply)).await?;
-            Response::UndoChanges {
-                outcome: brigadier_core::UndoOutcome::default(),
-            }
+            let outcome =
+                heap(|| sessions.undo_request(conversation_id, request_id, reapply)).await?;
+            Response::UndoChanges { outcome }
         }
-        // Built in phase T2 (the thread's images and background runs); refused until then.
-        Request::ReadThreadImage { .. } | Request::ReadBackgroundRun { .. } => {
-            return Err(brigadier_core::Error::Invalid("not available yet".into()).into());
+        Request::ReadThreadImage {
+            conversation_id,
+            item_id,
+        } => {
+            let (data, mime) =
+                heap(|| sessions.read_thread_image(&conversation_id, &item_id)).await?;
+            Response::ReadThreadImage { data, mime }
+        }
+        Request::ReadBackgroundRun {
+            conversation_id,
+            run_id,
+        } => {
+            let (output, bytes) =
+                heap(|| sessions.read_background_run(&conversation_id, &run_id)).await?;
+            Response::ReadBackgroundRun { output, bytes }
         }
         Request::GetGitState { conversation_id } => Response::GetGitState {
             state: heap(|| sessions.git_state(&conversation_id)).await?,

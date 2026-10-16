@@ -846,6 +846,12 @@ impl SessionManager {
     }
 
     async fn landed(&self, task: &Task, target: &str, from: &Oid, new_tip: &Oid, commits: u32) {
+        self.refresh_changes(
+            &task.conversation_id,
+            task.request_id.as_deref(),
+            super::request_changes::Refresh::Landing { from, tip: new_tip },
+        )
+        .await;
         // Counted before the task is final, until its review is stored: a held merge waits.
         let review_due = self.conv(&task.conversation_id).ok().map(ReviewDue::new);
         // The thread's own commits below the landing get their review; the landing has its own.

@@ -77,6 +77,7 @@ mod quiet;
 pub(crate) mod reads;
 mod rebirth;
 mod refcheck;
+mod request_changes;
 mod requests;
 mod research;
 mod review;
@@ -91,6 +92,7 @@ mod sidecars;
 mod status;
 mod takeover;
 mod thread;
+mod thread_images;
 mod thread_items;
 mod thread_metrics;
 mod thread_scratch;
@@ -172,6 +174,7 @@ pub struct SessionManager {
     /// Held while the thread's new commits are looked for and their tip recorded
     /// ([`thread`]), so a range is taken once.
     thread_scans: tokio::sync::Mutex<()>,
+    change_records: request_changes::ChangeRecords,
     /// Where each session's thread's newest `run_check` stands: a review of its own changes
     /// starts only on files a check passed on, never while one runs or on files one failed
     /// on ([`unreviewed::ThreadCheck`], BUILD-PLAN C10).
@@ -350,6 +353,7 @@ impl SessionManager {
             plans: tokio::sync::Mutex::new(()),
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
+            change_records: request_changes::ChangeRecords::default(),
             thread_checks: std::sync::Mutex::new(HashMap::new()),
             known_windows: std::sync::Mutex::new(HashMap::new()),
             run_passes: run::RunPasses::default(),

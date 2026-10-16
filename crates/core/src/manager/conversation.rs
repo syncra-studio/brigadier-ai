@@ -2683,6 +2683,12 @@ impl SessionManager {
             crate::heap(|| self.scan_thread_commits(&conv.id, false)).await;
             // On a local checkout, where the request's changes start (BUILD-PLAN B2).
             crate::heap(|| self.note_request_start(&conv.id, request.as_deref())).await;
+            self.refresh_changes(
+                &conv.id,
+                request.as_deref(),
+                super::request_changes::Refresh::Start,
+            )
+            .await;
         }
         let (reseed, briefing) = {
             let mut state = conv.state.lock().await;
@@ -4324,6 +4330,7 @@ impl SessionManager {
         cli: &Arc<Cli>,
         event: ProviderEvent,
     ) {
+        let event = self.retain_thread_image(&conv.id, event).await;
         // A tool call's row points at its log entry, and a turn's start keys the calls that
         // follow: both are logged before they are handled.
         let logged = if super::thread_items::logged_first(&event) {
@@ -4339,6 +4346,8 @@ impl SessionManager {
             conv.items().turn_started(log_seq);
         }
         let turn = conv.items().turn();
+        self.image_row(&conv.id, &event, log_seq, turn).await;
+        self.background_item(&conv.id, &event).await;
         match &event {
             ProviderEvent::Reasoning { item_id, text } => {
                 let request_id = conv.state.lock().await.request.clone();
@@ -4848,6 +4857,7 @@ impl SessionManager {
             }
             _ => {}
         }
+        self.changes_event(&conv.id, &event).await;
         let completed = match &event {
             ProviderEvent::TurnCompleted { status, .. } => Some(*status),
             _ => None,

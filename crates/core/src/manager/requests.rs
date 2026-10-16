@@ -314,6 +314,12 @@ impl SessionManager {
                 tracing::debug!(conversation = %conversation_id, error = %err, "could not update a request");
             }
             if over {
+                self.refresh_changes(
+                    conversation_id,
+                    Some(id),
+                    super::request_changes::Refresh::Settle,
+                )
+                .await;
                 self.release_narration(&conv, id, done).await;
             }
         }

@@ -45,10 +45,15 @@ impl SessionManager {
     /// Lets the cleanup ledger remove the worktrees it records.
     pub(super) fn install_worktree_remover(&self) {
         let git = self.git.clone();
+        let manager = self.me.clone();
         self.runtime.ledger().set_worktree_remover(Arc::new(
             move |repo: PathBuf, path: PathBuf| {
                 let git = git.clone();
+                let manager = manager.clone();
                 Box::pin(async move {
+                    if let Some(manager) = manager.upgrade() {
+                        manager.removed_worktree_changes(&path).await;
+                    }
                     tokio::task::spawn_blocking(move || {
                         match git.open(&repo) {
                             Ok(repo) => {
@@ -126,6 +131,7 @@ impl SessionManager {
             }
             // Its thread's background runs the restart cut off are told as such.
             self.recover_background_runs(&conversation.id).await;
+            self.recover_change_records(&conversation.id).await;
             let Ok(tasks) = self.core.tasks(&conversation.id).await else {
                 continue;
             };
@@ -1303,6 +1309,9 @@ impl SessionManager {
         self.forget_routing(&id, &tasks).await;
         let store = self.core.store().clone();
         // Its own blobs go now, not a day later; then the usual collection of older leftovers.
+        self.delete_change_records(&id).await?;
+        self.delete_thread_images(&id).await?;
+        self.delete_background_output(&id).await?;
         let (removed, own) = store.delete_streams_and_blobs(purge).await?;
         self.core.forget_conversation(id.clone()).await?;
         self.convs_lock().remove(&id);

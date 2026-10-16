@@ -29,7 +29,16 @@ impl SessionManager {
         conversation_id: ConversationId,
         request_id: String,
         reapply: bool,
-    ) -> Result<()> {
+    ) -> Result<crate::work::UndoOutcome> {
+        if self
+            .change_record(&conversation_id, &request_id)
+            .await?
+            .is_some()
+        {
+            return self
+                .undo_record(&conversation_id, &request_id, reapply)
+                .await;
+        }
         let conversation = self.core.conversation(&conversation_id)?;
         if conversation.kind != ConversationKind::Session {
             return Err(refused("only a session's workers land changes"));
@@ -58,6 +67,24 @@ impl SessionManager {
         let first = landed
             .first()
             .ok_or_else(|| refused("its workers landed no changes"))?;
+        if self.local_checkout(&conversation_id).is_some() {
+            self.record_legacy_local_changes(
+                &conversation_id,
+                &request,
+                landed
+                    .iter()
+                    .filter_map(|task| {
+                        task.candidate
+                            .as_ref()
+                            .map(|candidate| Oid(candidate.commit.clone()))
+                    })
+                    .collect(),
+            )
+            .await?;
+            return self
+                .undo_record(&conversation_id, &request_id, reapply)
+                .await;
+        }
         let reverted = request.undo.as_ref().is_some_and(|undo| undo.reverted);
         if reverted != reapply {
             return Err(refused(if reapply {
@@ -87,6 +114,21 @@ impl SessionManager {
             request.preview,
             verb.to_lowercase()
         );
+        let restored = {
+            let (git, repo, commits) = (self.git.clone(), repo.clone(), commits.clone());
+            blocking(move || {
+                let repo = git.open(&repo).map_err(git_error)?;
+                let (from, to) = repo.changes_of(&commits).map_err(git_error)?;
+                Ok(repo
+                    .diff_stat(&from, &to)
+                    .map_err(git_error)?
+                    .files
+                    .into_iter()
+                    .map(|file| file.path)
+                    .collect())
+            })
+            .await?
+        };
         let mut outcome = None;
         for _ in 0..UNDO_ATTEMPTS {
             let (git, repo, target, commits, message) = (
@@ -160,6 +202,9 @@ impl SessionManager {
             )
         };
         self.conv(&conversation_id)?.note(note).await;
-        Ok(())
+        Ok(crate::work::UndoOutcome {
+            restored,
+            held: Vec::new(),
+        })
     }
 }

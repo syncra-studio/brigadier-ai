@@ -1606,6 +1606,36 @@ impl Core {
         Ok(())
     }
 
+    /// Publishes the request's file totals without replacing its concurrently updated state.
+    pub(crate) async fn set_request_changes(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        changes: crate::work::RequestChanges,
+    ) -> Result<()> {
+        let mut boards = self.boards.lock().await;
+        if !boards.contains_key(id) {
+            boards.insert(id.clone(), self.load_board(id).await?);
+        }
+        let mut request = boards
+            .get(id)
+            .and_then(|board| board.requests.get(request_id))
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("request {request_id}")))?;
+        if request.changes.as_ref() == Some(&changes) {
+            return Ok(());
+        }
+        request.changes = Some(changes);
+        let event = DomainEvent::RequestUpdated { request };
+        let stored = self
+            .record(vec![(streams::conversation(id), event.clone())])
+            .await?;
+        if let Some(board) = boards.get_mut(id) {
+            board.apply(&event, stored[0]);
+        }
+        Ok(())
+    }
+
     /// Records the user's Undo or Reapply of what a request's workers landed.
     pub(crate) async fn set_request_undo(
         &self,
