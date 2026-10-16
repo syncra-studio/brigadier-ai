@@ -2,8 +2,8 @@
  * File links in an answer whose files are gone (BUILD-PLAN A1): a link into a worker's removed
  * scratch folder opens the copy Brigadier stored, and both dead links say "This file is no
  * longer here", the stored one with its Save. A chip in a message passes when the message was
- * written, so an `outputs/` link opens the task of its time. Driven with real clicks; IPC is
- * mocked, no daemon.
+ * written, so an `outputs/` link opens the task of its time. In a table's narrow column, a
+ * chip's icon stays on its name's line. Driven with real clicks; IPC is mocked, no daemon.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -51,6 +51,17 @@ createRoot(document.getElementById("root")!).render(
             </p>
           </LinkTimeContext.Provider>
         ))}
+        {/* A table's first column, narrower than the file's name (as an answer's table squeezes it). */}
+        <table className="aui-md-table w-full border-collapse text-sm">
+          <tbody>
+            <tr>
+              <td data-fixture="cell" className="aui-md-td w-16 px-3 py-2 align-top">
+                <FileChip href="/repo/test/invoice.test.ts">test/invoice.test.ts</FileChip>
+              </td>
+              <td className="aui-md-td px-3 py-2 align-top">Expected values updated for half-even rounding.</td>
+            </tr>
+          </tbody>
+        </table>
       </main>
     </LinkConversationContext.Provider>
   </TooltipProvider>,
@@ -70,6 +81,13 @@ const notice = (id: string) => row(id).querySelector("[data-slot=file-chip-gone]
 const seen: Record<string, unknown> = {};
 try {
   await until("the chips", () => Object.keys(links).every((id) => row(id)?.querySelector("[data-slot=file-chip]")));
+  // The icon and the name's first line share a line: their middles within a few pixels.
+  const cell = row("cell").querySelector("[data-slot=file-chip]")!;
+  const icon = cell.querySelector("svg")!.getBoundingClientRect();
+  const name = document.createRange();
+  name.selectNodeContents([...cell.childNodes].find((node) => node.nodeType === Node.TEXT_NODE)!);
+  const first = name.getClientRects()[0]!;
+  seen.cellIconOnNameLine = Math.abs(icon.top + icon.height / 2 - (first.top + first.height / 2)) < 4;
   seen.before = Object.fromEntries(Object.keys(links).map((id) => [id, notice(id)]));
   for (const id of Object.keys(links)) {
     await fixtureClick(row(id).querySelector("[data-slot=file-chip]")!);

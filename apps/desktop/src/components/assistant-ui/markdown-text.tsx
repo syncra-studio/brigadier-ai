@@ -251,7 +251,7 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
               event.preventDefault();
               open().catch(failed);
             }}
-            className="aui-md-file text-link hover:text-link/80 cursor-pointer no-underline"
+            className="aui-md-file text-link hover:text-link/80 cursor-pointer whitespace-nowrap no-underline"
           >
             <FileTypeIcon name={path} className="me-0.5 inline-block size-icon-sm align-text-bottom" />
             {children}

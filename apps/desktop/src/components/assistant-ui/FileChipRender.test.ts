@@ -9,6 +9,7 @@ test("a dead file link says the file is no longer here, opens and saves the stor
     after: Record<string, string | null>;
     saves: Record<string, boolean>;
     toasts: number;
+    cellIconOnNameLine: boolean;
     calls: Record<string, unknown>[];
   };
   assert.equal(seen.error, undefined, `${seen.error} ${JSON.stringify(seen.calls)}`);
@@ -17,6 +18,8 @@ test("a dead file link says the file is no longer here, opens and saves the stor
   assert.match(seen.after.lost!, /This file is no longer here\)/);
   assert.deepEqual(seen.saves, { stored: true, lost: false });
   assert.equal(seen.toasts, 0);
+  // In a narrow table cell the chip's icon stays on its name's line.
+  assert.equal(seen.cellIconOnNameLine, true);
   const commands = seen.calls.map((call) => call.command ?? call.method);
   assert.deepEqual(commands, ["resolveFileLink", "open_artifact", "resolveFileLink", "save_artifact"]);
   assert.deepEqual(seen.calls[0], {
