@@ -62,8 +62,13 @@ impl SessionManager {
                     board
                         .requests
                         .values()
+                        // A record starts with the request, so one that changed nothing has one.
                         .filter(|request| {
-                            request.changes.is_some() || !landed_by(&request.id).is_empty()
+                            request
+                                .changes
+                                .as_ref()
+                                .is_some_and(|changes| !changes.stat.files.is_empty())
+                                || !landed_by(&request.id).is_empty()
                         })
                         .max_by_key(|request| request.started_at_ms)
                         .map(|request| request.id.clone())

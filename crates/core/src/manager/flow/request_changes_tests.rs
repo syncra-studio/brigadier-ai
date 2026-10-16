@@ -942,3 +942,86 @@ async fn request_changes_background_runs_keep_the_starting_item_and_return_the_f
         flow.stop().await;
     }
 }
+
+/// A request that only answered has a record that changed nothing: Last Turn with no request
+/// named still shows the latest request that changed files.
+#[tokio::test]
+async fn last_turn_skips_a_later_request_that_changed_nothing() {
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w77-last-turn",
+        options(ProviderKind::Codex),
+        script(move |turn| async move {
+            if turn.input.contains("Edit a") {
+                let id = turn.conversation().unwrap();
+                let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+                edit(
+                    &turn,
+                    &workspace.join("a.txt"),
+                    "edit-a",
+                    "base\n",
+                    "base\nthread a\n",
+                )
+                .await;
+                observed(&turn, 1).await;
+                Reply::text("Changed a.")
+            } else {
+                Reply::text("Nothing to change.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Edit a.").await;
+    let board = flow
+        .until("settled changes", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled)
+        })
+        .await;
+    let edited = board.latest_request().unwrap().id.clone();
+    flow.say("Just answer.").await;
+    let board = flow
+        .until("the answer's record", |board| {
+            board
+                .latest_request()
+                .is_some_and(|r| r.id != edited && r.changes.as_ref().is_some_and(|c| c.settled))
+        })
+        .await;
+    assert!(
+        board
+            .latest_request()
+            .unwrap()
+            .changes
+            .as_ref()
+            .unwrap()
+            .stat
+            .files
+            .is_empty()
+    );
+    let latest = flow
+        .manager
+        .review_diff(
+            &flow.conversation,
+            ReviewScope::LastTurn { request_id: None },
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    let named = flow
+        .manager
+        .review_diff(
+            &flow.conversation,
+            ReviewScope::LastTurn {
+                request_id: Some(edited),
+            },
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(latest.patch.contains("+thread a"));
+    assert_eq!(latest.patch, named.patch);
+    flow.stop().await;
+}
