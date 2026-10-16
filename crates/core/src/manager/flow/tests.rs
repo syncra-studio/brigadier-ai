@@ -747,7 +747,9 @@ async fn an_outline_gets_its_go_ahead_at_once_and_a_plan_review_in_the_backgroun
 /// stack, of the 2 MiB a runtime thread has: a debug build keeps every future a function
 /// awaits in its stack frame at once, so a big unboxed await grows each frame on the way (the
 /// thread's tool call, its land_phase, the landing). Before the tool dispatch's awaits went
-/// through [`crate::heap`] this flow needed over 1.5 MiB; it now fits in about 0.9.
+/// through [`crate::heap`] this flow needed over 1.5 MiB. Phase C's waits brought the landing
+/// back to 1.3; with the landing's own awaits, the manager's start and the thread's event
+/// pump on the heap too, its deepest path (a worker's launch) is about 0.95.
 #[test]
 fn a_landing_flow_fits_well_inside_a_runtime_threads_stack() {
     std::thread::Builder::new()

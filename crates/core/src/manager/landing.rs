@@ -430,8 +430,8 @@ impl SessionManager {
             .as_ref()
             .and_then(|w| w.target.clone())
             .unwrap_or_default();
-        // Boxed, like each merge_again below: each call's future is otherwise made in this
-        // frame, a slot apiece in an unoptimized build.
+        // Boxed, like each landing and merge_again below: each call's future is otherwise made
+        // in this frame, a slot apiece in an unoptimized build.
         let problem = |reason: String, state: TaskState| {
             Box::pin(async move {
                 if on_its_own {
@@ -449,7 +449,7 @@ impl SessionManager {
                 commits,
                 excluded,
             } => {
-                self.landed(task, &target, &from, &tip, commits).await;
+                crate::heap(|| self.landed(task, &target, &from, &tip, commits)).await;
                 return (
                     true,
                     format!(
@@ -463,9 +463,9 @@ impl SessionManager {
             Moved::Nothing { excluded } => {
                 // Nothing of the work it carries is left to land (all of it was litter, say):
                 // that work ends with it.
-                for done in self.landed_with(task).await {
-                    self.dispose_task(&done, TaskState::Done).await;
-                    self.set_phase_stage(&done, PhaseStage::Done).await;
+                for done in crate::heap(|| self.landed_with(task)).await {
+                    crate::heap(|| self.dispose_task(&done, TaskState::Done)).await;
+                    crate::heap(|| self.set_phase_stage(&done, PhaseStage::Done)).await;
                 }
                 format!(
                     "[nothing to land task-{}] It has no commits to land.{}",

@@ -345,19 +345,21 @@ impl SessionManager {
             activity: Arc::default(),
         });
         manager.install_worktree_remover();
-        manager.start_machine_watch().await;
+        // Each step's future is polled from the heap: made in this frame, they took half a
+        // MiB of an unoptimized build's stack at once.
+        crate::heap(|| manager.start_machine_watch()).await;
         // Cleanups a quit cut off finish before anything of those conversations resumes.
-        manager.finish_cut_off_cleanups().await;
+        crate::heap(|| manager.finish_cut_off_cleanups()).await;
         // The thread engine's first start deletes the earlier engine's conversations, before
         // anything of theirs could resume.
-        manager.switch_engine().await?;
+        crate::heap(|| manager.switch_engine()).await?;
         // Before any session's instructions are written, which carry the preference.
-        manager.carry_short_replies().await;
-        manager.recover_active_runs().await;
-        manager.recover().await;
-        manager.resume_runs().await;
+        crate::heap(|| manager.carry_short_replies()).await;
+        crate::heap(|| manager.recover_active_runs()).await;
+        crate::heap(|| manager.recover()).await;
+        crate::heap(|| manager.resume_runs()).await;
         manager.start_overnight_clock();
-        manager.open_brains().await;
+        crate::heap(|| manager.open_brains()).await;
         manager.start_hibernation_timer();
         manager.start_watchdog();
         manager.start_computer_watchdog();

@@ -2261,12 +2261,13 @@ impl SessionManager {
         envelope: Envelope,
         request: Option<String>,
     ) {
-        // A quiet envelope waits a little while more of its request runs (BUILD-PLAN C3).
+        // A quiet envelope waits a little while more of its request runs (BUILD-PLAN C3). Its
+        // board read is polled from the heap: a landing reaches here deep in the thread's tool
+        // call, and its future in this frame overflowed a 1.25 MiB stack.
         let wait = envelope.quiet()
             && match &request {
                 Some(request) => {
-                    self.more_coming(id, request, envelope.task_id.as_ref())
-                        .await
+                    crate::heap(|| self.more_coming(id, request, envelope.task_id.as_ref())).await
                 }
                 None => false,
             };
@@ -2651,7 +2652,7 @@ impl SessionManager {
         if session {
             // Where the branch stands before the turn: what came since the last turn is the
             // thread's only if marked so.
-            self.scan_thread_commits(&conv.id, false).await;
+            crate::heap(|| self.scan_thread_commits(&conv.id, false)).await;
             // On a local checkout, where the request's changes start (BUILD-PLAN B2).
             crate::heap(|| self.note_request_start(&conv.id, request.as_deref())).await;
         }
@@ -3665,7 +3666,9 @@ impl SessionManager {
     }
 
     /// Stores the conversation CLI's text, reasoning and tool calls in the thread,
-    /// and keeps the complete provider events in `orch:<id>` for the Inspector.
+    /// and keeps the complete provider events in `orch:<id>` for the Inspector. Each event's
+    /// handling is polled from the heap: made in this frame, in each of the places it is
+    /// awaited, it took a fifth of a runtime thread's stack in an unoptimized build.
     async fn pump_conversation(
         self: Arc<Self>,
         conv: Arc<ConvLive>,
@@ -3737,7 +3740,7 @@ impl SessionManager {
                                 Some(true) => {
                                     if let Some(reply) = held.take() {
                                         if self.opening_line(&conv, &reply).await {
-                                            self.on_conversation_event(&conv, &cli, reply).await;
+                                            crate::heap(|| self.on_conversation_event(&conv, &cli, reply)).await;
                                         } else {
                                             self.hide_narration(&conv, &cli, &reply).await;
                                             self.log_provider(&conv.id, cli.provider, reply).await;
@@ -3746,18 +3749,18 @@ impl SessionManager {
                                 }
                                 Some(false) => {
                                     if let Some(reply) = held.take() {
-                                        self.on_conversation_event(&conv, &cli, reply).await;
+                                        crate::heap(|| self.on_conversation_event(&conv, &cli, reply)).await;
                                     }
                                 }
                                 None => {}
                             }
                             if quiet.holds_whole(&event) {
                                 if let Some(reply) = held.replace(event) {
-                                    self.on_conversation_event(&conv, &cli, reply).await;
+                                    crate::heap(|| self.on_conversation_event(&conv, &cli, reply)).await;
                                 }
                             } else {
                                 quiet.forget(&event);
-                                self.on_conversation_event(&conv, &cli, event).await;
+                                crate::heap(|| self.on_conversation_event(&conv, &cli, event)).await;
                             }
                         }
                         if exited {
@@ -3775,7 +3778,7 @@ impl SessionManager {
         self.store_deltas(&conv, quiet.pass(deltas)).await;
         self.record_held_looked(&conv).await;
         if let Some(reply) = held.take() {
-            self.on_conversation_event(&conv, &cli, reply).await;
+            crate::heap(|| self.on_conversation_event(&conv, &cli, reply)).await;
         }
         self.grants.revoke_owner(&cli.owner);
         conv.items().cli_ended();
@@ -4732,7 +4735,7 @@ impl SessionManager {
             self.log_provider(&conv.id, cli.provider, event).await;
         }
         if let Some(status) = completed {
-            self.turn_completed(conv, cli, status).await;
+            crate::heap(|| self.turn_completed(conv, cli, status)).await;
         }
     }
 

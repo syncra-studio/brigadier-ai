@@ -1040,9 +1040,7 @@ impl SessionManager {
             // A pass waits a little while more of its request runs (BUILD-PLAN C3).
             if let Some(request) = &request
                 && envelope.quiet()
-                && self
-                    .more_coming(id, request, envelope.task_id.as_ref())
-                    .await
+                && crate::heap(|| self.more_coming(id, request, envelope.task_id.as_ref())).await
             {
                 wait = true;
             }
