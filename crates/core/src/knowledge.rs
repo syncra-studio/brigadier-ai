@@ -253,14 +253,19 @@ pub fn worker_handoff_due(tokens: i64, start: Option<i64>, at: i64, cap: i64) ->
     tokens >= at.max(start.unwrap_or(0) + at / 2).min(cap)
 }
 
+/// The room Claude keeps in its window for the reply (its CLI's default most output tokens): a
+/// request whose context leaves less is refused.
+const CLAUDE_OUTPUT_ROOM: i64 = 32_000;
+
 /// Where a CLI itself acts on a full context, in tokens (BUILD-PLAN D2.3): Codex compacts at
 /// about 90% of the window, whatever its limit is set to; Claude, with its own compaction off,
-/// refuses the request at the window ("prompt is too long").
+/// refuses the request ("prompt is too long") once the context leaves less than its reply's room
+/// (a live run on a 200k window was refused between about 175k and 180k).
 pub fn context_ceiling(provider: ProviderKind, window: Option<i64>) -> i64 {
     let size = window.filter(|size| *size > 0).unwrap_or(DEFAULT_WINDOW);
     match provider {
         ProviderKind::Codex => size * 9 / 10,
-        ProviderKind::Claude => size,
+        ProviderKind::Claude => (size - CLAUDE_OUTPUT_ROOM).max(size / 2),
     }
 }
 
@@ -278,6 +283,22 @@ pub fn hard_line(provider: ProviderKind, window: Option<i64>) -> i64 {
         return tokens;
     }
     context_ceiling(provider, window) * 85 / 100
+}
+
+/// A worker's hard line where its provider isn't known: the lower of the two.
+pub fn worker_hard_line(window: Option<i64>) -> i64 {
+    hard_line(ProviderKind::Claude, window).min(hard_line(ProviderKind::Codex, window))
+}
+
+/// Where a worker is first asked to wrap up for a hand-off: [`worker_handoff_tokens`], kept
+/// below the hard line so the steer comes, and can come again, before the turn is stopped. An
+/// unknown window has no hard line (see `worker_context`), so nothing to keep below.
+pub fn worker_handoff_at(window: Option<i64>) -> i64 {
+    let at = worker_handoff_tokens(window);
+    match window {
+        Some(_) => at.min(worker_hard_line(window) * 85 / 100),
+        None => at,
+    }
 }
 
 /// How much more a context grows, past a first wrap-up steer, before the steer is sent again:
@@ -375,11 +396,14 @@ mod tests {
         assert_eq!(cap, 153_000);
         assert!(!worker_handoff_due(140_000, Some(100_000), 140_000, cap));
         assert!(worker_handoff_due(153_000, Some(100_000), 140_000, cap));
+        // Claude refuses once less than its reply's room is left.
         assert_eq!(
             context_ceiling(ProviderKind::Claude, Some(200_000)),
-            200_000
+            168_000
         );
-        assert_eq!(hard_line(ProviderKind::Claude, Some(200_000)), 170_000);
+        assert_eq!(hard_line(ProviderKind::Claude, Some(200_000)), 142_800);
+        assert_eq!(worker_hard_line(Some(200_000)), 142_800);
+        assert_eq!(worker_hard_line(Some(1_000_000)), 765_000);
         assert_eq!(steer_stretch(140_000, 170_000), 10_000);
         assert_eq!(steer_stretch(200_000, 850_000), 50_000);
     }
@@ -412,6 +436,10 @@ mod tests {
         assert_eq!(worker_handoff_tokens(Some(1_000_000)), 200_000);
         assert_eq!(worker_handoff_tokens(Some(272_000)), 190_400);
         assert_eq!(worker_handoff_tokens(None), 140_000);
+        // Asked below the hard line, so the steer has room before the stop.
+        assert_eq!(worker_handoff_at(Some(1_000_000)), 200_000);
+        assert_eq!(worker_handoff_at(Some(200_000)), 121_380);
+        assert_eq!(worker_handoff_at(None), 140_000);
         // No limit on how many: a successor that started small hands over again.
         assert!(worker_handoff_due(200_000, Some(30_000), 200_000, i64::MAX));
     }

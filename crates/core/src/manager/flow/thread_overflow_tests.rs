@@ -58,11 +58,11 @@ struct Seen {
     fresh: Option<(String, String)>,
 }
 
-/// The steer lines and the stretch on a 200k window: Claude steers at 153k, 5.7k apart, and
-/// stops at 170k; Codex steers at 137.7k, 5.1k apart, and stops at 153k.
+/// The steer lines and the stretch on a 200k window: Claude steers at 128.5k, 5k apart, and
+/// stops at 142.8k (it refuses past about 175k); Codex steers at 137.7k, 5.1k apart, and stops at 153k.
 fn steps(provider: ProviderKind) -> [i64; 3] {
     match provider {
-        ProviderKind::Claude => [155_000, 158_000, 162_000],
+        ProviderKind::Claude => [130_000, 133_000, 136_000],
         ProviderKind::Codex => [140_000, 143_000, 146_000],
     }
 }
@@ -299,6 +299,57 @@ async fn prompt_too_long_on_the_thread_rebirths_it_and_the_request_goes_on() {
     run.go.notify_one();
     continued(&run).await;
     run.flow.stop().await;
+}
+
+/// A Claude session learns its model's window only when its first turn ends. Until then the
+/// lines aren't known, and a guess (a 200k window) would stop a 1M-window thread far too early:
+/// a long first turn goes on, unasked and unstopped. Once a session of the model reported its
+/// window, the model's later sessions use it from their first report.
+#[tokio::test]
+async fn a_first_turn_with_no_window_known_yet_is_neither_steered_nor_stopped() {
+    let script = script(move |turn| async move {
+        if !turn.is_orchestrator() || !turn.input.contains(REQUEST) {
+            return Reply::text("Noted.");
+        }
+        // The steer and the stop wait on the same lines: with none known, neither comes.
+        for tokens in [20_000, 160_000, 300_000] {
+            turn.emit(ProviderEvent::ContextSize {
+                used_tokens: tokens,
+                window_tokens: None,
+            })
+            .await;
+        }
+        Reply::text("The parser is built.")
+    });
+    let flow = Flow::start("thread-overflow-no-window", Options::default(), script).await;
+    flow.say(REQUEST).await;
+    assert_eq!(ended(&flow).await, RequestState::Done);
+    assert!(
+        !entries(&flow)
+            .await
+            .iter()
+            .any(|entry| matches!(entry, OrchestratorEntry::StoppedForRebirth { .. })),
+        "not stopped"
+    );
+    // A window reported once is kept for the model's later sessions, and only for its model.
+    let manager = &flow.manager;
+    assert_eq!(
+        manager.model_window(ProviderKind::Claude, Some("opus"), Some(1_000_000)),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        manager.model_window(ProviderKind::Claude, Some("opus"), None),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        manager.model_window(ProviderKind::Claude, Some("sonnet"), None),
+        None
+    );
+    assert_eq!(
+        manager.model_window(ProviderKind::Codex, Some("opus"), None),
+        None
+    );
+    flow.stop().await;
 }
 
 /// A fresh session that the model refuses as too long before it makes any call can't make

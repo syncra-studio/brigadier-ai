@@ -4745,7 +4745,9 @@ impl SessionManager {
             } => {
                 let window = {
                     let mut state = conv.state.lock().await;
-                    let window = window_tokens.or(state.context.and_then(|(_, window)| window));
+                    let window = self
+                        .model_window(cli.provider, cli.model.model.as_deref(), *window_tokens)
+                        .or(state.context.and_then(|(_, window)| window));
                     state.context = Some((*used_tokens, window));
                     if conv.kind == ConversationKind::Session {
                         state.cache = Some(CacheMark {

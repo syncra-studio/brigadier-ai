@@ -2973,8 +2973,9 @@ impl SessionManager {
                 used_tokens,
                 window_tokens,
             } => {
-                self.worker_context(live, cli, *used_tokens, *window_tokens)
-                    .await;
+                let window =
+                    self.model_window(cli.provider, cli.model.model.as_deref(), *window_tokens);
+                self.worker_context(live, cli, *used_tokens, window).await;
             }
             // Its CLI's own compaction was refused: a fresh session takes over (BUILD-PLAN D2.3).
             ProviderEvent::CompactionRefused => {

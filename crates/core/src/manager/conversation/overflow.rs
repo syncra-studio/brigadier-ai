@@ -82,6 +82,12 @@ impl SessionManager {
         tokens: i64,
         window: Option<i64>,
     ) {
+        // Without its model's window the lines aren't known: a guess (the 200k default) would
+        // stop a big-window thread far too early. Its model refusing the context, or its CLI
+        // beginning to compact, still rebirths it.
+        if window.is_none() {
+            return;
+        }
         let hard = knowledge::hard_line(cli.provider, window);
         if tokens >= hard {
             self.stop_for_rebirth(conv, cli, tokens, StopWhy::HardLine)

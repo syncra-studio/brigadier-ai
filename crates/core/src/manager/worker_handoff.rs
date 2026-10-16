@@ -75,12 +75,14 @@ impl SessionManager {
         let window = live.window().await;
         let hard = knowledge::hard_line(cli.provider, window);
         // A session that starts past the line can't be helped by another: only growth counts.
-        if tokens >= hard && tokens > start {
+        // Without its model's window the line isn't known: a guess (the 200k default) would
+        // stop a big-window worker far too early, so only the wrap-up steer applies then.
+        if window.is_some() && tokens >= hard && tokens > start {
             self.force_worker_handoff(live, NearLimit::HardLine { tokens })
                 .await;
             return;
         }
-        let at = knowledge::worker_handoff_tokens(window);
+        let at = knowledge::worker_handoff_at(window);
         if !self.worker_handoff_due(tokens, Some(start), window)
             || !live
                 .ask_handoff(tokens, knowledge::steer_stretch(at, hard))
@@ -164,9 +166,9 @@ impl SessionManager {
         start: Option<i64>,
         window: Option<i64>,
     ) -> bool {
-        // The provider isn't known here: Codex's line is the lower of the two.
-        let cap = knowledge::hard_line(brigadier_providers::ProviderKind::Codex, window);
-        knowledge::worker_handoff_due(tokens, start, knowledge::worker_handoff_tokens(window), cap)
+        // The provider isn't known here: the lower line of the two.
+        let cap = knowledge::worker_hard_line(window);
+        knowledge::worker_handoff_due(tokens, start, knowledge::worker_handoff_at(window), cap)
     }
 
     /// The worker's context is past the hand-off size (after a restart, from its recorded

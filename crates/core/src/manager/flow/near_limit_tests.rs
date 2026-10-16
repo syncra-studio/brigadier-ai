@@ -81,16 +81,16 @@ fn growing(provider: &'static str, growth: Growth, seen: &Arc<Mutex<Seen>>) -> S
             context(&turn, 20_000).await;
             match growth {
                 Growth::PastTheLine => {
-                    // Past the hand-off size (140k): asked to wrap up.
-                    context(&turn, 145_000).await;
+                    // Past where it is asked to wrap up (121.4k, below the hard lines).
+                    context(&turn, 125_000).await;
                     let first = turn.steered().await.expect("asked to wrap up");
-                    // Not yet a stretch further: not asked again.
-                    context(&turn, 150_000).await;
+                    // Not yet a stretch further (7.1k Claude, 10.5k Codex): not asked again.
+                    context(&turn, 128_000).await;
                     // A stretch further: asked again.
-                    context(&turn, 158_000).await;
+                    context(&turn, 137_000).await;
                     let second = turn.steered().await.expect("asked again");
                     seen.lock().unwrap().steers = vec![first, second];
-                    // Past the hard line of either provider (153k Codex, 170k Claude).
+                    // Past the hard line of either provider (153k Codex, 142.8k Claude).
                     context(&turn, 175_000).await;
                 }
                 Growth::Compacting => turn.emit(ProviderEvent::CompactionRefused).await,

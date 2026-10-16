@@ -176,6 +176,10 @@ pub struct SessionManager {
     /// starts only on files a check passed on, never while one runs or on files one failed
     /// on ([`unreviewed::ThreadCheck`], BUILD-PLAN C10).
     thread_checks: std::sync::Mutex<HashMap<ConversationId, unreviewed::ThreadCheck>>,
+    /// The context window each model last reported, by provider and the model asked for: a
+    /// Claude session learns its own only when its first turn ends, and its overflow guard needs
+    /// it before then (BUILD-PLAN D2.3, D2.3b).
+    known_windows: std::sync::Mutex<HashMap<(ProviderKind, Option<String>), i64>>,
     /// Commands a Codex thread's `run_unsandboxed` may run, each once: what the user (or their
     /// "allow similar") approved when Codex asked ([`run`]).
     run_passes: run::RunPasses,
@@ -262,6 +266,28 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    /// `reported`, the window a session of `model` just reported, kept for its model's later
+    /// sessions; or, when it reported none, the one its model reported last.
+    pub(crate) fn model_window(
+        &self,
+        provider: ProviderKind,
+        model: Option<&str>,
+        reported: Option<i64>,
+    ) -> Option<i64> {
+        let mut known = self
+            .known_windows
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = (provider, model.map(str::to_owned));
+        match reported.filter(|window| *window > 0) {
+            Some(window) => {
+                known.insert(key, window);
+                Some(window)
+            }
+            None => known.get(&key).copied(),
+        }
+    }
+
     /// Starts the manager. Conversations come back to life lazily, on their next message.
     pub async fn start(
         core: Arc<Core>,
@@ -320,6 +346,7 @@ impl SessionManager {
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             thread_checks: std::sync::Mutex::new(HashMap::new()),
+            known_windows: std::sync::Mutex::new(HashMap::new()),
             run_passes: run::RunPasses::default(),
             ref_records: Arc::default(),
             integrated: integrated_checks::IntegratedChecks::default(),
