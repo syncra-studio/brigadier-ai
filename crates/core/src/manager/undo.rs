@@ -16,8 +16,8 @@ use crate::{Error, Result};
 /// How often an Undo chases a branch that moves under it.
 const UNDO_ATTEMPTS: usize = 3;
 
-/// Why an Undo or Reapply didn't happen, in the words its toast shows after "Failed to revert
-/// changes".
+/// Why an Undo or Reapply didn't happen, in the words its toast shows after "Couldn't undo the
+/// changes" (or reapply).
 fn refused(reason: impl Into<String>) -> Error {
     Error::Invalid(reason.into())
 }

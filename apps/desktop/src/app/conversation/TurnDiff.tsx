@@ -120,11 +120,17 @@ function useTurnReview(
  * What an Undo or Reapply left as it was, after its toast's first words: ". Left notes.md as it
  * is: you changed it during this request too." One file says why; several are named.
  */
-export function leftWords(left: readonly HeldPath[]): string {
+export function leftWords(left: readonly HeldPath[], reapply = false): string {
   const [only] = left;
   if (!only) return "";
-  if (left.length === 1) return `. ${only.reason}`;
   const names = left.map((file) => file.path.split("/").pop() || file.path);
+  // Reapply never touched what Undo left, so it doesn't give Undo's reason again.
+  if (reapply) {
+    return left.length === 1
+      ? `. ${names[0]} stays as it is: Undo left it`
+      : `. ${left.length} files stay as they are (${names.join(", ")}): Undo left them`;
+  }
+  if (left.length === 1) return `. ${only.reason}`;
   return `. Left ${left.length} files as they are (${names.join(", ")}): changed by you or by a command during the request`;
 }
 
@@ -280,10 +286,10 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
           }),
         Promise.resolve([]),
       )
-      .then((left) => toast(`${reverted ? "Changes reapplied" : "Changes reverted"}${leftWords(left)}`))
+      .then((left) => toast(`${reverted ? "Changes reapplied" : "Changes reverted"}${leftWords(left, reverted)}`))
       .catch((error: unknown) =>
         toast(
-          `Failed to revert changes: ${error instanceof Error ? error.message : String(error)}`,
+          `${reverted ? "Couldn't reapply" : "Couldn't undo"} the changes: ${error instanceof Error ? error.message : String(error)}`,
           { tone: "error" },
         ),
       )

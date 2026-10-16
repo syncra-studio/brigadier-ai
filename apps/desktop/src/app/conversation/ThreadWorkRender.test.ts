@@ -76,6 +76,9 @@ test("the thread's own work reads like the reference thread: running commands st
     toast: "Changes reverted. You changed src/notes.md during this request too, so Undo leaves it as it is.",
   });
   assert.equal(seen.reapply, "Reapply");
+  // Reapply names what Undo left without giving Undo's reason again; a refusal says which way.
+  assert.equal(seen.reapplied, "Changes reapplied. notes.md stays as it is: Undo left it");
+  assert.equal(seen.refused, "Couldn't undo the changes: Later changes touch the same files (run.mjs)");
 
   // The working request's pill, from its record; a click opens its changes.
   assert.match(String(seen.pill), /^2 files changed ?\+11 −2$/);

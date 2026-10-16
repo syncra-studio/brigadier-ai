@@ -97,6 +97,7 @@ mockIPC((command, payload) => {
       return { method: req.method, output: "served on :5173\nshut down", bytes: 26 };
     case "undoChanges":
       asked.undo.push(`${req.requestId}:${req.reapply ? "reapply" : "undo"}`);
+      if (req.requestId === "one") return Promise.reject(new Error("Later changes touch the same files (run.mjs)"));
       return {
         method: req.method,
         outcome: {
@@ -377,6 +378,16 @@ async function measure(): Promise<object> {
   }));
   await wait(200);
   out.reapply = text(card("turn-diff-four").undo);
+  // The toast a click brings, newer than any before it (toasts leave on a timer).
+  const toastAfter = async (click: () => void) => {
+    const before = Math.max(-1, ...useToasts.getState().toasts.map((shown) => shown.id));
+    click();
+    await until(() => useToasts.getState().toasts.some((shown) => shown.id > before));
+    return useToasts.getState().toasts.find((shown) => shown.id > before)?.text ?? null;
+  };
+  out.reapplied = await toastAfter(() => card("turn-diff-four").undo?.click());
+  // A refused Undo says which way it failed.
+  out.refused = await toastAfter(() => oneCard.undo?.click());
 
   // The pill of the working request, from its record; a click opens its changes.
   await until(() => one("[data-slot=composer-capsule]", at("pill")));
