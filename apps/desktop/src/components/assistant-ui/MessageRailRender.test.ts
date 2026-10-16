@@ -20,7 +20,7 @@ test("the rail beside the thread marks the user's messages, jumps to them, and p
   const seen = JSON.parse(await renderFixtureLive(t, "message-rail.html?drive=1", "message-rail-result", 150000)) as {
     error?: string;
     opened: {
-      rail: boolean; gutter: number; left: number | null; centreOff: number | null; listMax: string | null; listScrolls: boolean | null; faded: boolean | null;
+      rail: boolean; gutter: number; left: number | null; centreOff: number | null; listMax: string | null; windowHeight: number; listScrolls: boolean | null; faded: boolean | null;
       marker: number[] | null; line: number[] | null; markers: string[]; folded: string | null; current: string[]; inView: string[];
       lines: (string | null)[];
     };
@@ -54,8 +54,9 @@ test("the rail beside the thread marks the user's messages, jumps to them, and p
   assert.equal(opened.folded, "10 earlier messages");
   assert.deepEqual(opened.marker, [36, 10]);
   assert.deepEqual(opened.line, [6, 2]);
-  // The list stops at 70% of the window or 40rem, whichever is less (40rem in a 976px window), then scrolls.
-  assert.equal(opened.listMax, `${40 * 16}px`);
+  // The list stops at 70% of the window or 40rem, whichever is less (40rem in a 976px window, 70%
+  // in a shorter one, as a Linux runner's), then scrolls.
+  near(Number.parseFloat(opened.listMax ?? ""), Math.min(40 * 16, opened.windowHeight * 0.7), "the list's height cap");
   assert.equal(opened.listScrolls, false);
   assert.equal(opened.faded, false);
   // The turns in view are the current ones.

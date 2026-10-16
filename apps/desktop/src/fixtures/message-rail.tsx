@@ -271,6 +271,7 @@ const steps = {
       left: box ? round(box.left - shown.left) : null,
       centreOff: box ? round(box.top + box.height / 2 - (shown.top + shown.height / 2)) : null,
       listMax: list ? getComputedStyle(list).maxHeight : null,
+      windowHeight: innerHeight,
       listScrolls: list ? list.scrollHeight > list.clientHeight : null,
       faded: list?.classList.contains("scroll-edge-fade") ?? null,
       marker: first ? [round(first.width), round(first.height)] : null,
