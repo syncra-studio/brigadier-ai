@@ -150,8 +150,9 @@ struct Caller {
 const NOT_ON_LOCAL: &str = "Not committed: this is the user's own checkout, where you commit only when they ask, with git yourself.";
 
 /// What a commit's reply ends with (BUILD-PLAN O3): the gate's bench saw the thread try its
-/// change by hand after the commit, a whole call, where the try belonged in the check's message.
-pub(super) const AFTER_COMMIT: &str = "If the work is done, run nothing more for it: a try by hand belongs in the message with this check, not after it.";
+/// change by hand after the commit, a whole call, where the try belonged in the check's message,
+/// and once put it in the check's command, which failed on purpose and took a second check.
+pub(super) const AFTER_COMMIT: &str = "If the work is done, run nothing more for it: a try by hand is a shell call of its own in the message with this check, never part of its command, and never after it.";
 
 /// Longest a `run_check` commit may take, the repository's hooks included.
 const COMMIT_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 5 } else { 300 });
@@ -1201,7 +1202,7 @@ impl SessionManager {
         .await;
         // The full checks' commands are the project's, not a package's to learn.
         let full_checks = caller.task_id.is_none() && caller.low_priority;
-        if ran.status == "exit 0" && !full_checks {
+        if ran.status == "exit 0" && !full_checks && !scratch_command(command, &caller.tmp) {
             self.learn_check(caller, workdir, command).await;
         }
         Ok(CheckDone {
@@ -1893,13 +1894,32 @@ fn learned_key(folder: &str) -> String {
     format!("checks:{folder}")
 }
 
-/// The commands a learned-checks node lists, one per line.
+/// The commands a learned-checks node lists, one per line. A scratch command a Brain learned
+/// before scratch commands were left out is skipped too.
 fn learned_commands(body: &str) -> Vec<String> {
     body.lines()
         .filter_map(|line| line.strip_prefix("- "))
         .map(|command| command.trim_matches('`').to_owned())
-        .filter(|command| !command.is_empty())
+        .filter(|command| !command.is_empty() && !scratch_command(command, Path::new("")))
         .collect()
+}
+
+/// Whether `command` runs something in a temporary folder (its caller's `tmp`, `$TMPDIR`,
+/// `/tmp`, `/var/folders`): a one-off try, not a project check, so it is never learned. The
+/// full checks run in another checkout, where the scratch file isn't, and would fail on it.
+fn scratch_command(command: &str, tmp: &Path) -> bool {
+    let tmp = tmp.to_string_lossy();
+    (!tmp.is_empty() && command.contains(tmp.as_ref()))
+        || [
+            "$TMPDIR",
+            "${TMPDIR",
+            "/tmp/",
+            "/private/tmp/",
+            "/var/folders/",
+            "mktemp",
+        ]
+        .iter()
+        .any(|scratch| command.contains(scratch))
 }
 
 fn learned_body(commands: &[String]) -> String {
@@ -2938,6 +2958,30 @@ mod tests {
     fn learned_checks_read_back_as_written() {
         let commands = vec!["cargo test -p a".to_owned(), "pnpm run lint".to_owned()];
         assert_eq!(learned_commands(&learned_body(&commands)), commands);
+    }
+
+    #[test]
+    fn a_scratch_command_is_not_a_check_to_learn() {
+        let tmp = Path::new("/Users/me/Library/brigadier/tmp/t1");
+        for command in [
+            "node $TMPDIR/big.ts",
+            "node ${TMPDIR}/big.ts",
+            "cd /tmp/x && npm test",
+            "bash /private/tmp/try.sh",
+            "node /var/folders/ab/T/big.js",
+            "f=$(mktemp) && node src/cli.ts > $f",
+            "node /Users/me/Library/brigadier/tmp/t1/big.ts",
+        ] {
+            assert!(scratch_command(command, tmp), "{command}");
+        }
+        assert!(!scratch_command("npm run check", tmp));
+        assert!(!scratch_command("cargo test -p tmp-utils", tmp));
+        // A Brain that learned one before reads it back without it.
+        let learned = vec!["npm run check".to_owned(), "node $TMPDIR/big.ts".to_owned()];
+        assert_eq!(
+            learned_commands(&learned_body(&learned)),
+            vec!["npm run check"]
+        );
     }
 
     /// `crates/index` used by `crates/core`, used by `crates/daemon`; `crates/other` alone; a

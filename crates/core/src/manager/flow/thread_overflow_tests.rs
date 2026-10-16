@@ -522,6 +522,13 @@ async fn a_session_from_before_the_lean_tools_is_told_once() {
         "load it through ToolSearch by its name",
     )
     .await;
+    // A try by hand stays out of run_check, where a T4 bench run put it in the check's command
+    // and a T6 one ran a scratch script as a check (BUILD-PLAN O3).
+    told_once(
+        LEAN_TOOLS_REVISION,
+        "A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.",
+    )
+    .await;
 }
 
 /// A session told the instructions at the revision before `revision` hears its note (which
