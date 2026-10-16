@@ -2,7 +2,7 @@
  * A standalone Vite entry, excluded from the app entry and production build: the thread's own
  * work as its rows show it once the daemon keeps each call in full (phase T2), measured once the
  * page holds still. IPC is mocked, no daemon. The result goes to `<pre id="thread-work-result">`;
- * `stop=1` holds the page for a screenshot, `case=<id>` shows one case.
+ * `stop=1` holds the page for a screenshot, `case=<id>` shows one case with its rows opened.
  *
  * - A running own `run` in an open live group: "Running command for 3s", opening to its Shell
  *   box, which follows the output as the row hears more of it.
@@ -71,7 +71,7 @@ function threadItems(): RawEntry[] {
       itemId: "edit",
       status: "completed",
       changes: [
-        { path: `${ROOT}/src/math.js`, kind: "update", diff: MATH_DIFF, added: 8, removed: 2 },
+        { path: `${ROOT}/src/math.js`, kind: "update", diff: MATH_DIFF, added: 7, removed: 2 },
         { path: `${ROOT}/src/new.ts`, kind: "add", diff: NEW_DIFF, added: 3, removed: 0 },
         { path: `${ROOT}/src/old.ts`, kind: "delete", diff: OLD_DIFF, added: 0, removed: 4 },
       ],
@@ -92,6 +92,8 @@ mockIPC((command, payload) => {
       return { method: req.method, data: SVG(req.itemId === "made" ? "purple" : req.itemId === "view-1" ? "teal" : "orange"), mime: "image/svg+xml" };
     case "readBackgroundRun":
       asked.runs.push(req.runId);
+      // A running one has printed nothing yet; the ended ones, their whole output.
+      if (req.runId === "run-1") return { method: req.method, output: "", bytes: 0 };
       return { method: req.method, output: "served on :5173\nshut down", bytes: 26 };
     case "undoChanges":
       asked.undo.push(`${req.requestId}:${req.reapply ? "reapply" : "undo"}`);
@@ -173,7 +175,7 @@ const bigRun = tool(12, { itemId: "big", name: "shell", detail: "cat build.log",
 const editStep = tool(13, {
   itemId: "edit", name: "apply_patch", detail: `${ROOT}/src/math.js and 2 more`, item: "files", endedAtMs: now,
   files: [
-    { path: `${ROOT}/src/math.js`, insertions: 8, deletions: 2, binary: false, change: "update" },
+    { path: `${ROOT}/src/math.js`, insertions: 7, deletions: 2, binary: false, change: "update" },
     { path: `${ROOT}/src/new.ts`, insertions: 3, deletions: 0, binary: false, change: "add" },
     { path: `${ROOT}/src/old.ts`, insertions: 0, deletions: 4, binary: false, change: "delete" },
   ],
@@ -385,7 +387,25 @@ async function measure(): Promise<object> {
   return out;
 }
 
-void measure()
+/** One case on its own, for a screenshot: its rows opened, once each. */
+async function openCase(): Promise<object> {
+  await wait(300);
+  // A group's rows come once it opens: open what shows, then what that showed.
+  const done = new Set<Element>();
+  for (let pass = 0; pass < 3; pass++) {
+    for (const trigger of all<HTMLElement>("[data-slot=work-group] > button, [role=button][aria-expanded=false]")) {
+      if (done.has(trigger)) continue;
+      done.add(trigger);
+      trigger.click();
+      await wait(150);
+    }
+    await wait(400);
+  }
+  await wait(1200);
+  return { opened: query.get("case") };
+}
+
+void (query.get("case") ? openCase() : measure())
   .catch((error: unknown) => ({ error: String(error) }))
   .then(async (result) => {
     if (query.get("stop") === "1") await new Promise(() => {});

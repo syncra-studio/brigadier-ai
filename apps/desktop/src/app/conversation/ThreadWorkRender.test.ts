@@ -30,7 +30,7 @@ test("the thread's own work reads like the reference thread: running commands st
 
   // A row per file: verb, link, counts, the dot of a file made or deleted.
   assert.deepEqual(seen.edit, [
-    { row: "Edited math.js +8 −2", link: "math.js", counts: "+8 −2", dot: null },
+    { row: "Edited math.js +7 −2", link: "math.js", counts: "+7 −2", dot: null },
     { row: "Created new.ts +3 −0", link: "new.ts", counts: "+3 −0", dot: "add" },
     { row: "Deleted old.ts +0 −4", link: "old.ts", counts: "+0 −4", dot: "delete" },
   ]);
@@ -40,7 +40,8 @@ test("the thread's own work reads like the reference thread: running commands st
   assert.equal(diff.name, "math.js");
   // Numbered from the real patch's hunk (`@@ -10,6 +10,11 @@`), not from 1.
   assert.deepEqual(diff.numbers, ["10", "11", "12"]);
-  assert.match(diff.row, /^Edited file/);
+  // Opened, the row reads "Edited file" alone: the diff card says its name and counts.
+  assert.equal(diff.row, "Edited file");
 
   // A Codex find in a page says what and where.
   assert.equal(seen.find, "Searched the web for 'LTS' in https://nodejs.org/en");

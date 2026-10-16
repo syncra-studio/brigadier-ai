@@ -164,7 +164,7 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
         {printed && <CopyButton text={stripAnsi(printed)} label="Copy output" className="end-1 top-1" />}
       </div>
       {notes.map((note) => (
-        <p key={note} data-slot="shell-note" className="text-muted-foreground px-3 pt-1.5 text-sm wrap-anywhere">
+        <p key={note} data-slot="shell-note" className="text-muted-foreground px-3 pt-1.5 text-sm wrap-anywhere last:pb-2">
           {note}
         </p>
       ))}

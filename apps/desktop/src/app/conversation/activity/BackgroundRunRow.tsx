@@ -51,33 +51,44 @@ function ending(run: BackgroundRun): { status: ItemStatus; exit: number | null; 
   }
 }
 
-/** A run's output, read once it ended (and again if its state changes). */
+/** While a run goes on, its output is read again this often (the row's box is open). */
+const READ_EVERY_MS = 2000;
+
+/** A run's output: read when its box opens, again every 2 s while it runs, and once more when it ends. */
 function RunOutput({ run }: { run: BackgroundRun }) {
   const [output, setOutput] = useState<{ for: string; text: string | null; error: string | null } | null>(null);
+  const running = run.state.type === "running";
   const key = `${run.id}|${run.state.type}`;
   useEffect(() => {
-    if (run.state.type === "running") return;
     let current = true;
-    request({ method: "readBackgroundRun", conversationId: run.conversationId, runId: run.id }).then(
-      ({ output: text }) => current && setOutput({ for: key, text, error: null }),
-      (cause: unknown) => current && setOutput({ for: key, text: null, error: cause instanceof Error ? cause.message : String(cause) }),
-    );
+    const read = () =>
+      request({ method: "readBackgroundRun", conversationId: run.conversationId, runId: run.id }).then(
+        ({ output: text }) => current && setOutput({ for: key, text, error: null }),
+        (cause: unknown) => current && setOutput({ for: key, text: null, error: cause instanceof Error ? cause.message : String(cause) }),
+      );
+    void read();
+    const timer = running ? window.setInterval(() => void read(), READ_EVERY_MS) : null;
     return () => {
       current = false;
+      if (timer !== null) window.clearInterval(timer);
     };
-  }, [run.conversationId, run.id, run.state.type, key]);
+  }, [run.conversationId, run.id, key, running]);
   const end = ending(run);
-  if (run.state.type === "running") {
-    return (
-      <div className="flex flex-col gap-1">
-        <ShellBox command={run.command} output={null} status="inProgress" exit={null} />
-        <p className="text-muted-foreground text-sm">No output yet</p>
-      </div>
-    );
-  }
-  if (!output || output.for !== key) return <span className="shimmer text-xs">Loading</span>;
-  if (output.error) return <p className="text-destructive text-xs">{output.error}</p>;
-  return <ShellBox command={run.command} output={output.text} status={end.status} exit={end.exit} stopped={end.stopped} />;
+  // While it runs, what it printed so far stays until the next read: the box never blanks.
+  const shown = output && (output.for === key || running) ? output : null;
+  if (!shown && !running) return <span className="shimmer text-xs">Loading</span>;
+  if (shown?.error && !running) return <p className="text-destructive text-xs">{shown.error}</p>;
+  const text = shown?.text || null;
+  return (
+    <ShellBox
+      command={run.command}
+      output={text}
+      status={end.status}
+      exit={end.exit}
+      stopped={end.stopped}
+      notes={running && !text ? ["No output yet"] : []}
+    />
+  );
 }
 
 /** One background run's row. */

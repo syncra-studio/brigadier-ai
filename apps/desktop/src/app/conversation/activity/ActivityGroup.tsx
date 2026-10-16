@@ -120,7 +120,8 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, detail,
       </span>
       {/* "in 41s" only on a row inside an opened group: a row on its own says what it did. */}
       {suffix && inGroup && <span className="shrink-0 tabular-nums">{suffix}</span>}
-      {trail}
+      {/* Opened, an edit's diff card says its counts: the row reads "Edited file" alone. */}
+      {!opened && trail}
     </ThreadActivity>
   );
 }
