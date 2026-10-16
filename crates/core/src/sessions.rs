@@ -1236,6 +1236,8 @@ impl Core {
         let took = started_ms
             .filter(|_| finished)
             .map(|started| at_ms.saturating_sub(started));
+        let own =
+            matches!(&event, ProviderEvent::ToolCall { name, .. } if crate::digest::own_run(name));
         let mut item = match event {
             ProviderEvent::ToolCall {
                 name,
@@ -1286,7 +1288,11 @@ impl Core {
         if let Some(alias) = item.output.as_deref().and_then(crate::digest::digest_alias)
             && let Some(full) = self.stored_output_text(id, alias).await
         {
-            item.output = Some(full);
+            // An own command's reply keeps its first line and what it said after the output.
+            item.output = Some(match (own, item.output.as_deref()) {
+                (true, Some(reply)) => crate::digest::whole_reply(reply, &full),
+                _ => full,
+            });
         }
         Ok(item)
     }

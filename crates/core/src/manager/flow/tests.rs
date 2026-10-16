@@ -3057,7 +3057,10 @@ async fn a_finished_tool_step_says_when_it_ended_and_how_it_exited_and_opens_in_
         .await
         .unwrap();
     assert!(stored.len() < full.len());
-    *digest.lock().unwrap() = stored;
+    // What the reply says after the output stays with it (a run_check's commit, say).
+    let note = "Committed 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.rs). Nothing is left uncommitted.";
+    let header = stored.lines().next().unwrap().to_owned();
+    *digest.lock().unwrap() = format!("{stored}\n{note}");
     flow.say("Run the tests").await;
     let board = flow.settled().await;
     let tools: Vec<_> = board
@@ -3108,7 +3111,7 @@ async fn a_finished_tool_step_says_when_it_ended_and_how_it_exited_and_opens_in_
         run.input.as_deref(),
         Some(json!({"command": "cargo test"}).to_string().as_str())
     );
-    assert_eq!(run.output.as_deref(), Some(full.as_str()));
+    assert_eq!(run.output, Some(format!("{header}\n{full}\n{note}")));
     assert_eq!(run.exit, Some(2));
     assert!(run.ms.is_some_and(|ms| ms >= 0));
     let missing = flow

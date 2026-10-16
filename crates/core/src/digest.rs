@@ -194,6 +194,55 @@ pub(crate) fn exit_of(output: &str) -> Option<i32> {
     rest[..end].parse().ok()
 }
 
+/// Brigadier's own command tools, whose reply starts with how the command ended.
+pub(crate) fn own_run(name: &str) -> bool {
+    matches!(
+        bare_tool_name(name),
+        "run" | "run_unsandboxed" | "run_check"
+    )
+}
+
+/// What a `run_check` (or `run`) reply says after its output, on lines of their own: the commit
+/// it made or didn't, a review it started. Empty when it says nothing more.
+fn reply_notes(reply: &str) -> &str {
+    let is_note = |line: &str| {
+        line.is_empty()
+            || line.starts_with("Not committed: ")
+            || line.starts_with("Nothing to commit: ")
+            || line.starts_with("[review running] ")
+            || (line.starts_with("Committed ") && line.contains(" with your trailer: "))
+    };
+    let kept = reply.trim_end();
+    let mut cut = kept.len();
+    let mut rest = kept;
+    while let Some(at) = rest.rfind('\n') {
+        let line = &rest[at + 1..];
+        if !is_note(line) {
+            break;
+        }
+        cut = at;
+        rest = &rest[..at];
+    }
+    let notes = &kept[cut..];
+    if notes.trim().is_empty() { "" } else { notes }
+}
+
+/// An own command's reply that came as a digest, with its whole output in the digest's place:
+/// its first line (how the command ended), the whole output, then what the reply said after
+/// the output, so the thread's Shell box reads all three.
+pub(crate) fn whole_reply(reply: &str, whole: &str) -> String {
+    let header = reply.lines().next().unwrap_or_default();
+    let mut text = format!("{header}\n{whole}");
+    let notes = reply_notes(reply);
+    if !notes.is_empty() {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(notes.trim_start_matches('\n'));
+    }
+    text
+}
+
 /// The alias of the full output a digest points to (`read_artifact out-…`), if it names one.
 pub(crate) fn digest_alias(output: &str) -> Option<&str> {
     const MARK: &str = "read_artifact ";
@@ -351,6 +400,24 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A long run_check reply shows its whole output with its header and what it said after
+    /// the output: the commit it made, a review it started.
+    #[test]
+    fn a_digested_check_reply_keeps_its_header_and_notes_around_the_whole_output() {
+        let reply = "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.\n\n[review running] Codex reviews your change for this request in the background.";
+        assert_eq!(
+            whole_reply(reply, "one\ntwo\npassed\n"),
+            "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.\n\n[review running] Codex reviews your change for this request in the background."
+        );
+        let plain =
+            "exit 1 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\nFAIL a.test.js\n";
+        assert_eq!(
+            whole_reply(plain, "one\nFAIL a.test.js"),
+            "exit 1 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\nFAIL a.test.js"
+        );
+        assert!(own_run("mcp__brigadier__run_check") && own_run("run") && !own_run("Bash"));
+    }
 
     fn passing_log(lines: usize) -> String {
         (0..lines)
