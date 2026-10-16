@@ -134,7 +134,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(4);
         let events = Events::new(tx, Some(Arc::new(Redactor::new([secret]))));
         let change = FileChange {
-            original: None,
+            original: Some(secret.into()),
             path: "a".into(),
             kind: FileChangeKind::Update,
             diff: Some(diff),
@@ -150,6 +150,7 @@ mod tests {
         let Some(ProviderEvent::FileChanges { changes, .. }) = rx.recv().await else {
             panic!("no file change")
         };
+        assert!(!changes[0].original.as_deref().unwrap().contains(secret));
         let shown = changes[0].diff.as_deref().unwrap();
         assert!(
             !shown.contains(&secret[..12]),
