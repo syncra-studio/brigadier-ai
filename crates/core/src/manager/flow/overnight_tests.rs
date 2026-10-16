@@ -445,6 +445,34 @@ fn real(path: &std::path::Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_owned())
 }
 
+/// A thread whose session first starts with the run (a new session, or one reborn or restarted
+/// mid-run) hears the run's plan, Rules and restrictions in the `[run]` note once: its
+/// instructions only say where the run works, so they don't count as having told it.
+#[tokio::test]
+async fn a_thread_whose_session_starts_with_the_run_hears_its_plan_once() {
+    let thread = Arc::new(Thread {
+        order: vec![1],
+        ..Default::default()
+    });
+    let flow = flow_with("overnight-fresh-thread", thread.clone()).await;
+    let run = start_run(&flow, "/overnight Make one file.", 1).await;
+    finished(&flow, &run.id).await;
+    let turns = thread.turns.lock().unwrap().clone();
+    let (first, _) = turns
+        .iter()
+        .find(|(input, _)| input.contains("has started"))
+        .expect("the run's first turn");
+    assert!(first.contains("[run] From now on"), "{first}");
+    assert!(first.contains("Create p1.txt."), "the plan: {first}");
+    assert!(first.contains("p1.txt exists."), "its done when: {first}");
+    let heard = turns
+        .iter()
+        .filter(|(input, _)| input.contains("[run] From now on"))
+        .count();
+    assert_eq!(heard, 1, "{turns:#?}");
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn memory_warning_starts_overnight_workers_without_readmission_loops() {
     let thread = Arc::new(Thread {

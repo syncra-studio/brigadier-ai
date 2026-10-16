@@ -1086,7 +1086,9 @@ impl Current {
             start_workers: session.then_some(self.start_workers),
             permission: session.then_some(self.permission),
             folder_trusted: session.then_some(self.folder_trusted),
-            run: session.then(|| self.run_fingerprint()),
+            // Instructions say only where a run works, never its plan, Rules or restrictions:
+            // the `[run]` note at the first message tells those.
+            run: session.then(String::new),
             preferences: Some(preferences_fingerprint(&self.preferences)),
             workspace: self.workspace.clone(),
             revision: session.then(revision),
@@ -3510,6 +3512,16 @@ mod environment_tests {
         }
     }
 
+    /// What a session started now has been told once it took the notes its first message
+    /// carries: a run's plan, Rules and restrictions come in the `[run]` note, never in the
+    /// instructions.
+    fn heard(now: &Current) -> Told {
+        let mut told = now.told();
+        let sent = notes(&told, now);
+        took(&mut told, &sent);
+        told
+    }
+
     /// The rules left out of the instructions come once per CLI session, with the first
     /// message that calls for them, named as its CLI calls the tools; a session on older
     /// instructions has them already, and its revision note says so (BUILD-PLAN C1).
@@ -3559,7 +3571,14 @@ mod environment_tests {
             ),
             Current::chat(vec!["Lives in Chisinau".into()]),
         ] {
-            assert_eq!(notes(&now.told(), &now), Vec::new());
+            assert_eq!(notes(&heard(&now), &now), Vec::new());
+            // Instructions written during a run leave its plan to the `[run]` note.
+            let first = notes(&now.told(), &now);
+            if now.run.is_some() {
+                assert_eq!(labels(&first), vec![RUN_LABEL]);
+            } else {
+                assert_eq!(first, Vec::new());
+            }
         }
     }
 
@@ -4156,7 +4175,7 @@ mod environment_tests {
                 None,
             )
         };
-        told = run(true).told();
+        told = heard(&run(true));
         // The run still supplies the permission text while it is active.
         assert!(notes(&told, &run(false)).is_empty());
         let sent = notes(&told, &plain);
@@ -4217,24 +4236,24 @@ mod environment_tests {
             Some("- The report is due at Mon 06:00 (+03:00)."),
             &[],
         );
-        let sent = notes(&run.told(), &later);
+        let sent = notes(&heard(&run), &later);
         assert_eq!(labels(&sent), vec![RUN_LABEL]);
         assert!(sent[0].text.contains("due at Mon 06:00"));
         // Over: the session's own setting is back, the permission level with it.
-        let sent = notes(&later.told(), &plain);
+        let sent = notes(&heard(&later), &plain);
         assert_eq!(labels(&sent), vec![RUN_OVER_LABEL]);
         assert!(sent[0].text.starts_with("[run] The overnight run is over"));
         assert!(sent[0].text.contains(
             "Local checkout: landed work goes, as the workers' own commits, directly onto `main`"
         ));
         assert!(sent[0].text.contains("Permission level: Ask for approval:"));
-        let mut told = later.told();
+        let mut told = heard(&later);
         took(&mut told, &sent);
         assert_eq!(told, plain.told());
         // The permission level switched during the run: the run's words for it (its
         // sandbox), not the session's, which come back with its end.
         let full = current("fullAccess", Some("- The run lasts 60 minutes."), &[]);
-        let sent = notes(&run.told(), &full);
+        let sent = notes(&heard(&run), &full);
         assert_eq!(labels(&sent), vec![RUN_LABEL]);
         assert!(
             sent[0]
