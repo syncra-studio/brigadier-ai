@@ -101,6 +101,10 @@ plant every item:
 - an item only in the thread's own tool output;
 - a false `learned` line in a worker report (planted by the daemon's debug `debugPlantLearned`).
 
+`v2/battery/lookup.md` (`--battery lookup`) is the same battery with a probe that lets the thread look things up with
+`search_transcript` and `query_brain` (still no command, no file read): `thread.md` measures what the briefings keep,
+`lookup.md` what the session can still find, such as the thread-only item after two rebirths (BUILD-PLAN D2.4).
+
 Fillers then push the plants far out of the verbatim tail. Two edits act on the constraint, its exception and the
 ruled-out approach, and a probe asks for every item.
 
