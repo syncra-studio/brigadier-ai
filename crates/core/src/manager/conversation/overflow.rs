@@ -123,17 +123,24 @@ impl SessionManager {
     /// Stops the thread's running turn for a rebirth: recorded first, then the turn is
     /// interrupted (unless it already failed). Its end continues the request in a fresh
     /// session ([`Self::rebirth_mid_turn`]).
+    /// Whether the stop began: not when one already did, when the thread isn't working, or
+    /// when this session is itself a fresh one continuing the request that hasn't made a call
+    /// yet (stopping it again would never end).
     pub(super) async fn stop_for_rebirth(
         &self,
         conv: &Arc<ConvLive>,
         cli: &Arc<Cli>,
         tokens: i64,
         why: StopWhy,
-    ) {
+    ) -> bool {
         let request = {
             let mut state = conv.state.lock().await;
             if state.stopping_for_rebirth.is_some() || !state.busy {
-                return;
+                return false;
+            }
+            if state.reborn_unproven.is_some() && state.reborn_unproven == state.request {
+                tracing::warn!(conversation = %conv.id, tokens, ?why, "a fresh session reached its model's limit before any call: not reborn again");
+                return false;
             }
             state.stopping_for_rebirth = Some(tokens);
             state.request.clone()
@@ -165,6 +172,7 @@ impl SessionManager {
                 }
             });
         }
+        true
     }
 
     /// The turn stopped for a rebirth is over: the CLI closes, and the next turn starts a
@@ -200,7 +208,9 @@ impl SessionManager {
                 swap_started_at_ms: now_ms(),
                 stopped: Some(stopped),
             });
-            let user_stopped = state.hand_over.take().is_some_and(|over| over.stopped);
+            let over = state.hand_over.take();
+            let user_stopped = over.as_ref().is_some_and(|over| over.stopped);
+            state.reborn_unproven = over.and_then(|over| over.request).filter(|_| !user_stopped);
             if !user_stopped {
                 let mut pending = carried;
                 pending.append(&mut state.pending);
@@ -315,6 +325,7 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             state.fresh = true;
             state.reseed = false;
+            state.reborn_unproven = Some(request.clone());
             state.briefing = Some(BriefingPlan {
                 trigger: RebirthTrigger::MidTurn,
                 prep: None,

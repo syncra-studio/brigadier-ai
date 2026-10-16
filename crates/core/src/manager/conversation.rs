@@ -412,6 +412,10 @@ struct ConvState {
     /// The running turn is being stopped near its model's limit (at this context), to be
     /// reborn at once with its request going on (BUILD-PLAN D2.3b).
     stopping_for_rebirth: Option<i64>,
+    /// The request a fresh session continues after such a stop, until that session makes a
+    /// call: stopped again before one, it can't make progress (its request or briefing alone
+    /// is too long), so the request fails instead of being reborn again and again.
+    reborn_unproven: Option<String>,
     /// The context the thread was last asked, this turn, to commit at (BUILD-PLAN D2.3b).
     steered_at: Option<i64>,
     /// The running turn is one of its own that compacts the context: messages sent meanwhile
@@ -749,6 +753,7 @@ impl ConvLive {
     /// mid-work (see `ConvState::last_said`).
     async fn went_on_working(&self) {
         let mut state = self.state.lock().await;
+        state.reborn_unproven = None;
         if let Some(request) = state.request.clone()
             && let Some((_, followed)) = state.last_said.get_mut(&request)
         {
@@ -4434,8 +4439,22 @@ impl SessionManager {
                     && !error.will_retry =>
             {
                 let tokens = conv.state.lock().await.context.map_or(0, |(used, _)| used);
-                self.stop_for_rebirth(conv, cli, tokens, overflow::StopWhy::ContextWindow)
-                    .await;
+                if !self
+                    .stop_for_rebirth(conv, cli, tokens, overflow::StopWhy::ContextWindow)
+                    .await
+                {
+                    // A fresh session refused it too: the request fails, saying why.
+                    let message = format!(
+                        "{} A fresh session couldn't take this request either: its message is \
+                         too long for the model. Shorten it, or attach the long text as a file.",
+                        error.message
+                    );
+                    let mut state = conv.state.lock().await;
+                    state.turn_error = Some(message.clone());
+                    if state.request.is_some() {
+                        state.unshown_error = Some(message);
+                    }
+                }
             }
             ProviderEvent::Error { error } => {
                 // Credits run out or a failed sign-in, where another account of the provider

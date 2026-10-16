@@ -301,6 +301,94 @@ async fn prompt_too_long_on_the_thread_rebirths_it_and_the_request_goes_on() {
     run.flow.stop().await;
 }
 
+/// A fresh session that the model refuses as too long before it makes any call can't make
+/// progress: the request fails once, saying so, instead of being reborn again and again.
+#[tokio::test]
+async fn a_fresh_session_refused_again_before_any_call_fails_the_request_once() {
+    let (first, fresh, go) = (
+        Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
+    );
+    let fresh_turns = Arc::new(Mutex::new(0));
+    let script = {
+        let (first, fresh, go, fresh_turns) = (
+            first.clone(),
+            fresh.clone(),
+            go.clone(),
+            fresh_turns.clone(),
+        );
+        script(move |turn| {
+            let (first, fresh, go, fresh_turns) = (
+                first.clone(),
+                fresh.clone(),
+                go.clone(),
+                fresh_turns.clone(),
+            );
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Done.");
+                }
+                let starts = if turn.input.contains(STOPPED) {
+                    *fresh_turns.lock().unwrap() += 1;
+                    &fresh
+                } else if turn.input.contains(REQUEST) {
+                    &first
+                } else {
+                    return Reply::text("Noted.");
+                };
+                context(&turn, 20_000).await;
+                starts.notify_one();
+                go.notified().await;
+                // Its next event fires the armed fault.
+                turn.emit(ProviderEvent::Notice {
+                    level: NoticeLevel::Info,
+                    message: "reading".into(),
+                })
+                .await;
+                turn.stopped().await;
+                Reply::text("Still reading.")
+            }
+        })
+    };
+    let flow = Flow::start("thread-overflow-unproven", Options::default(), script).await;
+    let refuse = || async {
+        flow.manager
+            .debug_inject_error(
+                FaultKey::Conversation(flow.conversation.clone()),
+                ProviderKind::Claude,
+                InjectedError::ContextWindow,
+                0,
+            )
+            .await
+            .unwrap();
+    };
+    flow.say(REQUEST).await;
+    first.notified().await;
+    refuse().await;
+    go.notify_one();
+    fresh.notified().await;
+    refuse().await;
+    go.notify_one();
+    match ended(&flow).await {
+        RequestState::Failed { error } => {
+            assert!(
+                error.contains("A fresh session couldn't take this request"),
+                "{error}"
+            )
+        }
+        other => panic!("the request should fail, not {other:?}"),
+    }
+    assert_eq!(*fresh_turns.lock().unwrap(), 1, "reborn once, not again");
+    let stops = entries(&flow)
+        .await
+        .into_iter()
+        .filter(|entry| matches!(entry, OrchestratorEntry::StoppedForRebirth { .. }))
+        .count();
+    assert_eq!(stops, 1);
+    flow.stop().await;
+}
+
 /// The daemon dies after the stop was recorded and before the rebirth: the restart rebirths
 /// the thread and finishes the request instead of failing it as cut off.
 #[tokio::test]
