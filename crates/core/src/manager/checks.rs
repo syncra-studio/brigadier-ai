@@ -215,9 +215,11 @@ fn last_said(output: &[u8]) -> String {
 impl SessionManager {
     /// `run_check`'s `commit` (BUILD-PLAN C9): on a pass, everything changed in `tree` is
     /// committed with `message` and the thread's trailer, run as `caller`'s check ran; on a
-    /// failure nothing is. Nor is anything when a file changed since the check started on the
-    /// files of `checked` (a [`brigadier_git::Worktree::checkout_tree`]): the check didn't see
-    /// that change. What happened, in one line.
+    /// failure nothing is. Nor is anything when a file of `checked` (a
+    /// [`brigadier_git::Worktree::checkout_tree`] from the check's start) changed since: the
+    /// check didn't see that change. A file new since is what the check itself wrote (a fresh
+    /// snapshot, say) as often as not: it is committed with it, and the reply names it (#143).
+    /// What happened, in one line.
     async fn commit_on_pass(
         &self,
         caller: &Caller,
@@ -229,17 +231,38 @@ impl SessionManager {
         if !passed {
             return "Not committed: the check didn't pass.".into();
         }
+        let mut made = Vec::new();
         if let Some(checked) = checked {
             let (git, root) = (self.git.clone(), tree.to_owned());
             let changed = blocking(move || {
-                git.open_worktree(&root)
-                    .and_then(|worktree| worktree.paths_changed_since(&brigadier_git::Oid(checked)))
-                    .map_err(git_error)
+                let paths = git
+                    .open_worktree(&root)
+                    .and_then(|worktree| {
+                        worktree.paths_changed_since(&brigadier_git::Oid(checked.clone()))
+                    })
+                    .map_err(git_error)?;
+                if paths.is_empty() {
+                    return Ok((paths, Vec::new()));
+                }
+                // Which of them the check started with: the rest are new since.
+                let mut args = vec!["ls-tree", "-r", "-z", "--name-only", &checked, "--"];
+                args.extend(paths.iter().map(String::as_str));
+                let listed = git
+                    .open(&root)
+                    .and_then(|repo| repo.read_only(&args))
+                    .map_err(git_error)?;
+                let had: std::collections::HashSet<&str> =
+                    listed.split('\0').filter(|path| !path.is_empty()).collect();
+                let (had, new): (Vec<String>, Vec<String>) = paths
+                    .iter()
+                    .cloned()
+                    .partition(|path| had.contains(path.as_str()) || !root.join(path).exists());
+                Ok((had, new))
             })
             .await;
             match changed {
-                Ok(paths) if paths.is_empty() => {}
-                Ok(paths) => {
+                Ok((paths, new)) if paths.is_empty() => made = new,
+                Ok((paths, _)) => {
                     return format!(
                         "Not committed: {} changed while the check ran, so it didn't check them. Run the check again with commit.",
                         listed(&paths)
@@ -285,15 +308,23 @@ impl SessionManager {
         };
         // A hook that failed or was stopped after git made the commit (a post-commit hook, a
         // timeout, the session ending) leaves the commit made: HEAD says which.
+        let made = if made.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " New while the check ran, so committed as it left them: {}.",
+                listed(&made)
+            )
+        };
         let failed = match failed {
-            None => return self.commit_record_of(tree, message).await,
+            None => return format!("{}{made}", self.commit_record_of(tree, message).await),
             Some(failed) if self.head_of(tree).await == before => {
                 return format!("Not committed: {failed}");
             }
             Some(failed) => failed,
         };
         format!(
-            "{} Then {failed}",
+            "{}{made} Then {failed}",
             self.commit_record_of(tree, message).await
         )
     }

@@ -200,9 +200,10 @@ async fn on_the_users_checkout_a_check_commits_nothing() {
     flow.stop().await;
 }
 
-/// A file that changed while the check ran (here the check itself writes it, as an edit made
-/// while a check runs in the background would) isn't committed under a check that didn't see
-/// it: nothing is, and the reply says which file. The check run again commits it all.
+/// A file the check started with that changed while it ran (here the check itself edits it,
+/// as an edit made while a check runs in the background would) isn't committed under a check
+/// that didn't see it: nothing is, and the reply says which file. The check run again commits
+/// it all.
 #[tokio::test]
 async fn a_file_changed_while_the_check_ran_is_not_committed_under_it() {
     let seen: Log = Arc::default();
@@ -211,8 +212,8 @@ async fn a_file_changed_while_the_check_ran_is_not_committed_under_it() {
         Options::default(),
         checks(
             &[
-                ("Add the notes file.", "NOTES.md", "echo later > LATER.md"),
-                ("Check it again.", "NOTES.md", "true"),
+                ("Add the notes file.", "NOTES.md", "echo later >> NOTES.md"),
+                ("Check it again.", "LATER.md", "true"),
             ],
             seen.clone(),
         ),
@@ -222,11 +223,35 @@ async fn a_file_changed_while_the_check_ran_is_not_committed_under_it() {
     flow.settled().await;
     said(
         &seen,
-        "Not committed: LATER.md changed while the check ran, so it didn't check them.",
+        "Not committed: NOTES.md changed while the check ran, so it didn't check them.",
     );
     flow.say("Check it again.").await;
     flow.settled().await;
     said(&seen, "(LATER.md, NOTES.md). Nothing is left uncommitted.");
+    flow.stop().await;
+}
+
+/// A file new since the check started, here one the check itself writes (a test runner's
+/// fresh snapshot), doesn't hold the commit back: it is committed with the change, and the
+/// reply names it (#143).
+#[tokio::test]
+async fn a_file_the_check_itself_made_is_committed_with_it() {
+    let seen: Log = Arc::default();
+    let flow = Flow::start(
+        "commit-on-pass-made",
+        Options::default(),
+        checks(
+            &[("Add the notes file.", "NOTES.md", "echo snap > SNAP.md")],
+            seen.clone(),
+        ),
+    )
+    .await;
+    flow.say("Add the notes file.").await;
+    flow.settled().await;
+    said(
+        &seen,
+        "(NOTES.md, SNAP.md). Nothing is left uncommitted. New while the check ran, so committed as it left them: SNAP.md.",
+    );
     flow.stop().await;
 }
 
