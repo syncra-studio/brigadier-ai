@@ -91,6 +91,8 @@ pub(crate) struct Reply {
     pub error: Option<String>,
     /// Its text streams first, the CLI saying it is the turn's final answer.
     pub answer: bool,
+    /// The CLI's guess at the user's next message, which comes after the turn ended.
+    pub suggestion: Option<String>,
 }
 
 impl Reply {
@@ -1035,6 +1037,9 @@ impl ProviderSession for FakeSession {
                         usage: None,
                     })
                     .await;
+                if let Some(text) = reply.suggestion {
+                    let _ = tx.send(ProviderEvent::PromptSuggestion { text }).await;
+                }
             });
             Ok(())
         })

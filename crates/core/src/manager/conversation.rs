@@ -324,6 +324,9 @@ struct ConvState {
     hand_over: Option<HandOver>,
     /// The request the running turn serves.
     request: Option<String>,
+    /// The request the last turn served: the CLI's guess at the next message, which comes
+    /// after that turn ended, belongs to it.
+    guess_for: Option<String>,
     /// What the CLI still runs in the background for a request (a command run in the
     /// background): its end starts a turn of the CLI's own, and until that turn is over the
     /// request still works.
@@ -4408,7 +4411,18 @@ impl SessionManager {
         // The CLI's guess at the user's next message is for the composer only: never logged,
         // so no transcript, digest or rebirth ever reads it as said.
         if let ProviderEvent::PromptSuggestion { text } = event {
-            if let Err(err) = self.core.set_latest_suggestion(&conv.id, text).await {
+            // A guess that comes once another turn is under way, or for a request no longer
+            // the latest (a message came meanwhile), follows nothing on screen: dropped.
+            let request = {
+                let state = conv.state.lock().await;
+                (!state.busy && !state.awaiting_start)
+                    .then(|| state.guess_for.clone())
+                    .flatten()
+            };
+            let Some(request) = request else {
+                return;
+            };
+            if let Err(err) = self.core.set_suggestion(&conv.id, &request, text).await {
                 tracing::debug!(conversation = %conv.id, error = %err, "could not keep a next-message guess");
             }
             return;
@@ -5066,6 +5080,7 @@ impl SessionManager {
                 _ => None,
             };
             let served = state.request.take();
+            state.guess_for.clone_from(&served);
             // Codex commands still running keep this request working until each ended and
             // the thread heard of it; once none runs, the request is free of them.
             if state.lingering.is_empty() {

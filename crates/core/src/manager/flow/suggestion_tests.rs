@@ -51,10 +51,11 @@ async fn the_thread_s_cli_guesses_the_next_message_only_while_its_composer_shows
                 thread: provider,
                 ..Default::default()
             },
-            script(|turn| async move {
-                turn.emit(ProviderEvent::PromptSuggestion { text: GUESS.into() })
-                    .await;
-                Reply::text("Answered.")
+            script(|_| async move {
+                Reply {
+                    suggestion: Some(GUESS.into()),
+                    ..Reply::text("Answered.")
+                }
             }),
         )
         .await;
@@ -209,6 +210,58 @@ async fn a_turn_that_starts_a_worker_gets_no_guess_until_nothing_is_left_running
     assert_eq!(
         *behavior.suggestion_pauses.lock().unwrap(),
         [false, true, false]
+    );
+    flow.stop().await;
+}
+
+/// A guess that comes while a newer turn runs (Codex answers its request apart, so one can
+/// arrive after the user's next message started a turn) follows nothing on screen: dropped,
+/// and the newer request ends without it.
+#[tokio::test]
+async fn a_guess_that_comes_during_a_newer_turn_is_dropped() {
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w77-suggestion-late",
+        Options {
+            thread: ProviderKind::Codex,
+            ..Default::default()
+        },
+        script(|turn| async move {
+            if turn.input.contains("Second") {
+                turn.emit(ProviderEvent::PromptSuggestion { text: GUESS.into() })
+                    .await;
+                return Reply::text("Answered again.");
+            }
+            Reply::text("Answered.")
+        }),
+    )
+    .await;
+    flow.say("First").await;
+    let first = flow
+        .until("the first request over", |board| {
+            board
+                .latest_request()
+                .is_some_and(|request| request.state == crate::work::RequestState::Done)
+        })
+        .await
+        .latest_request()
+        .unwrap()
+        .id
+        .clone();
+    flow.say("Second").await;
+    let board = flow
+        .until("the second request over", |board| {
+            board.latest_request().is_some_and(|request| {
+                request.id != first && request.state == crate::work::RequestState::Done
+            })
+        })
+        .await;
+    assert!(
+        board
+            .requests
+            .values()
+            .all(|request| request.suggestion.is_none()),
+        "{:?}",
+        board.requests
     );
     flow.stop().await;
 }

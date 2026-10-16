@@ -1637,11 +1637,13 @@ impl Core {
         Ok(())
     }
 
-    /// Keeps the CLI's guess at the user's next message on the conversation's latest request,
-    /// the one whose turn it follows (a turn that starts a newer request has its own).
-    pub(crate) async fn set_latest_suggestion(
+    /// Keeps the CLI's guess at the user's next message on `request_id`, the request whose turn
+    /// it follows, while that is still the conversation's latest: once a newer one started, the
+    /// guess follows nothing the user sees.
+    pub(crate) async fn set_suggestion(
         &self,
         id: &ConversationId,
+        request_id: &str,
         text: String,
     ) -> Result<()> {
         let mut boards = self.boards.lock().await;
@@ -1651,6 +1653,7 @@ impl Core {
         let Some(mut request) = boards
             .get(id)
             .and_then(|board| board.latest_request())
+            .filter(|request| request.id == request_id)
             .cloned()
         else {
             return Ok(());
