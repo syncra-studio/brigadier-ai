@@ -239,13 +239,13 @@ async function clickTo(id: string) {
 }
 
 /** The rows in view, as the rail's markers should mark them: inside the view's edges by 16px. */
-function rowsInView(): string[] {
+/** The user messages whose turns show: each from its message to the next (the last to the thread's end). */
+function turnsInView(): string[] {
   const box = viewport().getBoundingClientRect();
-  return userRows()
-    .filter((element) => {
-      const rect = element.getBoundingClientRect();
-      return rect.bottom > box.top + 16 && rect.top < box.bottom - 16;
-    })
+  const rows = userRows();
+  const end = $('[data-slot="aui_message-group"]')!.getBoundingClientRect().bottom;
+  return rows
+    .filter((element, index) => element.getBoundingClientRect().top < box.bottom - 16 && (rows[index + 1]?.getBoundingClientRect().top ?? end) > box.top + 16)
     .map((element) => element.dataset["messageId"] ?? "");
 }
 const currentMarkers = () => markers().filter((marker) => marker.getAttribute("aria-current") === "true").map((marker) => marker.dataset["railMarker"] ?? "");
@@ -278,7 +278,9 @@ const steps = {
       markers: markerIds(),
       folded: $('[data-slot="earlier-turns"]')?.textContent ?? null,
       current: currentMarkers(),
-      inView: rowsInView(),
+      inView: turnsInView(),
+      // A current marker's line and a resting one's.
+      lines: [markers().at(-1), markers()[0]].map((marker) => (marker ? getComputedStyle(marker.querySelector("[data-slot=rail-line]")!).backgroundColor : null)),
     };
   },
   /** Hovering a marker: it and its neighbours grow, and the preview shows the message and its answer. */
@@ -330,7 +332,7 @@ const steps = {
     input.focus();
     altArrow(input, "ArrowUp");
     await settle(300);
-    return { clicked, down, up, composerMoved: viewport().scrollTop - scrollTop, current: currentMarkers(), inView: rowsInView() };
+    return { clicked, down, up, composerMoved: viewport().scrollTop - scrollTop, current: currentMarkers(), inView: turnsInView() };
   },
   /** A press-and-drag along the rail scrubs: each marker passed lands its turn at once, with no flash. */
   async scrub() {
@@ -418,6 +420,37 @@ const steps = {
     };
   },
   /** Three messages: no rail. */
+  /** A new turn whose answer is taller than the view, scrolled to its end: its message is the current one. */
+  async longAnswer() {
+    const list = stored["long"]!;
+    const at = Date.now();
+    const asked: Message = {
+      id: "long-tall-u", conversationId: "long", seq: list.length + 1, role: "user", text: "Explain it all at length.",
+      blob: null, createdAtMs: at, attachments: [], mentions: [], model: null, requestId: "long-tall", parentId: list.at(-1)?.id ?? null,
+    };
+    const said: Message = {
+      id: "long-tall-a", conversationId: "long", seq: list.length + 2, role: "assistant",
+      text: Array.from({ length: 30 }, (_, index) => `Paragraph ${index + 1} of a long answer, so the message it answers scrolls away above the view.`).join("\n\n"),
+      blob: null, createdAtMs: at + 1000, attachments: [], mentions: [], model: null, requestId: "long-tall", parentId: asked.id,
+    };
+    for (const message of [asked, said]) {
+      list.push(message);
+      appended(message);
+    }
+    await until(() => !!$('[data-message-id="long-tall-u"]') && markerIds().includes("long-tall-u"));
+    await settle(200);
+    viewport().scrollTop = viewport().scrollHeight;
+    await settle(300);
+    const shown = viewport().getBoundingClientRect();
+    return {
+      messagesShown: userRows().filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.bottom > shown.top && rect.top < shown.bottom;
+      }).length,
+      current: currentMarkers(),
+      inView: turnsInView(),
+    };
+  },
   async short() {
     await open("short");
     return { rail: rail() !== null, rows: userRows().length };

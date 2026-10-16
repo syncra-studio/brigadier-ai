@@ -22,6 +22,7 @@ test("the rail beside the thread marks the user's messages, jumps to them, and p
     opened: {
       rail: boolean; gutter: number; left: number | null; centreOff: number | null; listMax: string | null; listScrolls: boolean | null; faded: boolean | null;
       marker: number[] | null; line: number[] | null; markers: string[]; folded: string | null; current: string[]; inView: string[];
+      lines: (string | null)[];
     };
     hover: { lines: number[]; previewText: string[]; previewWidth: number | null; previewRightOfRail: number | null; afterLeave: { preview: boolean; line: number } };
     keysFromBottom: Landing & { expected: string; moved: number };
@@ -37,6 +38,7 @@ test("the rail beside the thread marks the user's messages, jumps to them, and p
       spinner: boolean; failed: boolean; failure: { text: string | null; pages: number }; anchor: string; before: number | null; after: number | null;
       loaded: boolean; pages: number; first: string; more: boolean; markers: number; listScrolls: boolean | null; faded: boolean | null;
     };
+    longAnswer: { messagesShown: number; current: string[]; inView: string[] };
     short: { rail: boolean; rows: number };
   };
   assert.equal(seen.error, undefined);
@@ -56,9 +58,11 @@ test("the rail beside the thread marks the user's messages, jumps to them, and p
   assert.equal(opened.listMax, `${40 * 16}px`);
   assert.equal(opened.listScrolls, false);
   assert.equal(opened.faded, false);
-  // The messages in view are the current ones.
+  // The turns in view are the current ones.
   assert.ok(opened.current.length > 0);
   assert.deepEqual(opened.current, opened.inView);
+  // A current marker is brighter than one at rest.
+  assert.notEqual(opened.lines[0], opened.lines[1]);
 
   // Hovered, the line grows to 26px; its neighbours by 0.7, 0.4 and 0.2 of the growth.
   const { hover } = seen;
@@ -129,6 +133,9 @@ test("the rail beside the thread marks the user's messages, jumps to them, and p
   // 80 markers reach past the list's 640px: it scrolls, its ends fading.
   assert.equal(atTop.listScrolls, true);
   assert.equal(atTop.faded, true);
+
+  // Only a long answer in view, its message scrolled away above: that message is the current one.
+  assert.deepEqual(seen.longAnswer, { messagesShown: 0, current: ["long-tall-u"], inView: ["long-tall-u"] });
 
   // Three user messages: no rail.
   assert.deepEqual(seen.short, { rail: false, rows: 3 });

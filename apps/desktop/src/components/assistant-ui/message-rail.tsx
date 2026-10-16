@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 /*
  * The rail of the user's messages, beside the thread: a short line per message, brighter for the
- * ones in view. Hovering one grows it and its neighbours and shows the message with the start of
+ * ones whose turns are in view. Hovering one grows it and its neighbours and shows the message with the start of
  * its answer; a click scrolls its turn to the top and flashes it, a press-and-drag scrubs along
  * the thread. ⌥↑ and ⌥↓ step through the same messages from the view's top, rail or no rail.
  * Messages folded away ("N earlier messages") are on the rail too; jumping to one unfolds them,
@@ -55,7 +55,7 @@ const MIN_GUTTER_PX = 48;
 const LAND_PX = 24;
 /** ⌥↑ and ⌥↓ count a message within this of the view's top as the one shown there. */
 const TOLERANCE_PX = 24;
-/** A message counts as in view once it is this far inside the view's edges. */
+/** A turn counts as in view once it is this far inside the view's edges. */
 const IN_VIEW_PX = 16;
 /** How much of the hovered line's growth each neighbour takes, by distance. */
 const FISHEYE = [1, 0.7, 0.4, 0.2];
@@ -319,50 +319,49 @@ export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: Thread
   return <Rail entries={entries} folded={folded ?? []} inView={inView} jumpTo={jumpTo} />;
 };
 
-/** The ids of the user messages in view, as the rows come and go. */
+/**
+ * The ids of the user messages whose turns are in view: a turn runs from its message to the
+ * next one (the last to the thread's end), so a long answer keeps its message current with the
+ * message itself scrolled away. With no turn in view, the last message.
+ */
 function useInView(viewport: HTMLDivElement | null): ReadonlySet<string> {
   const [inView, setInView] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
     const group = viewport?.querySelector('[data-slot="aui_message-group"]');
     if (!viewport || !group) return;
-    const seen = new Map<Element, boolean>();
+    let frame = 0;
     const publish = () => {
+      frame = 0;
+      const box = viewport.getBoundingClientRect();
+      const top = box.top + IN_VIEW_PX;
+      const bottom = box.bottom - IN_VIEW_PX;
+      const rows = userRows(viewport);
+      const tops = rows.map((row) => row.getBoundingClientRect().top);
+      const end = group.getBoundingClientRect().bottom;
       const ids = new Set<string>();
-      for (const [row, visible] of seen) {
-        const id = row instanceof HTMLElement ? row.dataset["messageId"] : undefined;
-        if (visible && id && row.isConnected) ids.add(id);
-      }
+      rows.forEach((row, index) => {
+        const id = row.dataset["messageId"];
+        if (id && (tops[index] ?? 0) < bottom && (tops[index + 1] ?? end) > top) ids.add(id);
+      });
+      const last = rows.at(-1)?.dataset["messageId"];
+      if (ids.size === 0 && last) ids.add(last);
       setInView((before) => (before.size === ids.size && [...ids].every((id) => before.has(id)) ? before : ids));
     };
-    const observer = new IntersectionObserver(
-      (records) => {
-        for (const record of records) seen.set(record.target, record.isIntersecting);
-        publish();
-      },
-      { root: viewport, rootMargin: `${-IN_VIEW_PX}px` },
-    );
-    const watch = () => {
-      const rows = new Set<Element>(userRows(viewport));
-      for (const row of seen.keys()) {
-        if (!rows.has(row)) {
-          observer.unobserve(row);
-          seen.delete(row);
-        }
-      }
-      for (const row of rows) {
-        if (!seen.has(row)) {
-          seen.set(row, false);
-          observer.observe(row);
-        }
-      }
-      publish();
+    const schedule = () => {
+      if (frame === 0) frame = requestAnimationFrame(publish);
     };
-    watch();
-    const rows = new MutationObserver(watch);
+    publish();
+    viewport.addEventListener("scroll", schedule, { passive: true });
+    const resized = new ResizeObserver(schedule);
+    resized.observe(viewport);
+    resized.observe(group);
+    const rows = new MutationObserver(schedule);
     rows.observe(group, { childList: true });
     return () => {
+      cancelAnimationFrame(frame);
+      viewport.removeEventListener("scroll", schedule);
+      resized.disconnect();
       rows.disconnect();
-      observer.disconnect();
     };
   }, [viewport]);
   return inView;
@@ -513,7 +512,7 @@ const Rail: FC<{
                   data-slot="rail-line"
                   className={cn(
                     "h-rail-line-height ease-rail rounded-capsule transition-[width,background-color] duration-160 motion-reduce:transition-none",
-                    current || grow > 0 ? "bg-foreground/60" : "bg-foreground/40",
+                    current || grow > 0 ? "bg-foreground/60" : "bg-muted-foreground/40",
                   )}
                   style={{
                     width: `calc(var(--spacing-rail-line) + (var(--spacing-rail-line-hover) - var(--spacing-rail-line)) * ${grow})`,
