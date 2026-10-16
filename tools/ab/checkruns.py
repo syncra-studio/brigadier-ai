@@ -22,6 +22,7 @@ bypassed, outside, seen = [], [], set()
 for line in open(os.path.join(arm, "rec", "events.jsonl")):
     env = json.loads(line)
     e = env["event"]
+    if not isinstance(e, dict) or "type" not in e: continue  # a stored record, not an event
     if e["type"] == "checkRan":
         key = (e.get("tree"), e.get("workdir", ""), e["command"])
         who = e.get("taskId") or "thread"

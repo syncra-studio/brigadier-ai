@@ -40,6 +40,7 @@ if a.kind == "brigadier":
     conv = st["conversation"]; request = None; landed = None; answer = None; last = t0; heads = []
     for line in open(os.path.join(a.arm, "rec", "events.jsonl")):
         env = json.loads(line); e = env["event"]
+        if not isinstance(e, dict) or "type" not in e: continue  # a stored record, not an event
         if not env.get("stream", "").endswith(conv) and env.get("stream", "").split(":")[0] not in ("task", "orch"):
             continue
         if e["type"] == "requestUpdated" and e["request"]["conversationId"] == conv:

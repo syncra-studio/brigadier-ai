@@ -10,10 +10,12 @@ arm = sys.argv[1]; conv = json.load(open(arm + "/start.json"))["conversation"]
 tasks = {}; brain = set(); out = []; seen = set()
 for l in open(arm + "/rec/events.jsonl"):
     e = json.loads(l)["event"]
+    if not isinstance(e, dict) or "type" not in e: continue  # a stored record, not an event
     if e["type"] == "taskUpdated":
         t = e["task"]; tasks[t["id"]] = t
 for l in open(arm + "/rec/events.jsonl"):
     env = json.loads(l); e = env["event"]
+    if not isinstance(e, dict) or "type" not in e: continue  # a stored record, not an event
     if e["type"] != "cleanupRecorded": continue
     a = e["artifact"]; owner = e["owner"]
     if a["type"] not in ("claudeSession", "codexThread"): continue
@@ -37,6 +39,7 @@ for f in rollouts:
 reviews = {}
 for l in open(arm + "/rec/events.jsonl"):
     env = json.loads(l); e = env["event"]
+    if not isinstance(e, dict) or "type" not in e: continue  # a stored record, not an event
     if e["type"] == "reviewUpdated" and e["review"]["conversationId"] == conv and e["review"]["reviewer"] == "codex":
         reviews.setdefault(e["review"]["id"], (e["review"], env["atMs"]))
 owners = {s["owner"] for s in out}

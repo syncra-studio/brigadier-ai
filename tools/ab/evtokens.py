@@ -8,6 +8,7 @@ arm = sys.argv[1]; end = int(sys.argv[2]) if len(sys.argv) > 2 else 1 << 62
 tasks = {}; sess = {}; cur = {}
 for l in open(arm + "/rec/events.jsonl"):
     env = json.loads(l); e = env["event"]
+    if not isinstance(e, dict) or "type" not in e: continue  # a stored record, not an event
     if env["atMs"] > end: continue
     if e["type"] == "taskUpdated": tasks[e["task"]["id"]] = e["task"]
     if e["type"] != "workerEvent": continue

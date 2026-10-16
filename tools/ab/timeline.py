@@ -8,7 +8,9 @@ cnt = collections.Counter()
 def ts(ms): s = (ms - t0) / 1000; return f"{int(s//60):3d}:{s%60:04.1f}"
 last_task = {}
 for e in evs:
-    ev = e["event"]; t = ev.get("type"); cnt[t] += 1
+    ev = e["event"]
+    if not isinstance(ev, dict) or "type" not in ev: continue  # a stored record, not an event
+    t = ev["type"]; cnt[t] += 1
     if e["atMs"] < t0 - 1000: continue
     line = None
     if t == "messageAppended":
