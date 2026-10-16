@@ -553,7 +553,35 @@ pub fn quit_on_exit(app: &AppHandle) {
     if QUITTING.swap(true, Ordering::AcqRel) {
         return;
     }
-    tauri::async_runtime::block_on(stop_daemon(app));
+    let app = app.clone();
+    let stopped = wait_on_runtime(
+        tauri::async_runtime::handle().inner(),
+        async move { stop_daemon(&app).await },
+        EXIT_WAIT,
+    );
+    if stopped.is_none() {
+        tracing::warn!("brigadierd did not answer the quit in time; exiting anyway");
+    }
+}
+
+/// Longest the main thread waits for the daemon when the process is already exiting: the two
+/// requests [`stop_daemon`] makes, each bounded by [`QUIT_TIMEOUT`].
+const EXIT_WAIT: Duration = Duration::from_secs(2 * QUIT_TIMEOUT.as_secs());
+
+/// Runs `task` on `runtime` and waits for it on this thread, at most `limit` by the clock.
+/// The wait doesn't drive the runtime: on the main thread, a runtime thread answering the
+/// webview or reading a window waits on this one, and with every runtime thread stuck so the
+/// runtime's own timers stop; a plain wait still ends.
+fn wait_on_runtime<T: Send + 'static>(
+    runtime: &tokio::runtime::Handle,
+    task: impl Future<Output = T> + Send + 'static,
+    limit: Duration,
+) -> Option<T> {
+    let (done, finished) = std::sync::mpsc::sync_channel(1);
+    runtime.spawn(async move {
+        let _ = done.send(task.await);
+    });
+    finished.recv_timeout(limit).ok()
 }
 
 async fn stop_daemon(app: &AppHandle) {
@@ -582,5 +610,60 @@ async fn stop_daemon(app: &AppHandle) {
         DAEMON_STOPPED.store(true, Ordering::Release);
     } else {
         tracing::warn!("brigadierd did not acknowledge the quit");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use super::wait_on_runtime;
+
+    /// The exit path's wait ends by the clock when every runtime thread is stuck waiting on the
+    /// waiting thread, as a webview response or a window getter is during a system quit.
+    #[test]
+    fn the_exit_wait_ends_when_every_runtime_thread_waits_on_it() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        // The one runtime thread waits for this thread, which is busy waiting below.
+        let (release, stuck) = mpsc::channel::<()>();
+        runtime.spawn(async move {
+            let _ = stuck.recv();
+        });
+        let (outcome, waited) = mpsc::channel();
+        let handle = runtime.handle().clone();
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            let stopped = wait_on_runtime(
+                &handle,
+                async {
+                    tokio::time::timeout(Duration::from_millis(50), std::future::pending::<()>())
+                        .await
+                },
+                Duration::from_millis(300),
+            );
+            let _ = outcome.send((stopped.is_some(), started.elapsed()));
+        });
+        let (stopped, took) = waited
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the exit wait never ended");
+        assert!(!stopped);
+        assert!(took < Duration::from_secs(2), "took {took:?}");
+        let _ = release.send(());
+    }
+
+    #[test]
+    fn the_exit_wait_answers_what_the_task_returns() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let answer = wait_on_runtime(runtime.handle(), async { 7 }, Duration::from_secs(5));
+        assert_eq!(answer, Some(7));
     }
 }

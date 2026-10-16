@@ -446,6 +446,11 @@ impl Bridge {
     /// the daemon's head and resumes after the last event forwarded, so older ones don't notify
     /// again. Whether it shows is up to the settings, read when it happens.
     fn notify(&self, event: &EventEnvelope) {
+        // Not while the app quits: what the quit cuts off isn't news, and telling it would read
+        // a window, which waits on the main thread while that thread waits on the daemon.
+        if crate::shell::is_quitting() {
+            return;
+        }
         let Some(notice) = notice_for(event) else {
             return;
         };
