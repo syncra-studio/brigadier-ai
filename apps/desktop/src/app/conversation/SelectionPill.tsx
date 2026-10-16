@@ -10,9 +10,10 @@ import { saveDraft } from "@/state/drafts";
 import { openSideChatTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
+import { showHighlight } from "@/lib/highlightRules";
 
 /** The highlight that keeps what was added to the chat marked in the answer. */
-const ANNOTATION = "thread-annotation";
+const ANNOTATION = "thread-annotation" as const;
 /** The pill keeps this far inside the window's edges, and this far above the selection. */
 const EDGE_PX = 8;
 const ABOVE_PX = 8;
@@ -110,7 +111,9 @@ export const SelectionPill: FC = () => {
 
   // Sent (the composer emptied): what it quoted is no longer marked.
   useEffect(() => {
-    if (empty) annotations()?.clear();
+    if (!empty) return;
+    annotations()?.clear();
+    showHighlight(ANNOTATION, false);
   }, [empty]);
 
   useEffect(() => {
@@ -127,6 +130,7 @@ export const SelectionPill: FC = () => {
     const quote = quoted(shown.text);
     composer.setText(current.trim() ? `${current.trimEnd()}\n\n${quote}\n\n` : `${quote}\n\n`);
     annotations()?.add(shown.range);
+    showHighlight(ANNOTATION, true);
     document.getSelection()?.removeAllRanges();
     setShown(null);
     // This pill's own composer: a side-by-side chat has one of its own.

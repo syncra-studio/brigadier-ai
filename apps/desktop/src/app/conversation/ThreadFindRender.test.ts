@@ -19,6 +19,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   const seen = JSON.parse(await renderFixtureLive(t, "thread-find.html?drive=1", "thread-find-result", 150000)) as {
     error?: string;
     opened: {
+      rulesBefore: string[]; rulesOpen: string[];
       foldedBefore: string | null; foldedAfter: boolean; bar: { top: number; right: number } | null; maxWidth: string | null;
       placeholder: string | null; value: string | null; focused: boolean; selected: number[] | null; label: string | null;
       size: number; active: string | null; buttons: (string | null)[]; matchColour: number[]; activeColour: number[];
@@ -35,7 +36,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
     inner: { label: string | null; inBox: boolean; inView: boolean };
     inButton: { label: string | null; ringed: boolean; left: boolean };
     details: { closed: string | null; opened: string | null; shut: string | null };
-    closed: { bar: boolean; finding: boolean; matches: boolean; active: boolean; emptied: (number | null)[] };
+    closed: { bar: boolean; finding: boolean; matches: boolean; active: boolean; emptied: (number | null)[]; rules: string[] };
     keepsPlace: { focusBack: boolean; moved: number };
     multiline: { value: string | null; label: string | null; size: number; closedByButton: boolean };
   };
@@ -44,6 +45,9 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   // ⌘F with a word selected in the thread: the bar at the top right (8px down, 16px in, at most
   // 70% of the 1280px window), the word as its text, selected, and its one match marked.
   const { opened } = seen;
+  // Find's colours are on the page only while it marks: a `::highlight()` rule slows every style pass.
+  assert.deepEqual(opened.rulesBefore, []);
+  assert.deepEqual(opened.rulesOpen.toSorted(), ["thread-find", "thread-find-active"]);
   assert.deepEqual(opened.bar, { top: 8, right: 16 });
   assert.equal(opened.maxWidth, `${1280 * 0.7}px`);
   assert.equal(opened.placeholder, "Search chat…");
@@ -131,7 +135,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   assert.deepEqual(seen.inButton, { label: "1 / 1 result", ringed: true, left: false });
   // Opening a report's Details finds what it holds; closing it drops the match again.
   assert.deepEqual(seen.details, { closed: "0 results", opened: "1 / 1 result", shut: "0 results" });
-  assert.deepEqual(seen.closed, { bar: false, finding: false, matches: false, active: false, emptied: [0, 0] });
+  assert.deepEqual(seen.closed, { bar: false, finding: false, matches: false, active: false, emptied: [0, 0], rules: [] });
   // Esc gives the keyboard back to what had it before, without scrolling the thread to it.
   assert.deepEqual(seen.keepsPlace, { focusBack: true, moved: 0 });
 

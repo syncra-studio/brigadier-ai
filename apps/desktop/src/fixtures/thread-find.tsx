@@ -298,11 +298,17 @@ function toggle(): string | null {
   return bubble?.querySelector(":scope > button[aria-expanded]")?.getAttribute("aria-expanded") ?? null;
 }
 
+/** The `::highlight()` rules on the page: none until marks are shown (they slow every style pass). */
+function highlightRules(): string[] {
+  return [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]).flatMap((rule) => /::highlight\(([\w-]+)\)/.exec(rule.cssText)?.[1] ?? []);
+}
+
 const steps = {
   /** A single line selected in the thread, then ⌘F: the bar opens at the top right, with it as its text, focused. */
   async opened() {
     select({ type: "conversation", id: "long" });
     await settle(LOAD_MS + 400);
+    const rulesBefore = highlightRules();
     const foldedBefore = $('[data-slot="earlier-turns"]')?.textContent ?? null;
     const word = textHolding("solitary")!;
     const range = document.createRange();
@@ -318,6 +324,8 @@ const steps = {
     const box = bar()?.getBoundingClientRect();
     const input = field();
     return {
+      rulesBefore,
+      rulesOpen: highlightRules(),
       foldedBefore,
       foldedAfter: $('[data-slot="earlier-turns"]') !== null,
       bar: box ? { top: round(box.top - root.top), right: round(root.right - box.right) } : null,
@@ -479,6 +487,7 @@ const steps = {
       matches: CSS.highlights.has(MATCHES),
       active: CSS.highlights.has(ACTIVE_MATCH),
       emptied: kept.map((highlight) => highlight?.size ?? null),
+      rules: highlightRules(),
     };
   },
   /** Esc gives the keyboard back to what had it, out of view, without scrolling the thread to it. */

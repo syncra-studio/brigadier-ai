@@ -4,6 +4,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, 
 import { ThreadHistoryContext } from "@/components/assistant-ui/message-rail";
 import type { ThreadOverlayProps } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { showHighlight } from "@/lib/highlightRules";
 import { useApp } from "@/state/store";
 
 /*
@@ -21,8 +22,8 @@ import { useApp } from "@/state/store";
 /** Counting stops here: "250+ results". */
 export const MAX_RESULTS = 250;
 /** The highlights the matches are drawn with (globals.css). */
-export const MATCHES = "thread-find";
-export const ACTIVE_MATCH = "thread-find-active";
+export const MATCHES = "thread-find" as const;
+export const ACTIVE_MATCH = "thread-find-active" as const;
 /** On the thread while it holds marks: its text is selectable (globals.css). */
 export const FINDING = "data-thread-finding";
 /** On a button holding the match gone to, whose text WebKit never marks. */
@@ -166,6 +167,8 @@ function paint(viewport: HTMLElement, ranges: readonly Range[], active: Range | 
   const highlights = registry();
   if (!highlights) return;
   viewport.setAttribute(FINDING, "");
+  showHighlight(MATCHES, true);
+  showHighlight(ACTIVE_MATCH, true);
   const all = marks(highlights, MATCHES, 0);
   all.clear();
   for (const range of ranges) all.add(range);
@@ -186,6 +189,7 @@ function unpaint(viewport: HTMLElement | null): void {
   for (const name of [MATCHES, ACTIVE_MATCH]) {
     highlights?.get(name)?.clear();
     highlights?.delete(name);
+    showHighlight(name, false);
   }
   if (!viewport) return;
   for (const button of viewport.querySelectorAll(`[${ACTIVE_BUTTON}]`)) button.removeAttribute(ACTIVE_BUTTON);
