@@ -15,13 +15,13 @@ export function RestartToUpdate() {
   const ready = useAppUpdate((s) => s.ready);
   const { open: expanded } = useSidebar();
   return (
-    <BarItem show={ready !== null} axis={expanded ? "x" : "y"}>
+    <BarItem show={ready !== null} axis={expanded ? "x" : "y"} shrink={expanded}>
       <FootButton
         tip="Restart to update"
         icon={<ArrowRotateCw aria-hidden />}
         dot={expanded ? null : "bg-foreground"}
         // A narrow sidebar cuts the words short rather than widening the row.
-        className={expanded ? "min-w-0" : undefined}
+        className={expanded ? "shrink" : undefined}
         end={expanded && <span className="truncate text-sm">Restart to update</span>}
         onClick={() => void restartToUpdate()}
       />

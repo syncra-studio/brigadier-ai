@@ -23,10 +23,13 @@ function prefersReducedMotion(): boolean {
 export function BarItem({
   show,
   axis = "x",
+  shrink = false,
   children,
 }: {
   show: boolean;
   axis?: "x" | "y";
+  /** Narrows with a row too short for it, instead of keeping its width. */
+  shrink?: boolean;
   children: ReactNode;
 }) {
   // Kept while leaving, until the motion ends.
@@ -64,7 +67,9 @@ export function BarItem({
       inert={!show}
       aria-hidden={!show || undefined}
       className={cn(
-        "ease-standard grid shrink-0 duration-200 motion-reduce:transition-none",
+        "ease-standard grid duration-200 motion-reduce:transition-none",
+        // Never below its icon while shown.
+        shrink ? (open ? "min-w-strip-button" : "min-w-0") : "shrink-0",
         axis === "x"
           ? "transition-[grid-template-columns,opacity]"
           : "transition-[grid-template-rows,opacity]",

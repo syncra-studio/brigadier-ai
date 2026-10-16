@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
 
 // The real sidebar in Chromium over a faked daemon: the Chats section's "+" next to Projects',
 // a lone agent update run from the chip itself, two updates where the finished one leaves the
@@ -25,4 +25,11 @@ test("sidebar: Chats +, updates that run from the chip and leave by themselves",
   assert.deepEqual(seen.afterLast, { open: false, pill: "gone" });
 
   assert.deepEqual(seen.failed, { open: true, alert: "Couldn't reach npm" });
+});
+
+// The narrowest sidebar with the updates chip and a nightly update waiting: "Restart to update"
+// shortens its words and stays inside, rather than running past the sidebar's edge.
+test("sidebar: Restart to update fits a narrow sidebar", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "updates.html?narrow=1", "updates-result")) as Record<string, unknown>;
+  assert.deepEqual(seen, { open: "expanded", inside: true, shortened: true });
 });

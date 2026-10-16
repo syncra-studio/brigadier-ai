@@ -13,9 +13,11 @@ import { toggleSettings } from "@/state/actions";
 
 /**
  * The icons at the sidebar's foot, outside Settings: keeping awake, the agents' usage, updates
- * while there are any, "Restart to update" while a nightly update waits, and Settings. Expanded, they make one row along the bottom, Settings
- * first; collapsed, they stack in the strip, Settings last. Settings stays in the corner either way, and the others fade in where they
- * move to, so the foot doesn't jump as the sidebar collapses or expands.
+ * while there are any, "Restart to update" while a nightly update waits, and Settings. Expanded,
+ * they make one row along the bottom, Settings first; collapsed, they stack in the strip, Settings
+ * last. Settings stays in the corner either way, and the others fade in where they move to, so the
+ * foot doesn't jump as the sidebar collapses or expands. In a narrow row "Restart to update"
+ * shortens its words.
  */
 export function SidebarFoot() {
   const shortcuts = useShortcuts();
@@ -48,7 +50,7 @@ export function SidebarFoot() {
       <Moving open={open}>
         <UpdatesRow />
       </Moving>
-      <Moving open={open}>
+      <Moving open={open} shrink>
         <RestartToUpdate />
       </Moving>
       {!open && settings}
@@ -57,11 +59,12 @@ export function SidebarFoot() {
 }
 
 /** A foot icon that moves between the row and the stack: it fades in where it lands. */
-function Moving({ open, children }: { open: boolean; children: ReactNode }) {
+function Moving({ open, shrink = false, children }: { open: boolean; shrink?: boolean; children: ReactNode }) {
   return (
     <div
       className={cn(
         "flex motion-reduce:animate-none",
+        shrink && "min-w-0",
         // Two names for one fade, so it starts again on each turn.
         open ? "animate-[foot-row_150ms_ease-out]" : "animate-[foot-stack_150ms_ease-out]",
       )}

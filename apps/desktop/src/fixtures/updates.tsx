@@ -1,4 +1,7 @@
-/** The sidebar over a faked daemon: the Chats section's "+", and updates that leave by themselves. */
+/**
+ * The sidebar over a faked daemon: the Chats section's "+", updates that leave by themselves, and
+ * "Restart to update" in a narrow sidebar.
+ */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -8,13 +11,16 @@ import { SidebarFoot } from "@/app/SidebarFoot";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EventEnvelope, Request, UpdateItem, UpdateTarget } from "@/ipc/generated";
+import { useAppUpdate } from "@/state/appUpdate";
 import { applyUpdateEvents } from "@/state/updates";
 import { useApp } from "@/state/store";
 
 /*
  * ?drive=1 clicks the Chats "+", runs a lone agent's update from the pill, runs one of two from
  * the list, and has one fail to start, writing what it saw to #updates-result
- * (SidebarUpdatesRender.test.ts reads it). Without it, the page shows two updates, for screenshots.
+ * (SidebarUpdatesRender.test.ts reads it). ?narrow=1 narrows the sidebar as far as it goes, with
+ * the two updates and a nightly update waiting, and writes whether "Restart to update" shortens its
+ * words inside it. Without either, the page shows two updates, for screenshots.
  */
 const params = new URLSearchParams(location.search);
 
@@ -80,6 +86,26 @@ const rows = () =>
 
 function Fixture() {
   const [result, setResult] = useState<string | null>(null);
+  useEffect(() => {
+    if (!params.has("narrow")) return;
+    const wrapper = q('[data-slot="sidebar-wrapper"]');
+    wrapper?.style.setProperty("--sidebar-width", "var(--spacing-sidebar-min)");
+    useAppUpdate.setState({ ready: "0.1.0-nightly.202610170130" });
+    // Past the sidebar's and the item's own motion.
+    const timer = window.setTimeout(() => {
+      const restart = q('button[aria-label="Restart to update"]');
+      const sidebar = restart?.closest(".sidebar-panel-width")?.getBoundingClientRect();
+      const words = restart ? q(".truncate", restart) : null;
+      setResult(
+        JSON.stringify({
+          open: wrapper?.dataset.state,
+          inside: Boolean(restart && sidebar && restart.getBoundingClientRect().right <= sidebar.right + 0.5),
+          shortened: Boolean(words && words.scrollWidth > words.clientWidth),
+        }),
+      );
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, []);
   useEffect(() => {
     if (!params.has("drive")) return;
     const seen: Record<string, unknown> = {};
