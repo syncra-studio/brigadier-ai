@@ -52,6 +52,8 @@ mod git_actions;
 mod instructions;
 mod integrated_checks;
 mod kept;
+#[cfg(all(test, unix))]
+mod kept_live_tests;
 mod landing;
 mod lifecycle;
 mod machine;
