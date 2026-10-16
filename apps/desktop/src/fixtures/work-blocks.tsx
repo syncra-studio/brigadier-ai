@@ -15,6 +15,8 @@
  *   result's answer.
  * - `drive=timer`: the turn waits on its question card, then ends; its header shows the work and the
  *   wait for the user apart (BUILD-PLAN A9).
+ * - `drive=filelink` (with `kind=session`): a finished answer's file chip holds still while a later
+ *   turn works.
  *
  * The result goes to `<pre id="work-blocks-result">`. `stop=running|answering|done|steer|menu` holds the
  * page at that moment instead, for a screenshot.
@@ -134,6 +136,8 @@ mockIPC((command, payload) => {
       settings = req.settings;
       return { method: req.method, settings };
     case "listFiles":
+      // `drive=filelink`: the checkout has the file its answer names, read back after a moment.
+      if (drive === "filelink") return new Promise((resolve) => setTimeout(() => resolve({ method: req.method, files: ["CHANGELOG.md"], truncated: false }), 80));
       return { method: req.method, files: [], truncated: false };
     case "openSideChat":
       calls.push(`${req.method} ${req.conversationId}`);
@@ -624,6 +628,66 @@ async function driveSelect(): Promise<object> {
   return { pills, placed, buttons, composer, focusedOwn, marked, afterAdd, sideChat: calls.filter((call) => call.startsWith("openSideChat")), draft };
 }
 
+/**
+ * A finished answer with a file link, then a later turn's live updates (steps, a thought, its
+ * streaming line): the answer is never drawn again, so its chip stays the same node, styled.
+ */
+async function driveFileLink(): Promise<object> {
+  await settle(600);
+  const answer: Message = {
+    id: "a1", conversationId: ID, seq: 2, role: "assistant", blob: null, createdAtMs: begun + 5000, attachments: [], mentions: [],
+    text: "I added `CHANGELOG.md` with an entry.\n\n- one\n- two", model: null, requestId: "r1", parentId: "r1", answerAtMs: begun + 5000,
+  };
+  daemon.messages = [...daemon.messages, answer];
+  daemon.run = "idle";
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change(() => ({ run: "idle", runRequest: null, head: "a1" }));
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 5000, worked: [{ fromMs: begun, toMs: begun + 5000 }] });
+  for (const end = performance.now() + 8000; performance.now() < end && !one("[data-slot=file-chip]"); ) await frame();
+  await settle(300);
+  const chip = one("[data-slot=file-chip]");
+  const events: string[] = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.removedNodes) {
+        if (node instanceof Element && (node.matches("[data-slot=file-chip]") || node.querySelector("[data-slot=file-chip]"))) events.push("chip removed");
+      }
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        if (node.matches("[data-slot=reply-loading], p.whitespace-pre-wrap") || node.querySelector("[data-slot=reply-loading], p.whitespace-pre-wrap")) events.push(`fallback ${node.className}`);
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  // A follow-up turn runs: its steps come one by one, then a line between them streams.
+  const second = user("r2", 3, "Also add a test", Date.now());
+  daemon.messages = [...daemon.messages, second];
+  daemon.requests.r2 = asked("r2", Date.now());
+  daemon.run = "running";
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change((board) => ({ run: "running", runRequest: "r2", head: "r2", requests: { ...board.requests, r2: daemon.requests.r2! } }));
+  await settle(200);
+  for (let index = 0; index < 4; index += 1) {
+    const step = { ...tool(`s${index}`, 3 + index / 10, "Read", `/repo/src/file${index}.js`, "inProgress"), requestId: "r2" } as OrchestratorStep;
+    // Each event moves the conversation's time, as the daemon's do.
+    const touch = () => useApp.setState((state) => ({ conversations: { ...state.conversations, [ID]: { ...state.conversations[ID]!, updatedAtMs: Date.now() } } }));
+    steps([...daemon.steps, step]);
+    touch();
+    // Another event before the checkout's files are read back.
+    await frame();
+    touch();
+    await wait(120);
+    steps(daemon.steps.map((s) => (s === step ? ({ ...step, kind: { ...step.kind, status: "completed" } } as OrchestratorStep) : s)));
+    touch();
+    await wait(120);
+  }
+  change(() => ({ streaming: { messageId: "line2", text: "Now the test.", requestId: "r2", phase: "commentary", startedAtMs: Date.now() } }));
+  await settle(300);
+  observer.disconnect();
+  const after = one("[data-slot=file-chip]");
+  return { same: !!chip && chip === after, connected: chip?.isConnected ?? false, events, color: after ? getComputedStyle(after).color : null };
+}
+
 async function driveQueue(): Promise<object> {
   await settle(600);
   // The composer's editor comes in its own chunk after a plain field and takes the focus a beat
@@ -705,7 +769,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "filelink" ? driveFileLink() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

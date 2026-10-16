@@ -213,3 +213,12 @@ test("the header shows the work and the wait for the user apart: Worked 15s · w
   assert.equal(seen.done.header, "Worked 15s · waited for you 15s");
   assert.equal(seen.noWait.header, "Worked for 15s");
 });
+
+test("a finished answer's file chip holds still while a later turn works: never drawn again as plain code", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ same: boolean; connected: boolean; events: string[]; color: string | null }>(t, "drive=filelink&kind=session");
+  // Each event of the later turn moves the conversation's time, which reads the checkout again.
+  assert.deepEqual(seen.events, []);
+  assert.equal(seen.same, true);
+  assert.equal(seen.connected, true);
+  assert.ok(seen.color, "the chip is there, in link blue");
+});

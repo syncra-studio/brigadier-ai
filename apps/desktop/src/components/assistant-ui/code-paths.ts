@@ -2,8 +2,9 @@
  * Inline code in an answer that names a file of the session's checkout (`src/cli.ts:64`) is a
  * file chip. A file counts only when it exists: in the checkout's file list, else asked of the
  * daemon by its exact path (the list stops at its cap and misses files made since it was read).
- * What is known is dropped whenever the checkout may have changed, so a chip is never false and
- * a real path never stays plain.
+ * What is known is read again whenever the checkout may have changed, so a chip is never false for
+ * long and a real path never stays plain; until the new answer comes the old one stays shown, so
+ * the chips of a finished answer hold still while a later turn works.
  */
 import { useEffect, useSyncExternalStore } from "react";
 
@@ -49,6 +50,8 @@ type Known = {
   waiting: [relative: string | null, absolute: string][];
   /** Absolute paths asked of the daemon, and whether each exists. */
   asked: Map<string, boolean | "asking">;
+  /** What was known for the checkout's version before this one: shown until this one knows. */
+  before: Known | null;
 };
 
 const known = new Map<string, Known>();
@@ -62,7 +65,11 @@ const changed = () => {
 function entry(conversationId: string, version: string): Known {
   const current = known.get(conversationId);
   if (current && current.version === version) return current;
-  const fresh: Known = { version, files: null, truncated: false, listing: false, waiting: [], asked: new Map() };
+  // The last version read through is shown meanwhile (one still being read knows nothing yet);
+  // older ones go.
+  const before = current ? (current.files !== null ? current : current.before) : null;
+  if (before) before.before = null;
+  const fresh: Known = { version, files: null, truncated: false, listing: false, waiting: [], asked: new Map(), before };
   known.set(conversationId, fresh);
   return fresh;
 }
@@ -120,7 +127,8 @@ function subscribe(listener: () => void): () => void {
 
 /**
  * Whether the file inline code names exists in the session's checkout: `null` while unknown (or
- * with no session), so the code shows plain until it is known.
+ * with no session), so the code shows plain until it is known. While a new version of the
+ * checkout is read, the last version's answer stands.
  */
 export function useCodePathExists(conversationId: string | null, root: string | null, version: string, path: CodePath | null): boolean | null {
   useSyncExternalStore(subscribe, () => generation);
@@ -128,10 +136,15 @@ export function useCodePathExists(conversationId: string | null, root: string | 
   const absolute = path && root && (!path.path.startsWith("/") || path.path.startsWith(`${root.replace(/\/$/, "")}/`)) ? underRoot(root, path.path) : null;
   const relative = path && root && !path.path.startsWith("/") ? path.path.replace(/^\.\//, "") : null;
   const state = conversationId ? known.get(conversationId) : undefined;
-  const result = state && state.version === version && absolute ? lookup(state, relative, absolute) : null;
+  const current = state && state.version === version ? state : undefined;
+  const result = current && absolute ? lookup(current, relative, absolute) : null;
+  // Not read for this version yet: what the last version read through knew.
+  const latest = current ?? state;
+  const previous = latest && (latest === current || latest.files === null) ? latest.before : latest;
+  const shown = result ?? (previous && absolute ? lookup(previous, relative, absolute) : null);
   useEffect(() => {
     if (!conversationId || !absolute || result !== null) return;
     learn(conversationId, version, relative, absolute);
   }, [conversationId, version, relative, absolute, result]);
-  return result;
+  return shown;
 }
