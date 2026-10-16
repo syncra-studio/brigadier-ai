@@ -2017,6 +2017,63 @@ async fn stopping_a_worker_while_the_thread_is_idle_gets_the_request_an_answer()
     flow.stop().await;
 }
 
+/// The composer's Stop while the thread is idle: the app stops the session, then each of its
+/// workers. The request asked to stop; no turn starts on the workers' stop (#65 review).
+#[tokio::test]
+async fn the_composers_stop_of_an_idle_thread_starts_no_turn_on_its_workers_stop() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let heard = inputs.clone();
+    let flow = Flow::start(
+        "stop-session-while-idle",
+        super::Options::default(),
+        script(move |turn| {
+            let heard = heard.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    std::future::pending::<()>().await;
+                    return Reply::text("");
+                }
+                heard.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("Scout it.") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Fix uploads", "kind": "scout", "spec": "Look around."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                Reply::text("Fine.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Scout it.").await;
+    let board = flow
+        .until("the worker to run", |board| {
+            board.tasks.len() == 1
+                && board
+                    .tasks
+                    .values()
+                    .all(|task| task.state == crate::work::TaskState::Running)
+        })
+        .await;
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.manager
+        .stop_task_by_user(Flow::task(&board, 1).id.clone())
+        .await
+        .unwrap();
+    flow.settled().await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let inputs = inputs.lock().unwrap().clone();
+    assert_eq!(inputs.len(), 1, "{inputs:#?}");
+    flow.stop().await;
+}
+
 /// The user's stops reach the thread inside its running turn (UI audit H2): one worker's Stop,
 /// then Stop all, each steered in as it happens. From then on the thread can't message, answer
 /// or approve a worker the user stopped, and `list_tasks` says who stopped it.

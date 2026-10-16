@@ -301,6 +301,10 @@ struct ConvState {
     /// put together (a landing's cleanup runs first), each with its request: until the
     /// envelope is in the inbox, the request works and a turn counts the task as running.
     announcing: HashMap<TaskId, Option<String>>,
+    /// Requests open when the user's Stop of the session came (the composer's, which stops
+    /// their workers next): a worker's stop then wakes no turn for them (#65). A turn of one
+    /// takes it off.
+    stopped_open: HashSet<String>,
     /// Until when the inbox's quiet envelopes wait for more ([`QUIET_WINDOW`]): none while
     /// nothing waits.
     quiet_until: Option<tokio::time::Instant>,
@@ -972,6 +976,12 @@ impl ConvLive {
         {
             crate::logging::private_trace!(self.private_logs, warn, "could not stop the turn"; conversation = %self.id, error = %err);
         }
+    }
+
+    /// Whether the user's Stop of the session came while `request` was open, and no turn of
+    /// it ran since.
+    pub(super) async fn stopped_open(&self, request: &str) -> bool {
+        self.state.lock().await.stopped_open.contains(request)
     }
 
     /// `task`'s news, marked on its way ([`SessionManager::announcing`]), isn't coming.
@@ -1980,8 +1990,20 @@ impl SessionManager {
                 .collect(),
             Err(_) => Vec::new(),
         };
+        let open: Vec<String> = match self.core.board(&id).await {
+            Ok(board) => board
+                .requests
+                .values()
+                .filter(|request| {
+                    matches!(request.state, RequestState::Working | RequestState::Waiting)
+                })
+                .map(|request| request.id.clone())
+                .collect(),
+            Err(_) => Vec::new(),
+        };
         let (stopped, handed_over, waits_on_jobs) = {
             let mut state = conv.state.lock().await;
+            state.stopped_open.extend(open);
             for request in owed.into_iter().chain(backgrounded) {
                 state.outcomes.insert(request, RequestState::Stopped);
             }
@@ -2659,6 +2681,7 @@ impl SessionManager {
             state.request.clone_from(&request);
             if let Some(request) = &request {
                 state.outcomes.remove(request);
+                state.stopped_open.remove(request);
                 // This turn says anew whether the request waits on the user.
                 state.asked_user.remove(request);
             }
@@ -4824,6 +4847,7 @@ impl SessionManager {
                         state.last_reply = None;
                         state.in_turn.clear();
                         state.outcomes.remove(&request);
+                        state.stopped_open.remove(&request);
                         state.request = Some(request.clone());
                         Some(Some(request))
                     } else {

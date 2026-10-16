@@ -4633,14 +4633,20 @@ impl SessionManager {
     /// The user's Stop for one worker (its row, its view, or the stop of a turn): stops it
     /// for good, files "Stopped by the user", and tells the thread at once: into its running
     /// turn; with a turn of its own when it is idle and the worker's request is still open,
-    /// so that request ends on the thread's word (#65); else before its next turn.
+    /// so that request ends on the thread's word (#65), unless the user stopped the session
+    /// meanwhile; else before its next turn.
     pub async fn stop_task_by_user(&self, task_id: TaskId) -> Result<()> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         self.mark_user_stop(&task.id);
         let conv = self.conv(&conversation_id).ok();
-        let wake = match &conv {
-            Some(conv) if !conv.turn_running().await => self.request_open(&task).await,
+        // The composer's Stop stops the session's workers one by one after it: no turn.
+        let wake = match (&conv, &task.request_id) {
+            (Some(conv), Some(request))
+                if !conv.turn_running().await && !conv.stopped_open(request).await =>
+            {
+                self.request_open(&task).await
+            }
             _ => false,
         };
         // The request keeps working from the stop to the thread's turn on it.
