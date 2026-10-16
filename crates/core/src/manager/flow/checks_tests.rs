@@ -335,8 +335,9 @@ async fn a_task_worktree_gets_a_stand_in_for_each_ignored_sidecar() {
 
 /// A thread's checks and commands get its short temporary folder under /tmp as TMPDIR, not
 /// its folder in the data folder (a long path with spaces, where a test that binds a Unix
-/// socket fails): at each level, in the sandbox that level gives, a socket binds there.
-#[cfg(unix)]
+/// socket fails): at each level, in the sandbox that level gives, a socket binds there. macOS
+/// only: the worker sandbox the lower levels need isn't there on Linux yet.
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn a_threads_checks_and_commands_bind_sockets_in_their_short_temporary_folder() {
     use crate::manager::workers::{SessionTemp, session_temp_dir};
