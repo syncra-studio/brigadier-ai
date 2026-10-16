@@ -17,6 +17,7 @@ A harness root (under /tmp) holds one build and one provider for the thread and 
 usage:
   run.py template --root R --provider claude|codex          (BRIGD, BRIG_SRC from the environment)
   run.py battery --root R --battery thread --seam SEAM [--n 1] [--tag T] [--rebirth-tokens N]
+                 [--hard-line-tokens N]
   run.py set --root R --battery thread --seam SEAM --reruns 3 [--first 1]
   run.py cleanup --root R [--export DIR]                    (as tools/ab/v3/run.py cleanup)
 
@@ -24,6 +25,8 @@ Seams (each forced at least twice between the plants and the probe):
   size     the thread is reborn by size: BRIGADIER_REBIRTH_TOKENS (--rebirth-tokens, default 36000),
            with the briefing's cap at BRIGADIER_BRIEFING_TOKENS (--briefing-tokens, default 8000),
            so a short battery's early messages leave the verbatim tail as a long session's do
+  inturn   the thread's turn is stopped mid-request and reborn at once: BRIGADIER_HARD_LINE_TOKENS
+           (--hard-line-tokens, default 40000), with the briefing's cap as for size (BUILD-PLAN D2.3b)
   restart  the daemon is killed (SIGKILL) mid-request at each seam point, and started again
   kill     the thread's CLI process is killed (SIGKILL) mid-request at each seam point
   context  "prompt is too long" injected into the thread's turn at each seam point
@@ -48,13 +51,17 @@ from v2lib import load_battery  # noqa: E402
 
 log, now_ms = v3run.log, v3run.now_ms
 MODELS = {"claude": "opus", "codex": "gpt-6.1-sol"}
-SEAMS = ["size", "restart", "kill", "context", "auth", "billing", "limit", "none"]
+SEAMS = ["size", "inturn", "restart", "kill", "context", "auth", "billing", "limit", "none"]
 INJECTED = {"context": "contextWindow", "auth": "auth", "billing": "billing"}
 # A reborn thread starts near 29k (instructions, tools and an 8k briefing): at 36k the first rebirth
 # comes after the last plant (r6 ends near 30k) and the second during e2, both well before the probe.
 # At 45k the second one fell on the probe in two of three runs.
 DEFAULT_REBIRTH_TOKENS = 36_000
 DEFAULT_BRIEFING_TOKENS = 8_000
+# The in-turn seam's hard line: a reborn thread starts near 29k, so each later step that grows past
+# 40k mid-turn is stopped and continued in a fresh session; the rebirth swap (400k on a 1M window)
+# never comes first.
+DEFAULT_HARD_LINE_TOKENS = 40_000
 
 
 # ---------------------------------------------------------------- the arm
@@ -254,7 +261,8 @@ def seam(arm, kind, conv, rid, sent_ms, deadline, record):
     log("seam", kind, json.dumps(entry)[:200])
 
 
-def one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens=DEFAULT_BRIEFING_TOKENS):
+def one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens=DEFAULT_BRIEFING_TOKENS,
+        hard_line_tokens=DEFAULT_HARD_LINE_TOKENS):
     build = json.load(open(os.path.join(root, "build.json")))
     label = tag or build["label"]
     rid_ = f"{b['name']}-{seam_kind}-{build['provider']}-{label}-{n}"
@@ -266,8 +274,9 @@ def one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens=DEFAULT_BRIE
     os.makedirs(run)
     shutil.copyfile(b["path"], os.path.join(run, "battery.md"))
     v3run.restore(root, "seeded")
-    debug_env = (f"BRIGADIER_REBIRTH_TOKENS={rebirth_tokens} BRIGADIER_BRIEFING_TOKENS={briefing_tokens}"
-                 if seam_kind == "size" else "")
+    debug_env = {"size": f"BRIGADIER_REBIRTH_TOKENS={rebirth_tokens} BRIGADIER_BRIEFING_TOKENS={briefing_tokens}",
+                 "inturn": f"BRIGADIER_HARD_LINE_TOKENS={hard_line_tokens} BRIGADIER_BRIEFING_TOKENS={briefing_tokens}",
+                 }.get(seam_kind, "")
     conditions = subprocess.run(["bash", "-c", "sysctl -n vm.loadavg; claude --version; codex --version; node --version"],
                                 capture_output=True, text=True).stdout.split("\n")
     arm = Arm(root, os.path.join(run, "rec"), run, debug_env)
@@ -298,7 +307,7 @@ def one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens=DEFAULT_BRIE
             start["steps"].append(step["id"]); start["requests"].append(rid); start["sent_ms"].append(t)
             json.dump(start, open(os.path.join(run, "start.json"), "w"), indent=1)
             log(rid_, f"{step['id']} sent ({i + 1}/{len(b['steps'])})")
-            if seam_kind not in ("size", "none") and step["id"] in h.get("seam_points", []):
+            if seam_kind not in ("size", "inturn", "none") and step["id"] in h.get("seam_points", []):
                 seam(arm, seam_kind, conv, rid, t, deadline, start["seams"])
             r = v3run.wait_request(arm.events, conv, rid, deadline)
             if r is None:
@@ -379,9 +388,9 @@ def run_checks(root, run, harness):
 
 # ---------------------------------------------------------------- commands
 
-def attempt(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens):
+def attempt(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens, hard_line_tokens):
     try:
-        return one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens)
+        return one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens, hard_line_tokens)
     except Exception as err:  # noqa: BLE001
         log(b["name"], "HARNESS ERROR", repr(err))
         with open(os.path.join(root, "results.jsonl"), "a") as f:
@@ -400,6 +409,7 @@ def main():
         p.add_argument("--seam", choices=SEAMS, required=True); p.add_argument("--tag")
         p.add_argument("--rebirth-tokens", type=int, default=DEFAULT_REBIRTH_TOKENS)
         p.add_argument("--briefing-tokens", type=int, default=DEFAULT_BRIEFING_TOKENS)
+        p.add_argument("--hard-line-tokens", type=int, default=DEFAULT_HARD_LINE_TOKENS)
         if name == "battery":
             p.add_argument("--n", type=int, default=1)
         else:
@@ -414,10 +424,10 @@ def main():
         root = v3run.check_root(a.root)
         b = load_battery(a.battery)
         if a.cmd == "battery":
-            one(root, b, a.seam, a.n, a.tag, a.rebirth_tokens, a.briefing_tokens)
+            one(root, b, a.seam, a.n, a.tag, a.rebirth_tokens, a.briefing_tokens, a.hard_line_tokens)
         else:
             for r in range(a.first, a.first + a.reruns):
-                attempt(root, b, a.seam, r, a.tag, a.rebirth_tokens, a.briefing_tokens)
+                attempt(root, b, a.seam, r, a.tag, a.rebirth_tokens, a.briefing_tokens, a.hard_line_tokens)
 
 
 if __name__ == "__main__":

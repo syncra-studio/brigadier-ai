@@ -143,6 +143,11 @@ def seams_forced(start, briefs, log, steps_ms, last_plant_ms, probe_ms):
     kind = start["seam"]
     if kind == "size":
         return sum(1 for b in briefs if last_plant_ms < b["at_ms"] < probe_ms)
+    if kind == "inturn":
+        # Rebirths of a turn stopped mid-request (BUILD-PLAN D2.3b), not by size between turns.
+        return sum(1 for e in log if e["entry"].get("type") == "rebirth"
+                   and e["entry"]["record"].get("trigger") == "midTurn"
+                   and last_plant_ms < e["entry"]["record"]["swappedAtMs"] < probe_ms)
     if kind in ("restart", "kill"):
         key = "killed_pid" if kind == "restart" else "killed"
         return sum(1 for s in start.get("seams", []) if s.get(key))
