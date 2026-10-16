@@ -2,8 +2,12 @@
 //! does in its own, so it gets the same copies of the checkout's dependency installs, and
 //! hears so, instead of failing its first check and reinstalling them.
 
+use std::ffi::OsStr;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
+
+use brigadier_sandbox::clone::Folder;
 
 use super::{Flow, Options, Reply, Script};
 
@@ -23,6 +27,26 @@ fn age(dir: &std::path::Path) {
             .set_modified(past)
             .unwrap();
     }
+}
+
+/// Whether a copy of the checkout can be made next to it: copies are only ever made
+/// copy-on-write, which a file system that can't share blocks (ext4) refuses, and then
+/// nothing is copied.
+fn copies_here(repo: &Path) -> bool {
+    let parent = repo.parent().unwrap();
+    let probe = parent.join("clone-check");
+    let made = Folder::open(repo, Path::new(""), false)
+        .and_then(|src| {
+            Folder::open(parent, Path::new(""), false)?.clone_in(
+                &src,
+                OsStr::new("package.json"),
+                OsStr::new("clone-check"),
+                Instant::now() + Duration::from_secs(30),
+            )
+        })
+        .is_ok();
+    let _ = std::fs::remove_file(probe);
+    made
 }
 
 #[tokio::test]
@@ -56,6 +80,10 @@ async fn the_threads_worktree_has_the_checkouts_dependencies_and_the_thread_is_t
         ..Options::default()
     };
     let flow = Flow::start("warm-session", options, script).await;
+    if !copies_here(&flow.repo) {
+        flow.stop().await;
+        return;
+    }
     age(&flow.repo.join("node_modules"));
     flow.say("Run the tests").await;
     flow.settled().await;

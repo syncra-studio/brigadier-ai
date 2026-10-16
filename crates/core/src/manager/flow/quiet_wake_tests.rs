@@ -122,10 +122,15 @@ async fn quiet_news_waits_while_a_worker_runs_and_a_question_wakes_the_thread_at
     );
     assert_eq!(flow.board().await.run, RunState::Idle);
     ask.notify_one();
-    flow.until("the question's turn", |board| {
-        board.run == RunState::Running || board.run == RunState::Starting
-    })
-    .await;
+    // The question's turn, its answer and the report can all be over between two looks at the
+    // board, so what the thread was given says it woke. With the window an hour long, only the
+    // question can have woken it.
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        flow.until("the question's turn", |_| inputs.lock().unwrap().len() >= 2),
+    )
+    .await
+    .expect("the question woke the thread at once");
     let board = flow.settled().await;
     assert_eq!(Flow::task(&board, 1).state, TaskState::Done);
     let inputs = inputs.lock().unwrap().clone();
