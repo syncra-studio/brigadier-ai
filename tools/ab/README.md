@@ -118,7 +118,7 @@ ruled-out approach, and a probe asks for every item.
 
     export BRIGD=<dev brigadierd> BRIG_SRC=<its source tree>
     v2/run.py template --root /tmp/v2-X --provider claude --tag X    # or --provider codex (thread and workers)
-    v2/run.py battery --root /tmp/v2-X --seam size [--rebirth-tokens 45000]
+    v2/run.py battery --root /tmp/v2-X --seam size [--rebirth-tokens 36000]
     v2/run.py set --root /tmp/v2-X --seam size --reruns 3            # D1.0: three reruns, one build
     v2/summary.py /tmp/v2-X        # rescored; per item and run; exit 1 when the reruns disagree on an item
     v2/selftest.py [/tmp/v2-X]     # the scorer's rules on synthetic runs, and byte-identical rescoring

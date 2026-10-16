@@ -1424,6 +1424,16 @@ fn decision_index(nodes: &[Node]) -> String {
             _ => "project",
         };
         let status = match &node.state {
+            // A replaced claim nobody checked still says so: what it said never reads as fact
+            // (V2's false learned line).
+            NodeState::Superseded { by, .. }
+                if brigadier_brain::unverified(node.kind, &node.provenance) =>
+            {
+                format!(
+                    "{}, replaced by {by}",
+                    brigadier_brain::source_label(node.kind, &node.provenance)
+                )
+            }
             NodeState::Superseded { by, .. } => format!("replaced by {by}"),
             NodeState::Stale { .. } => "may be out of date".to_owned(),
             NodeState::Fresh if brigadier_brain::unverified(node.kind, &node.provenance) => {
@@ -1580,6 +1590,44 @@ mod tests {
             expires_at_ms: None,
             embedded: false,
         }
+    }
+
+    /// A worker's claim the thread replaced keeps its label in the index, so its words never
+    /// read as fact; a replaced user decision is just replaced.
+    #[test]
+    fn a_replaced_claim_keeps_its_label_in_the_decision_index() {
+        let mut claim = decision(1, "The write is atomic.");
+        claim.kind = NodeKind::Convention;
+        claim.title = "writeDataFile writes atomically".into();
+        claim.provenance.origin = NodeOrigin::Report;
+        claim.provenance.claim = Some(brigadier_brain::Claim::default());
+        claim.state = NodeState::Superseded {
+            by: "d2".into(),
+            reason: Some("the thread read the code".into()),
+            since_ms: None,
+        };
+        let mut old = decision(3, "Keep it.");
+        old.state = NodeState::Superseded {
+            by: "d4".into(),
+            reason: Some("replaced by the user".into()),
+            since_ms: None,
+        };
+        let text = decision_index(&[
+            claim,
+            decision(2, "Not atomic."),
+            old,
+            decision(4, "Move it."),
+        ]);
+        assert!(
+            text.contains(
+                "- d1 · project · worker claim, unverified, replaced by d2 · writeDataFile writes atomically\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("- d3 · session · replaced by d4 · Decision 3\n"),
+            "{text}"
+        );
     }
 
     #[test]

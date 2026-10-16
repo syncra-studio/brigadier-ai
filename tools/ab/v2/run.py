@@ -21,7 +21,7 @@ usage:
   run.py cleanup --root R [--export DIR]                    (as tools/ab/v3/run.py cleanup)
 
 Seams (each forced at least twice between the plants and the probe):
-  size     the thread is reborn by size: BRIGADIER_REBIRTH_TOKENS (--rebirth-tokens, default 45000),
+  size     the thread is reborn by size: BRIGADIER_REBIRTH_TOKENS (--rebirth-tokens, default 36000),
            with the briefing's cap at BRIGADIER_BRIEFING_TOKENS (--briefing-tokens, default 8000),
            so a short battery's early messages leave the verbatim tail as a long session's do
   restart  the daemon is killed (SIGKILL) mid-request at each seam point, and started again
@@ -50,7 +50,10 @@ log, now_ms = v3run.log, v3run.now_ms
 MODELS = {"claude": "opus", "codex": "gpt-6.1-sol"}
 SEAMS = ["size", "restart", "kill", "context", "auth", "billing", "limit", "none"]
 INJECTED = {"context": "contextWindow", "auth": "auth", "billing": "billing"}
-DEFAULT_REBIRTH_TOKENS = 45_000
+# A reborn thread starts near 29k (instructions, tools and an 8k briefing): at 36k the first rebirth
+# comes after the last plant (r6 ends near 30k) and the second during e2, both well before the probe.
+# At 45k the second one fell on the probe in two of three runs.
+DEFAULT_REBIRTH_TOKENS = 36_000
 DEFAULT_BRIEFING_TOKENS = 8_000
 
 
