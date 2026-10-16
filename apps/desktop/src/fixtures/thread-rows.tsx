@@ -51,6 +51,8 @@ import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
 const CHAT = "thread-rows";
+/** What a `run_check` with `commit` says after a check's output, as the Shell box shows it. */
+const COMMITTED = 'Committed 1a2b3c4 "Fix rounding": 1 file changed, 2 insertions(+) (src/round.js). Nothing is left uncommitted.';
 const ROOT = "/repo";
 const asked: string[] = [];
 /** A worker's diff of six files, forty new lines each: taller than any window. */
@@ -205,6 +207,9 @@ function Page() {
         </Case>
         <Case id="shell-clipped">
           <ShellBox command="cat big.log" output={`head of the log… [12345 more bytes]`} status="completed" exit={0} />
+        </Case>
+        <Case id="shell-note">
+          <ShellBox command="npm test" output="ok" status="completed" exit={0} notes={[COMMITTED]} />
         </Case>
         <Case id="shell-command">
           <ShellBox command={longCommand} output="ok" status="completed" exit={0} />
@@ -365,6 +370,7 @@ function shell(id: string) {
     colored: all("[data-slot=shell-output] span[style]", box).map((span) => [span.textContent, span.style.color]),
     ending: text(one("[data-slot=shell-ending]", box)),
     clipped: text(one("[data-slot=shell-clipped]", box)),
+    notes: all("[data-slot=shell-note]", box).map((note) => text(note)),
     folded: all("button", box).some((button) => /lines/.test(button.textContent ?? "")),
   };
 }
@@ -375,7 +381,7 @@ async function measure(): Promise<object> {
   const out: Record<string, unknown> = {};
   // A compaction: a new one's words alone (read first, well within its 10 s), a long one says it may take a while.
   out.compaction = [text(at("compaction-new")), text(at("compaction-slow"))];
-  for (const id of ["shell-long", "shell-failed", "shell-cli-failed", "shell-running", "shell-clipped", "shell-command"]) out[id] = shell(id);
+  for (const id of ["shell-long", "shell-failed", "shell-cli-failed", "shell-running", "shell-clipped", "shell-command", "shell-note"]) out[id] = shell(id);
   one<HTMLElement>("[data-slot=shell-command]", at("shell-command"))?.click();
   await frame();
   out.commandClicked = shell("shell-command").clamped;

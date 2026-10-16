@@ -104,13 +104,15 @@ function Colored({ text }: { text: string }) {
  * A command's box: "Shell", `$ command` (two lines, all of it on a click) and everything it printed
  * in colour, newest line in view, then how it ended. Output the daemon cut short says so.
  */
-export function ShellBox({ command, output, status, exit, stopped = false }: {
+export function ShellBox({ command, output, status, exit, stopped = false, notes = [] }: {
   command: string;
   output: string | null;
   status: ItemStatus;
   exit: number | null;
   /** The user's Stop ended it. */
   stopped?: boolean;
+  /** What Brigadier did after the command, each on a line under its output: the commit a check made. */
+  notes?: string[];
 }) {
   const [whole, setWhole] = useState(false);
   // A command still running when the user's Stop ended its thread was stopped.
@@ -159,6 +161,11 @@ export function ShellBox({ command, output, status, exit, stopped = false }: {
         )}
         {printed && <CopyButton text={stripAnsi(printed)} label="Copy output" className="end-1 top-1" />}
       </div>
+      {notes.map((note) => (
+        <p key={note} data-slot="shell-note" className="text-muted-foreground px-3 pt-1.5 text-sm wrap-anywhere">
+          {note}
+        </p>
+      ))}
       {(end || more !== null) && (
         <div className="text-muted-foreground flex items-center gap-2 px-3 py-1.5 text-sm">
           {more !== null && <span data-slot="shell-clipped" className="min-w-0 truncate">Only the start was kept: {sizeWords(more)} more not shown</span>}
@@ -292,7 +299,7 @@ function callDetail(name: string, status: ItemStatus, call: { input: string | nu
     const command = call.command ?? (typeof given === "string" ? given : "");
     if (command && OWN_RUNS.has(short)) {
       const own = ownRunOutput(call.output);
-      return <ShellBox command={command} output={own.output} status={status} exit={call.exit ?? own.exit} />;
+      return <ShellBox command={command} output={own.output} status={status} exit={call.exit ?? own.exit} notes={own.notes} />;
     }
     if (command) return <ShellBox command={command} output={call.output} status={status} exit={call.exit} />;
   }

@@ -5,12 +5,12 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Shell = {
   command: string | null; clamped: boolean; shrinks: string; outputLines: number; output: string | null; colored: [string, string][];
-  ending: string | null; clipped: string | null; folded: boolean;
+  ending: string | null; clipped: string | null; notes: (string | null)[]; folded: boolean;
 };
 
 test("the thread's rows read like the reference thread: Shell boxes, stopped steps, a live group's children, web searches", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "thread-rows.html", "thread-rows-result", 90000)) as Record<
-    "shell-long" | "shell-failed" | "shell-cli-failed" | "shell-running" | "shell-clipped" | "shell-command",
+    "shell-long" | "shell-failed" | "shell-cli-failed" | "shell-running" | "shell-clipped" | "shell-command" | "shell-note",
     Shell
   > & {
     error?: string;
@@ -62,6 +62,13 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // Cut short by the daemon: says so, and the marker isn't shown as output.
   assert.equal(seen["shell-clipped"].output, "head of the log");
   assert.equal(seen["shell-clipped"].clipped, "Only the start was kept: 12 KB more not shown");
+  // What run_check's commit made reads under the output, in plain words, and the box still ends "Success".
+  assert.deepEqual([seen["shell-note"].output, seen["shell-note"].notes, seen["shell-note"].ending], [
+    "ok",
+    ['Committed 1a2b3c4 "Fix rounding": 1 file changed, 2 insertions(+) (src/round.js). Nothing is left uncommitted.'],
+    "Success",
+  ]);
+  assert.deepEqual(seen["shell-long"].notes, []);
   // A long command: two lines until clicked.
   assert.deepEqual([seen["shell-command"].clamped, seen.commandClicked], [true, false]);
   assert.equal(seen["shell-command"].shrinks, "0");
