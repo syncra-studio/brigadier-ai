@@ -1369,3 +1369,72 @@ async fn request_changes_undo_a_deleted_executable_with_its_mode() {
     );
     flow.stop().await;
 }
+
+/// A background run whose call is linked only after the handoff (its row came late) keeps that
+/// link when it ends, so its row still opens its output.
+#[tokio::test]
+async fn request_changes_background_runs_keep_a_late_link_to_their_call() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let proceed = release.clone();
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w79-late-link",
+        options(ProviderKind::Claude),
+        script(move |turn| {
+            let release = proceed.clone();
+            async move {
+                if turn.earlier > 0 {
+                    return Reply::text("The background run finished.");
+                }
+                let id = turn.conversation().unwrap();
+                let reply = turn
+                    .host
+                    .in_foreground(
+                        &id,
+                        "run",
+                        "late output",
+                        tokio_util::sync::CancellationToken::new(),
+                        tokio_util::sync::CancellationToken::new(),
+                        async move {
+                            release.notified().await;
+                            Ok(("exit 0".into(), "late output\n".into()))
+                        },
+                    )
+                    .await
+                    .unwrap();
+                for status in [ItemStatus::InProgress, ItemStatus::Completed] {
+                    turn.emit(ProviderEvent::ToolCall {
+                        kept: None,
+                        item_id: "late-call".into(),
+                        name: "mcp__brigadier__run".into(),
+                        input: Some("{\"command\":\"late output\"}".into()),
+                        output: (status == ItemStatus::Completed).then(|| reply.clone()),
+                        status,
+                    })
+                    .await;
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    flow.say("Run the late background command.").await;
+    flow.until("the late link", |b| {
+        b.background_runs
+            .get("run-1")
+            .is_some_and(|r| r.item_id.as_deref() == Some("late-call"))
+    })
+    .await;
+    release.notify_one();
+    let board = flow
+        .until("background finished", |b| {
+            b.background_runs.get("run-1").is_some_and(|r| {
+                matches!(r.state, crate::work::BackgroundRunState::Finished { .. })
+            })
+        })
+        .await;
+    assert_eq!(
+        board.background_runs["run-1"].item_id.as_deref(),
+        Some("late-call")
+    );
+    flow.stop().await;
+}

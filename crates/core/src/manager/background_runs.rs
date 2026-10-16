@@ -232,6 +232,15 @@ impl SessionManager {
             .unwrap_or_else(|p| p.into_inner())
             .remove(&(run.conversation_id.clone(), run.id.clone()));
         self.background_command_changes(&run).await;
+        // The call it started may have been linked after the handoff, on the board only.
+        if run.item_id.is_none()
+            && let Ok(board) = self.core.board(&run.conversation_id).await
+        {
+            run.item_id = board
+                .background_runs
+                .get(&run.id)
+                .and_then(|stored| stored.item_id.clone());
+        }
         run.ended_at_ms = Some(now_ms());
         if cancel.is_cancelled() {
             // What it printed before the Stop stays readable from its row.
