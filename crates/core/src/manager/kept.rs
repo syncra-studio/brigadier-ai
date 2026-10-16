@@ -106,12 +106,11 @@ impl SessionManager {
                 ..KeptFile::default()
             };
             match read_saved_file(&path).await {
-                Ok(bytes) => {
-                    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+                Ok((mut text, size)) => {
                     if let Some(redactor) = &redactor {
                         redactor.redact_in_place(&mut text);
                     }
-                    file.bytes = bytes.len() as u64;
+                    file.bytes = size;
                     match self.put_kept(text.into_bytes()).await {
                         Ok(blob) => file.blob = Some(blob),
                         Err(err) => {
@@ -136,15 +135,20 @@ impl SessionManager {
 
 /// A file the CLI saved a whole result to, up to the most of one result kept: only a file in a
 /// session's `tool-results` folder is read (see [`brigadier_providers::open_tool_results_file`]).
-async fn read_saved_file(path: &str) -> std::io::Result<Vec<u8>> {
+/// Its size is the file's whole size; what lies past the most kept is said at the end.
+async fn read_saved_file(path: &str) -> std::io::Result<(String, u64)> {
     use tokio::io::AsyncReadExt as _;
+    let file = brigadier_providers::open_tool_results_file(path).await?;
+    let size = file.metadata().await?.len();
     let mut bytes = Vec::new();
-    brigadier_providers::open_tool_results_file(path)
-        .await?
-        .take(brigadier_providers::OUTPUT_KEEP_MAX as u64)
+    file.take(brigadier_providers::OUTPUT_KEEP_MAX as u64)
         .read_to_end(&mut bytes)
         .await?;
-    Ok(bytes)
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if size > bytes.len() as u64 {
+        text.push_str(&format!("… [{} more bytes]", size - bytes.len() as u64));
+    }
+    Ok((text, size))
 }
 
 /// A finished result's item and the saved file it names that wasn't copied when it was seen.

@@ -749,11 +749,17 @@ impl ConvLive {
         self.items.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// The running turn made a call, ran a command or changed files: a fresh session that
+    /// continues a stopped request has shown it can go on (see `ConvState::reborn_unproven`).
+    async fn made_progress(&self) {
+        self.state.lock().await.reborn_unproven = None;
+    }
+
     /// The running turn started a call or command: the last reply its request showed was said
     /// mid-work (see `ConvState::last_said`).
     async fn went_on_working(&self) {
+        self.made_progress().await;
         let mut state = self.state.lock().await;
-        state.reborn_unproven = None;
         if let Some(request) = state.request.clone()
             && let Some((_, followed)) = state.last_said.get_mut(&request)
         {
@@ -4653,6 +4659,7 @@ impl SessionManager {
                 changes,
                 status,
             } => {
+                conv.made_progress().await;
                 let detail = changes.first().map(|first| match changes.len() {
                     1 => first.path.clone(),
                     n => format!("{} and {} more", first.path, n - 1),

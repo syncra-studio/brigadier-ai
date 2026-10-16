@@ -83,19 +83,27 @@ impl Sources {
             return Err(format!("{path} is outside the checkout"));
         }
         if let Some((dir, tip)) = &self.commit {
-            let output = std::process::Command::new("git")
-                .arg("-C")
-                .arg(dir)
-                .args(["cat-file", "blob", &format!("{tip}:{path}")])
-                .output()
-                .map_err(|err| format!("{path} can't be read: {err}"))?;
-            if !output.status.success() {
-                return Err(format!("{path} isn't in the tip's commit"));
-            }
-            if output.stdout.len() as u64 > READ_MAX {
+            let object = format!("{tip}:{path}");
+            let git = |args: &[&str]| {
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(dir)
+                    .args(args)
+                    .output()
+                    .ok()
+                    .filter(|output| output.status.success())
+                    .map(|output| output.stdout)
+            };
+            // Its size first: a big file is never read whole.
+            let size = git(&["cat-file", "-s", &object])
+                .and_then(|out| String::from_utf8_lossy(&out).trim().parse::<u64>().ok())
+                .ok_or_else(|| format!("{path} isn't in the tip's commit"))?;
+            if size > READ_MAX {
                 return Err(format!("{path} can't be read"));
             }
-            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+            let bytes = git(&["cat-file", "blob", &object])
+                .ok_or_else(|| format!("{path} can't be read"))?;
+            return Ok(String::from_utf8_lossy(&bytes).into_owned());
         }
         let Some(file) = self
             .roots
