@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
 import type { EventEnvelope } from "@/ipc/generated";
 import { CHAT_TAB, sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -56,6 +57,7 @@ function reveal(elementId: () => string): void {
       const scroller = target.closest("[data-slot=summary-card]")?.firstElementChild;
       if (scroller && target.offsetHeight > scroller.clientHeight)
         scroller.scrollTop += target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      jumpInThread(target);
       target.scrollIntoView({ block: "nearest" });
       target.focus({ preventScroll: true });
     }),

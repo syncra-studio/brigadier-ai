@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
 import { openNotificationSettings, request } from "@/ipc/client";
 import type { DiffStat, OvernightRun, TaskId } from "@/ipc/generated";
 import { loadConversation, loadFullText, openConversation, switchBranch } from "@/state/actions";
@@ -257,6 +258,7 @@ export const overnightActions: OvernightActions = {
       await loadConversation(conversationId);
       requestAnimationFrame(() => requestAnimationFrame(() => {
         const message = document.getElementById(`message-${messageId}`);
+        jumpInThread(message);
         message?.scrollIntoView({ block: "center" });
         message?.focus({ preventScroll: true });
       }));

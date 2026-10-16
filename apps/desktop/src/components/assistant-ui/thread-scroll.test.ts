@@ -5,6 +5,7 @@ import {
   BELOW_PX,
   expectSentTurn,
   FOLLOW_PX,
+  jumpInThread,
   roomFor,
   type RowBox,
   ThreadScroller,
@@ -1073,4 +1074,49 @@ test("a clamp heard only after the content grew back (no input of the user's) ke
   // The user's own wheel up still stops following.
   userScroll(fake, scroller, fake.scrollTop - 300);
   assert.equal(scroller.following, false);
+});
+
+test("a jump the code makes for the user (a message revealed) stays; a scroll with no input of theirs goes back while following", () => {
+  const fake = new Fake();
+  conversation(fake, 10);
+  const scroller = open(fake);
+  assert.equal(scroller.following, true);
+  fake.scrollTop = fake.max - 500;
+  scroller.scrolled();
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(scroller.following, true);
+  // A message revealed: the code says so first, and the view stays where it moved.
+  jumpInThread({ closest: () => fake } as unknown as Element);
+  fake.scrollTop = 800;
+  scroller.scrolled();
+  assert.equal(fake.scrollTop, 800);
+  assert.equal(scroller.following, false);
+});
+
+test("a fling that goes on long after the user's touch is still theirs, and reaching the bottom follows again", () => {
+  const now = performance.now;
+  let clock = 10_000;
+  performance.now = () => clock;
+  try {
+    const fake = new Fake();
+    conversation(fake, 10);
+    const scroller = open(fake);
+    userScroll(fake, scroller, 1000);
+    assert.equal(scroller.following, false);
+    // The fling glides on, a scroll every frame, well past a second after the touch.
+    for (let top = 1000; top < fake.max; top = Math.min(fake.max, top + 20)) {
+      clock += 16;
+      fake.scrollTop = top + 20;
+      scroller.scrolled();
+    }
+    assert.ok(clock - 10_000 > 1_000);
+    assert.equal(scroller.following, true);
+    // A quiet moment later, a scroll with no input is the browser's: a following view stays at its bottom.
+    clock += 2_000;
+    fake.scrollTop = fake.max - 300;
+    scroller.scrolled();
+    assert.equal(fake.scrollTop, fake.max);
+  } finally {
+    performance.now = now;
+  }
 });

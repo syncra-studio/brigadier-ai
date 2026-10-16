@@ -42,6 +42,8 @@ const HOLD_MS = 350;
 const EDIT_WINDOW_MS = 30_000;
 /** A scroll this soon after the user's own input in the thread (or a jump of theirs) is theirs. */
 const INPUT_MS = 1_000;
+/** A scroll this soon after one of the user's is theirs too: a fling or a glide goes on by itself. */
+const FLING_MS = 250;
 
 type Rect = { readonly top: number; readonly bottom: number };
 
@@ -88,6 +90,19 @@ type Saved = {
   room: { id: string; px: number; turn: number } | null;
 };
 const saved = new Map<string, Saved>();
+
+/** Each thread's scroller, by its view: for code that moves the view on the user's behalf. */
+const scrollers = new WeakMap<object, ThreadScroller>();
+
+/**
+ * Code moving a thread's view to what the user asked for (a message, a step, a report) says so
+ * first, with that or the view: the move is the user's jump (see `ThreadScroller.release`),
+ * where a scroll with no input of theirs is the browser's and undone while the view follows.
+ */
+export function jumpInThread(target: Element | null | undefined): void {
+  const viewport = target?.closest("[data-slot=aui_thread-viewport]");
+  if (viewport) scrollers.get(viewport)?.release();
+}
 
 /** Messages just sent, by conversation: their row's id, placed when it shows. */
 const sentTurns = new Map<string, string>();
@@ -138,6 +153,8 @@ export class ThreadScroller {
   private inputAtMs = Number.NEGATIVE_INFINITY;
   /** A pointer is held down in the thread (dragging the scrollbar, selecting text). */
   private pressed = false;
+  /** When a scroll last was the user's. */
+  private userScrollAtMs = Number.NEGATIVE_INFINITY;
   private lastDistance = 0;
   /** The view's size as last handled, and whether the view was at its bottom then. */
   private size = { width: 0, height: 0 };
@@ -211,10 +228,12 @@ export class ThreadScroller {
     this.lastDistance = 0;
     this.below = false;
     layout.setRoom(0);
+    scrollers.set(layout.viewport, this);
     this.rowsChanged();
     return () => {
       this.stopGlide();
       if (this.layout === layout) this.layout = null;
+      if (scrollers.get(layout.viewport) === this) scrollers.delete(layout.viewport);
     };
   }
 
@@ -326,7 +345,8 @@ export class ThreadScroller {
 
   /**
    * A scroll event. One that didn't come from here is the user's when it comes with their input
-   * (a wheel, a touch, a held pointer, a key, a jump); any other is the browser's: clamping the
+   * (a wheel, a touch, a held pointer, a key, a jump) or right after a scroll of theirs (a fling
+   * going on); any other is the browser's: clamping the
    * view to a range that shrank under it (a turn re-laid out as its work starts again, say, its
    * content back before the scroll is heard), hiding or showing it. The browser's moves nothing:
    * a view that follows goes back to its bottom.
@@ -345,11 +365,13 @@ export class ThreadScroller {
       this.record(clamped);
       return;
     }
-    if (!this.pressed && performance.now() - this.inputAtMs > INPUT_MS) {
+    const now = performance.now();
+    if (!this.pressed && now - this.inputAtMs > INPUT_MS && now - this.userScrollAtMs > FLING_MS) {
       if (this.follow && this.glide === null) this.toBottom();
       this.record();
       return;
     }
+    this.userScrollAtMs = now;
     this.interrupt();
     const distance = max - viewport.scrollTop;
     if (viewport.scrollTop < this.expected) {

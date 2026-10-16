@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
+
 /**
  * A message between sessions the thread is asked to show (SESSION-MESSAGING-PLAN.md §6.3): its
  * page loaded, the thread unfolds what holds it, scrolls it to the centre and flashes it once.
@@ -87,6 +89,7 @@ export function landReveal(messageId: string, done: number): () => void {
 
 function land(element: HTMLElement): void {
   const viewport = element.closest<HTMLElement>("[data-slot=aui_thread-viewport]");
+  jumpInThread(viewport);
   // A list that scrolls within the thread (a long group's rows) first brings the row into its own
   // view, then the thread centres it.
   for (let holder = element.parentElement; holder && holder !== viewport; holder = holder.parentElement) {

@@ -75,6 +75,7 @@ import {
   StreamingMessageText,
 } from "@/components/assistant-ui/thread";
 import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
+import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
@@ -667,7 +668,9 @@ export const RequestBlock: FC = () => {
     if (!revealDenied) return;
     // Once the work and the groups holding them have opened: the first in view, then ready for another click.
     const timer = window.setTimeout(() => {
-      body.current?.querySelector("[data-step-state=declined]")?.scrollIntoView({ block: "center" });
+      const declined = body.current?.querySelector("[data-step-state=declined]");
+      jumpInThread(declined);
+      declined?.scrollIntoView({ block: "center" });
       setRevealDenied(false);
     }, 50);
     return () => window.clearTimeout(timer);

@@ -215,7 +215,7 @@ function useThreadScroll(
     const listening = new AbortController();
     const options = { passive: true, signal: listening.signal };
     viewport.addEventListener("scroll", () => scroller.scrolled(), options);
-    for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+    for (const type of ["wheel", "touchstart", "touchmove", "touchend", "pointerdown", "keydown"]) {
       viewport.addEventListener(type, scroller.input, options);
     }
     // A pointer pressed in the thread may be let go anywhere.
