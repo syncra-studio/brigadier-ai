@@ -455,3 +455,86 @@ async fn own_run_streams_keep_a_stopped_background_runs_output() {
     );
     flow.stop().await;
 }
+
+/// A command that prints before the thread has its row keeps what it printed: the early bytes
+/// wait and go first once the row is found, ahead of what comes after.
+#[tokio::test]
+async fn own_run_streams_keep_output_printed_before_the_row() {
+    let script: Script = Arc::new(|turn: Turn| {
+        Box::pin(async move {
+            let id = turn.conversation().unwrap();
+            let command = "printf early; printf late";
+            let output = turn.host.own_command_output(&id, "run", command);
+            output(b"early chunk\n".to_vec()).await;
+            let call = |status, output: Option<&str>| ProviderEvent::ToolCall {
+                kept: None,
+                item_id: "own-run".into(),
+                name: "mcp__brigadier__run".into(),
+                input: Some(json!({ "command": command }).to_string()),
+                status,
+                output: output.map(Into::into),
+            };
+            turn.emit(call(ItemStatus::InProgress, None)).await;
+            tokio::time::timeout(super::PATIENCE, async {
+                while row(&turn.host.core.board(&id).await.unwrap(), "own-run").is_none() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            output(b"late chunk\n".to_vec()).await;
+            let request = turn
+                .host
+                .core
+                .board(&id)
+                .await
+                .unwrap()
+                .latest_request()
+                .unwrap()
+                .id
+                .clone();
+            let text = tokio::time::timeout(super::PATIENCE, async {
+                loop {
+                    let page = turn
+                        .host
+                        .thread_items(&id, &request, None, None, 100)
+                        .await
+                        .unwrap();
+                    if let Some(text) =
+                        page.entries
+                            .into_iter()
+                            .find_map(|entry| match entry.event {
+                                ProviderEvent::CommandOutputDelta { item_id, text }
+                                    if item_id == "own-run" && text.contains("late chunk") =>
+                                {
+                                    Some(text)
+                                }
+                                _ => None,
+                            })
+                    {
+                        return text;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(text, "early chunk\nlate chunk\n");
+            turn.emit(call(
+                ItemStatus::Completed,
+                Some("early chunk\nlate chunk\n"),
+            ))
+            .await;
+            Reply::text("Ran it.")
+        })
+    });
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w79-early-output",
+        Options::default(),
+        script,
+    )
+    .await;
+    flow.say("Run it.").await;
+    flow.settled().await;
+    flow.stop().await;
+}
