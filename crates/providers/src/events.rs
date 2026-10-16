@@ -258,10 +258,16 @@ mod tests {
         // path that climbs out of it, is never read.
         let outside = root.join("secret.txt");
         std::fs::write(&outside, "SECRET-FILE").unwrap();
-        let link = dir.join("tool-results/link.txt");
-        std::os::unix::fs::symlink(&outside, &link).unwrap();
         let climb = dir.join("tool-results/../../../../secret.txt");
-        for path in [link, climb] {
+        #[cfg(unix)]
+        let paths = {
+            let link = dir.join("tool-results/link.txt");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            vec![link, climb]
+        };
+        #[cfg(not(unix))]
+        let paths = vec![climb];
+        for path in paths {
             let (_, kept) = sent(&events, command("preview", Some(file(&path))), &mut rx).await;
             let file_kept = kept.unwrap().file.unwrap();
             assert!(file_kept.text.is_none(), "{path:?} was read");
