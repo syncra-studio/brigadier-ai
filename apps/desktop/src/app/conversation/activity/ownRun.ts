@@ -9,11 +9,17 @@ const DIGEST_LINE = /^exit (-?\d+) \[full output: [^\]\n]*\](?:\r?\n|$)/;
 const COMMIT_NOTE = /^(Committed [0-9a-f]+ ".*" with your trailer: .*|Not committed: .*|Nothing to commit: .*)$/;
 /** What a check that starts the review of the thread's change adds on a line of its own. */
 const REVIEW_NOTE = /^\[review running\] (.+?) reviews your change/;
+/** What every `run_check` reply ends its output with: the id a report or a claim cites, the model's, not shown. */
+const EVIDENCE_LINE = /^\[evidence: out-[^\]]*\]$/;
 /** The commit refusal on the user's own checkout, said to the model. */
 const ON_LOCAL = "Not committed: this is the user's own checkout";
 
-/** A line Brigadier adds after an own command's output, in plain words; `null` for any other line. */
+/**
+ * A line Brigadier adds after an own command's output, in plain words, `""` for one not shown (the
+ * evidence id); `null` for any other line.
+ */
 function noteOf(line: string): string | null {
+  if (EVIDENCE_LINE.test(line)) return "";
   const review = REVIEW_NOTE.exec(line);
   if (review) return `${review[1] ?? "A reviewer"} is reviewing this change.`;
   const commit = COMMIT_NOTE.exec(line);
@@ -25,8 +31,9 @@ function noteOf(line: string): string | null {
 /**
  * An own command's reply as its exit code, what it printed, and what Brigadier said about it
  * after the output (the commit `run_check` made or didn't, a review it started), in plain words:
- * the `[exit N]` line or a digest's `exit N [full output: …]` header is read, not shown. Any
- * other first line (`[killed by signal 9]`) stays, as what there is to say.
+ * the `[exit N]` line or a digest's `exit N [full output: …]` header is read, not shown, and the
+ * `[evidence: out-…]` line that ends a check's output is the model's, not shown. Any other first
+ * line (`[killed by signal 9]`) stays, as what there is to say.
  */
 export function ownRunOutput(output: string | null): { exit: number | null; output: string | null; notes: string[] } {
   if (!output) return { exit: null, output, notes: [] };
@@ -34,15 +41,17 @@ export function ownRunOutput(output: string | null): { exit: number | null; outp
   // first line (how the command ended) always left.
   const lines = output.split("\n");
   const notes: string[] = [];
+  let hidden = false;
   let end = lines.length;
   while (end > 1) {
     const line = (lines[end - 1] ?? "").replace(/\r$/, "");
     const note = line === "" ? "" : noteOf(line);
     if (note === null) break;
     if (note) notes.unshift(note);
+    else if (line !== "") hidden = true;
     end--;
   }
-  const rest = notes.length > 0 ? `${lines.slice(0, end).join("\n")}\n` : output;
+  const rest = notes.length > 0 || hidden ? `${lines.slice(0, end).join("\n")}\n` : output;
   const found = EXIT_LINE.exec(rest) ?? DIGEST_LINE.exec(rest);
   return found ? { exit: Number(found[1]), output: rest.slice(found[0].length), notes } : { exit: null, output: rest, notes };
 }
