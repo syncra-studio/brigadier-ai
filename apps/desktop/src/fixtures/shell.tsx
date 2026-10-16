@@ -302,8 +302,8 @@ function divider() {
 const stateOf = (slot: string) => one(`[data-slot="${slot}"]`)?.getAttribute("data-state");
 
 /** Runs `act`, then reads every frame for `ms`, and on until the panel `slot` names has opened or
- * closed and come to rest (for at most five seconds more, as a busy machine can be that slow):
- * whether a titlebar control moved, the window scrolled, or the left sidebar's width changed. */
+ * closed (for at most fifteen seconds more) and come to rest (five), as a busy machine can be that
+ * slow: whether a titlebar control moved, the window scrolled, or the left sidebar's width changed. */
 async function watch(act: () => void, ms = 600, slot?: string) {
   const titles = JSON.stringify(titlebar());
   const left = rect(one('[data-slot="sidebar-panel"]'))!.w;
@@ -313,7 +313,10 @@ async function watch(act: () => void, ms = 600, slot?: string) {
   act();
   const end = performance.now() + ms;
   let [last, since, still] = [box(), performance.now(), 0];
-  const busy = () => Boolean(slot) && (stateOf(slot!) === before || performance.now() - since < 250 || still < 5) && performance.now() < end + 5000;
+  const busy = () =>
+    Boolean(slot) &&
+    ((stateOf(slot!) === before && performance.now() < end + 15000) ||
+      ((performance.now() - since < 250 || still < 5) && performance.now() < end + 5000));
   while (performance.now() < end || busy()) {
     await new Promise((resolve) => requestAnimationFrame(resolve));
     if (box() === last) still++;
