@@ -10,6 +10,7 @@ import { useShallow } from "zustand/react/shallow";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { isFinal } from "@/app/conversation/blocks";
 import { mergeStats } from "@/app/conversation/ComposerCapsule";
+import { undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -114,24 +115,6 @@ function useTurnReview(
     };
   }, [due, conversationId, requests, key]);
   return state?.change === key ? state : null;
-}
-
-/**
- * What an Undo or Reapply left as it was, after its toast's first words: ". Left notes.md as it
- * is: you changed it during this request too." One file says why; several are named.
- */
-export function leftWords(left: readonly HeldPath[], reapply = false): string {
-  const [only] = left;
-  if (!only) return "";
-  const names = left.map((file) => file.path.split("/").pop() || file.path);
-  // Reapply never touched what Undo left, so it doesn't give Undo's reason again.
-  if (reapply) {
-    return left.length === 1
-      ? `. ${names[0]} stays as it is: Undo left it`
-      : `. ${left.length} files stay as they are (${names.join(", ")}): Undo left them`;
-  }
-  if (left.length === 1) return `. ${only.reason}`;
-  return `. Left ${left.length} files as they are (${names.join(", ")}): changed by you or by a command during the request`;
 }
 
 /** One changed file of the turn: a row that opens to its diff; a binary file or one too long only lists. */
@@ -278,15 +261,15 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
     // Undo goes newest first; Reapply oldest first.
     const due = requests.filter((_, index) => reverts[index] === reverted);
     (reverted ? due : due.toReversed())
-      .reduce<Promise<HeldPath[]>>(
+      .reduce<Promise<{ restored: number; left: HeldPath[] }>>(
         (before, requestId) =>
-          before.then(async (left) => {
+          before.then(async (done) => {
             const { outcome } = await request({ method: "undoChanges", conversationId, requestId, reapply: reverted });
-            return [...left, ...outcome.held];
+            return { restored: done.restored + outcome.restored.length, left: [...done.left, ...outcome.held] };
           }),
-        Promise.resolve([]),
+        Promise.resolve({ restored: 0, left: [] }),
       )
-      .then((left) => toast(`${reverted ? "Changes reapplied" : "Changes reverted"}${leftWords(left, reverted)}`))
+      .then(({ restored, left }) => toast(undoToast(left, restored, reverted)))
       .catch((error: unknown) =>
         toast(
           `${reverted ? "Couldn't reapply" : "Couldn't undo"} the changes: ${error instanceof Error ? error.message : String(error)}`,
