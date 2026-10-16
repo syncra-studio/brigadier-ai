@@ -3,6 +3,8 @@
 //! hand-off starts finds them in its hand-off folder, whatever happened to the CLI's own
 //! session files; what couldn't be kept is said, never passed off as whole.
 
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use brigadier_providers::{ItemStatus, KeptFile, KeptOutput, ProviderEvent};
@@ -86,18 +88,43 @@ async fn long_results(turn: &Turn) {
     .await;
 }
 
+/// A fresh session's first message, and the files of the hand-off folder it names as they
+/// were when it started: the folder is in the task's scratch, which goes once the task reports.
+struct Fresh {
+    first: String,
+    files: BTreeMap<String, String>,
+}
+
+/// Every regular file under `dir`, by its path from `dir` (a link would be no copy).
+fn snapshot(dir: &Path) -> BTreeMap<String, String> {
+    let mut files = BTreeMap::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(folder) = todo.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+            if kind.is_dir() {
+                todo.push(path);
+            } else if kind.is_file() {
+                let name = path.strip_prefix(dir).unwrap().to_string_lossy();
+                let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
+                files.insert(name.replace('\\', "/"), text);
+            }
+        }
+    }
+    files
+}
+
 /// The thread delegates one scout. Its first session prints the long results and grows past
-/// the hand-off size; the fresh one's first message is logged, and it reports.
-fn handing_over(firsts: &Arc<Mutex<Vec<String>>>) -> Script {
+/// the hand-off size; the fresh one's first message and hand-off folder are logged, and it
+/// reports.
+fn handing_over(firsts: &Arc<Mutex<Vec<Fresh>>>) -> Script {
     handing_over_with(firsts, None)
 }
 
 /// [`handing_over`], whose first session, given `saved`, shows instead one result recorded
 /// before results were kept: a preview naming the file `saved` its CLI saved the output to.
-fn handing_over_with(
-    firsts: &Arc<Mutex<Vec<String>>>,
-    saved: Option<std::path::PathBuf>,
-) -> Script {
+fn handing_over_with(firsts: &Arc<Mutex<Vec<Fresh>>>, saved: Option<std::path::PathBuf>) -> Script {
     let firsts = firsts.clone();
     script(move |turn| {
         let (firsts, saved) = (firsts.clone(), saved.clone());
@@ -125,7 +152,11 @@ fn handing_over_with(
                 return Reply::text(NOTE);
             }
             if turn.input.contains("You are continuing task-") {
-                firsts.lock().unwrap().push(turn.input.clone());
+                let files = snapshot(&handoff_dir(&turn.input));
+                firsts.lock().unwrap().push(Fresh {
+                    first: turn.input.clone(),
+                    files,
+                });
                 let reply = turn
                     .call("submit_report", json!({"summary": "Found it."}))
                     .await;
@@ -205,7 +236,7 @@ async fn recorded_kept(flow: &Flow) -> (Vec<KeptOutput>, Vec<DomainEvent>) {
 
 #[tokio::test]
 async fn a_long_output_and_a_saved_file_reach_the_fresh_session_whole() {
-    let firsts: Arc<Mutex<Vec<String>>> = Arc::default();
+    let firsts: Arc<Mutex<Vec<Fresh>>> = Arc::default();
     let flow = Flow::start("kept-whole", Options::default(), handing_over(&firsts)).await;
     flow.say("Find the marker.").await;
     flow.until("the scout reported", |board| {
@@ -228,15 +259,9 @@ async fn a_long_output_and_a_saved_file_reach_the_fresh_session_whole() {
         .unwrap();
     assert!(String::from_utf8(whole).unwrap().contains(MARKER));
 
-    let first = firsts
-        .lock()
-        .unwrap()
-        .first()
-        .cloned()
-        .expect("a fresh session");
+    let Fresh { first, files } = firsts.lock().unwrap().remove(0);
     assert!(first.contains("transcript.md is complete."), "{first}");
-    let dir = handoff_dir(&first);
-    let transcript = std::fs::read_to_string(dir.join("transcript.md")).unwrap();
+    let transcript = &files["transcript.md"];
     assert!(!transcript.contains(MARKER), "the transcript itself is cut");
     // The CLI's session files are not needed: the copies are in the hand-off folder.
     let named: Vec<&str> = transcript
@@ -246,7 +271,7 @@ async fn a_long_output_and_a_saved_file_reach_the_fresh_session_whole() {
         .filter(|name| name.ends_with(".txt"))
         .collect();
     assert_eq!(named.len(), 2, "{transcript}");
-    let read = |name: &str| std::fs::read_to_string(dir.join("outputs").join(name)).unwrap();
+    let read = |name: &str| &files[&format!("outputs/{name}")];
     assert!(read(named[0]).contains(MARKER));
     assert!(read(named[1]).contains(SAVED_MARKER));
     flow.stop().await;
@@ -254,7 +279,7 @@ async fn a_long_output_and_a_saved_file_reach_the_fresh_session_whole() {
 
 #[tokio::test]
 async fn an_output_the_disk_refused_is_said_missing_to_the_fresh_session() {
-    let firsts: Arc<Mutex<Vec<String>>> = Arc::default();
+    let firsts: Arc<Mutex<Vec<Fresh>>> = Arc::default();
     let flow = Flow::start("kept-refused", Options::default(), handing_over(&firsts)).await;
     flow.manager.debug_fail_kept_writes(true);
     flow.say("Find the marker.").await;
@@ -264,17 +289,11 @@ async fn an_output_the_disk_refused_is_said_missing_to_the_fresh_session() {
     .await;
     let (kept, _) = recorded_kept(&flow).await;
     assert!(kept[0].error.as_deref().unwrap().contains("disk refused"));
-    let first = firsts
-        .lock()
-        .unwrap()
-        .first()
-        .cloned()
-        .expect("a fresh session");
+    let Fresh { first, files } = firsts.lock().unwrap().remove(0);
     assert!(first.contains("transcript.md is NOT complete"), "{first}");
     assert!(first.contains("couldn't be stored"), "{first}");
     assert!(first.contains("say it is unknown"), "{first}");
-    let transcript = std::fs::read_to_string(handoff_dir(&first).join("transcript.md")).unwrap();
-    assert!(transcript.contains("Missing from this transcript:"));
+    assert!(files["transcript.md"].contains("Missing from this transcript:"));
     flow.stop().await;
 }
 
@@ -285,7 +304,7 @@ async fn a_saved_file_not_copied_yet_is_copied_before_the_hand_off_and_outlives_
     std::fs::create_dir_all(folder.join("tool-results")).unwrap();
     let saved = folder.join("tool-results/mcp-probe-big_dump-2.txt");
     std::fs::write(&saved, big(SAVED_MARKER)).unwrap();
-    let firsts: Arc<Mutex<Vec<String>>> = Arc::default();
+    let firsts: Arc<Mutex<Vec<Fresh>>> = Arc::default();
     let flow = Flow::start(
         "kept-late",
         Options::default(),
@@ -303,19 +322,14 @@ async fn a_saved_file_not_copied_yet_is_copied_before_the_hand_off_and_outlives_
             if item_id == "old-1" && file.blob.is_some()),
         "{late:?}"
     );
-    // The CLI's session folder goes; the hand-off's copy stays.
+    // The CLI's session folder goes; the hand-off held a copy of its own (a file, not a link).
     std::fs::remove_dir_all(&root).unwrap();
-    let first = firsts
-        .lock()
-        .unwrap()
-        .first()
-        .cloned()
-        .expect("a fresh session");
+    let Fresh { first, files } = firsts.lock().unwrap().remove(0);
     assert!(first.contains("transcript.md is complete."), "{first}");
-    let dir = handoff_dir(&first);
-    let copied = std::fs::read_dir(dir.join("outputs"))
-        .unwrap()
-        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+    let copied = files
+        .iter()
+        .filter(|(name, _)| name.starts_with("outputs/"))
+        .map(|(_, text)| text)
         .collect::<Vec<_>>();
     assert_eq!(copied.len(), 1);
     assert!(copied[0].contains(SAVED_MARKER));
