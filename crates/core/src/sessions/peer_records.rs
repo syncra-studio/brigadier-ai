@@ -277,6 +277,7 @@ impl Core {
                         from_peer: Some(send.from.clone()),
                         held_by: None,
                         background_jobs: None,
+                        changes: None,
                     },
                 },
             ));

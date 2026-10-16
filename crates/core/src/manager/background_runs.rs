@@ -148,6 +148,7 @@ impl SessionManager {
                 started_at_ms: now_ms(),
                 ended_at_ms: None,
                 state: BackgroundRunState::Running,
+                item_id: None,
             };
             self.background_runs
                 .running

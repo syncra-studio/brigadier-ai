@@ -22,8 +22,8 @@ use brigadier_core::{
     PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
     ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
     SearchQuery, SearchUpdate, Settings, Setup, SetupRequest, SourceChange, SourceScope,
-    SourceState, StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    SourceState, StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome,
+    UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
     WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
@@ -612,12 +612,26 @@ pub enum Request {
         scope: String,
         attachments: Vec<AttachmentRef>,
     },
-    /// Undoes (or, with `reapply`, reapplies) what a request's workers landed, with a new
-    /// commit on the branch they landed on.
+    /// Undoes (or, with `reapply`, reapplies) what a request changed: its thread's own edits
+    /// and commands and its workers' landings (`UserRequest::changes`), file by file, leaving
+    /// any file someone else changed meanwhile as it is. Uncommitted on the user's own
+    /// checkout. A request from before its changes were kept: what its workers landed, with a
+    /// new commit on the branch they landed on.
     UndoChanges {
         conversation_id: ConversationId,
         request_id: String,
         reapply: bool,
+    },
+    /// An image the thread looked at or made (its tool step's `itemId`), as base64 with its
+    /// media type: only an image a step of this conversation names.
+    ReadThreadImage {
+        conversation_id: ConversationId,
+        item_id: String,
+    },
+    /// A background run's output (`run-<n>`): its end, up to 256 KiB, so far while it runs.
+    ReadBackgroundRun {
+        conversation_id: ConversationId,
+        run_id: String,
     },
     /// A session's changes in the Review tab's scope: whole files unless `whole_files` is
     /// off, whitespace changes left out with `ignore_whitespace`.
@@ -1376,7 +1390,18 @@ pub enum Response {
         data: String,
     },
     PinDraftAttachments,
-    UndoChanges,
+    UndoChanges {
+        outcome: UndoOutcome,
+    },
+    ReadThreadImage {
+        data: String,
+        mime: String,
+    },
+    ReadBackgroundRun {
+        output: String,
+        /// How many bytes it printed in all (more than `output` holds when its start was cut).
+        bytes: u64,
+    },
     GetReviewDiff {
         review: ReviewDiff,
     },

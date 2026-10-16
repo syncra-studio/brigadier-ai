@@ -221,6 +221,7 @@ impl SessionManager {
                         from_peer: None,
                         held_by: None,
                         background_jobs: None,
+                        changes: None,
                     },
                 }],
             )

@@ -20,4 +20,9 @@ requestId: string | null,
 /**
  * The tool that started it: `run` or `run_check`.
  */
-tool: string, command: string, startedAtMs: number, endedAtMs: number | null, state: BackgroundRunState, };
+tool: string, command: string, startedAtMs: number, endedAtMs: number | null, state: BackgroundRunState, 
+/**
+ * The thread's tool call that started it (its row's `itemId`); absent on runs from
+ * before it was kept.
+ */
+itemId?: string, };

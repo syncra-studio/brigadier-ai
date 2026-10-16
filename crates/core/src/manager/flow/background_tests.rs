@@ -466,6 +466,7 @@ async fn a_background_run_cut_off_by_a_restart_tells_the_thread() {
                     started_at_ms: crate::now_ms(),
                     ended_at_ms: None,
                     state: BackgroundRunState::Running,
+                    item_id: None,
                 },
             }],
         )

@@ -641,7 +641,7 @@ impl PreviewState {
 }
 
 /// Lines added and removed, per file and in total.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffStat {
     pub files: Vec<FileStat>,
@@ -1562,6 +1562,11 @@ pub struct BackgroundRun {
     #[serde(default)]
     pub ended_at_ms: Option<i64>,
     pub state: BackgroundRunState,
+    /// The thread's tool call that started it (its row's `itemId`); absent on runs from
+    /// before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub item_id: Option<String>,
 }
 
 /// Where a background run stands.
@@ -2310,6 +2315,13 @@ pub struct UserRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub background_jobs: Option<u32>,
+    /// What it changed in its session's checkout (the turn diff card, the files-changed pill):
+    /// the thread's own edits and commands and its workers' landings, never what the user
+    /// changed meanwhile. Absent on requests from before it was kept, and while it changed
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub changes: Option<RequestChanges>,
 }
 
 /// A stretch of time a request worked.
@@ -2360,6 +2372,43 @@ impl UserRequest {
         self.state = state;
         self.quota_wait = quota_wait;
     }
+}
+
+/// What a request changed in its session's checkout, file by file: the files its thread's own
+/// edits and commands changed and its workers landed, each from how the file was before the
+/// request first changed it to how it is after its last change. Kept up to date while the
+/// request works (after each of the thread's edits and commands and each landing) and made
+/// final when the request settles. The contents it compares are kept under a private ref
+/// (`refs/brigadier/…`), so View changes, Undo and Reapply outlast Git's garbage collection.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestChanges {
+    /// The files and their lines in and out.
+    pub stat: DiffStat,
+    /// The files Undo would leave as they are, and why: someone else changed them during the
+    /// request too, or a command changed them and the user's edits can't be told apart.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<HeldPath>>", optional)]
+    pub held: Vec<HeldPath>,
+    /// The request settled and every landing of its workers is counted.
+    #[serde(default)]
+    pub settled: bool,
+}
+
+/// A file Undo or Reapply leaves as it is, with why in plain words.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldPath {
+    pub path: String,
+    pub reason: String,
+}
+
+/// What an Undo or Reapply did: the files it put back, and those it left as they are.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoOutcome {
+    pub restored: Vec<String>,
+    pub held: Vec<HeldPath>,
 }
 
 /// The user's Undo and Reapply of what a request's workers landed (the turn diff card).

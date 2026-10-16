@@ -1518,6 +1518,7 @@ mod tests {
                 started_at_ms: 0,
                 ended_at_ms: None,
                 state: crate::work::BackgroundRunState::Running,
+                item_id: None,
             },
         );
         assert_eq!(
