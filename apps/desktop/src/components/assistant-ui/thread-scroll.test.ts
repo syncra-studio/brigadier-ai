@@ -958,3 +958,54 @@ test("a conversation attached hidden reopens where it was left once shown", () =
   assert.equal(again.scrollTop, 2000);
   assert.equal(scroller.following, false);
 });
+
+test("a turn that ended short and works again (a plan approved, a question answered) is followed once it reaches past the bottom", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  expectSentTurn(id, "sent");
+  const user = fake.row("sent", 60, "user");
+  const plan = fake.row("plan", 120);
+  fake.rows.push(user, plan);
+  scroller.rowsChanged();
+  // The plan turn ends inside its room: the user reads it at the bottom, nothing follows.
+  scroller.setRunning(false);
+  scroller.resized();
+  assert.ok(fake.room > 0);
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(scroller.following, false);
+  // The plan is approved: the same request works again, with no new message of the user's.
+  scroller.setRunning(true);
+  for (let grow = 0; grow < 30; grow++) {
+    plan.height += 40;
+    scroller.resized();
+  }
+  // Its new rows went past the view's bottom: the view follows them.
+  assert.equal(scroller.following, true);
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(scroller.contentBelow(), false);
+});
+
+test("scrolled up when a short turn works again, the view stays where the user is", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  expectSentTurn(id, "sent");
+  const user = fake.row("sent", 60, "user");
+  const plan = fake.row("plan", 120);
+  fake.rows.push(user, plan);
+  scroller.rowsChanged();
+  scroller.setRunning(false);
+  scroller.resized();
+  userScroll(fake, scroller, fake.scrollTop - 300);
+  const top = fake.scrollTop;
+  scroller.setRunning(true);
+  for (let grow = 0; grow < 30; grow++) {
+    plan.height += 40;
+    scroller.resized();
+  }
+  assert.equal(scroller.following, false);
+  assert.equal(fake.scrollTop, top);
+});

@@ -13,7 +13,8 @@
  *   answer fill it. Once the running turn reaches past the view's bottom it is followed, unless
  *   the user scrolled away or opened a fold in the meantime. The room only ever shrinks: by the
  *   turn's growth, and by what the user scrolls below the view; a turn ending leaves what shows.
- *   Sent while the user had scrolled up, reading, nothing moves: the turn is added below.
+ *   Sent while the user had scrolled up, reading, nothing moves: the turn is added below. Work
+ *   starting again with no message (a plan approved, a question answered) is watched the same way.
  * - The scroll button shows while a row reaches under the floating footer or below the view,
  *   never for the room alone or for content in the gap above the footer, which stays in view.
  * - Each conversation's place is kept for the app's run, by row id, and restored on return: a
@@ -248,11 +249,18 @@ export class ThreadScroller {
     this.editSentAtMs = performance.now();
   };
 
-  /** Whether the thread works on its newest turn: a sent turn is watched while it does. */
+  /**
+   * Whether the thread works on its newest turn: a sent turn is watched while it does. Work that
+   * starts again with no message sent here (a plan approved, a question answered, a queued
+   * message taken up) is watched too unless the user scrolled away, so it is followed once it
+   * reaches past the view's bottom.
+   */
   setRunning(running: boolean): void {
+    const resumed = running && !this.running;
     this.running = running;
     if (running) this.ran = true;
     else if (this.ran) this.turnEnded();
+    if (resumed && this.started && !this.away && !this.follow) this.watch = true;
   }
 
   /**
