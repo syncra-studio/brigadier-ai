@@ -475,10 +475,8 @@ impl SessionManager {
                         // changed).
                         if let Some(moved) = change.moved_to.as_deref().and_then(relative) {
                             let after = repo.checkout_blob(&moved).map_err(git_error)?;
-                            let diff = change
-                                .diff
-                                .as_deref()
-                                .filter(|diff| !diff.trim().is_empty());
+                            // A diff without hunks (a pure rename, +0 −0) changed nothing.
+                            let diff = change.diff.as_deref().filter(|diff| diff.contains("@@ "));
                             let before = match diff {
                                 None => Before::Known(after.clone().map(Into::into)),
                                 Some(diff) if !diff.contains(" more bytes]") => repo

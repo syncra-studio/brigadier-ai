@@ -1026,6 +1026,61 @@ async fn last_turn_skips_a_later_request_that_changed_nothing() {
     flow.stop().await;
 }
 
+/// A Codex patch that only renames a file reports a diff with no hunks: the file went with
+/// its bytes, so both ends are the thread's and Undo puts it back where it was.
+#[tokio::test]
+async fn request_changes_undo_a_codex_rename_without_hunks() {
+    let mut flow = Flow::start(
+        "20261015-0226-rebuild-wow-w79-rename",
+        options(ProviderKind::Codex),
+        script(move |turn| async move {
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            std::fs::rename(workspace.join("a.txt"), workspace.join("renamed.txt")).unwrap();
+            let mut change = FileChange::counted(
+                workspace.join("a.txt").to_string_lossy().into_owned(),
+                FileChangeKind::Update,
+                Some("--- a/a.txt\n+++ b/renamed.txt\n"),
+                usize::MAX,
+            );
+            change.moved_to = Some(workspace.join("renamed.txt").to_string_lossy().into_owned());
+            turn.emit(ProviderEvent::FileChanges {
+                item_id: "rename-a".into(),
+                changes: vec![change],
+                status: ItemStatus::Completed,
+            })
+            .await;
+            // git counts an exact rename as one file.
+            observed(&turn, 1).await;
+            Reply::text("Renamed a.")
+        }),
+    )
+    .await;
+    local(&mut flow).await;
+    flow.say("Rename a.").await;
+    let board = flow
+        .until("settled changes", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled)
+        })
+        .await;
+    let request = board.latest_request().unwrap();
+    let changes = request.changes.as_ref().unwrap();
+    assert!(changes.held.is_empty(), "{:?}", changes.held);
+    flow.manager
+        .undo_request(flow.conversation.clone(), request.id.clone(), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("a.txt")).unwrap(),
+        "base\n"
+    );
+    assert!(!flow.repo.join("renamed.txt").exists());
+    flow.stop().await;
+}
+
 /// A Codex patch that moves a file records both ends: the diff shows where it went and what
 /// changed, and Undo puts it back where it was.
 #[tokio::test]
