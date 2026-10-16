@@ -424,7 +424,8 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     input.current?.select();
   }, [focusAsk]);
 
-  // While the bar is open the thread's changes are searched again, a moment after they come.
+  // While the bar is open the thread's changes are searched again, a moment after they come:
+  // a `<details>` opening or closing (its `open` alone changes) shows or hides its text too.
   useEffect(() => {
     if (!open || !viewport) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -434,7 +435,7 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         rerun.current();
       }, RERUN_MS);
     });
-    observer.observe(viewport, { childList: true, subtree: true, characterData: true });
+    observer.observe(viewport, { childList: true, subtree: true, characterData: true, attributeFilter: ["open"] });
     return () => {
       observer.disconnect();
       if (timer) clearTimeout(timer);

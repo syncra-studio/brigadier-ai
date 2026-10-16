@@ -447,6 +447,26 @@ const steps = {
     await settle(300);
     return { label: found.label, ringed, left };
   },
+  /** A report's Details opened and closed while the bar is open: what it holds is counted only while it shows. */
+  async details() {
+    const answers = [...document.querySelectorAll('[data-slot="aui_assistant-message-content"]')];
+    const details = document.createElement("details");
+    details.innerHTML = "<summary>Details</summary><p>The okapi check passed.</p>";
+    answers.at(-2)?.append(details);
+    await settle(300);
+    const closed = (await find("okapi")).label;
+    details.open = true;
+    await until(() => label() !== closed);
+    await settle(50);
+    const opened = label();
+    details.open = false;
+    await until(() => label() !== opened);
+    await settle(50);
+    const shut = label();
+    details.remove();
+    await settle(300);
+    return { closed, opened, shut };
+  },
   /** Esc closes the bar and clears the marks: the sets it drops are emptied first, which is what repaints them. */
   async closed() {
     const kept = [matches(), CSS.highlights.get(ACTIVE_MATCH)];

@@ -34,6 +34,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
     clipped: Found & { before: string | null; after: string | null };
     inner: { label: string | null; inBox: boolean; inView: boolean };
     inButton: { label: string | null; ringed: boolean; left: boolean };
+    details: { closed: string | null; opened: string | null; shut: string | null };
     closed: { bar: boolean; finding: boolean; matches: boolean; active: boolean; emptied: (number | null)[] };
     keepsPlace: { focusBack: boolean; moved: number };
     multiline: { value: string | null; label: string | null; size: number; closedByButton: boolean };
@@ -128,6 +129,8 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   // Text in a button is never marked in WebKit: the button holding the match gone to has a ring,
   // taken off when no match in it is gone to.
   assert.deepEqual(seen.inButton, { label: "1 / 1 result", ringed: true, left: false });
+  // Opening a report's Details finds what it holds; closing it drops the match again.
+  assert.deepEqual(seen.details, { closed: "0 results", opened: "1 / 1 result", shut: "0 results" });
   assert.deepEqual(seen.closed, { bar: false, finding: false, matches: false, active: false, emptied: [0, 0] });
   // Esc gives the keyboard back to what had it before, without scrolling the thread to it.
   assert.deepEqual(seen.keepsPlace, { focusBack: true, moved: 0 });
