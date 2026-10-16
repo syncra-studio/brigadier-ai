@@ -118,6 +118,8 @@ const view = { selection: { type: "conversation" as const, id: CHAT }, conversat
 
 const patch = "--- a/src/math.js\n+++ b/src/math.js\n@@ -1,4 +1,4 @@\n export function round(value) {\n-  return Math.round(value * 100) / 100;\n+  return Math.round((value + Number.EPSILON) * 100) / 100;\n }\n \n@@ -20,2 +20,3 @@\n const a = 1;\n+const b = 2;\n const c = 3;\n";
 const links = "See [the release](https://nodejs.org/en/about) and [its schedule](https://nodejs.org/en/about/previous-releases), [a page](https://none.example/x) and [the dev server](http://localhost:3000). Write to [the team](mailto:team@example.com).";
+/** A code block whose lines run past the column. */
+const longCode = "```ts\nconst csv = toCsv([\n  { description: \"Notebook\", unitPrice: 3.35, quantity: 3, category: \"standard\", note: \"rounded half to even, in cents\" },\n  { description: 'Book; \"Dune\"', unitPrice: 8.99, quantity: 1, category: \"books\" },\n]);\n```";
 const answer = "The CLI parses it in `src/cli.ts:64`, the new helper is `src/made-later.ts`, rounding uses `Math.round`, and `src/gone.ts` was removed.";
 
 const now = Date.now();
@@ -328,6 +330,9 @@ function Page() {
         <Case id="links">
           <MarkdownBlock text={links} />
         </Case>
+        <Case id="code-long">
+          <MarkdownBlock text={longCode} />
+        </Case>
       </main>
     </TooltipProvider>
   );
@@ -449,6 +454,16 @@ async function measure(): Promise<object> {
   await wait(300);
   out.chips = all("[data-slot=file-chip]", at("chips")).map((chip) => [text(chip), chip.getAttribute("href")]);
   out.code = all("code", at("chips")).map((code) => text(code));
+  // A code line longer than the card: the card scrolls sideways, the side with more fading out.
+  const longPre = one<HTMLPreElement>("pre", at("code-long"));
+  const sideways = () => ({ more: longPre?.getAttribute("data-more") ?? null, mask: !!longPre && getComputedStyle(longPre).maskImage.includes("gradient") });
+  const atRest = { ...sideways(), scrolls: !!longPre && longPre.scrollWidth > longPre.clientWidth && getComputedStyle(longPre).overflowX === "auto" };
+  if (longPre) longPre.scrollLeft = longPre.scrollWidth;
+  await wait(100);
+  const atEnd = sideways();
+  if (longPre) longPre.scrollLeft = 40;
+  await wait(100);
+  out.longCode = { atRest, atEnd, between: sideways() };
   out.asked = asked.toSorted();
   const boundary = at("boundary");
   out.boundary = { fallback: text(one("[data-slot=turn-render-error] [data-slot=error-state]", boundary))?.startsWith("This turn couldn’t render.") ?? false, neighbour: text(one("[data-slot=neighbour]", boundary)) };

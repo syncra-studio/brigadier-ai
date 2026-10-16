@@ -22,6 +22,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     search: { row: string | null; opens: boolean };
     chips: [string, string][];
     code: string[];
+    longCode: Record<"atRest" | "atEnd" | "between", { more: string | null; mask: boolean; scrolls?: boolean }>;
     asked: string[];
     viewer: { first: { open: boolean; count: string | null; alt: string | null }; second: { count: string | null; alt: string | null }; closed: boolean };
     zoomKeys: (string | null)[];
@@ -127,6 +128,12 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // because the list was cut short; other code stays code, and a missing file is no chip.
   assert.deepEqual(seen.chips, [["src/cli.ts (line 64)", "/repo/src/cli.ts:64"], ["src/made-later.ts", "/repo/src/made-later.ts"]]);
   assert.deepEqual(seen.code, ["Math.round", "src/gone.ts"]);
+  // A code line longer than the card scrolls sideways, and the side with more fades out.
+  assert.deepEqual(seen.longCode, {
+    atRest: { more: "end", mask: true, scrolls: true },
+    atEnd: { more: "start", mask: true },
+    between: { more: "both", mask: true },
+  });
   assert.deepEqual(seen.asked, ["/repo/src/gone.ts", "/repo/src/made-later.ts"]);
   // The image viewer steps through its set and closes from the backdrop.
   assert.deepEqual(seen.viewer, {

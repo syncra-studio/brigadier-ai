@@ -7,7 +7,7 @@ import {
   DotsHorizontal,
   ExpandLg,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, type ReactNode, useEffect, useState } from "react";
+import { type FC, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -143,6 +143,37 @@ const CopyButton: FC<{ text: string; tooltip?: string }> = ({ text, tooltip = "C
   );
 };
 
+type Edges = { start: boolean; end: boolean };
+const NO_EDGES: Edges = { start: false, end: false };
+/** How far a side with more code fades out. */
+const FADE = "var(--spacing-row-sm)";
+
+/** Which sides of a box scrolling sideways have more past them, as it scrolls, resizes and its code streams in. */
+function useMoreSideways(ref: RefObject<HTMLElement | null>, on: boolean): Edges {
+  const [edges, setEdges] = useState<Edges>(NO_EDGES);
+  useLayoutEffect(() => {
+    const box = ref.current;
+    if (!box || !on) return;
+    const measure = () => {
+      const start = box.scrollLeft > 1;
+      const end = box.scrollLeft < box.scrollWidth - box.clientWidth - 1;
+      setEdges((before) => (before.start === start && before.end === end ? before : { start, end }));
+    };
+    measure();
+    box.addEventListener("scroll", measure, { passive: true });
+    const resized = new ResizeObserver(measure);
+    resized.observe(box);
+    const changed = new MutationObserver(measure);
+    changed.observe(box, { childList: true, subtree: true, characterData: true });
+    return () => {
+      box.removeEventListener("scroll", measure);
+      resized.disconnect();
+      changed.disconnect();
+    };
+  }, [ref, on]);
+  return on ? edges : NO_EDGES;
+}
+
 const Card: FC<{ header: ReactNode; children: ReactNode }> = ({ header, children }) => (
   <div
     data-slot="code-block"
@@ -157,11 +188,14 @@ const Card: FC<{ header: ReactNode; children: ReactNode }> = ({ header, children
 
 /**
  * The code block: a card with `</>` and the language on the left, "Enable word wrap"
- * and Copy on the right, the code syntax-highlighted (a diff in its own colours). A mermaid
- * block draws its diagram.
+ * and Copy on the right, the code syntax-highlighted (a diff in its own colours). Lines longer
+ * than the card scroll sideways, the side with more fading out (the scrollbar only shows while
+ * scrolling). A mermaid block draws its diagram.
  */
 export const CodeBlock: FC<SyntaxHighlighterProps> = ({ code, language }) => {
   const [wrap, setWrap] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+  const more = useMoreSideways(preRef, !wrap && language.toLowerCase() !== "mermaid");
   if (language.toLowerCase() === "mermaid") return <Diagram code={code} />;
   return (
     <Card
@@ -183,10 +217,19 @@ export const CodeBlock: FC<SyntaxHighlighterProps> = ({ code, language }) => {
       }
     >
       <pre
+        ref={preRef}
+        data-more={more.start && more.end ? "both" : more.start ? "start" : more.end ? "end" : undefined}
         className={cn(
           "text-code px-3 pb-3 font-mono text-sm leading-relaxed",
           wrap ? "break-words whitespace-pre-wrap" : "overflow-x-auto",
         )}
+        style={
+          more.start || more.end
+            ? {
+                maskImage: `linear-gradient(to right, ${more.start ? "transparent" : "black"}, black ${FADE}, black calc(100% - ${FADE}), ${more.end ? "transparent" : "black"})`,
+              }
+            : undefined
+        }
       >
         <code>
           <Body code={code} language={language} />
