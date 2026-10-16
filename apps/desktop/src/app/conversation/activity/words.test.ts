@@ -250,8 +250,10 @@ test("Brigadier's own tools read in plain words, never as their internal names",
   assert.equal(stepWords({ name: "WebSearch", detail: "node lts site:nodejs.org", status: "completed" }).done, "Searched the web for node lts | nodejs.org");
 });
 
+const editOf = (paths: string[]) => ({ ...stepWords({ name: "apply_patch", detail: paths[0] ?? null, status: "completed" }), paths });
+
 test("edits that name their files sum up by files, not by calls", () => {
-  const edit = (paths: string[]) => ({ ...stepWords({ name: "apply_patch", detail: paths[0] ?? null, status: "completed" }), paths });
+  const edit = editOf;
   // Two edits of one file: a file.
   assert.equal(summarize([edit(["/r/a.ts"]), edit(["/r/a.ts"])]), "Edited a file");
   // One patch of two files: files.

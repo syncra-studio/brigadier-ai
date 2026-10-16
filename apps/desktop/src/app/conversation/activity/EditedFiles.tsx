@@ -1,4 +1,4 @@
-import { useContext } from "react";
+import { type ReactNode, useContext } from "react";
 
 import { StepRow } from "@/app/conversation/activity/ActivityGroup";
 import type { LeadStep } from "@/app/conversation/activity/group";
@@ -6,8 +6,9 @@ import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { leadAction, useLeadItems } from "@/app/conversation/activity/StepDetail";
 import { basename, type StepWords, type ToolStep } from "@/app/conversation/activity/words";
 import { OpenFileContext } from "@/components/assistant-ui/file-links";
-import type { FileChangeKind, FileStat, ItemStatus } from "@/ipc/generated";
+import type { FileChange, FileChangeKind, FileStat, ItemStatus } from "@/ipc/generated";
 import { revealPath } from "@/ipc/client";
+import { diffCounts, parseDiff } from "@/lib/patch";
 import { cn } from "@/lib/utils";
 
 /**
@@ -99,29 +100,72 @@ function FileDiff({ conversationId, requestId, kind, path }: { conversationId: s
   return <>{changes.map((change, index) => <InlineDiff key={index} path={path} diff={change.diff} />)}</>;
 }
 
-/** A lead's file change, one row per file. */
-export function EditedFileRows({ step, files, conversationId }: { step: LeadStep; files: readonly FileStat[]; conversationId: string | null }) {
-  const { kind } = step;
-  if (kind.type !== "tool") return null;
+/**
+ * A file change as rows, one per file, each opening to its diff (`diffs`, by path) once it is
+ * done: the same rows for the thread's own change and a worker's.
+ */
+export function FileChangeRows({ files, status, startedAtMs, diffs }: {
+  files: readonly FileStat[];
+  status: ItemStatus;
+  startedAtMs?: number | undefined;
+  diffs: ReadonlyMap<string, ReactNode>;
+}) {
   return (
     <>
       {files.map((file) => {
-        const words = fileWords(file, kind.status);
+        const words = fileWords(file, status);
         return (
           <StepRow
             key={file.path}
             slot="edited-file"
             words={words}
-            status={kind.status}
-            startedAtMs={step.atMs}
+            status={status}
+            startedAtMs={startedAtMs}
             objectNode={<FileLink path={file.path} name={words.object ?? basename(file.path)} />}
-            trail={kind.status === "inProgress" ? undefined : <FileCounts file={file} />}
-            detail={conversationId && kind.status !== "inProgress" && kind.logSeq !== undefined
-              ? <FileDiff conversationId={conversationId} requestId={step.requestId ?? null} kind={kind} path={file.path} />
-              : undefined}
+            trail={status === "inProgress" ? undefined : <FileCounts file={file} />}
+            detail={status === "inProgress" ? undefined : diffs.get(file.path)}
           />
         );
       })}
     </>
   );
+}
+
+/** A lead's file change, one row per file, each diff read with the request's calls. */
+export function EditedFileRows({ step, files, conversationId }: { step: LeadStep; files: readonly FileStat[]; conversationId: string | null }) {
+  const { kind } = step;
+  if (kind.type !== "tool") return null;
+  return (
+    <FileChangeRows
+      files={files}
+      status={kind.status}
+      startedAtMs={step.atMs}
+      diffs={new Map(
+        conversationId && kind.logSeq !== undefined
+          ? files.map((file) => [file.path, <FileDiff key={file.path} conversationId={conversationId} requestId={step.requestId ?? null} kind={kind} path={file.path} />])
+          : [],
+      )}
+    />
+  );
+}
+
+/** A worker's file change's files, counted as the thread's own are: its CLI's counts, else its diff's. */
+export function changeStats(changes: readonly FileChange[]): FileStat[] {
+  const byPath = new Map<string, FileStat>();
+  for (const change of changes) {
+    const counted = change.added !== undefined && change.removed !== undefined
+      ? { added: change.added, removed: change.removed }
+      : change.diff
+        ? diffCounts(parseDiff(change.diff).rows)
+        : { added: 0, removed: 0 };
+    const seen = byPath.get(change.path);
+    byPath.set(change.path, {
+      path: change.path,
+      insertions: (seen?.insertions ?? 0) + counted.added,
+      deletions: (seen?.deletions ?? 0) + counted.removed,
+      binary: false,
+      change: seen?.change ?? change.kind,
+    });
+  }
+  return [...byPath.values()];
 }

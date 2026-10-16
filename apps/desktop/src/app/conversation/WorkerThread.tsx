@@ -7,6 +7,7 @@ import {
   ShieldCheck,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
+  type ReactNode,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -18,6 +19,8 @@ import { FileList } from "@/app/conversation/FileList";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { workerDone, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
+import { changeStats, FileChangeRows } from "@/app/conversation/activity/EditedFiles";
+import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { actionDetail } from "@/app/conversation/activity/StepDetail";
 import { workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
@@ -92,6 +95,14 @@ const exitOf = (item: ActionItem): number | null => (item.kind === "command" ? i
 
 /** A worker's action, as the lead's same step would read; a command or call opens to what it ran. */
 function ActionRow({ item }: { item: ActionItem }) {
+  // A file change is a row per file, as the thread's own is.
+  if (item.kind === "files" && item.changes.length > 0) {
+    const diffs = new Map<string, ReactNode>();
+    for (const change of item.changes) {
+      if (change.diff) diffs.set(change.path, <InlineDiff key={change.path} path={change.path} diff={change.diff} />);
+    }
+    return <FileChangeRows files={changeStats(item.changes)} status={item.status} diffs={diffs} />;
+  }
   const call = itemCall(item);
   const ran = item.kind === "command" && item.status !== "inProgress" && item.durationMs !== null && item.durationMs >= 1000;
   return (
