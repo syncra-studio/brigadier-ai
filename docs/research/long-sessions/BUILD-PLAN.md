@@ -209,6 +209,7 @@ gpt-6.1-sol, both at high.
 | 4 | **D1: Never forgets, without the output store** | V2 is built first; constraints (D1.1) come before selective loading (D1.6); effort floors (D1.7) need V2 |
 | 5 | **E: Never hallucinates** | Small and binding (Q38). Its in-turn checks need nothing from P0.3 |
 | 6 | **D2: Never forgets, with the output store** | Workers come off compaction only after same-session resume (D1.3) and the output store (D2.1), or a forced hand-off passes clipped output (PLAN §4). The thread's in-turn overflow guard (D2.3b) uses the same store and seams |
+| 6b | **O: Never more tokens than plain** | Q57: after D2 shipped, every task at or under plain Claude Code. Measured per call against plain first |
 | 7 | **X: Experiments** | A10 only after P0.1, V2 and B5. An experiment, never a silent threshold change |
 
 **Where the P0 measurement goes:** each fixture is built before its first consumer.
@@ -1036,6 +1037,72 @@ findings ≤ the better plain arm, and C's token gates still holding on them (Q4
 **Risk:** disk growth from stored outputs and a file write per tool batch, both measured in V1. A mid-turn thread
 interrupt (D2.3b) may cut a step in half: the steer comes first, and the successor gets the last commit and the
 interrupted step by name.
+
+### Phase O: Never more tokens than plain (Q57)
+
+The user, 10-16: "We need to beat everybody's ass on token usage, no hallucination, reliability, speed." The token gate
+becomes **≤ 1.0× plain Claude Code on every bench task** (it was ≤ 1.15×), with the full ratio (reviews included)
+reported beside it. We keep the CLIs' own prompt caching, deferred tools and system prompt, and cut only what Brigadier
+adds on top.
+
+**O1. Measure first.** A Codex chore (O-1) ran plain and Brigadier on T1, T4 and T6 (n = 2 each) and Brigadier on T5
+(n = 1) at `79dda573`, keeping the transcripts, and a per-call script split every model call into uncached input, cache
+reads and writes, output, the tools it called and what was fed into it. One-word `claude -p` turns split the first
+call's fixed start into its parts:
+
+| First call's context (tokens) | Before O | After O2–O5 |
+|---|---|---|
+| Plain Claude Code (every built-in tool) | 16,089 | 16,089 |
+| The thread's built-in tools and Claude Code's prompt | 7,486 | 7,486 |
+| + Brigadier's instructions | 13,180 (+5,694) | 11,602 (+4,116) |
+| + its always-loaded tools (as text, an estimate) | 17,520 (+4,340) | 14,885 (+3,283) |
+
+- Brigadier's start was about 1.4k above plain's on every call; the thread drops plain's Agent, TodoWrite and similar
+  built-ins (8.6k), and pays 5.7k of instructions and 4.3k of tool schemas.
+- Calls per task were at or under plain's (T1 5–6 against 6, T4 6–8 against 10–11, T6 7–11 against 10), so the rest
+  of the gap is per call. Where Brigadier spent a call plain didn't, it was its edit and its check in separate calls,
+  or a try by hand after the commit.
+- No wake turn that only said [quiet] happened in any of the 7 runs; T5's one [quiet] call ends the turn while its
+  review runs.
+- T5's findings turn was 6 calls at 58–68k of context (391k), plus the review's 145k of Codex: a fix through git with
+  the Fixes trailer took a call of its own, and recording the findings another.
+
+**O2. A smaller start (revision 70).** The instructions say each rule once (17.4 kB → 12.5 kB for a Claude thread on a
+worktree). A rule's procedure moves to the message or tool that needs it, and its trigger stays in the instructions:
+judging and recording findings into the review's findings message, the merge steps into the `[merge …]` messages and
+`finish_session`, how `run`, `run_check`, `remember` and `ask_user` work into their own descriptions. Kept whole: the
+rules against acting on one's own (merges, pushes, approvals, Desktop and clipboard, deletions, workers announced), E3's
+final answer, D1's Brain and constraint rules, the Q48 review line and the [quiet] rule. A size test keeps the
+instructions under 11.5 kB.
+
+**O3. Fewer calls.** A Claude thread sends its last edit, any try of it by hand and the `run_check` that checks it in
+one message, and tries nothing after the commit. `remember`'s field docs are shorter.
+
+**O4. A cheaper findings turn.** The thread's `run_check` takes `fixes`, the ids of the review findings its change fixes.
+When the check passes, its commit carries their Fixes trailer and they are recorded fixed, checked by that check (its
+`[evidence: out-…]`), so the fix needs no git commit or `record_findings` call of its own. A failing check commits and
+records nothing.
+
+**O5. `run` behind the tool search (revision 71).** A Claude thread runs its commands in its own shell (whole up to
+30 KB) and loads `run` through ToolSearch when it needs an output kept whole. `note_for_user` stays loaded (a
+diagnostic T1 run spent a call on a note after its commit, which a search would have made two) and goes in the same
+message as the last `run_check`. A commit's reply says nothing more runs once the work is done. Measured on its own in
+9 diagnostic runs: no ToolSearch hop, no `run` call, no invalid tool call; the first call's context fell to 17.4k
+against plain's 17.6k.
+
+**Not built, and why:**
+- holding `run_check` until its review returns: a call held past a minute goes to the background anyway, so the
+  [quiet] call stays;
+- the passing check's reply is already cut to 768 bytes of tail;
+- the thread's shell resetting to its scratch folder after each command: it keeps `--resume` working; a follow-up.
+
+**Done when:**
+- every bench task T1–T6 and T7L has its gate ratio ≤ 1.0× plain (T1–T6 n = 2, T4 n = 4 middle-two mean, T7L n = 2),
+  with the full ratio reported for each;
+- no regression: hidden tests pass every run, the E3 audit passes, V2 (with the lookup battery) and V3 keep their
+  verdicts, V3's invalid tool calls don't rise, high findings ≤ plain;
+- rule R for revision 70, with a test on a session from before;
+- the per-task breakdown before and after is in `docs/evidence`.
 
 ### Phase X: Experiments
 
