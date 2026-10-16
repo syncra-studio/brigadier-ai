@@ -80,6 +80,9 @@ pub struct Parser {
     /// A session reported its own start; `thread/started` is then not a start.
     started: bool,
     turn_id: Option<String>,
+    /// The turn that started last, running or not: a next-message guess for an earlier one
+    /// comes after a newer turn and follows nothing on screen.
+    last_turn: Option<String>,
     /// An error was already reported for the running turn.
     turn_error: bool,
     /// Files of file-change items, which their approval requests do not repeat: each
@@ -183,6 +186,13 @@ impl Parser {
                 }
             }
             "thread/prediction/updated" => {
+                let source = params
+                    .get("sourceTurnId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                if source.is_some() && self.last_turn.is_some() && source != self.last_turn {
+                    return;
+                }
                 if let Some(text) = prediction_text(params) {
                     out.push(Output::Event(ProviderEvent::PromptSuggestion { text }));
                 }
@@ -194,6 +204,7 @@ impl Parser {
                     return;
                 };
                 self.turn_id = Some(started.turn.id.clone());
+                self.last_turn = Some(started.turn.id.clone());
                 self.turn_error = false;
                 out.push(Output::Event(ProviderEvent::TurnStarted {
                     turn_id: Some(started.turn.id),
@@ -1362,6 +1373,45 @@ mod tests {
         assert!(guesses(json!({"type": "completed", "text": null})).is_empty());
         assert!(guesses(json!({"type": "completed", "text": " "})).is_empty());
         assert!(guesses(json!({"type": "failed"})).is_empty());
+    }
+
+    /// A guess for a turn older than the last one started comes after a newer turn: it follows
+    /// nothing on screen and is dropped, while the last turn's own guess is kept.
+    #[test]
+    fn a_codex_prediction_for_an_earlier_turn_is_dropped() {
+        let mut parser = Parser::live();
+        let guesses = |parser: &mut Parser, source: &str| {
+            parser
+                .feed(
+                    &json!({"jsonrpc": "2.0", "method": "thread/prediction/updated", "params": {
+                        "threadId": "t", "sourceTurnId": source,
+                        "result": {"type": "completed", "text": format!("After {source}.")},
+                    }})
+                    .to_string(),
+                )
+                .into_iter()
+                .filter_map(|out| match out {
+                    Output::Event(ProviderEvent::PromptSuggestion { text }) => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for (turn, status) in [("turn-a", "completed"), ("turn-b", "completed")] {
+            for (method, status, completed) in [
+                ("turn/started", "inProgress", Value::Null),
+                ("turn/completed", status, json!(2)),
+            ] {
+                parser.feed(
+                    &json!({"method": method, "params": {"threadId": "t", "turn": {
+                        "id": turn, "items": [], "itemsView": "notLoaded", "status": status,
+                        "error": null, "startedAt": 1, "completedAt": completed, "durationMs": null,
+                    }}})
+                    .to_string(),
+                );
+            }
+        }
+        assert!(guesses(&mut parser, "turn-a").is_empty());
+        assert_eq!(guesses(&mut parser, "turn-b"), ["After turn-b."]);
     }
 
     #[test]
