@@ -206,7 +206,7 @@ const CODEX_COMMANDS: &str = "\n- Use @run for builds, tests, logs and long list
 /// whole, a failure's included; where its own shell starts (its CLI runs in its scratch
 /// folder, so a workspace change can resume the same session) and what that shell's long
 /// output looks like (its output hook trims it).
-const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Use @run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest with a `read_artifact out-…` id for the whole of it. Below Full access, run_unsandboxed runs a command the sandbox blocked once it is approved for you.\n- Your own shell starts in a scratch folder: run a command there as `cd <your workspace> && …`. Its output up to 30 KB comes back whole.\n- Send your last edit and the run_check that checks it in the same message: a separate call for the check costs a whole turn of context.";
+const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Use @run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest with a `read_artifact out-…` id for the whole of it. Below Full access, run_unsandboxed runs a command the sandbox blocked once it is approved for you.\n- Your own shell starts in a scratch folder: run a command there as `cd <your workspace> && …`. Its output up to 30 KB comes back whole.\n- Your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context.";
 
 /// Command tools supplied by the CLI when Brigadier has no supported sandbox wrapper.
 const NATIVE_COMMANDS: &str = "\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
@@ -229,7 +229,7 @@ fn own_commits(local: bool) -> String {
             .to_owned()
     } else {
         format!(
-            "Commit your changes on your workspace's branch: give run_check `commit: \"<message>\"` on the first check you expect to pass, which commits them all with your trailer when it passes (a failing check commits nothing: fix it and run it again), or use `git commit --trailer \"{THREAD_TRAILER}\"`. Its reply names the commit's files and what git status still shows: that is the record, so don't check the commit again with git, and try anything by hand before that run_check. A commit fixing only review findings goes through git with both trailers, adding `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
+            "Commit your changes on your workspace's branch: give run_check `commit: \"<message>\"` on the first check you expect to pass, which commits them all with your trailer when it passes (a failing check commits nothing: fix it and run it again), or use `git commit --trailer \"{THREAD_TRAILER}\"`. Its reply names the commit's files and what git status still shows: that is the record, so don't check the commit again with git or try anything after it. A commit fixing only review findings goes through git with both trailers, adding `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
         )
     }
 }
@@ -740,7 +740,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: SHORT_START_REVISION,
-        thread: "From now on, a review's findings message says how to judge and record its findings, and finish_session and the [merge …] messages say how a merge goes: where they say more than your instructions, follow them.",
+        thread: "From now on, a review's findings message says how to judge and record its findings, and finish_session and the [merge …] messages say how a merge goes: where they say more than your instructions, follow them. On a Claude thread, your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context.",
         worker: "",
     },
 ];

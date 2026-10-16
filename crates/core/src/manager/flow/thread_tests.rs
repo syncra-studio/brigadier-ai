@@ -1023,10 +1023,7 @@ async fn starts_over_on_older_instructions(thread: ProviderKind) {
         rules.contains("delegate_task says how to brief them"),
         "{rules}"
     );
-    assert!(
-        rules.contains("When the user invites questions"),
-        "{rules}"
-    );
+    assert!(rules.contains("When the user invites questions"), "{rules}");
     assert!(rules.contains("propose_plan), never in text"), "{rules}");
     assert!(
         specs.iter().all(|(provider, _)| *provider == thread),
