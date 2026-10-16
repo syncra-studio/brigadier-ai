@@ -14,7 +14,9 @@ fn image_io(err: std::io::Error) -> Error {
     Error::Invalid(err.to_string())
 }
 
-const MAX_IMAGE: u64 = 20 * 1024 * 1024;
+/// The biggest image the thread keeps: it is sent to the app whole, as base64 in one IPC
+/// frame of at most 16 MiB, and base64 takes 4 bytes for every 3.
+const MAX_IMAGE: u64 = 11 * 1024 * 1024;
 
 fn mime(path: &Path) -> Option<&'static str> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
@@ -60,7 +62,7 @@ impl SessionManager {
             let target = self.thread_images_dir(id).join(format!("{name}.{ext}"));
             let retained = blocking(move || {
                 if std::fs::metadata(&source).map_err(image_io)?.len() > MAX_IMAGE {
-                    return Err(Error::Invalid("This image is over 20 MB".into()));
+                    return Err(Error::Invalid("This image is over 11 MB".into()));
                 }
                 std::fs::create_dir_all(target.parent().expect("image folder"))
                     .map_err(image_io)?;
@@ -199,7 +201,7 @@ impl SessionManager {
             let mut file = std::fs::File::open(&path)
                 .map_err(|_| Error::Invalid("This image is no longer there".into()))?;
             if file.metadata().map_err(image_io)?.len() > MAX_IMAGE {
-                return Err(Error::Invalid("This image is over 20 MB".into()));
+                return Err(Error::Invalid("This image is over 11 MB".into()));
             }
             let mut bytes = Vec::new();
             file.by_ref()
@@ -207,7 +209,7 @@ impl SessionManager {
                 .read_to_end(&mut bytes)
                 .map_err(image_io)?;
             if bytes.len() as u64 > MAX_IMAGE {
-                return Err(Error::Invalid("This image is over 20 MB".into()));
+                return Err(Error::Invalid("This image is over 11 MB".into()));
             }
             let mime = mime(&path)
                 .ok_or_else(|| Error::Invalid("This file is not a supported image".into()))?;

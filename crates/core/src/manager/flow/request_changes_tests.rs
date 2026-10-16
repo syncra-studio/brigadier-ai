@@ -665,7 +665,7 @@ async fn request_changes_generated_and_viewed_images_are_conversation_scoped_and
                 let oversized = turn.cwd.join("oversized.png");
                 std::fs::File::create(&oversized)
                     .unwrap()
-                    .set_len(20 * 1024 * 1024 + 1)
+                    .set_len(11 * 1024 * 1024 + 1)
                     .unwrap();
                 turn.emit(ProviderEvent::ToolCall {
                     kept: None,
@@ -734,7 +734,7 @@ async fn request_changes_generated_and_viewed_images_are_conversation_scoped_and
                 .await
                 .unwrap_err()
                 .to_string()
-                .contains("over 20 MB")
+                .contains("over 11 MB")
         );
         assert!(
             flow.manager
