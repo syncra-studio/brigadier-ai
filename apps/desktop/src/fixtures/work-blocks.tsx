@@ -602,8 +602,15 @@ async function driveSelect(): Promise<object> {
   const placed = shown ? { bottomGap: Math.round(box.top - shown.getBoundingClientRect().bottom), centre: Math.round(shown.getBoundingClientRect().left + shown.getBoundingClientRect().width / 2 - (box.left + box.width / 2)) } : null;
   const buttons = all("button", shown ?? document.createElement("div")).map((button) => text(button));
   const pills = all("[data-slot=selection-pill]").length;
+  // Another chat's composer earlier in the page (a side-by-side one): the pill's own takes the focus.
+  const decoy = document.createElement("div");
+  decoy.setAttribute("data-slot", "composer-input");
+  decoy.innerHTML = '<div class="aui-lexical-input" tabindex="-1"></div>';
+  document.body.prepend(decoy);
   all<HTMLButtonElement>("button", shown ?? document.createElement("div")).find((button) => text(button) === "Add to chat")?.click();
   await settle();
+  const focusedOwn = document.activeElement?.matches("[data-slot=composer-input] .aui-lexical-input") === true && !decoy.contains(document.activeElement);
+  decoy.remove();
   const composer = text(one("[contenteditable=true][aria-label='Message input']"));
   const marked = CSS.highlights.get("thread-annotation")?.size ?? 0;
   const afterAdd = { pill: !!pill(), collapsed: document.getSelection()?.isCollapsed ?? null };
@@ -614,7 +621,7 @@ async function driveSelect(): Promise<object> {
   for (const end = performance.now() + 3000; performance.now() < end && !calls.some((call) => call.startsWith("openSideChat")); ) await frame();
   await settle();
   const draft = JSON.parse(localStorage.getItem("brigadier.drafts") ?? "{}")[SIDE]?.text ?? null;
-  return { pills, placed, buttons, composer, marked, afterAdd, sideChat: calls.filter((call) => call.startsWith("openSideChat")), draft };
+  return { pills, placed, buttons, composer, focusedOwn, marked, afterAdd, sideChat: calls.filter((call) => call.startsWith("openSideChat")), draft };
 }
 
 async function driveQueue(): Promise<object> {

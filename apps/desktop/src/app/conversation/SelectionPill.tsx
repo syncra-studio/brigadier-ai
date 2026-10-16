@@ -129,7 +129,10 @@ export const SelectionPill: FC = () => {
     annotations()?.add(shown.range);
     document.getSelection()?.removeAllRanges();
     setShown(null);
-    requestAnimationFrame(() => document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus());
+    // This pill's own composer: a side-by-side chat has one of its own.
+    requestAnimationFrame(() =>
+      anchor.current?.closest(".aui-composer-root")?.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus(),
+    );
   };
   const ask = () => {
     if (!shown || !conversation) return;
