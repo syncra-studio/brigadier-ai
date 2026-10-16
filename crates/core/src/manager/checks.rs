@@ -149,7 +149,7 @@ struct Caller {
 const NOT_ON_LOCAL: &str = "Not committed: this is the user's own checkout, where you commit only when they ask, with git yourself.";
 
 /// Longest a `run_check` commit may take, the repository's hooks included.
-const COMMIT_TIMEOUT: Duration = Duration::from_secs(300);
+const COMMIT_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 5 } else { 300 });
 
 /// The shell lines of `run_check`'s `commit` (BUILD-PLAN C9): everything changed in the
 /// checkout staged and committed with `message` and the thread's trailer. They run as the
@@ -255,6 +255,7 @@ impl SessionManager {
             Ok(spec) => spec,
             Err(err) => return format!("Not committed: {err}"),
         };
+        let before = self.head_of(tree).await;
         let ran = run_command_then(
             self.runtime.platform().clone(),
             &spec,
@@ -265,27 +266,56 @@ impl SessionManager {
             |_| {},
         )
         .await;
-        let ran = match ran {
-            Ok(ran) => ran,
-            Err(err) => return format!("Not committed: {err}"),
-        };
-        match ran.status.as_str() {
-            "exit 0" => {}
-            "exit 100" => return "Nothing to commit: no change is left uncommitted.".into(),
-            "exit 101" => {
-                return format!("Not committed: git add failed: {}", last_said(&ran.output));
-            }
-            status => {
-                return format!(
-                    "Not committed: git commit failed ({status}): {}",
+        let failed = match ran {
+            Ok(ran) => match ran.status.as_str() {
+                "exit 0" => None,
+                "exit 100" => return "Nothing to commit: no change is left uncommitted.".into(),
+                "exit 101" => {
+                    return format!("Not committed: git add failed: {}", last_said(&ran.output));
+                }
+                status if status.starts_with("exit ") => Some(format!(
+                    "git commit failed ({status}): {}",
                     last_said(&ran.output)
-                );
+                )),
+                // Timed out, killed or stopped.
+                status => Some(format!("git commit {status}.")),
+            },
+            Err(err) => Some(err.to_string()),
+        };
+        // A hook that failed or was stopped after git made the commit (a post-commit hook, a
+        // timeout, the session ending) leaves the commit made: HEAD says which.
+        let failed = match failed {
+            None => return self.commit_record_of(tree, message).await,
+            Some(failed) if self.head_of(tree).await == before => {
+                return format!("Not committed: {failed}");
             }
-        }
+            Some(failed) => failed,
+        };
+        format!(
+            "{} Then {failed}",
+            self.commit_record_of(tree, message).await
+        )
+    }
+
+    /// [`commit_record`], read off the blocking pool.
+    async fn commit_record_of(&self, tree: &Path, message: &str) -> String {
         let (git, root, message) = (self.git.clone(), tree.to_owned(), message.to_owned());
         blocking(move || Ok(commit_record(&git, &root, &message)))
             .await
             .unwrap_or_else(|err| format!("Committed, but git could not read it back: {err}"))
+    }
+
+    /// The commit `tree`'s HEAD names, when git can tell.
+    async fn head_of(&self, tree: &Path) -> Option<String> {
+        let (git, root) = (self.git.clone(), tree.to_owned());
+        blocking(move || {
+            git.open(&root)
+                .and_then(|repo| repo.read_only(&["rev-parse", "HEAD"]))
+                .map_err(git_error)
+        })
+        .await
+        .ok()
+        .map(|head| head.trim().to_owned())
     }
 }
 

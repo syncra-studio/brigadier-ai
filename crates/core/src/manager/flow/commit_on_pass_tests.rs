@@ -24,32 +24,54 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
-/// What the thread's scripted turns write and call: a failing check with a commit, then a
-/// passing one. Each run_check reply goes into `replies`, each turn's input into `inputs`.
-fn edits(inputs: Log, replies: Log) -> Script {
+/// What a run_check reply or a later turn's input says when it went to the background: its
+/// result then comes as a `[run-N finished …]` message, which `seen` gets too.
+fn waits(text: &str) -> bool {
+    text.contains("goes on in the background")
+}
+
+/// The thread's scripted turns: on `ask`, write `file` and run `command` with a commit, one
+/// check a turn. Every run_check reply and every later turn's input goes into `seen`, so a
+/// check's result is there whether it came in the call or from the background.
+fn checks(asks: &'static [(&'static str, &'static str, &'static str)], seen: Log) -> Script {
     script(move |turn| {
-        let (inputs, replies) = (inputs.clone(), replies.clone());
+        let seen = seen.clone();
         async move {
             if !turn.is_orchestrator() {
                 return Reply::text("");
             }
-            inputs.lock().unwrap().push(turn.input.clone());
-            if !turn.input.contains("Add the notes file.") {
+            seen.lock().unwrap().push(turn.input.clone());
+            let Some((_, file, command)) = asks.iter().find(|(ask, ..)| turn.input.contains(ask))
+            else {
                 return Reply::text("Fine.");
-            }
-            std::fs::write(turn.add_dirs[0].join("NOTES.md"), "notes\n").unwrap();
-            for command in ["false", "true"] {
-                let reply = turn
-                    .call(
-                        "run_check",
-                        json!({"command": command, "commit": "Add the notes file"}),
-                    )
-                    .await;
-                replies.lock().unwrap().push(reply.text);
-            }
-            Reply::text("Added NOTES.md.")
+            };
+            std::fs::write(turn.add_dirs[0].join(file), "notes\n").unwrap();
+            let reply = turn
+                .call(
+                    "run_check",
+                    json!({"command": command, "commit": "Add the notes file"}),
+                )
+                .await;
+            let quiet = waits(&reply.text);
+            seen.lock().unwrap().push(reply.text);
+            Reply::text(if quiet { "[quiet]" } else { "Checked." })
         }
     })
+}
+
+/// A failing check with a commit, then a passing one.
+const FAIL_THEN_PASS: &[(&str, &str, &str)] = &[
+    ("Add the notes file.", "NOTES.md", "false"),
+    ("Check it again.", "NOTES.md", "true"),
+];
+
+/// The one entry of `seen` that holds `text`.
+fn said(seen: &Log, text: &str) -> String {
+    let seen = seen.lock().unwrap().clone();
+    seen.iter()
+        .find(|said| said.contains(text))
+        .cloned()
+        .unwrap_or_else(|| panic!("nothing said {text:?}: {seen:#?}"))
 }
 
 /// Marks the session as told the instructions before this change.
@@ -83,11 +105,11 @@ async fn told_before(flow: &Flow) {
 /// trailer, leaving nothing uncommitted.
 #[tokio::test]
 async fn a_passing_check_commits_the_threads_change_and_a_failing_one_nothing() {
-    let (inputs, replies): (Log, Log) = (Arc::default(), Arc::default());
+    let seen: Log = Arc::default();
     let mut flow = Flow::start(
         "commit-on-pass",
         Options::default(),
-        edits(inputs.clone(), replies.clone()),
+        checks(FAIL_THEN_PASS, seen.clone()),
     )
     .await;
     flow.say("Look around.").await;
@@ -96,19 +118,12 @@ async fn a_passing_check_commits_the_threads_change_and_a_failing_one_nothing() 
     flow.restart().await;
     flow.say("Add the notes file.").await;
     flow.settled().await;
-    let replies = replies.lock().unwrap().clone();
-    assert_eq!(replies.len(), 2, "{replies:#?}");
-    assert!(
-        replies[0].contains("Not committed: the check didn't pass."),
-        "{}",
-        replies[0]
-    );
-    assert!(
-        replies[1].contains(
-            "\"Add the notes file\" with your trailer: 1 file changed, 1 insertion(+) (NOTES.md). Nothing is left uncommitted."
-        ),
-        "{}",
-        replies[1]
+    said(&seen, "Not committed: the check didn't pass.");
+    flow.say("Check it again.").await;
+    flow.settled().await;
+    said(
+        &seen,
+        "\"Add the notes file\" with your trailer: 1 file changed, 1 insertion(+) (NOTES.md). Nothing is left uncommitted.",
     );
     let workspace = flow
         .thread_specs()
@@ -129,23 +144,20 @@ async fn a_passing_check_commits_the_threads_change_and_a_failing_one_nothing() 
     );
     let note = revision_note(COMMIT_ON_PASS_REVISION - 1, false).unwrap();
     assert!(note.contains("give your last run_check `commit"), "{note}");
-    let inputs = inputs.lock().unwrap().clone();
-    let told: usize = inputs
-        .iter()
-        .map(|input| input.matches(&note).count())
-        .sum();
-    assert_eq!(told, 1, "{inputs:#?}");
+    let seen = seen.lock().unwrap().clone();
+    let told: usize = seen.iter().map(|said| said.matches(&note).count()).sum();
+    assert_eq!(told, 1, "{seen:#?}");
     flow.stop().await;
 }
 
 /// On the user's own checkout, `commit` commits nothing even on a pass, and says why.
 #[tokio::test]
 async fn on_the_users_checkout_a_check_commits_nothing() {
-    let (inputs, replies): (Log, Log) = (Arc::default(), Arc::default());
+    let seen: Log = Arc::default();
     let mut flow = Flow::start(
         "commit-on-pass-local",
         Options::default(),
-        edits(inputs, replies.clone()),
+        checks(&[("Add the notes file.", "NOTES.md", "true")], seen.clone()),
     )
     .await;
     let project = flow
@@ -182,12 +194,7 @@ async fn on_the_users_checkout_a_check_commits_nothing() {
     let start = git(&flow.repo, &["rev-parse", "HEAD"]);
     flow.say("Add the notes file.").await;
     flow.settled().await;
-    let replies = replies.lock().unwrap().clone();
-    assert!(
-        replies[1].contains("Not committed: this is the user's own checkout"),
-        "{}",
-        replies[1]
-    );
+    said(&seen, "Not committed: this is the user's own checkout");
     assert_eq!(git(&flow.repo, &["rev-parse", "HEAD"]), start);
     assert_eq!(git(&flow.repo, &["status", "--porcelain"]), "?? NOTES.md");
     flow.stop().await;
@@ -198,47 +205,56 @@ async fn on_the_users_checkout_a_check_commits_nothing() {
 /// it: nothing is, and the reply says which file. The check run again commits it all.
 #[tokio::test]
 async fn a_file_changed_while_the_check_ran_is_not_committed_under_it() {
-    let replies: Log = Arc::default();
-    let seen = replies.clone();
+    let seen: Log = Arc::default();
     let flow = Flow::start(
         "commit-on-pass-changed",
         Options::default(),
-        script(move |turn| {
-            let replies = seen.clone();
-            async move {
-                if !turn.is_orchestrator() || !turn.input.contains("Add the notes file.") {
-                    return Reply::text("Fine.");
-                }
-                std::fs::write(turn.add_dirs[0].join("NOTES.md"), "notes\n").unwrap();
-                for command in ["echo later > LATER.md", "true"] {
-                    let reply = turn
-                        .call(
-                            "run_check",
-                            json!({"command": command, "commit": "Add the notes file"}),
-                        )
-                        .await;
-                    replies.lock().unwrap().push(reply.text);
-                }
-                Reply::text("Added NOTES.md.")
-            }
-        }),
+        checks(
+            &[
+                ("Add the notes file.", "NOTES.md", "echo later > LATER.md"),
+                ("Check it again.", "NOTES.md", "true"),
+            ],
+            seen.clone(),
+        ),
     )
     .await;
     flow.say("Add the notes file.").await;
     flow.settled().await;
-    let replies = replies.lock().unwrap().clone();
-    assert_eq!(replies.len(), 2, "{replies:#?}");
-    assert!(
-        replies[0].contains(
-            "Not committed: LATER.md changed while the check ran, so it didn't check them."
-        ),
-        "{}",
-        replies[0]
+    said(
+        &seen,
+        "Not committed: LATER.md changed while the check ran, so it didn't check them.",
     );
+    flow.say("Check it again.").await;
+    flow.settled().await;
+    said(&seen, "(LATER.md, NOTES.md). Nothing is left uncommitted.");
+    flow.stop().await;
+}
+
+/// A hook stopped after git made the commit (a post-commit hook past the commit's time limit)
+/// leaves the commit made: the reply says it was, and what stopped after it.
+#[tokio::test]
+async fn a_commit_whose_hook_is_stopped_after_it_says_it_was_made() {
+    let seen: Log = Arc::default();
+    let flow = Flow::start(
+        "commit-on-pass-hook",
+        Options::default(),
+        checks(&[("Add the notes file.", "NOTES.md", "true")], seen.clone()),
+    )
+    .await;
+    let hook = flow.repo.join(".git/hooks/post-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    flow.say("Add the notes file.").await;
+    flow.settled().await;
+    let line = said(&seen, "\"Add the notes file\" with your trailer");
     assert!(
-        replies[1].contains("(LATER.md, NOTES.md). Nothing is left uncommitted."),
-        "{}",
-        replies[1]
+        line.contains("Nothing is left uncommitted. Then git commit timed out after 5 s."),
+        "{line}"
     );
     flow.stop().await;
 }
