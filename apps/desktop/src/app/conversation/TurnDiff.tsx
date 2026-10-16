@@ -4,7 +4,7 @@ import {
   ArrowUpRight,
   ChevronRightAlt,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, useEffect, useState } from "react";
+import { type FC, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
@@ -123,10 +123,15 @@ const FileRow: FC<{
   onToggle: () => void;
   patch: { patches: string[] | null; error: boolean } | null;
 }> = ({ file, open, onToggle, patch }) => {
-  // The file's change in each request that made one, each against its own base.
-  const sections = patch?.patches?.map((each) => filePatch(each, file.path)).filter((section) => section !== "") ?? [];
   const tooLarge = file.insertions + file.deletions > TOO_LARGE_LINES;
   const fixed = file.binary || tooLarge;
+  // The file's change in each request that made one, each against its own base: read only for an
+  // opened row, as reading a patch goes through all of it.
+  const patches = open && !fixed ? (patch?.patches ?? null) : null;
+  const sections = useMemo(
+    () => patches?.map((each) => filePatch(each, file.path)).filter((section) => section !== "") ?? [],
+    [patches, file.path],
+  );
   return (
     <li data-slot="turn-diff-file" data-open={open || undefined}>
       <button
