@@ -304,7 +304,9 @@ def read_events(path):
     with open(path) as f:
         for line in f:
             if line.endswith("\n"):
-                out.append(json.loads(line)["event"])
+                env = json.loads(line)
+                if v3lib.domain_event(env):
+                    out.append(env["event"])
     return out
 
 
