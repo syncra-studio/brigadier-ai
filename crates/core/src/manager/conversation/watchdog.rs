@@ -342,7 +342,8 @@ impl SessionManager {
     }
 }
 
-#[cfg(test)]
+/// For the flow tests, which run on unix only.
+#[cfg(all(test, unix))]
 impl ConvLive {
     pub(crate) async fn watchdog_snapshot(&self) -> (bool, i64, Option<i64>) {
         let state = self.state.lock().await;
