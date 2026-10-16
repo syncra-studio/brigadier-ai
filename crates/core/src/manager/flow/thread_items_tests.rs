@@ -251,13 +251,17 @@ async fn a_turns_own_edits_and_long_command_come_back_whole_as_transcript_items(
                 _ => None,
             })
             .collect();
-        let stat = |path: &str, insertions: u32, deletions: u32| FileStat {
+        let stat = |path: &str, insertions: u32, deletions: u32, change| FileStat {
             path: path.into(),
             insertions,
             deletions,
             binary: false,
+            change: Some(change),
         };
-        let files = vec![stat("/w/src/a.rs", 1, 1), stat("/w/src/lib.rs", 2, 0)];
+        let files = vec![
+            stat("/w/src/a.rs", 1, 1, FileChangeKind::Update),
+            stat("/w/src/lib.rs", 2, 0, FileChangeKind::Add),
+        ];
         let expected = match provider {
             ProviderKind::Claude => vec![
                 (

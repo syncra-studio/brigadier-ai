@@ -164,6 +164,7 @@ pub(super) fn file_stats(changes: &[FileChange]) -> Vec<FileStat> {
                 insertions,
                 deletions,
                 binary: false,
+                change: Some(change.kind),
             }
         })
         .collect()

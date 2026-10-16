@@ -666,6 +666,11 @@ pub struct FileStat {
     pub deletions: u32,
     /// Binary files have no line counts.
     pub binary: bool,
+    /// Whether the change created, changed or deleted the file, where a thread's own file
+    /// change says (its row reads Created, Edited or Deleted); absent elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub change: Option<brigadier_providers::FileChangeKind>,
 }
 
 /// A write task's result as one commit on the current target tip: what is reviewed, verified
