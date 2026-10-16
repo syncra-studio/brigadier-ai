@@ -222,3 +222,10 @@ test("a finished answer's file chip holds still while a later turn works: never 
   assert.equal(seen.connected, true);
   assert.ok(seen.color, "the chip is there, in link blue");
 });
+
+test("a follow-up that joined a turn as it ended leaves the first answer in view, above its bubble", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ first: boolean; second: boolean; firstAboveBubble: boolean; header: string | null }>(t, "drive=joined&kind=session");
+  assert.equal(seen.first, true, JSON.stringify(seen));
+  assert.equal(seen.second, true, JSON.stringify(seen));
+  assert.equal(seen.firstAboveBubble, true, JSON.stringify(seen));
+});

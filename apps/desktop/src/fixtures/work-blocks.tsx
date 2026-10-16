@@ -15,6 +15,8 @@
  *   result's answer.
  * - `drive=timer`: the turn waits on its question card, then ends; its header shows the work and the
  *   wait for the user apart (BUILD-PLAN A9).
+ * - `drive=joined` (with `kind=session`): a follow-up joined the turn as it ended; both answers stay
+ *   in view.
  * - `drive=filelink` (with `kind=session`): a finished answer's file chip holds still while a later
  *   turn works.
  *
@@ -688,6 +690,47 @@ async function driveFileLink(): Promise<object> {
   return { same: !!chip && chip === after, connected: chip?.isConnected ?? false, events, color: after ? getComputedStyle(after).color : null };
 }
 
+/**
+ * A follow-up that joined a turn as it ended (queued, it ran in the same turn): once all is done,
+ * the first request's answer stays in view under its fold, above the follow-up's bubble.
+ */
+async function driveJoined(): Promise<object> {
+  await settle(600);
+  const first: Message = {
+    id: "a1", conversationId: ID, seq: 2, role: "assistant", blob: null, createdAtMs: begun + 5000, attachments: [], mentions: [],
+    text: "Each line's tax is now rounded to cents.", model: null, requestId: "r1", parentId: "r1",
+  };
+  const followUp = user("r2", 3, "Also add a CHANGELOG entry", begun + 6000);
+  daemon.messages = [...daemon.messages, first, followUp];
+  daemon.requests.r2 = asked("r2", begun + 6000, { steeredInto: "r1" });
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change((board) => ({ requests: { ...board.requests, r2: daemon.requests.r2! }, head: "r2" }));
+  await settle();
+  steps([...daemon.steps, { ...tool("edit", 3.1, "Edit", "/repo/CHANGELOG.md", "completed"), requestId: "r2" } as OrchestratorStep]);
+  const second: Message = {
+    id: "a2", conversationId: ID, seq: 4, role: "assistant", blob: null, createdAtMs: begun + 9000, attachments: [], mentions: [],
+    text: "I added a CHANGELOG entry.", model: null, requestId: "r2", parentId: "r2",
+  };
+  daemon.messages = [...daemon.messages, second];
+  daemon.run = "idle";
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change(() => ({ run: "idle", runRequest: null, head: "a2" }));
+  request("r2", { state: { type: "done" }, endedAtMs: begun + 9000, worked: [{ fromMs: begun + 6000, toMs: begun + 9000 }] });
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 9000, worked: [{ fromMs: begun, toMs: begun + 9000 }] });
+  await settle(300);
+  const block = turn() ?? document;
+  const shown = (words: string) =>
+    all("[data-slot=aui_assistant-message-content]", block).some((element) => text(element)?.includes(words) && element.getClientRects().length > 0 && !element.closest("[data-slot=request-fold][data-fold=closed], [hidden]"));
+  const firstAnswer = all("[data-slot=joined-answer]", block)[0] ?? null;
+  const bubble = one("[data-slot=request-steer]", block);
+  return {
+    first: shown("rounded to cents"),
+    second: shown("I added a CHANGELOG entry"),
+    firstAboveBubble: !!firstAnswer && !!bubble && !!(firstAnswer.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING),
+    header: text(one("[data-slot=request-work-label]", block)),
+  };
+}
+
 async function driveQueue(): Promise<object> {
   await settle(600);
   // The composer's editor comes in its own chunk after a plain field and takes the focus a beat
@@ -769,7 +812,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "filelink" ? driveFileLink() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "joined" ? driveJoined() : drive === "filelink" ? driveFileLink() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");
