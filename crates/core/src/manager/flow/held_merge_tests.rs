@@ -378,6 +378,36 @@ async fn an_open_finding_stops_the_held_merge_at_medium_severity() {
     held.flow.stop().await;
 }
 
+/// A fix recorded with no check in the merged code is no fix a held merge counts on: it stops
+/// like an open finding, before anything reaches main (#11).
+#[tokio::test]
+async fn an_unverified_fix_stops_the_held_merge() {
+    let held = held(
+        "held-merge-unverified",
+        Plan {
+            finds: true,
+            records: Some("fixed"),
+            ..Plan::default()
+        },
+    )
+    .await;
+    writing(&held).await;
+    held.release.store(true, Ordering::SeqCst);
+    stopped(&held).await;
+    assert_eq!(
+        held.logged(&format!(
+            "[merge stopped] {} is recorded fixed but unverified (never checked in the merged code): The second note has no title",
+            held.finding()
+        )),
+        1,
+        "{:#?}",
+        held.log.lock().unwrap()
+    );
+    assert_eq!(held.logged("[merge due] The workers"), 0);
+    assert!(!held.merged());
+    held.flow.stop().await;
+}
+
 #[tokio::test]
 async fn an_unrecorded_finding_holds_the_merge_until_recorded() {
     let held = held(
@@ -434,7 +464,8 @@ async fn an_unrecorded_finding_holds_the_merge_until_recorded() {
         .record_findings(
             &held.flow.conversation,
             serde_json::from_value(
-                json!({"items": [{"id": id, "status": "fixed", "task": "task-2"}]}),
+                json!({"items": [{"id": id, "status": "fixed", "task": "task-2",
+                               "checked": "read B.md at the tip"}]}),
             )
             .unwrap(),
         )
@@ -842,7 +873,8 @@ async fn fixed_by_the_thread(
                     let reply = turn
                         .call(
                             "record_findings",
-                            json!({"items": [{"id": "R1.1", "status": "fixed", "high": high}]}),
+                            json!({"items": [{"id": "R1.1", "status": "fixed", "high": high,
+                                           "checked": "read B.md at the tip"}]}),
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);

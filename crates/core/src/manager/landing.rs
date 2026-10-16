@@ -1509,7 +1509,7 @@ impl SessionManager {
                 .map(|t| format!("task-{}", t.number))
                 .collect();
             return Ok(format!(
-                "[merge held] Merging after {} worker{} finish ({}). Nothing is merged yet, and the user's consent holds: Brigadier tells you [merge due] once they have landed, or [merge stopped] if one fails or a finding you record stays open. Tell the user in one line, then reply {} while they work.",
+                "[merge held] Merging after {} worker{} finish ({}). Nothing is merged yet, and the user's consent holds: Brigadier tells you [merge due] once they have landed, or [merge stopped] if one fails or a finding you record stays open or is fixed unverified. Tell the user in one line, then reply {} while they work.",
                 writing.len(),
                 if writing.len() == 1 { "" } else { "s" },
                 names.join(", "),
@@ -1831,7 +1831,7 @@ impl SessionManager {
                         return;
                     }
                     format!(
-                        "[merge waiting] The workers have finished, and the user's merge waits on the findings {}: record each with record_findings (fixed, open, or dismissed and why). Brigadier tells you when it is due; an open one stops it.",
+                        "[merge waiting] The workers have finished, and the user's merge waits on the findings {}: record each with record_findings (fixed, open, or dismissed and why). Brigadier tells you when it is due; an open one, or one fixed without `checked`, stops it.",
                         new.join(", ")
                     )
                 }
@@ -2573,7 +2573,8 @@ pub(super) fn spent(board: &crate::board::Board, asked: &str) -> bool {
 /// What a held merge does once no worker writes (SESSION-FIXES-PLAN.md Q3 step 3).
 #[derive(Debug, PartialEq)]
 pub(super) enum Gate {
-    /// Nothing merges: a writer failed or was stopped, or a finding is recorded open.
+    /// Nothing merges: a writer failed or was stopped, or a finding is recorded open or fixed
+    /// unverified.
     Stop(String),
     /// A review still runs, or findings wait to be recorded (their ids).
     Wait(Vec<String>),
@@ -2643,6 +2644,15 @@ pub(super) fn held_gate(
             .collect();
         return Gate::Stop(format!("{}.", open.join("; ")));
     }
+    // A fix never checked in the merged code is no fix the merge can count on (#11).
+    if !findings.unverified.is_empty() {
+        let unverified: Vec<String> = findings
+            .unverified
+            .iter()
+            .map(|(id, title)| format!("{id} is recorded fixed but unverified (never checked in the merged code): {title}"))
+            .collect();
+        return Gate::Stop(format!("{}.", unverified.join("; ")));
+    }
     // A landing whose review isn't stored yet waits like a running review.
     let review_due = conv.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0;
     if (reviews_on && (findings.running || review_due)) || !findings.new.is_empty() {
@@ -2664,6 +2674,8 @@ pub(super) struct FindingsNow {
     pub running: bool,
     /// Recorded open: id and title.
     pub open: Vec<(String, String)>,
+    /// Recorded fixed without a check in the merged code: id and title.
+    pub unverified: Vec<(String, String)>,
     /// Not recorded yet: ids.
     pub new: Vec<String>,
 }
@@ -2679,6 +2691,11 @@ pub(super) fn findings_now(board: &crate::board::Board) -> FindingsNow {
         open: items
             .clone()
             .filter(|item| matches!(item.status, FindingStatus::Open { .. }))
+            .map(|item| (item.id.clone(), item.title.clone()))
+            .collect(),
+        unverified: items
+            .clone()
+            .filter(|item| super::review_runs::unverified(&item.status))
             .map(|item| (item.id.clone(), item.title.clone()))
             .collect(),
         new: items
