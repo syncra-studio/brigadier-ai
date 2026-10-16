@@ -1,5 +1,6 @@
 //! The thread's CLI guesses the user's next message (G18): kept on the request it follows,
-//! never logged as said, and asked for only while the conversation's composer shows.
+//! never logged as said, and asked for only while the conversation's composer shows. A Claude
+//! Session goes without: Claude Code 2.1.301 acknowledges the pause and guesses anyway.
 
 use std::sync::Arc;
 
@@ -7,7 +8,7 @@ use brigadier_providers::{ProviderEvent, ProviderKind};
 use brigadier_store::StreamPage;
 
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
-use crate::model::streams;
+use crate::model::{ConversationId, ConversationKind, ModelChoice, SetupRequest, streams};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -19,9 +20,31 @@ where
 
 const GUESS: &str = "Run the tests once more.";
 
+async fn chat_on(flow: &Flow, provider: ProviderKind) -> ConversationId {
+    flow.manager
+        .create_conversation(
+            ConversationKind::Chat,
+            None,
+            Some("Guesses".into()),
+            Some(SetupRequest::Chat {
+                model: ModelChoice {
+                    provider,
+                    model: None,
+                    effort: None,
+                    fast: None,
+                    account: None,
+                },
+            }),
+        )
+        .await
+        .unwrap()
+        .id
+}
+
+/// A Session on Codex and a Chat on Claude guess.
 #[tokio::test]
 async fn the_thread_s_cli_guesses_the_next_message_only_while_its_composer_shows() {
-    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+    for (provider, chat) in [(ProviderKind::Codex, false), (ProviderKind::Claude, true)] {
         let flow = Flow::start(
             "20261015-0226-rebuild-wow-w70-suggestion",
             Options {
@@ -35,9 +58,14 @@ async fn the_thread_s_cli_guesses_the_next_message_only_while_its_composer_shows
             }),
         )
         .await;
-        flow.say("Hello").await;
+        let id = if chat {
+            chat_on(&flow, provider).await
+        } else {
+            flow.conversation.clone()
+        };
+        flow.say_to(&id, "Hello").await;
         let board = flow
-            .until("the request over with its guess", |board| {
+            .until_in(&id, "the request over with its guess", |board| {
                 board.latest_request().is_some_and(|request| {
                     request.suggestion.as_deref() == Some(GUESS)
                         && request.state == crate::work::RequestState::Done
@@ -52,7 +80,7 @@ async fn the_thread_s_cli_guesses_the_next_message_only_while_its_composer_shows
             .core
             .store()
             .read_stream(
-                streams::orchestrator(&flow.conversation),
+                streams::orchestrator(&id),
                 StreamPage {
                     limit: 1000,
                     ..Default::default()
@@ -76,12 +104,8 @@ async fn the_thread_s_cli_guesses_the_next_message_only_while_its_composer_shows
             "{suggesting:?}"
         );
         assert_eq!(*flow.behavior.suggestion_pauses.lock().unwrap(), [true]);
-        flow.manager
-            .set_composer_shown(flow.conversation.clone(), true)
-            .await;
-        flow.manager
-            .set_composer_shown(flow.conversation.clone(), false)
-            .await;
+        flow.manager.set_composer_shown(id.clone(), true).await;
+        flow.manager.set_composer_shown(id.clone(), false).await;
         assert_eq!(
             *flow.behavior.suggestion_pauses.lock().unwrap(),
             [true, false, true]
@@ -90,15 +114,45 @@ async fn the_thread_s_cli_guesses_the_next_message_only_while_its_composer_shows
     }
 }
 
+/// Claude Code 2.1.301 keeps guessing while paused, each guess reading the whole context from
+/// the cache again, so a Claude Session thread is never asked to guess at all.
+#[tokio::test]
+async fn a_claude_session_thread_is_never_asked_to_guess() {
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w75-suggestion-off",
+        Options::default(),
+        script(|_| async move { Reply::text("Answered.") }),
+    )
+    .await;
+    flow.manager
+        .set_composer_shown(flow.conversation.clone(), true)
+        .await;
+    flow.say("Hello").await;
+    flow.until("the request over", |board| {
+        board
+            .latest_request()
+            .is_some_and(|request| request.state == crate::work::RequestState::Done)
+    })
+    .await;
+    flow.manager
+        .set_composer_shown(flow.conversation.clone(), false)
+        .await;
+    let suggesting = flow.behavior.suggesting.lock().unwrap().clone();
+    assert!(!suggesting.contains(&true), "{suggesting:?}");
+    assert!(flow.behavior.suggestion_pauses.lock().unwrap().is_empty());
+    flow.stop().await;
+}
+
 /// Each guess reads the whole conversation from the cache again, so a turn that leaves work
 /// running (a worker that will wake the thread with its report) gets none: the hold lifts once
-/// nothing is left running, before the turn that ends the request.
+/// nothing is left running, before the turn that ends the request. (A Session on Codex: a
+/// Claude Session never guesses.)
 #[tokio::test]
 async fn a_turn_that_starts_a_worker_gets_no_guess_until_nothing_is_left_running() {
-    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-        let behavior = Arc::new(FakeBehavior::default());
-        let watched = behavior.clone();
-        let flow = Flow::start(
+    let provider = ProviderKind::Codex;
+    let behavior = Arc::new(FakeBehavior::default());
+    let watched = behavior.clone();
+    let flow = Flow::start(
             "20261015-0226-rebuild-wow-w70-suggestion-held",
             Options {
                 thread: provider,
@@ -139,23 +193,22 @@ async fn a_turn_that_starts_a_worker_gets_no_guess_until_nothing_is_left_running
             }),
         )
         .await;
-        // The user is looking at it from the start.
-        flow.manager
-            .set_composer_shown(flow.conversation.clone(), true)
-            .await;
-        flow.say("Where do notes go?").await;
-        flow.until("the request over", |board| {
-            board.latest_request().is_some_and(|request| {
-                request.state == crate::work::RequestState::Done
-                    && board.tasks.values().all(|task| task.state.is_final())
-            })
-        })
+    // The user is looking at it from the start.
+    flow.manager
+        .set_composer_shown(flow.conversation.clone(), true)
         .await;
-        // Started free, held while the worker ran, free again for the turn that answered.
-        assert_eq!(
-            *behavior.suggestion_pauses.lock().unwrap(),
-            [false, true, false]
-        );
-        flow.stop().await;
-    }
+    flow.say("Where do notes go?").await;
+    flow.until("the request over", |board| {
+        board.latest_request().is_some_and(|request| {
+            request.state == crate::work::RequestState::Done
+                && board.tasks.values().all(|task| task.state.is_final())
+        })
+    })
+    .await;
+    // Started free, held while the worker ran, free again for the turn that answered.
+    assert_eq!(
+        *behavior.suggestion_pauses.lock().unwrap(),
+        [false, true, false]
+    );
+    flow.stop().await;
 }

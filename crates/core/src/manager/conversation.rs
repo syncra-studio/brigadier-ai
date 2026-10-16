@@ -3170,8 +3170,12 @@ impl SessionManager {
             stop_hook: None,
             deny_tools: None,
             // The user types into this one: its CLI guesses their next message, held while
-            // its composer is off screen (`pause_suggestions`). Never a worker's.
-            suggestions: true,
+            // its composer is off screen (`pause_suggestions`). Never a worker's. A Claude
+            // Session goes without: Claude Code 2.1.301 acknowledges the pause and guesses
+            // anyway, each guess reading the whole context again, so neither the off-screen
+            // pause nor the work-pending hold would hold it. Codex is asked by Brigadier.
+            suggestions: conv.kind == ConversationKind::Chat
+                || choice.provider == ProviderKind::Codex,
             protection: launch
                 .as_ref()
                 .map(|launch| launch.protection.clone())

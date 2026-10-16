@@ -1260,7 +1260,8 @@ pub struct SessionSpec {
     /// The CLI predicts the user's next message after each turn, with its own small request
     /// ([`ProviderEvent::PromptSuggestion`]): a conversation the user types into, never a
     /// worker or a one-shot run. [`ProviderSession::pause_suggestions`] holds them while its
-    /// composer is off screen. A CLI that has none ignores it.
+    /// composer is off screen. A CLI that has none ignores it. A Claude Session thread goes
+    /// without: Claude Code 2.1.301 acknowledges the pause and keeps guessing.
     ///
     /// [`ProviderSession::pause_suggestions`]: crate::ProviderSession::pause_suggestions
     pub suggestions: bool,
