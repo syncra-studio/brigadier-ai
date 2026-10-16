@@ -206,7 +206,7 @@ const CODEX_COMMANDS: &str = "\n- Use @run for builds, tests, logs and long list
 /// whole, a failure's included; where its own shell starts (its CLI runs in its scratch
 /// folder, so a workspace change can resume the same session) and what that shell's long
 /// output looks like (its output hook trims it).
-const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Use @run for builds, tests, logs and long listings: it runs in your workspace, and an output over 8 KB comes back as a digest with a `read_artifact out-…` id for the whole of it. Below Full access, run_unsandboxed runs a command the sandbox blocked once it is approved for you.\n- Your own shell starts in a scratch folder: run a command there as `cd <your workspace> && …`. Its output up to 30 KB comes back whole.\n- Your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context.";
+const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Run builds, tests, logs and listings in your own shell. It starts in a scratch folder: run a command there as `cd <your workspace> && …`. Its output up to 30 KB comes back whole; for a longer one you need whole, @run keeps it behind a `read_artifact out-…` id. Below Full access, run_unsandboxed runs a command the sandbox blocked once it is approved for you.\n- Your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context.";
 
 /// Command tools supplied by the CLI when Brigadier has no supported sandbox wrapper.
 const NATIVE_COMMANDS: &str = "\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
@@ -743,6 +743,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, a review's findings message says how to judge and record its findings, and finish_session and the [merge …] messages say how a merge goes: where they say more than your instructions, follow them. run_check takes `fixes`, the ids of the review findings your change fixes: when it passes, its commit carries their Fixes trailer and they are recorded fixed, checked by it, with no record_findings call of their own. On a Claude thread, your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context.",
         worker: "",
     },
+    Revision {
+        number: LEAN_TOOLS_REVISION,
+        thread: "From now on, on a Claude thread, run builds, tests, logs and listings in your own shell (`cd <your workspace> && …`; output up to 30 KB comes back whole). run and note_for_user leave your tool list from the start, at your next resume: load one through ToolSearch by its name when you need it.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -997,6 +1002,10 @@ pub(crate) const COMMIT_FIRST_REVISION: u32 = 63;
 /// tool that needs it: a review's findings, a merge (BUILD-PLAN O2). Revisions 70–79 are phase
 /// O's.
 pub(crate) const SHORT_START_REVISION: u32 = 70;
+
+/// A Claude thread's `run` and `note_for_user` wait behind its tool search, and it runs its
+/// commands in its own shell (BUILD-PLAN O5).
+pub(crate) const LEAN_TOOLS_REVISION: u32 = 71;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2805,7 +2814,8 @@ mod environment_tests {
                 let claude_run =
                     !cfg!(windows) && (cfg!(target_os = "macos") || permission == "fullAccess");
                 assert_eq!(
-                    claude.contains("Use mcp__brigadier__run for builds"),
+                    claude
+                        .contains("for a longer one you need whole, mcp__brigadier__run keeps it"),
                     claude_run
                 );
                 assert_eq!(claude.contains("Use your own CLI shell"), !claude_run);
@@ -3096,7 +3106,7 @@ mod environment_tests {
             true,
         );
         assert_eq!(
-            claude.contains("Use mcp__brigadier__run for builds, tests, logs and long listings"),
+            claude.contains("Run builds, tests, logs and listings in your own shell."),
             cfg!(target_os = "macos")
         );
         assert_eq!(
@@ -3104,7 +3114,7 @@ mod environment_tests {
             cfg!(target_os = "macos")
         );
         assert_eq!(
-            claude.contains("Its output up to 30 KB comes back whole."),
+            claude.contains("Its output up to 30 KB comes back whole;"),
             cfg!(target_os = "macos")
         );
         assert!(claude.contains("Your workspace: (none yet)"));
