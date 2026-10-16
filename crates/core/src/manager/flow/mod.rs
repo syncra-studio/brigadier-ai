@@ -1815,7 +1815,8 @@ mod ending_tests;
 mod engine_tests;
 #[cfg(test)]
 mod evidence_tests;
-#[cfg(test)]
+// Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
+#[cfg(all(test, debug_assertions))]
 mod fault_tests;
 #[cfg(test)]
 mod findings_tests;
@@ -1831,7 +1832,8 @@ mod honesty_tests;
 mod integrated_checks_tests;
 #[cfg(test)]
 mod interrupted_turn_tests;
-#[cfg(test)]
+// Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
+#[cfg(all(test, debug_assertions))]
 mod kept_output_tests;
 #[cfg(test)]
 mod lean_work_tests;
@@ -1897,7 +1899,8 @@ mod review_on_pass_tests;
 mod review_switch_tests;
 #[cfg(test)]
 mod review_tiers_tests;
-#[cfg(test)]
+// Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
+#[cfg(all(test, debug_assertions))]
 mod same_session_tests;
 #[cfg(test)]
 mod search_tests;
@@ -1910,7 +1913,8 @@ mod status_tests;
 mod stop_hook_tests;
 #[cfg(test)]
 mod subfolder_rules_tests;
-#[cfg(test)]
+// Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
+#[cfg(all(test, debug_assertions))]
 mod successor_tests;
 #[cfg(test)]
 mod tab_chat_tests;
@@ -1920,7 +1924,8 @@ mod takeover_tests;
 mod tests;
 #[cfg(test)]
 mod thread_items_tests;
-#[cfg(test)]
+// Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
+#[cfg(all(test, debug_assertions))]
 mod thread_overflow_tests;
 #[cfg(test)]
 mod thread_scratch_tests;
