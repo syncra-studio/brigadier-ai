@@ -40,7 +40,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     toolRaw: string | null;
     compaction: (string | null)[];
     sentImages: [string | null, string | null, boolean][];
-    turnDiff: Record<"many" | "one", { title: string | null; counts: string | null; buttons: (string | null)[]; files: (string | null)[][]; more: string | null }> & {
+    turnDiff: Record<"many" | "one" | "direct" | "steered", { title: string | null; counts: string | null; buttons: (string | null)[]; files: (string | null)[][]; more: string | null }> & {
       all: { files: number; more: string | null }; opened: { name: string | null; counts: string | null }; asks: string[];
     };
     user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string; image: string[] };
@@ -115,7 +115,11 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.equal(turnDiff.many.more, "Show 2 more files");
   assert.deepEqual(turnDiff.all, { files: 5, more: "Collapse files" });
   assert.deepEqual(turnDiff.opened, { name: "README.md", counts: "+1 −1" });
-  assert.deepEqual(turnDiff.asks, [JSON.stringify({ type: "lastTurn", requestId: "many" })]);
+  // A worker that landed with no stats of its own is counted from the Review diff, asked once.
+  assert.deepEqual([turnDiff.direct.title, turnDiff.direct.counts, turnDiff.direct.files], ["Edited 2 files", "+4 −2", [["src/", "export.ts"], ["test/", "export.test.ts"]]]);
+  assert.deepEqual(turnDiff.asks.toSorted(), ["direct", "many"].map((requestId) => JSON.stringify({ type: "lastTurn", requestId })));
+  // A turn a message was steered into counts what both its requests landed.
+  assert.deepEqual([turnDiff.steered.title, turnDiff.steered.counts], ["Edited 2 files", "+2 −2"]);
   // One file: its name is the title, and there is no list.
   assert.deepEqual([turnDiff.one.title, turnDiff.one.files, turnDiff.one.more], ["Edited run.mjs", [], null]);
   assert.equal(seen["diff-missing"].empty, "Diff too large to preview");

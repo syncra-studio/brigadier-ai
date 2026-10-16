@@ -61,6 +61,8 @@ const siteAsks: string[] = [];
 const reviewAsks: string[] = [];
 /** The turn's patch, as the Review diff gives it: five files. */
 const TURN_FILES = ["README.md", "src/math.js", "src/strings.js", "src/a.js", "src/b.js"];
+/** What a worker landed straight onto the branch, with no stats of its own: the Review diff counts it. */
+const DIRECT_FILES = ["src/export.ts", "test/export.test.ts"];
 const turnPatch = TURN_FILES.map((path) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,1 @@\n-old ${path}\n+new ${path}\n`).join("");
 const NODE_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/eL9GtQAAAABJRU5ErkJggg==";
 let letIconsCome = () => {};
@@ -75,7 +77,9 @@ mockIPC((command, payload) => {
   }
   if (req.method === "getReviewDiff") {
     reviewAsks.push(JSON.stringify(req.scope));
-    return { method: req.method, review: { patch: turnPatch } };
+    const paths = req.scope.type === "lastTurn" && req.scope.requestId === "direct" ? DIRECT_FILES : TURN_FILES;
+    const files = paths.map((path) => ({ path, from: null, status: "modified", insertions: 2, deletions: 1, binary: false }));
+    return { method: req.method, review: { patch: turnPatch, files, insertions: 2 * paths.length, deletions: paths.length } };
   }
   if (req.method === "readArtifact") return { method: req.method, text: { text: bigPatch, offset: 0, totalBytes: bigPatch.length, binary: false } };
   if (req.method === "siteIcon") {
@@ -96,14 +100,18 @@ useApp.setState((state) => ({
   settings: state.settings,
 }));
 
-const landed = (id: string, requestId: string, number: number, files: string[]) => ({
+const landed = (id: string, requestId: string, number: number, files: string[] | null) => ({
   id, requestId, number, landed: "abc", state: "landed",
-  candidate: { diffStat: { files: files.map((path) => ({ path, insertions: 1, deletions: 1, binary: false })), insertions: files.length, deletions: files.length } },
+  candidate: files && { diffStat: { files: files.map((path) => ({ path, insertions: 1, deletions: 1, binary: false })), insertions: files.length, deletions: files.length } },
 });
 useBoard.setState({
   board: {
     ...emptyBoard(CHAT), loaded: true,
-    tasks: { t1: landed("t1", "many", 1, TURN_FILES), t2: landed("t2", "one", 2, ["scripts/run.mjs"]) },
+    tasks: {
+      t1: landed("t1", "many", 1, TURN_FILES), t2: landed("t2", "one", 2, ["scripts/run.mjs"]), t3: landed("t3", "direct", 3, null),
+      // A message steered into a turn takes over the worker it speaks to: the turn counts both.
+      t4: landed("t4", "work", 4, ["src/invoice.ts"]), t5: landed("t5", "steer", 5, ["src/export.ts"]),
+    },
   } as unknown as ReturnType<typeof emptyBoard>,
 });
 const view = { selection: { type: "conversation" as const, id: CHAT }, conversation: { id: CHAT } as Conversation, embedded: false };
@@ -271,10 +279,16 @@ function Page() {
         </Case>
         <ViewContext.Provider value={view}>
           <Case id="turn-diff-many">
-            <TurnDiff requestId="many" />
+            <TurnDiff requestIds={["many"]} />
           </Case>
           <Case id="turn-diff-one">
-            <TurnDiff requestId="one" />
+            <TurnDiff requestIds={["one"]} />
+          </Case>
+          <Case id="turn-diff-direct">
+            <TurnDiff requestIds={["direct"]} />
+          </Case>
+          <Case id="turn-diff-steered">
+            <TurnDiff requestIds={["work", "steer"]} />
           </Case>
         </ViewContext.Provider>
         <Case id="diff-patch">
@@ -400,6 +414,7 @@ async function measure(): Promise<object> {
     files: all("[data-slot=turn-diff-file]", at(id)).map((row) => [text(one("[data-slot=turn-diff-dir]", row)), text(one("[data-slot=turn-diff-name]", row))]),
     more: text(one("[data-slot=turn-diff-more]", at(id))),
   });
+  for (const end = performance.now() + 8000; performance.now() < end && !one("[data-slot=turn-diff-title]", at("turn-diff-direct")); ) await frame();
   const many = card("turn-diff-many");
   one<HTMLButtonElement>("[data-slot=turn-diff-more]", at("turn-diff-many"))?.click();
   await wait(100);
@@ -409,6 +424,7 @@ async function measure(): Promise<object> {
   out.turnDiff = {
     many, all: { files: all5.files.length, more: all5.more }, one: card("turn-diff-one"),
     opened: { name: text(one("[data-slot=turn-diff-file-body] [data-slot=diff-name]", at("turn-diff-many"))), counts: text(one("[data-slot=turn-diff-file-body] [data-slot=diff-counts]", at("turn-diff-many"))) },
+    direct: card("turn-diff-direct"), steered: card("turn-diff-steered"),
     asks: reviewAsks,
   };
   // The diff engine draws in its own shadow root.

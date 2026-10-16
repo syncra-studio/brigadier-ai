@@ -5,15 +5,16 @@ import {
   ChevronRightAlt,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { isFinal } from "@/app/conversation/blocks";
-import { useRequestDiff } from "@/app/conversation/ComposerCapsule";
+import { mergeStats } from "@/app/conversation/ComposerCapsule";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import type { FileStat } from "@/ipc/generated";
+import type { DiffStat, FileStat, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { filePatch } from "@/lib/patch";
 import { cn } from "@/lib/utils";
@@ -53,42 +54,65 @@ const PathWords: FC<{ path: string }> = ({ path }) => {
   );
 };
 
+/** A Review diff's files and counts, as a diff stat. */
+function statOf(review: ReviewDiff): DiffStat {
+  return {
+    files: review.files.map(({ path, insertions, deletions, binary }) => ({ path, insertions, deletions, binary })),
+    insertions: review.insertions,
+    deletions: review.deletions,
+  };
+}
+
 /**
- * The turn's patch, fetched the first time a file row opens (and again once the turn's landed
- * work changes): every row's own diff is its section of it.
+ * The turn's changes as the Review diff tells them, request by request, summed: fetched when
+ * `wanted` (and again once the turn's landed work changes). Its patch gives every file row its
+ * own diff; its counts stand in for workers' landings that carry none.
  */
-function useTurnPatch(
+function useTurnReview(
   conversationId: string,
-  requestId: string,
+  requests: string,
   wanted: boolean,
   change: string,
 ) {
   const [state, setState] = useState<{
     change: string;
+    stat: DiffStat | null;
     patch: string | null;
     error: boolean;
   } | null>(null);
-  const due = wanted && state?.change !== change;
+  const key = `${requests}|${change}`;
+  const due = wanted && requests !== "" && state?.change !== key;
   useEffect(() => {
     if (!due) return;
     let live = true;
-    request({
-      method: "getReviewDiff",
-      conversationId,
-      scope: { type: "lastTurn", requestId },
-      wholeFiles: false,
-      ignoreWhitespace: false,
-    })
-      .then(
-        ({ review }) =>
-          live && setState({ change, patch: review.patch, error: false }),
-      )
-      .catch(() => live && setState({ change, patch: null, error: true }));
+    Promise.all(
+      requests.split(" ").map((requestId) =>
+        request({
+          method: "getReviewDiff",
+          conversationId,
+          scope: { type: "lastTurn", requestId },
+          wholeFiles: false,
+          ignoreWhitespace: false,
+        }),
+      ),
+    )
+      .then((answers) => {
+        if (!live) return;
+        const reviews = answers.map(({ review }) => review);
+        const stat = mergeStats(reviews.map(statOf));
+        setState({
+          change: key,
+          stat: stat && stat.files.length > 0 ? stat : null,
+          patch: reviews.map((review) => review.patch).join(""),
+          error: false,
+        });
+      })
+      .catch(() => live && setState({ change: key, stat: null, patch: null, error: true }));
     return () => {
       live = false;
     };
-  }, [due, conversationId, requestId, change]);
-  return state?.change === change ? state : null;
+  }, [due, conversationId, requests, key]);
+  return state?.change === key ? state : null;
 }
 
 /** One changed file of the turn: a row that opens to its diff; a binary file or one too long only lists. */
@@ -147,37 +171,51 @@ const FileRow: FC<{
  * The card under a finished turn's answer: "Edited 3 files" (or the one file's name) over
  * "+a −d", which says "View changes ↗" while hovered, then Undo, which turns into Reapply, and
  * View changes. With more than one file it lists them, the first three, each opening to its
- * diff. It sums what the request's workers landed, so it keeps its counts in both states; a
- * request that landed nothing has no card.
+ * diff. It sums what the turn's workers landed, across every request the turn shows (a
+ * message steered in takes over the worker it speaks to), so it keeps its counts in both
+ * states; a turn that landed nothing has no card. A landing with no stats of its own (a worker
+ * that landed straight onto the branch) is counted from the Review diff.
  */
-export const TurnDiff: FC<{ requestId: string }> = ({ requestId }) => {
+export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) => {
   const conversationId = useViewConversation()?.id ?? null;
-  const diff = useRequestDiff(requestId);
-  const reverted = useBoard(
-    (s) => s.board?.requests[requestId]?.undo?.reverted ?? false,
+  const landed = useBoard(
+    useShallow((s) =>
+      Object.values(s.board?.tasks ?? {})
+        .filter((task) => task.requestId !== null && requestIds.includes(task.requestId) && task.landed !== null)
+        .toSorted((a, b) => a.number - b.number),
+    ),
   );
-  // Undo waits for the request's workers: one still at work may land more.
+  // The requests that landed something, in the turn's order.
+  const requests = requestIds.filter((id) => landed.some((task) => task.requestId === id));
+  const reverts = useBoard(
+    useShallow((s) => requests.map((id) => s.board?.requests[id]?.undo?.reverted ?? false)),
+  );
+  const reverted = reverts.length > 0 && reverts.every(Boolean);
+  // Undo waits for the turn's workers: one still at work may land more.
   const working = useBoard((s) =>
     Object.values(s.board?.tasks ?? {}).some(
-      (task) => task.requestId === requestId && !isFinal(task),
+      (task) => task.requestId !== null && requestIds.includes(task.requestId) && !isFinal(task),
     ),
   );
   const [busy, setBusy] = useState(false);
   const [all, setAll] = useState(false);
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
-  const change = diff
-    ? `${diff.insertions}:${diff.deletions}:${diff.files.length}`
-    : "";
-  const patch = useTurnPatch(
+  const known = landed.every((task) => task.candidate)
+    ? mergeStats(landed.flatMap((task) => (task.candidate ? [task.candidate.diffStat] : [])))
+    : null;
+  const fetched = useTurnReview(
     conversationId ?? "",
-    requestId,
-    opened.size > 0 && !!conversationId,
-    change,
+    requests.join(" "),
+    (known === null || opened.size > 0) && !!conversationId,
+    landed.map((task) => `${task.id}:${task.landed}`).join(" "),
   );
-  if (!diff || !conversationId) return null;
+  const diff = known ?? fetched?.stat ?? null;
+  const [first] = requests;
+  if (!diff || !conversationId || first === undefined) return null;
 
+  // The Changes tab shows one request: the turn's first that landed.
   const review = () => {
-    setReviewScope(conversationId, { type: "lastTurn", requestId });
+    setReviewScope(conversationId, { type: "lastTurn", requestId: first });
     openReviewTab(conversationId, { type: "all" });
   };
 
@@ -191,12 +229,21 @@ export const TurnDiff: FC<{ requestId: string }> = ({ requestId }) => {
   const more = diff.files.length - FIRST_FILES;
   const toggle = () => {
     setBusy(true);
-    request({
-      method: "undoChanges",
-      conversationId,
-      requestId,
-      reapply: reverted,
-    })
+    // Undo goes newest first; Reapply oldest first.
+    const due = requests.filter((_, index) => reverts[index] === reverted);
+    (reverted ? due : due.toReversed())
+      .reduce<Promise<unknown>>(
+        (before, requestId) =>
+          before.then(() =>
+            request({
+              method: "undoChanges",
+              conversationId,
+              requestId,
+              reapply: reverted,
+            }),
+          ),
+        Promise.resolve(),
+      )
       .then(() => toast(reverted ? "Changes reapplied" : "Changes reverted"))
       .catch((error: unknown) =>
         toast(
@@ -280,7 +327,7 @@ export const TurnDiff: FC<{ requestId: string }> = ({ requestId }) => {
               file={file}
               open={opened.has(file.path)}
               onToggle={() => flip(file.path)}
-              patch={patch}
+              patch={fetched}
             />
           ))}
           {more > 0 && (

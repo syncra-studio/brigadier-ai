@@ -34,6 +34,11 @@ export function useRequestDiff(requestId: string | null): DiffStat | null {
         .flatMap((task) => (task.candidate ? [task.candidate.diffStat] : [])),
     ),
   );
+  return mergeStats(stats);
+}
+
+/** Diff stats summed, file by file: null for none. */
+export function mergeStats(stats: readonly DiffStat[]): DiffStat | null {
   if (stats.length === 0) return null;
   const files = new Map<string, FileStat>();
   for (const file of stats.flatMap((stat) => stat.files)) {

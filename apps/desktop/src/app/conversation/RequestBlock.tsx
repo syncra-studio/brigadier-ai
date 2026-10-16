@@ -873,7 +873,7 @@ export const RequestBlock: FC = () => {
       </div>
       </StoppedBy.Provider>
       {/* A run's work is merged from its card, never undone behind the run's back. */}
-      {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestId={meta.requestId} />}
+      {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestIds={meta.requestIds} />}
       {!live && answer !== null && <AnswerFilesOf index={answer} requestIds={meta.requestIds} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
       <BlockError meta={meta} live={live} />
