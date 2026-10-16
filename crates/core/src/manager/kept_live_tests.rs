@@ -206,7 +206,10 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
     assert!(!made.is_empty(), "the session recorded what it made");
     provider.remove(made).await.unwrap();
     for path in &saved {
-        assert!(!Path::new(path).exists(), "{path} is removed with its session");
+        assert!(
+            !Path::new(path).exists(),
+            "{path} is removed with its session"
+        );
     }
 
     let out = root.join("handoff");

@@ -1845,6 +1845,8 @@ mod merge_by_user_tests;
 #[cfg(test)]
 mod mockup_tests;
 #[cfg(test)]
+mod near_limit_tests;
+#[cfg(test)]
 mod overnight_tests;
 #[cfg(test)]
 mod owed_tests;

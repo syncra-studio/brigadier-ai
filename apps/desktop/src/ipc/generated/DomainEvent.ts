@@ -11,6 +11,7 @@ import type { ConversationId } from "./ConversationId";
 import type { Decision } from "./Decision";
 import type { IntegratedCheck } from "./IntegratedCheck";
 import type { KeptBranch } from "./KeptBranch";
+import type { KeptFile } from "./KeptFile";
 import type { Lifecycle } from "./Lifecycle";
 import type { MachineStep } from "./MachineStep";
 import type { MemoryChange } from "./MemoryChange";
@@ -114,7 +115,7 @@ artifact: string | null,
  * configuration, lockfiles, toolchains and declared inputs); none when an input
  * couldn't be identified.
  */
-fingerprint?: string, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "previewsCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "brainJobUpdated", job: BrainJob, } | { "type": "memoryUpdated", conversationId: ConversationId, memory: MemoryChange, } | { "type": "decidedForYou", decision: Decision, } | { "type": "waitingOnYou", item: WaitingItem, } | { "type": "overnightUpdated", run: OvernightRun, } | { "type": "waitingResolved", id: string, by: ResolvedBy, } | { "type": "peerMessageSent", messageId: string, to: ConversationId, text: string, blob: string | null, replyTo: string | null, chainId: string, hop: number, 
+fingerprint?: string, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "previewsCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "outputKept", taskId: TaskId, itemId: string, file: KeptFile, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "brainJobUpdated", job: BrainJob, } | { "type": "memoryUpdated", conversationId: ConversationId, memory: MemoryChange, } | { "type": "decidedForYou", decision: Decision, } | { "type": "waitingOnYou", item: WaitingItem, } | { "type": "overnightUpdated", run: OvernightRun, } | { "type": "waitingResolved", id: string, by: ResolvedBy, } | { "type": "peerMessageSent", messageId: string, to: ConversationId, text: string, blob: string | null, replyTo: string | null, chainId: string, hop: number, 
 /**
  * The sender's request whose turn sent it.
  */

@@ -177,6 +177,11 @@ struct TaskLiveState {
     /// The worker was asked to end this turn with a handoff note (PLAN.md §7): a fresh session
     /// takes over when the turn ends.
     handoff_asked: bool,
+    /// The context it was last asked at, this turn: the ask is repeated after each further
+    /// stretch of growth (BUILD-PLAN D2.3).
+    steered_at: Option<i64>,
+    /// Its turn was stopped at the hard line, or its compaction refused, for a hand-off.
+    forced: bool,
     /// A fresh session's first message, held while the task is paused: resuming starts it.
     held_handover: Option<TurnInput>,
     /// When the worker last showed it works (an event from its CLI, or a turn started); the
@@ -448,19 +453,33 @@ impl TaskLive {
         std::mem::take(&mut self.state.lock().await.brain_calls)
     }
 
-    /// Whether to ask the worker, now, to end its turn with a handoff note: once per turn,
-    /// only while a turn runs that no hand-on or question waits in.
-    pub(crate) async fn ask_handoff(&self) -> bool {
+    /// Whether to ask the worker, now, at `tokens`, to end its turn with a handoff note: once,
+    /// then again after each further `stretch` of growth, only while a turn runs that no
+    /// hand-on or question waits in.
+    pub(crate) async fn ask_handoff(&self, tokens: i64, stretch: i64) -> bool {
         let mut state = self.state.lock().await;
         let ask = state.busy
-            && !state.handoff_asked
+            && state.steered_at.is_none_or(|at| tokens >= at + stretch)
             && !state.stopping
+            && !state.forced
             && state.cutoff.is_none()
             && state.question.is_none();
         if ask {
             state.handoff_asked = true;
+            state.steered_at = Some(tokens);
         }
         ask
+    }
+
+    /// Whether to stop the worker's turn now for a hand-off (the hard line, or a refused
+    /// compaction): once per CLI session, while a turn runs. Answers the session's generation.
+    pub(crate) async fn force_handoff(&self) -> Option<u64> {
+        let mut state = self.state.lock().await;
+        let force = state.busy && !state.forced && !state.stopping && state.cutoff.is_none();
+        if force {
+            state.forced = true;
+        }
+        force.then_some(state.generation)
     }
 
     /// The worker's latest context size and its CLI session's first one, while this daemon
@@ -1900,7 +1919,8 @@ impl SessionManager {
             } else {
                 cwd.clone()
             }),
-            auto_compact: true,
+            // Workers are handed off, never compacted by their CLI (BUILD-PLAN D2.3).
+            auto_compact: false,
             allowed_models: Some(allowed_models.clone()),
             auto_review: self.permission(&conversation_id) == PermissionLevel::ApproveForMe,
             omit_ai_coauthors,
@@ -2026,6 +2046,8 @@ impl SessionManager {
             state.nudged = false;
             state.stopping = false;
             state.handoff_asked = false;
+            state.steered_at = None;
+            state.forced = false;
             // Any start supersedes a fresh session held for a paused task.
             state.held_handover = None;
             state.generation += 1;
@@ -2954,6 +2976,30 @@ impl SessionManager {
                 self.worker_context(live, cli, *used_tokens, *window_tokens)
                     .await;
             }
+            // Its CLI's own compaction was refused: a fresh session takes over (BUILD-PLAN D2.3).
+            ProviderEvent::CompactionRefused => {
+                self.force_worker_handoff(
+                    live,
+                    super::worker_handoff::NearLimit::CompactionRefused,
+                )
+                .await;
+            }
+            // A worker is never compacted by its CLI: one that is anyway says so in its
+            // transcript, where the long-task bench counts it.
+            ProviderEvent::CompactionStarted { automatic } => {
+                tracing::warn!(task = %live.id, automatic, "a worker's CLI compacted its context");
+                self.record_worker_event(
+                    &live.id,
+                    ProviderEvent::Notice {
+                        level: brigadier_providers::NoticeLevel::Warning,
+                        message: format!(
+                            "Its {} CLI compacted its context, which Brigadier never asks for.",
+                            cli.provider
+                        ),
+                    },
+                )
+                .await;
+            }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
                 live.state.lock().await.last_message = None;
@@ -3059,6 +3105,7 @@ impl SessionManager {
             let mut state = live.state.lock().await;
             state.busy = false;
             let handoff_asked = std::mem::take(&mut state.handoff_asked);
+            state.steered_at = None;
             if state.stopping {
                 return;
             }

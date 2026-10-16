@@ -116,6 +116,7 @@ pub(crate) fn progress(event: &ProviderEvent, previous: Option<&ProviderEvent>) 
         | ProviderEvent::Image { .. }
         | ProviderEvent::TurnStarted { .. }
         | ProviderEvent::CompactionStarted { .. }
+        | ProviderEvent::CompactionRefused
         | ProviderEvent::CompactionEnded { .. }
         | ProviderEvent::TurnCompleted { .. } => true,
         ProviderEvent::Usage { total, .. } => {

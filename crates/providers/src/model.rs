@@ -802,6 +802,10 @@ pub enum ProviderEvent {
     CompactionStarted {
         automatic: bool,
     },
+    /// The CLI began compacting on its own and the session's `PreCompact` hook refused it: a
+    /// session that must not compact ([`SessionSpec::auto_compact`] off) is handed off or
+    /// reborn instead (BUILD-PLAN D2.3, D2.3b).
+    CompactionRefused,
     /// The compaction ended: the context before and after it, when the CLI says, or why it
     /// failed.
     CompactionEnded {

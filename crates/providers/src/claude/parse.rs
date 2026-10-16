@@ -112,6 +112,11 @@ pub struct Parser {
     compact_asked: bool,
     /// The compaction running now: whether Claude started it on its own.
     compacting: Option<bool>,
+    /// The session's `PreCompact` hook refuses compaction: one Claude starts on its own is
+    /// reported only once it is done, or as refused.
+    pub(crate) refuses_compaction: bool,
+    /// Claude began compacting on its own in a session that refuses it: not reported yet.
+    refusing: bool,
     /// A compaction failed: Claude says why once more, as a reply of its own, which is dropped.
     compact_failed: bool,
     /// The session's working directory (`system/init`), which its searches' relative paths
@@ -733,7 +738,20 @@ impl Parser {
                 out.push(Output::Event(ProviderEvent::Error { error }));
             }
             Some("status") if str_of(value, "status") == Some("compacting") => {
-                self.compaction_started(out)
+                if self.refuses_compaction && !self.compact_asked {
+                    self.refusing = true;
+                } else {
+                    self.compaction_started(out)
+                }
+            }
+            // The refused compaction's status ends with nothing compacted.
+            Some("status")
+                if self.refusing
+                    && value.get("status").is_none_or(Value::is_null)
+                    && value.get("compact_result").is_none() =>
+            {
+                self.refusing = false;
+                out.push(Output::Event(ProviderEvent::CompactionRefused));
             }
             Some("status") if str_of(value, "compact_result") == Some("failed") => {
                 let automatic = self.compacting.take().unwrap_or(false);
@@ -754,6 +772,10 @@ impl Parser {
                 }));
             }
             Some("compact_boundary") => {
+                // Compacted after all, though the session refuses it: said as it happened.
+                if std::mem::take(&mut self.refusing) {
+                    self.compaction_started(out);
+                }
                 let metadata = value.get("compact_metadata").unwrap_or(&Value::Null);
                 let automatic = self
                     .compacting
@@ -1798,6 +1820,57 @@ mod tests {
         );
         // The parser no longer cuts: the event sender does, once it is redacted and kept.
         assert!(kept[2].2 > 10_000, "{}", kept[2].2);
+    }
+
+    /// P5 (docs/research/long-sessions/PROBES.md), claude 2.1.301: a compaction Claude starts on
+    /// its own, refused by the session's `PreCompact` hook, shows only a `compacting` status and
+    /// an empty one. A session that refuses compaction reports it as refused, never as started;
+    /// one that compacts after all is reported as it happened.
+    #[test]
+    fn a_refused_compaction_is_reported_as_refused_not_started() {
+        let lines = [
+            json!({"type": "system", "subtype": "status", "status": "compacting",
+                   "compact_output_chars": 0, "session_id": "s"}),
+            json!({"type": "system", "subtype": "status", "status": null, "session_id": "s"}),
+        ];
+        let events = |refuses: bool, lines: &[Value]| {
+            let mut parser = Parser::live();
+            parser.refuses_compaction = refuses;
+            lines
+                .iter()
+                .flat_map(|line| parser.feed(&line.to_string()))
+                .filter_map(|output| match output {
+                    Output::Event(
+                        event @ (ProviderEvent::CompactionStarted { .. }
+                        | ProviderEvent::CompactionEnded { .. }
+                        | ProviderEvent::CompactionRefused),
+                    ) => Some(event),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(events(true, &lines), [ProviderEvent::CompactionRefused]);
+        // A session that may compact sees it start, as before.
+        assert_eq!(
+            events(false, &lines[..1]),
+            [ProviderEvent::CompactionStarted { automatic: true }]
+        );
+        let compacted = [
+            lines[0].clone(),
+            json!({"type": "system", "subtype": "compact_boundary", "session_id": "s",
+                   "compact_metadata": {"trigger": "auto", "pre_tokens": 90000, "post_tokens": 9000}}),
+        ];
+        let seen = events(true, &compacted);
+        assert!(
+            matches!(
+                &seen[..],
+                [
+                    ProviderEvent::CompactionStarted { automatic: true },
+                    ProviderEvent::CompactionEnded { error: None, .. }
+                ]
+            ),
+            "{seen:?}"
+        );
     }
 
     #[test]

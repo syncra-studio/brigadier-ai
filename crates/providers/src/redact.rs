@@ -540,6 +540,7 @@ pub fn redact_event(redactor: &Redactor, event: &mut ProviderEvent) {
         | ProviderEvent::Usage { .. }
         | ProviderEvent::ContextSize { .. }
         | ProviderEvent::CompactionStarted { .. }
+        | ProviderEvent::CompactionRefused
         | ProviderEvent::RateLimits { .. }
         | ProviderEvent::Progress { .. }
         | ProviderEvent::BackgroundJobs { .. }

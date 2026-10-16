@@ -242,9 +242,44 @@ pub fn worker_handoff_tokens(window: Option<i64>) -> i64 {
 /// session's first context size `start` (a fresh session already carries its hand-off). A
 /// session must grow by at least half the hand-off size since it started, so one that starts
 /// near the size is not handed over again at once; there is no limit on how many hand-overs a
-/// task makes.
-pub fn worker_handoff_due(tokens: i64, start: Option<i64>, at: i64) -> bool {
-    tokens >= at.max(start.unwrap_or(0) + at / 2)
+/// task makes. Never later than `cap`, below where the CLI itself would act on a full context
+/// (BUILD-PLAN D2.3).
+pub fn worker_handoff_due(tokens: i64, start: Option<i64>, at: i64, cap: i64) -> bool {
+    tokens >= at.max(start.unwrap_or(0) + at / 2).min(cap)
+}
+
+/// Where a CLI itself acts on a full context, in tokens (BUILD-PLAN D2.3): Codex compacts at
+/// about 90% of the window, whatever its limit is set to; Claude, with its own compaction off,
+/// refuses the request at the window ("prompt is too long").
+pub fn context_ceiling(provider: ProviderKind, window: Option<i64>) -> i64 {
+    let size = window.filter(|size| *size > 0).unwrap_or(DEFAULT_WINDOW);
+    match provider {
+        ProviderKind::Codex => size * 9 / 10,
+        ProviderKind::Claude => size,
+    }
+}
+
+/// The hard line, safely below [`context_ceiling`]: past it Brigadier stops a worker's turn and
+/// hands it off, or stops a thread's turn and reborn it, without waiting for the turn to end
+/// (BUILD-PLAN D2.3, D2.3b). A debug build takes `BRIGADIER_HARD_LINE_TOKENS`, so the line can
+/// be crossed on a short task.
+pub fn hard_line(provider: ProviderKind, window: Option<i64>) -> i64 {
+    if cfg!(debug_assertions)
+        && let Some(tokens) = std::env::var("BRIGADIER_HARD_LINE_TOKENS")
+            .ok()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .filter(|tokens| *tokens > 0)
+    {
+        return tokens;
+    }
+    context_ceiling(provider, window) * 85 / 100
+}
+
+/// How much more a context grows, past a first wrap-up steer, before the steer is sent again:
+/// a third of the way from where steering starts (`from`) to the hard line, at least 5k and at
+/// most 50k tokens.
+pub fn steer_stretch(from: i64, hard: i64) -> i64 {
+    ((hard - from) / 3).clamp(5_000, 50_000)
 }
 
 /// A project's Brain at a glance (or the Personal Brain's), for the Inspector.
@@ -328,18 +363,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_hand_off_comes_before_the_cli_acts_on_a_full_context() {
+        // A fresh session that started large would grow to 250k first: capped below the hard
+        // line of a 200k-window Codex model (153k).
+        let cap = hard_line(ProviderKind::Codex, Some(200_000));
+        assert_eq!(cap, 153_000);
+        assert!(!worker_handoff_due(140_000, Some(100_000), 140_000, cap));
+        assert!(worker_handoff_due(153_000, Some(100_000), 140_000, cap));
+        assert_eq!(
+            context_ceiling(ProviderKind::Claude, Some(200_000)),
+            200_000
+        );
+        assert_eq!(hard_line(ProviderKind::Claude, Some(200_000)), 170_000);
+        assert_eq!(steer_stretch(140_000, 170_000), 10_000);
+        assert_eq!(steer_stretch(200_000, 850_000), 50_000);
+    }
+
+    #[test]
     fn a_first_session_hands_over_at_the_size() {
-        assert!(!worker_handoff_due(159_999, Some(15_000), 160_000));
-        assert!(worker_handoff_due(160_000, Some(15_000), 160_000));
-        assert!(worker_handoff_due(160_000, None, 160_000));
+        assert!(!worker_handoff_due(
+            159_999,
+            Some(15_000),
+            160_000,
+            i64::MAX
+        ));
+        assert!(worker_handoff_due(160_000, Some(15_000), 160_000, i64::MAX));
+        assert!(worker_handoff_due(160_000, None, 160_000, i64::MAX));
     }
 
     #[test]
     fn a_fresh_session_near_the_size_needs_headroom() {
         // Started at 28k with the size at 25k: not at once, only after growing by half of it.
-        assert!(!worker_handoff_due(28_000, Some(28_000), 25_000));
-        assert!(!worker_handoff_due(40_000, Some(28_000), 25_000));
-        assert!(worker_handoff_due(40_500, Some(28_000), 25_000));
+        assert!(!worker_handoff_due(28_000, Some(28_000), 25_000, i64::MAX));
+        assert!(!worker_handoff_due(40_000, Some(28_000), 25_000, i64::MAX));
+        assert!(worker_handoff_due(40_500, Some(28_000), 25_000, i64::MAX));
     }
 
     #[test]
@@ -351,7 +408,7 @@ mod tests {
         assert_eq!(worker_handoff_tokens(Some(272_000)), 190_400);
         assert_eq!(worker_handoff_tokens(None), 140_000);
         // No limit on how many: a successor that started small hands over again.
-        assert!(worker_handoff_due(200_000, Some(30_000), 200_000));
+        assert!(worker_handoff_due(200_000, Some(30_000), 200_000, i64::MAX));
     }
 
     #[test]

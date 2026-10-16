@@ -781,6 +781,11 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
     if let Some(reason) = &spec.deny_tools {
         settings["hooks"]["PreToolUse"] = deny_hook(reason);
     }
+    // A session that must not compact refuses Claude's own compaction, which the parser turns
+    // into a hand-off or a rebirth (BUILD-PLAN D2.3, D2.3b).
+    if !spec.auto_compact {
+        settings["hooks"]["PreCompact"] = refuse_compaction_hook();
+    }
     // In auto mode Claude's classifier settles a command that leaves the sandbox: it refuses
     // what the protection keeps out, whatever the user said. `hard_deny` rules block whatever
     // the user intends, and `$defaults` keeps the built-in ones; the classifier reads `autoMode`
@@ -878,6 +883,22 @@ fn deny_hook(reason: &str) -> Value {
         "hooks": [{ "type": "command", "command": command }],
     }])
 }
+
+/// A `PreCompact` hook that refuses every compaction: exit 2 skips one Claude starts on its
+/// own before the context limit, and fails a request whose compaction would recover from the
+/// limit (code.claude.com/docs/en/hooks; P5 in docs/research/long-sessions/PROBES.md: a
+/// refused automatic compaction leaves only a `compacting` status and an empty one).
+fn refuse_compaction_hook() -> Value {
+    let command = format!(
+        "cat >/dev/null; printf '%s\\n' {} >&2; exit 2",
+        shell_quote(REFUSED_COMPACTION)
+    );
+    json!([{ "hooks": [{ "type": "command", "command": command }] }])
+}
+
+/// Why the hook refuses, as Claude reports it.
+const REFUSED_COMPACTION: &str =
+    "Brigadier continues this session in a fresh one instead of compacting it.";
 
 /// `text` as one word for the shell Claude runs a hook command with.
 fn shell_quote(text: &str) -> String {
@@ -1177,6 +1198,7 @@ impl Provider for Claude {
                 stdout,
                 shared.clone(),
                 parser_rx,
+                !spec.auto_compact,
             ));
             let cli_version = self.version().await;
             let session = Arc::new(ClaudeSession {
@@ -1669,8 +1691,10 @@ async fn read_loop(
     mut stdout: mpsc::Receiver<String>,
     shared: Arc<Shared>,
     mut commands: mpsc::UnboundedReceiver<ParserCommand>,
+    refuses_compaction: bool,
 ) {
     let mut parser = Parser::live();
+    parser.refuses_compaction = refuses_compaction;
     while let Some(line) = stdout.recv().await {
         while let Ok(command) = commands.try_recv() {
             match command {
@@ -3122,5 +3146,40 @@ for line in sys.stdin:
             r#"{"availableModels": ["claude-fable-5-1"]}"#,
         );
         assert_eq!(held(worktree), SubAgents::Off);
+    }
+
+    /// BUILD-PLAN D2.3: a session that must not compact refuses Claude's compaction with a
+    /// `PreCompact` hook beside its other hooks; one that may compact has none. The hook exits
+    /// 2 whatever it is sent.
+    #[test]
+    fn a_session_that_must_not_compact_refuses_compaction_with_a_hook() {
+        let cwd = Temp::new();
+        let worker = SessionSpec {
+            auto_compact: false,
+            deny_tools: Some("no".into()),
+            ..spec(cwd.path(), &[])
+        };
+        let hooks = &settings(&worker, cwd.path(), &SubAgents::Any, false)["hooks"];
+        assert!(hooks["PreToolUse"].is_array(), "the other hooks stay");
+        let command = hooks["PreCompact"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let run = std::process::Command::new("sh")
+            .args(["-c", &command])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(run.status.code(), Some(2));
+        assert_eq!(
+            String::from_utf8_lossy(&run.stderr).trim(),
+            REFUSED_COMPACTION
+        );
+        let chat = spec(cwd.path(), &[]);
+        assert!(
+            settings(&chat, cwd.path(), &SubAgents::Any, false)["hooks"]
+                .get("PreCompact")
+                .is_none()
+        );
     }
 }

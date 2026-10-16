@@ -62,7 +62,8 @@ most about 800 words. Don't call submit_report for this.",
 
 impl SessionManager {
     /// A worker reported its context size: past the hand-off size mid-turn, it is asked to wrap
-    /// up with a handoff note.
+    /// up with a handoff note, again after each further stretch of growth; past the hard line,
+    /// its turn is stopped and a fresh session takes over (BUILD-PLAN D2.3).
     pub(crate) async fn worker_context(
         &self,
         live: &Arc<TaskLive>,
@@ -71,8 +72,19 @@ impl SessionManager {
         window: Option<i64>,
     ) {
         let start = live.note_context(tokens, window).await;
-        if !self.worker_handoff_due(tokens, Some(start), live.window().await)
-            || !live.ask_handoff().await
+        let window = live.window().await;
+        let hard = knowledge::hard_line(cli.provider, window);
+        // A session that starts past the line can't be helped by another: only growth counts.
+        if tokens >= hard && tokens > start {
+            self.force_worker_handoff(live, NearLimit::HardLine { tokens })
+                .await;
+            return;
+        }
+        let at = knowledge::worker_handoff_tokens(window);
+        if !self.worker_handoff_due(tokens, Some(start), window)
+            || !live
+                .ask_handoff(tokens, knowledge::steer_stretch(at, hard))
+                .await
         {
             return;
         }
@@ -102,6 +114,47 @@ impl SessionManager {
         });
     }
 
+    /// Stops the worker's running turn and continues the task in a fresh session of the same
+    /// model, without waiting for the turn to end: its context passed the hard line, or its CLI
+    /// began compacting and the session's hook refused it (BUILD-PLAN D2.3).
+    pub(crate) async fn force_worker_handoff(&self, live: &Arc<TaskLive>, why: NearLimit) {
+        let Some(from) = live.force_handoff().await else {
+            return;
+        };
+        let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
+            return;
+        };
+        let words = match why {
+            NearLimit::HardLine { tokens } => format!(
+                "Context at about {}k tokens, near the model's limit: stopped the turn there, and a fresh session continues the task.",
+                tokens / 1_000
+            ),
+            NearLimit::CompactionRefused => "Its CLI began compacting its context; that was refused, and a fresh session continues the task instead."
+                .to_owned(),
+        };
+        tracing::info!(task = %live.id, ?why, "stopping a worker's turn for a hand-off");
+        self.record_worker_event(
+            &live.id,
+            ProviderEvent::Notice {
+                level: NoticeLevel::Info,
+                message: words,
+            },
+        )
+        .await;
+        // Not from inside the worker's event pump: closing its CLI waits for the pump.
+        let manager = self.arc();
+        let live = live.clone();
+        self.spawn(async move {
+            if let Err(err) = manager
+                .hand_over_worker(&live, &task, from, None, None, Handover::NearLimit(why))
+                .await
+            {
+                let reason = format!("The task could not continue in a fresh session: {err}");
+                manager.worker_failed(&task, &reason).await;
+            }
+        });
+    }
+
     /// Whether the worker's session, at `tokens` and started at `start`, is handed over now
     /// (see [`knowledge::worker_handoff_due`]).
     /// `window` is its model's context window, when known.
@@ -111,7 +164,9 @@ impl SessionManager {
         start: Option<i64>,
         window: Option<i64>,
     ) -> bool {
-        knowledge::worker_handoff_due(tokens, start, knowledge::worker_handoff_tokens(window))
+        // The provider isn't known here: Codex's line is the lower of the two.
+        let cap = knowledge::hard_line(brigadier_providers::ProviderKind::Codex, window);
+        knowledge::worker_handoff_due(tokens, start, knowledge::worker_handoff_tokens(window), cap)
     }
 
     /// The worker's context is past the hand-off size (after a restart, from its recorded
@@ -301,6 +356,9 @@ impl SessionManager {
             }
             Handover::Interrupted => " after its process ended".to_owned(),
             Handover::ContextWindow => " after its context passed the model's limit".to_owned(),
+            Handover::NearLimit(_) => {
+                " after its turn was stopped near the model's limit".to_owned()
+            }
         };
         self.record_worker_event(
             &task.id,
@@ -512,6 +570,17 @@ pub(crate) enum Handover {
     /// Its model refused the context as too long ("prompt is too long"): the same model goes
     /// on in a fresh session, never another model (BUILD-PLAN D1.3).
     ContextWindow,
+    /// Its turn was stopped near the model's limit (BUILD-PLAN D2.3).
+    NearLimit(NearLimit),
+}
+
+/// Why a worker's turn was stopped for a hand-off before it ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NearLimit {
+    /// Its context passed the hard line ([`knowledge::hard_line`]).
+    HardLine { tokens: i64 },
+    /// Its CLI began compacting on its own, and the session's hook refused it.
+    CompactionRefused,
 }
 
 /// What the fresh session's first message says about the hand-over.
@@ -564,6 +633,11 @@ fn handover_text(
             .to_owned(),
         Handover::ContextWindow => "Your earlier session's context passed the model's limit \
              (\"prompt is too long\"), so it was closed"
+            .to_owned(),
+        Handover::NearLimit(_) => "Your earlier session's context neared the model's limit in \
+             the middle of a turn, so Brigadier stopped it there. The step it was in may be \
+             unfinished: check the worktree (git status, git diff) and the end of transcript.md \
+             before you go on"
             .to_owned(),
     };
     let mut text = format!(
@@ -723,7 +797,12 @@ mod tests {
         let (last, first) = session_sizes(&events, false);
         assert_eq!((last, first), (Some(115_000), None));
         // Use the plain 100k threshold, not the resume's 110k + 50k guard.
-        assert!(knowledge::worker_handoff_due(last.unwrap(), first, 100_000));
+        assert!(knowledge::worker_handoff_due(
+            last.unwrap(),
+            first,
+            100_000,
+            i64::MAX
+        ));
     }
 
     #[test]
