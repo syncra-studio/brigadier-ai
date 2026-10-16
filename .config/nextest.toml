@@ -1,0 +1,7 @@
+# CI's Rust tests (ci.yml) run under cargo-nextest with this profile: each test in a process of its
+# own, a hung one killed after two minutes, and a failed or killed one tried once more. Tests that
+# fail both tries are listed in ci.yml's skips (issue #84).
+[profile.ci]
+retries = 1
+slow-timeout = { period = "60s", terminate-after = 2 }
+fail-fast = false

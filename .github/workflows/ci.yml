@@ -167,6 +167,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-tests
@@ -179,14 +182,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Tests
         # The app shell's build script wants the built frontend and the daemon beside it. The
-        # tests commit with git, which on Linux has no fallback identity as on a Mac.
+        # tests commit with git, which on Linux has no fallback identity as on a Mac. Nextest's
+        # ci profile (.config/nextest.toml) kills a test hung for two minutes and tries a failed
+        # one once more.
         run: |
           git config --global user.name "Brigadier CI"
           git config --global user.email ci@brigadier.invalid
           pnpm build
           pnpm --filter @brigadier/desktop stage-sidecar --debug
           # These fail on Linux only (issue #84); each is skipped until it's fixed there.
-          cargo test --locked --workspace --lib --bins --tests -- \
+          cargo nextest run --locked --profile ci --workspace --lib --bins --tests -- \
             --skip manager::flow::held_merge_tests::the_held_merge_survives_a_restart \
             --skip manager::flow::peer_ask_tests::a_card_waiting_across_a_restart_still_sends \
             --skip manager::flow::peer_ask_tests::a_send_cut_off_by_a_crash_goes_at_the_next_launch \
