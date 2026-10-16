@@ -122,6 +122,10 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.deepEqual(turnDiff.asks.toSorted(), ["direct", "many"].map((requestId) => JSON.stringify({ type: "lastTurn", requestId })));
   // A turn a message was steered into counts what both its requests landed.
   assert.deepEqual([turnDiff.steered.title, turnDiff.steered.counts], ["Edited 2 files", "+2 −2"]);
+  // Undo only where it can take the turn back whole: not across two requests, nor for a landing
+  // with no candidate.
+  assert.deepEqual(turnDiff.steered.buttons, ["View changed files", "View changes"]);
+  assert.deepEqual(turnDiff.direct.buttons, ["View changed files", "View changes"]);
   // One file: its name is the title, and there is no list.
   assert.deepEqual([turnDiff.one.title, turnDiff.one.files, turnDiff.one.more], ["Edited run.mjs", [], null]);
   assert.equal(seen["diff-missing"].empty, "Diff too large to preview");

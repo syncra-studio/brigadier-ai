@@ -77,7 +77,8 @@ function useTurnReview(
   const [state, setState] = useState<{
     change: string;
     stat: DiffStat | null;
-    patch: string | null;
+    /** Each request's patch: one file changed by two requests has a section in each, never joined. */
+    patches: string[] | null;
     error: boolean;
   } | null>(null);
   const key = `${requests}|${change}`;
@@ -103,11 +104,11 @@ function useTurnReview(
         setState({
           change: key,
           stat: stat && stat.files.length > 0 ? stat : null,
-          patch: reviews.map((review) => review.patch).join(""),
+          patches: reviews.map((review) => review.patch),
           error: false,
         });
       })
-      .catch(() => live && setState({ change: key, stat: null, patch: null, error: true }));
+      .catch(() => live && setState({ change: key, stat: null, patches: null, error: true }));
     return () => {
       live = false;
     };
@@ -120,8 +121,10 @@ const FileRow: FC<{
   file: FileStat;
   open: boolean;
   onToggle: () => void;
-  patch: { patch: string | null; error: boolean } | null;
+  patch: { patches: string[] | null; error: boolean } | null;
 }> = ({ file, open, onToggle, patch }) => {
+  // The file's change in each request that made one, each against its own base.
+  const sections = patch?.patches?.map((each) => filePatch(each, file.path)).filter((section) => section !== "") ?? [];
   const tooLarge = file.insertions + file.deletions > TOO_LARGE_LINES;
   const fixed = file.binary || tooLarge;
   return (
@@ -151,15 +154,14 @@ const FileRow: FC<{
             <p role="status" className="text-muted-foreground py-1 text-sm">
               Loading changes…
             </p>
-          ) : patch.error || patch.patch === null ? (
+          ) : patch.error || patch.patches === null ? (
             <p className="text-muted-foreground py-1 text-sm">
               Could not load the changes
             </p>
+          ) : sections.length === 0 ? (
+            <InlineDiff path={file.path} diff={null} />
           ) : (
-            <InlineDiff
-              path={file.path}
-              diff={filePatch(patch.patch, file.path) || null}
-            />
+            sections.map((section, index) => <InlineDiff key={index} path={file.path} diff={section} />)
           )}
         </div>
       )}
@@ -169,7 +171,7 @@ const FileRow: FC<{
 
 /**
  * The card under a finished turn's answer: "Edited 3 files" (or the one file's name) over
- * "+a −d", which says "View changes ↗" while hovered, then Undo, which turns into Reapply, and
+ * "+a −d", which says "View changes ↗" while hovered, then Undo (where one request's candidates can be taken back whole), which turns into Reapply, and
  * View changes. With more than one file it lists them, the first three, each opening to its
  * diff. It sums what the turn's workers landed, across every request the turn shows (a
  * message steered in takes over the worker it speaks to), so it keeps its counts in both
@@ -191,6 +193,9 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
     useShallow((s) => requests.map((id) => s.board?.requests[id]?.undo?.reverted ?? false)),
   );
   const reverted = reverts.length > 0 && reverts.every(Boolean);
+  // Undo takes back one request's candidates whole: a turn of several requests (whose undos would
+  // clash on a file both changed) or a landing straight onto the branch (no candidate) has none.
+  const undoable = requests.length === 1 && landed.every((task) => task.candidate !== null);
   // Undo waits for the turn's workers: one still at work may land more.
   const working = useBoard((s) =>
     Object.values(s.board?.tasks ?? {}).some(
@@ -293,7 +298,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
             </span>
           </span>
         </button>
-        <Button
+        {undoable && <Button
           variant="ghost"
           size="sm"
           disabled={busy || working}
@@ -309,7 +314,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
           ) : (
             <ArrowRotateCcw className="size-icon-sm" />
           )}
-        </Button>
+        </Button>}
         <Button
           variant="ghost"
           size="sm"
