@@ -138,7 +138,7 @@ How to talk to the user:
 - Everything a user message sets in motion (your turns, the workers, their reports and landings) is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While work for the request is still running, don't write to the user at all: reply with exactly {quiet} and nothing else, which Brigadier doesn't show. This holds right after you delegate, too. Starting work that takes more than a moment, you may write one short opening line ("I'll check how tabs work, then ask you a few questions."); otherwise never write text before or between tool calls ("Let me…", "I'll delegate…"): call the tools, then reply {quiet} or your final answer. Write one short line only when something changed their plans.
 - {LEAD}
 - Even while work runs, write one line for: a failure of what you started (a preview, a dev app, a build, a check you awaited), in the same turn: what failed, its key error line, what you do about it; work the user didn't ask for, before it starts ("Starting 3 fixes from the review; about 20 min."); and [status due]: what runs, why, roughly what's left. Never say something compiles or runs without checking its process, or having a worker look.
-- When the request's work is done, write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …", only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report under a last heading `### Details`, shown folded, which always holds three labelled lines: `Checks:` each check you ran in this request with its result (or "none run"), `Review:` its state (none for a tiny edit, off, still running, or what it found and what you fixed) and `Not checked:` what nobody checked (or "nothing"). Say code compiles or works only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text; a merge needs none.
+- When the request is done (work, a question or an error explained alike), write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …", only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then the full report under a last heading `### Details`, shown folded, which always holds three labelled lines: `Checks:` each check you ran in this request with its result (or "none run"), `Review:` its state (none for a tiny edit, off, still running, or what it found and what you fixed) and `Not checked:` what nobody checked (or "nothing"). Say code compiles or works only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text; a merge needs none.
 - Fix a known defect in a deliverable yourself, with no card (write a fixed copy in your workspace, writable at your level, and link its full path), or send it back, before you answer.
 - {LATE_EVENT} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that earlier request; answer about it as such, briefly.{voice}{orchestrator_voice}
@@ -742,6 +742,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, search_transcript also finds your own commands, reads and tool calls, from earlier sessions too, each shown as [command|read|tool · date · thread step N] with where its whole output is kept: search it before you run or read again what an earlier session did. A thread step is never a message number: cite only #N for user_message.",
         worker: "",
     },
+    Revision {
+        number: ANSWER_DETAILS_REVISION,
+        thread: "From now on, every final answer ends with its `### Details` and their three labelled lines (`Checks:`, `Review:`, `Not checked:`), an answer to a question or an explanation of an error too.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -983,6 +988,10 @@ pub(crate) const OVERFLOW_REVISION: u32 = 60;
 /// search_transcript also finds the thread's own commands, reads and tool calls (BUILD-PLAN
 /// D2.4).
 pub(crate) const THREAD_STEPS_REVISION: u32 = 61;
+
+/// The final answer's `### Details` closes an answer to a question or an explained error too,
+/// not only finished work (BUILD-PLAN E3, found by the gate's answer audit).
+pub(crate) const ANSWER_DETAILS_REVISION: u32 = 62;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3095,6 +3104,8 @@ mod environment_tests {
             assert!(text.contains("Fix a known defect in a deliverable yourself, with no card"));
             assert!(text.contains("and link its full path"));
             assert!(text.contains("`### Details`, shown folded"));
+            // Every final answer has them, a question's or an explained error's too (E3).
+            assert!(text.contains("(work, a question or an error explained alike)"));
             assert!(text.contains(LATE_EVENT));
             // A merge said while workers write is held, then due (SESSION-FIXES-PLAN.md Q3):
             // finish_session and delegate_task say so (BUILD-PLAN C1).

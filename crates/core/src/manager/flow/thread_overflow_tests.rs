@@ -14,7 +14,9 @@ use tokio::sync::Notify;
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::knowledge::RebirthTrigger;
 use crate::manager::fault::{FaultKey, InjectedError};
-use crate::manager::prompts::{OVERFLOW_REVISION, THREAD_STEPS_REVISION, revision_note};
+use crate::manager::prompts::{
+    ANSWER_DETAILS_REVISION, OVERFLOW_REVISION, THREAD_STEPS_REVISION, revision_note,
+};
 use crate::model::{DomainEvent, streams};
 use crate::work::{OrchestratorEntry, RequestState};
 
@@ -482,6 +484,12 @@ async fn a_session_from_before_the_overflow_guard_is_told_once() {
 #[tokio::test]
 async fn a_session_from_before_thread_steps_in_search_is_told_once() {
     told_once(THREAD_STEPS_REVISION, "thread step N").await;
+}
+
+/// Rule R for the Details of every final answer (BUILD-PLAN E3), here for its helper.
+#[tokio::test]
+async fn a_session_from_before_details_on_every_answer_is_told_once() {
+    told_once(ANSWER_DETAILS_REVISION, "an explanation of an error too").await;
 }
 
 /// A session told the instructions at the revision before `revision` hears its note (which
