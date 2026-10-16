@@ -88,6 +88,7 @@ pub(super) fn logged_first(event: &ProviderEvent) -> bool {
             | ProviderEvent::Command { .. }
             | ProviderEvent::FileChanges { .. }
             | ProviderEvent::TurnStarted { .. }
+            | ProviderEvent::Image { .. }
     )
 }
 
@@ -465,6 +466,7 @@ mod tests {
     #[test]
     fn a_file_change_lists_each_files_lines_in_and_out() {
         let change = |path: &str, diff: Option<&str>, counted: Option<(u32, u32)>| FileChange {
+            original: None,
             path: path.into(),
             kind: FileChangeKind::Update,
             diff: diff.map(str::to_owned),

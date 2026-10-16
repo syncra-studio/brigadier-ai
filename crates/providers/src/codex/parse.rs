@@ -557,10 +557,31 @@ impl Parser {
             } => ProviderEvent::Progress {
                 item_id: agent_thread_id,
             },
-            ThreadItem::WebSearch { id, query, .. } => ProviderEvent::ToolCall {
+            ThreadItem::WebSearch {
+                id, query, action, ..
+            } => ProviderEvent::ToolCall {
                 item_id: id,
                 name: "web_search".into(),
-                input: Some(query),
+                input: Some(match action {
+                    Some(p::WebSearchAction::Search {
+                        query: action_query,
+                        queries,
+                    }) => {
+                        let mut input = serde_json::json!({"query": action_query.unwrap_or(query)});
+                        if let Some(queries) = queries.filter(|queries| queries.len() > 1) {
+                            input["queries"] = serde_json::json!(queries);
+                        }
+                        input.to_string()
+                    }
+                    Some(p::WebSearchAction::OpenPage { url }) => {
+                        serde_json::json!({"action": "openPage", "url": url}).to_string()
+                    }
+                    Some(p::WebSearchAction::FindInPage { url, pattern }) => {
+                        serde_json::json!({"action": "findInPage", "url": url, "pattern": pattern})
+                            .to_string()
+                    }
+                    _ => serde_json::json!({"query": query}).to_string(),
+                }),
                 status: item_status(completed),
                 output: None,
                 kept: None,
@@ -1248,6 +1269,37 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn request_changes_codex_web_actions_keep_their_structured_arguments() {
+        for (action, expected) in [
+            (
+                json!({"type": "search", "query": "first", "queries": ["first", "second"]}),
+                json!({"query": "first", "queries": ["first", "second"]}),
+            ),
+            (
+                json!({"type": "openPage", "url": "https://example.com/a"}),
+                json!({"action": "openPage", "url": "https://example.com/a"}),
+            ),
+            (
+                json!({"type": "findInPage", "url": "https://example.com/a", "pattern": "word"}),
+                json!({"action": "findInPage", "url": "https://example.com/a", "pattern": "word"}),
+            ),
+        ] {
+            let mut parser = Parser::replay();
+            let output = parser.feed(&json!({"method": "item/completed", "params": {
+                "threadId": "thread", "turnId": "turn", "completedAtMs": 1, "item": {"type": "webSearch", "id": "web", "query": "first", "action": action}
+            }}).to_string());
+            let input = output
+                .into_iter()
+                .find_map(|output| match output {
+                    Output::Event(ProviderEvent::ToolCall { input, .. }) => input,
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&input).unwrap(), expected);
+        }
+    }
 
     #[test]
     fn an_mcp_result_shows_its_text_and_a_placeholder_for_an_image() {

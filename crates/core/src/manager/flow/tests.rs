@@ -2948,6 +2948,7 @@ async fn a_codex_thread_s_own_commands_and_edits_are_tool_steps() {
                     item_id: "patch-1".into(),
                     changes: vec![
                         FileChange {
+                            original: None,
                             path: "src/a.rs".into(),
                             kind: FileChangeKind::Update,
                             diff: None,
@@ -2955,6 +2956,7 @@ async fn a_codex_thread_s_own_commands_and_edits_are_tool_steps() {
                             removed: None,
                         },
                         FileChange {
+                            original: None,
                             path: "src/b.rs".into(),
                             kind: FileChangeKind::Add,
                             diff: None,

@@ -274,3 +274,9 @@ pub(crate) fn clip(text: &str, max: usize) -> String {
     }
     format!("{}… [{} more bytes]", &text[..end], text.len() - end)
 }
+
+/// Encodes an image's bytes for the provider and IPC media envelopes.
+pub fn image_base64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}

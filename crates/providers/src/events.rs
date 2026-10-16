@@ -134,6 +134,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(4);
         let events = Events::new(tx, Some(Arc::new(Redactor::new([secret]))));
         let change = FileChange {
+            original: None,
             path: "a".into(),
             kind: FileChangeKind::Update,
             diff: Some(diff),

@@ -445,6 +445,10 @@ pub enum FileChangeKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FileChange {
+    /// The file before a completed edit, when the provider supplies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub original: Option<String>,
     pub path: String,
     pub kind: FileChangeKind,
     /// The change as diff lines (`-` out, `+` in), when the CLI says (clipped).
@@ -468,6 +472,7 @@ impl FileChange {
     pub fn counted(path: String, kind: FileChangeKind, diff: Option<&str>, clip: usize) -> Self {
         let (added, removed) = diff.map(|diff| diff_counts(kind, diff)).unzip();
         Self {
+            original: None,
             path,
             kind,
             diff: diff.map(|diff| crate::clip(diff, clip)),

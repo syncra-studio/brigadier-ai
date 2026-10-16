@@ -580,11 +580,8 @@ impl Parser {
                 },
                 ToolKind::FileChange => {
                     let mut changes = file_changes(&tool.name, &tool.input);
-                    if let (Some((added, removed)), [change]) =
-                        (patch_counts(structured), changes.as_mut_slice())
-                    {
-                        change.added = Some(added);
-                        change.removed = Some(removed);
+                    if let [change] = changes.as_mut_slice() {
+                        finish_change(change, structured, &tool.input);
                     }
                     ProviderEvent::FileChanges {
                         item_id: id.to_owned(),
@@ -1221,28 +1218,71 @@ fn file_changes(tool: &str, input: &Value) -> Vec<FileChange> {
     .unwrap_or_default()
 }
 
-/// A finished edit's lines in and out as Claude applied it: its result's `structuredPatch`
-/// (hunks of ` `, `-` and `+` lines), which leaves out the unchanged lines an `Edit`'s old and
-/// new text repeat. `None` without one (a new file's `Write` has none: its content is all in).
-fn patch_counts(result: Option<&Value>) -> Option<(u32, u32)> {
-    let hunks = result?.get("structuredPatch")?.as_array()?;
-    if hunks.is_empty() {
-        return None;
-    }
-    let lines = hunks
-        .iter()
-        .filter_map(|hunk| hunk.get("lines")?.as_array())
-        .flatten()
-        .filter_map(Value::as_str);
-    let (mut added, mut removed) = (0u32, 0u32);
-    for line in lines {
-        if line.starts_with('+') {
-            added = added.saturating_add(1);
-        } else if line.starts_with('-') {
-            removed = removed.saturating_add(1);
+/// The result carries the patch actually applied, including its position in the file.
+fn finish_change(change: &mut FileChange, result: Option<&Value>, input: &Value) {
+    let Some(result) = result else { return };
+    change.original = str_of(result, "originalFile").map(str::to_owned);
+    change.kind = match str_of(result, "type") {
+        Some("create") => FileChangeKind::Add,
+        Some("update") => FileChangeKind::Update,
+        _ => change.kind,
+    };
+    let mut diff = String::new();
+    if let Some(hunks) = result.get("structuredPatch").and_then(Value::as_array) {
+        for hunk in hunks {
+            let number = |key| hunk.get(key).and_then(Value::as_u64).unwrap_or(0);
+            diff.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                number("oldStart"),
+                number("oldLines"),
+                number("newStart"),
+                number("newLines")
+            ));
+            for line in hunk
+                .get("lines")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                diff.push_str(line);
+                diff.push('\n');
+            }
         }
     }
-    Some((added, removed))
+    if diff.is_empty()
+        && change.kind == FileChangeKind::Update
+        && let Some(original) = &change.original
+        && let Some(content) = str_of(result, "content").or_else(|| str_of(input, "content"))
+    {
+        // A replacement Write sometimes supplies the two whole versions without hunks.
+        diff.push_str(&format!(
+            "@@ -1,{} +1,{} @@\n",
+            original.lines().count(),
+            content.lines().count()
+        ));
+        for (text, sign) in [(original.as_str(), '-'), (content, '+')] {
+            for line in text.lines() {
+                diff.push(sign);
+                diff.push_str(line);
+                diff.push('\n');
+            }
+            if !text.is_empty() && !text.ends_with('\n') {
+                diff.push_str("\\ No newline at end of file\n");
+            }
+        }
+    }
+    if !diff.is_empty() {
+        let counted = FileChange::counted(
+            change.path.clone(),
+            change.kind,
+            Some(&diff),
+            crate::DIFF_RAW_CLIP,
+        );
+        change.diff = counted.diff;
+        change.added = counted.added;
+        change.removed = counted.removed;
+    }
 }
 
 /// An edit's lines out and in, from its input: `Edit`'s old and new text, each of `MultiEdit`'s
@@ -1666,7 +1706,7 @@ mod tests {
         assert_eq!((edited[0].added, edited[0].removed), (Some(1), Some(1)));
         assert_eq!(
             edited[0].diff.as_deref(),
-            Some("-fn a() {\n-    1\n-}\n+fn a() {\n+    2\n+}\n")
+            Some("@@ -1,3 +1,3 @@\n fn a() {\n-    1\n+    2\n }\n")
         );
         let written = changes(parser.feed(
             &json!({"type": "user", "message": {"content": [
@@ -1675,6 +1715,50 @@ mod tests {
             .to_string(),
         ));
         assert_eq!((written[0].added, written[0].removed), (Some(3), Some(0)));
+    }
+
+    #[test]
+    fn request_changes_claude_applied_patches_keep_real_lines_and_replaced_contents() {
+        for (tool, input, result, expected) in [
+            (
+                "Write",
+                json!({"file_path": "/w/a", "content": "new\n"}),
+                json!({"type": "update", "originalFile": "old\n", "content": "new\n", "structuredPatch": []}),
+                "@@ -1,1 +1,1 @@\n-old\n+new\n",
+            ),
+            (
+                "Edit",
+                json!({"file_path": "/w/a", "old_string": "old", "new_string": "new"}),
+                json!({"type": "update", "originalFile": "one\ntwo\nold\n", "structuredPatch": [
+                 {"oldStart": 3, "oldLines": 1, "newStart": 3, "newLines": 1, "lines": ["-old", "+new"]}]}),
+                "@@ -3,1 +3,1 @@\n-old\n+new\n",
+            ),
+        ] {
+            let mut parser = Parser::live();
+            parser.feed(
+                &json!({"type": "assistant", "message": {"id": "msg_1", "content": [
+                    {"type": "tool_use", "id": "tool_1", "name": tool, "input": input}
+                ]}})
+                .to_string(),
+            );
+            let events = parser.feed(
+                &json!({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "tool_1", "content": "Updated"}
+            ]}, "tool_use_result": result})
+                .to_string(),
+            );
+            let change = events
+                .into_iter()
+                .find_map(|output| match output {
+                    Output::Event(ProviderEvent::FileChanges { mut changes, .. }) => changes.pop(),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(change.kind, FileChangeKind::Update);
+            assert_eq!(change.diff.as_deref(), Some(expected));
+            assert_eq!((change.added, change.removed), (Some(1), Some(1)));
+            assert!(change.original.is_some());
+        }
     }
 
     /// Claude's command output arrives at completion; Codex streams (C5). The lines a real
