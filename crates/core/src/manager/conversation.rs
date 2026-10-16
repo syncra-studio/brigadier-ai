@@ -6415,6 +6415,13 @@ impl SessionManager {
     }
 
     async fn log_orchestrator(&self, id: &ConversationId, entry: OrchestratorEntry) -> Option<i64> {
+        let entry = match entry {
+            OrchestratorEntry::Provider { provider, event } => OrchestratorEntry::Provider {
+                provider,
+                event: super::request_changes::without_originals(event),
+            },
+            entry => entry,
+        };
         let start = match &entry {
             OrchestratorEntry::Provider { provider, event } => match event {
                 ProviderEvent::SessionStarted { .. } => Some((*provider, event.clone())),

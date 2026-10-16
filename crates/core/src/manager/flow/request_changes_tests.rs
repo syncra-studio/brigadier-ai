@@ -1183,6 +1183,30 @@ async fn request_changes_read_a_redacted_original_from_the_diff() {
         edits.iter().all(|change| change.original.is_none()),
         "{edits:?}"
     );
+    // Nor does the stored log the app and the transcript read.
+    let logged = flow
+        .core
+        .store()
+        .read_stream(
+            crate::model::streams::orchestrator(&flow.conversation),
+            brigadier_store::StreamPage {
+                limit: 500,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        logged
+            .iter()
+            .any(|event| event.payload.get().contains("fileChanges"))
+    );
+    assert!(
+        logged
+            .iter()
+            .all(|event| !event.payload.get().contains("\"original\"")),
+        "an original was stored"
+    );
     assert!(
         !diff.patch.contains("-token") && !diff.patch.contains(brigadier_providers::REDACTED),
         "{}",

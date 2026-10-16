@@ -166,6 +166,18 @@ async fn pace(clock: &mut SnapshotClock) {
     }
 }
 
+/// Drops the whole file an edit came from (Claude's `originalFile`) from an event that is
+/// stored or sent: only the request's record reads it, from the live event, and whole files
+/// would make stored events, and the pages and messages made of them, too big to send.
+pub(super) fn without_originals(mut event: ProviderEvent) -> ProviderEvent {
+    if let ProviderEvent::FileChanges { changes, .. } = &mut event {
+        for change in changes {
+            change.original = None;
+        }
+    }
+    event
+}
+
 fn stream(id: &ConversationId, request: &str) -> String {
     format!("changes:{id}:{request}")
 }

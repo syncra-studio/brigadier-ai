@@ -3501,7 +3501,7 @@ impl SessionManager {
                     stream.clone(),
                     DomainEvent::WorkerEvent {
                         task_id: task_id.clone(),
-                        event,
+                        event: super::request_changes::without_originals(event),
                     },
                 )
             })
