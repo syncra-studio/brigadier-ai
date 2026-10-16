@@ -1,6 +1,6 @@
 //! Evidence for the files each request changed, retained independently of its checkout's history.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -17,6 +17,9 @@ use crate::{Error, Result};
 #[derive(Default)]
 pub(super) struct ChangeRecords {
     locks: std::sync::Mutex<HashMap<ConversationId, Arc<tokio::sync::Mutex<SnapshotClock>>>>,
+    /// Thread events waiting for a snapshot, in the order the thread saw them. Whoever holds
+    /// the session's lock takes them first, so a later refresh never overtakes them.
+    queued: std::sync::Mutex<HashMap<ConversationId, VecDeque<Queued>>>,
 }
 
 #[derive(Default)]
@@ -34,6 +37,63 @@ impl ChangeRecords {
             .or_default()
             .clone()
     }
+
+    fn push(&self, id: &ConversationId, queued: Queued) {
+        self.queued
+            .lock()
+            .unwrap()
+            .entry(id.clone())
+            .or_default()
+            .push_back(queued);
+    }
+
+    pub(super) fn pending(&self, id: &ConversationId) -> bool {
+        self.queued
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|queue| !queue.is_empty())
+    }
+
+    /// The front run of queued events for one request.
+    fn take(&self, id: &ConversationId) -> Option<(String, Vec<Queued>)> {
+        let mut queues = self.queued.lock().unwrap();
+        let queue = queues.get_mut(id)?;
+        let request = queue.front()?.request.clone();
+        let mut taken = Vec::new();
+        while queue
+            .front()
+            .is_some_and(|queued| queued.request == request)
+        {
+            taken.extend(queue.pop_front());
+        }
+        if queue.is_empty() {
+            queues.remove(id);
+        }
+        Some((request, taken))
+    }
+}
+
+/// One thread event's part in a request's changes, read when the thread reported it.
+pub(super) struct Queued {
+    request: String,
+    key: Option<String>,
+    edits: Vec<Evidence>,
+    command: bool,
+}
+
+/// What one reported edit did to one file. Its `after` is read when the edit is reported, so a
+/// later edit to the same file can't be mistaken for someone else's.
+struct Evidence {
+    path: String,
+    before: Before,
+    after: Option<Blob>,
+}
+
+enum Before {
+    Known(Option<Blob>),
+    /// The edit gave nothing to check its original against: the last snapshot stands in.
+    Unverified,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +144,24 @@ pub(super) enum Refresh<'a> {
     Recover,
 }
 
+enum Pass {
+    Start,
+    Events(Vec<Queued>),
+    Landing(Oid, Oid),
+    Settle,
+    Recover,
+}
+
+/// After one slow snapshot, the next waits a second from the last, so a burst of edits on a big
+/// checkout costs a snapshot a second rather than one each.
+async fn pace(clock: &mut SnapshotClock) {
+    if clock.slow
+        && let Some(at) = clock.at
+    {
+        tokio::time::sleep_until(at + std::time::Duration::from_secs(1)).await;
+    }
+}
+
 fn stream(id: &ConversationId, request: &str) -> String {
     format!("changes:{id}:{request}")
 }
@@ -100,6 +178,7 @@ fn command_reason(path: &str) -> String {
 }
 
 impl Record {
+    #[allow(clippy::too_many_arguments)]
     fn own(
         &mut self,
         path: &str,
@@ -108,6 +187,7 @@ impl Record {
         previous: Option<Blob>,
         by: &str,
         weak: bool,
+        after_command: bool,
     ) {
         let owned = self
             .paths
@@ -119,7 +199,11 @@ impl Record {
                 held: None,
             });
         if owned.last != before {
-            owned.held = Some(user_reason(path));
+            owned.held = Some(if after_command {
+                command_reason(path)
+            } else {
+                user_reason(path)
+            });
         }
         if by == "command" {
             owned.held = Some(command_reason(path));
@@ -266,63 +350,187 @@ impl SessionManager {
         let Some((checkout, _)) = self.changes_checkout(id) else {
             return Ok(());
         };
+        let pass = match refresh {
+            Refresh::Start => Pass::Start,
+            Refresh::Event(event) => match self.queued_change(&checkout, request, event).await? {
+                Some(queued) => Pass::Events(vec![queued]),
+                None => return Ok(()),
+            },
+            Refresh::Landing { from, tip } => Pass::Landing(from.clone(), tip.clone()),
+            Refresh::Settle => Pass::Settle,
+            Refresh::Recover => Pass::Recover,
+        };
         let lock = self.change_records.lock(id);
         let mut clock = lock.lock().await;
-        let stored = self.change_record(id, request).await?;
-        if matches!(refresh, Refresh::Start) && stored.is_some() {
-            return Ok(());
-        }
-        if stored.is_none() && !matches!(refresh, Refresh::Start) {
-            return Ok(());
-        }
-        let mut record = stored.unwrap_or_default();
-        if matches!(refresh, Refresh::Settle) && record.settled {
-            return Ok(());
-        }
-        let command = match &refresh {
-            Refresh::Event(ProviderEvent::Command { status, .. }) => {
-                *status != ItemStatus::InProgress
+        self.drain_changes(id, &checkout, &mut clock).await;
+        pace(&mut clock).await;
+        self.apply_changes(id, request, &checkout, &mut clock, pass)
+            .await
+    }
+
+    /// Applies what the thread reported before anything that comes after it.
+    async fn drain_changes(&self, id: &ConversationId, checkout: &Path, clock: &mut SnapshotClock) {
+        while self.change_records.pending(id) {
+            // Events reported while this waits join the same snapshot.
+            pace(clock).await;
+            let Some((request, queued)) = self.change_records.take(id) else {
+                break;
+            };
+            if let Err(err) = self
+                .apply_changes(id, &request, checkout, clock, Pass::Events(queued))
+                .await
+            {
+                tracing::warn!(conversation = %id, error = %err, "could not refresh request changes");
             }
-            Refresh::Event(ProviderEvent::ToolCall { name, status, .. }) => {
+        }
+    }
+
+    /// The part of one thread event the request's record needs, or None for an event that
+    /// changes nothing. An edit's files are read now; the snapshot waits.
+    async fn queued_change(
+        &self,
+        checkout: &Path,
+        request: &str,
+        event: &ProviderEvent,
+    ) -> Result<Option<Queued>> {
+        let command = match event {
+            ProviderEvent::Command { status, .. } => *status != ItemStatus::InProgress,
+            ProviderEvent::ToolCall { name, status, .. } => {
                 *status != ItemStatus::InProgress
                     && (crate::digest::is_shell_tool(name) || crate::digest::own_run(name))
             }
             _ => false,
         };
-        let event_key = match &refresh {
-            Refresh::Event(ProviderEvent::FileChanges {
+        let key = match event {
+            ProviderEvent::FileChanges {
                 item_id,
                 status: ItemStatus::Completed,
                 ..
-            }) => Some(format!("edit:{item_id}")),
-            Refresh::Event(ProviderEvent::Command { item_id, .. }) if command => {
+            } => Some(format!("edit:{item_id}")),
+            ProviderEvent::Command { item_id, .. } | ProviderEvent::ToolCall { item_id, .. }
+                if command =>
+            {
                 Some(format!("command:{item_id}"))
             }
-            Refresh::Event(ProviderEvent::ToolCall { item_id, .. }) if command => {
-                Some(format!("command:{item_id}"))
-            }
-            Refresh::Event(ProviderEvent::TurnCompleted { .. }) => None,
-            Refresh::Event(_) => return Ok(()),
-            Refresh::Landing { tip, .. } => Some(format!("landing:{}", tip.0)),
-            _ => None,
+            ProviderEvent::TurnCompleted { .. } => None,
+            _ => return Ok(None),
         };
-        if event_key
-            .as_ref()
-            .is_some_and(|key| record.seen.contains(key))
-        {
-            return Ok(());
-        }
-        let edit = match refresh {
-            Refresh::Event(ProviderEvent::FileChanges { changes, .. }) => changes.clone(),
+        let edits = match event {
+            ProviderEvent::FileChanges { changes, .. } => {
+                let (git, checkout, changes) =
+                    (self.git.clone(), checkout.to_owned(), changes.clone());
+                blocking(move || {
+                    let repo = git.open(&checkout).map_err(git_error)?;
+                    let mut edits = Vec::new();
+                    for change in changes {
+                        let given = Path::new(&change.path);
+                        let relative = if given.is_absolute() {
+                            given
+                                .strip_prefix(repo.root())
+                                .ok()
+                                .or_else(|| given.strip_prefix(&checkout).ok())
+                        } else {
+                            Some(given)
+                        };
+                        let Some(path) = relative.and_then(Path::to_str) else {
+                            continue;
+                        };
+                        let after = repo.checkout_blob(path).map_err(git_error)?;
+                        let before = if let Some(original) = &change.original {
+                            let mode = after.as_ref().map_or("100644", |blob| blob.mode.as_str());
+                            Before::Known(Some(
+                                repo.store_file_blob(original.as_bytes(), mode)
+                                    .map_err(git_error)?
+                                    .into(),
+                            ))
+                        } else if change.kind == FileChangeKind::Add {
+                            Before::Known(None)
+                        } else if let Some(before) = change
+                            .diff
+                            .as_deref()
+                            .filter(|diff| !diff.contains(" more bytes]"))
+                            .and_then(|diff| repo.before_patch(path, after.as_ref(), diff).ok())
+                        {
+                            Before::Known(before.map(Into::into))
+                        } else {
+                            Before::Unverified
+                        };
+                        edits.push(Evidence {
+                            path: path.to_owned(),
+                            before,
+                            after: after.map(Into::into),
+                        });
+                    }
+                    Ok(edits)
+                })
+                .await?
+            }
             _ => Vec::new(),
         };
-        let landing = match refresh {
-            Refresh::Landing { from, tip } => Some((from.clone(), tip.clone())),
-            _ => None,
-        };
-        let recovering = matches!(refresh, Refresh::Recover);
-        let settled = matches!(refresh, Refresh::Settle)
-            || (matches!(refresh, Refresh::Recover)
+        Ok(Some(Queued {
+            request: request.to_owned(),
+            key,
+            edits,
+            command,
+        }))
+    }
+
+    async fn apply_changes(
+        &self,
+        id: &ConversationId,
+        request: &str,
+        checkout: &Path,
+        clock: &mut SnapshotClock,
+        pass: Pass,
+    ) -> Result<()> {
+        let stored = self.change_record(id, request).await?;
+        if matches!(pass, Pass::Start) && stored.is_some() {
+            return Ok(());
+        }
+        if stored.is_none() && !matches!(pass, Pass::Start) {
+            return Ok(());
+        }
+        let mut record = stored.unwrap_or_default();
+        if matches!(pass, Pass::Settle) && record.settled {
+            return Ok(());
+        }
+        let mut keys = Vec::new();
+        // Each edit, and whether a command reported before it in this snapshot may explain
+        // what its file held before it.
+        let mut edits = Vec::new();
+        let mut command = false;
+        let mut landing = None;
+        let recovering = matches!(pass, Pass::Recover);
+        let settling = matches!(pass, Pass::Settle);
+        match pass {
+            Pass::Events(queued) => {
+                let mut any = false;
+                for queued in queued {
+                    if let Some(key) = queued.key {
+                        if record.seen.contains(&key) || keys.contains(&key) {
+                            continue;
+                        }
+                        keys.push(key);
+                    }
+                    any = true;
+                    edits.extend(queued.edits.into_iter().map(|edit| (edit, command)));
+                    command |= queued.command;
+                }
+                if !any {
+                    return Ok(());
+                }
+            }
+            Pass::Landing(from, tip) => {
+                keys.push(format!("landing:{}", tip.0));
+                if record.seen.contains(&keys[0]) {
+                    return Ok(());
+                }
+                landing = Some((from, tip));
+            }
+            _ => {}
+        }
+        let settled = settling
+            || (recovering
                 && self
                     .core
                     .board(id)
@@ -332,15 +540,15 @@ impl SessionManager {
                     .is_some_and(|request| {
                         !matches!(request.state, RequestState::Working | RequestState::Waiting)
                     }));
-        if clock.slow
-            && let Some(at) = clock.at
-        {
-            tokio::time::sleep_until(at + std::time::Duration::from_secs(1)).await;
-        }
         clock.at = Some(tokio::time::Instant::now());
-        let evidence_seen = event_key.is_some();
+        let evidence_seen = !keys.is_empty();
         let previous_paths = record.paths.clone();
-        let (git, id_owned, request_owned) = (self.git.clone(), id.clone(), request.to_owned());
+        let (git, checkout, id_owned, request_owned) = (
+            self.git.clone(),
+            checkout.to_owned(),
+            id.clone(),
+            request.to_owned(),
+        );
         let (record, changes, changed, cost) = blocking(move || {
             let repo = git.open(&checkout).map_err(git_error)?;
             let started = std::time::Instant::now();
@@ -354,52 +562,28 @@ impl SessionManager {
             };
             let current = repo.file_blobs(&latest).map_err(git_error)?;
             let mut explained = BTreeSet::new();
-            for change in edit {
-                let given = Path::new(&change.path);
-                let relative = if given.is_absolute() {
-                    given
-                        .strip_prefix(repo.root())
-                        .ok()
-                        .or_else(|| given.strip_prefix(&checkout).ok())
+            for (edit, after_command) in edits {
+                let path = edit.path.as_str();
+                let previous_blob = previous.get(path).cloned().map(Blob::from);
+                let (before, weak) = match edit.before {
+                    Before::Known(before) => (before, false),
+                    Before::Unverified => (previous_blob.clone(), true),
+                };
+                // The last edit to a file decides whether it explains what the file holds.
+                if current.get(path).cloned().map(Blob::from) == edit.after {
+                    explained.insert(path.to_owned());
                 } else {
-                    Some(given)
-                };
-                let Some(path) = relative.and_then(Path::to_str) else {
-                    continue;
-                };
-                let after = repo.checkout_blob(path).map_err(git_error)?;
-                let (before, weak) = if let Some(original) = change.original {
-                    let mode = after.as_ref().map_or("100644", |blob| blob.mode.as_str());
-                    (
-                        Some(
-                            repo.store_file_blob(original.as_bytes(), mode)
-                                .map_err(git_error)?,
-                        ),
-                        false,
-                    )
-                } else if change.kind == FileChangeKind::Add {
-                    (None, false)
-                } else if let Some(before) = change
-                    .diff
-                    .as_deref()
-                    .filter(|diff| !diff.contains(" more bytes]"))
-                    .and_then(|diff| repo.before_patch(path, after.as_ref(), diff).ok())
-                {
-                    (before, false)
-                } else {
-                    (previous.get(path).cloned(), true)
-                };
+                    explained.remove(path);
+                }
                 record.own(
                     path,
-                    before.map(Into::into),
-                    after.clone().map(Into::into),
-                    previous.get(path).cloned().map(Into::into),
+                    before,
+                    edit.after,
+                    previous_blob,
                     "edit",
                     weak,
+                    after_command,
                 );
-                if current.get(path) == after.as_ref() {
-                    explained.insert(path.to_owned());
-                }
             }
             if let Some((from, tip)) = landing {
                 let before = repo.file_blobs(&from).map_err(git_error)?;
@@ -414,6 +598,7 @@ impl SessionManager {
                         after.get(path).cloned().map(Into::into),
                         previous.get(path).cloned().map(Into::into),
                         "landing",
+                        false,
                         false,
                     );
                     if current.get(path) == after.get(path) {
@@ -444,6 +629,7 @@ impl SessionManager {
                             previous.get(path).cloned().map(Into::into),
                             "command",
                             false,
+                            false,
                         );
                     } else if let Some(owned) = record.paths.get_mut(path) {
                         owned.held = Some(user_reason(path));
@@ -454,9 +640,7 @@ impl SessionManager {
                 || record.paths != previous_paths
                 || record.settled != settled
                 || record.commit.is_empty();
-            if let Some(key) = event_key {
-                record.seen.insert(key);
-            }
+            record.seen.extend(keys);
             record.latest = latest.0.clone();
             record.settled = settled;
             if changed {
@@ -534,6 +718,7 @@ impl SessionManager {
                     before.get(path).cloned().map(Into::into),
                     "landing",
                     false,
+                    false,
                 );
             }
             if reverted {
@@ -562,7 +747,10 @@ impl SessionManager {
         reapply: bool,
     ) -> Result<crate::work::UndoOutcome> {
         let lock = self.change_records.lock(id);
-        let _guard = lock.lock().await;
+        let mut clock = lock.lock().await;
+        if let Some((checkout, _)) = self.changes_checkout(id) {
+            self.drain_changes(id, &checkout, &mut clock).await;
+        }
         let mut record = self
             .change_record(id, request_id)
             .await?
@@ -725,14 +913,45 @@ impl SessionManager {
         .await;
     }
 
+    /// The thread's event loop never waits for a snapshot: the event's own evidence is read
+    /// now and the snapshot runs behind it, in order.
     pub(super) async fn changes_event(&self, id: &ConversationId, event: &ProviderEvent) {
-        let request = self.conv(id).ok();
-        let request = match request {
+        if !matches!(
+            event,
+            ProviderEvent::FileChanges { .. }
+                | ProviderEvent::Command { .. }
+                | ProviderEvent::ToolCall { .. }
+                | ProviderEvent::TurnCompleted { .. }
+        ) {
+            return;
+        }
+        let Some(request) = (match self.conv(id).ok() {
             Some(conv) => conv.running_request().await,
             None => None,
+        }) else {
+            return;
         };
-        self.refresh_changes(id, request.as_deref(), Refresh::Event(event))
-            .await;
+        let Some((checkout, _)) = self.changes_checkout(id) else {
+            return;
+        };
+        let queued = match self.queued_change(&checkout, &request, event).await {
+            Ok(Some(queued)) => queued,
+            Ok(None) => return,
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "could not read an edit's changes");
+                return;
+            }
+        };
+        self.change_records.push(id, queued);
+        let Some(manager) = self.me.upgrade() else {
+            return;
+        };
+        let id = id.clone();
+        tokio::spawn(async move {
+            let lock = manager.change_records.lock(&id);
+            let mut clock = lock.lock().await;
+            manager.drain_changes(&id, &checkout, &mut clock).await;
+        });
     }
 
     pub(super) async fn recover_change_records(&self, id: &ConversationId) {

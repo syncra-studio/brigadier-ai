@@ -450,6 +450,100 @@ async fn request_changes_mid_request_saves_are_held_or_unowned() {
     }
 }
 
+/// A slow snapshot never holds up the thread: its events go on being handled meanwhile, and two
+/// edits to one file reported while it waits are both the thread's.
+#[tokio::test]
+async fn request_changes_snapshots_run_behind_the_thread_in_order() {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let flow = Flow::start(
+            "20261015-0226-rebuild-wow-w70-record-behind",
+            options(provider),
+            script(|turn| async move {
+                let id = turn.conversation().unwrap();
+                let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+                edit(&turn, &workspace.join("a.txt"), "a", "base\n", "thread a\n").await;
+                let board = observed(&turn, 1).await;
+                let request = board.latest_request().unwrap().id.clone();
+                let lock = turn.host.change_records.lock(&id);
+                let slow = lock.lock().await;
+                edit(&turn, &workspace.join("b.txt"), "b1", "base\n", "base\none\n").await;
+                // The second edit comes once the thread has read the first.
+                tokio::time::timeout(super::PATIENCE, async {
+                    while !turn.host.change_records.pending(&id) {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                edit(
+                    &turn,
+                    &workspace.join("b.txt"),
+                    "b2",
+                    "base\none\n",
+                    "base\none\ntwo\n",
+                )
+                .await;
+                turn.emit(ProviderEvent::Command {
+                    item_id: "probe".into(),
+                    command: "true".into(),
+                    cwd: None,
+                    status: ItemStatus::Completed,
+                    exit_code: Some(0),
+                    output: None,
+                    duration_ms: None,
+                })
+                .await;
+                tokio::time::timeout(super::PATIENCE, async {
+                    loop {
+                        let board = turn.host.core.board(&id).await.unwrap();
+                        if board.orchestrator_steps.iter().any(|step| {
+                            matches!(&step.kind, OrchestratorStepKind::Tool { item_id, .. } if item_id == "probe")
+                        }) {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("the thread's events wait for a snapshot");
+                let board = turn.host.core.board(&id).await.unwrap();
+                assert_eq!(
+                    board.requests[&request].changes.as_ref().unwrap().stat.files.len(),
+                    1
+                );
+                drop(slow);
+                observed(&turn, 2).await;
+                Reply::text("Finished.")
+            }),
+        )
+        .await;
+        flow.say("Edit a and b.").await;
+        let board = flow
+            .until("settled record", |b| {
+                b.latest_request()
+                    .and_then(|r| r.changes.as_ref())
+                    .is_some_and(|c| c.settled)
+            })
+            .await;
+        let request = board.latest_request().unwrap();
+        let changes = request.changes.as_ref().unwrap();
+        assert_eq!(changes.stat.files.len(), 2);
+        assert!(changes.held.is_empty(), "{:?}", changes.held);
+        let outcome = flow
+            .manager
+            .undo_request(flow.conversation.clone(), request.id.clone(), false)
+            .await
+            .unwrap();
+        assert_eq!(outcome.restored, ["a.txt", "b.txt"]);
+        let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("b.txt")).unwrap(),
+            "base\n"
+        );
+        flow.stop().await;
+    }
+}
+
 #[tokio::test]
 async fn request_changes_worktree_commits_and_late_worker_landing_round_trip() {
     for provider in [ProviderKind::Claude, ProviderKind::Codex] {
