@@ -77,9 +77,11 @@ async fn a_long_check_goes_to_the_background_and_its_result_comes_back_to_the_th
     )
     .await;
     flow.say("Run the long check.").await;
+    // The board can show the run before the thread's script has kept the call's reply.
     let board = flow
         .until("the check to go to the background", |board| {
             run_state(board, "run-1") == Some(BackgroundRunState::Running)
+                && !replies.lock().unwrap().is_empty()
         })
         .await;
     // The turn ended quiet, yet the request works while its run does.
