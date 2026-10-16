@@ -116,6 +116,12 @@ export function ShellBox({ command, output, status, exit, stopped = false }: {
   // A command still running when the user's Stop ended its thread was stopped.
   const stoppedBy = useContext(StoppedBy);
   stopped ||= status === "inProgress" && stoppedBy !== null;
+  // A CLI's failed command reply starts with "Exit code N", which the box's ending says: read, not shown.
+  const cli = cliRunOutput(output);
+  if (cli.exit !== null && (exit === null || exit === cli.exit)) {
+    output = cli.output;
+    exit = cli.exit;
+  }
   const { kept, more } = clippedOutput(output?.trimEnd() ?? "");
   const printed = kept.trimEnd();
   const end = ending(status, exit, stopped);
@@ -287,10 +293,6 @@ function callDetail(name: string, status: ItemStatus, call: { input: string | nu
     if (command && OWN_RUNS.has(short)) {
       const own = ownRunOutput(call.output);
       return <ShellBox command={command} output={own.output} status={status} exit={call.exit ?? own.exit} />;
-    }
-    if (command && short === "Bash") {
-      const cli = cliRunOutput(call.output);
-      return <ShellBox command={command} output={cli.output} status={status} exit={call.exit ?? cli.exit} />;
     }
     if (command) return <ShellBox command={command} output={call.output} status={status} exit={call.exit} />;
   }

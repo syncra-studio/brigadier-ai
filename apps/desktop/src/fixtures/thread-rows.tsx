@@ -197,6 +197,9 @@ function Page() {
         <Case id="shell-failed">
           <ShellBox command="npm test" output="1 failed" status="failed" exit={1} />
         </Case>
+        <Case id="shell-cli-failed">
+          <ShellBox command="git ls-files && ls test*" output={"Exit code 1\n.gitignore\nREADME.md"} status="failed" exit={1} />
+        </Case>
         <Case id="shell-running">
           <ShellBox command="sleep 30" output="" status="inProgress" exit={null} />
         </Case>
@@ -372,7 +375,7 @@ async function measure(): Promise<object> {
   const out: Record<string, unknown> = {};
   // A compaction: a new one's words alone (read first, well within its 10 s), a long one says it may take a while.
   out.compaction = [text(at("compaction-new")), text(at("compaction-slow"))];
-  for (const id of ["shell-long", "shell-failed", "shell-running", "shell-clipped", "shell-command"]) out[id] = shell(id);
+  for (const id of ["shell-long", "shell-failed", "shell-cli-failed", "shell-running", "shell-clipped", "shell-command"]) out[id] = shell(id);
   one<HTMLElement>("[data-slot=shell-command]", at("shell-command"))?.click();
   await frame();
   out.commandClicked = shell("shell-command").clamped;

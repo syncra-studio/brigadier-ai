@@ -15,8 +15,9 @@ export function ownRunOutput(output: string | null): { exit: number | null; outp
 const CLI_EXIT_LINE = /^Exit code (-?\d+)(?:\r?\n|$)/;
 
 /**
- * A Claude CLI `Bash` call's reply as its exit code and what it printed: a failed command's reply
- * starts with `Exit code N`, read, not shown, as the box ends with it already.
+ * A CLI command's reply as its exit code and what it printed: the Claude CLI's failed command
+ * (its `Bash`, a `shell` step here) replies `Exit code N` first, read, not shown, as the box ends
+ * with it already.
  */
 export function cliRunOutput(output: string | null): { exit: number | null; output: string | null } {
   const found = output ? CLI_EXIT_LINE.exec(output) : null;

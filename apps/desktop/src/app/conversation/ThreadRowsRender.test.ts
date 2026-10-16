@@ -10,7 +10,7 @@ type Shell = {
 
 test("the thread's rows read like the reference thread: Shell boxes, stopped steps, a live group's children, web searches", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "thread-rows.html", "thread-rows-result", 90000)) as Record<
-    "shell-long" | "shell-failed" | "shell-running" | "shell-clipped" | "shell-command",
+    "shell-long" | "shell-failed" | "shell-cli-failed" | "shell-running" | "shell-clipped" | "shell-command",
     Shell
   > & {
     error?: string;
@@ -55,6 +55,8 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.deepEqual(long.colored, [["✓ 60 tests passed", "var(--ansi-green)"]]);
   assert.ok(!(long.output ?? "").includes(String.fromCharCode(27)), "no escape left in the output");
   assert.equal(seen["shell-failed"].ending, "Exit code 1");
+  // The CLI's "Exit code 1" first line is the box's ending, not its output.
+  assert.deepEqual([seen["shell-cli-failed"].output, seen["shell-cli-failed"].ending], [".gitignore\nREADME.md", "Exit code 1"]);
   // Running: nothing printed yet and no ending.
   assert.deepEqual([seen["shell-running"].output, seen["shell-running"].ending], [null, null]);
   // Cut short by the daemon: says so, and the marker isn't shown as output.
