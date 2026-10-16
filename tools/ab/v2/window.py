@@ -8,7 +8,7 @@ CLI must never compact.
 A root is a V2 root (`run.py template`, same fixture and settings) made with `--model`:
   window.py template --root R --provider claude --model claude-sonnet-4-6   (a 200k window)
   window.py template --root R --provider codex --model gpt-6-luna           (Codex's smallest, 272k)
-  window.py run --root R --role thread|worker [--n 1] [--files 24]
+  window.py run --root R --role thread|worker [--n 1] [--files 24] [--sequential] [--hard-line-tokens N]
   window.py score RUN_DIR                    (rescored from the run directory alone)
   run.py cleanup --root R [--export DIR]
 
@@ -57,12 +57,19 @@ def write_files(ws, count):
     return d
 
 
-def ask(role, count):
+SEQUENTIAL = ("Read them strictly one at a time: exactly one tool call per file, each call reading that one whole "
+              "file and nothing else (your file-read tool, or `cat bulk/NN.txt` alone as the whole command), "
+              "and wait for its result before the next call. Never read two files in one call, never call tools "
+              "in parallel, and never write a script or a loop to read them. ")
+
+
+def ask(role, count, sequential=False):
     files = ", ".join(f"bulk/{i:02d}.txt" for i in range(1, count + 1))
     task = (f"Read every one of these files completely, one read per file, in this order: {files}. Read each "
             "whole file (all of its lines; for a shell read use `cat` on the whole file, never head, tail or "
-            "grep). Don't summarise between reads and don't skip any. Then answer with one line per file: its "
-            "name and the CHECK-… word on its last line. Change no files and commit nothing.")
+            "grep). " + (SEQUENTIAL if sequential else "") + "Don't summarise between reads and don't skip any. "
+            "Then answer with one line per file: its name and the CHECK-… word on its last line. Change no files "
+            "and commit nothing.")
     if role == "thread":
         return "Do this yourself in this conversation, without starting any worker. " + task
     return ("Start exactly one worker for this and wait for its report; don't read the files yourself. Give it "
@@ -77,7 +84,7 @@ def template(a):
     json.dump(build, open(os.path.join(a.root, "build.json"), "w"), indent=1)
 
 
-def one(root, role, n, count):
+def one(root, role, n, count, sequential=False, hard_line=None):
     build = json.load(open(os.path.join(root, "build.json")))
     provider, model = build["provider"], build["model"]
     v2.MODELS[provider] = model
@@ -89,8 +96,10 @@ def one(root, role, n, count):
         v3run.safe_rmtree(root, run)
     os.makedirs(run)
     v3run.restore(root, "seeded")
-    arm = v2.Arm(root, os.path.join(run, "rec"), run, "")
+    debug_env = f"BRIGADIER_HARD_LINE_TOKENS={hard_line}" if hard_line else ""
+    arm = v2.Arm(root, os.path.join(run, "rec"), run, debug_env)
     start = {"role": role, "provider": provider, "model": model, "files": count, "n": n, "build": build,
+             "sequential": sequential, "debug_env": debug_env,
              "check_words": [check_word(i) for i in range(1, count + 1)], "requests": []}
     try:
         time.sleep(5)
@@ -106,7 +115,7 @@ def one(root, role, n, count):
         ws = v2.workspace(arm.events, conv)
         start["workspace"] = ws
         start["bulk"] = write_files(ws, count)
-        t, rid = v3run.send(arm.data, conv, ask(role, count) + " " + v2.v3lib.SAFETY)
+        t, rid = v3run.send(arm.data, conv, ask(role, count, sequential) + " " + v2.v3lib.SAFETY)
         start["requests"].append(rid); start["big_request"] = rid; start["sent_ms"] = t
         json.dump(start, open(os.path.join(run, "start.json"), "w"), indent=1)
         r = v3run.wait_request(arm.events, conv, rid, deadline)
@@ -217,6 +226,8 @@ def main():
     r = sub.add_parser("run"); r.add_argument("--root", required=True)
     r.add_argument("--role", choices=["thread", "worker"], required=True)
     r.add_argument("--n", type=int, default=1); r.add_argument("--files", type=int, default=24)
+    r.add_argument("--sequential", action="store_true", help="one whole-file read per call, never batched")
+    r.add_argument("--hard-line-tokens", type=int, help="a debug daemon's BRIGADIER_HARD_LINE_TOKENS (lines scale with it)")
     sc = sub.add_parser("score"); sc.add_argument("run")
     a = ap.parse_args()
     if a.cmd == "template":
@@ -224,7 +235,7 @@ def main():
     elif a.cmd == "run":
         root = v3run.check_root(a.root)
         try:
-            one(root, a.role, a.n, a.files)
+            one(root, a.role, a.n, a.files, a.sequential, a.hard_line_tokens)
         except Exception as err:  # noqa: BLE001
             log("HARNESS ERROR", repr(err))
             with open(os.path.join(root, "results.jsonl"), "a") as f:
