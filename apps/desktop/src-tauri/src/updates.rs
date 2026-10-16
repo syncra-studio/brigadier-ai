@@ -5,7 +5,8 @@
 //! A minute after launch and then every four hours it reads the nightly feed, downloads a newer
 //! build in the background and keeps it. The window then shows "Restart to update". The update
 //! is installed when the app quits (by that line or any other way), once the daemon has stopped.
-//! When an overnight run keeps the daemon going, it waits for a later quit.
+//! When an overnight run keeps the daemon going it isn't installed: the next launch downloads it
+//! again and installs it at a later quit.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -111,7 +112,7 @@ pub fn finish(daemon_stopped: bool) -> bool {
                 Err(err) => tracing::warn!(error = %err, "could not install the nightly update"),
             }
         } else {
-            tracing::info!("the daemon keeps running; the nightly update waits for a later quit");
+            tracing::info!("the daemon keeps running; the next launch fetches the update again");
         }
     }
     RESTART.load(Ordering::Acquire)
