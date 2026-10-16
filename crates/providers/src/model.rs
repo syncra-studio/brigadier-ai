@@ -450,6 +450,11 @@ pub struct FileChange {
     #[ts(optional)]
     pub original: Option<String>,
     pub path: String,
+    /// Where an update moved the file (Codex's `*** Move to:`), when it did; `path` is where
+    /// it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub moved_to: Option<String>,
     pub kind: FileChangeKind,
     /// The change as diff lines (`-` out, `+` in), when the CLI says (clipped).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -474,6 +479,7 @@ impl FileChange {
         Self {
             original: None,
             path,
+            moved_to: None,
             kind,
             diff: diff.map(|diff| crate::clip(diff, clip)),
             added,

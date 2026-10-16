@@ -421,9 +421,8 @@ impl SessionManager {
                     (self.git.clone(), checkout.to_owned(), changes.clone());
                 blocking(move || {
                     let repo = git.open(&checkout).map_err(git_error)?;
-                    let mut edits = Vec::new();
-                    for change in changes {
-                        let given = Path::new(&change.path);
+                    let relative = |given: &str| {
+                        let given = Path::new(given);
                         let relative = if given.is_absolute() {
                             given
                                 .strip_prefix(repo.root())
@@ -432,9 +431,44 @@ impl SessionManager {
                         } else {
                             Some(given)
                         };
-                        let Some(path) = relative.and_then(Path::to_str) else {
+                        relative.and_then(Path::to_str).map(str::to_owned)
+                    };
+                    let mut edits = Vec::new();
+                    for change in changes {
+                        let Some(path) = relative(&change.path) else {
                             continue;
                         };
+                        let path = path.as_str();
+                        // A move: the file is new where it went, and was where it came from
+                        // what the diff turns back from it (the same bytes when nothing else
+                        // changed).
+                        if let Some(moved) = change.moved_to.as_deref().and_then(relative) {
+                            let after = repo.checkout_blob(&moved).map_err(git_error)?;
+                            let diff = change
+                                .diff
+                                .as_deref()
+                                .filter(|diff| !diff.trim().is_empty());
+                            let before = match diff {
+                                None => Before::Known(after.clone().map(Into::into)),
+                                Some(diff) if !diff.contains(" more bytes]") => repo
+                                    .before_patch(&moved, after.as_ref(), diff)
+                                    .map_or(Before::Unverified, |before| {
+                                        Before::Known(before.map(Into::into))
+                                    }),
+                                Some(_) => Before::Unverified,
+                            };
+                            edits.push(Evidence {
+                                path: path.to_owned(),
+                                before,
+                                after: repo.checkout_blob(path).map_err(git_error)?.map(Into::into),
+                            });
+                            edits.push(Evidence {
+                                path: moved,
+                                before: Before::Known(None),
+                                after: after.map(Into::into),
+                            });
+                            continue;
+                        }
                         let after = repo.checkout_blob(path).map_err(git_error)?;
                         let before = if let Some(original) = &change.original {
                             let mode = after.as_ref().map_or("100644", |blob| blob.mode.as_str());

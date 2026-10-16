@@ -136,6 +136,7 @@ mod tests {
         let change = FileChange {
             original: Some(secret.into()),
             path: "a".into(),
+            moved_to: None,
             kind: FileChangeKind::Update,
             diff: Some(diff),
             added: None,

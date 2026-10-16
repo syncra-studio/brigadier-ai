@@ -5,7 +5,12 @@ export type FileChange = {
 /**
  * The file before a completed edit, when the provider supplies it.
  */
-original?: string, path: string, kind: FileChangeKind, 
+original?: string, path: string, 
+/**
+ * Where an update moved the file (Codex's `*** Move to:`), when it did; `path` is where
+ * it was.
+ */
+movedTo?: string, kind: FileChangeKind, 
 /**
  * The change as diff lines (`-` out, `+` in), when the CLI says (clipped).
  */

@@ -712,6 +712,7 @@ mod tests {
         let change = |path: &str, diff: Option<&str>, counted: Option<(u32, u32)>| FileChange {
             original: None,
             path: path.into(),
+            moved_to: None,
             kind: FileChangeKind::Update,
             diff: diff.map(str::to_owned),
             added: counted.map(|(added, _)| added),

@@ -473,13 +473,18 @@ impl Parser {
                 let changes: Vec<FileChange> = changes
                     .into_iter()
                     .map(|change| {
-                        let kind = match change.kind {
-                            p::PatchChangeKind::Add => FileChangeKind::Add,
-                            p::PatchChangeKind::Delete => FileChangeKind::Delete,
-                            p::PatchChangeKind::Update { .. } => FileChangeKind::Update,
+                        let (kind, moved_to) = match change.kind {
+                            p::PatchChangeKind::Add => (FileChangeKind::Add, None),
+                            p::PatchChangeKind::Delete => (FileChangeKind::Delete, None),
+                            p::PatchChangeKind::Update { move_path } => {
+                                (FileChangeKind::Update, move_path)
+                            }
                         };
                         let diff = (!change.diff.is_empty()).then_some(change.diff.as_str());
-                        FileChange::counted(change.path, kind, diff, crate::DIFF_RAW_CLIP)
+                        FileChange {
+                            moved_to,
+                            ..FileChange::counted(change.path, kind, diff, crate::DIFF_RAW_CLIP)
+                        }
                     })
                     .collect();
                 self.file_items.insert(id.clone(), paths);
@@ -1789,6 +1794,29 @@ mod tests {
             [(Some(1), Some(1)), (Some(20_000), Some(0)), (None, None)]
         );
         assert!(changes[1].diff.as_ref().unwrap().len() < long.len());
+    }
+
+    /// A patch that moves a file says where it went.
+    #[test]
+    fn a_completed_patch_keeps_where_a_moved_file_went() {
+        let mut parser = Parser::live();
+        let completed = json!({ "method": "item/completed", "params": {
+            "item": { "id": "f1", "type": "fileChange", "status": "completed", "changes": [
+                { "path": "/w/a.rs", "kind": { "type": "update", "move_path": "/w/b.rs" },
+                  "diff": "@@ -1 +1 @@\n-x\n+y\n" },
+            ]},
+            "completedAtMs": 1, "threadId": "t1", "turnId": "u1",
+        }});
+        let changes = events(&mut parser, &completed)
+            .into_iter()
+            .find_map(|event| match event {
+                ProviderEvent::FileChanges { changes, .. } => Some(changes),
+                _ => None,
+            })
+            .expect("a patch");
+        assert_eq!(changes[0].path, "/w/a.rs");
+        assert_eq!(changes[0].moved_to.as_deref(), Some("/w/b.rs"));
+        assert_eq!((changes[0].added, changes[0].removed), (Some(1), Some(1)));
     }
 
     #[test]

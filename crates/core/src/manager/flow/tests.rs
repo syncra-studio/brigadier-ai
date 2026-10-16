@@ -2950,6 +2950,7 @@ async fn a_codex_thread_s_own_commands_and_edits_are_tool_steps() {
                         FileChange {
                             original: None,
                             path: "src/a.rs".into(),
+                            moved_to: None,
                             kind: FileChangeKind::Update,
                             diff: None,
                             added: None,
@@ -2958,6 +2959,7 @@ async fn a_codex_thread_s_own_commands_and_edits_are_tool_steps() {
                         FileChange {
                             original: None,
                             path: "src/b.rs".into(),
+                            moved_to: None,
                             kind: FileChangeKind::Add,
                             diff: None,
                             added: None,
