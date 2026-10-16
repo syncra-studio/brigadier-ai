@@ -95,6 +95,7 @@ fn streaming(tool: &'static str, background: bool) -> Script {
             let decoy = format!("{}\nprintf decoy", words.lines().next().unwrap());
             for (item, command) in [("own-run", &words), ("decoy", &decoy)] {
                 turn.emit(ProviderEvent::ToolCall {
+                    kept: None,
                     item_id: item.into(),
                     name: name.clone(),
                     input: Some(json!({"command": command}).to_string()),
@@ -131,6 +132,7 @@ fn streaming(tool: &'static str, background: bool) -> Script {
                 ("decoy", &decoy, "not run"),
             ] {
                 turn.emit(ProviderEvent::ToolCall {
+                    kept: None,
                     item_id: item.into(),
                     name: name.clone(),
                     input: Some(json!({"command": command}).to_string()),

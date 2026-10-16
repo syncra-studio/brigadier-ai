@@ -140,6 +140,7 @@ pub(crate) fn progress(event: &ProviderEvent, previous: Option<&ProviderEvent>) 
         | ProviderEvent::ApprovalResolved { .. }
         | ProviderEvent::Error { .. }
         | ProviderEvent::Notice { .. }
+        | ProviderEvent::PromptSuggestion { .. }
         | ProviderEvent::Exited { .. } => false,
     }
 }

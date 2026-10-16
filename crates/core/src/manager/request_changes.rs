@@ -897,6 +897,7 @@ impl SessionManager {
     /// refresh too, so files written after that handoff remain counted and held.
     pub(super) async fn background_command_changes(&self, run: &crate::work::BackgroundRun) {
         let event = ProviderEvent::Command {
+            kept: None,
             item_id: format!("background-run/{}", run.id),
             command: run.command.clone(),
             cwd: None,

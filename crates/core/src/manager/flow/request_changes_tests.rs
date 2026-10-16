@@ -163,6 +163,7 @@ async fn request_changes_local_edits_commands_restart_and_undo_preserve_user_fil
                     .await;
                 }
                 turn.emit(ProviderEvent::Command {
+                    kept: None,
                     item_id: "command".into(),
                     command: "print and write".into(),
                     cwd: None,
@@ -483,7 +484,7 @@ async fn request_changes_snapshots_run_behind_the_thread_in_order() {
                     "base\none\ntwo\n",
                 )
                 .await;
-                turn.emit(ProviderEvent::Command {
+                turn.emit(ProviderEvent::Command { kept: None,
                     item_id: "probe".into(),
                     command: "true".into(),
                     cwd: None,
@@ -568,7 +569,7 @@ async fn request_changes_worktree_commits_and_late_worker_landing_round_trip() {
             observed(&turn, 2).await;
             git(&workspace, &["add", "a.txt", "b.txt"]);
             git(&workspace, &["commit", "-q", "-m", "Thread edits"]);
-            turn.emit(ProviderEvent::Command { item_id: "last-command".into(), command: "commit edits".into(), cwd: None, status: ItemStatus::Completed, exit_code: Some(0), output: Some("done".into()), duration_ms: None }).await;
+            turn.emit(ProviderEvent::Command { kept: None, item_id: "last-command".into(), command: "commit edits".into(), cwd: None, status: ItemStatus::Completed, exit_code: Some(0), output: Some("done".into()), duration_ms: None }).await;
             let reply = turn.call("delegate_task", serde_json::json!({"effort": "high", "title": "Add worker file", "kind": "implement", "spec": "Create worker.txt.", "provider": "codex"})).await;
             assert!(!reply.is_error, "{}", reply.text);
             Reply::text("[quiet]")
@@ -653,6 +654,7 @@ async fn request_changes_generated_and_viewed_images_are_conversation_scoped_and
                     )
                 };
                 turn.emit(ProviderEvent::ToolCall {
+                    kept: None,
                     item_id: "viewed".into(),
                     name: name.into(),
                     input: Some(input),
@@ -666,6 +668,7 @@ async fn request_changes_generated_and_viewed_images_are_conversation_scoped_and
                     .set_len(20 * 1024 * 1024 + 1)
                     .unwrap();
                 turn.emit(ProviderEvent::ToolCall {
+                    kept: None,
                     item_id: "oversized".into(),
                     name: "view_image".into(),
                     input: Some(oversized.display().to_string()),
@@ -885,7 +888,7 @@ async fn request_changes_background_runs_keep_the_starting_item_and_return_the_f
             async move {
                 if turn.earlier > 0 { return Reply::text("The background run finished."); }
                 let id = turn.conversation().unwrap();
-                turn.emit(ProviderEvent::ToolCall { item_id: "background-call".into(), name: "mcp__brigadier__run".into(), input: Some("{\"command\":\"controlled output\"}".into()), status: ItemStatus::InProgress, output: None }).await;
+                turn.emit(ProviderEvent::ToolCall { kept: None, item_id: "background-call".into(), name: "mcp__brigadier__run".into(), input: Some("{\"command\":\"controlled output\"}".into()), status: ItemStatus::InProgress, output: None }).await;
                 tokio::time::timeout(super::PATIENCE, async {
                     loop {
                         let board = turn.host.core.board(&id).await.unwrap();
@@ -897,7 +900,7 @@ async fn request_changes_background_runs_keep_the_starting_item_and_return_the_f
                     release.notified().await;
                     Ok(("exit 0".into(), "é".repeat(160_000)))
                 }).await.unwrap();
-                turn.emit(ProviderEvent::ToolCall { item_id: "background-call".into(), name: "mcp__brigadier__run".into(), input: None, status: ItemStatus::Completed, output: Some(reply) }).await;
+                turn.emit(ProviderEvent::ToolCall { kept: None, item_id: "background-call".into(), name: "mcp__brigadier__run".into(), input: None, status: ItemStatus::Completed, output: Some(reply) }).await;
                 Reply::text("[quiet]")
             }
         })).await;
