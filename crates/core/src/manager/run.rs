@@ -239,14 +239,18 @@ impl SessionManager {
         let manager = self.arc();
         let (owner, id_owned) = (super::background_runs::background_owner(id), id.clone());
         let work_cancel = cancel.clone();
+        let tool = if unsandboxed { RUN_UNSANDBOXED } else { "run" };
+        let output = self.own_command_output(id, tool, command);
         let work = async move {
-            let ran = run_command(
+            let ran = run_command_streamed(
                 manager.runtime.platform().clone(),
                 &spec,
                 timeout,
                 work_cancel,
                 &owner,
                 manager.runtime.ledger(),
+                |_| {},
+                Some(output),
             )
             .await?;
             let reply = if ran.output.len() <= TRIM_ABOVE {
@@ -260,7 +264,6 @@ impl SessionManager {
             };
             Ok((ran.status, reply))
         };
-        let tool = if unsandboxed { RUN_UNSANDBOXED } else { "run" };
         self.in_foreground(id, tool, command, cli.ended.clone(), cancel, work)
             .await
     }
@@ -423,6 +426,7 @@ pub(crate) fn hold_timeout(owner: &str, gate: Arc<tokio::sync::Notify>) {
 
 /// Runs `spec` to its end, `timeout`, or `ended` (the thread's CLI ended), whichever comes
 /// first, recorded under `owner` in the cleanup ledger while it runs.
+#[cfg(all(test, unix))]
 pub(crate) async fn run_command(
     platform: Arc<dyn Platform>,
     spec: &brigadier_sandbox::SpawnSpec,
@@ -434,8 +438,8 @@ pub(crate) async fn run_command(
     run_command_then(platform, spec, timeout, ended, owner, ledger, |_| {}).await
 }
 
-/// [`run_command`], telling `spawned` the command's pid as soon as it started, before it is
-/// recorded in the cleanup ledger (where the machine watch finds it).
+/// Runs a command, telling `spawned` its pid before it is recorded in the cleanup ledger
+/// (where the machine watch finds it).
 pub(crate) async fn run_command_then(
     platform: Arc<dyn Platform>,
     spec: &brigadier_sandbox::SpawnSpec,
@@ -444,6 +448,26 @@ pub(crate) async fn run_command_then(
     owner: &str,
     ledger: &Arc<crate::ledger::CleanupLedger>,
     spawned: impl FnOnce(u32),
+) -> Result<Ran> {
+    run_command_streamed(platform, spec, timeout, ended, owner, ledger, spawned, None).await
+}
+
+/// A pipe chunk delivered into the thread's existing live output buffer.
+pub(super) type CommandOutput =
+    Arc<dyn Fn(Vec<u8>) -> brigadier_providers::BoxFuture<'static, ()> + Send + Sync>;
+
+/// The command runner with an optional observer of its pipes, including checks that wait
+/// for a lease before they start. Reading and final output retention still use one runner.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_command_streamed(
+    platform: Arc<dyn Platform>,
+    spec: &brigadier_sandbox::SpawnSpec,
+    timeout: Duration,
+    ended: tokio_util::sync::CancellationToken,
+    owner: &str,
+    ledger: &Arc<crate::ledger::CleanupLedger>,
+    spawned: impl FnOnce(u32),
+    output: Option<CommandOutput>,
 ) -> Result<Ran> {
     let mut command = tokio::process::Command::from(platform.processes().piped_command(spec));
     command.stdin(Stdio::null());
@@ -466,8 +490,11 @@ pub(crate) async fn run_command_then(
     if let Err(err) = ledger.record(owner, artifact.clone()).await {
         tracing::warn!(owner, error = %err, "could not record a run command");
     }
-    let stdout = child.stdout.take().map(read_capped);
-    let stderr = child.stderr.take().map(read_capped);
+    let stdout = child
+        .stdout
+        .take()
+        .map(|pipe| read_capped(pipe, output.clone()));
+    let stderr = child.stderr.take().map(|pipe| read_capped(pipe, output));
     let stopped = |why: String| {
         let _ = platform.processes().kill_tree(pid);
         why
@@ -517,6 +544,7 @@ type Kept = Arc<std::sync::Mutex<(Vec<u8>, u64)>>;
 /// Reads a pipe to its end, keeping at most [`super::OUTPUT_MAX_BYTES`].
 fn read_capped(
     mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static,
+    output: Option<CommandOutput>,
 ) -> (Kept, tokio::task::JoinHandle<()>) {
     let kept = Kept::default();
     let into = kept.clone();
@@ -526,11 +554,16 @@ fn read_capped(
             match pipe.read(&mut buffer).await {
                 Ok(0) | Err(_) => break,
                 Ok(read) => {
-                    let mut kept = into.lock().unwrap_or_else(|p| p.into_inner());
-                    let room = super::OUTPUT_MAX_BYTES.saturating_sub(kept.0.len());
-                    let take = read.min(room);
-                    kept.0.extend_from_slice(&buffer[..take]);
-                    kept.1 += (read - take) as u64;
+                    {
+                        let mut kept = into.lock().unwrap_or_else(|p| p.into_inner());
+                        let room = super::OUTPUT_MAX_BYTES.saturating_sub(kept.0.len());
+                        let take = read.min(room);
+                        kept.0.extend_from_slice(&buffer[..take]);
+                        kept.1 += (read - take) as u64;
+                    }
+                    if let Some(output) = &output {
+                        output(buffer[..read].to_vec()).await;
+                    }
                 }
             }
         }

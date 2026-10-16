@@ -7,12 +7,12 @@
 //! ran in. [`SessionManager::thread_items`] reads one request's rows and returns each call's
 //! newest event from where its row points: one read per call, never a scan of the log.
 //!
-//! Output: Claude's command output arrives at completion; Codex streams (measured on claude
-//! 2.1.300, `claude::parse`'s `a_claude_commands_output_arrives_at_completion`). A Codex
-//! thread's streamed output is held here while its command runs, never stored as it streams:
-//! the one stored copy is the CLI's own event, plus the whole output in the output store when
-//! that event was clipped. The row hears how much came at most once a
-//! [`OUTPUT_STEP_EVERY`]; the output itself is read with `listThreadItems`.
+//! Native CLI output arrives at completion for Claude and streams for Codex. Brigadier's
+//! own command tools feed the same live buffers from their child pipes, for both providers.
+//! A tool call that returns a background run id transfers its buffer to that run; the same
+//! bytes remain readable until the command ends and its existing output store retains them.
+//! The row hears how much came at most once a [`OUTPUT_STEP_EVERY`]; live reads hide secrets
+//! before returning the output's tail.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -45,6 +45,9 @@ pub(crate) struct ThreadItems {
     turn: Option<i64>,
     /// Running commands' streamed output, by item.
     live: HashMap<String, LiveOutput>,
+    /// The same buffers after their tool calls return a background run id.
+    background: HashMap<String, LiveOutput>,
+    background_items: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -75,7 +78,44 @@ impl ThreadItems {
 
     /// The CLI ended: its commands' output streams no more.
     pub(super) fn cli_ended(&mut self) {
+        for (item, run) in &self.background_items {
+            if let Some(mut live) = self.live.remove(item) {
+                live.row = None;
+                self.background.insert(run.clone(), live);
+            }
+        }
         self.live.clear();
+    }
+    pub(super) fn background_started(&mut self, item: &str, run: &str) {
+        self.background_items
+            .insert(item.to_owned(), run.to_owned());
+    }
+
+    pub(super) fn background_output(
+        &self,
+        run: &str,
+        item: Option<&str>,
+    ) -> Option<(Vec<u8>, u64)> {
+        let live = self
+            .background
+            .get(run)
+            .or_else(|| item.and_then(|item| self.live.get(item)))?;
+        Some((live.output.clone(), live.bytes()))
+    }
+
+    pub(super) fn background_ended(&mut self, run: &str) -> Option<Vec<u8>> {
+        let item = self
+            .background_items
+            .iter()
+            .find_map(|(item, of)| (of == run).then(|| item.clone()));
+        let live = self
+            .background
+            .remove(run)
+            .or_else(|| item.as_ref().and_then(|item| self.live.remove(item)));
+        if let Some(item) = item {
+            self.background_items.remove(&item);
+        }
+        live.filter(|live| live.bytes() > 0).map(|live| live.output)
     }
 }
 
@@ -96,7 +136,7 @@ pub(super) fn logged_first(event: &ProviderEvent) -> bool {
 /// transcript item.
 pub(crate) fn tool_item(name: &str, input: Option<&str>) -> ThreadItemKind {
     let bare = crate::digest::bare_tool_name(name);
-    if crate::digest::is_shell_tool(bare) {
+    if crate::digest::is_shell_tool(bare) || crate::digest::own_run(bare) {
         return ThreadItemKind::Command;
     }
     match bare {
@@ -207,7 +247,118 @@ pub(super) fn digest_alias(output: &str) -> Option<String> {
 }
 
 impl SessionManager {
-    /// Files the row of a Codex command of the thread's: while it runs, its streamed output
+    /// The newest active call with this exact command, read from its log rather than the
+    /// row's abbreviated detail. Long commands sharing their first words stay distinct.
+    pub(super) async fn own_command_item(
+        &self,
+        id: &ConversationId,
+        tool: &str,
+        command: &str,
+    ) -> Option<String> {
+        let board = self.core.board(id).await.ok()?;
+        for step in board.orchestrator_steps.iter().rev() {
+            let OrchestratorStepKind::Tool {
+                item_id,
+                name,
+                status: ItemStatus::InProgress,
+                log_seq: Some(seq),
+                ..
+            } = &step.kind
+            else {
+                continue;
+            };
+            if crate::digest::bare_tool_name(name) != crate::digest::bare_tool_name(tool) {
+                continue;
+            }
+            let events = self
+                .core
+                .store()
+                .read_stream(
+                    streams::orchestrator(id),
+                    StreamPage {
+                        before: Some(seq + 1),
+                        limit: 1,
+                        kinds: vec!["orchestrator.logged".into()],
+                    },
+                )
+                .await
+                .ok()?;
+            let Some(event) = events.iter().find(|event| event.stream_seq == *seq) else {
+                continue;
+            };
+            let Ok(DomainEvent::OrchestratorLogged {
+                entry:
+                    OrchestratorEntry::Provider {
+                        event:
+                            ProviderEvent::ToolCall {
+                                input: Some(input), ..
+                            },
+                        ..
+                    },
+                ..
+            }) = crate::sessions::decode(event)
+            else {
+                continue;
+            };
+            let Ok(input) = serde_json::from_str::<serde_json::Value>(&input) else {
+                continue;
+            };
+            if input.get("command").and_then(serde_json::Value::as_str) == Some(command) {
+                return Some(item_id.clone());
+            }
+        }
+        None
+    }
+
+    /// Pipe readers resolve the row lazily: the CLI's start event and MCP request arrive on
+    /// different channels. Once found, every chunk belongs to that same call through handoff.
+    pub(super) fn own_command_output(
+        &self,
+        id: &ConversationId,
+        tool: &str,
+        command: &str,
+    ) -> super::run::CommandOutput {
+        let (manager, id, tool, command) = (
+            self.me.clone(),
+            id.clone(),
+            tool.to_owned(),
+            command.to_owned(),
+        );
+        let item = std::sync::Arc::new(tokio::sync::Mutex::new(None::<String>));
+        std::sync::Arc::new(move |bytes| {
+            let (manager, id, tool, command, item) = (
+                manager.clone(),
+                id.clone(),
+                tool.clone(),
+                command.clone(),
+                item.clone(),
+            );
+            Box::pin(async move {
+                let Some(manager) = manager.upgrade() else {
+                    return;
+                };
+                let mut resolved = item.lock().await;
+                if resolved.is_none() {
+                    *resolved = manager.own_command_item(&id, &tool, &command).await;
+                }
+                if let Some(item) = resolved.as_deref()
+                    && let Ok(conv) = manager.conv(&id)
+                {
+                    manager.command_output_bytes(&conv, item, &bytes).await;
+                }
+            })
+        })
+    }
+
+    pub(super) async fn tool_row(&self, conv: &ConvLive, row: OrchestratorStepKind) {
+        if matches!(&row, OrchestratorStepKind::Tool { name, .. } if crate::digest::own_run(name)) {
+            self.command_row(conv, row).await;
+        } else {
+            self.orchestrator_step(&conv.id, row).await;
+        }
+    }
+
+    /// Files a command row of the thread's: while it runs, its streamed output
     /// is kept for it; once it ends, an output longer than its event kept is stored whole and
     /// the row names where.
     pub(super) async fn command_row(&self, conv: &ConvLive, mut row: OrchestratorStepKind) {
@@ -230,13 +381,20 @@ impl SessionManager {
             }
             live.row = Some(row.clone());
         } else {
+            let background = conv.items().background_items.get(item_id.as_str()).cloned();
             let ended = conv.items().live.remove(item_id.as_str());
-            let Some(live) = ended else {
+            let Some(mut live) = ended else {
                 self.orchestrator_step(&conv.id, row).await;
                 return;
             };
             if live.bytes() > 0 {
                 *output_bytes = Some(live.bytes());
+            }
+            if let Some(run) = background {
+                live.row = None;
+                conv.items().background.insert(run, live);
+                self.orchestrator_step(&conv.id, row).await;
+                return;
             }
             if full_output.is_none() && live.bytes() > EVENT_OUTPUT as u64 {
                 let ended = exit.map_or_else(
@@ -268,12 +426,21 @@ impl SessionManager {
     /// Output a running command of the thread's printed (Codex): kept for it, and its row hears
     /// how much at most once a [`OUTPUT_STEP_EVERY`].
     pub(super) async fn command_output(&self, conv: &ConvLive, item_id: &str, text: &str) {
+        self.command_output_bytes(conv, item_id, text.as_bytes())
+            .await;
+    }
+
+    async fn command_output_bytes(&self, conv: &ConvLive, item_id: &str, text: &[u8]) {
         let row = {
             let mut items = conv.items();
-            let live = items.live.entry(item_id.to_owned()).or_default();
+            let run = items.background_items.get(item_id).cloned();
+            let live = match run.filter(|run| items.background.contains_key(run)) {
+                Some(run) => items.background.get_mut(&run).expect("background buffer"),
+                None => items.live.entry(item_id.to_owned()).or_default(),
+            };
             let room = OUTPUT_MAX_BYTES.saturating_sub(live.output.len());
             let kept = text.len().min(room);
-            live.output.extend_from_slice(&text.as_bytes()[..kept]);
+            live.output.extend_from_slice(&text[..kept]);
             live.dropped += (text.len() - kept) as u64;
             let bytes = live.bytes();
             let due = live
@@ -291,6 +458,29 @@ impl SessionManager {
         if let Some(row) = row {
             self.orchestrator_step(&conv.id, row).await;
         }
+    }
+
+    pub(super) async fn command_tail(
+        &self,
+        id: &ConversationId,
+        output: Vec<u8>,
+        bytes: u64,
+        running: bool,
+    ) -> (String, u64) {
+        let output = self.hide_secrets(id, output).await;
+        let mut text = String::from_utf8_lossy(&output).into_owned();
+        if running {
+            let mut hidden = self.grants.secrets();
+            hidden.extend(self.session_secret_values(id).await);
+            if let Some(redactor) = super::secrets::redactor(hidden) {
+                text = redactor.push(&mut String::new(), &text).into_owned();
+            }
+        }
+        let mut from = text.len().saturating_sub(LIVE_TAIL);
+        while !text.is_char_boundary(from) {
+            from += 1;
+        }
+        (text[from..].to_owned(), bytes)
     }
 
     /// A page of the thread's own calls in `request` (only those of `turn`, the log entry of
@@ -391,18 +581,19 @@ impl SessionManager {
                 event,
             });
             if running && let Some(conv) = &live {
-                let tail = conv.items().live.get(item_id).map(|live| {
-                    let from = live.output.len().saturating_sub(LIVE_TAIL);
-                    live.output[from..].to_vec()
-                });
+                let tail = conv
+                    .items()
+                    .live
+                    .get(item_id)
+                    .map(|live| live.output.clone());
                 if let Some(tail) = tail.filter(|tail| !tail.is_empty()) {
-                    let text = self.hide_secrets(id, tail).await;
+                    let (text, _) = self.command_tail(id, tail, 0, true).await;
                     entries.push(RawEntry {
                         stream_seq: stored.stream_seq,
                         at_ms: now_ms(),
                         event: ProviderEvent::CommandOutputDelta {
                             item_id: item_id.clone(),
-                            text: String::from_utf8_lossy(&text).into_owned(),
+                            text,
                         },
                     });
                 }

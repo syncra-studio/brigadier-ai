@@ -4566,8 +4566,8 @@ impl SessionManager {
                     .and_then(|input| serde_json::from_str(input).ok())
                     .unwrap_or_default();
                 let detail = super::thread_items::step_detail(&args);
-                self.orchestrator_step(
-                    &conv.id,
+                self.tool_row(
+                    conv,
                     OrchestratorStepKind::Tool {
                         item_id: item_id.clone(),
                         name: name.to_owned(),

@@ -705,6 +705,26 @@ impl SessionManager {
         Ok(outcome)
     }
 
+    /// A background call's tool result is only its handoff. Its eventual end gets a command
+    /// refresh too, so files written after that handoff remain counted and held.
+    pub(super) async fn background_command_changes(&self, run: &crate::work::BackgroundRun) {
+        let event = ProviderEvent::Command {
+            item_id: format!("background-run/{}", run.id),
+            command: run.command.clone(),
+            cwd: None,
+            status: ItemStatus::Completed,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+        };
+        self.refresh_changes(
+            &run.conversation_id,
+            run.request_id.as_deref(),
+            Refresh::Event(&event),
+        )
+        .await;
+    }
+
     pub(super) async fn changes_event(&self, id: &ConversationId, event: &ProviderEvent) {
         let request = self.conv(id).ok();
         let request = match request {

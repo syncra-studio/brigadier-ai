@@ -77,6 +77,17 @@ pub(crate) struct BackgroundRuns {
     numbering: tokio::sync::Mutex<()>,
 }
 
+#[cfg(all(test, unix))]
+static FOREGROUND_GATES: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<ConversationId, std::sync::Arc<tokio::sync::Notify>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Tests can hold a foreground call while pipe gates are inspected, regardless of machine load.
+#[cfg(all(test, unix))]
+pub(super) fn hold_foreground(id: &ConversationId, gate: std::sync::Arc<tokio::sync::Notify>) {
+    FOREGROUND_GATES.lock().unwrap().insert(id.clone(), gate);
+}
+
 impl SessionManager {
     /// Runs `work`, the thread's `tool` call of `command` (its status and reply), in its tool
     /// call while it ends within [`FOREGROUND`], else in the background: its reply then comes
@@ -109,13 +120,22 @@ impl SessionManager {
             run: None,
         };
         let handle = handoff.handle.as_mut().expect("held until handed off");
+        #[cfg(all(test, unix))]
+        let gate = FOREGROUND_GATES.lock().unwrap().remove(id);
+        let background_due = async {
+            tokio::time::sleep(FOREGROUND).await;
+            #[cfg(all(test, unix))]
+            if let Some(gate) = gate {
+                gate.notified().await;
+            }
+        };
         let joined = tokio::select! {
             joined = &mut *handle => Some(joined),
             () = cli_ended.cancelled() => {
                 cancel.cancel();
                 Some(handle.await)
             }
-            () = tokio::time::sleep(FOREGROUND) => None,
+            () = background_due => None,
         };
         if let Some(joined) = joined {
             handoff.handle = None;
@@ -148,30 +168,13 @@ impl SessionManager {
                 started_at_ms: now_ms(),
                 ended_at_ms: None,
                 state: BackgroundRunState::Running,
-                item_id: self.core.board(id).await.ok().and_then(|board| {
-                    let detail: String = command.chars().take(240).collect();
-                    let mut matches =
-                        board
-                            .orchestrator_steps
-                            .iter()
-                            .filter_map(|step| match &step.kind {
-                                crate::work::OrchestratorStepKind::Tool {
-                                    item_id,
-                                    name,
-                                    detail: Some(words),
-                                    status: brigadier_providers::ItemStatus::InProgress,
-                                    ..
-                                } if crate::digest::bare_tool_name(name) == tool
-                                    && words == &detail =>
-                                {
-                                    Some(item_id.clone())
-                                }
-                                _ => None,
-                            });
-                    let item = matches.next();
-                    if matches.next().is_none() { item } else { None }
-                }),
+                item_id: self.own_command_item(id, tool, command).await,
             };
+            if let Some(item) = &run.item_id
+                && let Ok(conv) = self.conv(id)
+            {
+                conv.items().background_started(item, &run.id);
+            }
             self.background_runs
                 .running
                 .lock()
@@ -226,8 +229,12 @@ impl SessionManager {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&(run.conversation_id.clone(), run.id.clone()));
+        self.background_command_changes(&run).await;
         run.ended_at_ms = Some(now_ms());
         if cancel.is_cancelled() {
+            if let Ok(conv) = self.conv(&run.conversation_id) {
+                conv.items().background_ended(&run.id);
+            }
             run.state = BackgroundRunState::Stopped;
             let alone = self
                 .background_runs
@@ -254,10 +261,39 @@ impl SessionManager {
             }
             return;
         }
-        let (status, text) = match result {
+        let (status, mut text) = match result {
             Ok(done) => done,
             Err(err) => ("couldn't run".to_owned(), format!("[couldn't run: {err}]")),
         };
+        let live_output = if crate::digest::digest_alias(&text).is_none() {
+            self.conv(&run.conversation_id)
+                .ok()
+                .and_then(|conv| {
+                    conv.items()
+                        .background_output(&run.id, run.item_id.as_deref())
+                })
+                .filter(|(output, _)| !output.is_empty())
+                .map(|(output, _)| output)
+        } else {
+            None
+        };
+        if let Some(output) = live_output {
+            match self
+                .store_output(
+                    &run.conversation_id,
+                    crate::work::OutputSource::Run,
+                    &status,
+                    output,
+                    false,
+                )
+                .await
+            {
+                Ok((_, digest)) => text = digest,
+                Err(err) => {
+                    tracing::warn!(run = %run.id, error = %err, "could not retain background output")
+                }
+            }
+        }
         if let Ok(event) = brigadier_store::NewEvent::new(
             format!("background-output:{}:{}", run.conversation_id, run.id),
             "background.output",
@@ -266,6 +302,10 @@ impl SessionManager {
         ) && let Err(err) = self.core.store().append(vec![event]).await
         {
             tracing::warn!(run = %run.id, error = %err, "could not store background output");
+        }
+        // Keep the live buffer readable until its final stored result can answer the same read.
+        if let Ok(conv) = self.conv(&run.conversation_id) {
+            conv.items().background_ended(&run.id);
         }
         run.state = BackgroundRunState::Finished { status };
         let envelope = Envelope {
@@ -327,20 +367,35 @@ impl SessionManager {
             && run.item_id.as_deref() != Some(item_id)
         {
             run.item_id = Some(item_id.clone());
+            if run.state == BackgroundRunState::Running
+                && let Ok(conv) = self.conv(id)
+            {
+                conv.items().background_started(item_id, &run.id);
+            }
             self.store_background_run(&run).await;
         }
     }
 
-    /// The runner owns its pipes privately; once ended, the existing stored result is read whole
-    /// and only its end is returned. A running or interrupted run has no final result yet.
+    /// Reads a running command's shared thread buffer, then its retained result after it ends.
+    /// Redaction sees the full buffer before the tail is cut, including secrets across chunks.
     pub async fn read_background_run(
         &self,
         id: &ConversationId,
         run_id: &str,
     ) -> Result<(String, u64)> {
         let board = self.core.board(id).await?;
-        if !board.background_runs.contains_key(run_id) {
-            return Err(crate::Error::NotFound(format!("background run {run_id}")));
+        let run = board
+            .background_runs
+            .get(run_id)
+            .ok_or_else(|| crate::Error::NotFound(format!("background run {run_id}")))?;
+        let live = self.conv(id).ok().and_then(|conv| {
+            conv.items()
+                .background_output(run_id, run.item_id.as_deref())
+        });
+        if let Some((output, bytes)) = live {
+            return Ok(self
+                .command_tail(id, output, bytes, run.state == BackgroundRunState::Running)
+                .await);
         }
         let events = self
             .core
@@ -371,11 +426,9 @@ impl SessionManager {
                 .map_or(whole.len() as u64, |stored| stored.bytes);
             output = whole;
         }
-        let mut start = output.len().saturating_sub(256 * 1024);
-        while !output.is_char_boundary(start) {
-            start += 1;
-        }
-        Ok((output[start..].to_owned(), bytes))
+        Ok(self
+            .command_tail(id, output.into_bytes(), bytes, false)
+            .await)
     }
 
     pub(super) async fn delete_background_output(&self, id: &ConversationId) -> Result<()> {

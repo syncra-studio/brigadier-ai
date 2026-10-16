@@ -115,6 +115,7 @@ const KEY_RECIPE: &str = "brigadier-check-2";
 /// Who calls `run_check`, and where its commands run.
 struct Caller {
     conversation_id: ConversationId,
+    output: Option<super::run::CommandOutput>,
     task_id: Option<TaskId>,
     provider: ProviderKind,
     access: Access,
@@ -584,6 +585,10 @@ impl SessionManager {
         let Some(command) = command else {
             return self.affected_checks(&caller).await;
         };
+        let call_command = args.command.clone().expect("a check command");
+        if task.is_none() {
+            caller.output = Some(self.own_command_output(id, "run_check", &call_command));
+        }
         // Keyed and run without the prefixes that change nothing about how it runs.
         let command = canonical_command(
             command,
@@ -643,7 +648,7 @@ impl SessionManager {
             }
             Ok((status, reply))
         };
-        self.in_foreground(id, "run_check", &command, cli_ended, cancel, work)
+        self.in_foreground(id, "run_check", &call_command, cli_ended, cancel, work)
             .await
     }
 
@@ -712,6 +717,7 @@ impl SessionManager {
             .unwrap_or_default();
         let redactor = super::secrets::redactor(self.session_secret_values(id).await);
         FullCheckCaller(Caller {
+            output: None,
             conversation_id: id.clone(),
             task_id: None,
             // Brigadier's own sandbox, below Full access: no CLI of a vendor needed.
@@ -834,6 +840,7 @@ impl SessionManager {
             let scratch = PathBuf::from(workspace.scratch);
             let cwd_grant = cwd_grant(provider, task.kind.writes(), tree.as_deref(), &scratch);
             return Ok(Caller {
+                output: None,
                 conversation_id: id.clone(),
                 task_id: Some(task_id.clone()),
                 provider,
@@ -869,6 +876,7 @@ impl SessionManager {
         };
         let redactor = super::secrets::redactor(self.session_secret_values(id).await);
         Ok(Caller {
+            output: None,
             conversation_id: id.clone(),
             task_id: None,
             provider: cli.provider,
@@ -1077,7 +1085,7 @@ impl SessionManager {
             None
         };
         let started = Instant::now();
-        let ran = run_command_then(
+        let ran = super::run::run_command_streamed(
             self.runtime.platform().clone(),
             &spec,
             timeout,
@@ -1089,6 +1097,7 @@ impl SessionManager {
                     self.machine.attach_check(lease.ticket, pid);
                 }
             },
+            caller.output.clone(),
         )
         .await;
         drop(lease);
