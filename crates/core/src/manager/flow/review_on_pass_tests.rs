@@ -140,3 +140,30 @@ async fn a_turn_ending_on_a_pending_check_that_fails_starts_no_review() {
     assert!(board.reviews.is_empty(), "{:#?}", board.reviews);
     flow.stop().await;
 }
+
+/// Checks that overlap: one that ends after a newer one started changes nothing, so an older
+/// pass neither lets a review start while the newer check runs nor hides its failure.
+#[tokio::test]
+async fn an_older_check_ending_late_leaves_the_newer_ones_state() {
+    let flow = Flow::start(
+        "review-on-pass-overlap",
+        Options::default(),
+        thread(&[], Log::default()),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    let older = flow.manager.thread_check_started(&id, None).await;
+    let newer = flow.manager.thread_check_started(&id, None).await;
+    older.ended(true);
+    assert_eq!(flow.manager.thread_check_state(&id), Some("running"));
+    newer.ended(false);
+    assert_eq!(flow.manager.thread_check_state(&id), Some("failed"));
+    // One stopped before it ended doesn't clear a newer one either.
+    let older = flow.manager.thread_check_started(&id, None).await;
+    let newer = flow.manager.thread_check_started(&id, None).await;
+    drop(older);
+    assert_eq!(flow.manager.thread_check_state(&id), Some("running"));
+    drop(newer);
+    assert_eq!(flow.manager.thread_check_state(&id), None);
+    flow.stop().await;
+}

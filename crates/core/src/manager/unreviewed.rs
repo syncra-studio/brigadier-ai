@@ -93,10 +93,15 @@ pub(crate) fn counts_as_a_file(path: &str) -> bool {
 /// memory only: after a restart a review starts as it did before C10.
 #[derive(Debug, Clone)]
 pub(crate) struct ThreadCheck {
+    /// Which check it is: one that ends after a newer one started changes nothing.
+    run: u64,
     /// The tree of the files it runs (or ran) on, when git could tell.
     tree: Option<String>,
     state: CheckState,
 }
+
+/// Numbers the thread's checks in the order they start.
+static CHECK_RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CheckState {
@@ -110,11 +115,19 @@ enum CheckState {
 pub(crate) struct CheckUnderWay {
     manager: std::sync::Weak<SessionManager>,
     id: ConversationId,
+    run: u64,
     tree: Option<String>,
     ended: bool,
 }
 
 impl CheckUnderWay {
+    /// The tree of the files the check started on, when git could tell.
+    pub(crate) fn tree(&self) -> Option<&str> {
+        self.tree.as_deref()
+    }
+
+    /// Records how the check ended, unless a newer check of the thread started since: the
+    /// newest check is the one that holds a review back or lets it start.
     pub(crate) fn ended(mut self, passed: bool) {
         self.ended = true;
         let state = if passed {
@@ -123,13 +136,12 @@ impl CheckUnderWay {
             CheckState::Failed
         };
         if let Some(manager) = self.manager.upgrade() {
-            manager.thread_checks.lock().unwrap().insert(
-                self.id.clone(),
-                ThreadCheck {
-                    tree: self.tree.take(),
-                    state,
-                },
-            );
+            let mut checks = manager.thread_checks.lock().unwrap();
+            if let Some(check) = checks.get_mut(&self.id)
+                && check.run == self.run
+            {
+                check.state = state;
+            }
         }
     }
 }
@@ -143,7 +155,7 @@ impl Drop for CheckUnderWay {
             let mut checks = manager.thread_checks.lock().unwrap();
             if checks
                 .get(&self.id)
-                .is_some_and(|check| check.state == CheckState::Running && check.tree == self.tree)
+                .is_some_and(|check| check.run == self.run)
             {
                 checks.remove(&self.id);
             }
@@ -188,9 +200,11 @@ impl SessionManager {
             }
             None => None,
         };
+        let run = CHECK_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.thread_checks.lock().unwrap().insert(
             id.clone(),
             ThreadCheck {
+                run,
                 tree: files.clone(),
                 state: CheckState::Running,
             },
@@ -198,9 +212,24 @@ impl SessionManager {
         CheckUnderWay {
             manager: self.me.clone(),
             id: id.clone(),
+            run,
             tree: files,
             ended: false,
         }
+    }
+
+    /// Where the thread's newest check stands: "running", "passed" or "failed".
+    #[cfg(test)]
+    pub(crate) fn thread_check_state(&self, id: &ConversationId) -> Option<&'static str> {
+        self.thread_checks
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|check| match check.state {
+                CheckState::Running => "running",
+                CheckState::Passed => "passed",
+                CheckState::Failed => "failed",
+            })
     }
 
     /// Whether the thread's checks let the review of `tip` (a commit, or a snapshot of its
