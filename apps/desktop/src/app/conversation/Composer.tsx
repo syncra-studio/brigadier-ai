@@ -49,6 +49,8 @@ import { QueueCard } from "@/app/conversation/QueueCard";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { useComposerDraft } from "@/app/conversation/composerDraft";
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
+import { useImagesBlocked, useImagesUnsupportedToast } from "@/app/conversation/imageInput";
+import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
 import { PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
 import { ViewContext } from "@/app/conversation/viewContext";
@@ -483,6 +485,9 @@ function SendControls({
   const armed = useEscToStop(canCancel);
   const dictationOwner = conversationId ?? NEW_CHAT_SCOPE;
   const steers = useApp((s) => s.settings.followUp === "steer");
+  // Images for a model that takes none hold the message until they go or the model changes.
+  const imagesBlocked = useImagesBlocked();
+  useImagesUnsupportedToast();
   const state: SendState =
     armed
       ? "armed"
@@ -495,11 +500,13 @@ function SendControls({
           : !running && empty && onResume
             ? "resume"
             : "send";
+  const sending = state === "send" || state === "queue";
   const button = (
     <TooltipIconButton
-      tooltip={state === "queue" && steers ? "Steer" : SEND_TIPS[state]}
+      tooltip={sending && imagesBlocked ? IMAGES_BLOCKED : state === "queue" && steers ? "Steer" : SEND_TIPS[state]}
       side="bottom"
       type="button"
+      disabled={sending && imagesBlocked}
       variant={state === "starting" ? "secondary" : "default"}
       size="icon-md"
       data-state={state}

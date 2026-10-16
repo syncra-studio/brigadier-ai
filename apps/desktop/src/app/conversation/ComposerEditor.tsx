@@ -37,6 +37,8 @@ import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { enterAction } from "@/app/conversation/composerKeys";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
+import { useImagesBlocked } from "@/app/conversation/imageInput";
+import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import {
   imageMarkerAt,
   imageMarkersIn,
@@ -73,6 +75,7 @@ import {
 } from "@/state/dictation";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { useApp } from "@/state/store";
+import { toast } from "@/state/toasts";
 
 export type ComposerInputProps = {
   placeholder: string;
@@ -204,6 +207,12 @@ function ComposerKeys({
   const mac = useApp((s) => s.info?.platform === "macos");
   const sendShortcut = useApp((s) => s.settings.sendShortcut);
   const followUp = useApp((s) => s.settings.followUp);
+  // Read when Enter is pressed, so the keys aren't registered again as images come and go.
+  const blocked = useImagesBlocked();
+  const imagesBlocked = useRef(blocked);
+  useEffect(() => {
+    imagesBlocked.current = blocked;
+  }, [blocked]);
   const dictating = dictation.phase.type === "recording";
   // Pressed again while the model downloads or the microphone opens, it cancels (as the button does).
   const opening = dictation.phase.type === "downloading" || dictation.phase.type === "starting";
@@ -241,6 +250,11 @@ function ComposerKeys({
           event.preventDefault();
           const thread = aui.thread().getState();
           if (thread.isRunning && !thread.capabilities.queue) return true;
+          // Images for a model that takes none: the message waits, as the send button says.
+          if (imagesBlocked.current) {
+            toast(IMAGES_BLOCKED, { tone: "error" });
+            return true;
+          }
           aui.composer().send(
             action === "other" && thread.isRunning ? { steer: followUp === "queue" } : undefined,
           );
