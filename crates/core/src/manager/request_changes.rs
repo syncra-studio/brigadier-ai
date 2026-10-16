@@ -486,6 +486,12 @@ impl SessionManager {
                                     }),
                                 Some(_) => Before::Unverified,
                             };
+                            // Undo moves both ends back or neither: a source it can't verify
+                            // holds the file where it went too, so it never removes the one copy.
+                            let destination = match before {
+                                Before::Unverified => Before::Unverified,
+                                Before::Known(_) => Before::Known(None),
+                            };
                             edits.push(Evidence {
                                 path: path.to_owned(),
                                 before,
@@ -493,7 +499,7 @@ impl SessionManager {
                             });
                             edits.push(Evidence {
                                 path: moved,
-                                before: Before::Known(None),
+                                before: destination,
                                 after: after.map(Into::into),
                             });
                             continue;

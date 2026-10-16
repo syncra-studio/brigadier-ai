@@ -1026,6 +1026,70 @@ async fn last_turn_skips_a_later_request_that_changed_nothing() {
     flow.stop().await;
 }
 
+/// A move whose old contents can't be verified (its diff was cut) holds both ends, so Undo
+/// never removes the file where it went while leaving where it came from empty.
+#[tokio::test]
+async fn request_changes_hold_both_ends_of_a_move_they_cannot_verify() {
+    let mut flow = Flow::start(
+        "20261015-0226-rebuild-wow-w79-move-unverified",
+        options(ProviderKind::Codex),
+        script(move |turn| async move {
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            std::fs::remove_file(workspace.join("a.txt")).unwrap();
+            std::fs::write(workspace.join("moved.txt"), "base\nmoved\n").unwrap();
+            let mut change = FileChange::counted(
+                workspace.join("a.txt").to_string_lossy().into_owned(),
+                FileChangeKind::Update,
+                Some("@@ -1,1 +1,2 @@\n base\n+moved\n[… 4096 more bytes]\n"),
+                usize::MAX,
+            );
+            change.moved_to = Some(workspace.join("moved.txt").to_string_lossy().into_owned());
+            turn.emit(ProviderEvent::FileChanges {
+                item_id: "move-a".into(),
+                changes: vec![change],
+                status: ItemStatus::Completed,
+            })
+            .await;
+            observed(&turn, 2).await;
+            Reply::text("Moved a.")
+        }),
+    )
+    .await;
+    local(&mut flow).await;
+    flow.say("Move a.").await;
+    let board = flow
+        .until("settled changes", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled)
+        })
+        .await;
+    let request = board.latest_request().unwrap();
+    let held: Vec<&str> = request
+        .changes
+        .as_ref()
+        .unwrap()
+        .held
+        .iter()
+        .map(|h| h.path.as_str())
+        .collect();
+    assert!(
+        held.contains(&"a.txt") && held.contains(&"moved.txt"),
+        "{held:?}"
+    );
+    flow.manager
+        .undo_request(flow.conversation.clone(), request.id.clone(), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("moved.txt")).unwrap(),
+        "base\nmoved\n"
+    );
+    flow.stop().await;
+}
+
 /// A Codex patch that only renames a file reports a diff with no hunks: the file went with
 /// its bytes, so both ends are the thread's and Undo puts it back where it was.
 #[tokio::test]
