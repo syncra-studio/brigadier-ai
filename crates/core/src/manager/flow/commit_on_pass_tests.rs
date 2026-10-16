@@ -192,3 +192,53 @@ async fn on_the_users_checkout_a_check_commits_nothing() {
     assert_eq!(git(&flow.repo, &["status", "--porcelain"]), "?? NOTES.md");
     flow.stop().await;
 }
+
+/// A file that changed while the check ran (here the check itself writes it, as an edit made
+/// while a check runs in the background would) isn't committed under a check that didn't see
+/// it: nothing is, and the reply says which file. The check run again commits it all.
+#[tokio::test]
+async fn a_file_changed_while_the_check_ran_is_not_committed_under_it() {
+    let replies: Log = Arc::default();
+    let seen = replies.clone();
+    let flow = Flow::start(
+        "commit-on-pass-changed",
+        Options::default(),
+        script(move |turn| {
+            let replies = seen.clone();
+            async move {
+                if !turn.is_orchestrator() || !turn.input.contains("Add the notes file.") {
+                    return Reply::text("Fine.");
+                }
+                std::fs::write(turn.add_dirs[0].join("NOTES.md"), "notes\n").unwrap();
+                for command in ["echo later > LATER.md", "true"] {
+                    let reply = turn
+                        .call(
+                            "run_check",
+                            json!({"command": command, "commit": "Add the notes file"}),
+                        )
+                        .await;
+                    replies.lock().unwrap().push(reply.text);
+                }
+                Reply::text("Added NOTES.md.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add the notes file.").await;
+    flow.settled().await;
+    let replies = replies.lock().unwrap().clone();
+    assert_eq!(replies.len(), 2, "{replies:#?}");
+    assert!(
+        replies[0].contains(
+            "Not committed: LATER.md changed while the check ran, so it didn't check them."
+        ),
+        "{}",
+        replies[0]
+    );
+    assert!(
+        replies[1].contains("(LATER.md, NOTES.md). Nothing is left uncommitted."),
+        "{}",
+        replies[1]
+    );
+    flow.stop().await;
+}

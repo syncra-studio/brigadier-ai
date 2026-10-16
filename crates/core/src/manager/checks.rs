@@ -148,85 +148,155 @@ struct Caller {
 /// What `run_check`'s `commit` says on the user's own checkout.
 const NOT_ON_LOCAL: &str = "Not committed: this is the user's own checkout, where you commit only when they ask, with git yourself.";
 
-/// `run_check`'s `commit` (BUILD-PLAN C9): on a pass, everything changed in `tree` is committed
-/// with `message` and the thread's trailer; on a failure nothing is. What happened, in one line.
-fn commit_on_pass(tree: &Path, passed: bool, message: &str) -> String {
-    if !passed {
-        return "Not committed: the check didn't pass.".into();
-    }
-    let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(tree)
-            .args(args)
-            .output()
-    };
-    let failed = |what: &str, output: std::io::Result<std::process::Output>| match output {
-        Ok(output) if output.status.success() => None,
-        Ok(output) => Some(format!(
-            "Not committed: {what} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .rfind(|line| !line.trim().is_empty())
-                .unwrap_or("no error output")
-        )),
-        Err(err) => Some(format!("Not committed: {what} failed: {err}")),
-    };
-    if let Some(note) = failed("git add", git(&["add", "-A"])) {
-        return note;
-    }
-    if git(&["diff", "--cached", "--quiet"]).is_ok_and(|output| output.status.success()) {
-        return "Nothing to commit: no change is left uncommitted.".into();
-    }
-    let trailer = super::prompts::THREAD_TRAILER;
-    if let Some(note) = failed(
-        "git commit",
-        git(&["commit", "-q", "-m", message, "--trailer", trailer]),
-    ) {
-        return note;
-    }
-    let stdout = |args: &[&str]| {
-        git(args)
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-    };
-    let sha = stdout(&["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+/// Longest a `run_check` commit may take, the repository's hooks included.
+const COMMIT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The shell lines of `run_check`'s `commit` (BUILD-PLAN C9): everything changed in the
+/// checkout staged and committed with `message` and the thread's trailer. They run as the
+/// check did, at its access and in its environment, since git runs the repository's hooks and
+/// filters. Exit 100: nothing to commit; 101: `git add` failed.
+fn commit_command(message: &str) -> String {
+    let quoted = |text: &str| format!("'{}'", text.replace('\'', r"'\''"));
+    format!(
+        "git add -A || exit 101\ngit diff --cached --quiet && exit 100\ngit commit -q -m {} --trailer {}",
+        quoted(message),
+        quoted(super::prompts::THREAD_TRAILER)
+    )
+}
+
+/// What the commit `commit_command` made in `tree` holds, and what it left (BUILD-PLAN C10
+/// e), in one line, so the thread needs no git call of its own to say so.
+fn commit_record(git: &brigadier_git::Git, tree: &Path, message: &str) -> String {
     let subject = message.lines().next().unwrap_or_default();
-    // What it holds and what is left, so the thread needs no git call of its own to say so.
-    let stat = stdout(&["show", "--shortstat", "--format=", "HEAD"]).unwrap_or_default();
-    let files: Vec<String> = stdout(&["show", "--name-only", "--format=", "HEAD"])
+    let repo = match git.open(tree) {
+        Ok(repo) => repo,
+        Err(err) => {
+            return format!("Committed \"{subject}\", but git could not read it back: {err}");
+        }
+    };
+    let read = |args: &[&str]| repo.read_only(args).ok();
+    let sha = read(&["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+    let stat = read(&["show", "--shortstat", "--format=", "HEAD"]).unwrap_or_default();
+    let files: Vec<String> = read(&["show", "--name-only", "--format=", "HEAD"])
         .unwrap_or_default()
         .lines()
         .map(str::to_owned)
         .collect();
-    let left = match left_uncommitted(tree) {
-        Ok(left) if left.is_empty() => "Nothing is left uncommitted.".to_owned(),
-        Ok(left) => format!("Left uncommitted: {}.", listed(&left)),
+    let left = match repo.read_only(&["status", "--porcelain", "--untracked-files=all"]) {
+        Ok(status) => {
+            let left = left_uncommitted(&status);
+            if left.is_empty() {
+                "Nothing is left uncommitted.".to_owned()
+            } else {
+                format!("Left uncommitted: {}.", listed(&left))
+            }
+        }
         Err(err) => format!("What is left uncommitted is unknown: git status failed: {err}"),
     };
     format!(
-        "Committed {sha} \"{subject}\" with your trailer: {stat} ({}). {left}",
+        "Committed {} \"{subject}\" with your trailer: {} ({}). {left}",
+        sha.trim(),
+        stat.trim(),
         listed(&files)
     )
 }
 
-/// The paths `git status` shows in `tree`, tracked or untracked, past its ignore rules.
-fn left_uncommitted(tree: &Path) -> std::result::Result<Vec<String>, String> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(tree)
-        .args(["status", "--porcelain", "--untracked-files=all"])
-        .output()
-        .map_err(|err| err.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+/// The last line with something on it in a command's output.
+fn last_said(output: &[u8]) -> String {
+    String::from_utf8_lossy(output)
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .unwrap_or("no error output")
+        .trim()
+        .to_owned()
+}
+
+impl SessionManager {
+    /// `run_check`'s `commit` (BUILD-PLAN C9): on a pass, everything changed in `tree` is
+    /// committed with `message` and the thread's trailer, run as `caller`'s check ran; on a
+    /// failure nothing is. Nor is anything when a file changed since the check started on the
+    /// files of `checked` (a [`brigadier_git::Worktree::checkout_tree`]): the check didn't see
+    /// that change. What happened, in one line.
+    async fn commit_on_pass(
+        &self,
+        caller: &Caller,
+        tree: &Path,
+        passed: bool,
+        checked: Option<String>,
+        message: &str,
+    ) -> String {
+        if !passed {
+            return "Not committed: the check didn't pass.".into();
+        }
+        if let Some(checked) = checked {
+            let (git, root) = (self.git.clone(), tree.to_owned());
+            let changed = blocking(move || {
+                git.open_worktree(&root)
+                    .and_then(|worktree| worktree.paths_changed_since(&brigadier_git::Oid(checked)))
+                    .map_err(git_error)
+            })
+            .await;
+            match changed {
+                Ok(paths) if paths.is_empty() => {}
+                Ok(paths) => {
+                    return format!(
+                        "Not committed: {} changed while the check ran, so it didn't check them. Run the check again with commit.",
+                        listed(&paths)
+                    );
+                }
+                Err(err) => {
+                    return format!(
+                        "Not committed: git could not tell whether files changed while the check ran: {err}"
+                    );
+                }
+            }
+        }
+        let spec = match self.check_spec(caller, tree, &commit_command(message)) {
+            Ok(spec) => spec,
+            Err(err) => return format!("Not committed: {err}"),
+        };
+        let ran = run_command_then(
+            self.runtime.platform().clone(),
+            &spec,
+            COMMIT_TIMEOUT,
+            caller.ended.clone(),
+            &caller.owner,
+            self.runtime.ledger(),
+            |_| {},
+        )
+        .await;
+        let ran = match ran {
+            Ok(ran) => ran,
+            Err(err) => return format!("Not committed: {err}"),
+        };
+        match ran.status.as_str() {
+            "exit 0" => {}
+            "exit 100" => return "Nothing to commit: no change is left uncommitted.".into(),
+            "exit 101" => {
+                return format!("Not committed: git add failed: {}", last_said(&ran.output));
+            }
+            status => {
+                return format!(
+                    "Not committed: git commit failed ({status}): {}",
+                    last_said(&ran.output)
+                );
+            }
+        }
+        let (git, root, message) = (self.git.clone(), tree.to_owned(), message.to_owned());
+        blocking(move || Ok(commit_record(&git, &root, &message)))
+            .await
+            .unwrap_or_else(|err| format!("Committed, but git could not read it back: {err}"))
     }
-    Ok(String::from_utf8_lossy(&output.stdout)
+}
+
+/// The paths a `git status --porcelain --untracked-files=all` shows, tracked or untracked,
+/// past its ignore rules.
+fn left_uncommitted(status: &str) -> Vec<String> {
+    status
         .lines()
         .filter_map(|line| line.get(3..))
         .map(str::to_owned)
-        .collect())
+        .collect()
 }
 
 /// Up to ten paths, then how many more.
@@ -404,9 +474,10 @@ impl SessionManager {
                 .await?;
             let passed = status == "exit 0";
             if let (Some(message), Some(tree)) = (commit, tree) {
-                let note = blocking(move || Ok(commit_on_pass(&tree, passed, &message)))
-                    .await
-                    .unwrap_or_else(|err| format!("Not committed: {err}"));
+                let checked = under_way.tree().map(str::to_owned);
+                let note = manager
+                    .commit_on_pass(&caller, &tree, passed, checked, &message)
+                    .await;
                 reply = format!("{reply}\n{note}");
             }
             under_way.ended(passed);
@@ -2915,7 +2986,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// A repository `commit_on_pass` can commit in, with its own user.
+    /// Runs `run_check`'s commit lines in `tree` as a check would, then reads its record.
+    fn commit_in(tree: &Path, message: &str) -> String {
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(commit_command(message))
+            .current_dir(tree)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        commit_record(
+            &brigadier_git::Git::new("git".into(), Vec::new()),
+            tree,
+            message,
+        )
+    }
+
+    /// A repository `run_check`'s commit can commit in, with its own user.
     fn repo_at(dir: &Path) {
         git_in(dir, &["init", "-q"]);
         git_in(dir, &["config", "user.email", "checks@example.com"]);
@@ -2932,7 +3023,7 @@ mod tests {
         std::fs::write(tree.join(".gitignore"), "*.log\n").unwrap();
         std::fs::write(tree.join("a.txt"), "a\n").unwrap();
         std::fs::write(tree.join("debug.log"), "scratch\n").unwrap();
-        let line = commit_on_pass(tree, true, "Add a");
+        let line = commit_in(tree, "Add a");
         assert!(
             line.contains("\"Add a\" with your trailer: 2 files changed, 2 insertions(+) (.gitignore, a.txt). Nothing is left uncommitted."),
             "{line}"
@@ -2945,11 +3036,11 @@ mod tests {
         std::fs::write(nested.join("v.txt"), "v\n").unwrap();
         git_in(&nested, &["add", "v.txt"]);
         git_in(&nested, &["commit", "-q", "-m", "v"]);
-        let line = commit_on_pass(tree, true, "Add vendor");
+        let line = commit_in(tree, "Add vendor");
         assert!(line.contains("Nothing is left uncommitted."), "{line}");
         std::fs::write(nested.join("v.txt"), "changed\n").unwrap();
         std::fs::write(tree.join("c.txt"), "c\n").unwrap();
-        let line = commit_on_pass(tree, true, "Add c");
+        let line = commit_in(tree, "Add c");
         assert!(
             line.contains("(c.txt). Left uncommitted: vendor."),
             "{line}"

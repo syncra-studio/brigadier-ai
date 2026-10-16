@@ -738,6 +738,10 @@ been missed. The line is settled from those numbers, and the phase report says w
   When the check fails, nothing is committed. On the user's own checkout it commits nothing and says why, since
   M6's rule stands there.
 - **What stays the thread's.** A commit that fixes review findings still goes through git with both trailers.
+- **Where it runs (the ship review).** The `git add` and `git commit` run as the check ran, at the session's access
+  and in its environment, since git runs the repository's hooks and filters. Nothing is committed when a file changed
+  while the check ran (an edit made while it ran in the background, or a file the check wrote): the reply names the
+  files, and the check run again commits.
 - **Revision 35** (`COMMIT_ON_PASS_REVISION`) tells open sessions.
 - **Done when:**
   - a flow test shows a pass committing and a failure committing nothing;

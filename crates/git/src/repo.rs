@@ -50,6 +50,10 @@ impl Repo {
     pub(crate) fn run<S: AsRef<OsStr>>(&self, args: &[S], read_only: bool) -> Result<Output> {
         self.git.run(Some(&self.root), args, read_only, &[], None)
     }
+    /// What a read-only git command prints in the checkout, for a caller's own look at it.
+    pub fn read_only(&self, args: &[&str]) -> Result<String> {
+        Ok(String::from_utf8_lossy(&self.cmd(args, true)?).into_owned())
+    }
     pub(crate) fn cmd<S: AsRef<OsStr>>(&self, args: &[S], read_only: bool) -> Result<Vec<u8>> {
         check(args, self.run(args, read_only)?)
     }
