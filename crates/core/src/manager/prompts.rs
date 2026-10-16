@@ -737,6 +737,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, near your model's limit Brigadier may ask you mid-turn to commit the finished steps of the request: do it, and keep each next step small. Your CLI never compacts your context. Past a hard line Brigadier stops your turn and you continue the request in a fresh session, from a briefing headed [Where your earlier session stopped] that names the step you were in, the last commit and your whole earlier transcript: check git status and git diff first, keep what is right, and carry on without asking the user.",
         worker: "From now on, your CLI never compacts your context: near your model's limit you are asked to write your handoff note again after each further stretch of growth, and past a hard line Brigadier stops your turn and a fresh session continues the task from your note, told its last step may be half done.",
     },
+    Revision {
+        number: THREAD_STEPS_REVISION,
+        thread: "From now on, search_transcript also finds your own commands, reads and tool calls, from earlier sessions too, each shown as [command|read|tool · date · thread step N] with where its whole output is kept: search it before you run or read again what an earlier session did. A thread step is never a message number: cite only #N for user_message.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -974,6 +979,10 @@ pub(crate) const CHECKED_ANSWER_REVISION: u32 = 53;
 /// further stretch and handed off at the hard line, and neither CLI compacts (BUILD-PLAN D2.3,
 /// D2.3b). Revisions 60–69 are phase D2's.
 pub(crate) const OVERFLOW_REVISION: u32 = 60;
+
+/// search_transcript also finds the thread's own commands, reads and tool calls (BUILD-PLAN
+/// D2.4).
+pub(crate) const THREAD_STEPS_REVISION: u32 = 61;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

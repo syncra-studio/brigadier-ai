@@ -565,14 +565,46 @@ pub struct BrainStats {
     pub bytes_on_disk: u64,
 }
 
+/// Which of a conversation's event streams a transcript entry came from. Each numbers its
+/// events on its own, so an entry is known by its stream and seq together.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum TranscriptStream {
+    /// The conversation: messages, reports, decisions.
+    #[default]
+    Conversation,
+    /// The thread's own work: the commands it ran, the files it read, the tools it called.
+    Thread,
+}
+
+impl TranscriptStream {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Conversation => "conversation",
+            Self::Thread => "thread",
+        }
+    }
+
+    pub(crate) fn parse(text: &str) -> Self {
+        match text {
+            "thread" => Self::Thread,
+            _ => Self::Conversation,
+        }
+    }
+}
+
 /// A line of a conversation's transcript, for full-transcript search.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptEntry {
     pub conversation_id: String,
-    /// The event store sequence it came from (entries are idempotent by conversation and seq).
+    #[serde(default)]
+    pub stream: TranscriptStream,
+    /// The event store sequence it came from (entries are idempotent by conversation, stream
+    /// and seq).
     pub seq: i64,
-    /// `user`, `assistant`, `report`, `decision`, `brigadier`.
+    /// `user`, `assistant`, `report`, `decision`, `brigadier`; a thread entry's `command`,
+    /// `read` or `tool`.
     pub role: String,
     pub request_id: Option<String>,
     pub at_ms: i64,
@@ -583,12 +615,16 @@ pub struct TranscriptEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptHit {
+    pub stream: TranscriptStream,
     pub seq: i64,
     pub role: String,
     pub request_id: Option<String>,
     pub at_ms: i64,
     /// The matching passage, with some context (at most about 600 bytes).
     pub snippet: String,
+    /// The entry's first line (a thread entry's command or call), which the snippet may not
+    /// reach.
+    pub lead: String,
 }
 
 /// The local embedding model's state.
@@ -871,8 +907,7 @@ impl Brain {
         let now = db::now_ms();
         self.write(move |tx, changes| {
             let gone = write::forget(tx, &write::Sources::Session(&session), now, changes)?;
-            tx.prepare_cached("DELETE FROM transcript WHERE conversation_id = ?1")?
-                .execute([&session])?;
+            transcript::forget(tx, &session)?;
             Ok(gone)
         })
     }
@@ -1183,14 +1218,35 @@ impl Brain {
         Ok(stats)
     }
 
-    /// Adds transcript entries (idempotent by conversation and seq).
+    /// Adds transcript entries (idempotent by conversation, stream and seq).
     pub fn index_transcript(&self, entries: Vec<TranscriptEntry>) -> Result<()> {
         self.write(move |tx, _| transcript::index(tx, &entries))
     }
 
-    /// The highest seq indexed for a conversation, to resume a backfill.
-    pub fn transcript_watermark(&self, conversation_id: &str) -> Result<Option<i64>> {
-        self.read(|conn| transcript::watermark(conn, conversation_id))
+    /// Adds the entries of a page read from one of a conversation's streams, and records that
+    /// the stream was read through `through_seq`.
+    pub fn index_transcript_through(
+        &self,
+        conversation_id: &str,
+        stream: TranscriptStream,
+        through_seq: i64,
+        entries: Vec<TranscriptEntry>,
+    ) -> Result<()> {
+        let conversation = conversation_id.to_owned();
+        self.write(move |tx, _| {
+            transcript::index(tx, &entries)?;
+            transcript::mark_read(tx, &conversation, stream, through_seq)
+        })
+    }
+
+    /// The highest seq indexed or read from one of a conversation's streams, to resume its
+    /// backfill.
+    pub fn transcript_watermark(
+        &self,
+        conversation_id: &str,
+        stream: TranscriptStream,
+    ) -> Result<Option<i64>> {
+        self.read(|conn| transcript::watermark(conn, conversation_id, stream))
     }
 
     /// Full-text search over one conversation's transcript, best matches first (then the most
@@ -1204,7 +1260,7 @@ impl Brain {
         self.read(|conn| transcript::search(conn, conversation_id, query, limit))
     }
 
-    /// Drops a conversation's transcript entries.
+    /// Drops a conversation's transcript entries, from every stream.
     pub fn forget_transcript(&self, conversation_id: &str) -> Result<()> {
         let conversation = conversation_id.to_owned();
         self.write(move |tx, _| transcript::forget(tx, &conversation))

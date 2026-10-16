@@ -1128,3 +1128,109 @@ fn a_claim_confirming_a_user_decision_keeps_it_the_users_and_claims_come_last() 
         answer.text
     );
 }
+
+fn transcript_entry(stream: TranscriptStream, seq: i64, role: &str, text: &str) -> TranscriptEntry {
+    TranscriptEntry {
+        conversation_id: "c1".into(),
+        stream,
+        seq,
+        role: role.into(),
+        request_id: None,
+        at_ms: seq,
+        text: text.into(),
+    }
+}
+
+/// The conversation and its thread number their events on their own: a message and a thread
+/// command with the same seq are both kept and found, each stream keeps its own watermark,
+/// and a hit carries its entry's first line.
+#[test]
+fn a_message_and_a_thread_command_with_the_same_seq_are_both_found() {
+    let brain = TestBrain::new();
+    brain
+        .index_transcript(vec![
+            transcript_entry(
+                TranscriptStream::Conversation,
+                12,
+                "user",
+                "Check the quokka build.",
+            ),
+            transcript_entry(
+                TranscriptStream::Thread,
+                12,
+                "command",
+                "Ran `make quokka` (exit 2)\nquokka: missing target",
+            ),
+            transcript_entry(
+                TranscriptStream::Thread,
+                30,
+                "read",
+                "Read src/a.rs\nfn a() {}",
+            ),
+        ])
+        .unwrap();
+    // Indexing again changes nothing.
+    brain
+        .index_transcript(vec![transcript_entry(
+            TranscriptStream::Thread,
+            12,
+            "command",
+            "Ran `make quokka` (exit 2)\nquokka: missing target",
+        )])
+        .unwrap();
+    let mut hits = brain.search_transcript("c1", "quokka", 10).unwrap();
+    hits.sort_by_key(|hit| hit.stream.as_str());
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    assert_eq!(
+        (hits[0].stream, hits[0].seq, hits[0].role.as_str()),
+        (TranscriptStream::Conversation, 12, "user")
+    );
+    assert_eq!(
+        (hits[1].stream, hits[1].seq, hits[1].role.as_str()),
+        (TranscriptStream::Thread, 12, "command")
+    );
+    assert_eq!(hits[1].lead, "Ran `make quokka` (exit 2)");
+    assert_eq!(
+        brain
+            .transcript_watermark("c1", TranscriptStream::Conversation)
+            .unwrap(),
+        Some(12)
+    );
+    assert_eq!(
+        brain
+            .transcript_watermark("c1", TranscriptStream::Thread)
+            .unwrap(),
+        Some(30)
+    );
+    assert_eq!(brain.stats().unwrap().transcript_entries, 3);
+    // A page read through seq 50 that added nothing still moves its stream's watermark, and
+    // only that stream's.
+    brain
+        .index_transcript_through("c1", TranscriptStream::Thread, 50, Vec::new())
+        .unwrap();
+    assert_eq!(
+        brain
+            .transcript_watermark("c1", TranscriptStream::Thread)
+            .unwrap(),
+        Some(50)
+    );
+    assert_eq!(
+        brain
+            .transcript_watermark("c1", TranscriptStream::Conversation)
+            .unwrap(),
+        Some(12)
+    );
+    brain.forget_transcript("c1").unwrap();
+    assert!(
+        brain
+            .search_transcript("c1", "quokka", 10)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        brain
+            .transcript_watermark("c1", TranscriptStream::Thread)
+            .unwrap(),
+        None
+    );
+}

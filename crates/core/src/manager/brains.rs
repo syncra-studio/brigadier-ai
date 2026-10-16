@@ -25,11 +25,12 @@ use std::time::{Duration, Instant};
 use brigadier_brain::{
     Brain, BrainAnswer, BrainCaps, BrainGraph, BrainQuery, Claim, Edge, EdgeKind, Embedder,
     EmbedderState, FileRef, NewNode, Node, NodeFilter, NodeKind, NodeState, Origin, Provenance,
-    Route, Scope, TranscriptEntry, WorkerRef,
+    Route, Scope, TranscriptEntry, TranscriptStream, WorkerRef,
 };
 use brigadier_index::{
     CodeHit, CodeIndex, CodeQuery, FileChange, IndexConfig, ScanHelper, SearchKind,
 };
+use brigadier_providers::{ItemStatus, ProviderEvent};
 use brigadier_sandbox::removal;
 use brigadier_store::StreamPage;
 
@@ -68,6 +69,11 @@ const FINDINGS_MAX_BYTES: usize = 24_000;
 const FINDINGS_MAX_PARTS: usize = 32;
 /// Transcript events read per page while indexing a conversation's transcript.
 const TRANSCRIPT_PAGE: u32 = 500;
+/// Most of a thread step's command or call shown in its entry's first line, which leads its
+/// search hits.
+const STEP_LEAD_BYTES: usize = 200;
+/// Most of a thread step's command or call input indexed (its output is already cut at 8 KiB).
+const STEP_INPUT_BYTES: usize = 8 * 1024;
 /// The markers around the conventions Brigadier writes into an AGENTS.md.
 const EXPORT_START: &str = "<!-- brigadier:conventions:start -->";
 const EXPORT_END: &str = "<!-- brigadier:conventions:end -->";
@@ -1120,36 +1126,74 @@ impl SessionManager {
         }
         let mut text = String::new();
         for hit in hits {
-            text.push_str(&format!(
-                "[{} · {} · #{}]\n{}\n\n",
-                hit.role,
-                crate::manager::prompts::date_of(hit.at_ms),
-                hit.seq,
-                hit.snippet.trim()
-            ));
+            let date = crate::manager::prompts::date_of(hit.at_ms);
+            let snippet = hit.snippet.trim();
+            match hit.stream {
+                // `#N` is how a user's message is cited (remember's `user_message`).
+                TranscriptStream::Conversation => {
+                    text.push_str(&format!("[{} · {date} · #{}]\n", hit.role, hit.seq));
+                }
+                // A step of the thread's own work is never shown as `#N`; its first line (the
+                // command or call, and where a whole output is kept) leads, as the passage
+                // may not reach it.
+                TranscriptStream::Thread => {
+                    text.push_str(&format!(
+                        "[{} · {date} · thread step {}]\n",
+                        hit.role, hit.seq
+                    ));
+                    if !hit.lead.is_empty() && !snippet.contains(hit.lead.trim()) {
+                        text.push_str(hit.lead.trim());
+                        text.push_str(if snippet.starts_with('…') {
+                            "\n"
+                        } else {
+                            "\n…"
+                        });
+                    }
+                }
+            }
+            text.push_str(snippet);
+            text.push_str("\n\n");
         }
         Ok(text.trim_end().to_owned())
     }
 
-    /// Adds the conversation's transcript since the last indexed event to the Brain's
-    /// transcript index.
+    /// Adds what the conversation and its thread did since each stream's last indexed or read
+    /// event to the Brain's transcript index. Each stream keeps its own watermark: a
+    /// conversation indexed before the thread's stream was still has its thread's whole stream
+    /// indexed from the start.
     pub(crate) async fn sync_transcript(&self, id: &ConversationId, brain: &Brain) -> Result<()> {
+        for stream in [TranscriptStream::Conversation, TranscriptStream::Thread] {
+            self.sync_transcript_stream(id, brain, stream).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn sync_transcript_stream(
+        &self,
+        id: &ConversationId,
+        brain: &Brain,
+        stream: TranscriptStream,
+    ) -> Result<()> {
         let conversation = id.0.clone();
         let mut after = {
             let (brain, conversation) = (brain.clone(), conversation.clone());
             blocking(move || {
                 brain
-                    .transcript_watermark(&conversation)
+                    .transcript_watermark(&conversation, stream)
                     .map_err(brain_error)
             })
             .await?
             .unwrap_or(0)
         };
+        let name = match stream {
+            TranscriptStream::Conversation => streams::conversation(id),
+            TranscriptStream::Thread => streams::orchestrator(id),
+        };
         loop {
             let page = self
                 .core
                 .store()
-                .read_stream_since(streams::conversation(id), after, TRANSCRIPT_PAGE)
+                .read_stream_since(name.clone(), after, TRANSCRIPT_PAGE)
                 .await?;
             let Some(last) = page.last() else {
                 return Ok(());
@@ -1158,12 +1202,24 @@ impl SessionManager {
             let full = page.len() as u32 == TRANSCRIPT_PAGE;
             let mut entries = Vec::new();
             for stored in page {
-                let Ok(event) = serde_json::from_str::<DomainEvent>(stored.payload.get()) else {
-                    continue;
+                let found = match stream {
+                    TranscriptStream::Conversation => {
+                        match serde_json::from_str::<DomainEvent>(stored.payload.get()) {
+                            Ok(event) => self.transcript_text(event).await,
+                            Err(_) => None,
+                        }
+                    }
+                    TranscriptStream::Thread => match super::export::thread_event(&stored) {
+                        super::export::Decoded::Event(event) => self
+                            .thread_step_text(&event)
+                            .map(|(role, text)| (role, None, text)),
+                        _ => None,
+                    },
                 };
-                if let Some((role, request_id, text)) = self.transcript_text(event).await {
+                if let Some((role, request_id, text)) = found {
                     entries.push(TranscriptEntry {
                         conversation_id: conversation.clone(),
+                        stream,
                         seq: stored.stream_seq,
                         role: role.into(),
                         request_id,
@@ -1172,14 +1228,116 @@ impl SessionManager {
                     });
                 }
             }
-            if !entries.is_empty() {
-                let brain = brain.clone();
-                blocking(move || brain.index_transcript(entries).map_err(brain_error)).await?;
-            }
+            let (brain, conversation) = (brain.clone(), conversation.clone());
+            blocking(move || {
+                brain
+                    .index_transcript_through(&conversation, stream, after, entries)
+                    .map_err(brain_error)
+            })
+            .await?;
             if !full {
                 return Ok(());
             }
         }
+    }
+
+    /// What a finished command or tool call of the thread adds to the searchable transcript:
+    /// its role (`command`, `read` for reads and searches, `tool`), and a first line with the
+    /// call and where its whole output is kept, then the call in full when that line cuts it,
+    /// then its output as recorded (cut at 8 KiB). A kept output is named, never copied in.
+    /// The thread's own `search_transcript` calls are left out: their passages would only
+    /// repeat what they found.
+    fn thread_step_text(&self, event: &ProviderEvent) -> Option<(&'static str, String)> {
+        let finished =
+            |status: &ItemStatus| matches!(status, ItemStatus::Completed | ItemStatus::Failed);
+        let (role, mut lead, call, output, kept) = match event {
+            ProviderEvent::Command {
+                command,
+                status,
+                exit_code,
+                output,
+                kept,
+                ..
+            } if finished(status) => {
+                let mut lead = format!("Ran `{}`", lead_part(command));
+                match exit_code {
+                    Some(code) => lead.push_str(&format!(" (exit {code})")),
+                    None if matches!(status, ItemStatus::Failed) => lead.push_str(" (failed)"),
+                    None => {}
+                }
+                ("command", lead, command.as_str(), output, kept)
+            }
+            ProviderEvent::ToolCall {
+                name,
+                input,
+                status,
+                output,
+                kept,
+                ..
+            } if finished(status) => {
+                if name.ends_with("search_transcript") {
+                    return None;
+                }
+                let input = input.as_deref().unwrap_or_default();
+                let args = serde_json::from_str::<serde_json::Value>(input).ok();
+                let arg = |key: &str| {
+                    args.as_ref()
+                        .and_then(|args| args.get(key))
+                        .and_then(serde_json::Value::as_str)
+                        .map(lead_part)
+                };
+                let path = arg("file_path").or_else(|| arg("notebook_path"));
+                let (role, mut lead) = match (name.as_str(), path, arg("pattern")) {
+                    ("Read" | "NotebookRead", Some(path), _) => ("read", format!("Read {path}")),
+                    ("Grep" | "Glob", _, Some(pattern)) => {
+                        let within = arg("path").map(|path| format!(" in {path}"));
+                        (
+                            "read",
+                            format!("{name} `{pattern}`{}", within.unwrap_or_default()),
+                        )
+                    }
+                    ("Read" | "NotebookRead" | "Grep" | "Glob" | "LS", ..) => {
+                        ("read", format!("{name} {}", lead_part(input)))
+                    }
+                    _ if matches!(input.trim(), "" | "{}") => ("tool", format!("Called {name}")),
+                    _ => ("tool", format!("Called {name} with {}", lead_part(input))),
+                };
+                if matches!(status, ItemStatus::Failed) {
+                    lead.push_str(" (failed)");
+                }
+                (role, lead, input, output, kept)
+            }
+            _ => return None,
+        };
+        let blobs = self.core.store().blobs();
+        let kept_file = |hash: &str| {
+            hash.parse::<brigadier_store::BlobHash>()
+                .ok()
+                .map(|hash| blobs.file_of(&hash).display().to_string())
+        };
+        if let Some(kept) = kept.as_deref() {
+            if let Some(path) = kept.blob.as_deref().and_then(kept_file) {
+                lead.push_str(&format!("; whole output ({} bytes): {path}", kept.bytes));
+            }
+            if let Some(file) = &kept.file
+                && let Some(path) = file.blob.as_deref().and_then(kept_file)
+            {
+                lead.push_str(&format!(
+                    "; the CLI's saved copy ({} bytes): {path}",
+                    file.bytes
+                ));
+            }
+        }
+        let mut text = lead;
+        if lead_part(call) != call.trim() {
+            text.push('\n');
+            text.push_str(&cut(call.trim(), STEP_INPUT_BYTES));
+        }
+        if let Some(output) = output.as_deref().filter(|output| !output.trim().is_empty()) {
+            text.push('\n');
+            text.push_str(output);
+        }
+        Some((role, text))
     }
 
     /// What a conversation event adds to the searchable transcript.
@@ -2660,6 +2818,15 @@ pub(super) fn blake_key(text: &str) -> String {
 /// The first line of `text`, at most `max` bytes (on a character boundary).
 pub(crate) fn one_line(text: &str, max: usize) -> String {
     cut(text.trim().lines().next().unwrap_or_default().trim(), max)
+}
+
+/// `text` on one line with its whitespace collapsed, cut at [`STEP_LEAD_BYTES`]: a thread
+/// step's call in its entry's first line.
+fn lead_part(text: &str) -> String {
+    cut(
+        &text.split_whitespace().collect::<Vec<_>>().join(" "),
+        STEP_LEAD_BYTES,
+    )
 }
 
 /// `text` cut to at most `max` bytes on a character boundary, with an ellipsis if cut.

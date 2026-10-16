@@ -341,6 +341,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "query_brain" if orchestrator => ToolCall::Orchestrator(O::QueryBrain(arg(name, args))),
         "query_brain" => ToolCall::Worker(W::QueryBrain(arg(name, args))),
         "remember" => ToolCall::Orchestrator(O::Remember(arg(name, args))),
+        "search_transcript" => ToolCall::Orchestrator(O::SearchTranscript(arg(name, args))),
         "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
         "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
         "start_verifier" => ToolCall::Orchestrator(O::StartVerifier(arg(name, args))),
@@ -1927,6 +1928,8 @@ mod thread_scratch_tests;
 mod thread_tests;
 #[cfg(test)]
 mod thread_works_tests;
+#[cfg(test)]
+mod transcript_thread_tests;
 #[cfg(test)]
 mod trim_tests;
 #[cfg(test)]

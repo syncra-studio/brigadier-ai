@@ -195,6 +195,36 @@ fn migrations() -> Migrations<'static> {
                            IN ('decision', 'convention', 'contract')));",
         )
         .comment("worker and thread rules and decisions become unverified claims"),
+        // BUILD-PLAN D2.4: the thread's own commands and reads are indexed beside the
+        // conversation's messages, from a stream that numbers its events on its own, so an
+        // entry is known by its stream too. SQLite can't change a UNIQUE constraint in place:
+        // the table is rebuilt with every row's `rid`, which the FTS index points at.
+        M::up(
+            "CREATE TABLE transcript_streams (
+            rid              INTEGER PRIMARY KEY,
+            conversation_id  TEXT    NOT NULL,
+            stream           TEXT    NOT NULL DEFAULT 'conversation'
+                                     CHECK (stream IN ('conversation', 'thread')),
+            seq              INTEGER NOT NULL,
+            role             TEXT    NOT NULL,
+            request_id       TEXT,
+            at_ms            INTEGER NOT NULL,
+            text             TEXT    NOT NULL,
+            UNIQUE (conversation_id, stream, seq)
+        ) STRICT;
+        INSERT INTO transcript_streams (rid, conversation_id, seq, role, request_id, at_ms, text)
+        SELECT rid, conversation_id, seq, role, request_id, at_ms, text FROM transcript;
+        DROP TABLE transcript;
+        ALTER TABLE transcript_streams RENAME TO transcript;
+        CREATE TRIGGER transcript_fts_insert AFTER INSERT ON transcript BEGIN
+            INSERT INTO transcript_fts (rowid, text) VALUES (new.rid, new.text);
+        END;
+        CREATE TRIGGER transcript_fts_delete AFTER DELETE ON transcript BEGIN
+            INSERT INTO transcript_fts (transcript_fts, rowid, text)
+                VALUES ('delete', old.rid, old.text);
+        END;",
+        )
+        .comment("transcript entries are known by their stream: the conversation or its thread"),
     ])
 }
 
@@ -261,6 +291,88 @@ mod tests {
         );
         conn.execute("DELETE FROM nodes", []).unwrap();
         assert_eq!(count(&conn), 0);
+    }
+
+    /// BUILD-PLAN D2.4's migration: indexed lines stay, as the conversation's, still found by
+    /// search and dropped by forgetting, and a thread entry with the same seq is kept beside
+    /// them.
+    #[test]
+    fn transcript_rows_migrate_as_the_conversations_and_a_thread_row_may_share_a_seq() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_writer(&conn).unwrap();
+        migrations().to_version(&mut conn, 5).unwrap();
+        conn.execute_batch(
+            "INSERT INTO transcript (conversation_id, seq, role, request_id, at_ms, text)
+             VALUES ('c1', 7, 'user', 'r1', 10, 'the zebra plan'),
+                    ('c1', 8, 'assistant', 'r1', 11, 'noted'),
+                    ('c2', 7, 'user', NULL, 12, 'another zebra');",
+        )
+        .unwrap();
+        migrate(&mut conn).unwrap();
+        let streams: Vec<(String, String, i64)> = conn
+            .prepare("SELECT conversation_id, stream, seq FROM transcript ORDER BY rid")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            streams,
+            [
+                ("c1".to_owned(), "conversation".to_owned(), 7),
+                ("c1".to_owned(), "conversation".to_owned(), 8),
+                ("c2".to_owned(), "conversation".to_owned(), 7),
+            ]
+        );
+        // The same seq from the thread's stream is a row of its own.
+        let thread = crate::TranscriptEntry {
+            conversation_id: "c1".into(),
+            stream: crate::TranscriptStream::Thread,
+            seq: 7,
+            role: "command".into(),
+            request_id: None,
+            at_ms: 13,
+            text: "Ran `grep zebra notes.txt` (exit 0)\nzebra crossing".into(),
+        };
+        let tx = conn.transaction().unwrap();
+        crate::transcript::index(&tx, &[thread]).unwrap();
+        tx.commit().unwrap();
+        let hits = crate::transcript::search(&conn, "c1", "zebra", 10).unwrap();
+        let mut found: Vec<(crate::TranscriptStream, i64)> =
+            hits.iter().map(|hit| (hit.stream, hit.seq)).collect();
+        found.sort_by_key(|(stream, seq)| (stream.as_str(), *seq));
+        assert_eq!(
+            found,
+            [
+                (crate::TranscriptStream::Conversation, 7),
+                (crate::TranscriptStream::Thread, 7)
+            ]
+        );
+        assert_eq!(
+            crate::transcript::watermark(&conn, "c1", crate::TranscriptStream::Conversation)
+                .unwrap(),
+            Some(8)
+        );
+        // Forgetting still clears the full-text index of every stream's rows.
+        let tx = conn.transaction().unwrap();
+        crate::transcript::forget(&tx, "c1").unwrap();
+        tx.commit().unwrap();
+        assert!(
+            crate::transcript::search(&conn, "c1", "zebra", 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            crate::transcript::search(&conn, "c2", "zebra", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        conn.execute(
+            "INSERT INTO transcript_fts (transcript_fts) VALUES ('integrity-check')",
+            [],
+        )
+        .unwrap();
     }
 
     /// BUILD-PLAN A11's migration: report and thread rules become unverified claims with

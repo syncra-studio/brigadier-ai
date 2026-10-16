@@ -14,7 +14,7 @@ use tokio::sync::Notify;
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::knowledge::RebirthTrigger;
 use crate::manager::fault::{FaultKey, InjectedError};
-use crate::manager::prompts::{OVERFLOW_REVISION, revision_note};
+use crate::manager::prompts::{OVERFLOW_REVISION, THREAD_STEPS_REVISION, revision_note};
 use crate::model::{DomainEvent, streams};
 use crate::work::{OrchestratorEntry, RequestState};
 
@@ -330,10 +330,22 @@ async fn a_daemon_killed_between_the_stop_and_the_rebirth_finishes_the_request()
 /// Rule R: a session told the instructions before this change hears the note once.
 #[tokio::test]
 async fn a_session_from_before_the_overflow_guard_is_told_once() {
+    told_once(OVERFLOW_REVISION, "near your model's limit").await;
+}
+
+/// Rule R for search_transcript's thread steps (BUILD-PLAN D2.4).
+#[tokio::test]
+async fn a_session_from_before_thread_steps_in_search_is_told_once() {
+    told_once(THREAD_STEPS_REVISION, "thread step N").await;
+}
+
+/// A session told the instructions at the revision before `revision` hears its note (which
+/// says `words`) exactly once after a restart.
+async fn told_once(revision: u32, words: &str) {
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
     let seen = inputs.clone();
     let mut flow = Flow::start(
-        "thread-overflow-rule-r",
+        &format!("thread-rule-r-{revision}"),
         Options::default(),
         script(move |turn| {
             let seen = seen.clone();
@@ -361,7 +373,7 @@ async fn a_session_from_before_the_overflow_guard_is_told_once() {
                         label: "instructions revision".into(),
                         task_id: None,
                         told: Some(crate::work::Told {
-                            revision: Some(OVERFLOW_REVISION - 1),
+                            revision: Some(revision - 1),
                             ..crate::work::Told::default()
                         }),
                     },
@@ -375,8 +387,8 @@ async fn a_session_from_before_the_overflow_guard_is_told_once() {
     flow.settled().await;
     flow.say("Thanks.").await;
     flow.settled().await;
-    let note = revision_note(OVERFLOW_REVISION - 1, false).unwrap();
-    assert!(note.contains("near your model's limit"), "{note}");
+    let note = revision_note(revision - 1, false).unwrap();
+    assert!(note.contains(words), "{note}");
     let told: usize = inputs
         .lock()
         .unwrap()

@@ -118,8 +118,10 @@ don't tell the user you remembered it. \
 Returns the node id; pass it as `replaces` to correct it, or a claim you find wrong.";
 
 const SEARCH_TRANSCRIPT: &str = "Search this conversation's full transcript (the user's \
-messages, your answers, reports and decisions), including what is no longer in your context. \
-Returns the best-matching passages with their dates.";
+messages, your answers, reports and decisions, and the commands you ran, files you read and \
+tools you called), including what is no longer in your context. Returns the best-matching \
+passages with their dates: a message shows its number (#N), a step of your own work shows as \
+a thread step, never a message number, with where its whole output is kept.";
 
 const PLAN_PHASES: &str = "Split a big request into phases that must run one after another \
 (each builds on the one before). Most requests are one phase: then skip this and delegate the \
