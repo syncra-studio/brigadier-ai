@@ -229,3 +229,9 @@ test("a follow-up that joined a turn as it ended leaves the first answer in view
   assert.equal(seen.second, true, JSON.stringify(seen));
   assert.equal(seen.firstAboveBubble, true, JSON.stringify(seen));
 });
+
+test("a plan approved: its request's new steps show under the plan as they come", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ under: boolean; new: boolean }>(t, "drive=implement&kind=session");
+  assert.equal(seen.new, true, JSON.stringify(seen));
+  assert.equal(seen.under, true, JSON.stringify(seen));
+});

@@ -1009,3 +1009,41 @@ test("scrolled up when a short turn works again, the view stays where the user i
   assert.equal(scroller.following, false);
   assert.equal(fake.scrollTop, top);
 });
+
+test("a turn that grew past the bottom unheard (a window not painting hears no resize) and ends is still followed", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  expectSentTurn(id, "sent");
+  const user = fake.row("sent", 60, "user");
+  const plan = fake.row("plan", 120);
+  fake.rows.push(user, plan);
+  scroller.rowsChanged();
+  scroller.setRunning(false);
+  scroller.resized();
+  // The plan is approved; its work and answer come while the window is in the background, and
+  // the turn ends before the view hears of any of it.
+  scroller.setRunning(true);
+  plan.height += 1600;
+  scroller.setRunning(false);
+  scroller.resized();
+  assert.equal(scroller.following, true);
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(scroller.contentBelow(), false);
+  // A sent turn whose whole answer comes with its end, the same.
+  const again = key();
+  const other = new Fake();
+  conversation(other, 6);
+  const second = open(other, again, true);
+  expectSentTurn(again, "sent");
+  const asked = other.row("sent", 60, "user");
+  const answer = other.row("answer", 40);
+  other.rows.push(asked, answer);
+  second.rowsChanged();
+  answer.height += 1600;
+  second.setRunning(false);
+  second.resized();
+  assert.equal(second.following, true);
+  assert.equal(other.scrollTop, other.max);
+});

@@ -439,7 +439,7 @@ async function driveEarly(): Promise<object> {
   useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
   change((board) => ({ requests: { ...board.requests, r2: daemon.requests.r2! }, head: "r2" }));
   await settle();
-  const block = turn() ?? document;
+  const block = turn() ?? document.body;
   const bubble = one("[data-slot=request-steer]", block);
   const header = one("[data-slot=request-work-header]", block);
   const above = !!bubble && !!header && !!(bubble.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -718,7 +718,7 @@ async function driveJoined(): Promise<object> {
   request("r2", { state: { type: "done" }, endedAtMs: begun + 9000, worked: [{ fromMs: begun + 6000, toMs: begun + 9000 }] });
   request("r1", { state: { type: "done" }, endedAtMs: begun + 9000, worked: [{ fromMs: begun, toMs: begun + 9000 }] });
   await settle(300);
-  const block = turn() ?? document;
+  const block = turn() ?? document.body;
   const shown = (words: string) =>
     all("[data-slot=aui_assistant-message-content]", block).some((element) => text(element)?.includes(words) && element.getClientRects().length > 0 && !element.closest("[data-slot=request-fold][data-fold=closed], [hidden]"));
   const firstAnswer = all("[data-slot=joined-answer]", block)[0] ?? null;
@@ -729,6 +729,31 @@ async function driveJoined(): Promise<object> {
     firstAboveBubble: !!firstAnswer && !!bubble && !!(firstAnswer.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING),
     header: text(one("[data-slot=request-work-label]", block)),
   };
+}
+
+/** A plan approved: its request works again, and the new steps show under the plan card as they come. */
+async function driveImplement(): Promise<object> {
+  await settle(600);
+  const plan = {
+    id: "plan", conversationId: ID, requestId: "r1", position: 1.5, title: "Round half-up",
+    body: "# Round half-up\n\nUse half-up rounding in `round`.", steps: [],
+    state: { type: "proposed" }, createdAtMs: begun + 10_000, decidedAtMs: null,
+  } as unknown as Plan;
+  daemon.run = "idle";
+  change(() => ({ run: "idle", runRequest: null, plans: { plan } }));
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 10_000, worked: [{ fromMs: begun, toMs: begun + 10_000 }] });
+  await settle();
+  const before = text(turn()) ?? "";
+  // Approved: the same request works on.
+  change(() => ({ run: "running", runRequest: "r1", plans: { plan: { ...plan, state: { type: "approved" } } as unknown as Plan } }));
+  request("r1", { state: { type: "working" }, endedAtMs: null, worked: [{ fromMs: begun, toMs: begun + 10_000 }, { fromMs: Date.now(), toMs: null }] });
+  steps([...daemon.steps, tool("impl-read", 3.1, "Read", "/repo/src/cli.ts", "completed"), tool("impl-edit", 3.2, "apply_patch", "/repo/src/cli.ts", "inProgress")]);
+  await settle();
+  const block = turn() ?? document.body;
+  const card = one("[data-slot=plan-card], [data-card=plan], [data-slot=action-card]", block);
+  const after = text(block) ?? "";
+  const planAt = after.indexOf("Round half-up");
+  return { before, after, card: !!card, under: planAt >= 0 && after.lastIndexOf("cli.ts") > planAt, new: !before.includes("cli.ts") };
 }
 
 async function driveQueue(): Promise<object> {
@@ -812,7 +837,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "joined" ? driveJoined() : drive === "filelink" ? driveFileLink() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "implement" ? driveImplement() : drive === "joined" ? driveJoined() : drive === "filelink" ? driveFileLink() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

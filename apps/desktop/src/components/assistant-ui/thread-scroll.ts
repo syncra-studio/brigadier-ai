@@ -15,6 +15,7 @@
  *   turn's growth, and by what the user scrolls below the view; a turn ending leaves what shows.
  *   Sent while the user had scrolled up, reading, nothing moves: the turn is added below. Work
  *   starting again with no message (a plan approved, a question answered) is watched the same way.
+ *   A turn ending is measured before its watch ends, so growth no resize told of is followed.
  * - The scroll button shows while a row reaches under the floating footer or below the view,
  *   never for the room alone or for content in the gap above the footer, which stays in view.
  * - Each conversation's place is kept for the app's run, by row id, and restored on return: a
@@ -257,6 +258,10 @@ export class ThreadScroller {
    */
   setRunning(running: boolean): void {
     const resumed = running && !this.running;
+    // Growth not heard of yet is handled while the watch still holds: the last of a turn comes
+    // in the same update as its end, and a window that paints nothing (in the background) hears
+    // of no resize at all.
+    if (!running && this.running && this.watch) this.resized();
     this.running = running;
     if (running) this.ran = true;
     else if (this.ran) this.turnEnded();
