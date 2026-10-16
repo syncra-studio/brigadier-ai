@@ -229,7 +229,7 @@ fn own_commits(local: bool) -> String {
             .to_owned()
     } else {
         format!(
-            "Commit your changes on your workspace's branch: give run_check `commit: \"<message>\"` on the first check you expect to pass, which commits them all with your trailer when it passes (a failing check commits nothing: fix it and run it again), or use `git commit --trailer \"{THREAD_TRAILER}\"`. Its reply names the commit's files and what git status still shows: that is the record, so don't check the commit again with git or try anything after it. A commit fixing only review findings goes through git with both trailers, adding `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
+            "Commit your changes on your workspace's branch: give run_check `commit: \"<message>\"` on the first check you expect to pass, which commits them all with your trailer when it passes (a failing check commits nothing: fix it and run it again), or use `git commit --trailer \"{THREAD_TRAILER}\"`. Its reply names the commit's files and what git status still shows: that is the record, so don't check the commit again with git or try anything after it. A commit fixing review findings also gives run_check their ids in `fixes`, which records them fixed on that pass (with git, add `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`); a held merge covers it."
         )
     }
 }
@@ -740,7 +740,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: SHORT_START_REVISION,
-        thread: "From now on, a review's findings message says how to judge and record its findings, and finish_session and the [merge …] messages say how a merge goes: where they say more than your instructions, follow them. On a Claude thread, your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context.",
+        thread: "From now on, a review's findings message says how to judge and record its findings, and finish_session and the [merge …] messages say how a merge goes: where they say more than your instructions, follow them. run_check takes `fixes`, the ids of the review findings your change fixes: when it passes, its commit carries their Fixes trailer and they are recorded fixed, checked by it, with no record_findings call of their own. On a Claude thread, your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context.",
         worker: "",
     },
 ];
@@ -3999,8 +3999,9 @@ mod environment_tests {
             true,
         );
         assert!(prompt.contains(&format!(
-            "--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it"
+            "--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`); a held merge covers it"
         )));
+        assert!(prompt.contains("also gives mcp__brigadier__run_check their ids in `fixes`"));
     }
 
     /// A job only in apps on screen is an operate task for a fast GUI model, and code checked in

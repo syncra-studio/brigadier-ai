@@ -261,3 +261,109 @@ async fn an_open_thread_resumes_with_record_findings_and_its_note() {
     assert!(!third.contains("[instructions]"), "{third}");
     flow.stop().await;
 }
+
+/// A fix of the thread's own goes with run_check's `fixes` (BUILD-PLAN O4): a failing check
+/// commits and records nothing; a passing one commits the fix with the Fixes trailer and records
+/// those findings fixed, checked by that check, with no git commit or record_findings call of
+/// the thread's own. The finding it didn't name stays unrecorded.
+#[tokio::test]
+async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = replies.clone();
+    let head: Arc<Mutex<String>> = Arc::default();
+    let body = head.clone();
+    let flow = Flow::start(
+        "findings-fixes",
+        Options {
+            reviews: Some(script(|_| async { Reply::text(THREE) })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (seen, body) = (seen.clone(), body.clone());
+            async move {
+                if turn.input.contains("Add notes.") {
+                    commit_in_workspace(
+                        &turn,
+                        "notes.txt",
+                        &format!("notes \n{}", super::thread_tests::reviewed_notes()),
+                        "Add notes\n\nBrigadier-Author: thread",
+                    );
+                    return Reply::text("Added NOTES.md.");
+                }
+                if turn.input.contains("[review of your commits · Codex found 3") {
+                    assert!(turn.input.contains("run_check's `commit` and `fixes`"));
+                    let workspace = turn.add_dirs[0].clone();
+                    std::fs::write(workspace.join("notes.txt"), "fixed notes\n").unwrap();
+                    for (command, fixes) in [("false", json!(["r1.1", "R1.2"])), ("true", json!("R1.1, R1.2"))] {
+                        let reply = turn
+                            .call(
+                                "run_check",
+                                json!({"command": command, "commit": "Fix the notes", "fixes": fixes}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        seen.lock().unwrap().push(reply.text);
+                    }
+                    *body.lock().unwrap() =
+                        super::git(&workspace, &["log", "-1", "--format=%B"]);
+                    return Reply::text("Fixed two.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes.").await;
+    let recorded = replies.clone();
+    let board = flow
+        .until("the fix's check to record its findings", move |board| {
+            recorded.lock().unwrap().len() == 2
+                && board.reviews.values().any(|review| {
+                    review
+                        .items
+                        .iter()
+                        .any(|item| matches!(item.status, FindingStatus::Fixed { .. }))
+                })
+        })
+        .await;
+    let said = replies.lock().unwrap().clone();
+    assert!(
+        said[0].contains("Not committed: the check didn't pass."),
+        "{}",
+        said[0]
+    );
+    assert!(
+        said[0].contains("Not recorded fixed: R1.1, R1.2"),
+        "{}",
+        said[0]
+    );
+    assert!(said[1].contains("Recorded: R1.1 fixed"), "{}", said[1]);
+    assert!(said[1].contains("R1.2 fixed"), "{}", said[1]);
+    assert!(said[1].contains("Still not recorded: R1.3."), "{}", said[1]);
+    let body = head.lock().unwrap().clone();
+    assert!(body.starts_with("Fix the notes"), "{body}");
+    assert!(body.contains("Brigadier-Author: thread"), "{body}");
+    assert!(body.contains("Brigadier-Fixes: R1.1, R1.2"), "{body}");
+    let review = board.reviews.values().next().unwrap();
+    for item in &review.items {
+        match (item.id.as_str(), &item.status) {
+            (
+                "R1.1" | "R1.2",
+                FindingStatus::Fixed {
+                    task: None,
+                    checked: Some(checked),
+                    ..
+                },
+            ) => {
+                assert!(
+                    checked.starts_with("`true` passed after the fix [evidence: out-"),
+                    "{checked}"
+                );
+            }
+            ("R1.3", FindingStatus::New) => {}
+            (id, status) => panic!("{id}: {status:?}"),
+        }
+    }
+    flow.settled().await;
+    flow.stop().await;
+}

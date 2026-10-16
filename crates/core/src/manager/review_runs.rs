@@ -311,7 +311,7 @@ pub(crate) fn unverified(status: &FindingStatus) -> bool {
 /// record them.
 fn record_line(items: &[Finding]) -> String {
     format!(
-        "Its findings:\n{}\nA finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason (mention it to the user if it matters). Record what became of each with record_findings, all in one call: fixed (in task-N, or by you, with how you checked it in the merged code), open, or dismissed and why. If record_findings isn't in your tool list, look it up in the same message as your first fix or check, not in a call of its own. If your answer is already written: {}",
+        "Its findings:\n{}\nA finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason (mention it to the user if it matters). Record what became of each that no run_check `fixes` records with record_findings, all in one call: fixed (in task-N, or by you, with how you checked it in the merged code), open, or dismissed and why. If record_findings isn't in your tool list, look it up in the same message as your first fix or check, not in a call of its own. If your answer is already written: {}",
         listed(items),
         super::prompts::LATE_EVENT
     )
@@ -1662,11 +1662,11 @@ impl SessionManager {
         // audit M6, issue #33), left uncommitted unless the user asks.
         let local = self.local_checkout(&review.conversation_id).is_some();
         let fix_rule = if local {
-            "This is the user's own checkout: make the fix yourself and leave it uncommitted, with the one line saying so, unless the user asked you to commit it; it gets no review of its own."
+            "This is the user's own checkout: make the fix yourself and leave it uncommitted, with the one line saying so, unless the user asked you to commit it; it gets no review of its own. run_check's `fixes` (their ids) records them fixed when its check passes."
                 .to_owned()
         } else {
             format!(
-                "A fix commit of yours names what it fixes, `--trailer \"{FIXES_TRAILER}: <their ids>\"`: it gets no review of its own."
+                "Commit a fix of yours with run_check's `commit` and `fixes` (their ids): on a pass it commits with `--trailer \"{FIXES_TRAILER}: <their ids>\"` and records them fixed, checked by that check; such a commit gets no review of its own."
             )
         };
         let text = match (review.kind, &review.state, text) {
@@ -1846,6 +1846,46 @@ impl SessionManager {
                 tracing::warn!(review = %running.id, error = %err, "could not record that the answer waits for a review");
                 false
             }
+        }
+    }
+
+    /// `run_check`'s `fixes` (BUILD-PLAN O4): the review findings the thread's check fixes,
+    /// recorded fixed and checked by that check (`command`, its output `alias`) when it passed
+    /// and its commit, if it asked for one, was made (`passed`). What became of them, in one
+    /// line.
+    pub(crate) async fn record_fixed_by_check(
+        &self,
+        conversation_id: &ConversationId,
+        fixes: &[String],
+        passed: bool,
+        command: &str,
+        alias: &str,
+    ) -> String {
+        let ids = fixes.join(", ");
+        if !passed {
+            return format!(
+                "Not recorded fixed: {ids}, as the check didn't pass or nothing was committed."
+            );
+        }
+        let items = fixes
+            .iter()
+            .map(|id| crate::tools::FindingRecord {
+                id: id.clone(),
+                status: crate::tools::FindingVerdict::Fixed,
+                task: None,
+                checked: Some(format!(
+                    "`{command}` passed after the fix [evidence: {alias}]"
+                )),
+                why: None,
+                high: None,
+            })
+            .collect();
+        match self
+            .record_findings(conversation_id, crate::tools::RecordFindings { items })
+            .await
+        {
+            Ok(reply) => reply,
+            Err(err) => format!("Findings not recorded: {err}"),
         }
     }
 

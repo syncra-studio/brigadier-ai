@@ -155,14 +155,27 @@ const COMMIT_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 5 } else { 
 /// The shell lines of `run_check`'s `commit` (BUILD-PLAN C9): everything changed in the
 /// checkout staged and committed with `message` and the thread's trailer. They run as the
 /// check did, at its access and in its environment, since git runs the repository's hooks and
-/// filters. Exit 100: nothing to commit; 101: `git add` failed.
-fn commit_command(message: &str) -> String {
+/// filters. Exit 100: nothing to commit; 101: `git add` failed. A commit that fixes review
+/// findings (`fixes`, their ids) names them in its Fixes trailer too, so it gets no review of
+/// its own (BUILD-PLAN O4).
+fn commit_command(message: &str, fixes: &[String]) -> String {
     let quoted = |text: &str| format!("'{}'", text.replace('\'', r"'\''"));
-    format!(
+    let mut command = format!(
         "git add -A || exit 101\ngit diff --cached --quiet && exit 100\ngit commit -q -m {} --trailer {}",
         quoted(message),
         quoted(super::prompts::THREAD_TRAILER)
-    )
+    );
+    if !fixes.is_empty() {
+        command.push_str(&format!(
+            " --trailer {}",
+            quoted(&format!(
+                "{}: {}",
+                super::prompts::FIXES_TRAILER,
+                fixes.join(", ")
+            ))
+        ));
+    }
+    command
 }
 
 /// What the commit `commit_command` made in `tree` holds, and what it left (BUILD-PLAN C10
@@ -227,6 +240,7 @@ impl SessionManager {
         passed: bool,
         checked: Option<String>,
         message: &str,
+        fixes: &[String],
     ) -> String {
         if !passed {
             return "Not committed: the check didn't pass.".into();
@@ -275,7 +289,7 @@ impl SessionManager {
                 }
             }
         }
-        let spec = match self.check_spec(caller, tree, &commit_command(message)) {
+        let spec = match self.check_spec(caller, tree, &commit_command(message, fixes)) {
             Ok(spec) => spec,
             Err(err) => return format!("Not committed: {err}"),
         };
@@ -564,6 +578,7 @@ impl SessionManager {
             check: args,
             risky,
             commit,
+            fixes,
         } = args.split();
         if let Some(why) = &risky {
             self.mark_risky(id, why).await;
@@ -573,7 +588,7 @@ impl SessionManager {
             Some(_) if self.local_checkout(id).is_some() => (None, true),
             commit => (commit, false),
         };
-        self.check_and_commit(id, None, args, commit)
+        self.check_and_commit(id, None, args, commit, fixes)
             .await
             .map(|reply| {
                 if local {
@@ -593,19 +608,22 @@ impl SessionManager {
         task: Option<&TaskId>,
         args: RunCheck,
     ) -> Result<String> {
-        self.check_and_commit(id, task, args, None).await
+        self.check_and_commit(id, task, args, None, Vec::new())
+            .await
     }
 
     /// [`Self::run_check_tool`], then the thread's commit of everything it changed when the
     /// check passes (`commit`: its message), in the same call, even once it went to the
-    /// background (BUILD-PLAN C9); then, for the thread, the review its change is due, which
-    /// only a pass starts (C10).
+    /// background (BUILD-PLAN C9), with the review findings it fixes (`fixes`) recorded fixed
+    /// on that pass (O4); then, for the thread, the review its change is due, which only a pass
+    /// starts (C10).
     async fn check_and_commit(
         &self,
         id: &ConversationId,
         task: Option<&TaskId>,
         args: RunCheck,
         commit: Option<String>,
+        fixes: Vec<String>,
     ) -> Result<String> {
         let mut caller = self.check_caller(id, task).await?;
         let command = args
@@ -661,15 +679,31 @@ impl SessionManager {
                 .thread_check_started(&conversation, tree.as_deref())
                 .await;
             let CheckDone {
-                status, mut reply, ..
+                status,
+                mut reply,
+                alias,
             } = manager
                 .check_now(&caller, &workdir, &words, timeout, args.rerun, &args.inputs)
                 .await?;
             let passed = status == "exit 0";
+            let mut committed = true;
             if let (Some(message), Some(tree)) = (commit, tree) {
                 let checked = under_way.tree().map(str::to_owned);
                 let note = manager
-                    .commit_on_pass(&caller, &tree, passed, checked, &message)
+                    .commit_on_pass(&caller, &tree, passed, checked, &message, &fixes)
+                    .await;
+                committed = !note.starts_with("Not committed");
+                reply = format!("{reply}\n{note}");
+            }
+            if !fixes.is_empty() {
+                let note = manager
+                    .record_fixed_by_check(
+                        &conversation,
+                        &fixes,
+                        passed && committed,
+                        &words,
+                        &alias,
+                    )
                     .await;
                 reply = format!("{reply}\n{note}");
             }
@@ -3208,9 +3242,14 @@ mod tests {
 
     /// Runs `run_check`'s commit lines in `tree` as a check would, then reads its record.
     fn commit_in(tree: &Path, message: &str) -> String {
+        commit_fixing(tree, message, &[])
+    }
+
+    /// [`commit_in`] for a commit that fixes the review findings `fixes`.
+    fn commit_fixing(tree: &Path, message: &str, fixes: &[String]) -> String {
         let out = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg(commit_command(message))
+            .arg(commit_command(message, fixes))
             .current_dir(tree)
             .output()
             .unwrap();
@@ -3265,6 +3304,36 @@ mod tests {
             line.contains("(c.txt). Left uncommitted: vendor."),
             "{line}"
         );
+    }
+
+    /// A commit that fixes review findings carries both trailers, so it gets no review of its
+    /// own (BUILD-PLAN O4); one that fixes none carries only the thread's.
+    #[test]
+    fn a_commit_that_fixes_findings_names_them_in_its_trailer() {
+        let temp = Temp::new("commit-fixes");
+        let tree = temp.0.as_path();
+        repo_at(tree);
+        let body = |tree: &Path| {
+            String::from_utf8(
+                std::process::Command::new("git")
+                    .args(["log", "-1", "--format=%B"])
+                    .current_dir(tree)
+                    .output()
+                    .unwrap()
+                    .stdout,
+            )
+            .unwrap()
+        };
+        std::fs::write(tree.join("a.txt"), "a\n").unwrap();
+        commit_in(tree, "Add a");
+        assert!(!body(tree).contains(super::super::prompts::FIXES_TRAILER));
+        std::fs::write(tree.join("a.txt"), "fixed\n").unwrap();
+        let fixes = ["R1.1".to_owned(), "R1.2".to_owned()];
+        commit_fixing(tree, "Fix a's 'quoting'", &fixes);
+        let body = body(tree);
+        assert!(body.contains("Brigadier-Author: thread"), "{body}");
+        assert!(body.contains("Brigadier-Fixes: R1.1, R1.2"), "{body}");
+        assert!(body.starts_with("Fix a's 'quoting'"), "{body}");
     }
 
     #[test]

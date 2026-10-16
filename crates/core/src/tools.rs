@@ -429,14 +429,20 @@ pub struct ThreadRunCheck {
     /// checkout.
     #[serde(default)]
     pub commit: Option<String>,
+    /// The review findings this change fixes, by id (`R1.2`): when the check passes they are
+    /// recorded fixed, checked by it, and its `commit` carries their Fixes trailer.
+    #[serde(default, deserialize_with = "lines")]
+    #[schemars(with = "Vec<String>")]
+    pub fixes: Vec<String>,
 }
 
-/// The parts of the thread's `run_check`: the check, the risk it marks and the commit it asks
-/// for on a pass.
+/// The parts of the thread's `run_check`: the check, the risk it marks, the commit it asks
+/// for on a pass and the review findings that pass fixes.
 pub struct ThreadCheckParts {
     pub check: RunCheck,
     pub risky: Option<String>,
     pub commit: Option<String>,
+    pub fixes: Vec<String>,
 }
 
 impl ThreadRunCheck {
@@ -454,6 +460,13 @@ impl ThreadRunCheck {
                 .commit
                 .map(|message| message.trim().to_owned())
                 .filter(|message| !message.is_empty()),
+            fixes: self
+                .fixes
+                .iter()
+                .flat_map(|ids| ids.split([',', ' ']))
+                .map(|id| id.trim().to_ascii_uppercase())
+                .filter(|id| !id.is_empty())
+                .collect(),
         }
     }
 }
