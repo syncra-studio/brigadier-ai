@@ -170,6 +170,32 @@ pub(super) fn file_stats(changes: &[FileChange]) -> Vec<FileStat> {
         .collect()
 }
 
+/// A tool call's one-line detail on its row, from its arguments: a find in a web page by what it
+/// looked for and where ("'lts' in https://nodejs.org/…"), else the first of its query, pattern,
+/// path, URL, title, task, name (a preview's) or command (Bash's, run's own words).
+pub(super) fn step_detail(args: &serde_json::Value) -> Option<String> {
+    let text = |key: &str| args.get(key).and_then(serde_json::Value::as_str);
+    let find = (text("action") == Some("findInPage"))
+        .then(|| Some(format!("'{}' in {}", text("pattern")?, text("url")?)))
+        .flatten();
+    find.or_else(|| {
+        [
+            "query",
+            "pattern",
+            "file_path",
+            "path",
+            "url",
+            "title",
+            "task",
+            "name",
+            "command",
+        ]
+        .into_iter()
+        .find_map(|key| text(key).map(str::to_owned))
+    })
+    .map(|text| text.chars().take(240).collect())
+}
+
 /// The `out-…` alias a digest's header names: an output the model got as a digest has its
 /// whole self stored under it.
 pub(super) fn digest_alias(output: &str) -> Option<String> {
@@ -414,6 +440,32 @@ mod tests {
         assert_eq!(tool_item("Read", Some(text)), ThreadItemKind::Tool);
         assert_eq!(image_path("Read", Some(text)), None);
         assert_eq!(tool_item("Read", None), ThreadItemKind::Tool);
+    }
+
+    /// A row's detail: a Codex find in a page says what and where, an opened page its URL, a
+    /// search its query, any other call its first known argument.
+    #[test]
+    fn a_rows_detail_says_what_a_web_action_looked_for() {
+        let detail = |args: serde_json::Value| step_detail(&args);
+        assert_eq!(
+            detail(serde_json::json!({"action": "findInPage", "url": "https://nodejs.org/en", "pattern": "LTS"}))
+                .as_deref(),
+            Some("'LTS' in https://nodejs.org/en")
+        );
+        assert_eq!(
+            detail(serde_json::json!({"action": "openPage", "url": "https://nodejs.org/en"}))
+                .as_deref(),
+            Some("https://nodejs.org/en")
+        );
+        assert_eq!(
+            detail(serde_json::json!({"query": "node lts site:nodejs.org"})).as_deref(),
+            Some("node lts site:nodejs.org")
+        );
+        assert_eq!(
+            detail(serde_json::json!({"command": "cargo test"})).as_deref(),
+            Some("cargo test")
+        );
+        assert_eq!(detail(serde_json::json!({"other": 1})), None);
     }
 
     /// A web search is a web item with its query, a page read with its URL: Claude's tools

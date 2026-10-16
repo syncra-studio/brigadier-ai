@@ -4565,21 +4565,7 @@ impl SessionManager {
                     .as_deref()
                     .and_then(|input| serde_json::from_str(input).ok())
                     .unwrap_or_default();
-                // A preview by its name, a command (Bash, run) by its own words.
-                let detail = [
-                    "query",
-                    "pattern",
-                    "file_path",
-                    "path",
-                    "url",
-                    "title",
-                    "task",
-                    "name",
-                    "command",
-                ]
-                .into_iter()
-                .find_map(|key| args.get(key).and_then(serde_json::Value::as_str))
-                .map(|text| text.chars().take(240).collect());
+                let detail = super::thread_items::step_detail(&args);
                 self.orchestrator_step(
                     &conv.id,
                     OrchestratorStepKind::Tool {
