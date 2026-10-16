@@ -439,10 +439,14 @@ async fn claims_carry_their_evidence(reviews: bool) {
         );
     }
     assert!(!briefing.contains("claim, verified"), "{briefing}");
-    assert!(
-        !briefing.contains(BARE),
-        "a superseded claim is not briefed: {briefing}"
-    );
+    // A superseded claim is not briefed: the decision index (D1.2) names it only as replaced,
+    // with its label.
+    for line in briefing.lines().filter(|line| line.contains(BARE)) {
+        assert!(
+            line.contains("· worker claim, unverified, replaced by "),
+            "a superseded claim is not briefed: {briefing}"
+        );
+    }
 
     // The source is re-read at each use: once the file changes, it no longer holds.
     let workspace = flow
