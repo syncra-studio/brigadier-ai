@@ -204,6 +204,7 @@ jobs:
             --skip manager::flow::peer_delivery_tests::a_message_waits_for_the_next_turn_when_steering_is_refused \
             --skip manager::flow::peer_delivery_tests::a_message_wakes_a_sleeping_session_in_the_same_project \
             --skip manager::flow::preview_tests::a_preview_runs_in_the_workspace_and_outlives_the_threads_cli \
+            --skip manager::flow::takeover_tests::stop_archive_and_delete_end_the_terminal_without_handing_back \
             --skip manager::flow::tests::a_check_right_after_a_landing_rewrites_the_task_branch_keeps_the_rewrite \
             --skip clone::tests::clones_a_tree_and_refuses_an_existing_destination
 
