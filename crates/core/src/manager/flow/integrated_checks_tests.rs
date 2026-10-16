@@ -1110,6 +1110,13 @@ fn checkout_state(repo: &Path) -> Vec<String> {
     ]
     .iter()
     .map(|args| git(repo, args))
+    // Brigadier's own refs under refs/brigadier/ (a request's file records) are not the user's.
+    .map(|out| {
+        out.lines()
+            .filter(|line| !line.contains("\trefs/brigadier/"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
     .collect()
 }
 

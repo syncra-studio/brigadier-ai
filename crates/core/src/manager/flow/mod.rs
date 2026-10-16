@@ -1736,14 +1736,20 @@ impl Flow {
         self.settled_in(&self.conversation).await
     }
 
-    /// Waits until every request of the session `id` is over.
+    /// Waits until every request of the session `id` is over, and the file snapshot each
+    /// ended request takes once it is over has run: it runs git in the checkout after the
+    /// request shows as ended.
     pub async fn settled_in(&self, id: &ConversationId) -> Board {
         self.until_in(id, "the requests to settle", |board| {
             !board.requests.is_empty()
-                && board
-                    .requests
-                    .values()
-                    .all(|request| !matches!(request.state, RequestState::Working))
+                && board.requests.values().all(|request| match request.state {
+                    RequestState::Working => false,
+                    RequestState::Waiting => true,
+                    _ => request
+                        .changes
+                        .as_ref()
+                        .is_none_or(|changes| changes.settled),
+                })
         })
         .await
     }
