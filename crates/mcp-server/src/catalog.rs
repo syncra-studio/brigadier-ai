@@ -109,7 +109,8 @@ the user's (kind constraint, in their exact words with its `scope`), or (persona
 of theirs across projects. What the user settled cites their message (`user_message`, with their \
 words in `quote`): Brigadier checks both. Anything else is kept as your claim, unverified, with \
 its evidence (`files`, `check` or `finding`, and the words it shows in `quote`), re-read whenever \
-the claim is used. Do it silently. Returns the node id, for `replaces`.";
+the claim is used. Do it silently. Returns the node id; pass it as `replaces` to correct it, or a \
+claim you find wrong.";
 
 const SEARCH_TRANSCRIPT: &str = "Search this conversation's full transcript (the user's \
 messages, your answers, reports and decisions, and the commands you ran, files you read and \
