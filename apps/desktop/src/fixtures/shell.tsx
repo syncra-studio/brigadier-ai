@@ -313,12 +313,16 @@ async function watch(act: () => void, ms = 600, slot?: string) {
   act();
   const end = performance.now() + ms;
   let [last, since, still] = [box(), performance.now(), 0];
-  const busy = () =>
-    Boolean(slot) &&
-    ((stateOf(slot!) === before && performance.now() < end + 15000) ||
-      ((performance.now() - since < 250 || still < 5) && performance.now() < end + 5000));
+  // When the panel's state changed: its five seconds to come to rest count from then.
+  let changed = slot && stateOf(slot) !== before ? performance.now() : null;
+  const busy = () => {
+    if (!slot) return false;
+    if (changed === null) return performance.now() < end + 15000;
+    return (performance.now() - since < 250 || still < 5) && performance.now() < Math.max(end, changed) + 5000;
+  };
   while (performance.now() < end || busy()) {
     await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (changed === null && slot && stateOf(slot) !== before) changed = performance.now();
     if (box() === last) still++;
     else [last, since, still] = [box(), performance.now(), 0];
     const now = titlebar();
