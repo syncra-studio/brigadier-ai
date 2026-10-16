@@ -234,9 +234,9 @@ impl SessionManager {
         self.background_command_changes(&run).await;
         run.ended_at_ms = Some(now_ms());
         if cancel.is_cancelled() {
-            if let Ok(conv) = self.conv(&run.conversation_id) {
-                conv.items().background_ended(&run.id);
-            }
+            // What it printed before the Stop stays readable from its row.
+            self.retain_background_output(&run, "stopped", String::new())
+                .await;
             run.state = BackgroundRunState::Stopped;
             let alone = self
                 .background_runs
@@ -263,10 +263,33 @@ impl SessionManager {
             }
             return;
         }
-        let (status, mut text) = match result {
+        let (status, text) = match result {
             Ok(done) => done,
             Err(err) => ("couldn't run".to_owned(), format!("[couldn't run: {err}]")),
         };
+        let text = self.retain_background_output(&run, &status, text).await;
+        run.state = BackgroundRunState::Finished { status };
+        let envelope = Envelope {
+            kind: InjectionKind::BackgroundRun,
+            label: format!("{} finished", run.id),
+            task_id: None,
+            text: format!(
+                "[{} finished · {} `{}`]\n{text}",
+                run.id, run.tool, run.command
+            ),
+        };
+        self.end_with_message(run, envelope).await;
+    }
+
+    /// Stores what a background run printed as its final result, `text` when its live buffer
+    /// holds nothing more, and releases the buffer: the stored result then answers the row's
+    /// reads. Returns the result the thread hears (a digest when the output was stored whole).
+    async fn retain_background_output(
+        &self,
+        run: &BackgroundRun,
+        status: &str,
+        mut text: String,
+    ) -> String {
         let live_output = if crate::digest::digest_alias(&text).is_none() {
             self.conv(&run.conversation_id)
                 .ok()
@@ -284,7 +307,7 @@ impl SessionManager {
                 .store_output(
                     &run.conversation_id,
                     crate::work::OutputSource::Run,
-                    &status,
+                    status,
                     output,
                     false,
                 )
@@ -296,12 +319,14 @@ impl SessionManager {
                 }
             }
         }
-        if let Ok(event) = brigadier_store::NewEvent::new(
-            format!("background-output:{}:{}", run.conversation_id, run.id),
-            "background.output",
-            now_ms(),
-            &text,
-        ) && let Err(err) = self.core.store().append(vec![event]).await
+        if !text.is_empty()
+            && let Ok(event) = brigadier_store::NewEvent::new(
+                format!("background-output:{}:{}", run.conversation_id, run.id),
+                "background.output",
+                now_ms(),
+                &text,
+            )
+            && let Err(err) = self.core.store().append(vec![event]).await
         {
             tracing::warn!(run = %run.id, error = %err, "could not store background output");
         }
@@ -309,17 +334,7 @@ impl SessionManager {
         if let Ok(conv) = self.conv(&run.conversation_id) {
             conv.items().background_ended(&run.id);
         }
-        run.state = BackgroundRunState::Finished { status };
-        let envelope = Envelope {
-            kind: InjectionKind::BackgroundRun,
-            label: format!("{} finished", run.id),
-            task_id: None,
-            text: format!(
-                "[{} finished · {} `{}`]\n{text}",
-                run.id, run.tool, run.command
-            ),
-        };
-        self.end_with_message(run, envelope).await;
+        text
     }
 
     /// Records a background run's end with the message the thread hears of it: the message is

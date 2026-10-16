@@ -400,3 +400,58 @@ async fn own_run_streams_keep_one_buffer_through_background_handoff() {
         flow.stop().await;
     }
 }
+
+/// What a background run printed before the user's Stop stays readable from its row.
+#[tokio::test]
+async fn own_run_streams_keep_a_stopped_background_runs_output() {
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w77-stopped-stream",
+        Options::default(),
+        streaming("run", true),
+    )
+    .await;
+    flow.say("Run in the background.").await;
+    flow.until("the starting rows", |b| row(b, "decoy").is_some())
+        .await;
+    let scratch = flow.manager.owned_dir("orch", &flow.conversation.0);
+    release(scratch.join("gate-0")).await;
+    flow.until("the background handoff", |b| {
+        b.background_runs
+            .get("run-1")
+            .is_some_and(|run| run.item_id.as_deref() == Some("own-run"))
+    })
+    .await;
+    let first = parts(false)[0].clone();
+    tokio::time::timeout(super::PATIENCE, async {
+        while flow
+            .manager
+            .read_background_run(&flow.conversation, "run-1")
+            .await
+            .unwrap()
+            .0
+            != first
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    flow.manager
+        .stop_background_run(flow.conversation.clone(), "run-1".into())
+        .await
+        .unwrap();
+    flow.until("the stopped run", |b| {
+        b.background_runs
+            .get("run-1")
+            .is_some_and(|run| run.state == BackgroundRunState::Stopped)
+    })
+    .await;
+    assert_eq!(
+        flow.manager
+            .read_background_run(&flow.conversation, "run-1")
+            .await
+            .unwrap(),
+        (first.clone(), first.len() as u64)
+    );
+    flow.stop().await;
+}
