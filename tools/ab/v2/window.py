@@ -119,6 +119,7 @@ def one(root, role, n, count):
         json.dump(start, open(os.path.join(run, "start.json"), "w"), indent=1)
     finally:
         arm.close()
+    v3run.backup(os.path.join(arm.data, "routing.sqlite"), v3run.ensure(os.path.join(run, "data")) + "/routing.sqlite")
     v3run.after(run)
     s = score(run)
     json.dump(s, open(os.path.join(run, "score.json"), "w"), indent=1, sort_keys=True)
@@ -164,7 +165,7 @@ def score(run):
                 note_window(ev)
         if t == "stoppedForRebirth":
             s["stopped"] += 1; s["stop_reasons"].append(entry.get("reason"))
-        if t == "rebirth" and (entry.get("record") or {}).get("midTurn"):
+        if t == "rebirth" and (entry.get("record") or {}).get("trigger") == "midTurn":
             s["rebirths_mid"] += 1
         if role == "thread" and any("Your context is now about" in text for text in walk(entry)):
             s["steers"] += 1
