@@ -179,7 +179,7 @@ pub struct SessionManager {
     /// The context window each model last reported, by provider and the model asked for: a
     /// Claude session learns its own only when its first turn ends, and its overflow guard needs
     /// it before then (BUILD-PLAN D2.3, D2.3b).
-    known_windows: std::sync::Mutex<HashMap<(ProviderKind, Option<String>), i64>>,
+    known_windows: std::sync::Mutex<HashMap<(ProviderKind, String), i64>>,
     /// Commands a Codex thread's `run_unsandboxed` may run, each once: what the user (or their
     /// "allow similar") approved when Codex asked ([`run`]).
     run_passes: run::RunPasses,
@@ -267,18 +267,23 @@ pub struct SessionManager {
 
 impl SessionManager {
     /// `reported`, the window a session of `model` just reported, kept for its model's later
-    /// sessions; or, when it reported none, the one its model reported last.
+    /// sessions; or, when it reported none, the one its model reported last. A session on the
+    /// CLI's default model (none named) shares nothing: the default may differ from one session
+    /// to the next.
     pub(crate) fn model_window(
         &self,
         provider: ProviderKind,
         model: Option<&str>,
         reported: Option<i64>,
     ) -> Option<i64> {
+        let Some(model) = model else {
+            return reported;
+        };
         let mut known = self
             .known_windows
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let key = (provider, model.map(str::to_owned));
+        let key = (provider, model.to_owned());
         match reported.filter(|window| *window > 0) {
             Some(window) => {
                 known.insert(key, window);

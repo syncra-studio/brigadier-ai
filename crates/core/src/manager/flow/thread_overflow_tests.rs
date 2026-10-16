@@ -349,6 +349,12 @@ async fn a_first_turn_with_no_window_known_yet_is_neither_steered_nor_stopped() 
         manager.model_window(ProviderKind::Codex, Some("opus"), None),
         None
     );
+    // The CLI's default model may differ between sessions: nothing is shared for it.
+    assert_eq!(
+        manager.model_window(ProviderKind::Claude, None, Some(200_000)),
+        Some(200_000)
+    );
+    assert_eq!(manager.model_window(ProviderKind::Claude, None, None), None);
     flow.stop().await;
 }
 
