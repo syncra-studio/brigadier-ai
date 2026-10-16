@@ -122,13 +122,22 @@ export function ImagePreview({
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState(first);
   const [morph, setMorph] = useState(false);
+  // How it opened: grown out of its thumbnail, or faded in. Only a fade-in has the enter animation:
+  // added once a morph is over, it would fade the shown viewer out and in again.
+  const [grown, setGrown] = useState(false);
   const thumbnail = useRef<HTMLElement | null>(null);
   const shown = useRef<HTMLImageElement | null>(null);
+  // The thumbnail's picture size: the opening image is laid out at its own size from its first
+  // frame, not grown to it once it loads.
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
 
   const show = (opener: HTMLElement) => {
     thumbnail.current = opener.querySelector("img") ?? opener;
+    const picture = thumbnail.current instanceof HTMLImageElement && thumbnail.current.naturalWidth > 0 ? thumbnail.current : null;
+    setSize(picture ? { width: picture.naturalWidth, height: picture.naturalHeight } : null);
     setAt(first);
     if (!morphs()) {
+      setGrown(false);
       setOpen(true);
       return;
     }
@@ -138,6 +147,7 @@ export function ImagePreview({
       thumb.style.viewTransitionName = "";
       flushSync(() => {
         setMorph(true);
+        setGrown(true);
         setOpen(true);
       });
       // The new picture is taken once the image can be drawn.
@@ -165,7 +175,10 @@ export function ImagePreview({
 
   const zoomKeys = useRef<ZoomKeys>(null);
   const step = (by: number) => setAt((current) => Math.min(images.length - 1, Math.max(0, current + by)));
-  const current = images[at] ?? { name, url };
+  const listed = images[at] ?? { name, url };
+  // The opening image shows what its thumbnail already reads, never an empty frame while its own
+  // read of the attachment comes.
+  const current = at === first ? { ...listed, url: listed.url ?? url } : listed;
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(next) => (next ? undefined : hide())}>
       <DialogPrimitive.Trigger
@@ -181,7 +194,8 @@ export function ImagePreview({
         <DialogPrimitive.Overlay
           className={cn(
             "bg-image-viewer fixed inset-0 z-50",
-            !morph && "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 duration-150 motion-reduce:animate-none motion-reduce:duration-0",
+            !morph && !grown && "data-[state=open]:animate-in data-[state=open]:fade-in-0",
+            !morph && "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 duration-150 motion-reduce:animate-none motion-reduce:duration-0",
           )}
         />
         <DialogPrimitive.Content
@@ -199,11 +213,12 @@ export function ImagePreview({
           onClick={(event) => { if (event.target === event.currentTarget) hide(); }}
           className={cn(
             "bg-image-viewer fixed inset-0 z-50 flex flex-col items-center justify-center px-16 py-16 outline-none",
-            !morph && "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 duration-150 motion-reduce:animate-none motion-reduce:duration-0",
+            !morph && !grown && "data-[state=open]:animate-in data-[state=open]:fade-in-0",
+            !morph && "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 duration-150 motion-reduce:animate-none motion-reduce:duration-0",
           )}
         >
           <DialogPrimitive.Title className="sr-only">Image preview</DialogPrimitive.Title>
-          <ShownImage key={at} image={current} morph={morph && at === first} imageRef={shown} zoomKeys={zoomKeys} onBackdrop={hide} count={images.length > 1 ? `${at + 1} of ${images.length}` : null} />
+          <ShownImage key={at} image={current} size={at === first ? size : null} morph={morph && at === first} imageRef={shown} zoomKeys={zoomKeys} onBackdrop={hide} count={images.length > 1 ? `${at + 1} of ${images.length}` : null} />
           {images.length > 1 && <>
             <StepButton side="start" disabled={at === 0} onClick={() => step(-1)} />
             <StepButton side="end" disabled={at >= images.length - 1} onClick={() => step(1)} />
@@ -238,8 +253,10 @@ function StepButton({ side, disabled, onClick }: { side: "start" | "end"; disabl
 type ZoomKeys = { press: (key: string) => boolean };
 
 /** The image is centred when it fits; its overflow is panned by dragging. */
-function ShownImage({ image, morph, imageRef, zoomKeys, onBackdrop, count }: {
+function ShownImage({ image, size, morph, imageRef, zoomKeys, onBackdrop, count }: {
   image: ViewerImage;
+  /** Its picture size when already known (from its thumbnail). */
+  size: { width: number; height: number } | null;
   morph: boolean;
   imageRef: { current: HTMLImageElement | null };
   zoomKeys: Ref<ZoomKeys>;
@@ -249,7 +266,7 @@ function ShownImage({ image, morph, imageRef, zoomKeys, onBackdrop, count }: {
   const resolved = useAttachmentUrl(image.source ?? {});
   const url = image.url ?? resolved;
   const frame = useRef<HTMLDivElement>(null);
-  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(size);
   const [room, setRoom] = useState({ width: innerWidth - 128, height: innerHeight - 240 });
   const [scale, setScale] = useState<number | null>(null);
   const fit = natural ? Math.min(1, room.width / natural.width, room.height / natural.height) : 1;

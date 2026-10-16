@@ -39,8 +39,10 @@ async function nativeCopies() {
   if (query.has("auto")) await saveCopy({ name: "20261015-0226-rebuild-wow-w33lb-result.json", bytes: new TextEncoder().encode(JSON.stringify(result)), ask: false });
 }
 
+const opening = query.get("drive") === "open";
 createRoot(one("#root")).render(<main className="p-10">
-  <ImagePreview name="preview" url={url} gallery={{ images, index: 0 }}><button type="button" data-slot="open-preview">Open image preview</button></ImagePreview>
+  {/* `drive=open&source=1`: a composer attachment, its set's entry known only by its file. */}
+  <ImagePreview name="preview" url={url} gallery={{ images: opening && query.has("source") ? [{ name: "preview", source }, images[1]!] : images, index: 0 }}><button type="button" data-slot="open-preview">{opening ? <img src={url} alt="preview" className="h-24 w-40 object-cover" /> : "Open image preview"}</button></ImagePreview>
   {native && <>
     <button type="button" onClick={() => { void nativeCopies(); }}>Save native copies</button>
     <a href={url} download="20261015-0226-rebuild-wow-w33lb-source.png">Source PNG</a>
@@ -142,6 +144,47 @@ if (native) {
     if (query.has("auto")) void saveCopy({ name: "20261015-0226-rebuild-wow-w33lb-error.json", bytes: new TextEncoder().encode(JSON.stringify(error)), ask: false });
   });
 }
-if (!native && !query.has("stop")) void measure().catch((error: unknown) => report({ error: String(error), stack: error instanceof Error ? error.stack : null }));
+/**
+ * `drive=open` (with motion): the viewer grown out of a thumbnail, sampled on every frame until it
+ * settles: once it shows whole it never fades again, and its image keeps one size.
+ */
+async function measureOpen() {
+  await wait(300);
+  const samples: { opacity: number; overlay: number; width: number; height: number }[] = [];
+  let sampling = true;
+  const sample = () => {
+    const view = document.querySelector<HTMLElement>("[data-slot=image-preview]");
+    const overlay = view?.previousElementSibling as HTMLElement | null;
+    const picture = view?.querySelector("img");
+    if (view) {
+      const box = picture?.getBoundingClientRect();
+      samples.push({
+        opacity: Number(getComputedStyle(view).opacity),
+        overlay: overlay ? Number(getComputedStyle(overlay).opacity) : 1,
+        width: Math.round(box?.width ?? 0),
+        height: Math.round(box?.height ?? 0),
+      });
+    }
+    if (sampling) requestAnimationFrame(sample);
+  };
+  requestAnimationFrame(sample);
+  one<HTMLButtonElement>("[data-slot=open-preview]").click();
+  await wait(1200);
+  sampling = false;
+  const whole = samples.findIndex((entry) => entry.opacity >= 0.999 && entry.overlay >= 0.999 && entry.width > 0);
+  const after = whole < 0 ? [] : samples.slice(whole);
+  report({
+    frames: samples.length,
+    shownWhole: whole >= 0,
+    // A dip after it showed whole is the flash.
+    dips: after.filter((entry) => entry.opacity < 0.999 || entry.overlay < 0.999).length,
+    // Frames of the open viewer with no picture in it.
+    empty: samples.filter((entry) => entry.width === 0).length,
+    sizes: [...new Set(after.filter((entry) => entry.width > 0).map((entry) => `${entry.width}x${entry.height}`))],
+  });
+}
+
+if (!native && opening) void measureOpen().catch((error: unknown) => report({ error: String(error), stack: error instanceof Error ? error.stack : null }));
+else if (!native && !query.has("stop")) void measure().catch((error: unknown) => report({ error: String(error), stack: error instanceof Error ? error.stack : null }));
 
 if (native && query.has("auto")) void nativeCopies();
