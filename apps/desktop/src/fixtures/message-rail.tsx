@@ -200,6 +200,20 @@ async function settle(ms: number): Promise<void> {
 }
 
 /** Waits a frame at a time until `check` holds, up to 10s; whether it did. */
+/**
+ * Watches for `selector` from now on, however briefly it shows (a spinner while a page loads can
+ * come and go between two frames on a runner that draws few): `seen` holds its first sighting.
+ */
+function watchFor(selector: string): { seen: () => Element | null; stop: () => void } {
+  const sighting = () => (document.querySelector(selector)?.cloneNode(true) as Element | undefined) ?? null;
+  let first = sighting();
+  const observer = new MutationObserver(() => {
+    first ??= sighting();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  return { seen: () => first, stop: () => observer.disconnect() };
+}
+
 async function until(check: () => boolean): Promise<boolean> {
   const end = performance.now() + 10_000;
   while (!check()) {
@@ -382,9 +396,11 @@ const steps = {
     await settle(50);
     const pagesBefore = pages;
     viewport().focus();
+    const watch = watchFor('[data-slot="earlier-loading"]');
     altArrow(viewport(), "ArrowUp");
-    const spinner = await until(() => $('[data-slot="earlier-loading"]') !== null);
-    const loading = $('[data-slot="earlier-loading"]');
+    const spinner = await until(() => watch.seen() !== null);
+    watch.stop();
+    const loading = watch.seen();
     const spinnerSeen = loading
       ? { role: loading.getAttribute("role"), text: loading.textContent, classes: loading.className, svg: loading.querySelector("svg") !== null }
       : null;
@@ -397,9 +413,11 @@ const steps = {
   async atTop() {
     failNext = true;
     const pagesBefore = pages;
+    const watch = watchFor('[data-slot="earlier-loading"]');
     viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
     viewport().scrollTop = 0;
-    const spinner = await until(() => $('[data-slot="earlier-loading"]') !== null);
+    const spinner = await until(() => watch.seen() !== null);
+    watch.stop();
     const failed = await until(() => $('[data-slot="earlier-failed"]') !== null);
     await settle(100);
     const failure = { text: $('[data-slot="earlier-failed"]')?.textContent ?? null, pages: pages - pagesBefore };
