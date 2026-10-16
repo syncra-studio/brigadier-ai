@@ -218,6 +218,8 @@ function useThreadScroll(
     for (const type of ["wheel", "touchstart", "touchmove", "touchend", "pointerdown", "keydown"]) {
       viewport.addEventListener(type, scroller.input, options);
     }
+    // A focus moved in from outside (Tab from the composer, the latest response's pill) scrolls to it.
+    viewport.addEventListener("focusin", scroller.focused, options);
     // A pointer pressed in the thread may be let go anywhere.
     for (const type of ["pointerup", "pointercancel"]) window.addEventListener(type, scroller.input, options);
     // A click on the list's empty space focuses it but leaves the caret in the composer, where

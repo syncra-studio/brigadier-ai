@@ -1120,3 +1120,17 @@ test("a fling that goes on long after the user's touch is still theirs, and reac
     performance.now = now;
   }
 });
+
+test("a focus moved into the thread from outside it keeps the scroll that brings it into view", () => {
+  const fake = new Fake();
+  conversation(fake, 10);
+  const scroller = open(fake);
+  assert.equal(scroller.following, true);
+  // The latest response's pill, from the keyboard in the composer: the answer is focused, and the
+  // browser scrolls up to it.
+  scroller.focused();
+  fake.scrollTop = 1200;
+  scroller.scrolled();
+  assert.equal(fake.scrollTop, 1200);
+  assert.equal(scroller.following, false);
+});

@@ -345,7 +345,7 @@ export class ThreadScroller {
 
   /**
    * A scroll event. One that didn't come from here is the user's when it comes with their input
-   * (a wheel, a touch, a held pointer, a key, a jump) or right after a scroll of theirs (a fling
+   * (a wheel, a touch, a held pointer, a key, a focus moved in, a jump) or right after a scroll of theirs (a fling
    * going on); any other is the browser's: clamping the
    * view to a range that shrank under it (a turn re-laid out as its work starts again, say, its
    * content back before the scroll is heard), hiding or showing it. The browser's moves nothing:
@@ -406,6 +406,14 @@ export class ThreadScroller {
     if (event?.type === "pointerdown") this.pressed = true;
     else if (event?.type === "pointerup" || event?.type === "pointercancel") this.pressed = false;
     if (event?.type !== "pointerup" && event?.type !== "pointercancel") this.interrupt();
+  };
+
+  /**
+   * The focus moved into the thread (Tab from the composer, the latest response's pill, a link):
+   * the browser's scroll that brings it into view is the user's.
+   */
+  focused = (): void => {
+    this.inputAtMs = performance.now();
   };
 
   /**
