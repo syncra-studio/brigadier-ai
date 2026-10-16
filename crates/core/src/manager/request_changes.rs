@@ -205,10 +205,10 @@ impl Record {
         weak: bool,
         after_command: bool,
     ) {
-        // A command's snapshot runs behind the thread, so it can read an edit reported just
-        // after the command and claim it. The edit's own evidence of that same change takes
-        // the file back.
-        if by == "edit"
+        // A command's snapshot runs behind the thread, so it can read an edit or a worker's
+        // landing reported just after the command and claim it. Their own evidence of that
+        // same change takes the file back.
+        if (by == "edit" || by == "landing")
             && !weak
             && let Some(owned) = self.paths.get_mut(path)
             && owned.by.len() == 1
@@ -216,7 +216,7 @@ impl Record {
             && owned.first == before
             && owned.last == after
         {
-            owned.by = BTreeSet::from(["edit".to_owned()]);
+            owned.by = BTreeSet::from([by.to_owned()]);
             owned.held = None;
             return;
         }
@@ -1119,5 +1119,52 @@ impl SessionManager {
             )
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn blob(oid: &str) -> Option<Blob> {
+        Some(Blob {
+            oid: oid.into(),
+            mode: "100644".into(),
+        })
+    }
+
+    /// A command's late snapshot claimed a change; the edit's or landing's own evidence of
+    /// the same change takes it back, while evidence of another change is still held.
+    #[test]
+    fn evidence_of_the_same_change_takes_a_file_back_from_a_command() {
+        for by in ["edit", "landing"] {
+            let mut record = Record::default();
+            record.own(
+                "a",
+                blob("1"),
+                blob("2"),
+                blob("1"),
+                "command",
+                false,
+                false,
+            );
+            assert!(record.paths["a"].held.is_some());
+            record.own("a", blob("1"), blob("2"), blob("2"), by, false, false);
+            assert_eq!(record.paths["a"].held, None, "{by}");
+            assert_eq!(record.paths["a"].by, BTreeSet::from([by.to_owned()]));
+
+            let mut record = Record::default();
+            record.own(
+                "a",
+                blob("1"),
+                blob("2"),
+                blob("1"),
+                "command",
+                false,
+                false,
+            );
+            record.own("a", blob("1"), blob("3"), blob("2"), by, false, false);
+            assert!(record.paths["a"].held.is_some(), "{by}");
+        }
     }
 }
