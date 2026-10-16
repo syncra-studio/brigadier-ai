@@ -786,6 +786,18 @@ been missed. The line is settled from those numbers, and the phase report says w
   - a 20 kB shell output reaches the model whole;
   - a session from before hears revisions 36 and 37 once;
   - the re-bench at the new head meets C's gates as Q52 measures them.
+- **The re-bench at `654ef7d9`** passed every gate but T4 at 1.19× (T1 0.66×, T2 0.67×, T3 0.63×, T5 0.51×, T6 1.05×,
+  T7L 0.81×). Triage: `workers/w52` of the run.
+  - T4's per-call cost matches plain's. In three of four runs the thread spent one more call (36–42k tokens) after
+    `run_check` had committed, on `git status` and `git show --stat`, to confirm the commit and list its files.
+  - T5's one high finding was the judges' error: the flagged test type-checks (`region` is a `string`), and the
+    eval's `tsc` passed.
+- **(e) `run_check`'s commit reply is the commit's record.** It names the commit's files and lines and, from a real
+  `git status` after the commit (tracked and untracked, past `.gitignore`), "Nothing is left uncommitted." or the
+  paths left. The thread is told not to check the commit again with git, and to try anything by hand before that
+  last check. Revision 38 (`COMMIT_RECORD_REVISION`) tells open sessions.
+  - **Done when:** a commit's reply names an ignored file nowhere and a change `git add -A` couldn't take by its
+    path; a session from before hears revision 38 once; the T4 (n=4) and T5 (n=2) re-bench meets C's gates.
 
 **Validation:**
 - **Bench T1–T6 and T7L,** n = 3, cold and warm (T7L's plain-arm runs are made first, since it is frozen and not run

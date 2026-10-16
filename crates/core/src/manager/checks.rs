@@ -185,12 +185,63 @@ fn commit_on_pass(tree: &Path, passed: bool, message: &str) -> String {
     ) {
         return note;
     }
-    let sha = git(&["rev-parse", "--short", "HEAD"])
-        .ok()
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-        .unwrap_or_default();
+    let stdout = |args: &[&str]| {
+        git(args)
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+    let sha = stdout(&["rev-parse", "--short", "HEAD"]).unwrap_or_default();
     let subject = message.lines().next().unwrap_or_default();
-    format!("Committed {sha} \"{subject}\" with your trailer.")
+    // What it holds and what is left, so the thread needs no git call of its own to say so.
+    let stat = stdout(&["show", "--shortstat", "--format=", "HEAD"]).unwrap_or_default();
+    let files: Vec<String> = stdout(&["show", "--name-only", "--format=", "HEAD"])
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let left = match left_uncommitted(tree) {
+        Ok(left) if left.is_empty() => "Nothing is left uncommitted.".to_owned(),
+        Ok(left) => format!("Left uncommitted: {}.", listed(&left)),
+        Err(err) => format!("What is left uncommitted is unknown: git status failed: {err}"),
+    };
+    format!(
+        "Committed {sha} \"{subject}\" with your trailer: {stat} ({}). {left}",
+        listed(&files)
+    )
+}
+
+/// The paths `git status` shows in `tree`, tracked or untracked, past its ignore rules.
+fn left_uncommitted(tree: &Path) -> std::result::Result<Vec<String>, String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(tree)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .output()
+        .map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.get(3..))
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Up to ten paths, then how many more.
+fn listed(paths: &[String]) -> String {
+    const SHOWN: usize = 10;
+    let mut text = paths
+        .iter()
+        .take(SHOWN)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if paths.len() > SHOWN {
+        text.push_str(&format!(" and {} more", paths.len() - SHOWN));
+    }
+    text
 }
 
 /// How one check ended: the reply the model gets, its status ("exit 0", "timed out after …")
@@ -2862,5 +2913,55 @@ mod tests {
             assert_eq!(full(&root), ["tools/full-checks.sh"]);
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A repository `commit_on_pass` can commit in, with its own user.
+    fn repo_at(dir: &Path) {
+        git_in(dir, &["init", "-q"]);
+        git_in(dir, &["config", "user.email", "checks@example.com"]);
+        git_in(dir, &["config", "user.name", "Checks"]);
+    }
+
+    /// A commit's line says what it holds and, from git status after it, what it left: an
+    /// ignored file is named nowhere, a change `git add -A` couldn't take is named.
+    #[test]
+    fn a_commit_says_what_it_holds_and_what_git_status_still_shows() {
+        let temp = Temp::new("commit-record");
+        let tree = temp.0.as_path();
+        repo_at(tree);
+        std::fs::write(tree.join(".gitignore"), "*.log\n").unwrap();
+        std::fs::write(tree.join("a.txt"), "a\n").unwrap();
+        std::fs::write(tree.join("debug.log"), "scratch\n").unwrap();
+        let line = commit_on_pass(tree, true, "Add a");
+        assert!(
+            line.contains("\"Add a\" with your trailer: 2 files changed, 2 insertions(+) (.gitignore, a.txt). Nothing is left uncommitted."),
+            "{line}"
+        );
+
+        // A nested repository's own change is something `git add -A` can't take.
+        let nested = tree.join("vendor");
+        std::fs::create_dir_all(&nested).unwrap();
+        repo_at(&nested);
+        std::fs::write(nested.join("v.txt"), "v\n").unwrap();
+        git_in(&nested, &["add", "v.txt"]);
+        git_in(&nested, &["commit", "-q", "-m", "v"]);
+        let line = commit_on_pass(tree, true, "Add vendor");
+        assert!(line.contains("Nothing is left uncommitted."), "{line}");
+        std::fs::write(nested.join("v.txt"), "changed\n").unwrap();
+        std::fs::write(tree.join("c.txt"), "c\n").unwrap();
+        let line = commit_on_pass(tree, true, "Add c");
+        assert!(
+            line.contains("(c.txt). Left uncommitted: vendor."),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn a_long_list_names_ten_and_counts_the_rest() {
+        let paths: Vec<String> = (0..12).map(|n| format!("f{n}")).collect();
+        assert_eq!(
+            listed(&paths),
+            "f0, f1, f2, f3, f4, f5, f6, f7, f8, f9 and 2 more"
+        );
     }
 }

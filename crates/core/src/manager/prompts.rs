@@ -239,7 +239,7 @@ fn own_commits(local: bool) -> String {
             .to_owned()
     } else {
         format!(
-            "For your own changes, read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch: give your last run_check `commit: \"<message>\"` to commit all your changes with your trailer when it passes, in that same call, or use `git commit --trailer \"{THREAD_TRAILER}\"`. One fixing only findings goes through git with both trailers, adding `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
+            "For your own changes, read the code they touch, make the change, run the checks of what you changed, then commit. Commit them on your workspace's branch: give your last run_check `commit: \"<message>\"` to commit all your changes with your trailer when it passes, in that same call, or use `git commit --trailer \"{THREAD_TRAILER}\"`. Its reply names the commit's files and what git status still shows: that is the record, so don't check the commit again with git, and try anything by hand before that last run_check, not after it. One fixing only findings goes through git with both trailers, adding `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`; a held merge covers it."
         )
     }
 }
@@ -697,6 +697,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, on a Claude thread, send your last edit and the run_check that checks it in the same message: they run in order, and a separate call for the check costs a whole turn of context. After a review's findings, look up record_findings (if it isn't in your tool list) in the same message as your first fix or check, not in a call of its own.",
         worker: "",
     },
+    Revision {
+        number: COMMIT_RECORD_REVISION,
+        thread: "From now on, run_check's commit reply names the commit's files and lines and what git status still shows after it (\"Nothing is left uncommitted.\" or the paths left): that is the record, so don't check the commit again with git. Try anything by hand before that last run_check, in the same message as an edit, not after the commit.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -897,6 +902,10 @@ pub(crate) const SHELL_WHOLE_REVISION: u32 = 36;
 /// A Claude thread sends its last edit and its check in one message, and a review's findings
 /// message has it look up record_findings alongside its first fix (BUILD-PLAN C10).
 pub(crate) const SAME_MESSAGE_REVISION: u32 = 37;
+
+/// run_check's commit reply names the commit's files and what git status still shows, so the
+/// thread spends no call checking its commit (BUILD-PLAN C10).
+pub(crate) const COMMIT_RECORD_REVISION: u32 = 38;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

@@ -104,7 +104,9 @@ async fn a_passing_check_commits_the_threads_change_and_a_failing_one_nothing() 
         replies[0]
     );
     assert!(
-        replies[1].contains("\"Add the notes file\" with your trailer."),
+        replies[1].contains(
+            "\"Add the notes file\" with your trailer: 1 file changed, 1 insertion(+) (NOTES.md). Nothing is left uncommitted."
+        ),
         "{}",
         replies[1]
     );

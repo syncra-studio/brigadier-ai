@@ -1,12 +1,15 @@
 //! Rule R for BUILD-PLAN C10's instruction changes: a session told the instructions before
 //! them (revision 35) hears revisions 36 (its own shell's output whole up to 30 KB) and 37 (its
 //! last edit and check in one message, record_findings looked up alongside a fix) once, at its
-//! next turn, and goes on working.
+//! next turn, and goes on working; one told revision 37 hears revision 38 (run_check's commit
+//! reply is the commit's record) once.
 
 use std::sync::{Arc, Mutex};
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::manager::prompts::{SAME_MESSAGE_REVISION, SHELL_WHOLE_REVISION, revision_note};
+use crate::manager::prompts::{
+    COMMIT_RECORD_REVISION, SAME_MESSAGE_REVISION, SHELL_WHOLE_REVISION, revision_note,
+};
 use crate::model::DomainEvent;
 
 type Log = Arc<Mutex<Vec<String>>>;
@@ -80,6 +83,50 @@ async fn a_session_from_before_hears_the_gate_fixes_once_and_goes_on() {
         "{note}"
     );
     assert!(note.contains("look up record_findings"), "{note}");
+    let inputs = inputs.lock().unwrap().clone();
+    let told: usize = inputs
+        .iter()
+        .map(|input| input.matches(&note).count())
+        .sum();
+    assert_eq!(told, 1, "{inputs:#?}");
+    assert!(inputs.iter().any(|input| input.contains("And once more.")));
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_session_from_before_hears_that_the_commit_reply_is_the_record_once() {
+    let inputs: Log = Arc::default();
+    let heard = inputs.clone();
+    let mut flow = Flow::start(
+        "commit-record-revision",
+        Options::default(),
+        script(move |turn| {
+            let heard = heard.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    heard.lock().unwrap().push(turn.input.clone());
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Look around.").await;
+    flow.settled().await;
+    told(&flow, SAME_MESSAGE_REVISION).await;
+    flow.restart().await;
+    flow.say("Look again.").await;
+    flow.settled().await;
+    flow.say("And once more.").await;
+    flow.settled().await;
+
+    assert_eq!(COMMIT_RECORD_REVISION, SAME_MESSAGE_REVISION + 1);
+    let note = revision_note(SAME_MESSAGE_REVISION, false).unwrap();
+    assert!(
+        note.contains("don't check the commit again with git"),
+        "{note}"
+    );
+    assert!(!note.contains("comes back whole up to 30 KB"), "{note}");
     let inputs = inputs.lock().unwrap().clone();
     let told: usize = inputs
         .iter()
