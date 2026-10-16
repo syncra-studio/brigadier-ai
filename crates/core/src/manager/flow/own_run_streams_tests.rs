@@ -538,3 +538,89 @@ async fn own_run_streams_keep_output_printed_before_the_row() {
     flow.settled().await;
     flow.stop().await;
 }
+
+/// A background check that ends with a short output: the thread hears the check's own reply,
+/// its evidence line with it, not a digest of what the pipes printed; the row reads the output.
+#[tokio::test]
+async fn own_run_streams_tell_a_background_checks_own_reply() {
+    let gate: Arc<std::sync::Mutex<Option<PathBuf>>> = Arc::default();
+    let heard: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+    let (gate_at, heard_at) = (gate.clone(), heard.clone());
+    let script: Script = Arc::new(move |turn: Turn| {
+        let (gate, heard) = (gate_at.clone(), heard_at.clone());
+        Box::pin(async move {
+            if turn.earlier > 0 {
+                *heard.lock().unwrap() = Some(turn.input.clone());
+                return Reply::text("The check finished.");
+            }
+            let fifo = turn.cwd.join("check-gate");
+            assert!(
+                std::process::Command::new("mkfifo")
+                    .arg(&fifo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            *gate.lock().unwrap() = Some(fifo.clone());
+            let command = format!(
+                "IFS= read -r gate < {}; printf 'short output\\n'",
+                quote(&fifo)
+            );
+            let call = |status, output: Option<String>| ProviderEvent::ToolCall {
+                kept: None,
+                item_id: "own-check".into(),
+                name: "mcp__brigadier__run_check".into(),
+                input: Some(json!({ "command": command }).to_string()),
+                status,
+                output,
+            };
+            turn.emit(call(ItemStatus::InProgress, None)).await;
+            let id = turn.conversation().unwrap();
+            tokio::time::timeout(super::PATIENCE, async {
+                while row(&turn.host.core.board(&id).await.unwrap(), "own-check").is_none() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let reply = turn
+                .call(
+                    "run_check",
+                    json!({"command": command, "timeout_secs": 120, "rerun": true}),
+                )
+                .await;
+            assert!(reply.text.contains("[run-1 still runs"), "{}", reply.text);
+            turn.emit(call(ItemStatus::Completed, Some(reply.text)))
+                .await;
+            Reply::text("[quiet]")
+        })
+    });
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w79-background-check",
+        Options::default(),
+        script,
+    )
+    .await;
+    flow.say("Run the check.").await;
+    flow.until("the background run", |b| {
+        b.background_runs
+            .get("run-1")
+            .is_some_and(|run| run.item_id.as_deref() == Some("own-check"))
+    })
+    .await;
+    let fifo = gate.lock().unwrap().clone().unwrap();
+    release(fifo).await;
+    flow.until("the check's end heard", |_| heard.lock().unwrap().is_some())
+        .await;
+    flow.settled().await;
+    let heard = heard.lock().unwrap().clone().unwrap();
+    assert!(heard.contains("short output"), "{heard}");
+    assert!(heard.contains("[evidence: "), "{heard}");
+    let (text, _) = flow
+        .manager
+        .read_background_run(&flow.conversation, "run-1")
+        .await
+        .unwrap();
+    assert!(text.contains("short output"), "{text}");
+    flow.stop().await;
+}

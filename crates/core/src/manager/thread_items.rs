@@ -248,7 +248,9 @@ pub(super) fn digest_alias(output: &str) -> Option<String> {
 
 impl SessionManager {
     /// The newest active call with this exact command, read from its log rather than the
-    /// row's abbreviated detail. Long commands sharing their first words stay distinct.
+    /// row's abbreviated detail. Long commands sharing their first words stay distinct. A call
+    /// whose command went on in the background is active too: its row has its answer, but
+    /// what the command prints from then on is still that row's.
     pub(super) async fn own_command_item(
         &self,
         id: &ConversationId,
@@ -256,17 +258,24 @@ impl SessionManager {
         command: &str,
     ) -> Option<String> {
         let board = self.core.board(id).await.ok()?;
+        let backgrounded: std::collections::HashSet<String> = self
+            .conv(id)
+            .map(|conv| conv.items().background_items.keys().cloned().collect())
+            .unwrap_or_default();
         for step in board.orchestrator_steps.iter().rev() {
             let OrchestratorStepKind::Tool {
                 item_id,
                 name,
-                status: ItemStatus::InProgress,
+                status,
                 log_seq: Some(seq),
                 ..
             } = &step.kind
             else {
                 continue;
             };
+            if *status != ItemStatus::InProgress && !backgrounded.contains(item_id) {
+                continue;
+            }
             if crate::digest::bare_tool_name(name) != crate::digest::bare_tool_name(tool) {
                 continue;
             }

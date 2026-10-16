@@ -281,15 +281,17 @@ impl SessionManager {
         self.end_with_message(run, envelope).await;
     }
 
-    /// Stores what a background run printed as its final result, `text` when its live buffer
-    /// holds nothing more, and releases the buffer: the stored result then answers the row's
-    /// reads. Returns the result the thread hears (a digest when the output was stored whole).
+    /// Stores what a background run printed as its row's final output, `text` when its live
+    /// buffer holds nothing more, and releases the buffer: the stored output then answers the
+    /// row's reads. Returns `text`, the result the thread hears as it always did: a check's
+    /// evidence and commit lines are in it, not in what the pipes printed.
     async fn retain_background_output(
         &self,
         run: &BackgroundRun,
         status: &str,
-        mut text: String,
+        text: String,
     ) -> String {
+        let mut stored = text.clone();
         let live_output = if crate::digest::digest_alias(&text).is_none() {
             self.conv(&run.conversation_id)
                 .ok()
@@ -313,18 +315,18 @@ impl SessionManager {
                 )
                 .await
             {
-                Ok((_, digest)) => text = digest,
+                Ok((_, digest)) => stored = digest,
                 Err(err) => {
                     tracing::warn!(run = %run.id, error = %err, "could not retain background output")
                 }
             }
         }
-        if !text.is_empty()
+        if !stored.is_empty()
             && let Ok(event) = brigadier_store::NewEvent::new(
                 format!("background-output:{}:{}", run.conversation_id, run.id),
                 "background.output",
                 now_ms(),
-                &text,
+                &stored,
             )
             && let Err(err) = self.core.store().append(vec![event]).await
         {
