@@ -520,6 +520,10 @@ async function driveClip(): Promise<object> {
   const bubble = one(".aui-user-message-content");
   const clip = bubble?.firstElementChild as HTMLElement | null;
   const block = one(".aui-user-message-content pre");
+  // A font come late lays the block out again; the cut follows on the next frame: read once settled.
+  await document.fonts.ready;
+  const apart = () => Math.abs((clip?.getBoundingClientRect().bottom ?? 0) - (block?.getBoundingClientRect().bottom ?? 0));
+  for (const end = performance.now() + 2000; performance.now() < end && apart() > 1; ) await frame();
   const more = all("button", bubble ?? document).find((button) => text(button) === "Show more");
   const lineHeight = clip ? Number.parseFloat(getComputedStyle(clip).lineHeight) : 0;
   return {
