@@ -189,6 +189,21 @@ impl Record {
         weak: bool,
         after_command: bool,
     ) {
+        // A command's snapshot runs behind the thread, so it can read an edit reported just
+        // after the command and claim it. The edit's own evidence of that same change takes
+        // the file back.
+        if by == "edit"
+            && !weak
+            && let Some(owned) = self.paths.get_mut(path)
+            && owned.by.len() == 1
+            && owned.by.contains("command")
+            && owned.first == before
+            && owned.last == after
+        {
+            owned.by = BTreeSet::from(["edit".to_owned()]);
+            owned.held = None;
+            return;
+        }
         let owned = self
             .paths
             .entry(path.to_owned())

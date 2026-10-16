@@ -1179,3 +1179,74 @@ async fn request_changes_read_a_redacted_original_from_the_diff() {
     );
     flow.stop().await;
 }
+
+/// A command's snapshot runs behind the thread: one reported just before a patch can read the
+/// checkout after the patch landed and claim its change. The patch's own evidence of that same
+/// change takes the file back, so Undo reverts it.
+#[tokio::test]
+async fn request_changes_give_an_edit_back_from_a_command_snapshot_that_read_it() {
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w79-late-snapshot",
+        options(ProviderKind::Codex),
+        script(move |turn| async move {
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            let lock = turn.host.change_records.lock(&id);
+            let held = lock.lock().await;
+            turn.emit(ProviderEvent::Command {
+                kept: None,
+                item_id: "look".into(),
+                command: "ls".into(),
+                cwd: None,
+                status: ItemStatus::Completed,
+                exit_code: Some(0),
+                output: Some("a.txt\n".into()),
+                duration_ms: Some(1),
+            })
+            .await;
+            // The patch lands before the command's snapshot runs.
+            std::fs::write(workspace.join("a.txt"), "base\nthread a\n").unwrap();
+            drop(held);
+            tokio::time::timeout(super::PATIENCE, async {
+                while turn.host.change_records.pending(&id) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            edit(
+                &turn,
+                &workspace.join("a.txt"),
+                "edit-a",
+                "base\n",
+                "base\nthread a\n",
+            )
+            .await;
+            observed(&turn, 1).await;
+            Reply::text("Changed a.")
+        }),
+    )
+    .await;
+    flow.say("Edit a.").await;
+    let board = flow
+        .until("settled changes", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled)
+        })
+        .await;
+    let request = board.latest_request().unwrap();
+    let changes = request.changes.as_ref().unwrap();
+    assert!(changes.held.is_empty(), "{:?}", changes.held);
+    flow.manager
+        .undo_request(flow.conversation.clone(), request.id.clone(), false)
+        .await
+        .unwrap();
+    let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "base\n"
+    );
+    flow.stop().await;
+}
