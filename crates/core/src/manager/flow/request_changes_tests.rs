@@ -1097,3 +1097,85 @@ async fn request_changes_record_both_ends_of_a_codex_move() {
     assert!(!flow.repo.join("moved.txt").exists());
     flow.stop().await;
 }
+
+/// A Claude edit to a file with a secret in it comes with its original redacted: that isn't
+/// what the file held, so the record reads the file's before from the diff instead, and the
+/// file stays the thread's own to undo, its diff only the edited line.
+#[tokio::test]
+async fn request_changes_read_a_redacted_original_from_the_diff() {
+    let options = Options {
+        thread: ProviderKind::Claude,
+        files: vec![("config.txt", "token = hidden-value\nmode = a\n")],
+        ..Default::default()
+    };
+    let flow = Flow::start(
+        "20261015-0226-rebuild-wow-w79-redacted",
+        options,
+        script(move |turn| async move {
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            let path = workspace.join("config.txt");
+            std::fs::write(&path, "token = hidden-value\nmode = b\n").unwrap();
+            let mut change = FileChange::counted(
+                path.to_string_lossy().into_owned(),
+                FileChangeKind::Update,
+                Some("@@ -2,1 +2,1 @@\n-mode = a\n+mode = b\n"),
+                usize::MAX,
+            );
+            change.original = Some(format!(
+                "token = {}\nmode = a\n",
+                brigadier_providers::REDACTED
+            ));
+            turn.emit(ProviderEvent::FileChanges {
+                item_id: "edit-config".into(),
+                changes: vec![change],
+                status: ItemStatus::Completed,
+            })
+            .await;
+            observed(&turn, 1).await;
+            Reply::text("Changed the mode.")
+        }),
+    )
+    .await;
+    flow.say("Change the mode.").await;
+    let board = flow
+        .until("settled changes", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled)
+        })
+        .await;
+    let request = board.latest_request().unwrap();
+    let changes = request.changes.as_ref().unwrap();
+    assert!(changes.held.is_empty(), "{:?}", changes.held);
+    let request = request.id.clone();
+    let diff = flow
+        .manager
+        .review_diff(
+            &flow.conversation,
+            ReviewScope::LastTurn {
+                request_id: Some(request.clone()),
+            },
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(diff.patch.contains("+mode = b"), "{}", diff.patch);
+    assert!(
+        !diff.patch.contains("-token") && !diff.patch.contains(brigadier_providers::REDACTED),
+        "{}",
+        diff.patch
+    );
+    flow.manager
+        .undo_request(flow.conversation.clone(), request, false)
+        .await
+        .unwrap();
+    let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("config.txt")).unwrap(),
+        "token = hidden-value\nmode = a\n"
+    );
+    flow.stop().await;
+}

@@ -470,7 +470,12 @@ impl SessionManager {
                             continue;
                         }
                         let after = repo.checkout_blob(path).map_err(git_error)?;
-                        let before = if let Some(original) = &change.original {
+                        // An original with a secret in it came redacted: it isn't what the
+                        // file held, so the diff tells it instead.
+                        let original = change.original.as_ref().filter(|original| {
+                            !original.contains(brigadier_providers::redact::REDACTED)
+                        });
+                        let before = if let Some(original) = original {
                             let mode = after.as_ref().map_or("100644", |blob| blob.mode.as_str());
                             Before::Known(Some(
                                 repo.store_checkout_blob(original.as_bytes(), mode, path)
