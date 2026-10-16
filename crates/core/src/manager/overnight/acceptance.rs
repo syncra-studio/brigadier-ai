@@ -107,7 +107,11 @@ impl SessionManager {
             })
             .map(|check| check.id.clone())
             .collect();
-        let reader = self.sources_for(id, workspace.as_deref().map(Path::new));
+        // A quoted file counts only as it is in the tip's commit.
+        let reader = workspace.as_ref().map(|path| {
+            self.sources_for(id, Some(Path::new(path)))
+                .at_commit(path.into(), tip.to_owned())
+        });
         let mut evidence = Vec::new();
         let mut problems = Vec::new();
         for criterion in &phase.done_when {
@@ -171,6 +175,10 @@ impl SessionManager {
                     }
                 }
                 for (cite, quote) in quoted_lines(rest) {
+                    let Some(reader) = &reader else {
+                        why_not.push(format!("{cite} can't be read: the run has no checkout"));
+                        continue;
+                    };
                     let checked = reader.check(&Source {
                         cite: cite.clone(),
                         quote: quote.clone(),

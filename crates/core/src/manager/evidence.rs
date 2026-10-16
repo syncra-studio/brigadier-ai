@@ -56,9 +56,63 @@ type BlobReader = Arc<dyn Fn(&BlobHash) -> Option<Vec<u8>> + Send + Sync>;
 pub(crate) struct Sources {
     roots: Vec<PathBuf>,
     blobs: BlobReader,
+    /// Files are read from this commit of this checkout instead (an accepted tip), never from
+    /// the folders.
+    commit: Option<(PathBuf, String)>,
 }
 
 impl Sources {
+    /// The same sources, with a cited file read as it is in commit `tip` of the checkout at
+    /// `dir`: what isn't committed there doesn't count.
+    pub(crate) fn at_commit(self, dir: PathBuf, tip: String) -> Self {
+        Self {
+            commit: Some((dir, tip)),
+            ..self
+        }
+    }
+
+    /// `path` read from the commit or the first folder that has it, or why it can't be.
+    fn read(&self, path: &str) -> std::result::Result<String, String> {
+        use std::path::Component;
+        let relative = Path::new(path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|part| matches!(part, Component::ParentDir))
+        {
+            return Err(format!("{path} is outside the checkout"));
+        }
+        if let Some((dir, tip)) = &self.commit {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["cat-file", "blob", &format!("{tip}:{path}")])
+                .output()
+                .map_err(|err| format!("{path} can't be read: {err}"))?;
+            if !output.status.success() {
+                return Err(format!("{path} isn't in the tip's commit"));
+            }
+            if output.stdout.len() as u64 > READ_MAX {
+                return Err(format!("{path} can't be read"));
+            }
+            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+        }
+        let Some(file) = self
+            .roots
+            .iter()
+            .map(|root| root.join(path))
+            .find(|file| file.is_file())
+        else {
+            return Err(format!("{path} is gone"));
+        };
+        match std::fs::metadata(&file) {
+            Ok(meta) if meta.len() <= READ_MAX => Ok(std::fs::read(&file)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default()),
+            _ => Err(format!("{path} can't be read")),
+        }
+    }
+
     /// Re-reads `source`: whether its quoted words are still where it says.
     pub(crate) fn check(&self, source: &Source) -> Option<SourceCheck> {
         let quote = normal(&source.quote);
@@ -101,19 +155,9 @@ impl Sources {
     }
 
     fn lines_say(&self, path: &str, from: usize, to: usize, quote: &str) -> (bool, Option<String>) {
-        let Some(file) = self
-            .roots
-            .iter()
-            .map(|root| root.join(path))
-            .find(|file| file.is_file())
-        else {
-            return (false, Some(format!("{path} is gone")));
-        };
-        let text = match std::fs::metadata(&file) {
-            Ok(meta) if meta.len() <= READ_MAX => std::fs::read(&file)
-                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                .unwrap_or_default(),
-            _ => return (false, Some(format!("{path} can't be read"))),
+        let text = match self.read(path) {
+            Ok(text) => text,
+            Err(why) => return (false, Some(why)),
         };
         let lines: Vec<&str> = text.lines().collect();
         let first = from.saturating_sub(DRIFT_LINES + 1);
@@ -276,6 +320,7 @@ impl SessionManager {
         Sources {
             roots,
             blobs: Arc::new(move |hash| blobs.get_blocking(hash).ok().flatten()),
+            commit: None,
         }
     }
 
@@ -487,7 +532,58 @@ mod tests {
         Sources {
             roots: vec![root.to_owned()],
             blobs: Arc::new(move |asked| (asked.as_str() == hash).then(|| output.to_vec())),
+            commit: None,
         }
+    }
+
+    /// Read at a commit, a quote counts only as the file is committed there: not an edit left
+    /// uncommitted, not a file only in the folder, and never a path out of the checkout.
+    #[test]
+    fn at_a_commit_only_what_is_committed_there_holds() {
+        let dir = std::env::temp_dir().join(format!("brigadier-evidence-{}", uuid::Uuid::new_v4()));
+        let _temp = Temp(dir.clone());
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        git(&["init", "-q"]);
+        std::fs::write(dir.join("a.txt"), "first line\nRetries stop at three\n").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "-qm", "a"]);
+        let tip = git(&["rev-parse", "HEAD"]);
+        // Edited and a new file, neither committed.
+        std::fs::write(dir.join("a.txt"), "first line\nRetries never stop\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "Only in the folder here\n").unwrap();
+        let reader = sources(&dir, b"").at_commit(dir.clone(), tip);
+        let holds =
+            |cite: &str, quote: &str| reader.check(&source(cite, quote, None)).unwrap().holds;
+        assert!(holds("a.txt:2", "Retries stop at three"));
+        assert!(!holds("a.txt:2", "Retries never stop"));
+        assert!(!holds("b.txt:1", "Only in the folder here"));
+        assert!(!holds("../a.txt:2", "Retries stop at three"));
+        // Read from the folder, the uncommitted edit is what is there.
+        let folder = sources(&dir, b"");
+        assert!(
+            folder
+                .check(&source("a.txt:2", "Retries never stop", None))
+                .unwrap()
+                .holds
+        );
     }
 
     struct Temp(PathBuf);
