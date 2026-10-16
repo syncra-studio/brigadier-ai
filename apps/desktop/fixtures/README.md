@@ -120,10 +120,21 @@ a daemon. This entry is absent from the production build.
 
 `/fixtures/card-keys.html` mounts the production merge question, "Implement this plan?" and a
 phase plan's rail link, one fresh mount per case, and drives them with the browser's real keys
-and clicks: nothing is lit at first, Enter answers only from the focused card, a digit only
-lights, and the phase plan takes no Enter. It writes JSON into `#card-keys-result`;
+and clicks: a consequential card lights nothing at first, every question card takes Enter only
+when focused (a plain question lit at once too), a digit only lights, and the phase plan takes no
+Enter. It writes JSON into `#card-keys-result`;
 `CardKeysRender.test.ts` checks it. IPC stays mocked. This entry is absent from the production
 build.
+
+# Composer suggestion
+
+`/fixtures/composer-suggestion.html` opens a Chat whose finished request carries its CLI's guess
+at the next message, in the app's own conversation view. It drives the real keys: the guess shows
+in the empty composer with "Press Tab to accept", Tab puts it in the field unsent, it comes back
+when the field empties and hides while something is typed, and a working request shows none. It
+records each `setComposerShown` and writes JSON into `#composer-suggestion-result`;
+`ComposerSuggestionRender.test.ts` checks it. IPC stays mocked. This entry is absent from the
+production build.
 
 # Merge button
 

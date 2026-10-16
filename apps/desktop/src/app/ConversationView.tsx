@@ -113,6 +113,7 @@ import {
   switchBranch,
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
+import { useComposerShown } from "@/app/conversation/suggestion";
 import { useBoard } from "@/state/board";
 import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
@@ -817,6 +818,8 @@ export function ConversationView({
   const tabbed = !embedded && conversation?.kind === "session";
   const { active: activeTab } = useSessionTabsOf(tabbed ? conversationId : null);
   const covered = tabbed && activeTab !== CHAT_TAB;
+  // Its CLI guesses the next message only while this composer is on screen.
+  useComposerShown(conversation && conversation.lifecycle !== "archived" ? conversation.id : null, !covered);
   // A file link in an answer opens in a tab of its own when it is one of the session's files.
   const checkout =
     setup?.type === "session"

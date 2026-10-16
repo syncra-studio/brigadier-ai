@@ -25,6 +25,7 @@ import {
   KEY_ARROW_UP_COMMAND,
   KEY_DOWN_COMMAND,
   KEY_ENTER_COMMAND,
+  KEY_TAB_COMMAND,
   type LexicalEditor,
   PASTE_COMMAND,
   PASTE_TAG,
@@ -38,6 +39,7 @@ import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { enterAction } from "@/app/conversation/composerKeys";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { useImagesBlocked } from "@/app/conversation/imageInput";
+import { SuggestionContext } from "@/app/conversation/suggestion";
 import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import {
   imageMarkerAt,
@@ -123,9 +125,37 @@ export default function ComposerEditor({
       aria-label="Message input"
     >
       <ComposerKeys formatter={formatter} deleted={deleted} />
+      <SuggestionKeys />
       <InlineImageSync deleted={deleted} />
     </ChipComposerInput>
   );
+}
+
+/** Tab in the empty field takes the guess at the next message it shows, unsent. */
+function SuggestionKeys() {
+  const [editor] = useLexicalComposerContext();
+  const aui = useAui();
+  const suggestion = useContext(SuggestionContext);
+  const shown = useRef(suggestion);
+  useEffect(() => {
+    shown.current = suggestion;
+  }, [suggestion]);
+  useEffect(
+    () =>
+      editor.registerCommand(
+        KEY_TAB_COMMAND,
+        (event) => {
+          const guess = shown.current;
+          if (!guess || event.shiftKey || !aui.composer().getState().isEmpty) return false;
+          event.preventDefault();
+          aui.composer().setText(guess);
+          return true;
+        },
+        COMMAND_PRIORITY_NORMAL,
+      ),
+    [editor, aui],
+  );
+  return null;
 }
 
 /** A worker on its mention chip by its name; its `task-N` stays in the text it sends. */

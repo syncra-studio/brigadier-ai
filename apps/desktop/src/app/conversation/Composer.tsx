@@ -28,6 +28,7 @@ import {
   ProjectSettingsButton,
   ProvidersButton,
 } from "@/app/conversation/SetupPickers";
+import { SuggestionContext, useSuggestion } from "@/app/conversation/suggestion";
 import type { ComposerInputProps } from "@/app/conversation/ComposerEditor";
 import { type MentionMemory, Mentions } from "@/app/conversation/Mentions";
 import { SlashCommands } from "@/app/conversation/SlashCommands";
@@ -95,6 +96,9 @@ const ComposerEditor = lazy(() =>
  */
 export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder }) => {
   const target = useContext(ComposerTargetContext);
+  // The CLI's guess at the next message, in the empty field (Tab takes it).
+  const suggestion = useSuggestion(target?.conversation?.id ?? null);
+  const attached = useAuiState((s) => s.composer.attachments.length > 0);
   const [modelOpen, setModelOpen] = useState(false);
   const statusCard = useContext(StatusCardContext);
   const pending = usePendingActions(target?.conversation ?? null);
@@ -122,6 +126,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
   const setAsideIds = (ids: readonly string[]) => {
     if (conversation) setAsideCards(conversation.id, ids);
   };
+  const guess = !archived && !plan.on && !attached ? (suggestion?.text ?? null) : null;
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
@@ -187,16 +192,21 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
             className="@container/composer bg-composer rounded-composer shadow-hairline relative flex w-full cursor-text flex-col gap-1 p-2 backdrop-blur-lg"
           >
             <ComposerAttachments />
-            <ComposerInput
-              placeholder={
-                archived
-                  ? "Restore this conversation to continue it."
-                  : plan.on
-                    ? PLAN_PLACEHOLDER
-                    : placeholder
-              }
-              autoFocus={autoFocus}
-            />
+            <SuggestionContext.Provider value={guess}>
+              <ComposerInput
+                placeholder={
+                  archived
+                    ? "Restore this conversation to continue it."
+                    : plan.on
+                      ? PLAN_PLACEHOLDER
+                      : guess
+                        ? ""
+                        : placeholder
+                }
+                autoFocus={autoFocus}
+                guess={guess}
+              />
+            </SuggestionContext.Provider>
             <ComposerFooter owner={dictationOwner}>
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">
                 <PlusMenu />
@@ -266,7 +276,32 @@ function ComposerDraft({
  * The text field: assistant-ui's Lexical input with mention/command chips (its own chunk, so
  * it doesn't hold up startup), a plain field on the same composer text until it loads.
  */
-function ComposerInput(props: ComposerInputProps) {
+function ComposerInput({ guess, ...props }: ComposerInputProps & { guess: string | null }) {
+  const { placeholder, autoFocus } = props;
+  const empty = useAuiState((s) => s.composer.isEmpty);
+  return (
+    <div className="relative min-w-0">
+      <ComposerField placeholder={placeholder} autoFocus={autoFocus} />
+      {/* The CLI's guess at the next message, where the placeholder would be. */}
+      {guess && empty && (
+        <p
+          data-slot="composer-suggestion"
+          className="text-muted-foreground/60 pointer-events-none absolute inset-x-0 top-0 px-2 py-2.5 text-base"
+        >
+          {guess}{" "}
+          <span
+            data-slot="composer-suggestion-key"
+            className="bg-foreground/5 text-muted-foreground/60 ms-0.5 inline-block rounded-sm px-1.5 py-0.5 align-middle text-sm leading-4"
+          >
+            Press Tab to accept
+          </span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ComposerField(props: ComposerInputProps) {
   const { placeholder, autoFocus } = props;
   return (
     <Suspense

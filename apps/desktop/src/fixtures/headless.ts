@@ -209,7 +209,7 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
 /** CDP's description of a key the keyboard sends: Enter, Escape, Tab, the arrows, a digit or a letter. */
 function keyEvent(key: string): { key: string; code: string; windowsVirtualKeyCode: number; text?: string | undefined } {
   const named: Record<string, [number, string?]> = {
-    Enter: [13, "\r"], Escape: [27], Tab: [9], ArrowLeft: [37], ArrowUp: [38], ArrowRight: [39], ArrowDown: [40],
+    Enter: [13, "\r"], Escape: [27], Tab: [9], Backspace: [8], ArrowLeft: [37], ArrowUp: [38], ArrowRight: [39], ArrowDown: [40],
   };
   const found = named[key];
   if (found) return { key, code: key, windowsVirtualKeyCode: found[0], text: found[1] };
