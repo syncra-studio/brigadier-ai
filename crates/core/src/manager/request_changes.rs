@@ -439,7 +439,7 @@ impl SessionManager {
                         let before = if let Some(original) = &change.original {
                             let mode = after.as_ref().map_or("100644", |blob| blob.mode.as_str());
                             Before::Known(Some(
-                                repo.store_file_blob(original.as_bytes(), mode)
+                                repo.store_checkout_blob(original.as_bytes(), mode, path)
                                     .map_err(git_error)?
                                     .into(),
                             ))

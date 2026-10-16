@@ -59,6 +59,24 @@ impl Repo {
         })
     }
 
+    /// Stores a file's bytes as the checkout holds them, through the same attributes `git add`
+    /// applies to `path` (line endings, clean filters), so equal files compare equal with any
+    /// snapshot of the checkout.
+    pub fn store_checkout_blob(&self, bytes: &[u8], mode: &str, path: &str) -> Result<FileBlob> {
+        valid_path(path)?;
+        let oid = parse::oid(&self.git.checked(
+            Some(&self.root),
+            &["hash-object", "-w", "--stdin", &format!("--path={path}")],
+            false,
+            &[],
+            Some(bytes),
+        )?)?;
+        Ok(FileBlob {
+            oid: oid.0,
+            mode: mode.to_owned(),
+        })
+    }
+
     /// Reads a file from the checkout without following a symlink in its parent paths.
     pub fn checkout_blob(&self, path: &str) -> Result<Option<FileBlob>> {
         let file = self.safe_file(path)?;
@@ -83,9 +101,10 @@ impl Repo {
         };
         #[cfg(not(unix))]
         let executable = false;
-        self.store_file_blob(
+        self.store_checkout_blob(
             &fs::read(file)?,
             if executable { "100755" } else { "100644" },
+            path,
         )
         .map(Some)
     }
@@ -237,7 +256,8 @@ impl Repo {
         Ok(self.file_blobs(&before)?.remove(path))
     }
 
-    /// Writes only working files. The user's staged versions and index bytes remain intact.
+    /// Writes only working files, as a checkout of them would (line endings, smudge filters).
+    /// The user's staged versions and index bytes remain intact.
     pub fn restore_file_blobs(&self, files: &BTreeMap<String, Option<FileBlob>>) -> Result<()> {
         let mut writes = Vec::new();
         for (path, blob) in files {
@@ -246,7 +266,19 @@ impl Repo {
                 .as_ref()
                 .map(|blob| {
                     valid_oid(&Oid(blob.oid.clone()))?;
-                    self.cmd(&["cat-file", "blob", &blob.oid], true)
+                    if blob.mode == "120000" {
+                        self.cmd(&["cat-file", "blob", &blob.oid], true)
+                    } else {
+                        self.cmd(
+                            &[
+                                "cat-file",
+                                "--filters",
+                                &format!("--path={path}"),
+                                &blob.oid,
+                            ],
+                            true,
+                        )
+                    }
                 })
                 .transpose()?;
             writes.push((file, blob, bytes));
@@ -346,6 +378,30 @@ mod tests {
         fs::write(dir.join("a"), "first\n").unwrap();
         repo.commit_changes("Start", true).unwrap();
         (Scratch(dir), repo)
+    }
+
+    /// Under `eol=crlf` a checkout file and its snapshot hold the same blob, and a restore
+    /// writes the checkout's line endings back.
+    #[test]
+    fn request_changes_git_compare_and_restore_files_through_their_attributes() {
+        let (dir, repo) = setup();
+        fs::write(dir.0.join(".gitattributes"), "*.txt text eol=crlf\n").unwrap();
+        fs::write(dir.0.join("crlf.txt"), "one\r\ntwo\r\n").unwrap();
+        repo.commit_changes("Attributes", true).unwrap();
+        let snapshot = repo.snapshot_files().unwrap();
+        let checkout = repo.checkout_blob("crlf.txt").unwrap();
+        assert_eq!(
+            repo.file_blobs(&snapshot).unwrap().get("crlf.txt"),
+            checkout.as_ref()
+        );
+        let stored = repo
+            .store_checkout_blob(b"one\r\ntwo\r\n", "100644", "crlf.txt")
+            .unwrap();
+        assert_eq!(Some(&stored), checkout.as_ref());
+        fs::write(dir.0.join("crlf.txt"), "changed\r\n").unwrap();
+        repo.restore_file_blobs(&BTreeMap::from([("crlf.txt".into(), checkout)]))
+            .unwrap();
+        assert_eq!(fs::read(dir.0.join("crlf.txt")).unwrap(), b"one\r\ntwo\r\n");
     }
 
     #[test]
