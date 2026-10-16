@@ -3166,6 +3166,9 @@ impl SessionManager {
             output_hook,
             stop_hook: None,
             deny_tools: None,
+            // The user types into this one: its CLI guesses their next message, held while
+            // its composer is off screen (`pause_suggestions`). Never a worker's.
+            suggestions: true,
             protection: launch
                 .as_ref()
                 .map(|launch| launch.protection.clone())
@@ -3266,11 +3269,51 @@ impl SessionManager {
                 state.fork_base = fork_base;
             }
         }
+        // It guesses the user's next message only while they can see its composer.
+        self.pause_suggestions(&cli, !self.composer_shown(&conv.id))
+            .await;
         let manager = self.arc();
         let pumped = cli.clone();
         let pumping = conv.clone();
         self.spawn(async move { manager.pump_conversation(pumping, pumped, events).await });
         Ok(cli)
+    }
+
+    /// Whether the user can see conversation `id`'s composer (the app says so as it shows and
+    /// hides it): only then does its CLI guess their next message, each guess a small request
+    /// of the CLI's own.
+    pub async fn set_composer_shown(&self, id: ConversationId, shown: bool) {
+        {
+            let mut set = self
+                .composers_shown
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if shown {
+                set.insert(id.clone());
+            } else {
+                set.remove(&id);
+            }
+        }
+        let Some(conv) = self.convs_lock().get(&id).cloned() else {
+            return;
+        };
+        let cli = conv.state.lock().await.cli.clone();
+        if let Some(cli) = cli {
+            self.pause_suggestions(&cli, !shown).await;
+        }
+    }
+
+    fn composer_shown(&self, id: &ConversationId) -> bool {
+        self.composers_shown
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(id)
+    }
+
+    async fn pause_suggestions(&self, cli: &Cli, paused: bool) {
+        if let Err(err) = cli.session.pause_suggestions(paused).await {
+            tracing::debug!(owner = %cli.owner, error = %err, "could not hold or resume next-message guesses");
+        }
     }
 
     /// Removes the files of `owner`'s CLI session `native_id` (one that started after its
@@ -4330,6 +4373,14 @@ impl SessionManager {
         cli: &Arc<Cli>,
         event: ProviderEvent,
     ) {
+        // The CLI's guess at the user's next message is for the composer only: never logged,
+        // so no transcript, digest or rebirth ever reads it as said.
+        if let ProviderEvent::PromptSuggestion { text } = event {
+            if let Err(err) = self.core.set_latest_suggestion(&conv.id, text).await {
+                tracing::debug!(conversation = %conv.id, error = %err, "could not keep a next-message guess");
+            }
+            return;
+        }
         let event = self.retain_thread_image(&conv.id, event).await;
         // A tool call's row points at its log entry, and a turn's start keys the calls that
         // follow: both are logged before they are handled.

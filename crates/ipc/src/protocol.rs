@@ -622,6 +622,12 @@ pub enum Request {
         request_id: String,
         reapply: bool,
     },
+    /// Whether the user can see a conversation's composer now. Only while they can does its
+    /// CLI guess their next message (`UserRequest::suggestion`), so a hidden one costs nothing.
+    SetComposerShown {
+        conversation_id: ConversationId,
+        shown: bool,
+    },
     /// An image the thread looked at or made (its tool step's `itemId`), as base64 with its
     /// media type: only an image a step of this conversation names.
     ReadThreadImage {
@@ -1393,6 +1399,7 @@ pub enum Response {
     UndoChanges {
         outcome: UndoOutcome,
     },
+    SetComposerShown,
     ReadThreadImage {
         data: String,
         mime: String,

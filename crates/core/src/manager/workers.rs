@@ -1927,6 +1927,7 @@ impl SessionManager {
             output_hook: None,
             stop_hook,
             deny_tools: None,
+            suggestions: false,
             protection: protection.unwrap_or_default(),
         };
         let worktree = workspace.worktree.clone();

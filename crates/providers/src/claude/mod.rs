@@ -60,6 +60,9 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const EXIT_GRACE: Duration = Duration::from_secs(3);
 /// The first version seen to run `/compact` sent as a stream-json message.
 const COMPACT_SINCE: &str = "2.1.282";
+/// The first version seen with `--prompt-suggestions` and `set_prompt_suggestions_paused`
+/// (2.1.301: its help, the CLI reference and its SDK schema). An older CLI would refuse the flag.
+const SUGGESTIONS_SINCE: &str = "2.1.301";
 /// Built-in tools a worker's lean start leaves out ([`ToolSet::Lean`]): scheduling, background
 /// agents and messaging, worktrees (Brigadier manages them), notebooks and the like. Each tool's
 /// description is part of every request; without these a worker starts at about 10k tokens
@@ -954,6 +957,13 @@ fn paths(paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+/// Whether a session runs with `--prompt-suggestions`: one that asks for them
+/// ([`SessionSpec::suggestions`]), on a CLI that has the flag.
+fn suggests(spec: &SessionSpec, cli_version: Option<&str>) -> bool {
+    spec.suggestions
+        && cli_version.is_some_and(|version| version_at_least(version, SUGGESTIONS_SINCE))
+}
+
 /// Whether `path` is a repository's git folder (its `HEAD` and object store).
 fn is_git_dir(path: &Path) -> bool {
     path.join("HEAD").is_file() && path.join("objects").is_dir()
@@ -1094,7 +1104,14 @@ impl Provider for Claude {
                     "no saved Claude session {native_id} to resume"
                 )));
             }
-            let args = Self::session_args(&spec, &cwd, &native_id, self.main_config.is_some())?;
+            let mut args = Self::session_args(&spec, &cwd, &native_id, self.main_config.is_some())?;
+            let cli_version = self.version().await;
+            // The CLI's own next-message guess: after each turn, one small request on the
+            // conversation's warm cache, emitted as a `prompt_suggestion` message.
+            let suggests = suggests(&spec, cli_version.as_deref());
+            if suggests {
+                args.push("--prompt-suggestions".into());
+            }
 
             // Recorded before the CLI can create them.
             if let Some(config) = self.history_dir() {
@@ -1210,9 +1227,9 @@ impl Provider for Claude {
                 parser_rx,
                 !spec.auto_compact,
             ));
-            let cli_version = self.version().await;
             let session = Arc::new(ClaudeSession {
                 native_id: native_id.clone(),
+                suggests,
                 compacts: cli_version
                     .as_deref()
                     .is_some_and(|version| version_at_least(version, COMPACT_SINCE)),
@@ -1527,6 +1544,8 @@ enum ParserCommand {
 
 pub struct ClaudeSession {
     native_id: String,
+    /// It runs with `--prompt-suggestions` ([`SessionSpec::suggestions`]).
+    suggests: bool,
     /// The CLI's version takes `/compact` in stream-json.
     compacts: bool,
     process: Arc<CliProcess>,
@@ -1629,6 +1648,18 @@ impl ProviderSession for ClaudeSession {
 
     fn can_compact(&self) -> bool {
         self.compacts
+    }
+
+    fn pause_suggestions(&self, paused: bool) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            if !self.suggests {
+                return Ok(());
+            }
+            let mut request = Map::new();
+            request.insert("subtype".into(), "set_prompt_suggestions_paused".into());
+            request.insert("paused".into(), paused.into());
+            self.request(request, CONTROL_TIMEOUT).await.map(drop)
+        })
     }
 
     fn compact(&self) -> BoxFuture<'_, Result<()>> {
@@ -2019,6 +2050,7 @@ for line in sys.stdin:
                 prompt_tools: Vec::new(),
             }],
             deny_tools: Some(reason.into()),
+            suggestions: false,
             ..spec(&dir, &[])
         };
         let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
@@ -2221,6 +2253,22 @@ for line in sys.stdin:
         assert!(flag.contains("\"CLAUDE_CODE_OAUTH_TOKEN\":\"\""), "{flag}");
     }
 
+    /// Only a session that asks for next-message guesses gets the flag, and only on a CLI that
+    /// has it: an older one would refuse to start.
+    #[test]
+    fn only_a_session_that_asks_guesses_the_next_message_on_a_cli_that_can() {
+        let cwd = Path::new("/nonexistent/suggestions");
+        let mut thread = spec(cwd, &[]);
+        thread.suggestions = true;
+        assert!(suggests(&thread, Some("2.1.301")));
+        assert!(suggests(&thread, Some("2.2.0")));
+        assert!(!suggests(&thread, Some("2.1.300")));
+        assert!(!suggests(&thread, None));
+        let worker = spec(cwd, &[]);
+        assert!(!worker.suggestions);
+        assert!(!suggests(&worker, Some("2.1.301")));
+    }
+
     fn spec(cwd: &Path, ids: &[&str]) -> SessionSpec {
         SessionSpec {
             cwd: cwd.to_owned(),
@@ -2249,6 +2297,7 @@ for line in sys.stdin:
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
+            suggestions: false,
             protection: Default::default(),
         }
     }
@@ -2717,6 +2766,7 @@ for line in sys.stdin:
         let reason = "This is the read-only note fork: no tool runs. Answer in text.";
         let fork = SessionSpec {
             deny_tools: Some(reason.into()),
+            suggestions: false,
             ..thread.clone()
         };
         let hooks = &settings(&fork, cwd.path(), &SubAgents::Any, false)["hooks"];

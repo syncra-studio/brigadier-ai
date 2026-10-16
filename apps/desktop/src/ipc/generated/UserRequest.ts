@@ -76,4 +76,9 @@ backgroundJobs?: number,
  * changed meanwhile. Absent on requests from before it was kept, and while it changed
  * nothing.
  */
-changes?: RequestChanges, };
+changes?: RequestChanges, 
+/**
+ * The thread's CLI's own guess at the user's next message after this request's last
+ * turn, for the empty composer once it is over. Never sent by itself.
+ */
+suggestion?: string, };

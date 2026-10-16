@@ -574,6 +574,7 @@ impl SessionManager {
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
+            suggestions: false,
             protection: Default::default(),
         };
         let access = spec.access.clone();

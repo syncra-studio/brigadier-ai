@@ -1728,6 +1728,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 heap(|| sessions.undo_request(conversation_id, request_id, reapply)).await?;
             Response::UndoChanges { outcome }
         }
+        Request::SetComposerShown {
+            conversation_id,
+            shown,
+        } => {
+            sessions.set_composer_shown(conversation_id, shown).await;
+            Response::SetComposerShown
+        }
         Request::ReadThreadImage {
             conversation_id,
             item_id,

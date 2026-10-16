@@ -740,6 +740,7 @@ impl Core {
                         held_by: None,
                         background_jobs: None,
                         changes: None,
+                        suggestion: None,
                     },
                 },
             ),
@@ -1626,6 +1627,38 @@ impl Core {
             return Ok(());
         }
         request.changes = Some(changes);
+        let event = DomainEvent::RequestUpdated { request };
+        let stored = self
+            .record(vec![(streams::conversation(id), event.clone())])
+            .await?;
+        if let Some(board) = boards.get_mut(id) {
+            board.apply(&event, stored[0]);
+        }
+        Ok(())
+    }
+
+    /// Keeps the CLI's guess at the user's next message on the conversation's latest request,
+    /// the one whose turn it follows (a turn that starts a newer request has its own).
+    pub(crate) async fn set_latest_suggestion(
+        &self,
+        id: &ConversationId,
+        text: String,
+    ) -> Result<()> {
+        let mut boards = self.boards.lock().await;
+        if !boards.contains_key(id) {
+            boards.insert(id.clone(), self.load_board(id).await?);
+        }
+        let Some(mut request) = boards
+            .get(id)
+            .and_then(|board| board.latest_request())
+            .cloned()
+        else {
+            return Ok(());
+        };
+        if request.suggestion.as_deref() == Some(text.as_str()) {
+            return Ok(());
+        }
+        request.suggestion = Some(text);
         let event = DomainEvent::RequestUpdated { request };
         let stored = self
             .record(vec![(streams::conversation(id), event.clone())])

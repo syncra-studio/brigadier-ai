@@ -175,6 +175,9 @@ pub struct SessionManager {
     /// ([`thread`]), so a range is taken once.
     thread_scans: tokio::sync::Mutex<()>,
     change_records: request_changes::ChangeRecords,
+    /// The conversations whose composer the user can see: only their CLIs guess the user's
+    /// next message ([`SessionManager::set_composer_shown`]).
+    composers_shown: std::sync::Mutex<std::collections::HashSet<ConversationId>>,
     /// Where each session's thread's newest `run_check` stands: a review of its own changes
     /// starts only on files a check passed on, never while one runs or on files one failed
     /// on ([`unreviewed::ThreadCheck`], BUILD-PLAN C10).
@@ -354,6 +357,7 @@ impl SessionManager {
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             change_records: request_changes::ChangeRecords::default(),
+            composers_shown: std::sync::Mutex::default(),
             thread_checks: std::sync::Mutex::new(HashMap::new()),
             known_windows: std::sync::Mutex::new(HashMap::new()),
             run_passes: run::RunPasses::default(),

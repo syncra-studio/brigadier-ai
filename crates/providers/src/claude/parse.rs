@@ -203,6 +203,16 @@ impl Parser {
             Some("system") => self.system(&value, &mut out),
             Some("result") => self.result(&value, &mut out),
             Some("rate_limit_event") => self.rate_limit(&value, &mut out),
+            Some("prompt_suggestion") => {
+                if let Some(text) = str_of(&value, "suggestion")
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                {
+                    out.push(Output::Event(ProviderEvent::PromptSuggestion {
+                        text: text.to_owned(),
+                    }));
+                }
+            }
             Some("control_request") => self.control_request(&value, &mut out),
             Some("control_response") => {
                 if let Some(response) = value.get("response") {
@@ -1637,6 +1647,29 @@ mod tests {
         similar.allow(&network);
         assert!(similar.covers(&network, Some(&workspace)));
         std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    /// The CLI's guess at the user's next message, trimmed; an empty one is no guess.
+    #[test]
+    fn a_prompt_suggestion_is_the_cli_s_guess_at_the_next_message() {
+        let guesses = |suggestion: &str| {
+            Parser::live()
+                .feed(
+                    &json!({"type": "prompt_suggestion", "suggestion": suggestion, "uuid": "u", "session_id": "s"})
+                        .to_string(),
+                )
+                .into_iter()
+                .filter_map(|out| match out {
+                    Output::Event(ProviderEvent::PromptSuggestion { text }) => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            guesses("  Run the tests once more.\n"),
+            ["Run the tests once more."]
+        );
+        assert!(guesses("   ").is_empty());
     }
 
     #[test]

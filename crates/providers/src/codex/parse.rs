@@ -182,6 +182,11 @@ impl Parser {
                     }));
                 }
             }
+            "thread/prediction/updated" => {
+                if let Some(text) = prediction_text(params) {
+                    out.push(Output::Event(ProviderEvent::PromptSuggestion { text }));
+                }
+            }
             "turn/started" => {
                 let Some(started) =
                     decode::<p::TurnStartedNotification>(method, params, out, self.private_logs)
@@ -1264,6 +1269,31 @@ fn notice(level: NoticeLevel, message: String) -> Output {
     Output::Event(ProviderEvent::Notice { level, message })
 }
 
+/// The text of Codex's guess at the user's next message (`thread/prediction/updated`, read by
+/// hand: the request is experimental and outside the generated protocol). Nothing for a failed
+/// or empty one.
+fn prediction_text(params: Value) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Updated {
+        result: Prediction,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    enum Prediction {
+        Completed {
+            #[serde(default)]
+            text: Option<String>,
+        },
+        Failed,
+    }
+    match serde_json::from_value::<Updated>(params).ok()?.result {
+        Prediction::Completed { text: Some(text) } if !text.trim().is_empty() => {
+            Some(text.trim().to_owned())
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -1299,6 +1329,34 @@ mod tests {
                 .unwrap();
             assert_eq!(serde_json::from_str::<Value>(&input).unwrap(), expected);
         }
+    }
+
+    /// Codex's guess at the user's next message (`thread/prediction/updated`); a failed or empty
+    /// one is no guess.
+    #[test]
+    fn a_codex_prediction_is_its_guess_at_the_next_message() {
+        let guesses = |result: Value| {
+            Parser::live()
+                .feed(
+                    &json!({"jsonrpc": "2.0", "method": "thread/prediction/updated", "params": {
+                        "threadId": "t", "sourceTurnId": "turn-1", "result": result,
+                    }})
+                    .to_string(),
+                )
+                .into_iter()
+                .filter_map(|out| match out {
+                    Output::Event(ProviderEvent::PromptSuggestion { text }) => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            guesses(json!({"type": "completed", "text": "Commit the fix. "})),
+            ["Commit the fix."]
+        );
+        assert!(guesses(json!({"type": "completed", "text": null})).is_empty());
+        assert!(guesses(json!({"type": "completed", "text": " "})).is_empty());
+        assert!(guesses(json!({"type": "failed"})).is_empty());
     }
 
     #[test]

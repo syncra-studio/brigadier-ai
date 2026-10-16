@@ -615,6 +615,9 @@ impl Provider for Codex {
                 turn_id: Mutex::new(None),
                 compact_asked: AtomicBool::new(false),
                 events: Events::new(events_tx, spec.redactor.clone()),
+                predict_thread: Mutex::new(None),
+                predicting: AtomicBool::new(spec.suggestions),
+                predict_paused: AtomicBool::new(false),
             });
             let trusted: HashSet<String> = spec
                 .mcp_servers
@@ -666,6 +669,7 @@ impl Provider for Codex {
                 }
             };
 
+            *lock(&shared.predict_thread) = Some(thread.id.clone());
             let session = Arc::new(CodexSession {
                 thread_id: thread.id.clone(),
                 ephemeral: thread.ephemeral,
@@ -1764,6 +1768,14 @@ struct Shared {
     /// `thread/compact/start` is being sent; the reader tells its parser.
     compact_asked: AtomicBool,
     events: Events,
+    /// The thread whose turns get Codex's own guess at the user's next message
+    /// ([`SessionSpec::suggestions`]), once it is open.
+    predict_thread: Mutex<Option<String>>,
+    /// Asked after each finished turn; off for good once Codex refuses the request (an
+    /// app-server or account without it).
+    predicting: AtomicBool,
+    /// Held while the conversation's composer is off screen.
+    predict_paused: AtomicBool,
 }
 
 pub struct CodexSession {
@@ -1860,6 +1872,11 @@ impl CodexSession {
 }
 
 impl ProviderSession for CodexSession {
+    fn pause_suggestions(&self, paused: bool) -> BoxFuture<'_, Result<()>> {
+        self.shared.predict_paused.store(paused, Ordering::Release);
+        Box::pin(async { Ok(()) })
+    }
+
     fn native_id(&self) -> String {
         self.thread_id.clone()
     }
@@ -2015,6 +2032,30 @@ impl ProviderSession for CodexSession {
     }
 }
 
+/// Asks Codex for its guess at the user's next message after the turn `turn`, which comes back
+/// as `thread/prediction/updated` (an experimental request, `thread/prediction/request`, seen
+/// in 0.163.0). It runs apart: its answer arrives through the reader that calls this. A refusal
+/// ends the asking for this session, and Brigadier makes no guess of its own.
+fn predict(rpc: &Arc<Rpc>, shared: &Arc<Shared>, turn: String) {
+    if !shared.predicting.load(Ordering::Acquire) || shared.predict_paused.load(Ordering::Acquire) {
+        return;
+    }
+    let Some(thread) = lock(&shared.predict_thread).clone() else {
+        return;
+    };
+    let (rpc, shared) = (rpc.clone(), shared.clone());
+    tokio::spawn(async move {
+        let params = json!({ "threadId": thread.clone(), "sourceTurnId": turn });
+        if let Err(err) = rpc
+            .call::<_, Value>("thread/prediction/request", &params)
+            .await
+        {
+            shared.predicting.store(false, Ordering::Release);
+            crate::logging::private_trace!(rpc.process.private_logs(), debug, "Codex makes no next-message guesses here"; thread = %thread, error = %err);
+        }
+    });
+}
+
 /// Serves a session's app-server output until it exits. `trusted` names the MCP servers whose
 /// tool calls run without asking.
 async fn read_loop(
@@ -2032,7 +2073,18 @@ async fn read_loop(
         for output in parser.feed(&line) {
             match output {
                 Output::Event(event) => {
+                    let finished = match &event {
+                        ProviderEvent::TurnCompleted {
+                            turn_id: Some(turn),
+                            status: TurnStatus::Completed,
+                            ..
+                        } => Some(turn.clone()),
+                        _ => None,
+                    };
                     shared.events.send(event).await;
+                    if let Some(turn) = finished {
+                        predict(&rpc, &shared, turn);
+                    }
                 }
                 Output::Control(Control::Response { id, result }) => rpc.resolve(id, result),
                 Output::Control(Control::Approval {
@@ -2234,6 +2286,7 @@ mod tests {
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
+            suggestions: false,
             protection: Default::default(),
         }
     }
