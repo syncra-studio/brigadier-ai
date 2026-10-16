@@ -50,9 +50,10 @@ def write_files(ws, count):
         lines = [f"file {i:02d} line {n:04d}: " + " ".join(rnd.choice(WORDS) for _ in range(10)) for n in range(1, 520)]
         lines.append(check_word(i))
         open(os.path.join(d, f"{i:02d}.txt"), "w").write("\n".join(lines) + "\n")
-    with open(os.path.join(ws, ".git", "info", "exclude") if os.path.isdir(os.path.join(ws, ".git"))
-              else os.path.join(ws, ".bulk-exclude"), "a") as f:
-        f.write("bulk/\n")
+    # Committed on the session's branch: a worker's checkout is made from its committed tip.
+    git = ["git", "-C", ws, "-c", "user.name=V2 harness", "-c", "user.email=v2@example.invalid", "-c", "commit.gpgsign=false"]
+    subprocess.run(git + ["add", "bulk"], check=True, capture_output=True)
+    subprocess.run(git + ["commit", "-q", "-m", "Add the bulk files to read"], check=True, capture_output=True)
     return d
 
 
