@@ -376,7 +376,14 @@ async function driveTurn(): Promise<object> {
   out.time = { text: text(time), opacity: time ? getComputedStyle(time).opacity : null };
   out.announcedDone = text(one("[data-slot=answer-announcer]", turn() ?? document));
   // Copy's rich text: the answer as shown, with no classes or controls.
+  // A reply of the work, as an opened fold shows it, stays out of it.
+  const work = document.createElement("div");
+  work.setAttribute("data-slot", "aui_assistant-message-content");
+  work.setAttribute("data-commentary", "true");
+  work.textContent = "I’ll fix the rounding next.";
+  one("[data-slot=request-body]", turn() ?? document)?.prepend(work);
   out.html = turn() ? answerHtml(turn()!) : null;
+  work.remove();
   // Read again from the daemon, as after a restart.
   await loadConversation(ID);
   await settle(300);

@@ -837,6 +837,7 @@ export const RequestBlock: FC = () => {
             {answer !== null && (
               <div
                 data-slot="aui_assistant-message-content"
+                data-answer=""
                 // The replies Brigadier sent other sessions with this answer land a jump here.
                 data-peer-message={meta.texts[answer]?.anchors?.join(" ")}
                 className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0 || before.length > 0) && "pt-activity")}
@@ -1033,9 +1034,13 @@ const AnswerActions: FC<{
   );
 };
 
-/** What a rich-text paste of the answer gets: its rendered text, without the thread's controls and styling. */
+/**
+ * What a rich-text paste of the answer gets: its rendered text, without the thread's controls and
+ * styling. Only the answer and its updates, as in the plain text: never the work's own replies,
+ * shown or not.
+ */
 export function answerHtml(turn: Element): string | undefined {
-  const parts = [...turn.querySelectorAll("[data-slot=aui_assistant-message-content], [data-slot=answer-update]")];
+  const parts = [...turn.querySelectorAll("[data-answer], [data-slot=answer-update]")];
   if (parts.length === 0) return undefined;
   return parts
     .map((part) => {
