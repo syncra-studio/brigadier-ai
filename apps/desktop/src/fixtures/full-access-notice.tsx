@@ -59,6 +59,7 @@ async function run() {
   let height = -1;
   for (let tries = 0; tries < 20 && height !== viewport.scrollHeight; tries += 1) {
     height = viewport.scrollHeight;
+    viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
     viewport.scrollTop = height;
     await pause(300);
   }

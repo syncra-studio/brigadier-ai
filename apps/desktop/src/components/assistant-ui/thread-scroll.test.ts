@@ -181,7 +181,7 @@ function open(fake: Fake, id: string | null = key(), running = false): ThreadScr
 
 /** The user scrolls to `top`. */
 function userScroll(fake: Fake, scroller: ThreadScroller, top: number): void {
-  scroller.interrupt();
+  scroller.input({ type: "wheel" });
   fake.scrollTop = top;
   scroller.scrolled();
 }
@@ -1046,4 +1046,31 @@ test("a turn that grew past the bottom unheard (a window not painting hears no r
   second.resized();
   assert.equal(second.following, true);
   assert.equal(other.scrollTop, other.max);
+});
+
+test("a clamp heard only after the content grew back (no input of the user's) keeps a following view at its bottom", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const scroller = open(fake);
+  const plan = fake.row("plan", 600);
+  fake.rows.push(fake.row("asked", 60, "user"), plan);
+  scroller.rowsChanged();
+  assert.equal(scroller.following, true);
+  assert.equal(fake.scrollTop, fake.max);
+  // A plan approved: its turn is laid out again as its work starts, shorter for a moment, and
+  // the browser clamps the view; the turn is back, taller, before the scroll is heard.
+  plan.height = 100;
+  fake.scrollTop = fake.max;
+  plan.height = 700;
+  scroller.scrolled();
+  assert.equal(scroller.following, true);
+  assert.equal(fake.scrollTop, fake.max);
+  scroller.setRunning(true);
+  plan.height += 400;
+  scroller.resized();
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(scroller.contentBelow(), false);
+  // The user's own wheel up still stops following.
+  userScroll(fake, scroller, fake.scrollTop - 300);
+  assert.equal(scroller.following, false);
 });

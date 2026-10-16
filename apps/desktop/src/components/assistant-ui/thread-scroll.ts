@@ -40,6 +40,8 @@ const TURN_LINE_PX = 240;
 const HOLD_MS = 350;
 /** An edit's new message comes back from the daemon; one that comes later than this isn't placed. */
 const EDIT_WINDOW_MS = 30_000;
+/** A scroll this soon after the user's own input in the thread (or a jump of theirs) is theirs. */
+const INPUT_MS = 1_000;
 
 type Rect = { readonly top: number; readonly bottom: number };
 
@@ -130,8 +132,12 @@ export class ThreadScroller {
   private watch = false;
   /** The user scrolled away from the bottom since they were last there or sent a message. */
   private away = false;
-  /** scrollTop as last set or seen here: a scroll to anywhere else is the user's. */
+  /** scrollTop as last set or seen here: a scroll to anywhere else is the user's, or the browser's. */
   private expected = 0;
+  /** When the user last wheeled, touched, pressed or typed in the thread, or jumped in it. */
+  private inputAtMs = Number.NEGATIVE_INFINITY;
+  /** A pointer is held down in the thread (dragging the scrollbar, selecting text). */
+  private pressed = false;
   private lastDistance = 0;
   /** The view's size as last handled, and whether the view was at its bottom then. */
   private size = { width: 0, height: 0 };
@@ -319,8 +325,11 @@ export class ThreadScroller {
   }
 
   /**
-   * A scroll event. One that didn't come from here is the user's, except the browser clamping
-   * the view to a range that shrank under it, or hiding or showing it.
+   * A scroll event. One that didn't come from here is the user's when it comes with their input
+   * (a wheel, a touch, a held pointer, a key, a jump); any other is the browser's: clamping the
+   * view to a range that shrank under it (a turn re-laid out as its work starts again, say, its
+   * content back before the scroll is heard), hiding or showing it. The browser's moves nothing:
+   * a view that follows goes back to its bottom.
    */
   scrolled(): void {
     const viewport = this.layout?.viewport;
@@ -334,6 +343,11 @@ export class ThreadScroller {
     if (clamped || Math.abs(viewport.scrollTop - this.expected) < 1) {
       // Clamped, the view's top moved: its anchor is where it is now.
       this.record(clamped);
+      return;
+    }
+    if (!this.pressed && performance.now() - this.inputAtMs > INPUT_MS) {
+      if (this.follow && this.glide === null) this.toBottom();
+      this.record();
       return;
     }
     this.interrupt();
@@ -362,11 +376,23 @@ export class ThreadScroller {
   };
 
   /**
+   * The user's own input in the thread (a wheel, a touch, a key, a pointer pressed or let go):
+   * what was underway stops, and the scrolls that come with it are theirs.
+   */
+  input = (event?: { type: string }): void => {
+    this.inputAtMs = performance.now();
+    if (event?.type === "pointerdown") this.pressed = true;
+    else if (event?.type === "pointerup" || event?.type === "pointercancel") this.pressed = false;
+    if (event?.type !== "pointerup" && event?.type !== "pointercancel") this.interrupt();
+  };
+
+  /**
    * The user jumps to a place themselves (one of their messages, from the rail or ⌥↑/⌥↓): as
    * with their own scroll away from the bottom, nothing follows, springs or is watched. Reaching
    * the bottom again follows again (see `scrolled`).
    */
   release = (): void => {
+    this.inputAtMs = performance.now();
     this.interrupt();
     this.follow = false;
     this.watch = false;

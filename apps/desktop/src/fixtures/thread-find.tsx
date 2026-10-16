@@ -493,6 +493,7 @@ const steps = {
   /** Esc gives the keyboard back to what had it, out of view, without scrolling the thread to it. */
   async keepsPlace() {
     const away = viewport().querySelector<HTMLElement>("button")!;
+    viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
     viewport().scrollTop = viewport().scrollHeight;
     away.focus({ preventScroll: true });
     press(away, "KeyF", { meta: true });

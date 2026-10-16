@@ -216,8 +216,10 @@ function useThreadScroll(
     const options = { passive: true, signal: listening.signal };
     viewport.addEventListener("scroll", () => scroller.scrolled(), options);
     for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) {
-      viewport.addEventListener(type, scroller.interrupt, options);
+      viewport.addEventListener(type, scroller.input, options);
     }
+    // A pointer pressed in the thread may be let go anywhere.
+    for (const type of ["pointerup", "pointercancel"]) window.addEventListener(type, scroller.input, options);
     // A click on the list's empty space focuses it but leaves the caret in the composer, where
     // Cmd+Up and Cmd+Down would move the caret rather than scroll the list.
     viewport.addEventListener(

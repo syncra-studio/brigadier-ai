@@ -439,6 +439,7 @@ const steps = {
     }
     await until(() => !!$('[data-message-id="long-tall-u"]') && markerIds().includes("long-tall-u"));
     await settle(200);
+    viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
     viewport().scrollTop = viewport().scrollHeight;
     await settle(300);
     const shown = viewport().getBoundingClientRect();
