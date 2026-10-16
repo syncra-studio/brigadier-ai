@@ -1359,6 +1359,8 @@ impl SessionManager {
         self.core
             .record_conversation(conversation_id, events)
             .await?;
+        // A worker wakes the thread when it reports: the turn that started it gets no guess.
+        self.hold_guesses(conversation_id).await;
         if waits {
             // Its timer is set as for any task waiting for quota.
             self.keep_waiting(&task).await;
@@ -2022,6 +2024,7 @@ impl SessionManager {
             owner,
             ended: CancellationToken::new(),
             launch: None,
+            guesses_held: std::sync::Mutex::new(None),
         });
         {
             let mut state = live.state.lock().await;

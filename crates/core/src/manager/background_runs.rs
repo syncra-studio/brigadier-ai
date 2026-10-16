@@ -183,6 +183,8 @@ impl SessionManager {
             // Recorded running from here: a dropped call still records how it ended.
             handoff.run = Some(run.clone());
             self.store_background_run(&run).await;
+            // Its end wakes the thread: the turn that sent it there gets no guess.
+            self.hold_guesses(id).await;
             run
         };
         let reply = format!(

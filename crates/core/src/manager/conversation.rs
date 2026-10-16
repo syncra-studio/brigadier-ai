@@ -247,6 +247,9 @@ pub(crate) struct Cli {
     pub meter: TokenMeter,
     /// A session thread's: the workspace, level and access it was started for.
     pub launch: Option<super::thread::ThreadLaunch>,
+    /// Whether its next-message guesses were last held (none sent yet): a hold is sent only
+    /// when it changes.
+    pub guesses_held: std::sync::Mutex<Option<bool>>,
 }
 
 #[derive(Default)]
@@ -3261,6 +3264,7 @@ impl SessionManager {
             owner,
             ended: CancellationToken::new(),
             launch,
+            guesses_held: std::sync::Mutex::new(None),
         });
         {
             let mut state = conv.state.lock().await;
@@ -3270,8 +3274,7 @@ impl SessionManager {
             }
         }
         // It guesses the user's next message only while they can see its composer.
-        self.pause_suggestions(&cli, !self.composer_shown(&conv.id))
-            .await;
+        self.hold_guesses(&conv.id).await;
         let manager = self.arc();
         let pumped = cli.clone();
         let pumping = conv.clone();
@@ -3294,13 +3297,38 @@ impl SessionManager {
                 set.remove(&id);
             }
         }
-        let Some(conv) = self.convs_lock().get(&id).cloned() else {
+        self.hold_guesses(&id).await;
+    }
+
+    /// Holds the thread CLI's next-message guesses while no composer shows them, and while its
+    /// newest request has work that will wake the thread again (a worker, a background command,
+    /// a review of its work): each guess reads the whole conversation from the cache once more,
+    /// and only the turn that ends the request needs one. Sent only when it changes.
+    pub(super) async fn hold_guesses(&self, id: &ConversationId) {
+        let Some(conv) = self.convs_lock().get(id).cloned() else {
             return;
         };
-        let cli = conv.state.lock().await.cli.clone();
-        if let Some(cli) = cli {
-            self.pause_suggestions(&cli, !shown).await;
+        let Some(cli) = conv.state.lock().await.cli.clone() else {
+            return;
+        };
+        let later = match self.core.board(id).await {
+            Ok(board) => board
+                .latest_request()
+                .is_some_and(|request| super::requests::wakes_later(&board, &request.id)),
+            Err(_) => false,
+        };
+        let held = !self.composer_shown(id) || later;
+        {
+            let mut last = cli
+                .guesses_held
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *last == Some(held) {
+                return;
+            }
+            *last = Some(held);
         }
+        self.pause_suggestions(&cli, held).await;
     }
 
     fn composer_shown(&self, id: &ConversationId) -> bool {

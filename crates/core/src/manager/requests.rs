@@ -216,6 +216,12 @@ impl SessionManager {
 
     /// Brings every request of the conversation up to date with what runs and waits.
     pub(crate) async fn settle_requests(&self, conversation_id: &ConversationId) {
+        self.settle_requests_inner(conversation_id).await;
+        // What still runs for the newest request decides whether its CLI guesses now.
+        self.hold_guesses(conversation_id).await;
+    }
+
+    async fn settle_requests_inner(&self, conversation_id: &ConversationId) {
         let Ok(mut board) = self.core.board(conversation_id).await else {
             return;
         };
@@ -552,6 +558,18 @@ fn runs_in(board: &Board, request: &str) -> bool {
         || board.background_runs.values().any(|run| {
             run.state == crate::work::BackgroundRunState::Running
                 && run.request_id.as_deref() == Some(request)
+        })
+}
+
+/// Whether `request` has work besides the thread's own turn that wakes the thread when it ends:
+/// a worker queued, starting, running or landing, a background command, a code review of its
+/// work. The thread's next-message guess waits for the turn after (G18).
+pub(super) fn wakes_later(board: &Board, request: &str) -> bool {
+    runs_in(board, request)
+        || board.reviews.values().any(|review| {
+            review.kind == ReviewKind::Code
+                && review.state == ReviewState::Running
+                && review_request(board, review).as_deref() == Some(request)
         })
 }
 
