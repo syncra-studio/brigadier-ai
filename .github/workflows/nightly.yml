@@ -4,8 +4,8 @@ name: Nightly
 # builds with their launch smoke checks, macOS clippy and the computer-use helper's checks, which
 # the per-push run (ci.yml) leaves out. The macOS app is built as released (full optimization),
 # signed with the Developer ID, notarized and published as the `nightly` prerelease, which
-# installed nightly builds update themselves from. Without the signing secrets
-# (msgs/w03-secrets.md lists them) it is built unsigned and nothing is published.
+# installed nightly builds update themselves from. Without the signing secrets (the signing step
+# below names them) it is built unsigned and nothing is published.
 #
 # A release tag (v*) runs the same builds, the macOS one universal, and publishes nothing.
 #
@@ -103,8 +103,9 @@ jobs:
 
       - name: Signing keychain and nightly settings
         id: signing
-        # Everything below needs all of these. Without them the app is built unsigned, smoke
-        # checked, and not published. Only main's scheduled or hand-started runs publish.
+        # Everything below needs all of these but the key's password (a key made without one has
+        # none). Without them the app is built unsigned, smoke checked, and not published. Only
+        # main's scheduled or hand-started runs publish.
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -118,8 +119,7 @@ jobs:
         run: |
           missing=()
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID \
-                      APPLE_PASSWORD APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY \
-                      TAURI_SIGNING_PRIVATE_KEY_PASSWORD UPDATER_PUBKEY; do
+                      APPLE_PASSWORD APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY UPDATER_PUBKEY; do
             if [ -z "${!name}" ]; then missing+=("$name"); fi
           done
           if [ "${#missing[@]}" -gt 0 ]; then
@@ -145,7 +145,8 @@ jobs:
           echo "signed=true" >> "$GITHUB_OUTPUT"
 
           # The nightly's version sorts after every earlier nightly of the same release, and its
-          # updater reads the feed the publish job writes.
+          # updater reads the feed the publish job writes. The archive's signature carries the
+          # version, so the feed can't pair a newer version with an older build's archive.
           base="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           stamp="$(date -u +%Y%m%d%H%M)"
           version="$base-nightly.$stamp"
@@ -154,7 +155,7 @@ jobs:
             --arg feed "$feed" '{
               version: $version,
               bundle: { createUpdaterArtifacts: true, macOS: { bundleVersion: $bundleVersion } },
-              plugins: { updater: { pubkey: $pubkey, endpoints: [$feed] } }
+              plugins: { updater: { pubkey: $pubkey, endpoints: [$feed], requireSignedVersion: true } }
             }' > "$RUNNER_TEMP/nightly.conf.json"
           cat "$RUNNER_TEMP/nightly.conf.json"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -391,7 +392,8 @@ jobs:
   report:
     name: Failure issue
     needs: [gate, macos, others, publish]
-    if: always() && needs.gate.outputs.run == 'true' && !startsWith(github.ref, 'refs/tags/')
+    # Main's runs only: a run started by hand on another branch, or a tag's, never touches it.
+    if: always() && needs.gate.outputs.run == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
