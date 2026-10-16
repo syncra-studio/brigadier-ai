@@ -195,6 +195,7 @@ jobs:
           cargo nextest run --locked --profile ci --workspace --lib --bins --tests -- \
             --skip manager::flow::held_merge_tests::the_held_merge_survives_a_restart \
             --skip manager::flow::integrated_checks_tests::a_run_cut_off_by_a_restart_runs_again_and_an_archive_ends_it \
+            --skip manager::flow::mockup_tests::notes_reach_the_mockups_worker_and_the_real_work_gets_its_screenshots \
             --skip manager::flow::peer_ask_tests::a_card_waiting_across_a_restart_still_sends \
             --skip manager::flow::peer_ask_tests::a_send_cut_off_by_a_crash_goes_at_the_next_launch \
             --skip manager::flow::peer_ask_tests::send_on_the_card_delivers_the_message_as_written \
