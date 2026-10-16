@@ -1101,10 +1101,12 @@ async fn request_changes_undo_a_codex_rename_without_hunks() {
             let id = turn.conversation().unwrap();
             let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
             std::fs::rename(workspace.join("a.txt"), workspace.join("renamed.txt")).unwrap();
+            // What Codex reports for a pure rename.
+            let diff = format!("\n\nMoved to: {}", workspace.join("renamed.txt").display());
             let mut change = FileChange::counted(
                 workspace.join("a.txt").to_string_lossy().into_owned(),
                 FileChangeKind::Update,
-                Some("--- a/a.txt\n+++ b/renamed.txt\n"),
+                Some(&diff),
                 usize::MAX,
             );
             change.moved_to = Some(workspace.join("renamed.txt").to_string_lossy().into_owned());
