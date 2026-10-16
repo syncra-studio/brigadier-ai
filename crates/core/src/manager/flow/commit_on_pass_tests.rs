@@ -125,6 +125,14 @@ async fn a_passing_check_commits_the_threads_change_and_a_failing_one_nothing() 
         &seen,
         "\"Add the notes file\" with your trailer: 1 file changed, 1 insertion(+) (NOTES.md). Nothing is left uncommitted.",
     );
+    // The reply says nothing more runs once the work is done (BUILD-PLAN O3).
+    said(
+        &seen,
+        &format!(
+            "Nothing is left uncommitted. {}",
+            crate::manager::checks::AFTER_COMMIT
+        ),
+    );
     let workspace = flow
         .thread_specs()
         .last()

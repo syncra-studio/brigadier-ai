@@ -149,6 +149,10 @@ struct Caller {
 /// What `run_check`'s `commit` says on the user's own checkout.
 const NOT_ON_LOCAL: &str = "Not committed: this is the user's own checkout, where you commit only when they ask, with git yourself.";
 
+/// What a commit's reply ends with (BUILD-PLAN O3): the gate's bench saw the thread try its
+/// change by hand after the commit, a whole call, where the try belonged in the check's message.
+pub(super) const AFTER_COMMIT: &str = "If the work is done, run nothing more for it: a try by hand belongs in the message with this check, not after it.";
+
 /// Longest a `run_check` commit may take, the repository's hooks included.
 const COMMIT_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 5 } else { 300 });
 
@@ -693,7 +697,11 @@ impl SessionManager {
                     .commit_on_pass(&caller, &tree, passed, checked, &message, &fixes)
                     .await;
                 committed = !note.starts_with("Not committed");
-                reply = format!("{reply}\n{note}");
+                reply = if note.starts_with("Committed") {
+                    format!("{reply}\n{note} {AFTER_COMMIT}")
+                } else {
+                    format!("{reply}\n{note}")
+                };
             }
             if !fixes.is_empty() {
                 let note = manager
