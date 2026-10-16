@@ -208,6 +208,8 @@ impl SessionManager {
     /// Removes what `task`'s hold kept: its session files, and its branch while that is still
     /// merged into where it landed (a fix that stopped with work on it keeps it).
     pub(crate) async fn release_hold(&self, task: &Task) {
+        // The held session's folder goes now (BUILD-PLAN D2.2).
+        self.keep_saved_files(&task.id).await;
         let leftovers = self.runtime.ledger().dispose(&hold_owner(&task.id)).await;
         if !leftovers.is_clean() {
             tracing::warn!(task = %task.id, ?leftovers, "some of a landed worker's session files will be retried at the next launch");

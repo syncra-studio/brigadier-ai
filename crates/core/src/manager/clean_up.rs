@@ -42,6 +42,10 @@ impl SessionManager {
                 }
                 continue;
             }
+            // Its CLI's session files go below (BUILD-PLAN D2.2).
+            if holds {
+                self.keep_saved_files(&task.id).await;
+            }
             owners.push((format!("task:{}", task.id), name.clone()));
             owners.push((held, name));
         }

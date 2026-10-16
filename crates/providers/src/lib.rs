@@ -243,6 +243,18 @@ pub fn now_ms() -> i64 {
         .unwrap_or_default()
 }
 
+/// A tool input or result as an event shows it: a result is cut on the way out, once it is
+/// redacted and kept whole (`events::Events::send`, [`KeptOutput`]).
+pub const OUTPUT_CLIP: usize = 8 * 1024;
+/// The most of one result kept: what a command prints beyond it is counted, not kept.
+pub const OUTPUT_KEEP_MAX: usize = 64 * 1024 * 1024;
+
+/// The file a Claude tool result's preview says the whole output was saved to (its
+/// `tool-results/`), if it names one.
+pub fn saved_output_file(text: &str) -> Option<String> {
+    claude::parse::saved_file(text)
+}
+
 /// A file change's diff as shown: clipped on the way out, after it is redacted
 /// (`events::Events::send`), so a secret that crosses the cut is still recognised whole and never
 /// kept in part.

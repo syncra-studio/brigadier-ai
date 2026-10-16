@@ -40,6 +40,7 @@ pub mod disk;
 mod engine;
 mod escalation;
 mod evidence;
+mod export;
 mod fallback;
 #[cfg(debug_assertions)]
 pub mod fault;
@@ -50,6 +51,7 @@ mod fork;
 mod git_actions;
 mod instructions;
 mod integrated_checks;
+mod kept;
 mod landing;
 mod lifecycle;
 mod machine;

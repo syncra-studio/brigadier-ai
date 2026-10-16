@@ -98,6 +98,15 @@ pub(crate) struct Faults {
     planted: Mutex<HashMap<ConversationId, Vec<String>>>,
     /// `BRIGADIER_FAULT` was applied (it arms one worker per daemon run).
     env_used: std::sync::atomic::AtomicBool,
+    /// Storing a kept output fails, as on a full disk (BUILD-PLAN D2.1).
+    kept_writes_fail: std::sync::atomic::AtomicBool,
+}
+
+impl Faults {
+    pub(crate) fn kept_writes_fail(&self) -> bool {
+        self.kept_writes_fail
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// `BRIGADIER_FAULT=<claude|codex>-limit[:tool-calls=N][:window=ID][:reset=MINUTES]`, for
@@ -180,6 +189,13 @@ impl SessionManager {
             },
         );
         Ok(())
+    }
+
+    /// Makes storing a kept output fail (`on`), as on a full disk, or work again.
+    pub fn debug_fail_kept_writes(&self, on: bool) {
+        self.faults
+            .kept_writes_fail
+            .store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Adds `text` to the `learned` items of the next report a worker of `conversation`

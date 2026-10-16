@@ -32,6 +32,7 @@ async fn commands(turn: &Turn, count: u32) {
             exit_code: Some(0),
             output: None,
             duration_ms: None,
+            kept: None,
         })
         .await;
     }

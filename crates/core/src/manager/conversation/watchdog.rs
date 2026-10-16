@@ -383,6 +383,7 @@ mod tests {
             exit_code: None,
             output: None,
             duration_ms: None,
+            kept: None,
         };
         watch.observe(&event, 0);
         assert!(!due(&watch, &timing, 30 * 60_000 - 1, false));

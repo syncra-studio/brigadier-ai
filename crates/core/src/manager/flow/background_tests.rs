@@ -640,6 +640,7 @@ async fn a_codex_command_outliving_its_turn_tells_the_thread_when_it_ends() {
                         exit_code,
                         output: output.map(str::to_owned),
                         duration_ms: None,
+                        kept: None,
                     }
                 };
                 let _ = events
@@ -723,6 +724,7 @@ async fn a_cli_ending_with_its_job_running_tells_the_thread() {
                         exit_code: None,
                         output: None,
                         duration_ms: None,
+                        kept: None,
                     })
                     .await;
                 tokio::spawn(async move {

@@ -291,6 +291,7 @@ async fn the_requests_opening_line_shows_and_later_narration_does_not() {
                 input: Some("{}".into()),
                 status: ItemStatus::InProgress,
                 output: None,
+                kept: None,
             };
             turn.emit(say(
                 "I'll check how the tabs work today, then ask you a few questions.",

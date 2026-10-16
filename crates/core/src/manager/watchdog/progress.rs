@@ -418,6 +418,7 @@ mod tests {
             exit_code: None,
             output: None,
             duration_ms: None,
+            kept: None,
         }
     }
 
@@ -465,6 +466,7 @@ mod tests {
                 input: None,
                 status,
                 output: None,
+                kept: None,
             };
             evidence.observe(&event(ItemStatus::InProgress), 0);
             assert!(evidence.waiting(), "{name}");

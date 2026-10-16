@@ -3744,9 +3744,11 @@ impl SessionManager {
                         merge_delta(&mut deltas, event);
                         deadline.get_or_insert_with(|| tokio::time::Instant::now() + DELTA_WINDOW);
                     }
-                    Some(event) => {
+                    Some(mut event) => {
                         deadline = None;
                         self.store_deltas(&conv, quiet.pass(std::mem::take(&mut deltas))).await;
+                        // Stored whole before it is recorded cut (BUILD-PLAN D2.1).
+                        self.keep_output(&mut event).await;
                         // A worker it starts gets what the thread read so far in its context
                         // pack: recorded when the call starts, before it reaches Brigadier.
                         if matches!(
@@ -4473,6 +4475,7 @@ impl SessionManager {
                 input,
                 status,
                 output,
+                ..
             } => {
                 let name = crate::digest::bare_tool_name(name);
                 if *status == ItemStatus::InProgress {

@@ -134,6 +134,7 @@ async fn a_turns_own_edits_and_long_command_come_back_whole_as_transcript_items(
                         exit_code: None,
                         output: None,
                         duration_ms: None,
+                        kept: None,
                     })
                     .await;
                     // Codex streams the output as it comes; Claude's arrives at completion.
@@ -159,6 +160,7 @@ async fn a_turns_own_edits_and_long_command_come_back_whole_as_transcript_items(
                         exit_code: Some(0),
                         output: Some(output),
                         duration_ms,
+                        kept: None,
                     })
                     .await;
                     Reply::text("Built.")

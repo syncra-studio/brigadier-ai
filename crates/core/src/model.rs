@@ -2249,6 +2249,13 @@ pub enum DomainEvent {
         task_id: TaskId,
         event: ProviderEvent,
     },
+    /// A file a worker's tool result named, copied later than the result was seen: before the
+    /// CLI's session folder could go (BUILD-PLAN D2.2). `itemId` is the result's.
+    OutputKept {
+        task_id: TaskId,
+        item_id: String,
+        file: brigadier_providers::KeptFile,
+    },
     OrchestratorLogged {
         conversation_id: ConversationId,
         entry: OrchestratorEntry,
@@ -2439,6 +2446,7 @@ impl DomainEvent {
             Self::PreviewsCleared { .. } => "previews.cleared",
             Self::QueueChanged { .. } => "queue.changed",
             Self::WorkerEvent { .. } => "worker.event",
+            Self::OutputKept { .. } => "output.kept",
             Self::OrchestratorLogged { .. } => "orchestrator.logged",
             Self::DraftPinned { .. } => "draft.pinned",
             Self::BrainJobUpdated { .. } => "brain.job",

@@ -160,6 +160,7 @@ impl Projection {
             | DomainEvent::OvernightUpdated { .. }
             | DomainEvent::QueueChanged { .. }
             | DomainEvent::WorkerEvent { .. }
+            | DomainEvent::OutputKept { .. }
             | DomainEvent::OrchestratorLogged { .. }
             | DomainEvent::RawSessionUpdated { .. }
             | DomainEvent::RawEvent { .. }

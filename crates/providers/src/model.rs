@@ -603,6 +603,75 @@ pub enum TextPhase {
     Answer,
 }
 
+/// A tool result or command output kept whole (BUILD-PLAN D2.1): an event's `output` is cut at
+/// 8 KiB, so the result as the CLI gave it is stored first, in Brigadier's blob store, and the
+/// event names it here. The adapter fills `whole` (and the saved file's `text`), redacted; the
+/// core stores them and records the hashes, or why it couldn't.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptOutput {
+    /// The blob holding the result as the CLI gave it, before Brigadier cut it; `None` when it
+    /// wasn't stored (see `error`), or the result was short enough to be whole in `output`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub blob: Option<String>,
+    /// Its size in bytes.
+    #[serde(default)]
+    pub bytes: u64,
+    /// The whole output the CLI saved to a file of its own and showed the model only a preview
+    /// of (Claude's `tool-results/`), copied when the event was seen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub file: Option<KeptFile>,
+    /// The CLI gave only an excerpt (a failing Claude command's head and tail): no more of it
+    /// exists anywhere.
+    #[serde(default)]
+    pub excerpt: bool,
+    /// Why the result couldn't be kept (a failed write).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+    /// The redacted result, waiting to be stored. Never serialized.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub whole: Option<Arc<str>>,
+}
+
+/// A file the CLI saved a whole output to, and Brigadier's copy of it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptFile {
+    /// Where the CLI saved it.
+    pub path: String,
+    /// The blob holding the copy; `None` when it couldn't be copied (see `error`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub blob: Option<String>,
+    #[serde(default)]
+    pub bytes: u64,
+    /// Why it couldn't be copied (the file was gone, a failed write).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+    /// The redacted file, waiting to be stored. Never serialized.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub text: Option<Arc<str>>,
+}
+
+impl KeptOutput {
+    /// Whether all of it that exists is kept: the result is stored (or was short enough to be
+    /// whole in the event), and so is the CLI's saved file, if any.
+    pub fn is_complete(&self) -> bool {
+        self.error.is_none()
+            && self.whole.is_none()
+            && self
+                .file
+                .as_ref()
+                .is_none_or(|file| file.blob.is_some() && file.error.is_none())
+    }
+}
+
 /// Everything a provider session reports, in one vocabulary for every CLI.
 ///
 /// Streaming text arrives as `*Delta` events keyed by `itemId`; the matching final event
@@ -654,6 +723,11 @@ pub enum ProviderEvent {
         status: ItemStatus,
         /// Result text (truncated), once finished.
         output: Option<String>,
+        /// Where the whole result is kept, when `output` is cut or the CLI saved it to a file of
+        /// its own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        kept: Option<Box<KeptOutput>>,
     },
     Command {
         item_id: String,
@@ -664,6 +738,11 @@ pub enum ProviderEvent {
         /// Combined output (truncated), once finished.
         output: Option<String>,
         duration_ms: Option<i64>,
+        /// Where the whole output is kept, when `output` is cut or the CLI saved it to a file of
+        /// its own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        kept: Option<Box<KeptOutput>>,
     },
     CommandOutputDelta {
         item_id: String,

@@ -539,6 +539,8 @@ impl SessionManager {
 
     /// Writes the successor's hand-off files and answers its first message.
     async fn write_task_handoff(&self, task: &Task) -> Result<String> {
+        // The model before may be on another provider, whose files go with its session.
+        self.keep_saved_files(&task.id).await;
         let (dir, has_diff) = self.write_handoff_files(task).await?;
         let before = task
             .attempts

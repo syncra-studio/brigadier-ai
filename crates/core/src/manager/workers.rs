@@ -2852,10 +2852,12 @@ impl SessionManager {
                         merge_delta(&mut deltas, event);
                         deadline.get_or_insert_with(|| tokio::time::Instant::now() + DELTA_WINDOW);
                     }
-                    Some(event) => {
+                    Some(mut event) => {
                         live.note_event(&cli, &event).await;
                         deadline = None;
                         self.record_worker_events(&live.id, std::mem::take(&mut deltas)).await;
+                        // Stored whole before it is recorded cut (BUILD-PLAN D2.1).
+                        self.keep_output(&mut event).await;
                         let mut exited = false;
                         for event in self.session_events(EventSource::Task(&live.id), &cli, event) {
                             if let ProviderEvent::Exited {
@@ -5016,6 +5018,8 @@ impl SessionManager {
         self.task_ended_waiting(task, state).await;
         let owner = format!("task:{}", task.id);
         self.grants.revoke_owner(&owner);
+        // Its CLI's session folder goes with what the task leaves (BUILD-PLAN D2.2).
+        self.keep_saved_files(&task.id).await;
         let leftovers = self.runtime.ledger().dispose(&owner).await;
         if !leftovers.is_clean() {
             tracing::warn!(task = %task.id, ?leftovers, "some of the task's leftovers will be retried at the next launch");

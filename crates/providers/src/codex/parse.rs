@@ -12,9 +12,7 @@ use serde_json::Value;
 
 use super::protocol::{self as p, ThreadItem};
 use crate::model::*;
-use crate::{clip, now_ms};
-
-const OUTPUT_CLIP: usize = 8 * 1024;
+use crate::{OUTPUT_CLIP, clip, now_ms};
 
 #[derive(Debug)]
 pub enum Control {
@@ -446,8 +444,11 @@ impl Parser {
                     p::CommandExecutionStatus::Declined => ItemStatus::Declined,
                 },
                 exit_code,
-                output: aggregated_output.map(|output| clip(&output, OUTPUT_CLIP)),
+                // Whole (P5 in docs/research/long-sessions/PROBES.md: `aggregatedOutput` held all
+                // of a 200 KiB output): the event sender cuts it once it is redacted and kept.
+                output: aggregated_output,
                 duration_ms,
+                kept: None,
             },
             ThreadItem::FileChange {
                 id,
@@ -508,14 +509,15 @@ impl Parser {
                 },
                 output: error
                     .map(|error| error.message)
-                    .or_else(|| result.map(|result| mcp_content_text(&result.content)))
-                    .map(|output| clip(&output, OUTPUT_CLIP)),
+                    .or_else(|| result.map(|result| mcp_content_text(&result.content))),
+                kept: None,
             },
             ThreadItem::DynamicToolCall {
                 id,
                 tool,
                 arguments,
                 status,
+                content_items,
                 ..
             } => ProviderEvent::ToolCall {
                 item_id: id,
@@ -526,7 +528,8 @@ impl Parser {
                     p::DynamicToolCallStatus::Completed => ItemStatus::Completed,
                     p::DynamicToolCallStatus::Failed => ItemStatus::Failed,
                 },
-                output: None,
+                output: content_items.map(|items| dynamic_content_text(&items)),
+                kept: None,
             },
             // A sub-agent call (spawning one, waiting for it…) is a tool call of the worker's;
             // what the sub-agent does meanwhile only shows the session is alive.
@@ -547,6 +550,7 @@ impl Parser {
                     | p::CollabAgentToolCallStatus::Interrupted => ItemStatus::Failed,
                 },
                 output: None,
+                kept: None,
             },
             ThreadItem::SubAgentActivity {
                 agent_thread_id, ..
@@ -559,6 +563,7 @@ impl Parser {
                 input: Some(query),
                 status: item_status(completed),
                 output: None,
+                kept: None,
             },
             ThreadItem::ImageView { id, path } => ProviderEvent::ToolCall {
                 item_id: id,
@@ -566,6 +571,7 @@ impl Parser {
                 input: Some(path.to_string()),
                 status: item_status(completed),
                 output: None,
+                kept: None,
             },
             ThreadItem::ImageGeneration {
                 id,
@@ -590,6 +596,7 @@ impl Parser {
                 input: None,
                 status: ItemStatus::Completed,
                 output: Some(text),
+                kept: None,
             },
             ThreadItem::ContextCompaction { .. } if !completed => {
                 let automatic = !std::mem::take(&mut self.compact_asked);
@@ -1116,6 +1123,19 @@ fn looked(item: &ThreadItem) -> Option<ProviderEvent> {
 /// An MCP result's content as the transcript shows it: text blocks as their text, an image as
 /// a short placeholder (its base64 would fill the clip and hide the text after it), anything
 /// else as its JSON.
+/// The text of a dynamic tool's answer (Brigadier's own tools, served to a Codex thread).
+fn dynamic_content_text(items: &[p::DynamicToolCallOutputContentItem]) -> String {
+    items
+        .iter()
+        .map(|item| match item {
+            p::DynamicToolCallOutputContentItem::InputText { text } => text.clone(),
+            p::DynamicToolCallOutputContentItem::InputImage { .. } => "[image]".to_owned(),
+            p::DynamicToolCallOutputContentItem::InputAudio { .. } => "[audio]".to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn mcp_content_text(content: &[Value]) -> String {
     content
         .iter()
@@ -1340,6 +1360,44 @@ mod tests {
                 only_reads(vec![read("src.rs", Some((100, None)))]),
             ]
         );
+    }
+
+    /// P5 (docs/research/long-sessions/PROBES.md): `item/completed` holds a 200 KiB command's
+    /// whole output and an MCP tool's whole result; the parser passes them on whole, for the
+    /// event sender to keep before it cuts them.
+    #[test]
+    fn a_long_command_and_mcp_result_reach_the_event_sender_whole() {
+        let mut parser = Parser::live();
+        let big = format!(
+            "{}PLANTED-MARKER\n{}",
+            "a\n".repeat(25_000),
+            "b\n".repeat(75_000)
+        );
+        let command = json!({"method":"item/completed", "params":{"threadId":"t", "turnId":"u",
+            "completedAtMs": 1, "item":{
+            "type":"commandExecution", "id": "c", "command": "python3 gen.py", "cwd":"/r",
+            "commandActions": [], "status": "completed",
+            "exitCode": 0, "aggregatedOutput": big, "durationMs": 3,
+            "source": "unifiedExecStartup"}}});
+        let mcp = json!({"method":"item/completed", "params":{"threadId":"t", "turnId":"u",
+            "completedAtMs": 1, "item":{
+            "type":"mcpToolCall", "id": "m", "server": "probe", "tool": "big_dump",
+            "status": "completed", "arguments": {},
+            "result": {"content": [{"type": "text", "text": big}]}, "error": null,
+            "durationMs": 20}}});
+        let outputs: Vec<Option<String>> = [command, mcp]
+            .iter()
+            .flat_map(|line| events(&mut parser, line))
+            .filter_map(|event| match event {
+                ProviderEvent::Command { output, kept, .. }
+                | ProviderEvent::ToolCall { output, kept, .. } => {
+                    assert_eq!(kept, None);
+                    Some(output)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs, [Some(big.clone()), Some(big)]);
     }
 
     #[test]
@@ -1725,6 +1783,7 @@ mod tests {
                 input: None,
                 status: ItemStatus::InProgress,
                 output: None,
+                kept: None,
             }]
         );
         let activity = json!({ "method": "item/completed", "params": {

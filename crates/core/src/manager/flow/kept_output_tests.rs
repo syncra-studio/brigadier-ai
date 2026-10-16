@@ -1,0 +1,322 @@
+//! Durable raw output (BUILD-PLAN D2.1, D2.2): a worker's long command output and the file a
+//! Claude preview names are kept whole when the events are seen, and the fresh session a
+//! hand-off starts finds them in its hand-off folder, whatever happened to the CLI's own
+//! session files; what couldn't be kept is said, never passed off as whole.
+
+use std::sync::{Arc, Mutex};
+
+use brigadier_providers::{ItemStatus, KeptFile, KeptOutput, ProviderEvent};
+use serde_json::json;
+
+use super::{Flow, Options, Reply, Script, Turn};
+use crate::model::DomainEvent;
+
+fn script<F, Fut>(f: F) -> Script
+where
+    F: Fn(Turn) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Reply> + Send + 'static,
+{
+    Arc::new(move |turn| Box::pin(f(turn)))
+}
+
+const MARKER: &str = "PLANTED-MARKER-7f3a9c";
+const SAVED_MARKER: &str = "SAVED-MARKER-41bd";
+
+/// 200 KiB of output with `marker` 50 KiB in.
+fn big(marker: &str) -> String {
+    let line = "line filler text filler text filler text\n";
+    let mut text = line.repeat(50 * 1024 / line.len());
+    text.push_str(marker);
+    text.push('\n');
+    while text.len() < 200 * 1024 {
+        text.push_str(line);
+    }
+    text
+}
+
+/// What the adapter's event sender hands on for a long output: cut, with the whole waiting.
+fn cut(whole: &str) -> String {
+    format!(
+        "{}… [{} more bytes]",
+        &whole[..8 * 1024],
+        whole.len() - 8 * 1024
+    )
+}
+
+/// The first session's two long results: a command's, and an MCP tool's that Claude saved
+/// to its `tool-results/` and previewed.
+async fn long_results(turn: &Turn) {
+    let whole = big(MARKER);
+    turn.emit(ProviderEvent::Command {
+        item_id: "cmd-1".into(),
+        command: "python3 gen.py".into(),
+        cwd: None,
+        status: ItemStatus::Completed,
+        exit_code: Some(0),
+        output: Some(cut(&whole)),
+        duration_ms: None,
+        kept: Some(Box::new(KeptOutput {
+            bytes: whole.len() as u64,
+            whole: Some(whole.as_str().into()),
+            ..KeptOutput::default()
+        })),
+    })
+    .await;
+    let saved = big(SAVED_MARKER);
+    turn.emit(ProviderEvent::ToolCall {
+        item_id: "mcp-1".into(),
+        name: "mcp__probe__big_dump".into(),
+        input: Some("{}".into()),
+        status: ItemStatus::Completed,
+        output: Some(
+            "Error: result exceeds maximum allowed tokens. Output has been saved to \
+             /cli/session/tool-results/mcp-probe-big_dump-1.txt."
+                .into(),
+        ),
+        kept: Some(Box::new(KeptOutput {
+            file: Some(KeptFile {
+                path: "/cli/session/tool-results/mcp-probe-big_dump-1.txt".into(),
+                bytes: saved.len() as u64,
+                text: Some(saved.as_str().into()),
+                ..KeptFile::default()
+            }),
+            ..KeptOutput::default()
+        })),
+    })
+    .await;
+}
+
+/// The thread delegates one scout. Its first session prints the long results and grows past
+/// the hand-off size; the fresh one's first message is logged, and it reports.
+fn handing_over(firsts: &Arc<Mutex<Vec<String>>>) -> Script {
+    handing_over_with(firsts, None)
+}
+
+/// [`handing_over`], whose first session, given `saved`, shows instead one result recorded
+/// before results were kept: a preview naming the file `saved` its CLI saved the output to.
+fn handing_over_with(
+    firsts: &Arc<Mutex<Vec<String>>>,
+    saved: Option<std::path::PathBuf>,
+) -> Script {
+    let firsts = firsts.clone();
+    script(move |turn| {
+        let (firsts, saved) = (firsts.clone(), saved.clone());
+        async move {
+            if turn.is_review() {
+                return Reply::text("No findings.");
+            }
+            if turn.is_orchestrator() {
+                if turn.input.contains("Find the marker.") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "medium", "title": "Find the marker",
+                                   "kind": "scout", "spec": "Find the marker in gen.py's output.",
+                                   "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                return Reply::text("Noted.");
+            }
+            const NOTE: &str = "Goal: find the marker.\nNext steps: read the outputs.";
+            if turn.input.contains("[Brigadier] Your context is now about") {
+                return Reply::text(NOTE);
+            }
+            if turn.input.contains("You are continuing task-") {
+                firsts.lock().unwrap().push(turn.input.clone());
+                let reply = turn
+                    .call("submit_report", json!({"summary": "Found it."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Reported.");
+            }
+            // It starts small, prints the long results and grows past the hand-off size.
+            turn.report_context(20_000).await;
+            match saved {
+                Some(saved) => {
+                    turn.emit(ProviderEvent::ToolCall {
+                        item_id: "old-1".into(),
+                        name: "mcp__probe__big_dump".into(),
+                        input: Some("{}".into()),
+                        status: ItemStatus::Completed,
+                        output: Some(format!(
+                            "Error: result exceeds maximum allowed tokens. Output has been saved \
+                             to {}.",
+                            saved.display()
+                        )),
+                        kept: None,
+                    })
+                    .await
+                }
+                None => long_results(&turn).await,
+            }
+            Reply {
+                text: NOTE.into(),
+                context_tokens: Some(310_000),
+                ..Reply::default()
+            }
+        }
+    })
+}
+
+/// The hand-off folder a fresh session's first message names.
+fn handoff_dir(first: &str) -> std::path::PathBuf {
+    first
+        .split("Its hand-off is in ")
+        .nth(1)
+        .and_then(|rest| rest.split(": ").next())
+        .expect("the hand-off folder")
+        .into()
+}
+
+/// The kept parts of the worker's recorded long results, and its other kept-copy events.
+async fn recorded_kept(flow: &Flow) -> (Vec<KeptOutput>, Vec<DomainEvent>) {
+    let board = flow.board().await;
+    let task = board.tasks.keys().next().expect("the scout").clone();
+    let page = flow
+        .manager
+        .core
+        .store()
+        .read_stream_since(crate::model::streams::task(&task), 0, 10_000)
+        .await
+        .unwrap();
+    let mut kept = Vec::new();
+    let mut late = Vec::new();
+    for stored in &page {
+        match serde_json::from_str::<DomainEvent>(stored.payload.get()).unwrap() {
+            DomainEvent::WorkerEvent {
+                event:
+                    ProviderEvent::Command {
+                        kept: Some(one), ..
+                    }
+                    | ProviderEvent::ToolCall {
+                        kept: Some(one), ..
+                    },
+                ..
+            } => kept.push(*one),
+            event @ DomainEvent::OutputKept { .. } => late.push(event),
+            _ => {}
+        }
+    }
+    (kept, late)
+}
+
+#[tokio::test]
+async fn a_long_output_and_a_saved_file_reach_the_fresh_session_whole() {
+    let firsts: Arc<Mutex<Vec<String>>> = Arc::default();
+    let flow = Flow::start("kept-whole", Options::default(), handing_over(&firsts)).await;
+    flow.say("Find the marker.").await;
+    flow.until("the scout reported", |board| {
+        board.tasks.values().any(|task| task.report.is_some())
+    })
+    .await;
+    // Recorded cut, naming the blob that holds the whole, and nothing waiting.
+    let (kept, _) = recorded_kept(&flow).await;
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept.iter().all(KeptOutput::is_complete), "{kept:?}");
+    let blob = kept[0].blob.clone().expect("the output's blob");
+    let whole = flow
+        .manager
+        .core
+        .store()
+        .blobs()
+        .get(blob.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(String::from_utf8(whole).unwrap().contains(MARKER));
+
+    let first = firsts
+        .lock()
+        .unwrap()
+        .first()
+        .cloned()
+        .expect("a fresh session");
+    assert!(first.contains("transcript.md is complete."), "{first}");
+    let dir = handoff_dir(&first);
+    let transcript = std::fs::read_to_string(dir.join("transcript.md")).unwrap();
+    assert!(!transcript.contains(MARKER), "the transcript itself is cut");
+    // The CLI's session files are not needed: the copies are in the hand-off folder.
+    let named: Vec<&str> = transcript
+        .split("outputs/")
+        .skip(1)
+        .filter_map(|rest| rest.split(')').next())
+        .filter(|name| name.ends_with(".txt"))
+        .collect();
+    assert_eq!(named.len(), 2, "{transcript}");
+    let read = |name: &str| std::fs::read_to_string(dir.join("outputs").join(name)).unwrap();
+    assert!(read(named[0]).contains(MARKER));
+    assert!(read(named[1]).contains(SAVED_MARKER));
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn an_output_the_disk_refused_is_said_missing_to_the_fresh_session() {
+    let firsts: Arc<Mutex<Vec<String>>> = Arc::default();
+    let flow = Flow::start("kept-refused", Options::default(), handing_over(&firsts)).await;
+    flow.manager.debug_fail_kept_writes(true);
+    flow.say("Find the marker.").await;
+    flow.until("the scout reported", |board| {
+        board.tasks.values().any(|task| task.report.is_some())
+    })
+    .await;
+    let (kept, _) = recorded_kept(&flow).await;
+    assert!(kept[0].error.as_deref().unwrap().contains("disk refused"));
+    let first = firsts
+        .lock()
+        .unwrap()
+        .first()
+        .cloned()
+        .expect("a fresh session");
+    assert!(first.contains("transcript.md is NOT complete"), "{first}");
+    assert!(first.contains("couldn't be stored"), "{first}");
+    assert!(first.contains("say it is unknown"), "{first}");
+    let transcript = std::fs::read_to_string(handoff_dir(&first).join("transcript.md")).unwrap();
+    assert!(transcript.contains("Missing from this transcript:"));
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_saved_file_not_copied_yet_is_copied_before_the_hand_off_and_outlives_its_folder() {
+    let folder = std::env::temp_dir().join(format!("brigadier-kept-cli-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(folder.join("tool-results")).unwrap();
+    let saved = folder.join("tool-results/mcp-probe-big_dump-2.txt");
+    std::fs::write(&saved, big(SAVED_MARKER)).unwrap();
+    let firsts: Arc<Mutex<Vec<String>>> = Arc::default();
+    let flow = Flow::start(
+        "kept-late",
+        Options::default(),
+        handing_over_with(&firsts, Some(saved.clone())),
+    )
+    .await;
+    flow.say("Find the marker.").await;
+    flow.until("the scout reported", |board| {
+        board.tasks.values().any(|task| task.report.is_some())
+    })
+    .await;
+    let (_, late) = recorded_kept(&flow).await;
+    assert!(
+        matches!(&late[..], [DomainEvent::OutputKept { item_id, file, .. }]
+            if item_id == "old-1" && file.blob.is_some()),
+        "{late:?}"
+    );
+    // The CLI's session folder goes; the hand-off's copy stays.
+    std::fs::remove_dir_all(&folder).unwrap();
+    let first = firsts
+        .lock()
+        .unwrap()
+        .first()
+        .cloned()
+        .expect("a fresh session");
+    assert!(first.contains("transcript.md is complete."), "{first}");
+    let dir = handoff_dir(&first);
+    let copied = std::fs::read_dir(dir.join("outputs"))
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(copied.len(), 1);
+    assert!(copied[0].contains(SAVED_MARKER));
+    flow.stop().await;
+}

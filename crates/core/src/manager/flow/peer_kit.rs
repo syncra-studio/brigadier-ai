@@ -207,6 +207,7 @@ pub(super) async fn wait_as(turn: &Turn, args: Value, name: &str) -> (String, bo
         input: Some(args.to_string()),
         status,
         output,
+        kept: None,
     };
     turn.emit(event(ItemStatus::InProgress, None)).await;
     let reply = turn.call("wait_for_replies", args.clone()).await;

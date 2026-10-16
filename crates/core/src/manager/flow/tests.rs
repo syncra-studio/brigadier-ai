@@ -2938,6 +2938,7 @@ async fn a_codex_thread_s_own_commands_and_edits_are_tool_steps() {
                         exit_code: (status == ItemStatus::Completed).then_some(0),
                         output: None,
                         duration_ms: None,
+                        kept: None,
                     })
                     .await
                     .unwrap();
@@ -3025,6 +3026,7 @@ async fn a_finished_tool_step_says_when_it_ended_and_how_it_exited_and_opens_in_
                             exit_code: finished.then_some(1),
                             output: finished.then(|| "1 failed".into()),
                             duration_ms: finished.then_some(41_000),
+                            kept: None,
                         })
                         .await
                         .unwrap();
@@ -3040,6 +3042,7 @@ async fn a_finished_tool_step_says_when_it_ended_and_how_it_exited_and_opens_in_
                             input: Some(json!({"command": "cargo test"}).to_string()),
                             status,
                             output,
+                            kept: None,
                         })
                         .await
                         .unwrap();
@@ -3151,6 +3154,7 @@ async fn orchestrator_tools_are_visible_while_running_and_keep_their_first_posit
                         input: None,
                         status: ItemStatus::InProgress,
                         output: None,
+                        kept: None,
                     })
                     .await
                     .unwrap();
@@ -3162,6 +3166,7 @@ async fn orchestrator_tools_are_visible_while_running_and_keep_their_first_posit
                         input: Some(json!({"query":"composer attachments"}).to_string()),
                         status: ItemStatus::Completed,
                         output: Some("Found the composer".into()),
+                        kept: None,
                     })
                     .await
                     .unwrap();

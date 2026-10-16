@@ -1047,6 +1047,7 @@ mod tests {
             exit_code: None,
             output: None,
             duration_ms: None,
+            kept: None,
         };
         assert!(evidence.observe(&event, 0));
         watch.command_running = true;

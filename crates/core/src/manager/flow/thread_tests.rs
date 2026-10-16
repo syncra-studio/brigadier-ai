@@ -1197,6 +1197,7 @@ async fn a_stop_during_a_command_ends_it_and_the_next_message_resumes() {
                     input: Some(json!({ "command": "sleep 45" }).to_string()),
                     status: brigadier_providers::ItemStatus::InProgress,
                     output: None,
+                    kept: None,
                 })
                 .await;
                 assert!(turn.stopped().await, "the user stops it");

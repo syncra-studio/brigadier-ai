@@ -285,6 +285,7 @@ async fn a_receiver_a_crash_cut_off_replies_that_it_was_cut_off() {
                 exit_code: None,
                 output: None,
                 duration_ms: None,
+                kept: None,
             })
             .await;
             held.notified().await;

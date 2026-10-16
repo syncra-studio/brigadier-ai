@@ -7,6 +7,7 @@ import type { FileChange } from "./FileChange";
 import type { FileRead } from "./FileRead";
 import type { FileSearch } from "./FileSearch";
 import type { ItemStatus } from "./ItemStatus";
+import type { KeptOutput } from "./KeptOutput";
 import type { NoticeLevel } from "./NoticeLevel";
 import type { ProviderError } from "./ProviderError";
 import type { QuotaSnapshot } from "./QuotaSnapshot";
@@ -33,11 +34,21 @@ input: string | null, status: ItemStatus,
 /**
  * Result text (truncated), once finished.
  */
-output: string | null, } | { "type": "command", itemId: string, command: string, cwd: string | null, status: ItemStatus, exitCode: number | null, 
+output: string | null, 
+/**
+ * Where the whole result is kept, when `output` is cut or the CLI saved it to a file of
+ * its own.
+ */
+kept?: KeptOutput, } | { "type": "command", itemId: string, command: string, cwd: string | null, status: ItemStatus, exitCode: number | null, 
 /**
  * Combined output (truncated), once finished.
  */
-output: string | null, durationMs: number | null, } | { "type": "commandOutputDelta", itemId: string, text: string, } | { "type": "looked", itemId: string, cwd: string | null, reads: Array<FileRead>, searches: Array<FileSearch>, } | { "type": "progress", itemId: string, } | { "type": "backgroundJobs", running: number, } | { "type": "fileChanges", itemId: string, changes: Array<FileChange>, status: ItemStatus, } | { "type": "image", itemId: string, status: ItemStatus, path: string | null, prompt: string | null, } | { "type": "usage", 
+output: string | null, durationMs: number | null, 
+/**
+ * Where the whole output is kept, when `output` is cut or the CLI saved it to a file of
+ * its own.
+ */
+kept?: KeptOutput, } | { "type": "commandOutputDelta", itemId: string, text: string, } | { "type": "looked", itemId: string, cwd: string | null, reads: Array<FileRead>, searches: Array<FileSearch>, } | { "type": "progress", itemId: string, } | { "type": "backgroundJobs", running: number, } | { "type": "fileChanges", itemId: string, changes: Array<FileChange>, status: ItemStatus, } | { "type": "image", itemId: string, status: ItemStatus, path: string | null, prompt: string | null, } | { "type": "usage", 
 /**
  * Totals for the session so far.
  */

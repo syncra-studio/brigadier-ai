@@ -240,8 +240,7 @@ async fn a_worker_whose_sign_in_fails_resumes_its_own_session_on_another_account
 }
 
 /// "Prompt is too long" on a worker: a fresh session of the same model goes on from the size
-/// hand-off, told that its transcript is clipped and to say unknown rather than guess, and no
-/// other model is routed.
+/// hand-off, whose transcript is whole (BUILD-PLAN D2.1), and no other model is routed.
 #[tokio::test]
 async fn a_worker_whose_prompt_is_too_long_goes_on_in_a_fresh_session_of_the_same_model() {
     let log: Arc<Mutex<Vec<WorkerTurn>>> = Arc::default();
@@ -258,10 +257,7 @@ async fn a_worker_whose_prompt_is_too_long_goes_on_in_a_fresh_session_of_the_sam
     assert_ne!(turns[1].native_id, turns[0].native_id, "a fresh session");
     assert!(
         turns[1].input.contains("prompt is too long")
-            && turns[1].input.contains("This hand-off is not lossless")
-            && turns[1]
-                .input
-                .contains("say it is unknown rather than guess it"),
+            && turns[1].input.contains("transcript.md is complete."),
         "{}",
         turns[1].input
     );

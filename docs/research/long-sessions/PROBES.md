@@ -111,3 +111,35 @@ app's `routing.sqlite`.
   544 and wrote 216,616 after the thread's last turn at 252,313 (WEAK-SPOTS C11). Codex cache writes: reported as 0 in all
   725 Codex rows. The field is optional with a default of 0 in the app-server schema, so Codex comparisons lean on the
   cached share of input, keep recording the write counter, and treat Codex write charges as unknown.
+
+## P5. Phase D2's probes (2026-10-16; claude 2.1.301 on Haiku, codex-cli 0.162.1 app-server on gpt-6.1-sol at low)
+
+One command printed 200 KiB (204,802 bytes) with a planted marker 50 KiB in; one stdio MCP tool returned the same
+text.
+
+- **Claude, `PostToolBatch` in `-p` stream-json: it fires, once per batch, and its `tool_response` is byte-equal to
+  the stream's `tool_result` content.** So the stream already carries what the model saw, and Brigadier stores it in
+  the parse layer, before its 8 KiB clip, with no hook process per batch (BUILD-PLAN D2.1, change approved
+  2026-10-16).
+- **Claude, a big result is a preview plus a file.** `Bash`'s 200 KiB result reached the model (and the stream) as
+  `<persisted-output>`: "Output too large (200KB). Full output saved to: `<config>/projects/<cwd>/<session>/tool-results/<id>.txt`"
+  and a 2 KB preview. The stream line's `tool_use_result` also has `persistedOutputPath` and `persistedOutputSize`
+  (204,802), and its `stdout` holds the first 30,000 characters. An MCP tool's 200 KiB result is the same idea in
+  other words: "Error: result (204,802 characters across 3,414 lines) exceeds maximum allowed tokens. Output has been
+  saved to `<…>/tool-results/mcp-probe-big_dump-<n>.txt`." Both files hold the whole output, marker included, so
+  D2.2 copies them into the blob store when the event is seen.
+- **Claude, `PreCompact` exit 2 blocks a proactive compaction, mid-turn included.** With
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000` (the binary clamps the value to at least 100,000) and five 20k-token reads in
+  one turn, the CLI started compacting before each of the last three calls (`system/status` `compacting`, hook
+  `trigger: "auto"`), the hook refused, and the stream went on with `status: null`, no `compact_result` and no
+  `compact_boundary`; the context grew to 135k on the 200k model. A blocked manual `/compact` instead ends
+  `compact_result: "failed"` with `compact_error: "skipped: Compaction blocked by PreCompact hook: …"`. So a
+  `compacting` status is not yet a compaction: only `compact_boundary` is.
+- **Codex, `item/completed` is whole.** The command's `aggregatedOutput` was all 204,802 bytes and the MCP call's
+  `result` all of the text, marker included: no excerpt bound at this size (`tool_output_token_limit` bounds what the
+  model keeps in its history, not the event). So the parse-layer copy is the whole output, more than the model saw.
+- **Codex, Brigadier's own hooks without the user's: fails by the inline route.** With `--enable hooks` and
+  `-c hooks.PostToolUse=[…]` / `-c hooks.PreCompact=[…]`, neither inline hook ran, while the user's
+  `~/.codex/hooks.json` ran (`sessionStart`, `userPromptSubmit`; `source: "user"`). The per-session `CODEX_HOME` route
+  was not tried. Codex hooks stay off (`DISABLED_FEATURES`); Codex is kept from compacting by the hand-off guard below
+  its ~90% clamp alone (BUILD-PLAN D2.3, D2.3b).

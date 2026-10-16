@@ -24,7 +24,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use brigadier_providers::{ItemStatus, NoticeLevel, ProviderEvent, Role, TurnInput};
+use brigadier_providers::{NoticeLevel, ProviderEvent, TurnInput};
 use brigadier_store::StreamPage;
 
 use super::SessionManager;
@@ -36,8 +36,6 @@ use crate::{Error, Result, knowledge};
 
 /// Worker events read per page for the transcript.
 const EVENTS_PAGE: u32 = 2_000;
-/// The previous session's last messages the fresh one gets word for word.
-const TAIL_MESSAGES: usize = 6;
 /// … each up to this many bytes (the rest is in transcript.md).
 const TAIL_MESSAGE_BYTES: usize = 8_000;
 /// How the notice of a hand-over starts; hand-overs are counted by it.
@@ -242,8 +240,9 @@ impl SessionManager {
         if task.state.is_final() {
             return Ok(());
         }
+        self.keep_saved_files(&task.id).await;
         let (dir, has_diff) = self.write_handoff_files(&task).await?;
-        let (transcript, tail) = self.worker_transcript(&task.id).await;
+        let export = self.export_handoff_transcript(&task, &dir).await;
         let checks = self.passed_checks(&task).await;
         // A turn that ended before the ask reached it has no note: its last message is in the
         // tail anyway.
@@ -254,7 +253,6 @@ impl SessionManager {
             super::blocking(move || {
                 let io =
                     |err: std::io::Error| Error::Invalid(format!("writing the hand-off: {err}"));
-                std::fs::write(dir.join("transcript.md"), transcript).map_err(io)?;
                 if has_checks {
                     std::fs::write(dir.join("checks.md"), checks_text(&checks)).map_err(io)?;
                 } else if let Err(err) = std::fs::remove_file(dir.join("checks.md"))
@@ -285,8 +283,9 @@ impl SessionManager {
                 has_note: note.is_some(),
                 has_diff,
                 has_checks,
+                transcript: export.summary("transcript.md"),
             },
-            &tail,
+            &export.tail,
             pending,
         );
         let text = self.with_constraints(&task.conversation_id, text).await;
@@ -442,127 +441,6 @@ impl SessionManager {
         .await
         .unwrap_or_default()
     }
-
-    /// Every recorded event of the task's workers, in full, oldest first, and their last
-    /// messages.
-    async fn worker_transcript(&self, id: &TaskId) -> (String, Vec<String>) {
-        let mut events: Vec<ProviderEvent> = Vec::new();
-        let mut before = None;
-        loop {
-            let page = self
-                .core
-                .store()
-                .read_stream(
-                    streams::task(id),
-                    StreamPage {
-                        before,
-                        kinds: vec!["worker.event".into()],
-                        limit: EVENTS_PAGE,
-                    },
-                )
-                .await
-                .unwrap_or_default();
-            let Some(oldest) = page.last() else {
-                break;
-            };
-            before = Some(oldest.stream_seq);
-            let full = page.len() == EVENTS_PAGE as usize;
-            events.extend(page.iter().filter_map(|stored| {
-                match serde_json::from_str::<DomainEvent>(stored.payload.get()) {
-                    Ok(DomainEvent::WorkerEvent { event, .. }) => Some(event),
-                    _ => None,
-                }
-            }));
-            if !full {
-                break;
-            }
-        }
-        events.reverse();
-        let mut text = String::from(
-            "# The task's full transcript\n\nEvery message, command and tool call so far, oldest \
-             first, as Brigadier recorded them (long command and tool outputs are clipped where \
-             the CLI clipped them).\n",
-        );
-        let mut tail: Vec<String> = Vec::new();
-        for event in &events {
-            if let ProviderEvent::Message {
-                role: Role::Assistant,
-                text: said,
-                ..
-            } = event
-            {
-                tail.push(said.clone());
-            }
-            transcript_entry(&mut text, event);
-        }
-        let tail = tail.split_off(tail.len().saturating_sub(TAIL_MESSAGES));
-        (text, tail)
-    }
-}
-
-/// One transcript entry, in full.
-fn transcript_entry(text: &mut String, event: &ProviderEvent) {
-    match event {
-        ProviderEvent::SessionStarted { model, .. } => {
-            let _ = write!(
-                text,
-                "\n## A session started ({})\n",
-                model.as_deref().unwrap_or("its default model")
-            );
-        }
-        ProviderEvent::Message {
-            role, text: said, ..
-        } => {
-            let who = match role {
-                Role::Assistant => "The worker",
-                _ => "The worker was told",
-            };
-            let _ = write!(text, "\n### {who}\n\n{said}\n");
-        }
-        ProviderEvent::Command {
-            command,
-            status: ItemStatus::Completed | ItemStatus::Failed,
-            exit_code,
-            output,
-            ..
-        } => {
-            let code = exit_code.map_or_else(String::new, |code| format!(" (exit {code})"));
-            let _ = write!(text, "\n### Ran `{command}`{code}\n");
-            if let Some(output) = output.as_deref().filter(|output| !output.trim().is_empty()) {
-                let _ = write!(text, "\n```\n{}\n```\n", output.trim_end());
-            }
-        }
-        ProviderEvent::ToolCall {
-            name,
-            input,
-            status: ItemStatus::Completed | ItemStatus::Failed,
-            output,
-            ..
-        } => {
-            let _ = write!(text, "\n### Used {name}\n");
-            if let Some(input) = input {
-                let _ = write!(text, "\nInput: {input}\n");
-            }
-            if let Some(output) = output.as_deref().filter(|output| !output.trim().is_empty()) {
-                let _ = write!(text, "\n```\n{}\n```\n", output.trim_end());
-            }
-        }
-        ProviderEvent::FileChanges {
-            changes,
-            status: ItemStatus::Completed,
-            ..
-        } => {
-            let paths: Vec<&str> = changes.iter().map(|change| change.path.as_str()).collect();
-            let _ = write!(text, "\n### Changed files: {}\n", paths.join(", "));
-        }
-        ProviderEvent::Error { error } if !error.will_retry => {
-            let _ = write!(text, "\n### Stopped by an error\n\n{}\n", error.message);
-        }
-        ProviderEvent::Notice { message, .. } => {
-            let _ = write!(text, "\n### Brigadier\n\n{message}\n");
-        }
-        _ => {}
-    }
 }
 
 /// A check whose latest run passed, for the fresh session's `checks.md`.
@@ -636,10 +514,6 @@ pub(crate) enum Handover {
     ContextWindow,
 }
 
-/// What Brigadier keeps of each tool output in a transcript, in KiB (`OUTPUT_CLIP` in the
-/// providers' parsers): what a context-window hand-off's successor is told may be cut.
-const CLIPPED_KIB: usize = 8;
-
 /// What the fresh session's first message says about the hand-over.
 struct HandoverFacts {
     why: Handover,
@@ -649,6 +523,8 @@ struct HandoverFacts {
     has_diff: bool,
     /// `checks.md` lists the checks that passed.
     has_checks: bool,
+    /// What the fresh session is told of transcript.md ([`super::export::Export::summary`]).
+    transcript: String,
 }
 
 /// The fresh session's first message.
@@ -665,6 +541,7 @@ fn handover_text(
         has_note,
         has_diff,
         has_checks,
+        transcript,
     } = facts;
     let why = match why {
         Handover::Size => {
@@ -685,13 +562,9 @@ fn handover_text(
         Handover::Interrupted => "Your earlier session's process ended before it reported, and \
              the session couldn't be resumed. Check what was running (its output may be lost)"
             .to_owned(),
-        Handover::ContextWindow => format!(
-            "Your earlier session's context passed the model's limit (\"prompt is too long\"), so \
-             it was closed. This hand-off is not lossless: transcript.md clips each tool output at \
-             {} KiB, so a detail you need may be cut there. Re-read or rerun what you need, and \
-             where you can't, say it is unknown rather than guess it",
-            CLIPPED_KIB
-        ),
+        Handover::ContextWindow => "Your earlier session's context passed the model's limit \
+             (\"prompt is too long\"), so it was closed"
+            .to_owned(),
     };
     let mut text = format!(
         "[Brigadier] You are continuing task-{} in a fresh session. {why}; you are the same \
@@ -708,7 +581,8 @@ fn handover_text(
     text.push_str(
         "spec.md (the task and every later instruction from the orchestrator), progress.md (a \
          short log of what it did) and transcript.md (the whole transcript, word for word: search \
-         it with rg for any detail instead of redoing work)",
+         it with rg for any detail instead of redoing work; each tool output cut there at 8 KiB \
+         names its whole copy in outputs/)",
     );
     if has_checks {
         text.push_str(
@@ -730,6 +604,7 @@ fn handover_text(
         ". Decisions and commitments made earlier still hold. Then carry on with the task and \
          report with submit_report as your rules say.",
     );
+    let _ = write!(text, "\n\n{transcript}");
     if !tail.is_empty() {
         text.push_str("\n\nThe earlier session's last messages, oldest first, word for word:");
         for said in tail {

@@ -12,10 +12,7 @@ use serde_json::{Map, Value};
 
 use crate::model::*;
 use crate::policy;
-use crate::{clip, now_ms};
-
-/// Tool output kept in events; the full output stays in the CLI's transcript.
-const OUTPUT_CLIP: usize = 8 * 1024;
+use crate::{OUTPUT_CLIP, clip, now_ms};
 
 /// Something the session has to act on besides forwarding events.
 #[derive(Debug)]
@@ -485,6 +482,7 @@ impl Parser {
                 exit_code: None,
                 output: None,
                 duration_ms: None,
+                kept: None,
             },
             ToolKind::FileChange => ProviderEvent::FileChanges {
                 item_id: id.clone(),
@@ -497,6 +495,7 @@ impl Parser {
                 input: (!input.is_null()).then(|| clip(&input.to_string(), OUTPUT_CLIP)),
                 status: ItemStatus::InProgress,
                 output: None,
+                kept: None,
             },
         };
         self.tools.insert(id, ToolUse { name, input });
@@ -553,7 +552,9 @@ impl Parser {
             } else {
                 ItemStatus::Completed
             };
-            let output = clip(&content_text(block), OUTPUT_CLIP);
+            // Whole: the event sender cuts it once it is redacted and kept (`crate::events`).
+            let output = content_text(block);
+            let kept = kept_output(&output, structured, failed);
             let event = match tool_kind(&tool.name) {
                 // Claude's command output arrives at completion; Codex streams. A running
                 // `Bash` gets no output on the way (claude 2.1.300, measured 2026-10-15): a
@@ -570,6 +571,7 @@ impl Parser {
                     exit_code: exit_code(&output, failed),
                     output: Some(output),
                     duration_ms: None,
+                    kept,
                 },
                 ToolKind::FileChange => {
                     let mut changes = file_changes(&tool.name, &tool.input);
@@ -591,6 +593,7 @@ impl Parser {
                     input: Some(clip(&tool.input.to_string(), OUTPUT_CLIP)),
                     status,
                     output: Some(output),
+                    kept,
                 },
             };
             out.push(Output::Event(event));
@@ -1257,6 +1260,40 @@ fn edit_diff(tool: &str, input: &Value) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
+/// What a tool result says of its whole output (P5 in docs/research/long-sessions/PROBES.md):
+/// a result too big for the model is a preview naming the file Claude saved it to (a command's
+/// also in `persistedOutputPath`), and a failing command's long output is only a head and tail
+/// around a "[N characters truncated]" mark.
+fn kept_output(text: &str, structured: Option<&Value>, failed: bool) -> Option<Box<KeptOutput>> {
+    let path = structured
+        .and_then(|result| str_of(result, "persistedOutputPath"))
+        .map(str::to_owned)
+        .or_else(|| saved_file(text));
+    let excerpt = failed && text.contains(" characters truncated]");
+    (path.is_some() || excerpt).then(|| {
+        Box::new(KeptOutput {
+            file: path.map(|path| KeptFile {
+                path,
+                ..KeptFile::default()
+            }),
+            excerpt,
+            ..KeptOutput::default()
+        })
+    })
+}
+
+/// The file a preview says the whole output was saved to: "Full output saved to: <path>" (a
+/// command's) or "Output has been saved to <path>." (an MCP tool's).
+pub(crate) fn saved_file(text: &str) -> Option<String> {
+    let head = &text[..text.len().min(4 * 1024)];
+    let (_, rest) = head
+        .split_once("Full output saved to: ")
+        .or_else(|| head.split_once("Output has been saved to "))?;
+    let line = rest.lines().next()?.trim();
+    let path = line.strip_suffix('.').unwrap_or(line);
+    (path.starts_with('/') && path.contains("/tool-results/")).then(|| path.to_owned())
+}
+
 /// Claude reports a failed command's status as `Exit code N` at the top of its output.
 fn exit_code(output: &str, failed: bool) -> Option<i32> {
     let first = output.lines().next().unwrap_or_default();
@@ -1680,6 +1717,99 @@ mod tests {
                 (ItemStatus::InProgress, None, None),
                 (ItemStatus::Completed, Some(whole.as_str()), Some(0)),
             ]
+        );
+    }
+
+    /// The results of P5 (docs/research/long-sessions/PROBES.md), claude 2.1.301: a 200 KiB
+    /// `Bash` output and a 200 KiB MCP result reach the model as a preview naming the file the
+    /// whole output was saved to; a failing command's long output as a head and tail.
+    #[test]
+    fn a_preview_names_the_saved_file_and_a_failure_excerpt_is_marked() {
+        let dir = "/Users/u/Library/Application Support/x/projects/-tmp-p/d8d2/tool-results";
+        let bash = format!(
+            "<persisted-output>\nOutput too large (200KB). Full output saved to: {dir}/bs15nclkg.txt\n\n\
+             Preview (first 2KB):\nline 000000 filler\n...\n</persisted-output>"
+        );
+        let mcp = format!(
+            "Error: result (204,802 characters across 3,414 lines) exceeds maximum allowed tokens. \
+             Output has been saved to {dir}/mcp-probe-big_dump-1792107958316.txt.\nFormat: Plain text\n"
+        );
+        let failing = format!(
+            "Exit code 1\n{}... [182345 characters truncated] ...{}",
+            "x".repeat(5_000),
+            "y".repeat(5_000)
+        );
+        let lines = [
+            json!({"type": "assistant", "message": {"id": "m1", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "gen"}},
+                {"type": "tool_use", "id": "t2", "name": "mcp__probe__big_dump", "input": {}},
+                {"type": "tool_use", "id": "t3", "name": "Bash", "input": {"command": "make test"}},
+            ]}}),
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"tool_use_id": "t1", "type": "tool_result", "content": bash, "is_error": false}]},
+             "tool_use_result": {"stdout": "line 000000 filler", "stderr": "",
+                 "persistedOutputPath": format!("{dir}/bs15nclkg.txt"), "persistedOutputSize": 204802}}),
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"tool_use_id": "t2", "type": "tool_result", "content": mcp, "is_error": false}]}}),
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"tool_use_id": "t3", "type": "tool_result", "content": failing, "is_error": true}]}}),
+        ];
+        let mut parser = Parser::live();
+        let kept: Vec<(String, Option<Box<KeptOutput>>, usize)> = lines
+            .iter()
+            .flat_map(|line| parser.feed(&line.to_string()))
+            .filter_map(|output| match output {
+                Output::Event(
+                    ProviderEvent::Command {
+                        item_id,
+                        status: ItemStatus::Completed | ItemStatus::Failed,
+                        output,
+                        kept,
+                        ..
+                    }
+                    | ProviderEvent::ToolCall {
+                        item_id,
+                        status: ItemStatus::Completed | ItemStatus::Failed,
+                        output,
+                        kept,
+                        ..
+                    },
+                ) => Some((item_id, kept, output.map_or(0, |output| output.len()))),
+                _ => None,
+            })
+            .collect();
+        let file = |name: &str| {
+            Some(Box::new(KeptOutput {
+                file: Some(KeptFile {
+                    path: format!("{dir}/{name}"),
+                    ..KeptFile::default()
+                }),
+                ..KeptOutput::default()
+            }))
+        };
+        assert_eq!(kept[0].1, file("bs15nclkg.txt"));
+        assert_eq!(kept[1].1, file("mcp-probe-big_dump-1792107958316.txt"));
+        assert_eq!(
+            kept[2].1,
+            Some(Box::new(KeptOutput {
+                excerpt: true,
+                ..KeptOutput::default()
+            }))
+        );
+        // The parser no longer cuts: the event sender does, once it is redacted and kept.
+        assert!(kept[2].2 > 10_000, "{}", kept[2].2);
+    }
+
+    #[test]
+    fn a_saved_file_is_only_a_tool_results_path() {
+        assert_eq!(saved_file("Full output saved to: /etc/passwd\n"), None);
+        assert_eq!(
+            saved_file("Output has been saved to relative/tool-results/a.txt."),
+            None
+        );
+        assert_eq!(
+            saved_file("Output has been saved to /a b/tool-results/c.txt.\nmore"),
+            Some("/a b/tool-results/c.txt".into())
         );
     }
 

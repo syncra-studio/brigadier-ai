@@ -41,6 +41,7 @@ async fn narrate(turn: &Turn, text: &str) {
         input: Some("{}".into()),
         status: ItemStatus::InProgress,
         output: None,
+        kept: None,
     })
     .await;
 }
@@ -296,6 +297,7 @@ fn bash(command: &str, status: ItemStatus) -> ProviderEvent {
         input: Some(json!({ "command": command }).to_string()),
         status,
         output: (status != ItemStatus::InProgress).then(|| "ok".into()),
+        kept: None,
     }
 }
 
