@@ -1305,15 +1305,18 @@ fn kept_output(text: &str, structured: Option<&Value>, failed: bool) -> Option<B
 }
 
 /// The file a preview says the whole output was saved to: "Full output saved to: <path>" (a
-/// command's) or "Output has been saved to <path>." (an MCP tool's).
+/// command's) or "Output has been saved to <path>." (an MCP tool's). The preview's text is a
+/// command's own output too, so only a path shaped as the CLI writes them counts: a file right
+/// in a session's `tool-results` folder (`…/projects/<project>/<session>/tool-results/<file>`),
+/// with no `..` or `.` in it.
 pub(crate) fn saved_file(text: &str) -> Option<String> {
-    let head = &text[..text.len().min(4 * 1024)];
+    let head = &text[..text.floor_char_boundary(4 * 1024)];
     let (_, rest) = head
         .split_once("Full output saved to: ")
         .or_else(|| head.split_once("Output has been saved to "))?;
     let line = rest.lines().next()?.trim();
     let path = line.strip_suffix('.').unwrap_or(line);
-    (path.starts_with('/') && path.contains("/tool-results/")).then(|| path.to_owned())
+    crate::model::is_tool_results_file(path).then(|| path.to_owned())
 }
 
 /// Claude reports a failed command's status as `Exit code N` at the top of its output.
@@ -1882,8 +1885,24 @@ mod tests {
         );
         assert_eq!(
             saved_file("Output has been saved to /a b/tool-results/c.txt.\nmore"),
-            Some("/a b/tool-results/c.txt".into())
+            None
         );
+        // A command's own output can forge the words: a path out of the folder is no saved file.
+        assert_eq!(
+            saved_file(
+                "Full output saved to: /h/.claude/projects/p/s/tool-results/../../../../../etc/passwd\n"
+            ),
+            None
+        );
+        assert_eq!(
+            saved_file(
+                "Output has been saved to /h/x b/projects/-tmp-p/s1/tool-results/c.txt.\nmore"
+            ),
+            Some("/h/x b/projects/-tmp-p/s1/tool-results/c.txt".into())
+        );
+        // Long output whose 4 KiB mark falls inside a character is read, not a panic.
+        let wide = "界".repeat(2_000);
+        assert_eq!(saved_file(&wide), None);
     }
 
     /// The `Looked` events a recording's output makes.

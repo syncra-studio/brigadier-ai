@@ -105,7 +105,7 @@ impl SessionManager {
                 path: path.clone(),
                 ..KeptFile::default()
             };
-            match tokio::fs::read(&path).await {
+            match read_saved_file(&path).await {
                 Ok(bytes) => {
                     let mut text = String::from_utf8_lossy(&bytes).into_owned();
                     if let Some(redactor) = &redactor {
@@ -132,6 +132,19 @@ impl SessionManager {
             }
         }
     }
+}
+
+/// A file the CLI saved a whole result to, up to the most of one result kept: only a file in a
+/// session's `tool-results` folder is read (see [`brigadier_providers::open_tool_results_file`]).
+async fn read_saved_file(path: &str) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt as _;
+    let mut bytes = Vec::new();
+    brigadier_providers::open_tool_results_file(path)
+        .await?
+        .take(brigadier_providers::OUTPUT_KEEP_MAX as u64)
+        .read_to_end(&mut bytes)
+        .await?;
+    Ok(bytes)
 }
 
 /// A finished result's item and the saved file it names that wasn't copied when it was seen.

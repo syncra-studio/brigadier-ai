@@ -81,7 +81,7 @@ async fn keep_output(event: &mut ProviderEvent, secrets: Option<&Redactor>) {
 async fn read_saved(file: &mut KeptFile, secrets: Option<&Redactor>) {
     use tokio::io::AsyncReadExt as _;
     let read = async {
-        let handle = tokio::fs::File::open(&file.path).await?;
+        let handle = crate::model::open_tool_results_file(&file.path).await?;
         let size = handle.metadata().await?.len();
         let mut bytes = Vec::new();
         handle
@@ -214,7 +214,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_file_a_preview_names_is_read_redacted_and_a_missing_one_is_said() {
-        let dir = std::env::temp_dir().join(format!("brigadier-kept-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("brigadier-kept-{}", uuid::Uuid::new_v4()));
+        let dir = root.join("projects/-tmp-p/s1");
         std::fs::create_dir_all(dir.join("tool-results")).unwrap();
         let path = dir.join("tool-results/x.txt");
         let secret = "sk-0123456789abcdef0123456789abcd";
@@ -252,6 +253,20 @@ mod tests {
                 .starts_with("couldn't read it")
         );
         assert!(!kept.is_complete());
-        std::fs::remove_dir_all(&dir).unwrap();
+
+        // A command can print the CLI's words with any path: a link out of the folder, or a
+        // path that climbs out of it, is never read.
+        let outside = root.join("secret.txt");
+        std::fs::write(&outside, "SECRET-FILE").unwrap();
+        let link = dir.join("tool-results/link.txt");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let climb = dir.join("tool-results/../../../../secret.txt");
+        for path in [link, climb] {
+            let (_, kept) = sent(&events, command("preview", Some(file(&path))), &mut rx).await;
+            let file_kept = kept.unwrap().file.unwrap();
+            assert!(file_kept.text.is_none(), "{path:?} was read");
+            assert!(file_kept.error.is_some());
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

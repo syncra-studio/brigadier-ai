@@ -280,7 +280,8 @@ async fn an_output_the_disk_refused_is_said_missing_to_the_fresh_session() {
 
 #[tokio::test]
 async fn a_saved_file_not_copied_yet_is_copied_before_the_hand_off_and_outlives_its_folder() {
-    let folder = std::env::temp_dir().join(format!("brigadier-kept-cli-{}", uuid::Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("brigadier-kept-cli-{}", uuid::Uuid::new_v4()));
+    let folder = root.join("projects/-tmp-p/s1");
     std::fs::create_dir_all(folder.join("tool-results")).unwrap();
     let saved = folder.join("tool-results/mcp-probe-big_dump-2.txt");
     std::fs::write(&saved, big(SAVED_MARKER)).unwrap();
@@ -303,7 +304,7 @@ async fn a_saved_file_not_copied_yet_is_copied_before_the_hand_off_and_outlives_
         "{late:?}"
     );
     // The CLI's session folder goes; the hand-off's copy stays.
-    std::fs::remove_dir_all(&folder).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
     let first = firsts
         .lock()
         .unwrap()

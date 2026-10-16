@@ -659,6 +659,63 @@ pub struct KeptFile {
     pub text: Option<Arc<str>>,
 }
 
+/// Whether `path` is shaped as a file the Claude CLI saves a whole tool result to: absolute,
+/// right in a session's `tool-results` folder (`…/projects/<project>/<session>/tool-results/
+/// <file>`), with no `..` in it (BUILD-PLAN D2.2). A command's output can print any path after
+/// the CLI's words, so no other file is read as one.
+pub fn is_tool_results_file(path: &str) -> bool {
+    use std::path::{Component, Path};
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return false;
+    }
+    let parts: Vec<Component> = path.components().collect();
+    if parts
+        .iter()
+        .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+    {
+        return false;
+    }
+    let names: Vec<&std::ffi::OsStr> = parts
+        .iter()
+        .rev()
+        .take(5)
+        .filter_map(|part| match part {
+            Component::Normal(name) => Some(*name),
+            _ => None,
+        })
+        .collect();
+    names.len() == 5 && names[1] == "tool-results" && names[4] == "projects"
+}
+
+/// Opens a file the Claude CLI saved a whole tool result to: shaped as
+/// [`is_tool_results_file`], a regular file and not a link, and still so with every link on its
+/// way resolved. Anything else is refused, so a forged path never has the daemon read a file
+/// the session couldn't.
+pub async fn open_tool_results_file(path: &str) -> std::io::Result<tokio::fs::File> {
+    let refused = || {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "not a file the CLI saved a tool result to",
+        )
+    };
+    if !is_tool_results_file(path) {
+        return Err(refused());
+    }
+    if !tokio::fs::symlink_metadata(path)
+        .await?
+        .file_type()
+        .is_file()
+    {
+        return Err(refused());
+    }
+    let real = tokio::fs::canonicalize(path).await?;
+    if !real.to_str().is_some_and(is_tool_results_file) {
+        return Err(refused());
+    }
+    tokio::fs::File::open(real).await
+}
+
 impl KeptOutput {
     /// Whether all of it that exists is kept: the result is stored (or was short enough to be
     /// whole in the event), and so is the CLI's saved file, if any.
