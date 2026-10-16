@@ -14,7 +14,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import type { DiffStat, FileStat, ReviewDiff } from "@/ipc/generated";
+import type { DiffStat, FileStat, HeldPath, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { filePatch } from "@/lib/patch";
 import { cn } from "@/lib/utils";
@@ -116,6 +116,18 @@ function useTurnReview(
   return state?.change === key ? state : null;
 }
 
+/**
+ * What an Undo or Reapply left as it was, after its toast's first words: ". Left notes.md as it
+ * is: you changed it during this request too." One file says why; several are named.
+ */
+export function leftWords(left: readonly HeldPath[]): string {
+  const [only] = left;
+  if (!only) return "";
+  if (left.length === 1) return `. ${only.reason}`;
+  const names = left.map((file) => file.path.split("/").pop() || file.path);
+  return `. Left ${left.length} files as they are (${names.join(", ")}): changed by you or by a command during the request`;
+}
+
 /** One changed file of the turn: a row that opens to its diff; a binary file or one too long only lists. */
 const FileRow: FC<{
   file: FileStat;
@@ -176,33 +188,46 @@ const FileRow: FC<{
 
 /**
  * The card under a finished turn's answer: "Edited 3 files" (or the one file's name) over
- * "+a −d", which says "View changes ↗" while hovered, then Undo (where one request's candidates can be taken back whole), which turns into Reapply, and
- * View changes. With more than one file it lists them, the first three, each opening to its
- * diff. It sums what the turn's workers landed, across every request the turn shows (a
- * message steered in takes over the worker it speaks to), so it keeps its counts in both
- * states; a turn that landed nothing has no card. A landing with no stats of its own (a worker
- * that landed straight onto the branch) is counted from the Review diff.
+ * "+a −d", which says "View changes ↗" while hovered, then Undo (where one request's changes can
+ * be taken back whole), which turns into Reapply, and View changes. With more than one file it
+ * lists them, the first three, each opening to its diff. It sums what each of the turn's requests
+ * recorded of its own changes (the thread's own edits and commands and its workers' landings,
+ * never what the user changed meanwhile), and for a request from before that was kept, what its
+ * workers landed; a message steered in takes over the worker it speaks to. A turn that changed
+ * nothing has no card. A landing with no stats of its own (a worker that landed straight onto
+ * the branch) is counted from the Review diff.
  */
 export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) => {
   const conversationId = useViewConversation()?.id ?? null;
+  // What each request recorded of its own changes.
+  const recorded = useBoard(useShallow((s) => requestIds.map((id) => s.board?.requests[id]?.changes ?? null)));
+  const hasRecord = (id: string) => {
+    const changes = recorded[requestIds.indexOf(id)];
+    return !!changes && changes.stat.files.length > 0;
+  };
+  // Workers' landings, for the requests that recorded nothing (from before it was kept).
   const landed = useBoard(
     useShallow((s) =>
       Object.values(s.board?.tasks ?? {})
         .filter((task) => task.requestId !== null && requestIds.includes(task.requestId) && task.landed !== null)
+        .filter((task) => !s.board?.requests[task.requestId ?? ""]?.changes)
         .toSorted((a, b) => a.number - b.number),
     ),
   );
-  // The requests that landed something, in the turn's order.
-  const requests = requestIds.filter((id) => landed.some((task) => task.requestId === id));
+  // The requests that changed something, in the turn's order.
+  const requests = requestIds.filter((id) => hasRecord(id) || landed.some((task) => task.requestId === id));
   const reverts = useBoard(
     useShallow((s) => requests.map((id) => s.board?.requests[id]?.undo?.reverted ?? false)),
   );
   const reverted = reverts.length > 0 && reverts.every(Boolean);
-  // Undo takes back one request's candidates whole: a turn of several requests (whose undos would
-  // clash on a file both changed) or a landing straight onto the branch (no candidate) has none.
-  const undoable = requests.length === 1 && landed.every((task) => task.candidate !== null);
-  // Undo waits for the turn's workers: one still at work may land more.
+  // Undo takes back one request's changes whole: a turn of several requests (whose undos would
+  // clash on a file both changed) has none, nor an old landing straight onto the branch (no candidate).
+  const undoable = requests.length === 1 && (requests.every(hasRecord) || landed.every((task) => task.candidate !== null));
+  // What Undo leaves as it is, and why.
+  const held = requests.flatMap((id) => recorded[requestIds.indexOf(id)]?.held ?? []);
+  // Undo waits for the turn's work: a request still at work, or a worker that may land more.
   const working = useBoard((s) =>
+    requests.some((id) => s.board?.requests[id]?.state.type === "working") ||
     Object.values(s.board?.tasks ?? {}).some(
       (task) => task.requestId !== null && requestIds.includes(task.requestId) && !isFinal(task),
     ),
@@ -210,14 +235,19 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
   const [busy, setBusy] = useState(false);
   const [all, setAll] = useState(false);
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
-  const known = landed.every((task) => task.candidate)
-    ? mergeStats(landed.flatMap((task) => (task.candidate ? [task.candidate.diffStat] : [])))
+  const ownStats = requests.flatMap((id) => {
+    const changes = recorded[requestIds.indexOf(id)];
+    return changes && hasRecord(id) ? [changes.stat] : [];
+  });
+  const landedKnown = landed.every((task) => task.candidate);
+  const known = landedKnown
+    ? mergeStats([...ownStats, ...landed.flatMap((task) => (task.candidate ? [task.candidate.diffStat] : []))])
     : null;
   const fetched = useTurnReview(
     conversationId ?? "",
     requests.join(" "),
     (known === null || opened.size > 0) && !!conversationId,
-    landed.map((task) => `${task.id}:${task.landed}`).join(" "),
+    `${landed.map((task) => `${task.id}:${task.landed}`).join(" ")}|${ownStats.map((stat) => `${stat.files.length}:${stat.insertions}:${stat.deletions}`).join(" ")}`,
   );
   const diff = known ?? fetched?.stat ?? null;
   const [first] = requests;
@@ -242,19 +272,15 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
     // Undo goes newest first; Reapply oldest first.
     const due = requests.filter((_, index) => reverts[index] === reverted);
     (reverted ? due : due.toReversed())
-      .reduce<Promise<unknown>>(
+      .reduce<Promise<HeldPath[]>>(
         (before, requestId) =>
-          before.then(() =>
-            request({
-              method: "undoChanges",
-              conversationId,
-              requestId,
-              reapply: reverted,
-            }),
-          ),
-        Promise.resolve(),
+          before.then(async (left) => {
+            const { outcome } = await request({ method: "undoChanges", conversationId, requestId, reapply: reverted });
+            return [...left, ...outcome.held];
+          }),
+        Promise.resolve([]),
       )
-      .then(() => toast(reverted ? "Changes reapplied" : "Changes reverted"))
+      .then((left) => toast(`${reverted ? "Changes reapplied" : "Changes reverted"}${leftWords(left)}`))
       .catch((error: unknown) =>
         toast(
           `Failed to revert changes: ${error instanceof Error ? error.message : String(error)}`,
@@ -306,6 +332,8 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
         {undoable && <Button
           variant="ghost"
           size="sm"
+          data-held={held.length || undefined}
+          title={held.length === 0 ? undefined : held.length === 1 ? held[0]?.reason : `Undo leaves ${held.length} files as they are: changed by you or by a command during the request`}
           disabled={busy || working}
           aria-busy={busy || undefined}
           onClick={toggle}

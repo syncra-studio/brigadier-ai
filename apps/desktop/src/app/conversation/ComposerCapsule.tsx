@@ -18,23 +18,37 @@ import { Spinner } from "@/components/glyphs/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { DiffStat, FileStat } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { setReviewScope } from "@/state/review";
+import { openReviewTab } from "@/state/sessionTabs";
 import { type Board, useBoard } from "@/state/board";
 
 /**
- * What a request changed so far: the stats of its workers' landed commits, merged by file.
- * It keeps counting landings after the orchestrator's reply ended (the turn's diff reads it
- * too), so it is tied to the request, not to the turn.
+ * What a request changed so far, with the messages steered into it: what each recorded of its
+ * own changes (`changes`: the thread's own edits and commands and its workers' landings, never
+ * the user's), else, for a request from before that was kept, the stats of its workers' landed
+ * commits. It keeps counting after the orchestrator's reply ended (the turn's diff reads it too),
+ * so it is tied to the request, not to the turn. Nothing changed yet: `null`, never "0 files".
  */
 export function useRequestDiff(requestId: string | null): DiffStat | null {
   const stats = useBoard(
-    useShallow((s) =>
-      Object.values(s.board?.tasks ?? {})
-        .filter((task) => requestId !== null && task.requestId === requestId && task.landed !== null)
-        .toSorted((a, b) => a.number - b.number)
-        .flatMap((task) => (task.candidate ? [task.candidate.diffStat] : [])),
-    ),
+    useShallow((s) => {
+      if (requestId === null || !s.board) return [];
+      const { requests, tasks } = s.board;
+      const ids = Object.values(requests)
+        .filter((request) => request.id === requestId || request.steeredInto === requestId)
+        .map((request) => request.id);
+      return ids.flatMap((id) => {
+        const recorded = requests[id]?.changes;
+        if (recorded) return [recorded.stat];
+        return Object.values(tasks)
+          .filter((task) => task.requestId === id && task.landed !== null)
+          .toSorted((a, b) => a.number - b.number)
+          .flatMap((task) => (task.candidate ? [task.candidate.diffStat] : []));
+      });
+    }),
   );
-  return mergeStats(stats);
+  const merged = mergeStats(stats);
+  return merged && merged.files.length > 0 ? merged : null;
 }
 
 /** Diff stats summed, file by file: null for none. */
@@ -91,14 +105,15 @@ function useRunningPlan(requestId: string | null) {
   return plan ? { plan, states: stepStates(plan, states, request) } : null;
 }
 
-const Pill: FC<{ tip: ReactNode; label?: string; children: ReactNode }> = ({ tip, label, children }) => (
+const Pill: FC<{ tip: ReactNode; label?: string; onClick?: () => void; children: ReactNode }> = ({ tip, label, onClick, children }) => (
   <Tooltip delayDuration={0}>
     <TooltipTrigger asChild>
       {label ? (
-        // A plan's checklist: reachable from the keyboard too.
+        // A plan's checklist, or the changes: reachable from the keyboard too.
         <button
           type="button"
           aria-label={label}
+          onClick={onClick}
           className="hover:text-foreground rounded-control flex min-w-0 items-center gap-1.5 text-start transition-colors"
         >
           {children}
@@ -287,16 +302,25 @@ const RequestCapsule: FC<{ conversationId: string }> = ({ conversationId }) => {
         </Pill>
       )}
       {running && pill && diff && <span aria-hidden>·</span>}
-      {diff && <DiffPill diff={diff} />}
+      {diff && (
+        <DiffPill
+          diff={diff}
+          onOpen={() => {
+            setReviewScope(conversationId, { type: "lastTurn", requestId });
+            openReviewTab(conversationId, { type: "all" });
+          }}
+        />
+      )}
     </Capsule>
   );
 };
 
-/** "N files changed +a −d", with each file on hover. */
-const DiffPill: FC<{ diff: DiffStat }> = ({ diff }) => {
+/** "N files changed +a −d", with each file on hover; a click opens the changes, when it can. */
+const DiffPill: FC<{ diff: DiffStat; onOpen?: () => void }> = ({ diff, onOpen }) => {
   const files = diff.files.length;
   return (
     <Pill
+      {...(onOpen && { label: `${files} ${files === 1 ? "file" : "files"} changed, view changes`, onClick: onOpen })}
       tip={
         <ul className={cn(mono, "flex flex-col gap-0.5")}>
           {diff.files.map((file) => (

@@ -68,6 +68,8 @@ function FileLink({ path, name }: { path: string; name: string }) {
 function FileCounts({ file }: { file: FileStat }) {
   return (
     <span className="ms-1 flex shrink-0 items-center gap-1.5">
+      {/* Read as words, the name and its counts stay apart. */}
+      <span className="sr-only"> </span>
       {!file.binary && (
         <span data-slot="edited-file-counts" className="text-muted-foreground text-label tabular-nums">
           <span className="group-hover:text-success">+{file.insertions}</span>{" "}
