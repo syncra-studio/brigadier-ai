@@ -690,6 +690,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "previewsCleared":
     case "overnightUpdated":
     case "workerEvent":
+    case "outputKept":
     case "orchestratorLogged":
     // A Chat's Memory chips live on its board; Brain jobs in the Inspector's Brain tab.
     case "memoryUpdated":
