@@ -26,7 +26,7 @@ test("Providers shows a tab per agent, masks emails, and links to Routing for ru
   assert.deepEqual(seen.models, [
     "Opus 5.5opus · defaultFrontier · Best for writing code, reviewing changes and resolving conflicts",
     "Sonnet 5.5sonnetNever gets Review changes · rule in RoutingGets no tasks: a rule in Routing keeps it to chats and sessions you pick it for",
-    "Fable 5.1claude-fable-5-1Brigadier never gives work to Fable models; you can still pick one for a chat or session",
+    "Fable 5.1claude-fable-5-1Expensive: Brigadier uses it only where you pick it, in a chat, a session, your order or a rule",
   ]);
   // Only the row whose eye was pressed, and only until the page is left.
   assert.deepEqual(seen.revealed, [masked[0], "work.person@corp.example.io", masked[2]]);

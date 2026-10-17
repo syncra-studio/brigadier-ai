@@ -1,5 +1,5 @@
 //! The user's routing rules ("never use X for frontend"). Rules always win over scores and
-//! balancing, and hold during fallback too; only the hard rules (no Fable, efforts at most
+//! balancing, and hold during fallback too; only the hard rules (no expensive model the user didn't name, efforts at most
 //! `high`, the sandbox) are above them.
 
 use brigadier_providers::ProviderKind;

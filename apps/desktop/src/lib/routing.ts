@@ -20,7 +20,7 @@ import { formatTime } from "@/lib/format";
 import { modelName } from "@/lib/setup";
 import { isNoWorkRule } from "@/lib/workRules";
 
-export { isFable } from "@/lib/setup";
+export { isExpensive } from "@/lib/setup";
 export { isNoWorkRule, noWorkRule, WORKER_CATEGORIES } from "@/lib/workRules";
 
 /**

@@ -159,24 +159,28 @@ export function useCanCompact(setup: Setup | null | undefined): boolean {
   );
 }
 
-/** Whether a name has "fable" as a word, as routing reads model names. */
-function namesFable(name: string): boolean {
-  return name.split(/[^A-Za-z0-9.]+/).some((word) => word.toLowerCase() === "fable");
+/** Whether a name has "fable" or "mythos" as a word, as routing reads model names. */
+function namesExpensive(name: string): boolean {
+  return name.split(/[^A-Za-z0-9.]+/).some((word) => ["fable", "mythos"].includes(word.toLowerCase()));
 }
 
-/** A Fable model: routing never uses one, so it is never offered for a ranking. */
-export function isFable(model: ModelInfo): boolean {
-  return namesFable(model.id) || namesFable(model.displayName) || (model.resolved !== null && namesFable(model.resolved));
+/** An expensive model (Fable, Mythos): routing never picks one by itself, only where you pick it. */
+export function isExpensive(model: ModelInfo): boolean {
+  return (
+    namesExpensive(model.id) ||
+    namesExpensive(model.displayName) ||
+    (model.resolved !== null && namesExpensive(model.resolved))
+  );
 }
 
 /**
- * An agent's own default model, else its first current one that isn't Fable (a Fable model is
- * only used when picked), else its first one.
+ * An agent's own default model, else its first current one that isn't expensive (an expensive
+ * model is only used when picked), else its first one.
  */
 function agentDefault(group: ModelGroup): ModelInfo | undefined {
   return (
     group.models.find((entry) => entry.isDefault) ??
-    group.models.find((entry) => !entry.legacy && !isFable(entry)) ??
+    group.models.find((entry) => !entry.legacy && !isExpensive(entry)) ??
     group.models.find((entry) => !entry.legacy) ??
     group.models[0]
   );

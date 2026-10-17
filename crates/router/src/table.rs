@@ -74,19 +74,20 @@ pub(crate) fn has_word(id: &str, word: &str) -> bool {
     words(id).any(|candidate| candidate.eq_ignore_ascii_case(word))
 }
 
-/// Whether a model name (as asked for, without a catalog entry) names a Fable model.
-pub(crate) fn names_fable(name: &str) -> bool {
-    has_word(name, "fable")
+/// The expensive models' names: routing never picks one by itself, only when the user does.
+const EXPENSIVE: [&str; 2] = ["fable", "mythos"];
+
+/// Whether a model name (as asked for, without a catalog entry) names an expensive model.
+pub(crate) fn names_expensive(name: &str) -> bool {
+    EXPENSIVE.iter().any(|word| has_word(name, word))
 }
 
-/// Fable models are never routed to (the user's rule), whatever the catalog says.
-pub(crate) fn is_fable(model: &ModelInfo) -> bool {
-    has_word(&model.id, "fable")
-        || has_word(&model.display_name, "fable")
-        || model
-            .resolved
-            .as_deref()
-            .is_some_and(|resolved| has_word(resolved, "fable"))
+/// Expensive models (Fable, Mythos) stay out of the automatic ranking, whatever the catalog
+/// says; they run only where the user picks one by hand.
+pub(crate) fn is_expensive(model: &ModelInfo) -> bool {
+    names_expensive(&model.id)
+        || names_expensive(&model.display_name)
+        || model.resolved.as_deref().is_some_and(names_expensive)
 }
 
 // ----- reasoning effort -------------------------------------------------------------------

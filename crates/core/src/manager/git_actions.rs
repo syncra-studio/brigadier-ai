@@ -432,6 +432,7 @@ impl SessionManager {
                 provider: Some(chosen.provider),
                 model: chosen.model.clone(),
                 effort: chosen.effort.clone(),
+                by_user: true,
             };
             if let Decision::Run(routed) = self.decide(&ask(Some(pin))).await
                 && routed.provider == chosen.provider

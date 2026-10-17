@@ -126,7 +126,9 @@ pub fn is_worker_rule(rule: &OverrideRule, provider: ProviderKind, id: &str) -> 
 }
 
 /// The settings with the models of `provider`'s list recorded as known, or `None` when all
-/// of them already are. Each model seen after the agent's first list gets [`worker_rule`];
+/// of them already are. Each model seen after the agent's first list gets [`worker_rule`]
+/// (not an expensive one: routing never gives it work by itself, and the rule would block the
+/// user's own pick);
 /// each older one (`older`: the list's legacy models, each its id and the id it resolves to)
 /// is turned off the first time.
 pub fn note_models(
@@ -154,6 +156,7 @@ pub fn note_models(
             id: id.clone(),
         });
         if !first_list
+            && !brigadier_router::names_expensive(id)
             && !next
                 .routing_overrides
                 .iter()
@@ -447,11 +450,12 @@ mod tests {
         let next = note_models(
             &settings,
             ProviderKind::Claude,
-            &ids(&["opus", "fresh"]),
+            &ids(&["opus", "fresh", "claude-mythos-5"]),
             &[],
             2,
         )
         .expect("fresh is new");
+        // An expensive model needs no rule: routing uses it only where the user picks it.
         assert_eq!(next.routing_overrides.len(), 1);
         let rule = &next.routing_overrides[0];
         assert!(is_worker_rule(rule, ProviderKind::Claude, "fresh"));

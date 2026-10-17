@@ -44,6 +44,6 @@ only: { [key in TaskCategory]?: QualityTier } | null, strengths: { [key in TaskC
  */
 legacy: boolean, 
 /**
- * Never routed to (Fable).
+ * Expensive (Fable, Mythos): never routed to unless the user names it by hand.
  */
 excluded: boolean, trial: TrialState | null, research: ResearchNote | null, };

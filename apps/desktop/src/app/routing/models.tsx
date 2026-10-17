@@ -67,7 +67,7 @@ const BEST_WITHIN = 0.5;
 const BEST_SHOWN = 3;
 
 function statusHint(model: MergedModel): string {
-  if (model.excluded) return "Brigadier never routes work to this model.";
+  if (model.excluded) return "An expensive model: Brigadier uses it only where you pick it.";
   if (model.trial) {
     return `An unrated model trying out low-risk work (scouting, research, verification) until ${model.trial.needed} outcomes place it.`;
   }
@@ -270,7 +270,7 @@ export function ModelRow({
         (rule.target.type === "family" && rule.target.family === model.family)),
   );
   const summary = model.excluded
-    ? "Brigadier never gives work to Fable models."
+    ? "Expensive: used only where you pick it"
     : [
         PLAIN_TIERS[model.tier],
         bestFor(model),

@@ -3,7 +3,7 @@
 //!
 //! The registry is data, not policy. It may set a model's tier, strengths, context window,
 //! efforts and modalities, within bounds enforced when it is read; it never beats the user's
-//! overrides or the hard rules (no Fable models, efforts at most `high`, only CLIs Brigadier
+//! overrides or the hard rules (no expensive models, efforts at most `high`, only CLIs Brigadier
 //! drives, only capabilities their adapters implement).
 
 use std::collections::BTreeMap;
@@ -230,7 +230,7 @@ pub struct MergedModel {
     pub modalities: Modalities,
     /// An older model the CLI still lists beside a newer one.
     pub legacy: bool,
-    /// Never routed to (Fable).
+    /// Expensive (Fable, Mythos): never routed to unless the user names it by hand.
     pub excluded: bool,
     pub trial: Option<TrialState>,
     pub research: Option<ResearchNote>,

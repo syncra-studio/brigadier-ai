@@ -19,7 +19,7 @@ import type {
   ProviderOverview,
 } from "@/ipc/generated";
 import {
-  isFable,
+  isExpensive,
   isNoWorkRule,
   joinWords,
   PLAIN_KIND_NAMES,
@@ -43,8 +43,8 @@ import { useApp } from "@/state/store";
 const OFF_NOTE = "Off: its models are hidden from the model picker, and it gets no work";
 
 /** The line under a model Brigadier gives no tasks to whatever the user chooses. */
-export const FABLE_NOTE =
-  "Brigadier never gives work to Fable models; you can still pick one for a chat or session";
+export const EXPENSIVE_NOTE =
+  "Expensive: Brigadier uses it only where you pick it, in a chat, a session, your order or a rule";
 
 /** The line under a model a "Don't give work" rule keeps from tasks. */
 const NO_WORK_NOTE = "Gets no tasks: a rule in Routing keeps it to chats and sessions you pick it for";
@@ -271,10 +271,11 @@ function ModelRow({
   const newRule = rules.find((rule) => isNewModelRule(rule) && isWorkerRule(rule, ref));
   const noWork = rules.some((rule) => isWorkerRule(rule, ref));
   const toggle = useAction();
-  const fable = isFable(model);
-  const fresh = !fable && newRule !== undefined;
+  const expensive = isExpensive(model);
+  // A rule kept from before still shows, so it can be lifted.
+  const fresh = newRule !== undefined;
   const known = merged?.find((entry) => entry.provider === provider && entry.id === model.id);
-  const tags = fable ? [] : rulesAbout(rules, provider, model, known?.family ?? null);
+  const tags = rulesAbout(rules, provider, model, known?.family ?? null);
   // Opens Routing at the rule the link names.
   const showRule = (rule: OverrideRule) => {
     openSettings("routing");
@@ -282,14 +283,7 @@ function ModelRow({
   };
 
   let description: ReactNode;
-  if (fable) {
-    description = (
-      <span className="flex items-center gap-1.5">
-        <InfoCircle aria-hidden className="size-icon-xs shrink-0" />
-        {FABLE_NOTE}
-      </span>
-    );
-  } else if (fresh) {
+  if (fresh) {
     description = (
       <span className="flex flex-wrap items-center gap-x-2">
         Brigadier gives it no tasks until you allow it
@@ -300,6 +294,13 @@ function ModelRow({
     );
   } else if (noWork) {
     description = NO_WORK_NOTE;
+  } else if (expensive) {
+    description = (
+      <span className="flex items-center gap-1.5">
+        <InfoCircle aria-hidden className="size-icon-xs shrink-0" />
+        {EXPENSIVE_NOTE}
+      </span>
+    );
   } else if (known && known.tier !== "unrated") {
     description = [TIER_LABELS[known.tier], bestFor(known)].filter(Boolean).join(" · ");
   } else {

@@ -231,6 +231,8 @@ fn category_effort(category: TaskCategory) -> Option<&'static str> {
 /// Why a model can't take the task, in the order they are checked.
 #[derive(Debug, Clone, PartialEq)]
 enum Block {
+    /// An expensive model (Fable, Mythos) the user didn't name by hand.
+    HandOnly(String),
     /// The registry keeps it for other categories (its `only`).
     Role(String),
     /// It (or its provider) just failed on this task.
@@ -257,7 +259,8 @@ enum Block {
 impl Block {
     fn why(&self) -> &str {
         match self {
-            Block::Role(why)
+            Block::HandOnly(why)
+            | Block::Role(why)
             | Block::Excluded(why)
             | Block::Rule(why)
             | Block::Needs(why)
@@ -361,10 +364,15 @@ fn assessed<'q>(query: &'q Query) -> Assessed<'q> {
     let mut candidates = candidates(query);
     if let Some(ranking) = ranking {
         for candidate in &mut candidates {
+            // A vendor place never takes an expensive model: only its own place does.
             candidate.listed = ranking
                 .entries
                 .iter()
-                .position(|entry| targets(&entry.target, &candidate.model, query.registry))
+                .position(|entry| {
+                    targets(&entry.target, &candidate.model, query.registry)
+                        && !(candidate.model.excluded
+                            && matches!(entry.target, OverrideTarget::Vendor { .. }))
+                })
                 .map(|index| index as u32 + 1);
         }
     }
@@ -858,7 +866,10 @@ fn manual_pick(
             .filter(|i| targets(&entry.target, &candidates[*i].model, query.registry))
             .collect();
         let pick = match &entry.target {
-            OverrideTarget::Vendor { .. } => ranked.iter().copied().find(|i| members.contains(i)),
+            OverrideTarget::Vendor { .. } => ranked
+                .iter()
+                .copied()
+                .find(|i| members.contains(i) && !candidates[*i].model.excluded),
             OverrideTarget::Family { .. } => {
                 // Stable: the CLI's own order among the current models, then the older ones.
                 members.sort_by_key(|i| candidates[*i].model.legacy);
@@ -900,6 +911,7 @@ fn manual_pick(
                         .iter()
                         .copied()
                         .filter(|i| !candidates[*i].model.legacy)
+                        .filter(|i| !matches!(candidates[*i].block, Some(Block::HandOnly(_))))
                         .max_by(|a, b| {
                             (candidates[*a].score + candidates[*a].penalty)
                                 .total_cmp(&(candidates[*b].score + candidates[*b].penalty))
@@ -1009,6 +1021,7 @@ fn listing(
     let mut blocked: Vec<usize> = (0..candidates.len())
         .filter(|i| !candidates[*i].eligible())
         .filter(|i| !candidates[*i].model.legacy || candidates[*i].listed.is_some())
+        .filter(|i| !matches!(candidates[*i].block, Some(Block::HandOnly(_))))
         .collect();
     blocked.sort_by(|a, b| {
         let (a, b) = (&candidates[*a], &candidates[*b]);
@@ -1084,18 +1097,12 @@ fn heat_of(query: &Query, model: &MergedModel) -> Option<Heat> {
         .or(Some(Heat::Cool))
 }
 
-/// Every model routing may consider: the merged catalog (Fable and duplicate aliases of one
-/// curated model left out), plus the registry's models for a logged-in provider whose list
-/// isn't loaded yet.
+/// Every model routing may consider: the merged catalog (duplicate aliases of one curated
+/// model left out; expensive models are kept for a user who names one), plus the registry's
+/// models for a logged-in provider whose list isn't loaded yet.
 fn candidates<'q>(query: &'q Query) -> Vec<Candidate<'q>> {
     let mut models: Vec<(Cow<'q, MergedModel>, bool)> = Vec::new();
     for model in query.models {
-        if model.excluded
-            || table::names_fable(&model.id)
-            || table::names_fable(&model.display_name)
-        {
-            continue;
-        }
         // Claude lists `default` and `opus` for one model: keep the named alias.
         if model.status == ModelStatus::Curated
             && let Some(key) = &model.registry_key
@@ -1180,7 +1187,13 @@ fn assess<'q>(
     candidate.trial =
         on_trial && query.trial_slot && allows_trials(query.category) && candidate.listed.is_none();
 
-    let block = if let Some(only) = model
+    // An expensive model runs only where the user named it by hand, and then as ranked.
+    let named = model.excluded && named_by_hand(&model, query, rules, ranking);
+    let block = if model.excluded && !named {
+        Some(Block::HandOnly(
+            "an expensive model: Brigadier uses it only when you pick it".to_owned(),
+        ))
+    } else if let Some(only) = model
         .only
         .as_ref()
         .filter(|only| !only.contains_key(&query.category))
@@ -1223,9 +1236,9 @@ fn assess<'q>(
              slot ({runs} of {} runs so far)",
             crate::merge::TRIAL_OUTCOMES
         )))
-    } else if candidate.listed.is_some() {
-        // The user ranked it: the category's own floor is waived, a floor raised for this task
-        // holds.
+    } else if candidate.listed.is_some() || named {
+        // The user ranked or named it: the category's own floor is waived, a floor raised for
+        // this task holds.
         if query.floor > default_floor(query.category) && model.tier < query.floor {
             Some(Block::Floor(format!(
                 "below the {} quality floor asked for this task",
@@ -1510,6 +1523,34 @@ fn has_reset(resets_at_ms: Option<i64>, now_ms: i64) -> bool {
     resets_at_ms.is_some_and(|reset| reset <= now_ms)
 }
 
+/// Whether the user named this model by hand for the task: a model or family place in the
+/// manual ranking in force, a `prefer` or `only` rule naming it, or a pin they chose. A vendor
+/// place or rule names no model: routing would pick one by itself.
+fn named_by_hand(
+    model: &MergedModel,
+    query: &Query,
+    rules: &[&OverrideRule],
+    ranking: Option<&Ranking>,
+) -> bool {
+    let names = |target: &OverrideTarget| {
+        !matches!(target, OverrideTarget::Vendor { .. }) && targets(target, model, query.registry)
+    };
+    ranking.is_some_and(|ranking| ranking.entries.iter().any(|entry| names(&entry.target)))
+        || rules
+            .iter()
+            .any(|rule| rule.effect != OverrideEffect::Never && names(&rule.target))
+        || query.pin.as_ref().is_some_and(|pin| {
+            pin.by_user
+                && pin
+                    .provider
+                    .is_none_or(|provider| provider == model.provider)
+                && pin
+                    .model
+                    .as_deref()
+                    .is_some_and(|wanted| pin_names(model, query.registry, wanted.trim()))
+        })
+}
+
 /// The pinned model, when it may run; otherwise says why not.
 fn pinned(
     query: &Query,
@@ -1518,9 +1559,9 @@ fn pinned(
     notes: &mut Vec<String>,
 ) -> Option<usize> {
     let wanted = pin.model.as_deref()?.trim();
-    if table::names_fable(wanted) {
+    if table::names_expensive(wanted) && !pin.by_user {
         notes.push(format!(
-            "{wanted} was asked for, but Fable models are never used"
+            "{wanted} was asked for, but Brigadier uses expensive models only when you pick one"
         ));
         return None;
     }
@@ -1591,16 +1632,28 @@ fn find_named(
     first(&|m| m.id.eq_ignore_ascii_case(wanted))
         .or_else(|| first(&|m| is_model(m, query.registry, wanted)))
         .or_else(|| first(&|m| m.id.to_ascii_lowercase().starts_with(&lower)))
-        .or_else(|| {
-            first(&|m| {
-                !wanted.contains(['-', '.'])
-                    && (m
-                        .family
-                        .as_deref()
-                        .is_some_and(|f| f.eq_ignore_ascii_case(wanted))
-                        || table::has_word(&m.id, wanted))
-            })
-        })
+        .or_else(|| first(&|m| names_family(m, wanted)))
+}
+
+/// Whether a bare name (`sol`, `mythos`) names this model's family, as a pin may.
+fn names_family(model: &MergedModel, wanted: &str) -> bool {
+    !wanted.contains(['-', '.'])
+        && (model
+            .family
+            .as_deref()
+            .is_some_and(|f| f.eq_ignore_ascii_case(wanted))
+            || table::has_word(&model.id, wanted))
+}
+
+/// Whether a pin's model name could name this model, by any step [`find_named`] takes.
+fn pin_names(model: &MergedModel, registry: &Registry, wanted: &str) -> bool {
+    model.id.eq_ignore_ascii_case(wanted)
+        || is_model(model, registry, wanted)
+        || model
+            .id
+            .to_ascii_lowercase()
+            .starts_with(&wanted.to_ascii_lowercase())
+        || names_family(model, wanted)
 }
 
 /// Why none of a provider's models can take the task.
@@ -1613,6 +1666,7 @@ fn provider_block(candidates: &[Candidate], provider: ProviderKind) -> String {
             Block::Limit { .. } | Block::Unavailable(_) => 3,
             Block::Author(_) | Block::Excluded(_) | Block::Rule(_) | Block::Pinned(_) => 2,
             Block::Floor(_) | Block::Needs(_) | Block::Role(_) => 1,
+            Block::HandOnly(_) => 0,
         })
         .map_or_else(
             || format!("{} has no models listed", name(provider)),
@@ -1939,6 +1993,7 @@ fn alternatives(
     let mut blocked: Vec<&Candidate> = candidates
         .iter()
         .filter(|c| !c.eligible() && !c.model.legacy)
+        .filter(|c| !matches!(c.block, Some(Block::HandOnly(_))))
         .collect();
     blocked.sort_by(|a, b| unpenalized(b).total_cmp(&unpenalized(a)));
     order.extend(runners.first());
@@ -2682,7 +2737,11 @@ mod tests {
                 for q in [plain, pinned, preferred, ranked] {
                     let allowed = eligible(&q);
                     for model in &allowed {
-                        assert!(!table::names_fable(&model.id), "{category:?}: {}", model.id);
+                        assert!(
+                            !table::names_expensive(&model.id),
+                            "{category:?}: {}",
+                            model.id
+                        );
                     }
                     let haiku_allowed = allowed.iter().any(is_haiku_5_5);
                     let chosen = match decide(&q) {
@@ -2690,7 +2749,9 @@ mod tests {
                         Decision::Wait(_) => None,
                     };
                     assert!(
-                        chosen.as_deref().is_none_or(|id| !table::names_fable(id)),
+                        chosen
+                            .as_deref()
+                            .is_none_or(|id| !table::names_expensive(id)),
                         "{category:?}"
                     );
                     if category == TaskCategory::Operate {
@@ -2724,6 +2785,119 @@ mod tests {
             project_id: None,
             created_at_ms: 0,
         }
+    }
+
+    /// Fable and Mythos never run on a score, but do where the user names one by hand: a model
+    /// place in their order, a family rule or a pin they chose. A vendor place, or a pin the
+    /// orchestrator set, still doesn't pick one.
+    #[test]
+    fn an_expensive_model_runs_only_when_you_pick_it() {
+        let registry = Registry::bundled();
+        let mut models = catalog(&registry);
+        models.extend(crate::merge(
+            &registry,
+            &[(
+                ProviderKind::Claude,
+                &[info("claude-mythos-5", "Mythos 5", None)],
+            )],
+            &[],
+            &[],
+        ));
+        assert!(models.iter().filter(|m| m.excluded).count() == 2);
+        let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        });
+        let mut plain = query(&registry, &models, &both);
+        plain.category = TaskCategory::Implement;
+        plain.floor = default_floor(TaskCategory::Implement);
+        let expensive = |route: &Routed| table::names_expensive(&route.model);
+        assert!(!expensive(&routed(&plain)));
+        assert!(
+            preview(&plain)
+                .candidates
+                .iter()
+                .all(|c| !table::names_expensive(&c.model))
+        );
+
+        let ranking = |target: OverrideTarget| {
+            [Ranking {
+                id: "manual".into(),
+                category: TaskCategory::Implement,
+                areas: vec![],
+                project_id: None,
+                manual: true,
+                only: false,
+                updated_at_ms: 0,
+                entries: vec![crate::RankedEntry {
+                    target,
+                    effort: None,
+                }],
+            }]
+        };
+        let fable = ranking(OverrideTarget::Model {
+            provider: ProviderKind::Claude,
+            id: "claude-fable-5-1[1m]".into(),
+        });
+        let mut ranked = plain.clone();
+        ranked.rankings = &fable;
+        assert_eq!(routed(&ranked).model, "claude-fable-5-1[1m]");
+        let vendor = ranking(OverrideTarget::Vendor {
+            provider: ProviderKind::Claude,
+        });
+        ranked.rankings = &vendor;
+        assert!(!expensive(&routed(&ranked)));
+
+        let prefer = [rule(
+            OverrideEffect::Prefer,
+            OverrideTarget::Family {
+                provider: ProviderKind::Claude,
+                family: "mythos".into(),
+            },
+        )];
+        let mut preferred = plain.clone();
+        preferred.overrides = &prefer;
+        assert_eq!(routed(&preferred).model, "claude-mythos-5");
+
+        let mut pinned = plain.clone();
+        pinned.category = TaskCategory::GitText;
+        pinned.floor = default_floor(TaskCategory::GitText);
+        pinned.pin = Some(Pin {
+            model: Some("claude-mythos-5".into()),
+            ..Pin::default()
+        });
+        let route = routed(&pinned);
+        assert!(!expensive(&route));
+        assert!(
+            route.reason.contains("only when you pick one"),
+            "{}",
+            route.reason
+        );
+        pinned.pin.as_mut().unwrap().by_user = true;
+        assert_eq!(routed(&pinned).model, "claude-mythos-5");
+        // A family name picks it as it picks any model.
+        pinned.pin.as_mut().unwrap().model = Some("mythos".into());
+        assert_eq!(routed(&pinned).model, "claude-mythos-5");
+
+        // Named second, after a vendor place: the vendor place doesn't take it.
+        let mut fallback = ranking(OverrideTarget::Vendor {
+            provider: ProviderKind::Claude,
+        });
+        fallback[0].category = TaskCategory::GitText;
+        fallback[0].entries.push(crate::RankedEntry {
+            target: OverrideTarget::Model {
+                provider: ProviderKind::Claude,
+                id: "claude-mythos-5".into(),
+            },
+            effort: None,
+        });
+        let mut ranked = plain.clone();
+        ranked.category = TaskCategory::GitText;
+        ranked.floor = default_floor(TaskCategory::GitText);
+        ranked.rankings = &fallback;
+        let route = routed(&ranked);
+        assert!(!expensive(&route), "{}", route.model);
     }
 
     /// Providers, rules, models that just failed and the author under review.
@@ -2815,7 +2989,10 @@ mod tests {
                         .chain([model.resolved.as_ref()])
                         .flatten()
                     {
-                        assert!(!table::names_fable(name), "{category:?}: {name} is Fable");
+                        assert!(
+                            !table::names_expensive(name),
+                            "{category:?}: {name} is Fable"
+                        );
                     }
                 }
                 let preview = preview(&query);

@@ -238,6 +238,7 @@ impl SessionManager {
                         provider: Some(held.route.choice.provider),
                         model: held.route.choice.model.clone(),
                         effort: Some(effort),
+                        by_user: false,
                     }),
                     None => pin(args.provider.as_deref(), args.model, Some(effort))?,
                 };
@@ -1140,6 +1141,7 @@ fn pin(
         provider,
         model,
         effort,
+        by_user: false,
     }))
 }
 

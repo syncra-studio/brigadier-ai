@@ -1140,6 +1140,7 @@ impl SessionManager {
                     provider: Some(reviewer),
                     model: None,
                     effort: Some(brigadier_review::EFFORT.to_owned()),
+                    by_user: false,
                 }),
                 hold_pin: true,
                 avoid: Some(new.author.clone()),

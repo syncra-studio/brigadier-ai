@@ -12,7 +12,8 @@
 //!   ±2 of the unrated 5);
 //! - **Unknown** otherwise: tier `unrated`, strength 5 everywhere.
 //!
-//! Fable models are listed but `excluded`; researched and unknown ones are on trial until they
+//! Expensive models (Fable, Mythos) are listed but `excluded` from the automatic ranking: they
+//! run only where the user picks one by hand; researched and unknown ones are on trial until they
 //! have [`TRIAL_OUTCOMES`] outcomes.
 
 use std::collections::BTreeMap;
@@ -126,7 +127,7 @@ fn merge_one(
         trial: None,
         research: None,
     };
-    if table::is_fable(info) {
+    if table::is_expensive(info) {
         model.excluded = true;
         model.strengths.clear();
         return model;

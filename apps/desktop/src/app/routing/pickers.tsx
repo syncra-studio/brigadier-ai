@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { OverrideTarget, RouteCandidate } from "@/ipc/generated";
-import { isFable, PROVIDERS, sameTarget, VENDOR_LABELS } from "@/lib/routing";
+import { PROVIDERS, sameTarget, VENDOR_LABELS } from "@/lib/routing";
 import { useAvailableModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { providerOn } from "@/state/providers";
@@ -150,8 +150,8 @@ export function TargetItems({
     <>
       {PROVIDERS.filter((provider) => providerOn(availability, provider)).map((provider, index) => {
         const group = available.find((entry) => entry.provider === provider);
-        // Routing never uses a Fable model, so no list or rule names one.
-        const models = (group?.models ?? []).filter((model) => !model.legacy && !isFable(model));
+        // Expensive models (Fable, Mythos) are offered too: picked here, routing uses them.
+        const models = (group?.models ?? []).filter((model) => !model.legacy);
         const vendor: OverrideTarget = { type: "vendor", provider };
         return (
           <div key={provider}>

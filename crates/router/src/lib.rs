@@ -8,20 +8,23 @@
 //! (0–10: how well suited it is, weighing quality against cost), area modifiers (±2), efforts,
 //! context window and modalities. The app ships a copy ([`Registry::bundled`]) and the daemon
 //! downloads newer revisions ([`Registry::parse`], [`Registry::is_newer_than`]). Every copy
-//! passes the same bounds (see [`load`]'s docs): no Fable, efforts only up to `high`, only CLIs
-//! Brigadier drives, only capabilities their adapters implement.
+//! passes the same bounds (see [`load`]'s docs): no expensive models, efforts only up to `high`,
+//! only CLIs Brigadier drives, only capabilities their adapters implement.
 //!
 //! # Merge
 //!
 //! [`merge()`] joins each CLI's live list with the registry: a model is **curated** (its own
 //! entry), **inherited** (a newer member of a family entry, `gpt-6.1-sol` from `sol`),
 //! **researched** (placed by a research note, within ±2 of unrated) or **unknown** (tier
-//! unrated, strength 5). Fable models are listed but excluded.
+//! unrated, strength 5). Expensive models (Fable, Mythos) are listed but excluded: they run only
+//! where the user names one by hand (a model or family place in a manual ranking, a `prefer` or
+//! `only` rule, a pin the user chose), never on a score.
 //!
 //! # Eligibility
 //!
 //! A model may take a task when all of these hold ([`decide`]):
-//! - it isn't Fable, and its provider is logged in;
+//! - it isn't an expensive model (Fable, Mythos) unless the user named it by hand, and its
+//!   provider is logged in;
 //! - the registry doesn't keep it for other categories (an entry's `only`: Haiku 5.5 takes only
 //!   operating apps on screen, where it counts as strong);
 //! - **no confirmed limit**: a provider limit (usage window, spend control, credits), a window
@@ -73,8 +76,8 @@
 //! is tried top-down instead of scoring: a model place takes that model, a family place its
 //! newest model that can run (the CLI lists newest first), a vendor place its best-scored one.
 //! In order of strength:
-//! 1. The hard rules (no Fable, efforts at most `high`, a login, no confirmed limit, not the
-//!    model that just failed, the task's needs, a binding pin's vendor, cross-vendor review).
+//! 1. The hard rules (no expensive model the user didn't name, efforts at most `high`, a login,
+//!    no confirmed limit, not the model that just failed, the task's needs, a binding pin's vendor, cross-vendor review).
 //! 2. `never` and `only` rules.
 //! 3. The floor: a ranked model skips the category's default floor (the Routing page warns);
 //!    a floor the orchestrator raised for a task still holds. A ranked model not rated yet
@@ -134,6 +137,12 @@ mod rankings;
 mod ratings;
 mod registry;
 pub use ratings::{RatingPatch, validate_patches};
+
+/// Whether a model id or name names an expensive model (Fable, Mythos): routing never picks one
+/// by itself, only where the user names it.
+pub fn names_expensive(name: &str) -> bool {
+    table::names_expensive(name)
+}
 mod table;
 
 use brigadier_providers::ProviderKind;
@@ -251,6 +260,11 @@ pub struct Pin {
     /// alone also picks its provider.
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// The user picked this model by hand (their commit-message model, say): an expensive
+    /// model it names may run. Never kept: a stored pin is the orchestrator's.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub by_user: bool,
 }
 
 /// The model that wrote the change a review is about.

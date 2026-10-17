@@ -7,7 +7,7 @@
 //!   it has). Within a version, names this app doesn't know (a modality, a capability, a task
 //!   category or area) are dropped where they appear; everything else must parse.
 //! - **Bounds**, enforced here whatever the data says: entries for a CLI Brigadier doesn't drive
-//!   and entries naming a Fable model are dropped; efforts keep only `low`, `medium` and `high`
+//!   and entries naming an expensive model (Fable, Mythos) are dropped; efforts keep only `low`, `medium` and `high`
 //!   (a default above `high` becomes `high`, one below `low` becomes `low`); strengths are
 //!   clamped to 0–10 and area modifiers to ±2; a context window outside
 //!   [`MIN_CONTEXT_WINDOW`]..=[`MAX_CONTEXT_WINDOW`] counts as unknown; a capability is kept only
@@ -292,9 +292,9 @@ fn bound(mut registry: Registry, adjustments: &mut Vec<String>) -> Result<Regist
             ));
             continue;
         };
-        if names_fable(&model) {
+        if names_expensive(&model) {
             adjustments.push(format!(
-                "{}: skipped, Fable models are never used",
+                "{}: skipped, expensive models are never rated or routed to automatically",
                 model.key
             ));
             continue;
@@ -328,14 +328,18 @@ fn bound(mut registry: Registry, adjustments: &mut Vec<String>) -> Result<Regist
     Ok(registry)
 }
 
-fn names_fable(model: &RegistryModel) -> bool {
-    table::names_fable(&model.key)
-        || model.matches.ids.iter().any(|id| table::names_fable(id))
+fn names_expensive(model: &RegistryModel) -> bool {
+    table::names_expensive(&model.key)
+        || model
+            .matches
+            .ids
+            .iter()
+            .any(|id| table::names_expensive(id))
         || model
             .matches
             .family
             .as_deref()
-            .is_some_and(table::names_fable)
+            .is_some_and(table::names_expensive)
 }
 
 fn bound_model(
