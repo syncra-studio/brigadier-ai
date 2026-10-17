@@ -775,7 +775,7 @@ async fn a_message_the_thread_had_not_taken_before_a_restart_still_reaches_it() 
         let heard = heard.lock().unwrap().join("\n");
         heard.contains("The build server is back.") && heard.contains("The cache is warm.")
     };
-    tokio::time::timeout(super::PATIENCE, async {
+    tokio::time::timeout(*super::PATIENCE, async {
         while !both() {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }

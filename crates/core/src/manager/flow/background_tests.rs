@@ -533,7 +533,7 @@ async fn the_users_stop_of_a_run_that_printed_says_what_it_printed() {
                 })
                 .await;
                 let id = turn.conversation().unwrap();
-                tokio::time::timeout(super::PATIENCE, async {
+                tokio::time::timeout(*super::PATIENCE, async {
                     while !turn
                         .host
                         .core
@@ -562,7 +562,7 @@ async fn the_users_stop_of_a_run_that_printed_says_what_it_printed() {
         run_state(board, "run-1") == Some(BackgroundRunState::Running)
     })
     .await;
-    tokio::time::timeout(super::PATIENCE, async {
+    tokio::time::timeout(*super::PATIENCE, async {
         loop {
             let (text, _) = flow
                 .manager

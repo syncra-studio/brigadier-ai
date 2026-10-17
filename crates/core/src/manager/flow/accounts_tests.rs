@@ -377,7 +377,7 @@ async fn two_chats_on_two_accounts_run_at_the_same_time() {
             .unwrap();
     }
     // Both turns ran at once (each waited for the other), each on its own account.
-    let deadline = tokio::time::Instant::now() + super::PATIENCE;
+    let deadline = tokio::time::Instant::now() + *super::PATIENCE;
     loop {
         let mut done = true;
         for chat in &chats {
@@ -678,7 +678,7 @@ async fn say_to(flow: &Flow, chat: &ConversationId, text: &str) {
         .send_message(chat.clone(), text.into(), vec![], vec![], false, None)
         .await
         .unwrap();
-    tokio::time::timeout(super::PATIENCE, async {
+    tokio::time::timeout(*super::PATIENCE, async {
         loop {
             let board = flow.core.board(chat).await.unwrap();
             if !board.requests.is_empty()

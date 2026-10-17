@@ -66,6 +66,19 @@ pub fn heap<F: std::future::Future>(make: impl FnOnce() -> F) -> std::pin::Pin<B
     Box::pin(make())
 }
 
+/// How long a test may wait for what it needs before it fails: only a hang takes this long. On
+/// CI it stays under nextest's kill of a test hung for two minutes (`.config/nextest.toml`), so
+/// a hang fails saying what it waited for instead of being killed (#111).
+#[cfg(all(test, unix))]
+pub(crate) fn test_patience() -> std::time::Duration {
+    let secs = if std::env::var_os("CI").is_some() {
+        100
+    } else {
+        300
+    };
+    std::time::Duration::from_secs(secs)
+}
+
 /// Milliseconds since the Unix epoch.
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()

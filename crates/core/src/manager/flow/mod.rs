@@ -34,8 +34,9 @@ use crate::work::{RequestState, Task};
 /// wait under it is for the condition the test needs, so this only turns a hang into a failure.
 /// A scripted run is CPU-bound, and the machine running the tests may be loaded far past its
 /// cores: the longest flows take 5 to 10 s on a calm 14-core Mac, and took 66 to 81 s (and
-/// then passed) with six suites and sixty busy loops running beside them (load ~200).
-const PATIENCE: Duration = Duration::from_secs(300);
+/// then passed) with six suites and sixty busy loops running beside them (load ~200). Shorter
+/// on CI ([`crate::test_patience`]).
+static PATIENCE: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(crate::test_patience);
 
 /// One turn a scripted CLI is asked to take.
 pub(crate) struct Turn {
@@ -257,13 +258,13 @@ impl Turn {
             .send(ProviderEvent::ApprovalRequested { request })
             .await
             .ok()?;
-        tokio::time::timeout(PATIENCE, rx).await.ok()?.ok()
+        tokio::time::timeout(*PATIENCE, rx).await.ok()?.ok()
     }
 
     /// Waits for the next message steered into this running turn (`None`: none came in time).
     pub async fn steered(&self) -> Option<String> {
         let mut steers = self.steers.lock().await;
-        tokio::time::timeout(PATIENCE, steers.recv())
+        tokio::time::timeout(*PATIENCE, steers.recv())
             .await
             .ok()
             .flatten()
@@ -293,7 +294,7 @@ impl Turn {
                 notified.await;
             }
         };
-        tokio::time::timeout(PATIENCE, wait).await.is_ok()
+        tokio::time::timeout(*PATIENCE, wait).await.is_ok()
     }
 
     /// Reports `event` as the session's CLI would, mid-turn.
@@ -918,7 +919,7 @@ impl ProviderSession for FakeSession {
                 release.notified().await;
             }
             // A manager that starts again may resume a session before it is reachable here.
-            let host = tokio::time::timeout(PATIENCE, async {
+            let host = tokio::time::timeout(*PATIENCE, async {
                 loop {
                     if let Some(host) = self.host.get().and_then(Weak::upgrade) {
                         break host;
@@ -1224,7 +1225,7 @@ async fn boot(
     host.set(Arc::downgrade(&manager)).ok();
     // The router picks only among models it has seen.
     let mut checked = runtime.provider_checks();
-    tokio::time::timeout(PATIENCE, async {
+    tokio::time::timeout(*PATIENCE, async {
         while ProviderKind::ALL.iter().any(|kind| {
             runtime
                 .overview(*kind)
@@ -1240,7 +1241,7 @@ async fn boot(
 
 /// Waits until `done` holds, failing after [`PATIENCE`] with `what`.
 pub(crate) async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = tokio::time::Instant::now() + PATIENCE;
+    let deadline = tokio::time::Instant::now() + *PATIENCE;
     while !done() {
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -1256,7 +1257,7 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
-    let deadline = tokio::time::Instant::now() + PATIENCE;
+    let deadline = tokio::time::Instant::now() + *PATIENCE;
     while !done().await {
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -1708,7 +1709,7 @@ impl Flow {
         settings.switch_accounts = switch;
         self.core.update_settings(settings).await.unwrap();
         self.manager.runtime.sync_accounts().await;
-        let deadline = tokio::time::Instant::now() + PATIENCE;
+        let deadline = tokio::time::Instant::now() + *PATIENCE;
         while !self
             .manager
             .runtime
@@ -1775,7 +1776,7 @@ impl Flow {
         what: &str,
         done: impl Fn(&Board) -> bool,
     ) -> Board {
-        let deadline = tokio::time::Instant::now() + PATIENCE;
+        let deadline = tokio::time::Instant::now() + *PATIENCE;
         loop {
             let board = self.board_of(id).await;
             if done(&board) {

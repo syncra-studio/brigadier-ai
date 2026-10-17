@@ -21,7 +21,7 @@ where
 
 async fn observed(turn: &Turn, files: usize) -> Board {
     let id = turn.conversation().unwrap();
-    tokio::time::timeout(super::PATIENCE, async {
+    tokio::time::timeout(*super::PATIENCE, async {
         loop {
             let board = turn.host.core.board(&id).await.unwrap();
             if board
@@ -383,7 +383,7 @@ async fn request_changes_mid_request_saves_are_held_or_unowned() {
                     "user and thread\nthread again\n",
                 )
                 .await;
-                tokio::time::timeout(super::PATIENCE, async {
+                tokio::time::timeout(*super::PATIENCE, async {
                     loop {
                         let board = turn.host.core.board(&id).await.unwrap();
                         if board
@@ -470,7 +470,7 @@ async fn request_changes_snapshots_run_behind_the_thread_in_order() {
                 let slow = lock.lock().await;
                 edit(&turn, &workspace.join("b.txt"), "b1", "base\n", "base\none\n").await;
                 // The second edit comes once the thread has read the first.
-                tokio::time::timeout(super::PATIENCE, async {
+                tokio::time::timeout(*super::PATIENCE, async {
                     while !turn.host.change_records.pending(&id) {
                         tokio::task::yield_now().await;
                     }
@@ -495,7 +495,7 @@ async fn request_changes_snapshots_run_behind_the_thread_in_order() {
                     duration_ms: None,
                 })
                 .await;
-                tokio::time::timeout(super::PATIENCE, async {
+                tokio::time::timeout(*super::PATIENCE, async {
                     loop {
                         let board = turn.host.core.board(&id).await.unwrap();
                         if board.orchestrator_steps.iter().any(|step| {
@@ -890,7 +890,7 @@ async fn request_changes_background_runs_keep_the_starting_item_and_return_the_f
                 if turn.earlier > 0 { return Reply::text("The background run finished."); }
                 let id = turn.conversation().unwrap();
                 turn.emit(ProviderEvent::ToolCall { kept: None, item_id: "background-call".into(), name: "mcp__brigadier__run".into(), input: Some("{\"command\":\"controlled output\"}".into()), status: ItemStatus::InProgress, output: None }).await;
-                tokio::time::timeout(super::PATIENCE, async {
+                tokio::time::timeout(*super::PATIENCE, async {
                     loop {
                         let board = turn.host.core.board(&id).await.unwrap();
                         if board.orchestrator_steps.iter().any(|step| matches!(&step.kind, OrchestratorStepKind::Tool { item_id, .. } if item_id == "background-call")) { break; }
@@ -1374,7 +1374,7 @@ async fn request_changes_give_an_edit_back_from_a_command_snapshot_that_read_it(
             // The patch lands before the command's snapshot runs.
             std::fs::write(workspace.join("a.txt"), "base\nthread a\n").unwrap();
             drop(held);
-            tokio::time::timeout(super::PATIENCE, async {
+            tokio::time::timeout(*super::PATIENCE, async {
                 while turn.host.change_records.pending(&id) {
                     tokio::task::yield_now().await;
                 }
@@ -1625,7 +1625,7 @@ async fn request_changes_record_a_steered_requests_edits() {
                 status,
             };
             turn.emit(call(ItemStatus::InProgress)).await;
-            tokio::time::timeout(super::PATIENCE, async {
+            tokio::time::timeout(*super::PATIENCE, async {
                 loop {
                     let board = turn.host.core.board(&id).await.unwrap();
                     if board.requests.values().any(|r| r.steered_into.is_some()) {

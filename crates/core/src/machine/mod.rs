@@ -765,11 +765,12 @@ pub(crate) mod tests {
 
     /// How long a process the test started may take to get where it waits for. Only a hang
     /// takes this long: a process starting, stopping or going on is quick on a calm machine,
-    /// but each step is many times slower on one loaded far past its cores.
-    const PATIENCE: Duration = Duration::from_secs(300);
+    /// but each step is many times slower on one loaded far past its cores. Shorter on CI
+    /// ([`crate::test_patience`]).
+    static PATIENCE: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(crate::test_patience);
 
     fn wait_for<T>(mut found: impl FnMut() -> Option<T>) -> T {
-        let deadline = Instant::now() + PATIENCE;
+        let deadline = Instant::now() + *PATIENCE;
         loop {
             if let Some(value) = found() {
                 return value;
@@ -922,7 +923,7 @@ pub(crate) mod tests {
     }
 
     fn settles(pid: u32, ok: impl Fn(&str) -> bool) -> bool {
-        let deadline = Instant::now() + PATIENCE;
+        let deadline = Instant::now() + *PATIENCE;
         loop {
             if ok(&state(pid)) {
                 return true;

@@ -105,7 +105,7 @@ fn streaming(tool: &'static str, background: bool) -> Script {
                 .await;
             }
             let id = turn.conversation().unwrap();
-            tokio::time::timeout(super::PATIENCE, async {
+            tokio::time::timeout(*super::PATIENCE, async {
                 loop {
                     if row(&turn.host.core.board(&id).await.unwrap(), "decoy").is_some() {
                         break;
@@ -153,7 +153,7 @@ fn streaming(tool: &'static str, background: bool) -> Script {
 /// Nonblocking FIFO opens wait for the child to reach its read, without a sleeping test or
 /// a blocked helper thread that could outlive a failed assertion.
 async fn release(path: PathBuf) {
-    tokio::time::timeout(super::PATIENCE, async {
+    tokio::time::timeout(*super::PATIENCE, async {
         loop {
             match std::fs::OpenOptions::new()
                 .write(true)
@@ -176,7 +176,7 @@ async fn release(path: PathBuf) {
 }
 
 async fn live_text(flow: &Flow, request: &str, contains: &str) -> String {
-    tokio::time::timeout(super::PATIENCE, async {
+    tokio::time::timeout(*super::PATIENCE, async {
         loop {
             let page = flow
                 .manager
@@ -359,7 +359,7 @@ async fn own_run_streams_keep_one_buffer_through_background_handoff() {
         assert_eq!(text, first);
         assert_eq!(bytes, first.len() as u64);
         release(scratch.join("gate-1")).await;
-        let (text, bytes) = tokio::time::timeout(super::PATIENCE, async {
+        let (text, bytes) = tokio::time::timeout(*super::PATIENCE, async {
             loop {
                 let output = flow
                     .manager
@@ -424,7 +424,7 @@ async fn own_run_streams_keep_a_stopped_background_runs_output() {
     })
     .await;
     let first = parts(false)[0].clone();
-    tokio::time::timeout(super::PATIENCE, async {
+    tokio::time::timeout(*super::PATIENCE, async {
         while flow
             .manager
             .read_background_run(&flow.conversation, "run-1")
@@ -477,7 +477,7 @@ async fn own_run_streams_keep_output_printed_before_the_row() {
                 output: output.map(Into::into),
             };
             turn.emit(call(ItemStatus::InProgress, None)).await;
-            tokio::time::timeout(super::PATIENCE, async {
+            tokio::time::timeout(*super::PATIENCE, async {
                 while row(&turn.host.core.board(&id).await.unwrap(), "own-run").is_none() {
                     tokio::task::yield_now().await;
                 }
@@ -495,7 +495,7 @@ async fn own_run_streams_keep_output_printed_before_the_row() {
                 .unwrap()
                 .id
                 .clone();
-            let text = tokio::time::timeout(super::PATIENCE, async {
+            let text = tokio::time::timeout(*super::PATIENCE, async {
                 loop {
                     let page = turn
                         .host
@@ -578,7 +578,7 @@ async fn own_run_streams_tell_a_background_checks_own_reply() {
             };
             turn.emit(call(ItemStatus::InProgress, None)).await;
             let id = turn.conversation().unwrap();
-            tokio::time::timeout(super::PATIENCE, async {
+            tokio::time::timeout(*super::PATIENCE, async {
                 while row(&turn.host.core.board(&id).await.unwrap(), "own-check").is_none() {
                     tokio::task::yield_now().await;
                 }

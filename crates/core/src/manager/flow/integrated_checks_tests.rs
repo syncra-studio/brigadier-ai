@@ -368,7 +368,7 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_the_merge_states_it
                 }
                 if turn.input.contains("[checks failed at ") {
                     // The landings' reviews end first: what the merge says is the checks.
-                    let deadline = std::time::Instant::now() + super::PATIENCE;
+                    let deadline = std::time::Instant::now() + *super::PATIENCE;
                     loop {
                         let board = turn.host.core.board(&turn.conversation().unwrap()).await;
                         if board.unwrap().reviews.values().all(|review| {
@@ -747,7 +747,7 @@ async fn pass_during_a_later_turn(quiet: bool) {
     std::fs::remove_file(hold(&flow.repo)).unwrap();
     // Wait for delivery, not only the stored verdict: it is in the inbox before this turn ends.
     let conv = flow.manager.conv(&flow.conversation).unwrap();
-    let deadline = tokio::time::Instant::now() + super::PATIENCE;
+    let deadline = tokio::time::Instant::now() + *super::PATIENCE;
     while !conv.request_activity().await.carried.contains(&request) {
         assert!(
             tokio::time::Instant::now() < deadline,

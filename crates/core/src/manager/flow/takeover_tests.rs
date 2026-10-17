@@ -531,7 +531,7 @@ async fn a_restart_ends_the_terminal_and_hands_back_or_finishes_the_stop() {
         flow.manager.set_terminal_host(host.clone());
         // The launch sweep ended the survivor (it is our child here: reap it).
         let mut survivor = survivor;
-        let status = tokio::time::timeout(super::PATIENCE, async {
+        let status = tokio::time::timeout(*super::PATIENCE, async {
             loop {
                 if let Some(status) = survivor.try_wait().unwrap() {
                     return status;
@@ -795,7 +795,7 @@ async fn a_stop_while_the_hand_back_waits_for_a_worker_slot_ends_it() {
     })
     .await;
     // Held until the slot is released below: a Stop that waited for it would never answer.
-    tokio::time::timeout(super::PATIENCE, flow.manager.stop_task(id.clone()))
+    tokio::time::timeout(*super::PATIENCE, flow.manager.stop_task(id.clone()))
         .await
         .expect("the Stop doesn't wait for the slot")
         .unwrap();

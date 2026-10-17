@@ -274,7 +274,7 @@ async fn a_trimmed_output_is_read_back_whole_by_its_own_session_only() {
         .delete(flow.conversation.clone())
         .await
         .unwrap();
-    let deadline = tokio::time::Instant::now() + super::PATIENCE;
+    let deadline = tokio::time::Instant::now() + *super::PATIENCE;
     while blobs.get(hash.clone()).await.unwrap().is_some() {
         assert!(
             tokio::time::Instant::now() < deadline,

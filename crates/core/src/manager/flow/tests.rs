@@ -567,7 +567,7 @@ async fn a_real_store_is_cleared_on_the_first_start() {
         1,
         "only the session made after the first start"
     );
-    let deadline = tokio::time::Instant::now() + super::PATIENCE;
+    let deadline = tokio::time::Instant::now() + *super::PATIENCE;
     while flow.core.catalog().conversations.len() > 1 {
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -686,7 +686,7 @@ async fn an_outline_gets_its_go_ahead_at_once_and_a_plan_review_in_the_backgroun
     .await;
     flow.say("Rework the parser.").await;
     reviews_ended(&flow, 1).await;
-    let deadline = tokio::time::Instant::now() + super::PATIENCE;
+    let deadline = tokio::time::Instant::now() + *super::PATIENCE;
     while !heard
         .lock()
         .unwrap()
@@ -2007,7 +2007,7 @@ async fn archiving_a_session_ends_its_running_review() {
     // Once under heavy load the checkout stayed: a timeout names what is still recorded for
     // the review and what git still lists.
     let owner = format!("review:{}", review.id);
-    let deadline = tokio::time::Instant::now() + super::PATIENCE;
+    let deadline = tokio::time::Instant::now() + *super::PATIENCE;
     while dir.exists() {
         assert!(
             tokio::time::Instant::now() < deadline,
