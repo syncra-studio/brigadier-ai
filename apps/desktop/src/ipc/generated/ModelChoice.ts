@@ -15,7 +15,7 @@ model: string | null, effort: string | null,
 fast?: boolean, 
 /**
  * The provider's account it runs on ([`AccountEntry::id`], or
- * [`crate::accounts::OWN`] for the user's own login). Absent: the provider's default
- * account ([`Settings::accounts`]), or the one with the most left when that is used up.
+ * [`crate::accounts::OWN`] for the user's own login). Absent: the one
+ * [`crate::accounts::select`] picks, recorded here once the conversation starts on it.
  */
 account?: string, };

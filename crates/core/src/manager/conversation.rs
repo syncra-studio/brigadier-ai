@@ -3222,7 +3222,7 @@ impl SessionManager {
         let mut auto_review = false;
         let mut output_hook = None;
         let mut run_tools = None;
-        let (choice, prompt, mcp, current) = match (&conversation.setup, conv.kind) {
+        let (mut choice, prompt, mcp, current) = match (&conversation.setup, conv.kind) {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = fallback.unwrap_or_else(|| orchestrator.clone());
                 // Its workspace exists before its CLI starts.
@@ -3511,6 +3511,34 @@ impl SessionManager {
             self.log_told(&conv.id, label, prompt.len(), told).await;
         }
         let Started { session, events } = started;
+        // The conversation keeps the account it started on until a hard stop moves it
+        // (`switch_account`): with switching on and another account to go to, its next start
+        // would otherwise follow whichever account resets soonest by then, away from its cache.
+        let mut chosen = setup_choice(&conversation);
+        let settings = self.core.settings();
+        if choice.account.is_none()
+            && conversation.setup.is_some()
+            && settings.switch_accounts
+            && settings
+                .accounts
+                .iter()
+                .any(|entry| entry.provider == choice.provider)
+        {
+            match self.run_on_account(&conv.id, &choice, &account).await {
+                Ok(()) => {
+                    // What it runs on names the account too, so a handoff's fork stays there.
+                    choice.account = Some(account.choice_id());
+                    if conversation.fallback.is_none()
+                        && let Some(chosen) = chosen.as_mut()
+                    {
+                        chosen.account = Some(account.choice_id());
+                    }
+                }
+                Err(err) => {
+                    crate::logging::private_trace!(conv.private_logs, warn, "could not record the account it started on"; conversation = %conv.id, error = %err);
+                }
+            }
+        }
         // Why this CLI starts, for where its cache writes come from (BUILD-PLAN B0).
         let restart = conv.take_restart_cause().await;
         let cold = resumed && restart.is_none() && self.cache_gone_cold(conv).await;
@@ -3523,7 +3551,7 @@ impl SessionManager {
                 .with_tools(tools_key),
             account,
             model: choice,
-            chosen: setup_choice(&conversation),
+            chosen,
             session,
             owner,
             ended: CancellationToken::new(),

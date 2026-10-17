@@ -1057,17 +1057,9 @@ async fn a_terminal_opens_on_the_account_the_worker_ran_on() {
     .await;
     flow.add_accounts(&[(ProviderKind::Claude, "claude-b")], true)
         .await;
-    let pick_default = |id: Option<&str>| {
-        let mut settings = flow.core.settings();
-        for entry in &mut settings.accounts {
-            entry.default = Some(entry.id.as_str()) == id;
-        }
-        settings
-    };
-    flow.core
-        .update_settings(pick_default(Some("claude-b")))
-        .await
-        .unwrap();
+    // New work starts on the account whose week ends first.
+    flow.weekly_resets_in(ProviderKind::Claude, None, 90);
+    flow.weekly_resets_in(ProviderKind::Claude, Some("claude-b"), 20);
     let host = Arc::new(FakeHost::default());
     flow.manager.set_terminal_host(host.clone());
     flow.say("Look around.").await;
@@ -1081,7 +1073,7 @@ async fn a_terminal_opens_on_the_account_the_worker_ran_on() {
     .await;
     let id = task_id(&flow).await;
     // New work would start on the user's own login now.
-    flow.core.update_settings(pick_default(None)).await.unwrap();
+    flow.weekly_resets_in(ProviderKind::Claude, None, 2);
 
     flow.manager
         .open_worker_terminal(id.clone(), 80, 24)

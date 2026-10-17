@@ -6,7 +6,7 @@
 //! starts on, which one a conversation moves to when its account hits a limit, and whose quota
 //! routing and the Usage page show for the provider.
 
-use brigadier_providers::{ProviderKind, QuotaSnapshot};
+use brigadier_providers::{ProviderKind, QuotaSnapshot, QuotaWindow};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -84,10 +84,12 @@ pub struct Candidate {
     pub quota: Option<QuotaSnapshot>,
 }
 
-/// The provider's account work starts on (for `model`, when it has windows of its own): its
-/// default account while that can take work; otherwise, with switching on, the signed-in
-/// account with the most quota left; otherwise the default still (it then reads as limited,
-/// and routing moves the work to another provider).
+/// The provider's account work starts on (for `model`, when it has windows of its own). With
+/// switching on: of the accounts that can take work (signed in, not in `avoid`, room left for
+/// `model`, under 99% of their 5-hour window), the one whose weekly window resets soonest, so
+/// the quota that is lost first is used first. An unknown reset sorts last; a tie goes to the
+/// most left, then to the earliest added. With switching off, or with no account ready, the
+/// default (it then reads as limited, and routing moves the work to another provider).
 ///
 /// An account an earlier choice already left at its limit is passed in `avoid`.
 pub fn select(
@@ -103,36 +105,93 @@ pub fn select(
             .default_account(provider)
             .map(|account| account.id.clone()),
     );
-    let known = |account: &AccountRef| candidates.iter().find(|c| c.account == *account);
-    let ready = |candidate: &Candidate| {
-        candidate.logged_in
-            && !avoid.contains(&candidate.account)
-            && candidate
-                .quota
-                .as_ref()
-                .is_none_or(|quota| headroom(quota, model).is_some())
-    };
-    if known(&default).is_some_and(ready) {
-        return default;
-    }
     if !settings.switch_accounts {
         return default;
     }
+    soonest_ready(settings, provider, model, candidates, avoid).unwrap_or(default)
+}
+
+/// [`select`]'s choice among the accounts that can take work, `None` when none can.
+pub fn soonest_ready(
+    settings: &Settings,
+    provider: ProviderKind,
+    model: Option<&str>,
+    candidates: &[Candidate],
+    avoid: &[AccountRef],
+) -> Option<AccountRef> {
+    let ready = |candidate: &&Candidate| {
+        candidate.account.provider == provider
+            && candidate.logged_in
+            && !avoid.contains(&candidate.account)
+            && candidate.quota.as_ref().is_none_or(|quota| {
+                headroom(quota, model).is_some() && !five_hour_full(quota, model)
+            })
+    };
     candidates
         .iter()
-        .filter(|candidate| candidate.account.provider == provider && candidate.account != default)
-        .filter(|candidate| ready(candidate))
-        // The most left; unknown quota counts as full, and on a tie the earliest added wins.
-        .max_by(|a, b| {
-            let left = |c: &Candidate| c.quota.as_ref().and_then(|q| headroom(q, model));
-            let (a_left, b_left) = (left(a).unwrap_or(100.0), left(b).unwrap_or(100.0));
-            a_left
-                .partial_cmp(&b_left)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| order(settings, &b.account).cmp(&order(settings, &a.account)))
+        .filter(ready)
+        .min_by(|a, b| {
+            let reset = |c: &Candidate| c.quota.as_ref().and_then(|q| weekly_reset(q, model));
+            // Unknown quota counts as full.
+            let left = |c: &Candidate| {
+                c.quota
+                    .as_ref()
+                    .and_then(|q| headroom(q, model))
+                    .unwrap_or(100.0)
+            };
+            let (a_reset, b_reset) = (reset(a), reset(b));
+            a_reset
+                .is_none()
+                .cmp(&b_reset.is_none())
+                .then_with(|| a_reset.cmp(&b_reset))
+                .then_with(|| left(b).total_cmp(&left(a)))
+                .then_with(|| order(settings, &a.account).cmp(&order(settings, &b.account)))
         })
         .map(|candidate| candidate.account.clone())
-        .unwrap_or(default)
+}
+
+/// Whether a window limits `model`: a window of every model, or one scoped to it.
+fn applies(window: &QuotaWindow, model: Option<&str>) -> bool {
+    window
+        .model
+        .as_deref()
+        .is_none_or(|scope| model.is_some_and(|model| limits(scope, model)))
+}
+
+const FIVE_HOURS: i64 = 5 * 60;
+const WEEK: i64 = 7 * 24 * 60;
+
+/// How long a window runs, in minutes: as reported, else as its id says (Claude's
+/// `five_hour` and `seven_day…`, Codex's usual `primary` and `secondary`, a bucket's own
+/// prefixed `bucket.primary`). Codex may report its weekly window as `primary`, so a reported
+/// length wins.
+fn span(window: &QuotaWindow) -> Option<i64> {
+    let slot = window.id.rsplit('.').next().unwrap_or(&window.id);
+    window.window_minutes.or(match slot {
+        "five_hour" | "primary" => Some(FIVE_HOURS),
+        "secondary" => Some(WEEK),
+        _ if slot.starts_with("seven_day") => Some(WEEK),
+        _ => None,
+    })
+}
+
+/// Whether a 5-hour window that applies to `model` is at 99% or more: the account is all but
+/// out for the next hours, and new work would stop at once.
+fn five_hour_full(quota: &QuotaSnapshot, model: Option<&str>) -> bool {
+    quota.windows.iter().any(|window| {
+        span(window) == Some(FIVE_HOURS) && applies(window, model) && window.used_percent >= 99.0
+    })
+}
+
+/// When the soonest weekly window that applies to `model` resets (Claude's `seven_day` and its
+/// per-model ones, Codex's weekly one), if known.
+fn weekly_reset(quota: &QuotaSnapshot, model: Option<&str>) -> Option<i64> {
+    quota
+        .windows
+        .iter()
+        .filter(|window| span(window) == Some(WEEK) && applies(window, model))
+        .filter_map(|window| window.resets_at_ms)
+        .min()
 }
 
 /// How much is left (percent) in the tightest window that applies to `model`, `None` when the
@@ -144,12 +203,7 @@ pub fn headroom(quota: &QuotaSnapshot, model: Option<&str>) -> Option<f64> {
     let left = quota
         .windows
         .iter()
-        .filter(|window| {
-            window
-                .model
-                .as_deref()
-                .is_none_or(|scope| model.is_some_and(|model| limits(scope, model)))
-        })
+        .filter(|window| applies(window, model))
         .map(|window| 100.0 - window.used_percent)
         .fold(100.0_f64, f64::min);
     (left > 0.0).then_some(left)
@@ -269,22 +323,128 @@ mod tests {
         select(settings, ProviderKind::Claude, None, candidates, &[]).account
     }
 
+    /// `candidate` with a weekly window that resets in `hours` (unknown when `None`).
+    fn weekly(id: Option<&str>, used: f64, hours: Option<i64>) -> Candidate {
+        let mut candidate = candidate(id, used, false);
+        candidate.quota.as_mut().unwrap().windows.push(QuotaWindow {
+            id: "seven_day".into(),
+            label: "Weekly".into(),
+            used_percent: 10.0,
+            resets_at_ms: hours.map(|hours| hours * 3_600_000),
+            window_minutes: Some(7 * 24 * 60),
+            bucket: None,
+            model: None,
+        });
+        candidate
+    }
+
     #[test]
-    fn the_default_account_takes_work_while_it_can() {
+    fn the_account_whose_week_resets_soonest_takes_work() {
         let all = [
-            candidate(None, 90.0, false),
-            candidate(Some("work"), 10.0, false),
-            candidate(Some("home"), 0.0, false),
+            weekly(None, 0.0, Some(90)),
+            weekly(Some("work"), 60.0, Some(20)),
+            weekly(Some("home"), 0.0, Some(50)),
+        ];
+        assert_eq!(pick(&settings(None, true), &all), Some("work".into()));
+        // Being the default wins nothing.
+        assert_eq!(
+            pick(&settings(Some("home"), true), &all),
+            Some("work".into())
+        );
+        // A tie goes to the most left, then to the earliest added.
+        let tied = [
+            weekly(None, 40.0, Some(20)),
+            weekly(Some("work"), 30.0, Some(20)),
+            weekly(Some("home"), 30.0, Some(20)),
+        ];
+        assert_eq!(pick(&settings(None, true), &tied), Some("work".into()));
+    }
+
+    #[test]
+    fn an_account_at_99_percent_of_its_5_hour_window_is_skipped() {
+        let all = [
+            weekly(None, 99.0, Some(5)),
+            weekly(Some("work"), 98.0, Some(20)),
+            weekly(Some("home"), 0.0, Some(50)),
+        ];
+        assert_eq!(pick(&settings(None, true), &all), Some("work".into()));
+        // Codex names its 5-hour window `primary` and its weekly one `secondary`.
+        let codex = |id: Option<&str>, five_hour: f64, hours: i64| {
+            let mut candidate = candidate(id, 0.0, false);
+            candidate.quota.as_mut().unwrap().windows = vec![
+                QuotaWindow {
+                    id: "primary".into(),
+                    label: "5-hour".into(),
+                    used_percent: five_hour,
+                    resets_at_ms: Some(3_600_000),
+                    window_minutes: Some(300),
+                    bucket: Some("codex".into()),
+                    model: None,
+                },
+                QuotaWindow {
+                    id: "secondary".into(),
+                    label: "Weekly".into(),
+                    used_percent: 10.0,
+                    resets_at_ms: Some(hours * 3_600_000),
+                    window_minutes: Some(7 * 24 * 60),
+                    bucket: Some("codex".into()),
+                    model: None,
+                },
+            ];
+            candidate
+        };
+        let all = [
+            codex(None, 99.5, 5),
+            codex(Some("work"), 10.0, 30),
+            codex(Some("home"), 10.0, 20),
+        ];
+        assert_eq!(pick(&settings(None, true), &all), Some("home".into()));
+        // A weekly window Codex reports as `primary` is read by its length: the week, not a
+        // 5-hour window.
+        let weekly_primary = |id: Option<&str>, used: f64, hours: i64| {
+            let mut candidate = codex(id, 0.0, hours);
+            let windows = &mut candidate.quota.as_mut().unwrap().windows;
+            windows.truncate(1);
+            windows[0].used_percent = used;
+            windows[0].window_minutes = Some(7 * 24 * 60);
+            windows[0].resets_at_ms = Some(hours * 3_600_000);
+            candidate
+        };
+        let all = [
+            weekly_primary(None, 99.5, 5),
+            weekly_primary(Some("work"), 10.0, 30),
         ];
         assert_eq!(pick(&settings(None, true), &all), None);
+    }
+
+    #[test]
+    fn an_unknown_weekly_reset_sorts_last() {
+        let mut unread = candidate(Some("home"), 0.0, false);
+        unread.quota = None;
+        let all = [
+            weekly(None, 0.0, None),
+            weekly(Some("work"), 90.0, Some(150)),
+            unread,
+        ];
+        assert_eq!(pick(&settings(None, true), &all), Some("work".into()));
+    }
+
+    #[test]
+    fn with_switching_off_the_default_is_the_only_choice() {
+        let all = [
+            weekly(None, 0.0, Some(90)),
+            weekly(Some("work"), 0.0, Some(20)),
+            weekly(Some("home"), 0.0, Some(50)),
+        ];
+        assert_eq!(pick(&settings(None, false), &all), None);
         assert_eq!(
-            pick(&settings(Some("work"), true), &all),
-            Some("work".into())
+            pick(&settings(Some("home"), false), &all),
+            Some("home".into())
         );
     }
 
     #[test]
-    fn a_limited_default_gives_way_to_the_account_with_the_most_left() {
+    fn with_no_reset_known_the_account_with_the_most_left_takes_work() {
         let all = [
             candidate(None, 100.0, true),
             candidate(Some("work"), 60.0, false),

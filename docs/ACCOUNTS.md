@@ -34,10 +34,16 @@ Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accou
   A model's own window (Claude's weekly Opus) used up on the lead is shown to routing as the
   window of the signed-in account with the most room in it, since work on that model starts
   there. An agent counts as signed in when its lead account is.
-- **Which account work starts on** (`brigadier_core::accounts::select`): the agent's default
-  account while it can take work; otherwise, with switching on, the signed-in account with the
-  most left (per-model windows respected, under any of the model's names); otherwise the default (which then reads as limited,
-  and routing moves the work to the other agent, as before).
+- **Which account work starts on** (`brigadier_core::accounts::select`): with switching on, of
+  the signed-in accounts that can take work (room left for the model, per-model windows
+  respected under any of the model's names, and under 99% of the 5-hour window), the one whose
+  weekly window resets soonest, so quota that would be lost first is used first. An unknown
+  reset sorts last; a tie goes to the most left, then to the earliest added. Being the default
+  wins nothing. With switching off, or with no account ready, the default (which then reads as
+  limited, and routing moves the work to the other agent, as before).
+- **A conversation keeps its account.** With switching on and more than one account of the
+  agent, a conversation records the account it starts on in its setup, so a later start of its
+  CLI stays where its cache is; only a hard stop (below) moves it.
 - **When a chat hits a limit** with switching on and another account of the same agent left,
   the chat closes its CLI, records the new account in its setup and resumes the same session
   there. If the CLI had already begun the turn, it is told to continue rather than sent the

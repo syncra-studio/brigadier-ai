@@ -199,8 +199,8 @@ pub struct ModelChoice {
     #[ts(optional)]
     pub fast: Option<bool>,
     /// The provider's account it runs on ([`AccountEntry::id`], or
-    /// [`crate::accounts::OWN`] for the user's own login). Absent: the provider's default
-    /// account ([`Settings::accounts`]), or the one with the most left when that is used up.
+    /// [`crate::accounts::OWN`] for the user's own login). Absent: the one
+    /// [`crate::accounts::select`] picks, recorded here once the conversation starts on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account: Option<String>,
@@ -909,9 +909,9 @@ pub struct Settings {
     /// user's own login, the one their terminal uses, is each provider's first account and is
     /// not listed.
     pub accounts: Vec<AccountEntry>,
-    /// When an account hits its usage limit, its work carries on with the provider's account
-    /// with the most quota left; only when every account is used up does it move to another
-    /// provider.
+    /// New work starts on the provider's account whose weekly window resets soonest, and work
+    /// whose account hits its usage limit carries on with the next such account; only when
+    /// every account is used up does it move to another provider. Off: the default account.
     #[serde(default = "default_true")]
     pub switch_accounts: bool,
     /// The language dictation listens for, as the speech engine names it ("en", "de"…). Empty:
@@ -964,7 +964,7 @@ pub struct AccountView {
     pub account: crate::accounts::AccountRef,
     /// The user's name for an extra account; empty for their own login.
     pub name: String,
-    /// New work on its provider starts here.
+    /// Its provider's default: with switching off, work on that provider runs here.
     pub default: bool,
     /// Its login, as the CLI last reported it; unknown until first checked.
     pub status: Option<ProviderStatus>,
@@ -992,7 +992,8 @@ pub struct AccountEntry {
     pub provider: ProviderKind,
     /// The user's name for it.
     pub name: String,
-    /// New work on its provider starts here (the user's own login when none is).
+    /// Its provider's default (the user's own login when none is): with switching off, work
+    /// on that provider runs here.
     #[serde(default)]
     pub default: bool,
     pub added_at_ms: i64,

@@ -1724,6 +1724,37 @@ impl Flow {
         }
     }
 
+    /// Notes `account`'s weekly window as resetting in `hours` (its 5-hour one barely used):
+    /// new work starts on the account whose week ends first.
+    pub fn weekly_resets_in(&self, provider: ProviderKind, account: Option<&str>, hours: i64) {
+        use brigadier_providers::{QuotaSnapshot, QuotaSource, QuotaWindow};
+
+        let now = crate::now_ms();
+        let window = |id: &str, minutes: i64, resets_at_ms: i64| QuotaWindow {
+            id: id.into(),
+            label: id.into(),
+            used_percent: 10.0,
+            resets_at_ms: Some(resets_at_ms),
+            window_minutes: Some(minutes),
+            bucket: None,
+            model: None,
+        };
+        self.manager.runtime.monitor().note(
+            &crate::accounts::AccountRef::new(provider, account.map(Into::into)),
+            &QuotaSnapshot {
+                provider,
+                windows: vec![
+                    window("five_hour", 300, now + 3_600_000),
+                    window("seven_day", 7 * 24 * 60, now + hours * 3_600_000),
+                ],
+                limit: None,
+                observed_at_ms: now,
+                source: QuotaSource::Read,
+            },
+            now,
+        );
+    }
+
     /// Every session the CLIs were started with, in order.
     pub fn specs(&self) -> Vec<(ProviderKind, SessionSpec)> {
         self.specs.lock().unwrap().clone()

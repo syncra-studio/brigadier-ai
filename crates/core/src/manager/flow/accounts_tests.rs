@@ -652,6 +652,47 @@ async fn a_model_window_used_up_on_one_account_sends_that_models_work_to_another
     flow.stop().await;
 }
 
+#[tokio::test]
+async fn a_running_thread_keeps_its_account_when_another_resets_sooner() {
+    let log = Log::default();
+    let mut flow = Flow::start(
+        "accounts-keep",
+        Options::default(),
+        logging(&log, |_| Reply::text("Done.")),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    // New work starts on the account whose week ends first: here the second one.
+    flow.weekly_resets_in(ProviderKind::Claude, None, 90);
+    flow.weekly_resets_in(ProviderKind::Claude, Some("acct-b"), 20);
+    flow.say("First.").await;
+    flow.settled().await;
+    assert_eq!(seen(&log)[0].account.as_deref(), Some("acct-b"));
+    assert_eq!(orchestrator(&flow).account.as_deref(), Some("acct-b"));
+
+    // The other account's week now ends sooner, and its CLI starts again (a restart): the
+    // thread stays where its cache is, with no limit hit.
+    flow.restart().await;
+    flow.weekly_resets_in(ProviderKind::Claude, None, 2);
+    flow.weekly_resets_in(ProviderKind::Claude, Some("acct-b"), 120);
+    assert_eq!(
+        flow.manager
+            .runtime
+            .launch_account(ProviderKind::Claude, None)
+            .account,
+        None
+    );
+    flow.say("Second.").await;
+    flow.until("the next turn", |_| seen(&log).len() >= 2).await;
+    flow.settled().await;
+    let turns = seen(&log);
+    assert_eq!(turns.len(), 2, "{turns:#?}");
+    assert_eq!(turns[1].account.as_deref(), Some("acct-b"));
+    assert_eq!(orchestrator(&flow).account.as_deref(), Some("acct-b"));
+    flow.stop().await;
+}
+
 async fn chat_on(flow: &Flow, provider: ProviderKind, account: Option<&str>) -> ConversationId {
     flow.manager
         .create_conversation(

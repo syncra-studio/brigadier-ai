@@ -283,33 +283,36 @@ impl Runtime {
         let lead = self.monitor.lead(kind);
         let mut snapshot = self.monitor.current_for(&lead, now)?;
         let mut owners = vec![lead.clone(); snapshot.windows.len()];
-        if self.core.settings().switch_accounts {
-            let others: Vec<_> = self
-                .account_candidates(kind)
-                .into_iter()
-                .filter(|candidate| candidate.account != lead && candidate.logged_in)
-                .filter_map(|candidate| {
-                    let quota = candidate.quota?;
-                    crate::accounts::headroom(&quota, None).map(|_| (candidate.account, quota))
-                })
-                .collect();
+        let settings = self.core.settings();
+        if settings.switch_accounts {
+            let candidates = self.account_candidates(kind);
             for (window, owner) in snapshot.windows.iter_mut().zip(&mut owners) {
                 if window.model.is_none() || window.used_percent < 100.0 {
                     continue;
                 }
-                let roomier = others
+                // The account work on that model starts on instead, as `select` picks it.
+                let Some(next) = crate::accounts::soonest_ready(
+                    &settings,
+                    kind,
+                    window.model.as_deref(),
+                    &candidates,
+                    std::slice::from_ref(&lead),
+                ) else {
+                    continue;
+                };
+                let other = candidates
                     .iter()
-                    .filter_map(|(account, quota)| {
+                    .find(|candidate| candidate.account == next)
+                    .and_then(|candidate| candidate.quota.as_ref())
+                    .and_then(|quota| {
                         quota
                             .windows
                             .iter()
                             .find(|other| other.id == window.id && other.used_percent < 100.0)
-                            .map(|other| (account, other))
-                    })
-                    .min_by(|a, b| a.1.used_percent.total_cmp(&b.1.used_percent));
-                if let Some((account, other)) = roomier {
+                    });
+                if let Some(other) = other {
                     *window = other.clone();
-                    *owner = account.clone();
+                    *owner = next;
                 }
             }
         }

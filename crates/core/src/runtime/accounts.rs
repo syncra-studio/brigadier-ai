@@ -403,22 +403,13 @@ impl Runtime {
                 })
             });
         }
-        let next = crate::accounts::select(
+        crate::accounts::soonest_ready(
             &settings,
             from.provider,
             model,
             &candidates,
             std::slice::from_ref(from),
-        );
-        let ready = candidates.iter().any(|candidate| {
-            candidate.account == next
-                && candidate.logged_in
-                && candidate
-                    .quota
-                    .as_ref()
-                    .is_none_or(|quota| crate::accounts::headroom(quota, model).is_some())
-        });
-        (next != *from && ready).then_some(next)
+        )
     }
 
     /// Chooses each provider's lead account again; a provider whose lead changed has its

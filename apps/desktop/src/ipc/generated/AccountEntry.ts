@@ -11,6 +11,7 @@ export type AccountEntry = { id: string, provider: ProviderKind,
  */
 name: string, 
 /**
- * New work on its provider starts here (the user's own login when none is).
+ * Its provider's default (the user's own login when none is): with switching off, work
+ * on that provider runs here.
  */
 default: boolean, addedAtMs: number, };

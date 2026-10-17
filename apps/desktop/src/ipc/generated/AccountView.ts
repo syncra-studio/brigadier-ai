@@ -13,7 +13,7 @@ export type AccountView = { account: AccountRef,
  */
 name: string, 
 /**
- * New work on its provider starts here.
+ * Its provider's default: with switching off, work on that provider runs here.
  */
 default: boolean, 
 /**

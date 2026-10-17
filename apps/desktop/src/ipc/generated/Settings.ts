@@ -173,9 +173,9 @@ olderModelsOff: Array<ModelRef>,
  */
 accounts: Array<AccountEntry>, 
 /**
- * When an account hits its usage limit, its work carries on with the provider's account
- * with the most quota left; only when every account is used up does it move to another
- * provider.
+ * New work starts on the provider's account whose weekly window resets soonest, and work
+ * whose account hits its usage limit carries on with the next such account; only when
+ * every account is used up does it move to another provider. Off: the default account.
  */
 switchAccounts: boolean, 
 /**
