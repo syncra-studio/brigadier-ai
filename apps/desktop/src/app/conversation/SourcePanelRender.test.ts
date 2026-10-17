@@ -45,4 +45,5 @@ test("the Source panel commits from its menu, merges a branch in, lists its conf
   assert.deepEqual(seen.resolved, { groups: ["Staged Changes2", "Changes0"], commit: "Continue" });
   const committed = seen.committed as { message: string | null; amend: boolean; push: boolean };
   assert.deepEqual([committed.message, committed.amend, committed.push], ["Merge branch 'main' into brigadier/912a9469/session", false, false]);
+  assert.equal(seen.afterAbort, "", "an aborted merge's message leaves the box");
 });

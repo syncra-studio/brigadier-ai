@@ -213,7 +213,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
 
   const act = (run: () => Promise<{ state: SourceState }>, failed: string) => {
     setBusy(true);
-    run()
+    return run()
       .then(({ state: next }) => set(next))
       .catch((cause: unknown) => toast(`${failed}: ${reason(cause)}`, { tone: "error" }))
       .finally(() => setBusy(false));
@@ -223,7 +223,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
   const unstage = (paths: string[] | null) =>
     act(() => calls.change({ type: "unstage", paths }), "Failed to unstage");
   const discard = ({ scope, files }: Discarding) =>
-    act(() => calls.change({ type: "discard", scope, paths: files.map((file) => file.path) }), "Failed to discard");
+    void act(() => calls.change({ type: "discard", scope, paths: files.map((file) => file.path) }), "Failed to discard");
 
   const showConflicts = (paths: readonly string[]) => {
     const first = paths[0];
@@ -280,20 +280,29 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
   const picked = (branch: SourceBranch) => {
     const which = picker;
     setPicker(null);
+    // A commit under way commits whichever branch is checked out by then.
+    if (locked) return;
     if (which === "merge") void run({ type: "merge", branch: branch.name }, "Failed to merge", () => `Merged ${branch.name}`);
     else if (which === "checkout") void run({ type: "checkout", branch: branch.name }, "Failed to check out");
   };
 
-  /** Stages conflicted files, asking first when any still has conflict markers. */
+  /**
+   * Stages conflicted files, asking first when any still has conflict markers. A file that
+   * can't be read as text (a binary one) has none to check.
+   */
   const stageConflicted = (paths: string[]) => {
     setBusy(true);
-    Promise.all(paths.map((path) => request({ method: "getConflictFile", target: cacheTarget, path })))
+    Promise.allSettled(paths.map((path) => request({ method: "getConflictFile", target: cacheTarget, path })))
       .then((read) => {
-        const marked = read.filter(({ file }) => file.text !== null && conflictCount(parseConflicts(file.text)) > 0).length;
-        if (marked > 0) setStagingConflicts({ paths, marked });
-        else stage(paths);
+        const marked = read.filter(
+          (entry) => entry.status === "fulfilled" && entry.value.file.text !== null && conflictCount(parseConflicts(entry.value.file.text)) > 0,
+        ).length;
+        if (marked > 0) {
+          setStagingConflicts({ paths, marked });
+          return;
+        }
+        return stage(paths);
       })
-      .catch(() => stage(paths))
       .finally(() => setBusy(false));
   };
 
@@ -402,8 +411,8 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
           onClose={() => setPicker(null)}
         />
       )}
-      {open && (
-        <>
+      {/* Folded, it stays mounted: a commit under way keeps its state. */}
+      <div className={cn("flex min-h-0 flex-1 flex-col", !open && "hidden")}>
           {readOnly ? (
             <OwnCopyNote state={state} />
           ) : (
@@ -416,6 +425,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
               onCommitted={load}
               onSync={sync}
               onBranch={canCheckout ? () => pick("checkout") : null}
+              locked={locked}
             />
           )}
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -563,8 +573,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
               </Group>
             )}
           </div>
-        </>
-      )}
+      </div>
       <DiscardDialog
         discarding={discarding}
         unstagedPaths={unstagedPaths}
@@ -595,7 +604,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
                 </Button>
                 <Button
                   onClick={() => {
-                    stage(stagingConflicts.paths);
+                    void stage(stagingConflicts.paths);
                     setStagingConflicts(null);
                   }}
                 >
@@ -780,7 +789,9 @@ const CommitBox: FC<{
   onSync: () => void;
   /** Opens Checkout to…; null where the branch can't change. */
   onBranch: (() => void) | null;
-}> = ({ target, state, staging, commitRef, onCommitting, onCommitted, onSync, onBranch }) => {
+  /** Something is under way: the branch can't change meanwhile. */
+  locked: boolean;
+}> = ({ target, state, staging, commitRef, onCommitting, onCommitted, onSync, onBranch, locked }) => {
   const key = targetKey(target);
   const [message, setMessageState] = useState(() => unsent.get(key) ?? "");
   const setMessage = (next: string) => {
@@ -800,6 +811,10 @@ const CommitBox: FC<{
   if (merging && merging.message !== prefilled) {
     setPrefilled(merging.message);
     if (!message) setMessage(merging.message);
+  } else if (state && !merging && prefilled !== null) {
+    // The merge ended (committed or aborted): its message goes unless the user rewrote it.
+    setPrefilled(null);
+    if (message === prefilled) setMessage("");
   }
   const conflicted = state?.changes.some((file) => file.status === "conflicted") ?? false;
   const nothing = !state || (merging ? conflicted : state.staged.length === 0);
@@ -907,13 +922,17 @@ const CommitBox: FC<{
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <BranchItem state={state} onClick={onBranch} />
+      <BranchItem state={state} onClick={onBranch} disabled={locked} />
     </div>
   );
 };
 
 /** The checked-out branch, "(merging)" during a merge, and its commits not pushed yet; a click opens Checkout to…. */
-const BranchItem: FC<{ state: SourceState | null; onClick: (() => void) | null }> = ({ state, onClick }) => {
+const BranchItem: FC<{ state: SourceState | null; onClick: (() => void) | null; disabled: boolean }> = ({
+  state,
+  onClick,
+  disabled,
+}) => {
   const content = (
     <>
       <Branch className="size-icon-sm shrink-0" />
@@ -931,7 +950,13 @@ const BranchItem: FC<{ state: SourceState | null; onClick: (() => void) | null }
   );
   const look = "text-muted-foreground rounded-control flex h-control-sm min-w-0 items-center gap-1.5 px-1 text-sm";
   return onClick ? (
-    <button type="button" title="Checkout to…" onClick={onClick} className={cn(look, "hover:bg-muted text-start")}>
+    <button
+      type="button"
+      title="Checkout to…"
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(look, "hover:bg-muted text-start disabled:opacity-50")}
+    >
       {content}
     </button>
   ) : (

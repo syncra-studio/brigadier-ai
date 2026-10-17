@@ -33,6 +33,10 @@ export const BranchPicker: FC<{
     return () => window.removeEventListener("pointerdown", away);
   }, [onClose]);
   const picked = Math.min(at, Math.max(0, shown.length - 1));
+  // The input keeps the keyboard: the picked branch is scrolled to by hand.
+  useEffect(() => {
+    root.current?.querySelector(`#branch-picker-${picked}`)?.scrollIntoView({ block: "nearest" });
+  }, [picked]);
   return (
     <div
       ref={root}

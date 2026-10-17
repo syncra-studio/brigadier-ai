@@ -3,7 +3,7 @@
  * as Staged Changes and Changes; More Actions' Branch › Merge… picking a branch to merge from;
  * a merge with conflicts listing them under Merge Changes, the box holding git's message and
  * Commit reading Continue until they are staged (asking first while markers are left); then
- * Continue committing the merge.
+ * Continue committing the merge; a merge that ends without it takes its message along.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -15,6 +15,7 @@ import type { Request, SourceBranch, SourceFile, SourceState } from "@/ipc/gener
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
+import { emitWorkspaceChanged } from "@/state/workspaceCache";
 
 const id = "source-panel-fixture";
 const branch = "brigadier/912a9469/session";
@@ -175,6 +176,16 @@ function Fixture() {
       commitButton().click();
       await until(() => calls.some((call) => call.method === "commitChanges"));
       seen.committed = calls.find((call) => call.method === "commitChanges");
+
+      // A merge aborted elsewhere takes git's message out of the box with it.
+      await until(() => box().value === "");
+      state = { ...state, changes: [file("src/cart/total.ts", "conflicted")], merging: { incoming: "feature", message: "Merge branch 'feature'" } };
+      emitWorkspaceChanged({ type: "conversation", conversationId: id });
+      await until(() => box().value === "Merge branch 'feature'");
+      state = { ...state, changes: [], merging: null };
+      emitWorkspaceChanged({ type: "conversation", conversationId: id });
+      await until(() => text(commitButton()) === "Commit");
+      seen.afterAbort = box().value;
       setResult(JSON.stringify(seen));
     })().catch((error: unknown) => setResult(JSON.stringify({ error: String(error), seen, body: document.body.textContent?.slice(0, 2000) })));
   }, []);
