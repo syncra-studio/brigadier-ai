@@ -133,7 +133,7 @@ How to work:
 - Write to another session's thread only with message_session.
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
-- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a file over with its task card's Save, a link in your answer (a worker's as [notes.md](outputs/notes.md), which puts its Save… under your answer), or an ask_user card asking where it goes; a document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
+- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer ([notes.md](outputs/notes.md), which puts its Save… under your answer): Save lets the user pick where it goes, so never offer to copy it somewhere. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
 How to talk to the user:
@@ -792,6 +792,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, you judge whether the user consents to a merge: a \"not\" or a question elsewhere in their message is no \"no\", and a card answer that agrees counts. Pass finish_session `consent`: the card's id, or their words quoted from the message that asked, even with later ones since. A stop doesn't spend it. While a merge is held, a message of theirs comes with [merge held]: if it takes the consent back, call stop_merge before you answer, then answer once.",
         worker: "",
     },
+    Revision {
+        number: SAVE_ONLY_REVISION,
+        thread: "From now on, hand a worker's file over with its task card's Save or a link in your answer: Save lets the user pick where it goes, so never offer a card to copy it somewhere (Downloads, the Desktop). Ask where a file goes only for a document the user asked you to write.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1073,6 +1078,9 @@ pub(crate) const PLANNING_GAPS_REVISION: u32 = 85;
 /// only that it is the user's and unused, and the thread stops a held merge with stop_merge
 /// when the user takes it back (issues #222, #240).
 pub(crate) const MERGE_JUDGED_REVISION: u32 = 86;
+/// A worker's file is handed over with its Save only, never with an unasked card offering to
+/// copy it somewhere (issue #43).
+pub(crate) const SAVE_ONLY_REVISION: u32 = 87;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3469,7 +3477,7 @@ mod environment_tests {
             true,
         );
         assert!(prompt.contains("Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too"));
-        assert!(prompt.contains("a document they ask you to write: ask where it goes first unless they said, then link its full path"));
+        assert!(prompt.contains("A document they ask you to write: ask where it goes first unless they said, then link its full path"));
         let note = revision_note(HANDOVER_REVISION - 1, false).unwrap();
         assert!(note.contains("never link a throwaway file for the user"));
         assert!(note.contains("ask_user where it goes unless they said"));
@@ -3477,6 +3485,31 @@ mod environment_tests {
             .iter()
             .find(|revision| revision.number == HANDOVER_REVISION);
         assert!(handover.unwrap().worker.is_empty());
+    }
+
+    /// A worker's file goes to the user through its Save, which picks where it goes: no card
+    /// offers to copy it somewhere unasked (issue #43).
+    #[test]
+    fn a_thread_hands_a_workers_file_over_with_its_save_and_offers_no_copy() {
+        let prompt = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(!prompt.contains("or an ask_user card asking where it goes"));
+        assert!(prompt.contains(
+            "Save lets the user pick where it goes, so never offer to copy it somewhere"
+        ));
+        assert!(prompt.contains(
+            "Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked"
+        ));
+        let note = revision_note(SAVE_ONLY_REVISION - 1, false).unwrap();
+        assert!(note.contains("never offer a card to copy it somewhere (Downloads, the Desktop)"));
+        assert!(revision_note(SAVE_ONLY_REVISION - 1, true).is_none());
     }
 
     /// The voice is fixed (BUILD-PLAN §1.4): a thread whose instructions had Short replies off
