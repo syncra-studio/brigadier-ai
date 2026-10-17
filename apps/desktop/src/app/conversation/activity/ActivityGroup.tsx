@@ -7,7 +7,7 @@ import { useCalmLabel } from "@/app/conversation/activity/calmLabel";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { labelParts, stepLabel, type StepWords, summarize, summaryLead } from "@/app/conversation/activity/words";
 import { CHEVRON, LIST_ICON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
-import { GROUP_LIST, ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
+import { GROUP_LIST, RowOpens, ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useNow } from "@/hooks/use-now";
 import type { ItemStatus } from "@/ipc/generated";
@@ -154,7 +154,7 @@ function useStepNames(described: Described | undefined, live: boolean): boolean 
  * turn's live line ("Thinking", the thought's heading, "Waiting for your answer"), so the turn
  * has one live line. Its live words change at most once a second. Opened, it lists each step,
  * also while it runs. A group of one step is that step's own row, except while it says the live
- * line or sums up work a follow-up cut short.
+ * line or sums up work a follow-up cut short; opened, that row stays as it is, live line or not.
  */
 export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, liveLabel = null, summary = false }: {
   items: readonly GroupItem<S>[];
@@ -170,6 +170,8 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   reveal?: ((step: S) => boolean) | undefined;
 }) {
   const [open, setOpen] = useState(false);
+  // A lone step's row the user opened: swapping it for the live line would close it.
+  const [rowOpen, setRowOpen] = useState(false);
   // A jump to one of its steps opens it, once per jump.
   const holds = !!reveal && items.some((item) => reveal(item.step));
   const [revealed, setRevealed] = useState(false);
@@ -200,7 +202,9 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   const calm = useCalmLabel(label, live && !summary);
   const [only] = items;
   if (!only) return null;
-  if (items.length === 1 && !line && !summary) return <>{renderStep(only.step, only.key)}</>;
+  if (items.length === 1 && (!line || rowOpen) && !summary) {
+    return <RowOpens.Provider value={setRowOpen}>{renderStep(only.step, only.key)}</RowOpens.Provider>;
+  }
   return (
     <Collapsible data-slot="work-group" open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>

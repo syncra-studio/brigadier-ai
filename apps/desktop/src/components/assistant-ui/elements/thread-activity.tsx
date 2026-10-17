@@ -1,5 +1,5 @@
 import { ChevronRightAlt } from "@openai/apps-sdk-ui/components/Icon";
-import { type ComponentProps, type ReactNode, useRef } from "react";
+import { type ComponentProps, createContext, type ReactNode, useContext, useRef } from "react";
 
 import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -7,6 +7,9 @@ import { cn } from "@/lib/utils";
 
 /** The list an opened group's rows scroll in. */
 export const GROUP_LIST = "work-group-list";
+
+/** Told when a row in it opens or closes: a lone step's group keeps an opened row as it is. */
+export const RowOpens = createContext<((open: boolean) => void) | null>(null);
 
 /**
  * Scrolls `row` into its group's list, nearest, so what it opened to shows whole (its state
@@ -29,11 +32,13 @@ export function ThreadActivity({ detail, detailClassName, className, children, o
   onOpenChange?: (open: boolean) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  const told = useContext(RowOpens);
   const row = className ?? ROW;
   if (!detail) return <div className={row} {...props}>{children}</div>;
   // Opened inside a group, it shows itself in the group's list: at once, and again once its detail has its height.
   const opened = (open: boolean) => {
     onOpenChange?.(open);
+    told?.(open);
     if (open) requestAnimationFrame(() => root.current && showInGroup(root.current));
   };
   return <Collapsible ref={root} {...props} onOpenChange={opened}>

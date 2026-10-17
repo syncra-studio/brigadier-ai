@@ -11,8 +11,11 @@
  * - A group holding an edited file, opened to its diff and scrolled down it, in the 1280 px
  *   window's column and in a 760 px window's: the diff card's header stays in the group's list,
  *   clear of the group's own row above it.
+ * - A live group of one running command, opened to its Shell box: the box stays open when the
+ *   command ends and the group's row says "Thinking", and when the live line moves on.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
@@ -22,7 +25,7 @@ import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { stepWords } from "@/app/conversation/activity/words";
 import { WorkerThread } from "@/app/conversation/WorkerThread";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { RawEntry, Request, Task } from "@/ipc/generated";
+import type { ItemStatus, RawEntry, Request, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 
 const query = new URLSearchParams(location.search);
@@ -74,6 +77,29 @@ useBoard.setState({
 type Ran = { key: string; command: string };
 const commands: Ran[] = Array.from({ length: 12 }, (_, index) => ({ key: `run-${index}`, command: `npm test -- part${index + 1}` }));
 
+/** One command in the live turn's last group; the test moves it on: it ends, then a thought starts. */
+type Lone = { status: ItemStatus; endedAtMs?: number; line: boolean };
+const moveLone = (lone: Lone) => window.dispatchEvent(new CustomEvent<Lone>("move-lone", { detail: lone }));
+
+function LoneLive() {
+  const [lone, setLone] = useState<Lone>({ status: "inProgress", line: true });
+  useEffect(() => {
+    const move = (event: Event) => setLone((event as CustomEvent<Lone>).detail);
+    window.addEventListener("move-lone", move);
+    return () => window.removeEventListener("move-lone", move);
+  }, []);
+  const words = stepWords({ name: "shell", detail: "npm test", status: lone.status });
+  return (
+    <ActivityGroup<string>
+      items={[{ type: "step", key: "run", step: "run" }]}
+      live
+      liveLabel={lone.line ? { text: "Thinking", tone: "busy" } : null}
+      describe={() => ({ words, status: lone.status, exit: 0, endedAtMs: lone.endedAtMs })}
+      renderStep={(_, key) => <StepRow key={key} words={words} status={lone.status} exit={0} detail={<ShellBox command="npm test" output="ok" status={lone.status} exit={0} />} />}
+    />
+  );
+}
+
 function Page() {
   return (
     <TooltipProvider>
@@ -100,6 +126,9 @@ function Page() {
         {/* A 760 px window's thread column: the window less its margins. */}
         <section data-case="edit-narrow" style={{ width: 728 }}>
           <EditGroup />
+        </section>
+        <section data-case="lone-live">
+          <LoneLive />
         </section>
         <section data-case="worker-lone" className="flex h-96 flex-col">
           <WorkerThread task={worker} />
@@ -173,6 +202,18 @@ async function measure(): Promise<object> {
     rowLine: one("[data-slot=group-live-line]", thread ?? document)?.textContent ?? null,
     linesUnder: [...(column?.children ?? [])].filter((child) => !child.matches("[data-slot=work-group]") && child.textContent === "Thinking").length,
   };
+
+  // A lone running command opened to its Shell box; it ends, then the live line moves on.
+  one<HTMLElement>("[role=button]", at("lone-live"))?.click();
+  await wait(500);
+  const boxOpen = () => !!one("[data-slot=shell-output]", at("lone-live"))?.checkVisibility();
+  const opened = boxOpen();
+  moveLone({ status: "completed", endedAtMs: Date.now() - 2000, line: true });
+  await wait(1500);
+  const ended = boxOpen();
+  moveLone({ status: "completed", endedAtMs: Date.now() - 4000, line: false });
+  await wait(500);
+  out.loneLive = { opened, ended, movedOn: boxOpen() };
   return out;
 }
 
