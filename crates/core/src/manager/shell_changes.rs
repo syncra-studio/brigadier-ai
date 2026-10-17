@@ -124,17 +124,50 @@ impl ShellCaptures {
     }
 }
 
+/// A command's words as the shell reads them: a quoted span or an escaped space stays in its
+/// word (`mv 'old name.txt' new.txt`), and the shell's operators end one.
+fn shell_words(command: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => word.extend(chars.by_ref().take_while(|&c| c != '\'')),
+            '"' => {
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => word.extend(chars.next()),
+                        c => word.push(c),
+                    }
+                }
+            }
+            '\\' => word.extend(chars.next()),
+            c if c.is_whitespace() || ";|&<>(){}".contains(c) => {
+                words.push(std::mem::take(&mut word));
+            }
+            c => word.push(c),
+        }
+    }
+    words.push(word);
+    words
+}
+
 /// The checkout's files a command names, relative to its root `root`: each word of the command
-/// (split at spaces, quotes and the shell's operators), read from `cwd`, that is a file in the
-/// checkout, or a new file's name in one of its folders (`echo x > new.md`). Folders, `.git` and
-/// places outside the checkout (a symlinked folder that leads out) are left out.
+/// (as the shell reads it, and split at spaces, quotes and the shell's operators too, for the
+/// names a script inside it writes), read from `cwd`, that is a file in the checkout, or a new
+/// file's name in one of its folders (`echo x > new.md`). Folders, `.git` and places outside
+/// the checkout (a symlinked folder that leads out) are left out.
 pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String> {
     let Ok(root) = root.canonicalize() else {
         return Vec::new();
     };
     let mut found = BTreeSet::new();
-    let words = command.split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}[]=,$".contains(c));
-    for word in words {
+    let split = command
+        .split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}[]=,$".contains(c))
+        .map(str::to_owned);
+    for word in shell_words(command).into_iter().chain(split) {
+        let word = word.as_str();
         if word.is_empty() || word.starts_with('-') || word.contains("://") || word.len() > 1024 {
             continue;
         }
@@ -362,6 +395,19 @@ mod tests {
             &root,
         );
         assert_eq!(left_out, ["ls"], "only a word that could be a new file");
+        std::fs::write(root.join("old name.txt"), "x").unwrap();
+        for command in [
+            "mv 'old name.txt' new.txt",
+            "mv \"old name.txt\" new.txt",
+            "mv old\\ name.txt new.txt",
+        ] {
+            let named = named(command, &root);
+            assert!(
+                named.iter().any(|n| n == "old name.txt"),
+                "{command}: {named:?}"
+            );
+            assert!(named.iter().any(|n| n == "new.txt"), "{command}: {named:?}");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

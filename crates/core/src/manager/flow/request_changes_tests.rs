@@ -2107,3 +2107,83 @@ async fn request_changes_own_a_run_commands_edit() {
         flow.stop().await;
     }
 }
+
+/// A move's two ends go together: a quoted name is still the command's, the end of a move its
+/// words don't name holds the other, and two moves in a row through a file no snapshot saw
+/// hold each other's files, so Undo never takes the only copy of a file away (#87).
+#[tokio::test]
+async fn request_changes_never_split_a_shell_move() {
+    const GLOBBED: &str = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\n";
+    let flow = Flow::start(
+        "20261017-0213-issues-run-w27-shell-moves",
+        Options {
+            thread: ProviderKind::Claude,
+            files: vec![
+                ("old name.txt", MOVED),
+                ("g1.txt", GLOBBED),
+                ("c.txt", "base\n"),
+            ],
+            ..Default::default()
+        },
+        script(|turn| async move {
+            let quoted = "mv 'old name.txt' new.txt";
+            shell(&turn, "bash-1", quoted, |dir| {
+                std::fs::rename(dir.join("old name.txt"), dir.join("new.txt")).unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-1", quoted).await;
+            observed(&turn, 1).await;
+            let globbed = "mv g*.txt h.txt";
+            shell(&turn, "bash-2", globbed, |dir| {
+                std::fs::rename(dir.join("g1.txt"), dir.join("h.txt")).unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-2", globbed).await;
+            observed(&turn, 2).await;
+            // The user saved c.txt just before two moves that one snapshot sees.
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            std::fs::write(workspace.join("c.txt"), format!("user\n{MOVED}")).unwrap();
+            let (first, second) = ("mv c.txt d.txt", "mv d.txt e.txt");
+            shell(&turn, "bash-3", first, |dir| {
+                std::fs::rename(dir.join("c.txt"), dir.join("d.txt")).unwrap();
+            })
+            .await;
+            shell(&turn, "bash-4", second, |dir| {
+                std::fs::rename(dir.join("d.txt"), dir.join("e.txt")).unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-3", first).await;
+            shell_reported(&turn, "bash-4", second).await;
+            observed(&turn, 3).await;
+            Reply::text("Moved the files.")
+        }),
+    )
+    .await;
+    flow.say("Move the files.").await;
+    let board = flow
+        .until("settled changes", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled)
+        })
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    let changes = board.latest_request().unwrap().changes.as_ref().unwrap();
+    let held: Vec<_> = changes.held.iter().map(|held| held.path.as_str()).collect();
+    assert_eq!(held, ["c.txt", "e.txt", "g1.txt", "h.txt"]);
+    let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+    let read = |path: &str| std::fs::read_to_string(workspace.join(path)).ok();
+    let outcome = flow
+        .manager
+        .undo_request(flow.conversation.clone(), request, false)
+        .await
+        .unwrap();
+    assert_eq!(outcome.restored, ["new.txt", "old name.txt"]);
+    assert_eq!(read("old name.txt").as_deref(), Some(MOVED));
+    assert_eq!(read("new.txt"), None);
+    assert_eq!(read("h.txt").as_deref(), Some(GLOBBED));
+    assert_eq!(read("e.txt"), Some(format!("user\n{MOVED}")));
+    flow.stop().await;
+}

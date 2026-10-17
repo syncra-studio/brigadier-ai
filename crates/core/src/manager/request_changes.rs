@@ -205,7 +205,7 @@ fn user_reason(path: &str) -> String {
 }
 fn together_reason(path: &str, held: &str) -> String {
     format!(
-        "The same command changed {path} and {held}, which Undo leaves as it is, so it leaves both."
+        "Commands changed {path} together with {held}, which Undo leaves as it is, so it leaves both."
     )
 }
 fn command_reason(path: &str) -> String {
@@ -287,23 +287,38 @@ impl Record {
             .collect();
         (before, after)
     }
-    /// One shell command's files go together: one left as it is leaves them all.
+    /// One shell command's files go together: one left as it is leaves them all, and so on
+    /// through every command that shares a file with them (`mv a b`, then `mv b c`).
     fn hold_together(&mut self) {
-        for group in &self.together {
-            let held = group.iter().find(|path| {
-                self.paths
-                    .get(*path)
-                    .is_some_and(|owned| owned.held.is_some())
-            });
-            let Some(held) = held.cloned() else {
-                continue;
-            };
-            for path in group {
-                if let Some(owned) = self.paths.get_mut(path)
-                    && owned.held.is_none()
-                {
-                    owned.held = Some(together_reason(path, &held));
+        // Each file left as it is, and the held file that leaves it.
+        let mut held: BTreeMap<String, String> = self
+            .paths
+            .iter()
+            .filter(|(_, owned)| owned.held.is_some())
+            .map(|(path, _)| (path.clone(), path.clone()))
+            .collect();
+        loop {
+            let mut grew = false;
+            for group in &self.together {
+                let Some(from) = group.iter().find_map(|path| held.get(path).cloned()) else {
+                    continue;
+                };
+                for path in group {
+                    if !held.contains_key(path) {
+                        held.insert(path.clone(), from.clone());
+                        grew = true;
+                    }
                 }
+            }
+            if !grew {
+                break;
+            }
+        }
+        for (path, from) in held {
+            if let Some(owned) = self.paths.get_mut(&path)
+                && owned.held.is_none()
+            {
+                owned.held = Some(together_reason(&path, &from));
             }
         }
     }
@@ -725,11 +740,14 @@ impl SessionManager {
                     Step::Edit(edit, after_command) => (edit, after_command),
                     Step::Shell(shell, after_command) => {
                         let mut group = BTreeMap::new();
+                        let mut together = BTreeSet::new();
                         for (path, before, after) in shell.changes {
                             let previous_blob = previous.get(&path).cloned().map(Blob::from);
                             let current_blob = current.get(&path).cloned().map(Blob::from);
-                            // A file no snapshot keeps (an ignored one) is no part of the
-                            // request's changes.
+                            together.insert(path.clone());
+                            // A file no snapshot keeps (an ignored one, or one a later command
+                            // moved on) is no part of the request's changes, though it still
+                            // ties this command's files to that later command's.
                             if previous_blob.is_none() && current_blob.is_none() {
                                 continue;
                             }
@@ -749,8 +767,8 @@ impl SessionManager {
                             );
                             group.insert(path, (before, after));
                         }
-                        if group.len() > 1 {
-                            record.together.push(group.keys().cloned().collect());
+                        if together.len() > 1 {
+                            record.together.push(together);
                         }
                         if !group.is_empty() {
                             shells.push((shell.item, group));
@@ -810,6 +828,9 @@ impl SessionManager {
                     }
                 }
             }
+            // Files gone that nothing here explains: the other end of a move a command's words
+            // didn't name (`mv old*.txt new.txt`).
+            let mut gone = BTreeSet::new();
             if !record.latest.is_empty() {
                 for path in previous
                     .keys()
@@ -825,6 +846,9 @@ impl SessionManager {
                     }) {
                         continue;
                     }
+                    if !current.contains_key(path) {
+                        gone.insert(path.clone());
+                    }
                     if command {
                         record.own(
                             path,
@@ -839,6 +863,15 @@ impl SessionManager {
                         owned.held = Some(user_reason(path));
                     }
                 }
+            }
+            // Its content may be in one of this snapshot's commands' files, which Undo would
+            // then take away: they stay as they are with it.
+            if !gone.is_empty() && !shells.is_empty() {
+                let mut together = gone;
+                for (_, group) in &shells {
+                    together.extend(group.keys().cloned());
+                }
+                record.together.push(together);
             }
             record.hold_together();
             // A command whose files all stay the thread's shows them as its edits.
@@ -1395,5 +1428,23 @@ mod tests {
             record.own("a", blob("1"), blob("3"), blob("2"), by, false, false);
             assert!(record.paths["a"].held.is_some(), "{by}");
         }
+    }
+
+    /// A held file holds every file a command changed with it, and on through commands that
+    /// share a file, whatever order their groups came in.
+    #[test]
+    fn a_held_file_holds_every_command_group_it_reaches() {
+        let mut record = Record::default();
+        for path in ["a", "c", "d"] {
+            record.own(path, blob("1"), blob("2"), blob("1"), "shell", false, false);
+        }
+        record.paths.get_mut("a").unwrap().held = Some(user_reason("a"));
+        record.together = vec![
+            BTreeSet::from(["b".to_owned(), "c".to_owned()]),
+            BTreeSet::from(["a".to_owned(), "b".to_owned()]),
+        ];
+        record.hold_together();
+        assert!(record.paths["c"].held.as_ref().unwrap().contains("with a"));
+        assert_eq!(record.paths["d"].held, None);
     }
 }
