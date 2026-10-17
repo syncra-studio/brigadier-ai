@@ -22,11 +22,11 @@ usage:
   run.py cleanup --root R [--export DIR]                    (as tools/ab/v3/run.py cleanup)
 
 Seams (each forced at least twice between the plants and the probe):
-  size     the thread is reborn by size: BRIGADIER_REBIRTH_TOKENS (--rebirth-tokens, default 36000),
+  size     the thread is reborn by size: BRIGADIER_REBIRTH_TOKENS (--rebirth-tokens, default 33500),
            with the briefing's cap at BRIGADIER_BRIEFING_TOKENS (--briefing-tokens, default 8000),
            so a short battery's early messages leave the verbatim tail as a long session's do
   inturn   the thread's turn is stopped mid-request and reborn at once: BRIGADIER_HARD_LINE_TOKENS
-           (--hard-line-tokens, default 40000), with the briefing's cap as for size (BUILD-PLAN D2.3b)
+           (--hard-line-tokens, default 37500), with the briefing's cap as for size (BUILD-PLAN D2.3b)
   restart  the daemon is killed (SIGKILL) mid-request at each seam point, and started again
   kill     the thread's CLI process is killed (SIGKILL) mid-request at each seam point
   context  "prompt is too long" injected into the thread's turn at each seam point
@@ -53,15 +53,20 @@ log, now_ms = v3run.log, v3run.now_ms
 MODELS = {"claude": "opus", "codex": "gpt-6.1-sol"}
 SEAMS = ["size", "inturn", "restart", "kill", "context", "auth", "billing", "limit", "none"]
 INJECTED = {"context": "contextWindow", "auth": "auth", "billing": "billing"}
-# A reborn thread starts near 29k (instructions, tools and an 8k briefing): at 36k the first rebirth
-# comes after the last plant (r6 ends near 30k) and the second during e2, both well before the probe.
-# At 45k the second one fell on the probe in two of three runs.
-DEFAULT_REBIRTH_TOKENS = 36_000
+# A reborn thread started near 29k (instructions, tools and an 8k briefing) until Phase O cut the
+# thread's start by about 2.6k (17.5k to 14.9k of instructions and Brigadier tools, docs/evidence/
+# benchmark-2026-10-16-phase-o.md): near 26.4k now. The line keeps the 7k of room above the start
+# the 36k line had, where every 10-15 size run rebirthed four times between the last plant and the
+# probe and never on it (a 10-16 run at 36k on the smaller start rebirthed three times). At 45k the
+# second one fell on the probe in two of three runs; score.py now makes such a run invalid and names
+# the step each rebirth fell in (seams.at_steps), so a line that drifts again shows (#191).
+DEFAULT_REBIRTH_TOKENS = 33_500
 DEFAULT_BRIEFING_TOKENS = 8_000
-# The in-turn seam's hard line: a reborn thread starts near 29k, so each later step that grows past
-# 40k mid-turn is stopped and continued in a fresh session; the rebirth swap (400k on a 1M window)
-# never comes first.
-DEFAULT_HARD_LINE_TOKENS = 40_000
+# The in-turn seam's hard line: a reborn thread starts near 26.4k (29k before Phase O; the line keeps
+# the 11k above it that 40k had), so each later step that grows past 37.5k mid-turn is stopped and
+# continued in a fresh session; the size rebirth (prepared at 300k, swapped at 375k on a 1M window
+# since A10) never comes first.
+DEFAULT_HARD_LINE_TOKENS = 37_500
 
 
 # ---------------------------------------------------------------- the arm

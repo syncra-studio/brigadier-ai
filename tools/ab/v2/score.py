@@ -7,7 +7,8 @@ didn't know is `unknown`, one it guessed wrong is `fail`.
 
 An item is `not_tested` where its source was still in the verbatim tail of the last briefing before
 a step that needs it: the run didn't test forgetting there. A run whose seams didn't happen at least
-twice between the last plant and the probe is invalid (`valid: false`).
+twice between the last plant and the probe is invalid (`valid: false`), as is a size or in-turn run
+with a rebirth during the probe; `seams.at_steps` names the step each of their rebirths fell in.
 
 usage: score.py <run-dir>     prints the score as JSON (run.py writes it to score.json)"""
 import glob, json, os, re, sys
@@ -150,15 +151,27 @@ def tail_free(source_text, sent, uses_ms, briefs, item=None):
     return out
 
 
+def line_rebirths(kind, briefs, log):
+    """When the size and in-turn seams' rebirths happened: every rebirth for size, those of a turn
+    stopped mid-request for inturn (BUILD-PLAN D2.3b), not by size between turns."""
+    if kind == "size":
+        return [b["at_ms"] for b in briefs]
+    if kind == "inturn":
+        return [e["entry"]["record"]["swappedAtMs"] for e in log if e["entry"].get("type") == "rebirth"
+                and e["entry"]["record"].get("trigger") == "midTurn"]
+    return []
+
+
+def seam_steps(times, sent):
+    """The step each time fell in: the last one sent before it."""
+    order = sorted(sent.items(), key=lambda kv: kv[1])
+    return [next((step for step, at in reversed(order) if at <= t), None) for t in times]
+
+
 def seams_forced(start, briefs, log, steps_ms, last_plant_ms, probe_ms):
     kind = start["seam"]
-    if kind == "size":
-        return sum(1 for b in briefs if last_plant_ms < b["at_ms"] < probe_ms)
-    if kind == "inturn":
-        # Rebirths of a turn stopped mid-request (BUILD-PLAN D2.3b), not by size between turns.
-        return sum(1 for e in log if e["entry"].get("type") == "rebirth"
-                   and e["entry"]["record"].get("trigger") == "midTurn"
-                   and last_plant_ms < e["entry"]["record"]["swappedAtMs"] < probe_ms)
+    if kind in ("size", "inturn"):
+        return sum(1 for t in line_rebirths(kind, briefs, log) if last_plant_ms < t < probe_ms)
     if kind in ("restart", "kill"):
         key = "killed_pid" if kind == "restart" else "killed"
         return sum(1 for s in start.get("seams", []) if s.get(key))
@@ -187,8 +200,13 @@ def score(run, probe=None):
     plants = [s["id"] for s in steps if s["role"] in ("plant", "worker")]
     last_plant_ms = max((sent[p] for p in plants if p in sent), default=0)
     probe_ms = sent.get(probe, 10 ** 15)
+    probe_end = (rec.requests.get(rid.get(probe)) or {}).get("endedAtMs") or 10 ** 15
     forced = seams_forced(start, briefs, log, sent, last_plant_ms, probe_ms)
-    valid = start["seam"] == "none" or forced >= SEAMS_WANTED
+    # Where the size and in-turn lines put each rebirth (#191): one during the probe answers it from
+    # a fresh session mid-answer, which isn't the seam under test.
+    rebirths = line_rebirths(start["seam"], briefs, log)
+    on_probe = sum(1 for t in rebirths if probe_ms <= t <= probe_end)
+    valid = start["seam"] == "none" or (forced >= SEAMS_WANTED and not on_probe)
     answer = rec.answer(rid[probe]) if probe in rid else ""
     entries = probe_entries(answer)
     wbriefs = worker_briefs(run, rec)
@@ -238,18 +256,20 @@ def score(run, probe=None):
     lost = [i for i, s in by_item.items() if s in ("unknown", "fail")]
     unknowns = sum(1 for i in lost if detail[i]["recall"] == "unknown")
     guessed = sum(1 for i in lost if detail[i]["recall"] == "wrong")
-    probe_end = (rec.requests.get(rid.get(probe)) or {}).get("endedAtMs") or 10 ** 15
     probe_tools = sum(1 for e in log if e["entry"].get("type") == "provider" and probe_ms <= e["atMs"] <= probe_end
                       and (e["entry"].get("event") or {}).get("type") in TOOL_EVENTS)
     why = []
     if not completed:
         why.append("not completed")
-    if not valid:
+    if forced < SEAMS_WANTED and start["seam"] != "none":
         why.append(f"seams forced {forced} of {SEAMS_WANTED}")
+    if on_probe:
+        why.append(f"{on_probe} rebirth(s) during the probe")
     why += [f"{i}: {s}" for i, s in by_item.items() if s != "pass"]
     return {
         "battery": start["battery"], "seam": start["seam"], "provider": start["provider"], "label": start["label"], "n": start["n"],
-        "completed": completed, "valid": valid, "seams": {"kind": start["seam"], "forced": forced, "wanted": SEAMS_WANTED},
+        "completed": completed, "valid": valid, "seams": {"kind": start["seam"], "forced": forced, "wanted": SEAMS_WANTED,
+                                                        "at_steps": seam_steps(rebirths, sent), "on_probe": on_probe},
         "by_item": by_item, "all_pass": completed and valid and all(s == "pass" for s in by_item.values()),
         "unknown_instead_of_guess": {"lost": len(lost), "unknown": unknowns, "guessed": guessed,
                                      "score": round(unknowns / (unknowns + guessed), 3) if unknowns + guessed else None},

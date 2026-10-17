@@ -31,7 +31,7 @@ def battery():
 
 
 def make(dirpath, *, answers, seam="size", briefs=2, tail_holds=None, words_hold=None, false_as_fact=False, checks=None,
-         timed_out=False, trigger="threshold"):
+         timed_out=False, trigger="threshold", on_probe=False):
     b = battery()
     os.makedirs(os.path.join(dirpath, "rec"), exist_ok=True)
     os.makedirs(os.path.join(dirpath, "briefings"), exist_ok=True)
@@ -58,6 +58,8 @@ def make(dirpath, *, answers, seam="size", briefs=2, tail_holds=None, words_hold
     # Rebirths: one before e1, one before e2 (after f8), one more before the probe when asked.
     at = {s: t for s, t in zip(steps, sent)}
     when = [at["e1"] - 10_000, at["e2"] - 10_000, at["p1"] - 10_000][:briefs]
+    if on_probe:
+        when.append(at["p1"] + 20_000)  # while the probe is answered
     log = []
     texts = {s["id"]: s["text"] for s in b["steps"]}
     for g, t in enumerate(when, start=1):
@@ -83,7 +85,8 @@ def make(dirpath, *, answers, seam="size", briefs=2, tail_holds=None, words_hold
 
 
 CASES = [
-    ("all pass", dict(answers=GOOD), lambda s: s["all_pass"] and s["valid"] and s["completed"]),
+    ("all pass", dict(answers=GOOD),
+     lambda s: s["all_pass"] and s["valid"] and s["completed"] and s["seams"]["at_steps"] == ["f4", "f8"]),
     ("a lost item said unknown, another guessed",
      dict(answers={**GOOD, 3: "unknown", 5: "about 3 seconds"}),
      lambda s: s["by_item"]["hash"] == "unknown" and s["by_item"]["units"] == "fail"
@@ -116,6 +119,13 @@ CASES = [
     ("one size seam only: invalid",
      dict(answers=GOOD, briefs=1),
      lambda s: not s["valid"] and not s["all_pass"]),
+    ("a size rebirth during the probe: invalid",
+     dict(answers=GOOD, on_probe=True),
+     lambda s: not s["valid"] and s["seams"]["on_probe"] == 1 and s["seams"]["at_steps"] == ["f4", "f8", "p1"]
+     and "during the probe" in s["why"]),
+    ("an in-turn rebirth during the probe: invalid",
+     dict(answers=GOOD, seam="inturn", trigger="midTurn", on_probe=True),
+     lambda s: not s["valid"] and s["seams"]["forced"] == 2 and s["seams"]["on_probe"] == 1),
     ("two in-turn rebirths: valid",
      dict(answers=GOOD, seam="inturn", trigger="midTurn"),
      lambda s: s["valid"] and s["all_pass"] and s["seams"]["forced"] == 2),
