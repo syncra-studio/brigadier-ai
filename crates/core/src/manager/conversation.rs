@@ -346,6 +346,9 @@ struct ConvState {
     /// Counts what the CLI said of its background jobs: a later word makes moot the wait
     /// armed for an earlier one's turn.
     background_timer: u64,
+    /// A turn of the CLI's own for a job's end runs that serves no request (the job's request
+    /// was stopped): turns still owed wait for its end like for any turn's (#221).
+    unowned_turn: bool,
     /// How the last turn for a request ended, when it was stopped or failed.
     outcomes: HashMap<String, RequestState>,
     /// Requests whose last turn ended on [`prompts::QUIET`], or said nothing: the thread left
@@ -946,6 +949,7 @@ impl ConvLive {
         let mut state = self.state.lock().await;
         state.closing = false;
         state.busy = false;
+        state.unowned_turn = false;
         state.compacting = false;
     }
 
@@ -3988,7 +3992,7 @@ impl SessionManager {
                     jobs.running.push((job, owner.clone()));
                 }
             }
-            let owes = !state.busy && !jobs.owed.is_empty();
+            let owes = !state.busy && !state.unowned_turn && !jobs.owed.is_empty();
             state.background = jobs.waits().then_some(jobs);
             state.background_timer += 1;
             owes.then_some(state.background_timer)
@@ -4007,7 +4011,7 @@ impl SessionManager {
             tokio::time::sleep(BACKGROUND_TURN_GRACE).await;
             let gone = {
                 let mut state = conv.state.lock().await;
-                let gone = !state.busy && state.background_timer == timer;
+                let gone = !state.busy && !state.unowned_turn && state.background_timer == timer;
                 if gone && let Some(jobs) = &mut state.background {
                     jobs.owed.clear();
                     if !jobs.waits() {
@@ -4165,6 +4169,7 @@ impl SessionManager {
             // Its own jobs ended with it: nothing starts their turn now, and the thread hears
             // of those still running, in the request they served.
             let background = state.background.take_if(|jobs| jobs.of(&cli));
+            state.unowned_turn = false;
             let mut words: Vec<String> =
                 std::mem::take(&mut state.lingering).into_values().collect();
             words.sort();
@@ -5042,6 +5047,7 @@ impl SessionManager {
                     // still owed wait for its end, which looks again.
                     if own {
                         state.background_timer += 1;
+                        state.unowned_turn = adopted.is_none();
                     }
                     if let Some(request) = adopted {
                         // The CLI began a turn of its own, for its background jobs' end: it
@@ -5354,6 +5360,7 @@ impl SessionManager {
             })
             .flatten();
             state.busy = false;
+            state.unowned_turn = false;
             state.compacting = false;
             state.last_activity_ms = now_ms();
             state.replying_for.clear();

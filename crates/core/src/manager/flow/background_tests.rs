@@ -1222,6 +1222,115 @@ async fn a_long_turn_for_a_stopped_jobs_end_keeps_the_next_turn_owed() {
     flow.stop().await;
 }
 
+/// A stopped request's job ends and the CLI's turn for it starts; a later request's job ends
+/// while that turn runs. The later request still waits for its own job's turn, which answers
+/// in it: the turn of no request's is a running turn too (#221).
+#[tokio::test]
+async fn a_job_ending_during_an_unowned_jobs_turn_keeps_its_turn_owed() {
+    use brigadier_providers::ProviderEvent;
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let kept = events.clone();
+    let flow = Flow::start(
+        "cli-job-during-own-turn",
+        Options::default(),
+        script(move |turn| {
+            let kept = kept.clone();
+            async move {
+                let running: Vec<String> = if turn.input.contains("Start A.") {
+                    vec!["a".into()]
+                } else if turn.input.contains("Start B.") {
+                    vec!["a".into(), "b".into()]
+                } else {
+                    return Reply::text("Noted.");
+                };
+                let _ = turn
+                    .events
+                    .send(ProviderEvent::BackgroundJobs { running })
+                    .await;
+                *kept.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started it in the background.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start A.").await;
+    rested(&flow).await;
+    let first = flow.board().await.latest_request().unwrap().id.clone();
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.until("the first request stopped", |board| {
+        board.requests[&first].state == RequestState::Stopped
+    })
+    .await;
+    flow.manager
+        .resume_queue(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.say("Start B.").await;
+    let board = flow
+        .until("the second request", |board| board.requests.len() == 2)
+        .await;
+    let second = board.latest_request().unwrap().id.clone();
+    rested(&flow).await;
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    let turn = |text: &str| {
+        [
+            ProviderEvent::Message {
+                item_id: uuid::Uuid::new_v4().to_string(),
+                role: brigadier_providers::Role::Assistant,
+                text: text.to_owned(),
+            },
+            ProviderEvent::TurnCompleted {
+                turn_id: None,
+                status: brigadier_providers::TurnStatus::Completed,
+                duration_ms: Some(1),
+                usage: None,
+            },
+        ]
+    };
+    // The stopped one's job ends and its turn starts; then the later one's ends meanwhile.
+    for event in [
+        ProviderEvent::BackgroundJobs {
+            running: vec!["b".into()],
+        },
+        ProviderEvent::TurnStarted { turn_id: None },
+        ProviderEvent::BackgroundJobs {
+            running: Vec::new(),
+        },
+    ] {
+        sender.send(event).await.unwrap();
+    }
+    tokio::time::sleep(super::super::conversation::BACKGROUND_TURN_GRACE * 3).await;
+    assert_eq!(
+        flow.board().await.requests[&second].state,
+        RequestState::Working,
+        "it still waits for its own job's turn"
+    );
+    for event in turn("Job a printed a-1.") {
+        sender.send(event).await.unwrap();
+    }
+    sender
+        .send(ProviderEvent::TurnStarted { turn_id: None })
+        .await
+        .unwrap();
+    for event in turn("Job b printed b-2.") {
+        sender.send(event).await.unwrap();
+    }
+    flow.until("the second request answered", |board| {
+        board.requests[&second].state == RequestState::Done
+    })
+    .await;
+    let answers = answers_with_requests(&flow).await;
+    assert!(
+        answers.contains(&("Job b printed b-2.".into(), Some(second.clone())))
+            && answers.contains(&("Job a printed a-1.".into(), None)),
+        "{answers:?}"
+    );
+    flow.stop().await;
+}
+
 /// #220: the user's Stop ends a background run even when its work doesn't heed it: the row
 /// reads stopped, and the thread hears the user stopped it.
 #[tokio::test]

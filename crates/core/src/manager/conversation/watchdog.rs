@@ -23,7 +23,7 @@ fn due(watch: &ThreadWatch, timing: &Timing, now: i64, waiting: bool) -> bool {
 
 /// A turn is watched only after acceptance, with no stop, quota or hand-over under way.
 fn eligible(state: &ConvState) -> bool {
-    state.busy
+    (state.busy || state.unowned_turn)
         && state.landed
         && !state.awaiting_start
         && !state.interrupted
@@ -211,6 +211,22 @@ mod tests {
         }
         assert!(!due(&watch, &timing, 150 * 60_000, false));
     }
+    /// The CLI's own turn for a stopped request's job is watched like any turn: its silence is
+    /// reported, as turns still owed wait for its end (#221).
+    #[test]
+    fn watchdog_watches_a_turn_of_no_requests() {
+        let unowned = ConvState {
+            unowned_turn: true,
+            landed: true,
+            ..ConvState::default()
+        };
+        assert!(eligible(&unowned));
+        assert!(!eligible(&ConvState {
+            unowned_turn: false,
+            ..unowned
+        }));
+    }
+
     #[test]
     fn watchdog_thread_waiting_for_quota_or_stopping_is_never_touched() {
         let working = || ConvState {

@@ -122,6 +122,9 @@ pub struct Parser {
     /// The session's working directory (`system/init`), which its searches' relative paths
     /// start from.
     cwd: Option<String>,
+    /// The background jobs Claude last said still run: each `task_notification` of one ends
+    /// it alone, in the order Claude starts their turns (#221).
+    background: Vec<String>,
 }
 
 impl Parser {
@@ -836,7 +839,23 @@ impl Parser {
                         str_of(task, "task_id").map_or_else(|| format!("#{at}"), str::to_owned)
                     })
                     .collect();
+                self.background.clone_from(&running);
                 out.push(Output::Event(ProviderEvent::BackgroundJobs { running }));
+            }
+            // A job's end, before the word of those still running: said one at a time, so each
+            // end's turn is matched to its own job even when several end at once.
+            Some("task_notification") => {
+                let ended = str_of(value, "task_id");
+                if let Some(at) = self
+                    .background
+                    .iter()
+                    .position(|job| Some(job.as_str()) == ended)
+                {
+                    self.background.remove(at);
+                    out.push(Output::Event(ProviderEvent::BackgroundJobs {
+                        running: self.background.clone(),
+                    }));
+                }
             }
             _ => {}
         }
@@ -2283,24 +2302,54 @@ mod tests {
         assert_eq!(progress(&mut parser, task), ["toolu_4"]);
     }
 
+    /// What each line said of the background jobs still running.
+    fn jobs_of(outputs: Vec<Output>) -> Vec<Vec<String>> {
+        outputs
+            .into_iter()
+            .filter_map(|output| match output {
+                Output::Event(ProviderEvent::BackgroundJobs { running }) => Some(running),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Claude's word of the background jobs still running.
+    fn jobs(parser: &mut Parser, tasks: Value) -> Vec<Vec<String>> {
+        let line =
+            json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": tasks });
+        jobs_of(parser.feed(&line.to_string()))
+    }
+
+    /// Two jobs that end together are said to end one at a time, in the order of Claude's
+    /// notifications, which is the order of the turns their ends start: each turn is matched
+    /// to its own job, not to the order they started in (#221).
+    #[test]
+    fn jobs_that_end_together_end_in_the_order_claude_notifies_them() {
+        let mut parser = Parser::live();
+        let tasks = json!([{ "task_id": "a1", "task_type": "local_bash" },
+                           { "task_id": "b2", "task_type": "local_bash" }]);
+        assert_eq!(
+            jobs(&mut parser, tasks),
+            [vec!["a1".to_owned(), "b2".to_owned()]]
+        );
+        let notified = |parser: &mut Parser, id: &str| {
+            let line = json!({ "type": "system", "subtype": "task_notification",
+                               "task_id": id, "status": "completed" });
+            jobs_of(parser.feed(&line.to_string()))
+        };
+        assert_eq!(notified(&mut parser, "b2"), [vec!["a1".to_owned()]]);
+        assert_eq!(notified(&mut parser, "a1"), [Vec::<String>::new()]);
+        assert_eq!(jobs(&mut parser, json!([])), [Vec::<String>::new()]);
+        // A foreground command's notification ends no job.
+        assert!(notified(&mut parser, "fg9").is_empty());
+    }
+
     /// A turn can end while Claude's own background job still runs: Claude says how many run,
     /// and the job's end starts a turn of its own, with no message of ours echoed. Shapes as
     /// Claude Code 2.1.296 streams them (`run_in_background` Bash).
     #[test]
     fn a_background_jobs_end_starts_a_turn_of_its_own() {
         let mut parser = Parser::live();
-        let jobs = |parser: &mut Parser, tasks: Value| -> Vec<Vec<String>> {
-            let line =
-                json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": tasks });
-            parser
-                .feed(&line.to_string())
-                .into_iter()
-                .filter_map(|output| match output {
-                    Output::Event(ProviderEvent::BackgroundJobs { running }) => Some(running),
-                    _ => None,
-                })
-                .collect()
-        };
         let task = json!({ "task_id": "b3dwmq6fl", "task_type": "local_bash",
                            "description": "Sleep 8 seconds then echo finished" });
         assert_eq!(
@@ -2312,7 +2361,10 @@ mod tests {
         assert!(!parser.turn_active());
         let notification = json!({ "type": "system", "subtype": "task_notification",
                                    "task_id": "b3dwmq6fl", "status": "completed" });
-        assert!(parser.feed(&notification.to_string()).is_empty());
+        assert_eq!(
+            jobs_of(parser.feed(&notification.to_string())),
+            [Vec::<String>::new()]
+        );
         assert_eq!(jobs(&mut parser, json!([])), [Vec::<String>::new()]);
         assert!(!parser.turn_active());
         let reply = json!({ "type": "assistant", "parent_tool_use_id": null,
