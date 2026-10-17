@@ -2,7 +2,8 @@
  * A standalone Vite entry, excluded from the app entry and production build: the CLI's guess at
  * the user's next message (`UserRequest.suggestion`, G18) in the app's own conversation view.
  * A Chat whose one request is over carries a guess; IPC is mocked and records each
- * `setComposerShown`. It drives the real keys (`fixtureInput`) and writes what it saw as JSON
+ * `setComposerShown`. It drives the real keys (`fixtureInput`), then checks the field keeps typed
+ * text as typed (no text checking, no double-space period), and writes what it saw as JSON
  * into `<pre id="composer-suggestion-result">`.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -113,6 +114,18 @@ async function drive() {
     seen.ghostWhileWorking = ghost() !== null;
     setState({ type: "done" });
     await until("the guess after the request ends", () => ghost() !== null);
+    seen.plainTyping = ["spellcheck", "autocorrect", "autocapitalize"].map((name) => field()?.getAttribute(name));
+    // macOS's double-space period: the input method replaces the space before the caret with ". ".
+    await fixtureClick(field()!);
+    document.execCommand("insertText", false, "a ");
+    await until("the typed space", () => typed() === "a");
+    const space = field()!.querySelector("span")!.firstChild!;
+    field()!.dispatchEvent(new InputEvent("beforeinput", {
+      inputType: "insertReplacementText", data: ". ", bubbles: true, cancelable: true,
+      targetRanges: [new StaticRange({ startContainer: space, startOffset: 1, endContainer: space, endOffset: 2 })],
+    }));
+    await sleep(100);
+    seen.doubleSpace = field()?.textContent;
   } catch (error) {
     seen.error = String(error);
   }

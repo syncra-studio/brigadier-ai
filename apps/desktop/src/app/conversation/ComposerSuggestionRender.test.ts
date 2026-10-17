@@ -17,3 +17,10 @@ test("the CLI's guess at the next message shows in the empty composer with Press
   assert.equal(seen.ghostWhileTyping, false);
   assert.equal(seen.ghostWhileWorking, false);
 });
+
+test("the composer keeps typed text as typed: no spell checking, auto-correct or capitals, and two spaces stay two spaces", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "composer-suggestion.html", "composer-suggestion-result", 60000)) as Record<string, unknown>;
+  assert.equal(seen.error, undefined, String(seen.error));
+  assert.deepEqual(seen.plainTyping, ["false", "off", "off"]);
+  assert.equal(seen.doubleSpace, "a  ");
+});

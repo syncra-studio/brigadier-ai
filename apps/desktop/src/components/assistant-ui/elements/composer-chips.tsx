@@ -344,6 +344,32 @@ function completedTokens(text: string, caret: number | null): Token[] {
  * leaves Enter and Space on a chip's own button (an image's preview or ×, reached by Tab) to
  * press it, where the editor would send the message.
  */
+/** What turns off the webview's text checking (smart quotes and dashes, auto-correct, capitals). */
+const PLAIN_TYPING = { spellcheck: "false", autocorrect: "off", autocapitalize: "off" };
+
+function plainTyping(root: HTMLElement) {
+  for (const [name, value] of Object.entries(PLAIN_TYPING)) {
+    // Only a change: setting the same value again would wake the observer for nothing.
+    if (root.getAttribute(name) !== value) root.setAttribute(name, value);
+  }
+}
+
+/**
+ * macOS's "Add period with double-space" comes from the input method, past `spellcheck`: it
+ * replaces the space before the caret with ". ". The field keeps the two spaces typed instead.
+ */
+function keepDoubleSpace(event: InputEvent) {
+  if (event.data !== ". " || !/^insert(Replacement)?Text$/.test(event.inputType)) return;
+  const [range] = event.getTargetRanges();
+  if (!range || range.endOffset - range.startOffset !== 1 || range.startContainer !== range.endContainer) return;
+  if (range.startContainer.textContent?.[range.startOffset] !== " ") return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const root = event.currentTarget as HTMLElement;
+  // The space stays; the second one goes in at the caret.
+  root.ownerDocument.execCommand("insertText", false, " ");
+}
+
 function ChipsPlugin({
   formatter,
   editorRef,
@@ -356,75 +382,84 @@ function ChipsPlugin({
   useEffect(() => {
     editorRef.current = editor;
   }, [editor, editorRef]);
-  useEffect(
-    () =>
-      mergeRegister(
-        // What's typed is what's sent: macOS turns "..." into "…", quotes into curly ones,
-        // "--" into a dash and capitalizes words as part of its text checking, which only
-        // `spellcheck="false"` turns off in the webview (`autocorrect="off"` does nothing there).
-        editor.registerRootListener((root) => {
-          root?.setAttribute("spellcheck", "false");
-          root?.setAttribute("autocorrect", "off");
-          root?.setAttribute("autocapitalize", "off");
-        }),
-        editor.registerNodeTransform(TextNode, (node) => {
-          if (editor.isComposing() || !node.isSimpleText()) return;
-          const selection = $getSelection();
-          const caret =
-            $isRangeSelection(selection) &&
-            selection.isCollapsed() &&
-            selection.anchor.key === node.getKey()
-              ? selection.anchor.offset
-              : -1;
-          const pasted = $hasUpdateTag(PASTE_TAG);
-          if (!pasted && caret < 0) return;
-          // One chip per pass: the rest of the text is transformed again.
-          const token = completedTokens(node.getTextContent(), pasted ? null : caret)[0];
-          if (!token || token.segment.kind !== "mention") return;
-          const { type, label, id } = token.segment;
-          const parts = node.splitText(token.start, token.end);
-          const target = token.start === 0 ? parts[0] : parts[1];
-          if (!target) return;
-          const chip = $createDirectiveNodeWithFormatter({ id, type, label }, formatter);
-          // The caret right after the token's end goes on after the chip.
-          const after = target.isSelected();
-          target.replace(chip);
-          if (after) chip.selectNext(0, 0);
-        }),
-        editor.registerCommand(
-          KEY_DOWN_COMMAND,
-          (event) =>
-            (event.key === "Enter" || event.key === " ") &&
-            event.target instanceof HTMLButtonElement,
-          COMMAND_PRIORITY_NORMAL,
-        ),
-        editor.registerCommand(
-          KEY_ARROW_LEFT_COMMAND,
-          (event) => $stepOverChip(event, true),
-          COMMAND_PRIORITY_NORMAL,
-        ),
-        editor.registerCommand(
-          KEY_ARROW_RIGHT_COMMAND,
-          (event) => $stepOverChip(event, false),
-          COMMAND_PRIORITY_NORMAL,
-        ),
-        editor.registerCommand(
-          KEY_BACKSPACE_COMMAND,
-          (event) => {
-            if (event.isComposing || !$unwrapChipBeforeCaret()) return false;
-            event.preventDefault();
-            return true;
-          },
-          COMMAND_PRIORITY_NORMAL,
-        ),
-        editor.registerCommand(
-          DELETE_CHARACTER_COMMAND,
-          (isBackward) => isBackward && $unwrapChipBeforeCaret(),
-          COMMAND_PRIORITY_NORMAL,
-        ),
+  useEffect(() => {
+    let kept: MutationObserver | null = null;
+    return mergeRegister(
+      // What's typed is what's sent: macOS turns "..." into "…", quotes into curly ones,
+      // "--" into a dash and capitalizes words as part of its text checking, which only
+      // `spellcheck="false"` turns off in the webview (`autocorrect="off"` does nothing there).
+      // Lexical's focus() drops `autocapitalize`, so the field sets them again when one goes.
+      editor.registerRootListener((root, previous) => {
+        previous?.removeEventListener("beforeinput", keepDoubleSpace, true);
+        kept?.disconnect();
+        kept = null;
+        if (!root) return;
+        root.addEventListener("beforeinput", keepDoubleSpace, true);
+        plainTyping(root);
+        kept = new MutationObserver(() => plainTyping(root));
+        kept.observe(root, { attributeFilter: Object.keys(PLAIN_TYPING) });
+      }),
+      () => {
+        kept?.disconnect();
+        editor.getRootElement()?.removeEventListener("beforeinput", keepDoubleSpace, true);
+      },
+      editor.registerNodeTransform(TextNode, (node) => {
+        if (editor.isComposing() || !node.isSimpleText()) return;
+        const selection = $getSelection();
+        const caret =
+          $isRangeSelection(selection) &&
+          selection.isCollapsed() &&
+          selection.anchor.key === node.getKey()
+            ? selection.anchor.offset
+            : -1;
+        const pasted = $hasUpdateTag(PASTE_TAG);
+        if (!pasted && caret < 0) return;
+        // One chip per pass: the rest of the text is transformed again.
+        const token = completedTokens(node.getTextContent(), pasted ? null : caret)[0];
+        if (!token || token.segment.kind !== "mention") return;
+        const { type, label, id } = token.segment;
+        const parts = node.splitText(token.start, token.end);
+        const target = token.start === 0 ? parts[0] : parts[1];
+        if (!target) return;
+        const chip = $createDirectiveNodeWithFormatter({ id, type, label }, formatter);
+        // The caret right after the token's end goes on after the chip.
+        const after = target.isSelected();
+        target.replace(chip);
+        if (after) chip.selectNext(0, 0);
+      }),
+      editor.registerCommand(
+        KEY_DOWN_COMMAND,
+        (event) =>
+          (event.key === "Enter" || event.key === " ") &&
+          event.target instanceof HTMLButtonElement,
+        COMMAND_PRIORITY_NORMAL,
       ),
-    [editor, formatter],
-  );
+      editor.registerCommand(
+        KEY_ARROW_LEFT_COMMAND,
+        (event) => $stepOverChip(event, true),
+        COMMAND_PRIORITY_NORMAL,
+      ),
+      editor.registerCommand(
+        KEY_ARROW_RIGHT_COMMAND,
+        (event) => $stepOverChip(event, false),
+        COMMAND_PRIORITY_NORMAL,
+      ),
+      editor.registerCommand(
+        KEY_BACKSPACE_COMMAND,
+        (event) => {
+          if (event.isComposing || !$unwrapChipBeforeCaret()) return false;
+          event.preventDefault();
+          return true;
+        },
+        COMMAND_PRIORITY_NORMAL,
+      ),
+      editor.registerCommand(
+        DELETE_CHARACTER_COMMAND,
+        (isBackward) => isBackward && $unwrapChipBeforeCaret(),
+        COMMAND_PRIORITY_NORMAL,
+      ),
+    );
+  }, [editor, formatter]);
   return null;
 }
 
