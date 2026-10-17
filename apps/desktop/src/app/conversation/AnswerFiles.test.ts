@@ -32,6 +32,10 @@ test("a finished answer offers Save… for each file of its request's workers it
     assert.deepEqual(picked("Fixed the bug."), []);
     assert.deepEqual(answerFiles(Object.values(tasks), ["r1"]), []);
     assert.deepEqual(picked("See [rates](./outputs/rates.md#L2) and [loose](outputs/loose.md)."), ["rates-2"]);
+    // #27: a link naming its task offers that task's copy, though a later task has the name too.
+    const numbered = Object.values(tasks).map((each) => ({ ...each, number: each.position }) as Task);
+    assert.deepEqual((answerFiles(numbered, ["r1"], "[rates](outputs/task-1/rates.md)") as ArtifactRef[]).map((output) => output.id), ["rates-1"]);
+    assert.deepEqual((answerFiles(numbered, ["r1"], "[rates](outputs/rates.md)") as ArtifactRef[]).map((output) => output.id), ["rates-2"]);
 
     // A6: the thread fixed rates.md and links its corrected copy in its workspace, so the
     // worker's original isn't offered; a link to the stored output itself changes nothing.

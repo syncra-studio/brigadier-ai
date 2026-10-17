@@ -97,8 +97,8 @@ is read by the task id a Brain answer names.";
 
 const STORE_OUTPUT: &str = "Keep a file you wrote, such as your corrected copy of a worker's \
 deliverable, as that task's output, in place of its output with the same file name. Link it as \
-[name](outputs/name): it opens and saves from there and from the task card, and outlives your \
-workspace and scratch.";
+its reply says ([name](outputs/name)): it opens and saves from there and from the task card, and \
+outlives your workspace and scratch.";
 
 const READ_ARTIFACT: &str = "Read part of an artifact named in a report or a Brain answer (full \
 transcript, diff, command output, note), from any session of this project, by its id. At most 16000 bytes per call, starting at `offset`; the \

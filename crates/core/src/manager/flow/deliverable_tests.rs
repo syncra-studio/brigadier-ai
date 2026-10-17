@@ -223,6 +223,13 @@ async fn the_threads_corrected_copy_of_an_ended_tasks_output_is_kept_in_its_plac
                         assert!(!reply.is_error, "{}", reply.text);
                         return Reply::text(QUIET);
                     }
+                    if let Some(private) = turn.input.lines().find_map(|line| line.strip_prefix("Keep ")) {
+                        let reply = turn
+                            .call("store_output", json!({"task": "task-1", "path": private.trim()}))
+                            .await;
+                        *reply_log.lock().unwrap() = Some(format!("{}{}", reply.is_error, reply.text));
+                        return Reply::text("No.");
+                    }
                     if let Some(fixed) = turn.input.lines().find_map(|line| line.strip_prefix("Fix it in ")) {
                         let fixed = fixed.trim().to_owned();
                         std::fs::write(&fixed, FIXED).unwrap();
@@ -302,6 +309,21 @@ async fn the_threads_corrected_copy_of_an_ended_tasks_output_is_kept_in_its_plac
         .await
         .unwrap();
     assert_eq!(std::fs::read_to_string(copy).unwrap(), FIXED);
+
+    // Brigadier's private folder is never read into an output, as the sandbox never reads it.
+    let run_dir = flow.manager.runtime.platform().paths().run_dir.clone();
+    std::fs::create_dir_all(&run_dir).unwrap();
+    let token = run_dir.join("secret.token");
+    std::fs::write(&token, "s3cret").unwrap();
+    flow.say(&format!("Keep {}", token.display())).await;
+    flow.settled().await;
+    let refused = stored_reply.lock().unwrap().clone().unwrap();
+    assert!(
+        refused.starts_with("true") && refused.contains("Brigadier's private folder"),
+        "{refused}"
+    );
+    let board = flow.core.board(&flow.conversation).await.unwrap();
+    assert_eq!(Flow::task(&board, 1).outputs, *outputs);
     flow.stop().await;
 }
 

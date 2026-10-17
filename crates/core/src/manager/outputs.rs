@@ -287,7 +287,8 @@ impl SessionManager {
     /// `store_output`: a file the thread wrote kept as a task's output under its file name, in
     /// place of the task's output of that name, so an `outputs/<name>` link opens it and the
     /// task card and the answer's Save… save it (issue #27). While the task's outputs folder is
-    /// still there, the file goes in it too, so what the task's end stores keeps it.
+    /// still there, the file takes the place of the same-named files in it too, so what the
+    /// task's end stores keeps it. Brigadier's private folder is never read, as in the sandbox.
     pub(crate) async fn store_output_tool(
         &self,
         id: &ConversationId,
@@ -299,6 +300,14 @@ impl SessionManager {
             _ => std::env::temp_dir(),
         };
         let path = super::reads::absolute(&base, args.path.trim());
+        let run_dir = self.runtime.platform().paths().run_dir.clone();
+        let private = run_dir.canonicalize().unwrap_or_else(|_| run_dir.clone());
+        if path.starts_with(&private) || path.starts_with(&run_dir) {
+            return Err(Error::Invalid(format!(
+                "{} is in Brigadier's private folder: store a file you wrote",
+                path.display()
+            )));
+        }
         let size = {
             let path = path.clone();
             blocking(move || std::fs::metadata(&path).map_err(|err| io_error(&path, err))).await?
@@ -316,28 +325,56 @@ impl SessionManager {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .ok_or_else(|| Error::Invalid(format!("{} has no file name", path.display())))?;
+        let same = |output: &ArtifactRef| output.file_name.as_deref() == Some(name.as_str());
+        // The worker's title (its path in the outputs folder, or the report's) stays.
+        let title = task
+            .outputs
+            .iter()
+            .find(|output| same(output))
+            .map_or_else(|| name.clone(), |output| output.title.clone());
+        let replaced = task.outputs.iter().any(same);
         let redactor = self.task_redactor(&task).await;
-        let artifact = self.store_file(&path, name.clone(), &redactor).await?;
+        let artifact = self.store_file(&path, title, &redactor).await?;
         if let Some(workspace) = &task.workspace {
             let outputs = outputs_dir(Path::new(&workspace.scratch));
             if outputs.is_dir() {
                 let bytes = self.artifact_bytes(&artifact.id).await?;
                 let name = name.clone();
-                blocking(move || write_unfollowed(&outputs, &name, &bytes)).await?;
+                blocking(move || {
+                    let mut folders: Vec<PathBuf> = output_files(&outputs)
+                        .into_iter()
+                        .filter(|(file, _)| file.file_name().is_some_and(|base| *base == *name))
+                        .filter_map(|(file, _)| file.parent().map(Path::to_owned))
+                        .collect();
+                    if folders.is_empty() {
+                        folders.push(outputs);
+                    }
+                    folders
+                        .iter()
+                        .try_for_each(|folder| write_unfollowed(folder, &name, &bytes))
+                })
+                .await?;
             }
         }
-        let replaced = task
-            .outputs
-            .iter()
-            .any(|output| output.file_name.as_deref() == Some(name.as_str()));
         self.update_task(id, &task.id, |task| {
-            task.outputs
-                .retain(|output| output.file_name.as_deref() != Some(name.as_str()));
+            task.outputs.retain(|output| !same(output));
             task.outputs.push(artifact);
         })
         .await?;
+        // Another task's file of the same name could answer a plain `outputs/<name>`.
+        let shared = self
+            .core
+            .tasks(id)
+            .await?
+            .iter()
+            .any(|other| other.id != task.id && other.outputs.iter().any(&same));
+        let link = if shared {
+            format!("outputs/task-{}/{name}", task.number)
+        } else {
+            format!("outputs/{name}")
+        };
         Ok(format!(
-            "Kept {name} as task-{}'s output{}. Link it as [{name}](outputs/{name}): the user opens and saves it from there and from the task card.",
+            "Kept {name} as task-{}'s output{}. Link it as [{name}]({link}): the user opens and saves it from there and from the task card.",
             task.number,
             if replaced {
                 ", in place of the worker's"
@@ -797,6 +834,16 @@ fn find_stored(tasks: &[Task], link: &str, at_ms: Option<i64>) -> Option<StoredC
     // `outputs/x.md`, as a worker or the thread writes it.
     let relative = path.strip_prefix("./").unwrap_or(&path);
     if let Some(name) = relative.strip_prefix("outputs/") {
+        // `outputs/task-3/x.md`: task-3's, whichever task has a file of that name too.
+        if let Some((number, rest)) = name.strip_prefix("task-").and_then(|r| r.split_once('/'))
+            && let Ok(number) = number.parse::<u32>()
+            && let Some(copy) = tasks
+                .iter()
+                .find(|task| task.number == number)
+                .and_then(|task| matching(&task.outputs, rest).and_then(|a| found(task, a)))
+        {
+            return Some(copy);
+        }
         let newest = |by: Option<i64>| {
             tasks
                 .iter()
@@ -1100,5 +1147,29 @@ mod tests {
         // Unknown time: the newest, as before; a message older than both still opens one.
         assert_eq!(found(None).as_deref(), Some("second"));
         assert_eq!(found(Some(10)).as_deref(), Some("second"));
+    }
+
+    /// `outputs/task-N/<name>` opens task-N's copy even when a newer task has a file of that
+    /// name, as store_output links a corrected copy then (#27).
+    #[test]
+    fn an_outputs_link_naming_its_task_opens_that_tasks_copy() {
+        let first = read_task(
+            "t1",
+            "/tmp/s/t1",
+            vec![artifact("fixed", "notes.md", "notes.md")],
+        );
+        let mut second = read_task(
+            "t2",
+            "/tmp/s/t2",
+            vec![artifact("second", "notes.md", "notes.md")],
+        );
+        second.number = 2;
+        let tasks = vec![first, second];
+        let found = |link: &str| super::find_stored(&tasks, link, None).map(|s| s.artifact.id);
+        assert_eq!(found("outputs/notes.md").as_deref(), Some("second"));
+        assert_eq!(found("outputs/task-1/notes.md").as_deref(), Some("fixed"));
+        assert_eq!(found("outputs/task-2/notes.md").as_deref(), Some("second"));
+        // No such task: read as a folder named so, as before.
+        assert_eq!(found("outputs/task-9/notes.md").as_deref(), Some("second"));
     }
 }

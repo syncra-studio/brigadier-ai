@@ -26,6 +26,19 @@ export function answerFiles(tasks: readonly Task[], requestIds: readonly string[
   }
   const scratch = ordered.flatMap((task) => (task.workspace?.scratch ? [task.workspace.scratch.replace(/\/$/, "")] : []));
   const { linked, corrected } = linkedNames(answer, scratch);
+  // `outputs/task-3/notes.md` names task-3's copy, whichever later task has one of that name: the
+  // thread's corrected copy of task-3's file (#27).
+  const pinned = [...linked].flatMap((stored) => {
+    const found = /^task-(\d+)\/(?:.*\/)?([^/]+)$/.exec(stored);
+    return found?.[1] && found[2] ? [{ number: Number(found[1]), name: found[2] }] : [];
+  });
+  for (const { number, name } of pinned) {
+    const output = ordered.find((task) => task.number === number)?.outputs.find((each) => fileNameOf(each) === name);
+    if (output) {
+      byName.set(name, output);
+      linked.add(name);
+    }
+  }
   return [...byName.entries()].filter(([name]) => linked.has(name) && !corrected.has(name)).map(([, output]) => output);
 }
 
