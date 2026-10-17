@@ -136,8 +136,12 @@ async fn held(name: &str, plan: Plan) -> Held {
                     return Reply::text("No findings.");
                 }
                 if !turn.is_orchestrator() {
-                    // A writer: holds until released, then writes its own file.
-                    until_set(&gate).await;
+                    // A writer: holds until released, then writes its own file. One whose CLI
+                    // a restart closed meanwhile ends there, as a real CLI's turn would.
+                    tokio::select! {
+                        () = until_set(&gate) => {}
+                        true = turn.stopped() => return Reply::default(),
+                    }
                     let file = if turn.task_number() == Some(1) {
                         "A.md"
                     } else {

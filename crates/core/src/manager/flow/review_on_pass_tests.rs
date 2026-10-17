@@ -104,6 +104,7 @@ async fn a_background_pass_starts_the_review_it_held() {
         thread(&["sleep 4; true"], seen.clone()),
     )
     .await;
+    flow.background_commands();
     flow.say("Build it.").await;
     let board = done(&flow).await;
     let seen = seen.lock().unwrap().clone();
@@ -128,6 +129,7 @@ async fn a_turn_ending_on_a_pending_check_that_fails_starts_no_review() {
         thread(&["sleep 4; false"], seen.clone()),
     )
     .await;
+    flow.background_commands();
     flow.say("Build it.").await;
     let board = done(&flow).await;
     let seen = seen.lock().unwrap().clone();

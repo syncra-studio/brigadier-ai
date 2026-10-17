@@ -76,6 +76,7 @@ async fn a_long_check_goes_to_the_background_and_its_result_comes_back_to_the_th
         ),
     )
     .await;
+    flow.background_commands();
     flow.say("Run the long check.").await;
     // The board can show the run before the thread's script has kept the call's reply.
     let board = flow
@@ -143,6 +144,7 @@ async fn a_long_command_goes_to_the_background_and_its_result_comes_back_to_the_
         ),
     )
     .await;
+    flow.background_commands();
     flow.say("Run it.").await;
     let board = flow.settled().await;
     assert_eq!(
@@ -193,6 +195,7 @@ async fn a_background_run_keeps_the_name_the_thread_gave_it() {
         }),
     )
     .await;
+    flow.background_commands();
     flow.say("Run them.").await;
     let board = flow.settled().await;
     let names: Vec<_> = ["run-1", "run-2", "run-3"]
@@ -228,6 +231,7 @@ async fn a_check_waiting_for_the_same_check_goes_to_the_background_and_answers_f
         ),
     )
     .await;
+    flow.background_commands();
     flow.say("Check twice.").await;
     let board = flow.settled().await;
     let replies = replies.lock().unwrap().clone();
@@ -270,6 +274,7 @@ async fn the_users_stop_ends_a_check_waiting_for_the_same_check() {
         ),
     )
     .await;
+    flow.background_commands();
     flow.say("Check twice.").await;
     flow.until("the second check to wait in the background", |board| {
         run_state(board, "run-2") == Some(BackgroundRunState::Running)
@@ -312,6 +317,7 @@ async fn a_check_waiting_for_the_build_lease_goes_to_the_background() {
         ),
     )
     .await;
+    flow.background_commands();
     let (held, now, _) = flow.manager.machine.ask_check("another-build", "make all");
     assert!(now, "the lease was free");
     flow.say("Build it.").await;
@@ -349,6 +355,7 @@ async fn the_users_stop_ends_a_background_run_quietly() {
         ),
     )
     .await;
+    flow.background_commands();
     flow.say("Run the long one.").await;
     flow.until("the run to go to the background", |board| {
         run_state(board, "run-1") == Some(BackgroundRunState::Running)
@@ -445,6 +452,7 @@ async fn the_users_stop_of_one_background_run_tells_the_thread() {
         }),
     )
     .await;
+    flow.background_commands();
     flow.say("Run the long one.").await;
     flow.until("the run to go to the background", |board| {
         run_state(board, "run-1") == Some(BackgroundRunState::Running)
@@ -548,6 +556,7 @@ async fn the_users_stop_of_a_run_that_printed_says_what_it_printed() {
         }),
     )
     .await;
+    flow.background_commands();
     flow.say("Run the log.").await;
     flow.until("the run to go to the background", |board| {
         run_state(board, "run-1") == Some(BackgroundRunState::Running)

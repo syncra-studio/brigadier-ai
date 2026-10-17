@@ -280,8 +280,8 @@ impl Turn {
             .await;
     }
 
-    /// Waits for the user's Stop of this turn (`false`: none came in time). The turn then ends
-    /// as interrupted, whatever it replies.
+    /// Waits for the user's Stop of this turn, or its CLI's close (`false`: none came in
+    /// time). The turn then ends as interrupted, whatever it replies.
     pub async fn stopped(&self) -> bool {
         let (stopped, notify) = &*self.stops;
         let wait = async {
@@ -1104,6 +1104,14 @@ impl ProviderSession for FakeSession {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
+            // Its running turn ends with it, as a real CLI's does with its process: a script
+            // waiting for its stop sees it.
+            if self.running.load(std::sync::atomic::Ordering::SeqCst) {
+                self.stops
+                    .0
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                self.stops.1.notify_waiters();
+            }
             let tx = self.events.lock().unwrap().take();
             if let Some(tx) = tx {
                 let _ = tx
@@ -1746,6 +1754,12 @@ impl Flow {
     /// The board of the session `id`.
     pub async fn board_of(&self, id: &ConversationId) -> Board {
         self.core.board(id).await.unwrap()
+    }
+
+    /// Lets the thread's commands go to the background past `FOREGROUND`, as in the app: by
+    /// default a test's answer in their calls, however loaded the machine.
+    pub fn background_commands(&self) {
+        super::background_runs::let_background(&self.conversation);
     }
 
     /// Waits until `done` holds for the conversation's board.

@@ -391,10 +391,14 @@ async fn racing_opens_resumes_and_landings_leave_one_writer() {
         "nothing landed: {answer}"
     );
 
-    // The terminal ends: the worker is handed back and reports.
+    // The terminal ends: the worker is handed back and reports. The thread's next turn quotes
+    // "LAND NOW" again, so the report may land before a look at the board sees it.
     host.exit(&a.terminal_id);
     flow.until("the hand-back", |board| {
-        board.tasks[&id].state == TaskState::Reported
+        matches!(
+            board.tasks[&id].state,
+            TaskState::Reported | TaskState::Landed
+        )
     })
     .await;
     flow.settled().await;

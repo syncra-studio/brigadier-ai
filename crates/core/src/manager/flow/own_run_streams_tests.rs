@@ -326,6 +326,7 @@ async fn own_run_streams_keep_one_buffer_through_background_handoff() {
             streaming("run", true),
         )
         .await;
+        flow.background_commands();
         flow.say("Run in the background.").await;
         flow.until("the starting rows", |b| row(b, "decoy").is_some())
             .await;
@@ -410,6 +411,7 @@ async fn own_run_streams_keep_a_stopped_background_runs_output() {
         streaming("run", true),
     )
     .await;
+    flow.background_commands();
     flow.say("Run in the background.").await;
     flow.until("the starting rows", |b| row(b, "decoy").is_some())
         .await;
@@ -601,6 +603,7 @@ async fn own_run_streams_tell_a_background_checks_own_reply() {
         script,
     )
     .await;
+    flow.background_commands();
     flow.say("Run the check.").await;
     flow.until("the background run", |b| {
         b.background_runs

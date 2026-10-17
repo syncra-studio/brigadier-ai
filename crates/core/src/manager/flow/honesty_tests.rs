@@ -92,6 +92,7 @@ async fn a_request_over_on_a_narration_line_gets_the_threads_answer() {
         narrating(inputs.clone(), "The suites passed; nothing is pending."),
     )
     .await;
+    flow.background_commands();
     flow.say("Run the full checks.").await;
     let board = flow
         .until("the request to end", |board| {
@@ -134,6 +135,7 @@ async fn a_request_still_unanswered_after_the_reminder_ends_on_a_plain_line() {
         narrating(inputs.clone(), QUIET),
     )
     .await;
+    flow.background_commands();
     flow.say("Run the full checks.").await;
     let board = flow
         .until("the request to end", |board| {

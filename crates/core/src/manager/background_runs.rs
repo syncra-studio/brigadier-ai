@@ -95,10 +95,24 @@ static FOREGROUND_GATES: std::sync::LazyLock<
     std::sync::Mutex<HashMap<ConversationId, std::sync::Arc<tokio::sync::Notify>>>,
 > = std::sync::LazyLock::new(Default::default);
 
+/// The sessions whose commands go to the background past [`FOREGROUND`] in tests
+/// ([`let_background`]); every other session's are held in their calls to their end.
+#[cfg(all(test, unix))]
+static BACKGROUNDED: std::sync::LazyLock<std::sync::Mutex<HashSet<ConversationId>>> =
+    std::sync::LazyLock::new(Default::default);
+
 /// Tests can hold a foreground call while pipe gates are inspected, regardless of machine load.
 #[cfg(all(test, unix))]
 pub(super) fn hold_foreground(id: &ConversationId, gate: std::sync::Arc<tokio::sync::Notify>) {
     FOREGROUND_GATES.lock().unwrap().insert(id.clone(), gate);
+}
+
+/// In tests a command answers in its own call, however loaded the machine, unless its test
+/// lets session `id`'s go to the background past [`FOREGROUND`], as they do in the app: a
+/// quick command on a loaded machine can take longer than that.
+#[cfg(all(test, unix))]
+pub(super) fn let_background(id: &ConversationId) {
+    BACKGROUNDED.lock().unwrap().insert(id.clone());
 }
 
 /// What the thread hears of a run the user stopped alone: how long it ran, and what it printed
@@ -169,7 +183,10 @@ impl SessionManager {
         };
         let handle = handoff.handle.as_mut().expect("held until handed off");
         #[cfg(all(test, unix))]
-        let gate = FOREGROUND_GATES.lock().unwrap().remove(id);
+        let gate = FOREGROUND_GATES.lock().unwrap().remove(id).or_else(|| {
+            (!BACKGROUNDED.lock().unwrap().contains(id))
+                .then(|| std::sync::Arc::new(tokio::sync::Notify::new()))
+        });
         let background_due = async {
             tokio::time::sleep(FOREGROUND).await;
             #[cfg(all(test, unix))]

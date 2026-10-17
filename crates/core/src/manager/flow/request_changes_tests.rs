@@ -905,6 +905,7 @@ async fn request_changes_background_runs_keep_the_starting_item_and_return_the_f
                 Reply::text("[quiet]")
             }
         })).await;
+        flow.background_commands();
         flow.say("Run the controlled background command.").await;
         flow.until("background item", |b| {
             b.background_runs
@@ -1583,6 +1584,7 @@ async fn request_changes_background_runs_keep_a_late_link_to_their_call() {
         }),
     )
     .await;
+    flow.background_commands();
     flow.say("Run the late background command.").await;
     flow.until("the late link", |b| {
         b.background_runs
