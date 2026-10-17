@@ -322,7 +322,8 @@ impl TabChats {
         self.pages_lock().remove(chat);
     }
 
-    #[cfg(test)]
+    /// For the flow tests, which run on Unix only.
+    #[cfg(all(test, unix))]
     pub(super) fn has_page(&self, chat: &ConversationId) -> bool {
         self.pages_lock().contains_key(chat)
     }
