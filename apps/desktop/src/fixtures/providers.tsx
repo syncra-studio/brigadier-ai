@@ -33,7 +33,7 @@ useApp.setState((state) => ({
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
   settings: { ...state.settings, routingOverrides: rules, routingRankings: rankings, switchAccounts: true },
   projects,
-  accounts: { accounts },
+  accounts: { accounts, warnings: [] },
   providers: { ...state.providers, view: { providers: overviews, sessions: [], fixtures: [] } },
 }));
 
@@ -45,7 +45,7 @@ mockIPC((command, payload) => {
   const req = (payload as { request: Request }).request;
   switch (req.method) {
     case "getAccounts":
-      return { method: req.method, accounts: { accounts: listed } };
+      return { method: req.method, accounts: { accounts: listed, warnings: [] } };
     case "updateSettings":
       return { method: req.method, settings: req.settings };
     case "getRankingsRefresh":
@@ -172,7 +172,7 @@ function Fixture() {
         const status = { ...own.status, email: "STEPHEN.GOLBAN@EXAMPLE.COM" };
         const twin = { ...own, account: { provider: own.account.provider, account: "acct-twin" }, default: true, status };
         listed = [{ ...own, default: false }, ...rest, twin];
-        useApp.setState({ accounts: { accounts: listed } });
+        useApp.setState({ accounts: { accounts: listed, warnings: [] } });
         openSettings("providers");
       },
       () => {

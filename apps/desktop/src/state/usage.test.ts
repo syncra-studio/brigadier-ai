@@ -13,7 +13,7 @@ const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 beforeEach(() => {
   Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
   calls = [];
-  useApp.setState({ accounts: { accounts: accounts(0) } });
+  useApp.setState({ accounts: { accounts: accounts(0), warnings: [] } });
   useUsage.setState({ refreshing: false, refreshError: null, view: null, activityShown: false });
   mockIPC((command, payload) => {
     if (command !== "ipc_request") return null;

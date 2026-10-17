@@ -35,7 +35,7 @@ useApp.setState((state) => ({
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
   settings: { ...state.settings, routingOverrides: rules, routingRankings: rankings },
   projects,
-  accounts: { accounts },
+  accounts: { accounts, warnings: [] },
   providers: { ...state.providers, view: { providers: overviews, sessions: [], fixtures: [] } },
 }));
 
@@ -47,7 +47,7 @@ mockIPC((command, payload) => {
   const req = (payload as { request: Request }).request;
   switch (req.method) {
     case "getAccounts":
-      return { method: req.method, accounts: { accounts } };
+      return { method: req.method, accounts: { accounts, warnings: [] } };
     case "updateSettings":
       return { method: req.method, settings: req.settings };
     case "getUsage":

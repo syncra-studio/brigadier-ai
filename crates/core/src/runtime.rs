@@ -397,6 +397,7 @@ impl Runtime {
                 }
             }
             self.poll_accounts().await;
+            self.warn_of_lost_quota().await;
             let now = now_ms();
             if now - pruned_ms > 24 * 60 * 60 * 1000 {
                 pruned_ms = now;
@@ -472,6 +473,7 @@ impl Runtime {
         if accounts {
             self.publish_accounts().await;
         }
+        self.warn_of_lost_quota().await;
     }
 
     /// Whether an Inspector session's CLI is open.
@@ -621,6 +623,18 @@ impl Runtime {
                 .await
                 .unwrap_or_default()
         };
+        // Warnings given before a restart aren't given again.
+        if let Ok(events) = self.read_all(streams::QUOTA_WARNINGS).await {
+            for event in events {
+                if let DomainEvent::QuotaWillBeLost { warning } = event {
+                    self.monitor.mark_warned(
+                        &warning.account,
+                        &warning.window,
+                        warning.resets_at_ms,
+                    );
+                }
+            }
+        }
         let mut state = self.state();
         state.sessions = sessions;
         for kind in ProviderKind::ALL {

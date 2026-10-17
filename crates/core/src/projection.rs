@@ -174,6 +174,7 @@ impl Projection {
             | DomainEvent::RankingsChanged
             | DomainEvent::ProviderChecked { .. }
             | DomainEvent::AccountsChecked { .. }
+            | DomainEvent::QuotaWillBeLost { .. }
             | DomainEvent::UpdatesChanged { .. }
             | DomainEvent::DraftPinned { .. }
             | DomainEvent::BrainJobUpdated { .. }

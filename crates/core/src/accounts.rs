@@ -159,13 +159,13 @@ fn applies(window: &QuotaWindow, model: Option<&str>) -> bool {
 }
 
 const FIVE_HOURS: i64 = 5 * 60;
-const WEEK: i64 = 7 * 24 * 60;
+pub(crate) const WEEK: i64 = 7 * 24 * 60;
 
 /// How long a window runs, in minutes: as reported, else as its id says (Claude's
 /// `five_hour` and `seven_day…`, Codex's usual `primary` and `secondary`, a bucket's own
 /// prefixed `bucket.primary`). Codex may report its weekly window as `primary`, so a reported
 /// length wins.
-fn span(window: &QuotaWindow) -> Option<i64> {
+pub(crate) fn span(window: &QuotaWindow) -> Option<i64> {
     let slot = window.id.rsplit('.').next().unwrap_or(&window.id);
     window.window_minutes.or(match slot {
         "five_hour" | "primary" => Some(FIVE_HOURS),

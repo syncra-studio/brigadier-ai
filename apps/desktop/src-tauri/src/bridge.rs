@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use brigadier_core::{
     ApprovalSubject, CardState, ConversationId, DomainEvent, NotifyFinished, Question,
-    RequestState, Settings, UserRequest, WaitingItem, WaitingSource,
+    QuotaWarning, RequestState, Settings, UserRequest, WaitingItem, WaitingSource,
 };
 use brigadier_ipc::app::BridgeEvent;
 use brigadier_ipc::protocol::{
@@ -579,6 +579,26 @@ fn notice_for(event: &EventEnvelope) -> Option<Notice> {
                 .unwrap_or(question.text),
         });
     }
+    if let Some(warning) = lost_quota(event) {
+        let hours = (warning.resets_at_ms - event.at_ms).max(0) as u64;
+        let hours = hours.div_ceil(3_600_000);
+        return Some(Notice {
+            key: format!(
+                "quota:{}:{}:{}:{}",
+                warning.account.provider,
+                warning.account.key(),
+                warning.window,
+                warning.resets_at_ms / 3_600_000
+            ),
+            kind: Kind::NeedsYou,
+            title: Title::Fixed("Weekly quota resets soon".to_owned()),
+            body: format!(
+                "{} has {}% of its weekly quota left; it resets in {hours} h.",
+                warning.who,
+                warning.left_percent.round()
+            ),
+        });
+    }
     let request = finished_request(event)?;
     let body = match &request.state {
         RequestState::Failed { error } => format!("Stopped with an error: {error}"),
@@ -620,6 +640,18 @@ fn finished_request(event: &EventEnvelope) -> Option<UserRequest> {
     );
     (over && request.steered_into.is_none() && !brigadier_core::is_run_request(&request.id))
         .then_some(request)
+}
+
+/// Weekly quota an event says is about to be lost unused.
+fn lost_quota(event: &EventEnvelope) -> Option<QuotaWarning> {
+    let raw = event.event.0.get();
+    if !raw.contains("\"quotaWillBeLost\"") {
+        return None;
+    }
+    let DomainEvent::QuotaWillBeLost { warning } = serde_json::from_str(raw).ok()? else {
+        return None;
+    };
+    Some(warning)
 }
 
 /// A question an event asks the user, while it is unanswered.
@@ -732,6 +764,22 @@ mod tests {
                 created_at_ms: 0,
             },
         }
+    }
+
+    #[test]
+    fn quota_about_to_be_lost_notifies_with_who_and_when() {
+        let warning: QuotaWarning = serde_json::from_str(
+            r#"{"account": {"provider": "claude", "account": "work"}, "who": "Work (Claude Code)",
+                "window": "seven_day", "leftPercent": 35.4, "resetsAtMs": 32340000}"#,
+        )
+        .unwrap();
+        let event = DomainEvent::QuotaWillBeLost { warning };
+        let notice = notice_for(&envelope(&event)).unwrap();
+        assert_eq!(notice.kind, Kind::NeedsYou);
+        assert_eq!(
+            notice.body,
+            "Work (Claude Code) has 35% of its weekly quota left; it resets in 9 h."
+        );
     }
 
     #[test]

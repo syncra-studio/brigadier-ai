@@ -16,7 +16,9 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use brigadier_providers::{LimitHit, LimitKind, ProviderKind, QuotaSnapshot, QuotaSource};
+use brigadier_providers::{
+    LimitHit, LimitKind, ProviderKind, QuotaSnapshot, QuotaSource, QuotaWindow,
+};
 
 use crate::accounts::AccountRef;
 use brigadier_router::QuotaSample;
@@ -34,6 +36,10 @@ const MIN_POLL: Duration = Duration::from_secs(30);
 const SAMPLE_UNCHANGED_MS: i64 = 30 * 60 * 1000;
 /// Changes smaller than this (in percentage points) are not new samples.
 const SAMPLE_EPSILON: f64 = 0.05;
+/// A weekly window this close to its reset, with [`WARN_UNUSED_PERCENT`] or more of it unused,
+/// is quota about to be lost: the user is told once ([`QuotaMonitor::due_warnings`]).
+const WARN_BEFORE_RESET_MS: i64 = 12 * 60 * 60 * 1000;
+const WARN_UNUSED_PERCENT: f64 = 20.0;
 
 #[derive(Default)]
 struct Tracked {
@@ -44,6 +50,8 @@ struct Tracked {
     last_event_ms: i64,
     /// When this account's quota was last read or reported.
     read_at_ms: Option<i64>,
+    /// The reset each weekly window was last warned of, by window id.
+    warned: HashMap<String, i64>,
     /// Development builds: a limit injected to exercise fallback, held until its reset.
     #[cfg(debug_assertions)]
     injected: Option<LimitHit>,
@@ -258,12 +266,83 @@ impl QuotaMonitor {
         self.note(account, &incoming, now_ms)
     }
 
+    /// Each account's weekly window that resets within 12 hours with 20% or more of it unused,
+    /// not warned of yet for this reset: each is due once per window per reset (Q60), and is
+    /// marked warned. Nothing starts on its own; the user decides what to spend it on.
+    pub fn due_warnings(&self, now_ms: i64) -> Vec<(AccountRef, QuotaWindow)> {
+        let mut state = self.state();
+        let mut due = Vec::new();
+        for (account, tracked) in state.iter_mut() {
+            let Some(quota) = current(tracked, now_ms) else {
+                continue;
+            };
+            for window in quota.windows {
+                let Some(at) = window.resets_at_ms.filter(|_| weekly(&window)) else {
+                    continue;
+                };
+                let losing = at - now_ms <= WARN_BEFORE_RESET_MS
+                    && 100.0 - window.used_percent >= WARN_UNUSED_PERCENT;
+                // Once per reset: a later read may move the reset a little.
+                let told = tracked
+                    .warned
+                    .get(&window.id)
+                    .is_some_and(|warned| *warned > now_ms);
+                if losing && !told {
+                    tracked.warned.insert(window.id.clone(), at);
+                    due.push((account.clone(), window));
+                }
+            }
+        }
+        due
+    }
+
+    /// Marks `window` of `account` as warned of for the reset at `resets_at_ms` (a warning
+    /// given before a restart).
+    pub fn mark_warned(&self, account: &AccountRef, window: &str, resets_at_ms: i64) {
+        self.state()
+            .entry(account.clone())
+            .or_default()
+            .warned
+            .insert(window.to_owned(), resets_at_ms);
+    }
+
+    /// The weekly windows warned of whose reset hasn't come yet, as they stand now.
+    pub fn warnings(&self, now_ms: i64) -> Vec<(AccountRef, QuotaWindow)> {
+        let state = self.state();
+        let mut warned = Vec::new();
+        for (account, tracked) in state.iter() {
+            let Some(quota) = current(tracked, now_ms) else {
+                continue;
+            };
+            warned.extend(
+                quota
+                    .windows
+                    .into_iter()
+                    .filter(|window| {
+                        window.resets_at_ms.is_some()
+                            && tracked
+                                .warned
+                                .get(&window.id)
+                                .is_some_and(|warned| *warned > now_ms)
+                    })
+                    .map(|window| (account.clone(), window)),
+            );
+        }
+        warned
+    }
+
     /// Development builds: makes `account` refuse work as `limit` says until its reset, so
     /// no read can clear it early.
     #[cfg(debug_assertions)]
     pub fn inject(&self, account: &AccountRef, limit: LimitHit) {
         self.state().entry(account.clone()).or_default().injected = Some(limit);
     }
+}
+
+/// Whether `window` is an account's weekly window for every model (Claude's `seven_day`,
+/// Codex's main bucket's weekly one).
+fn weekly(window: &QuotaWindow) -> bool {
+    window.model.is_none() && crate::accounts::span(window) == Some(crate::accounts::WEEK)
 }
 
 /// The known quota with the time applied.
@@ -419,5 +498,79 @@ mod tests {
         assert!(monitor.current_for(&own, 50).unwrap().limit.is_some());
         assert!(monitor.current_for(&work, 50).unwrap().limit.is_none());
         assert_eq!(monitor.history(&work, "five_hour", 0).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn quota_about_to_be_lost_is_warned_of_once_per_window_per_reset() {
+        const HOUR: i64 = 60 * 60 * 1000;
+        let monitor = QuotaMonitor::load(None, 0).await;
+        let own = AccountRef::own(ProviderKind::Claude);
+        let work = AccountRef::new(ProviderKind::Codex, Some("work".into()));
+        let weekly =
+            |provider: ProviderKind, id: &str, used: f64, resets_at_ms: i64| QuotaSnapshot {
+                provider,
+                windows: vec![QuotaWindow {
+                    id: id.into(),
+                    label: "Weekly".into(),
+                    used_percent: used,
+                    resets_at_ms: Some(resets_at_ms),
+                    window_minutes: Some(7 * 24 * 60),
+                    bucket: None,
+                    model: None,
+                }],
+                limit: None,
+                observed_at_ms: 0,
+                source: QuotaSource::Read,
+            };
+        let ids = |due: Vec<(AccountRef, QuotaWindow)>| -> Vec<(Option<String>, String)> {
+            let mut ids: Vec<_> = due
+                .into_iter()
+                .map(|(account, window)| (account.account, window.id))
+                .collect();
+            ids.sort();
+            ids
+        };
+        let reset = 100 * HOUR;
+        // 13 hours before the reset: not yet. 65% used on Claude, 85% on Codex's account.
+        monitor.note(
+            &own,
+            &weekly(ProviderKind::Claude, "seven_day", 65.0, reset),
+            0,
+        );
+        monitor.note(
+            &work,
+            &weekly(ProviderKind::Codex, "secondary", 85.0, reset),
+            0,
+        );
+        assert!(monitor.due_warnings(reset - 13 * HOUR).is_empty());
+        // 12 hours before: the window with 35% left, once; the one with 15% left never.
+        assert_eq!(
+            ids(monitor.due_warnings(reset - 12 * HOUR)),
+            [(None, "seven_day".to_owned())]
+        );
+        assert!(monitor.due_warnings(reset - 11 * HOUR).is_empty());
+        // A read that moves the reset a little is the same reset.
+        monitor.note(
+            &own,
+            &weekly(ProviderKind::Claude, "seven_day", 66.0, reset + 1_000),
+            0,
+        );
+        assert!(monitor.due_warnings(reset - 10 * HOUR).is_empty());
+        assert_eq!(ids(monitor.warnings(reset - 10 * HOUR)).len(), 1);
+        // After the reset: nothing, and the warning is gone.
+        assert!(monitor.due_warnings(reset + 2 * HOUR).is_empty());
+        assert!(monitor.warnings(reset + 2 * HOUR).is_empty());
+        // The next week's window is warned of again when its time comes.
+        let next = reset + 7 * 24 * HOUR;
+        monitor.note(
+            &own,
+            &weekly(ProviderKind::Claude, "seven_day", 50.0, next),
+            0,
+        );
+        assert!(monitor.due_warnings(reset + 3 * HOUR).is_empty());
+        assert_eq!(
+            ids(monitor.due_warnings(next - HOUR)),
+            [(None, "seven_day".to_owned())]
+        );
     }
 }

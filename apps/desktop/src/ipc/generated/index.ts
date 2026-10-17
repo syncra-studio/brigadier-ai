@@ -301,6 +301,7 @@ export type { QuotaSample } from "./QuotaSample";
 export type { QuotaSnapshot } from "./QuotaSnapshot";
 export type { QuotaSource } from "./QuotaSource";
 export type { QuotaWait } from "./QuotaWait";
+export type { QuotaWarning } from "./QuotaWarning";
 export type { QuotaWindow } from "./QuotaWindow";
 export type { RankedEntry } from "./RankedEntry";
 export type { RankedPlace } from "./RankedPlace";

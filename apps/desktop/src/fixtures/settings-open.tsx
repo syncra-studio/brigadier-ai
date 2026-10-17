@@ -187,7 +187,7 @@ function answer(method: string, req: Request | null): unknown {
   }
   switch (req?.method) {
     case "getAccounts":
-      return { method: req.method, accounts: { accounts: ACCOUNTS } };
+      return { method: req.method, accounts: { accounts: ACCOUNTS, warnings: [] } };
     case "getUsage":
       return { method: req.method, usage: USAGE };
     case "getUsageActivity":

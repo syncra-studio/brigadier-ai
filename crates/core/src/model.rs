@@ -954,6 +954,25 @@ pub struct Settings {
 pub struct AccountsView {
     /// Each provider's own login first, then its extra accounts as added.
     pub accounts: Vec<AccountView>,
+    /// Weekly quota about to be lost, as warned of, until its reset.
+    #[serde(default)]
+    pub warnings: Vec<QuotaWarning>,
+}
+
+/// An account's weekly quota about to be lost unused: its reset 12 hours away or less with
+/// 20% or more left (Q60). Told once per window per reset; nothing starts on its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaWarning {
+    pub account: crate::accounts::AccountRef,
+    /// How the app names it: the agent ("Claude Code"), or an extra account by its name with
+    /// the agent ("Work (Claude Code)").
+    pub who: String,
+    /// The window's id.
+    pub window: String,
+    /// Share of the window still unused, 0–100.
+    pub left_percent: f64,
+    pub resets_at_ms: i64,
 }
 
 /// One account as Settings → Accounts shows it. Nothing secret: who is logged in, as the CLI
@@ -2063,6 +2082,10 @@ pub enum DomainEvent {
     AccountsChecked {
         accounts: AccountsView,
     },
+    /// An account's weekly quota is about to be lost unused: one desktop notification.
+    QuotaWillBeLost {
+        warning: QuotaWarning,
+    },
     /// What can be updated changed: a check finished, or an update started or ended.
     UpdatesChanged {
         updates: UpdatesView,
@@ -2436,6 +2459,7 @@ impl DomainEvent {
             Self::RankingsChanged => "rankings.changed",
             Self::ProviderChecked { .. } => "provider.checked",
             Self::AccountsChecked { .. } => "accounts.checked",
+            Self::QuotaWillBeLost { .. } => "quota.willBeLost",
             Self::UpdatesChanged { .. } => "updates.changed",
             Self::ProjectUpdated { .. } => "project.updated",
             Self::ConversationSetUp { .. } => "conversation.setUp",
@@ -2510,6 +2534,8 @@ pub mod streams {
     pub const PROVIDERS: &str = "providers";
     /// Settings → Accounts snapshots.
     pub const ACCOUNTS: &str = "accounts";
+    /// Weekly quota about to be lost, as warned of (read again at launch: no warning twice).
+    pub const QUOTA_WARNINGS: &str = "quota-warnings";
     /// Newer versions of Brigadier and the agent CLIs.
     pub const UPDATES: &str = "updates";
 

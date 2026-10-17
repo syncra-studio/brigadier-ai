@@ -59,6 +59,8 @@ function summary(event: DomainEvent): string {
       return event.overview.provider;
     case "accountsChecked":
       return `${event.accounts.accounts.length} accounts`;
+    case "quotaWillBeLost":
+      return `${event.warning.who} ${Math.round(event.warning.leftPercent)}% left`;
     case "updatesChanged":
       return event.updates.items.length === 0
         ? "up to date"

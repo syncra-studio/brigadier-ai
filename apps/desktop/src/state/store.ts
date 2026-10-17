@@ -702,6 +702,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "waitingResolved":
     // The rail's update button reads these (state/updates).
     case "updatesChanged":
+    // Its desktop notification is the shell's; the Usage menu reads `accounts.warnings`.
+    case "quotaWillBeLost":
       return slice;
   }
 }

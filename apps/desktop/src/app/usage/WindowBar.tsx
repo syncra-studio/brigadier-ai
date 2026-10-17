@@ -1,7 +1,17 @@
-import type { QuotaWindow } from "@/ipc/generated";
+import type { QuotaWarning, QuotaWindow } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
 import { tone, used } from "@/lib/quota";
 import { cn } from "@/lib/utils";
+
+/** Weekly quota about to be lost unused, in one line: who, how much is left, when it resets. */
+export function QuotaWarningLine({ warning, now }: { warning: QuotaWarning; now: number }) {
+  return (
+    <p data-slot="quota-warning" className="text-warning px-2 py-1.5 text-xs">
+      {warning.who} has {Math.round(warning.leftPercent)}% of its weekly quota left; it resets in{" "}
+      {formatCountdown(warning.resetsAtMs, now)}
+    </p>
+  );
+}
 
 /** One usage window: its name, how much is used, when it resets, and a bar. */
 export function WindowBar({ window, now }: { window: QuotaWindow; now: number }) {

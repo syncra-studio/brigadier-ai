@@ -5,7 +5,7 @@ import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Segmented } from "@/app/settings/parts";
 import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
-import { WindowBar } from "@/app/usage/WindowBar";
+import { QuotaWarningLine, WindowBar } from "@/app/usage/WindowBar";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import {
   DropdownMenu,
@@ -135,6 +135,7 @@ function barStatus(shown: (ProviderOverview & { quota: QuotaSnapshot })[]): {
 export function UsageMenu() {
   useUsageRefresh();
   const providers = useApp((s) => s.providers.view?.providers);
+  const warnings = useApp((s) => s.accounts?.warnings);
   const onPage = useApp(
     (s) => s.selection.type === "settings" && s.selection.page === "providers",
   );
@@ -164,6 +165,15 @@ export function UsageMenu() {
             <ProviderUsage key={overview.provider} overview={overview} now={now} />
           ))
         )}
+        {warnings
+          ?.filter((warning) => warning.resetsAtMs > now)
+          .map((warning) => (
+            <QuotaWarningLine
+              key={`${warning.account.provider}:${warning.account.account ?? ""}:${warning.window}`}
+              warning={warning}
+              now={now}
+            />
+          ))}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => openSettings("providers")}>
           <Usage />

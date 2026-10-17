@@ -1636,3 +1636,56 @@ async fn a_delete_waits_for_a_start_that_outlasted_it() {
     assert!(seen(&log).iter().all(|turn| !turn.input.contains("Again.")));
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn weekly_quota_about_to_be_lost_is_told_once_and_nothing_starts() {
+    let log = Log::default();
+    let mut flow = Flow::start(
+        "accounts-lost-quota",
+        Options::default(),
+        logging(&log, |_| Reply::text("Noted.")),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    // 90% of acct-b's week left, 9 hours before it resets; the user's own login has days.
+    flow.weekly_resets_in(ProviderKind::Claude, None, 90);
+    flow.weekly_resets_in(ProviderKind::Claude, Some("acct-b"), 9);
+    flow.manager.runtime.warn_of_lost_quota().await;
+    flow.manager.runtime.warn_of_lost_quota().await;
+    let told = |flow: &Flow| {
+        let store = flow.core.store().clone();
+        async move {
+            let page = store
+                .read_stream(
+                    crate::model::streams::QUOTA_WARNINGS.into(),
+                    brigadier_store::StreamPage {
+                        limit: 500,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            page.iter()
+                .filter_map(|event| match crate::sessions::decode(event).unwrap() {
+                    DomainEvent::QuotaWillBeLost { warning } => Some(warning),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        }
+    };
+    let warned = told(&flow).await;
+    assert_eq!(warned.len(), 1, "{warned:#?}");
+    assert_eq!(warned[0].who, "Account acct-b (Claude Code)");
+    assert_eq!(warned[0].left_percent, 90.0);
+    // The Usage menu's line, until the reset.
+    assert_eq!(flow.manager.runtime.accounts_view().warnings, warned);
+    // A restart doesn't warn again of the same reset.
+    flow.restart().await;
+    flow.weekly_resets_in(ProviderKind::Claude, Some("acct-b"), 9);
+    flow.manager.runtime.warn_of_lost_quota().await;
+    assert_eq!(told(&flow).await.len(), 1);
+    // Nothing started on its own.
+    assert!(seen(&log).is_empty());
+    flow.stop().await;
+}

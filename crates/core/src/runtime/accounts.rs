@@ -13,7 +13,7 @@ use brigadier_store::Retention;
 
 use super::{Runtime, new_event};
 use crate::accounts::{AccountRef, Candidate, mask_email};
-use crate::model::{AccountEntry, AccountView, AccountsView, DomainEvent, streams};
+use crate::model::{AccountEntry, AccountView, AccountsView, DomainEvent, QuotaWarning, streams};
 use crate::{Error, Result, now_ms};
 
 /// One extra account, live.
@@ -32,6 +32,8 @@ pub(super) struct AccountLive {
 
 /// Snapshots of Settings → Accounts kept in the event log.
 const ACCOUNT_CHECKS_KEPT: u32 = 20;
+/// Quota warnings kept, for a restart to know which it gave (a few per account and week).
+const QUOTA_WARNINGS_KEPT: u32 = 64;
 
 /// Tests: makes the stand-in CLI of an extra account.
 #[cfg(test)]
@@ -232,6 +234,7 @@ impl Runtime {
                         &quota,
                         now_ms(),
                     );
+                    self.warn_of_lost_quota().await;
                 }
                 Err(err) => error = Some(format!("quota: {err}")),
             }
@@ -479,7 +482,79 @@ impl Runtime {
                 });
             }
         }
-        AccountsView { accounts }
+        AccountsView {
+            accounts,
+            warnings: self
+                .monitor
+                .warnings(now)
+                .iter()
+                .filter(|(account, _)| self.is_listed(account))
+                .map(|(account, window)| self.quota_warning(account, window))
+                .collect(),
+        }
+    }
+
+    /// Tells the user, once per window per reset, of weekly quota about to be lost unused
+    /// (Q60): a desktop notification and a line on the Usage menu. Nothing starts on its own.
+    pub async fn warn_of_lost_quota(&self) {
+        let due: Vec<_> = self
+            .monitor
+            .due_warnings(now_ms())
+            .into_iter()
+            .filter(|(account, _)| self.is_listed(account))
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        for (account, window) in &due {
+            let event = DomainEvent::QuotaWillBeLost {
+                warning: self.quota_warning(account, window),
+            };
+            let result = async {
+                let new = new_event(streams::QUOTA_WARNINGS, &event)?;
+                self.core
+                    .store()
+                    .append_with(
+                        vec![new],
+                        Some(Retention {
+                            keep_last: QUOTA_WARNINGS_KEPT,
+                        }),
+                    )
+                    .await?;
+                Ok::<_, Error>(())
+            }
+            .await;
+            if let Err(err) = result {
+                tracing::warn!(error = %err, "could not record a quota warning");
+            }
+        }
+        self.publish_accounts().await;
+    }
+
+    /// Whether `account` is the user's own login or an extra account still listed.
+    fn is_listed(&self, account: &AccountRef) -> bool {
+        account
+            .account
+            .as_deref()
+            .is_none_or(|id| self.accounts().contains_key(id) && !self.is_removing(id))
+    }
+
+    fn quota_warning(
+        &self,
+        account: &AccountRef,
+        window: &brigadier_providers::QuotaWindow,
+    ) -> QuotaWarning {
+        let agent = account.provider.label();
+        QuotaWarning {
+            account: account.clone(),
+            who: match &account.account {
+                None => agent.to_owned(),
+                Some(_) => format!("{} ({agent})", self.account_label(account)),
+            },
+            window: window.id.clone(),
+            left_percent: (100.0 - window.used_percent).max(0.0),
+            resets_at_ms: window.resets_at_ms.unwrap_or_default(),
+        }
     }
 
     /// Tells the app what Settings → Accounts shows now.
