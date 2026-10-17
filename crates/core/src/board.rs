@@ -604,13 +604,17 @@ impl Board {
                         return;
                     }
                 }
-                // A held merge's later tips stay where it was held.
+                // A held merge's later tips stay where it was held. Held again on the same
+                // consent after it ended (a stop), it is a new hold, in its own place.
                 if let crate::work::OrchestratorStepKind::MergeHeld { asked_in, .. } = &step.kind
-                    && let Some(known) = self.orchestrator_steps.iter_mut().find(|known| {
+                    && let Some(at) = self.orchestrator_steps.iter().rposition(|known| {
                         matches!(&known.kind, crate::work::OrchestratorStepKind::MergeHeld { asked_in: a, .. } if a == asked_in)
                     })
+                    && !self.orchestrator_steps[at + 1..]
+                        .iter()
+                        .any(|later| later.kind.ends_merge(asked_in))
                 {
-                    known.kind = step.kind;
+                    self.orchestrator_steps[at].kind = step.kind;
                     return;
                 }
                 // A CI watch's updates stay where it started: one row per repository, branch

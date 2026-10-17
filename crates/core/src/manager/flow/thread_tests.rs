@@ -1483,9 +1483,10 @@ pub(super) fn on_main(flow: &Flow, path: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// Merging is asked for in words, with no card: the thread proposes it in its reply, and
-/// finish_session refuses until the user's latest message agrees (silence, the thread's own
-/// guess at a yes, a "no", a "not yet"); then a "yes, merge it" merges, once.
+/// Merging is asked for in words, with no card: the thread proposes it in its reply, judges
+/// the user's answers ("No, not yet." and "don't merge it" aren't a yes), and merges on their
+/// "yes, merge it", once. finish_session refuses words the user never wrote, and a yes already
+/// used for a merge (#222).
 #[tokio::test]
 async fn the_merge_is_asked_in_words_and_happens_only_on_the_users_yes() {
     let replies: MergeReplies = Arc::default();
@@ -1499,20 +1500,16 @@ async fn the_merge_is_asked_in_words_and_happens_only_on_the_users_yes() {
                 let input = turn.input.clone();
                 if input.contains("Add notes.") {
                     commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    // Before the user answered: neither the thread's guess nor their request
-                    // for the work is consent.
+                    // Before the user answered: the thread's guess at a yes is no consent.
                     assert!(!finish(&turn, "yes", &log).await);
-                    assert!(!finish(&turn, "Add notes", &log).await);
                     return Reply::text(
                         "Notes added, and the review is clean. Merge them into `main`?",
                     );
                 }
                 if input.contains("No, not yet.") {
-                    assert!(!finish(&turn, "No, not yet.", &log).await);
                     return Reply::text("OK, it stays on its branch. Merge it into `main` now?");
                 }
                 if input.contains("don't merge it") {
-                    assert!(!finish(&turn, "merge it", &log).await);
                     return Reply::text("Left unmerged.");
                 }
                 if input.contains("yes, merge it") {
@@ -1541,17 +1538,19 @@ async fn the_merge_is_asked_in_words_and_happens_only_on_the_users_yes() {
     assert!(on_main(&flow, "NOTES.md"), "merged on the yes");
     let replies = replies.lock().unwrap().clone();
     let errors: Vec<_> = replies.iter().filter(|(_, error)| *error).collect();
-    assert_eq!(errors.len(), 5, "{replies:#?}");
+    assert_eq!(errors.len(), 2, "{replies:#?}");
     assert!(
         errors.iter().all(|(text, _)| text.contains("[not merged]")),
         "{replies:#?}"
     );
     assert!(
-        replies[0].0.contains("is not in the user's latest message"),
+        replies[0]
+            .0
+            .contains("is no message, card answer or click of the user's"),
         "{replies:#?}"
     );
     assert!(
-        replies[5].0.contains("already asked for a merge"),
+        replies[2].0.contains("of the user's since the last merge"),
         "{replies:#?}"
     );
     let finished = replies.iter().find(|(_, error)| !error).unwrap();
@@ -1617,10 +1616,10 @@ async fn a_wait_sent_while_the_merge_is_prepared_stops_it() {
 }
 
 /// A "wait" the user is still sending (its message not yet stored) when the merge takes its
-/// first look holds the merge until it is stored: the merge then sees it and refuses, instead of
-/// counting it as seen with the old message as the latest.
+/// first look holds the merge until it is stored. The thread judged the consent it names, so the
+/// merge goes, and its result names what the user wrote since, for the thread to act on (#240).
 #[tokio::test]
-async fn a_wait_still_being_stored_when_the_merge_looks_stops_it() {
+async fn a_wait_still_being_stored_when_the_merge_looks_is_named_in_its_result() {
     let replies: MergeReplies = Arc::default();
     let log = replies.clone();
     let (started, release) = (
@@ -1638,8 +1637,8 @@ async fn a_wait_still_being_stored_when_the_merge_looks_stops_it() {
                     commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
                     // The user's "wait!" is being stored now.
                     writing.notified().await;
-                    assert!(!finish(&turn, "merge it", &log).await);
-                    return Reply::text("You wrote again, so I didn't merge.");
+                    assert!(finish(&turn, "merge it", &log).await);
+                    return Reply::text("Merged.");
                 }
                 Reply::text("Done.")
             }
@@ -1664,15 +1663,15 @@ async fn a_wait_still_being_stored_when_the_merge_looks_stops_it() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     release.notify_one();
     write.await.unwrap();
-    flow.until("the refused merge", |_| !replies.lock().unwrap().is_empty())
+    flow.until("the merge", |_| !replies.lock().unwrap().is_empty())
         .await;
     let replies = replies.lock().unwrap().clone();
-    // The merge's look saw "wait!" as the latest message: "merge it" isn't in it.
     assert!(
-        replies[0].0.contains("is not in the user's latest message"),
+        replies[0]
+            .0
+            .contains("The user wrote after the consent it went on: \"wait!\""),
         "{replies:#?}"
     );
-    assert!(!on_main(&flow, "NOTES.md"), "nothing merged");
     flow.stop().await;
 }
 

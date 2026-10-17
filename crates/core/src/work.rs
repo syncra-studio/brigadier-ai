@@ -2059,8 +2059,9 @@ pub enum OrchestratorStepKind {
     },
     /// The user cancelled the held merge (the pill's Cancel): its consent is spent.
     MergeCancelled { asked_in: String },
-    /// The held merge stopped without merging (a writer failed or was stopped, or a finding
-    /// is open): its consent is spent, and the thread asks the user.
+    /// The held merge stopped without merging (a writer failed or was stopped, a finding is
+    /// open, or the thread read the user's words as taking it back): this hold ends, but the
+    /// thread may hold a merge on the same consent again.
     MergeStopped { asked_in: String, reason: String },
     /// The CI watch of a push (`watch_ci`, SESSION-FIXES-PLAN.md Q1), as it goes: one row per
     /// push, updated in place, "Checking CI…" while `result` is none.
@@ -2099,6 +2100,23 @@ pub enum OrchestratorStepKind {
         /// Why, in the words the thread heard.
         reason: String,
     },
+}
+
+impl OrchestratorStepKind {
+    /// Whether this step ends a held merge on the consent given in `asked`: merged on it,
+    /// cancelled or stopped.
+    pub fn ends_merge(&self, asked: &str) -> bool {
+        match self {
+            Self::Merged {
+                asked_in: Some(done),
+                ..
+            } => done == asked,
+            Self::MergeCancelled { asked_in } | Self::MergeStopped { asked_in, .. } => {
+                asked_in == asked
+            }
+            _ => false,
+        }
+    }
 }
 
 /// The user's answer on the card where the thread asked to watch a push's CI. While its loop

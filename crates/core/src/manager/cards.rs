@@ -507,13 +507,17 @@ impl SessionManager {
                         ),
                     );
                 }
+                // The card's id: an answer that agrees to a merge is consent (#240).
                 let text = if round.len() == 1 {
                     format!(
-                        "[answer] You asked the user: \"{}\"\nThe user answered: {answer}",
-                        round[0].text
+                        "[answer] You asked the user: \"{}\"\nThe user answered: {answer}\n[card {}]",
+                        round[0].text, question.id
                     )
                 } else {
-                    format!("[answer] You asked the user:\n{answer}")
+                    format!(
+                        "[answer] You asked the user:\n{answer}\n[card {}]",
+                        question.id
+                    )
                 };
                 self.deliver_for(
                     &conversation_id,
@@ -530,7 +534,7 @@ impl SessionManager {
             QuestionKind::Merge { branch, base, .. } if let Some(typed) = typed => {
                 self.conv(&conversation_id)?
                     .note(format!(
-                        "[answer] The user doesn't want `{branch}` merged into `{base}` yet: they answered the merge card with the message below instead. Don't merge, and don't ask again until they bring it up."
+                        "[answer] The user answered the merge card for `{branch}` into `{base}` in their own words, in the message below."
                     ))
                     .await;
                 self.waiters.answer(&card_id, CardAnswer::Answered);
@@ -562,8 +566,8 @@ impl SessionManager {
             QuestionKind::Merge { branch, base, .. } => {
                 self.conv(&conversation_id)?
                     .note(format!(
-                        "[answer] The user answered an old merge card for `{branch}` into `{base}` \"{}\". Merge cards are retired and no answer on one is consent: don't merge on it. The user merges by asking in their own words.",
-                        answers[0]
+                        "[answer] The user answered the merge card for `{branch}` into `{base}`: \"{}\"\n[card {}]",
+                        answers[0], question.id
                     ))
                     .await;
                 self.waiters.answer(&card_id, CardAnswer::Answered);

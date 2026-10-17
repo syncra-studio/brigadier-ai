@@ -19,8 +19,8 @@
 //! integrated branch ([`super::integrated_checks`], SESSION-FIXES-PLAN.md §11), and a failure
 //! goes back to the worker that broke it. A merge of the session needs them passed at its tip.
 //!
-//! Finishing a new-worktree session merges the session branch into its base the same way, when
-//! the user's latest message asks for it in words (`merge_consent`): no card.
+//! Finishing a new-worktree session merges the session branch into its base the same way, on
+//! the user's word as the thread judges it: their message, card answer or click.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1432,12 +1432,12 @@ impl SessionManager {
     }
 
     /// `finish_session`: merges the session branch into its base once the user consented: their
-    /// click on "Merge into main", or their latest message's words (`user_words`, quoted from it;
+    /// click on "Merge into main", their card answer, or their message (`consent`, its id or their words;
     /// [`merge_consent`]).
     pub(crate) async fn finish_session(
         &self,
         id: &ConversationId,
-        user_words: &str,
+        named: &str,
         message: Option<String>,
     ) -> Result<String> {
         if self.overnight.active.get(id).is_some() {
@@ -1462,7 +1462,7 @@ impl SessionManager {
         let landing_lock = conv.merge_lock.lock().await;
         let (consent, wrote) = {
             let wrote = conv.user_wrote.lock().await;
-            let consent = self.merge_consent(id, user_words, &branch, &base).await?;
+            let consent = self.merge_consent(id, named, &branch, &base).await?;
             (consent, *wrote)
         };
         // What the thread committed itself gets its review before the branch is merged.
@@ -1671,7 +1671,7 @@ impl SessionManager {
                 if *now != wrote {
                     return Err(wrote_meanwhile());
                 }
-                let consent = self.merge_consent(id, user_words, &branch, &base).await?;
+                let consent = self.merge_consent(id, named, &branch, &base).await?;
                 if pending.is_none() {
                     self.orchestrator_step(
                         id,
@@ -1688,7 +1688,7 @@ impl SessionManager {
                     .await;
                 }
                 return Err(Error::Invalid(format!(
-                    "`{branch}` conflicts with the current `{base}` in: {}. Nothing was merged, and the user's consent to this merge still holds. Don't ask the user: delegate a merge task without `subject` now. Its worker merges `{base}` into `{branch}` with git and resolves the conflicts. Once it lands, Brigadier tells you [merge due]: then call finish_session again. It merges on that consent unless the user writes \"wait\", \"no\" or a condition meanwhile.",
+                    "`{branch}` conflicts with the current `{base}` in: {}. Nothing was merged, and the user's consent to this merge still holds. Don't ask the user: delegate a merge task without `subject` now. Its worker merges `{base}` into `{branch}` with git and resolves the conflicts. Once it lands, Brigadier tells you [merge due]: then call finish_session again. It merges on that consent unless the user takes it back meanwhile: then call stop_merge.",
                     paths.join(", ")
                 )));
             }
@@ -1699,13 +1699,14 @@ impl SessionManager {
             )));
         }
         // The last look at consent and the landing are one step for what the user writes: a
-        // "wait" sent while the merge was prepared stops it; one sent now comes after it.
+        // message sent while the merge was prepared stops it for the thread to read; one sent
+        // now comes after it.
         let landing = {
             let now = conv.user_wrote.lock().await;
             if *now != wrote {
                 return Err(wrote_meanwhile());
             }
-            self.merge_consent(id, user_words, &branch, &base).await?;
+            self.merge_consent(id, named, &branch, &base).await?;
             let (git, repo_path, session_branch) =
                 (self.git.clone(), PathBuf::from(&repo), branch.clone());
             let request = LandRequest {
@@ -1765,6 +1766,7 @@ impl SessionManager {
             }
             Err(_) => String::new(),
         };
+        let since = self.wrote_since_consent(id, &consent).await;
         self.orchestrator_step(
             id,
             OrchestratorStepKind::Merged {
@@ -1787,7 +1789,7 @@ impl SessionManager {
             .follow_merge(&repo, &branch, &base, session_tip, new_tip.clone())
             .await;
         Ok(format!(
-            "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{reviews}{released}",
+            "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{reviews}{released}{since}",
             if commits == 1 { "" } else { "s" },
             short(&new_tip)
         ))
@@ -1839,42 +1841,35 @@ impl SessionManager {
                 // thread's turn on it looks again when it ends.
                 Gate::Due if wrote_since(&board, held.consented_at_ms) => return,
                 Gate::Due => {
-                    // Their words since took it back: it stops rather than come due.
-                    if let Ok(Some(why)) = self.taken_back(id, &board, &held).await {
-                        let reason = format!("{}{}.", why[..1].to_uppercase(), &why[1..]);
-                        self.stop_held_merge(id, &conv, &held, &reason).await;
-                        stopped_text(&reason)
-                    } else {
-                        // The session's full checks pass at its tip first (§11): a pass, or
-                        // a check's end, looks again.
-                        let gate = match self.recorded_workspace(id) {
-                            Some(workspace) => self
-                                .checks_gate(
-                                    id,
-                                    &workspace.repo,
-                                    &held.branch,
-                                    std::time::Duration::ZERO,
-                                )
-                                .await
-                                .ok(),
-                            None => None,
-                        };
-                        match gate {
-                            Some(super::integrated_checks::ChecksGate::Waiting(_)) => return,
-                            Some(super::integrated_checks::ChecksGate::Failed(why)) => {
-                                if told("checks") {
-                                    return;
-                                }
-                                format!(
-                                    "[merge waiting] The workers have finished, but the session's full checks {why}: the user's merge waits until they pass. Have the failure fixed (send it back to the task that broke it); Brigadier tells you [merge due] once they pass."
-                                )
+                    // The session's full checks pass at its tip first (§11): a pass, or a
+                    // check's end, looks again.
+                    let gate = match self.recorded_workspace(id) {
+                        Some(workspace) => self
+                            .checks_gate(
+                                id,
+                                &workspace.repo,
+                                &held.branch,
+                                std::time::Duration::ZERO,
+                            )
+                            .await
+                            .ok(),
+                        None => None,
+                    };
+                    match gate {
+                        Some(super::integrated_checks::ChecksGate::Waiting(_)) => return,
+                        Some(super::integrated_checks::ChecksGate::Failed(why)) => {
+                            if told("checks") {
+                                return;
                             }
-                            _ => {
-                                if told("due") {
-                                    return;
-                                }
-                                "[merge due] The workers have finished and nothing stops it: the user's merge is due. Call finish_session now; their held consent covers it, so don't ask them again.".to_owned()
+                            format!(
+                                "[merge waiting] The workers have finished, but the session's full checks {why}: the user's merge waits until they pass. Have the failure fixed (send it back to the task that broke it); Brigadier tells you [merge due] once they pass."
+                            )
+                        }
+                        _ => {
+                            if told("due") {
+                                return;
                             }
+                            "[merge due] The workers have finished and nothing stops it: the user's merge is due. Call finish_session now; their held consent covers it, so don't ask them again.".to_owned()
                         }
                     }
                 }
@@ -1979,9 +1974,32 @@ impl SessionManager {
         Ok("Merge cancelled.".into())
     }
 
+    /// `stop_merge`: the thread read the user's words since their consent as taking it back
+    /// or putting it off (#222). The held merge stops, its consent spent, and the thread tells
+    /// the user in its one answer.
+    pub(crate) async fn stop_merge(&self, id: &ConversationId, why: &str) -> Result<String> {
+        let conv = self.conv(id)?;
+        let _landing = conv.merge_lock.lock().await;
+        let board = self.core.board(id).await?;
+        let Some(held) = pending_merge(&board) else {
+            return Err(Error::Invalid("No merge is waiting.".into()));
+        };
+        let why = why.trim().trim_end_matches('.');
+        let reason = if why.is_empty() {
+            "The user took it back.".to_owned()
+        } else {
+            format!("The user took it back: {why}.")
+        };
+        self.stop_held_merge(id, &conv, &held, &reason).await;
+        Ok(
+            "Stopped: nothing merges until the user asks again. Say so in your answer to them."
+                .into(),
+        )
+    }
+
     /// Merge cards are retired (BUILD-PLAN A4). After an upgrade, a session's open merge card
-    /// is withdrawn, and a held merge whose consent came from a card answer is cancelled; the
-    /// thread hears of either in one line. A held merge from the user's words stays.
+    /// is withdrawn and the thread hears of it in one line. A held merge stays, whether its
+    /// consent came from the user's words or a card they answered (#240).
     pub(super) async fn retire_merge_cards(&self, id: &ConversationId) {
         let Ok(board) = self.core.board(id).await else {
             return;
@@ -1994,40 +2012,19 @@ impl SessionManager {
             })
             .cloned()
             .collect();
+        if open.is_empty() {
+            return;
+        }
         for question in &open {
             self.withdraw_question(question).await;
         }
-        let held = pending_merge(&board).filter(|held| {
-            board.questions.values().any(|question| {
-                matches!(question.kind, QuestionKind::Merge { .. })
-                    && question.id.to_string() == held.asked_in
-            })
-        });
-        if let Some(held) = &held {
-            self.orchestrator_step(
-                id,
-                OrchestratorStepKind::MergeCancelled {
-                    asked_in: held.asked_in.clone(),
-                },
-            )
-            .await;
-        }
-        let text = match (open.is_empty(), held.is_some()) {
-            (true, false) => return,
-            (_, true) => {
-                "[merge cards retired] Brigadier no longer merges on a card's answer, so the merge held from one is cancelled and nothing was merged. Merge only on the user's own words."
-            }
-            (false, false) => {
-                "[merge cards retired] Brigadier no longer asks about merges on cards, so the open merge card is closed. Merge only on the user's own words."
-            }
-        };
         self.queue_envelope(
             id,
             Envelope {
                 kind: InjectionKind::Decision,
                 label: "merge cards retired".into(),
                 task_id: None,
-                text: text.into(),
+                text: "[merge cards retired] Brigadier no longer asks about merges on cards, so the open merge card is closed. Merge when the user's words ask for it.".into(),
             },
             None,
         )
@@ -2134,7 +2131,7 @@ impl SessionManager {
                 label: "merge".into(),
                 task_id: None,
                 text: format!(
-                    "[merge] The user clicked \"Merge into main\" for `{branch}` into `{base}`. Call finish_session now, without user_words."
+                    "[merge] The user clicked \"Merge into main\" for `{branch}` into `{base}`. Call finish_session now, without consent."
                 ),
             },
         )
@@ -2148,11 +2145,11 @@ impl SessionManager {
     async fn merge_consent(
         &self,
         id: &ConversationId,
-        user_words: &str,
+        consent: &str,
         branch: &str,
         base: &str,
     ) -> Result<Consent> {
-        let fresh = self.fresh_consent(id, user_words, branch, base).await;
+        let fresh = self.fresh_consent(id, consent, branch, base).await;
         let held = pending_merge(&self.core.board(id).await?)
             .filter(|held| held.branch == branch && held.base == base);
         // A new yes replaces the held one. Reusing the same yes still checks what has
@@ -2173,10 +2170,9 @@ impl SessionManager {
         }
     }
 
-    /// Consent `held` (a pending merge), unless it was used or cancelled, or the user since
-    /// they gave it wrote something that waits, says "no", "wait", "not yet" or "don't", holds
-    /// the merge or puts a condition on it ([`merge_consent::takes_back`]). `refused` is why
-    /// fresh consent was refused.
+    /// Consent `held` (a pending merge), unless it was used, cancelled or stopped (the thread
+    /// stops it with stop_merge when the user's words since take it back), or something the
+    /// user wrote waits in the queue. `refused` is why fresh consent was refused.
     async fn held_consent(
         &self,
         id: &ConversationId,
@@ -2184,16 +2180,13 @@ impl SessionManager {
         refused: Error,
     ) -> Result<Consent> {
         let board = self.core.board(id).await?;
-        if spent(&board, &held.asked_in) {
+        if pending_merge(&board).is_none_or(|now| now.asked_in != held.asked_in) {
             return Err(refused);
         }
         if wrote_since(&board, held.consented_at_ms) {
             return Err(not_consented(
                 "the user wrote again since (it waits in the queue): read it first".into(),
             ));
-        }
-        if let Some(why) = self.taken_back(id, &board, &held).await? {
-            return Err(not_consented(why));
         }
         Ok(Consent {
             asked_in: held.asked_in,
@@ -2202,51 +2195,58 @@ impl SessionManager {
         })
     }
 
-    /// Why the user took back the consent `held` since they gave it: a message that says "no",
-    /// "wait", "not yet" or "don't", holds the merge or puts a condition on it
-    /// ([`merge_consent::takes_back`]). `None` while it holds.
-    async fn taken_back(
-        &self,
-        id: &ConversationId,
-        board: &crate::board::Board,
-        held: &PendingMerge,
-    ) -> Result<Option<String>> {
-        let messages = match &board.head {
-            Some((head, _)) => self.core.branch(id, head).await?,
-            None => self.core.all_messages(id).await?,
+    /// What the user wrote after the consent a merge went on, as a fact for the thread (#240):
+    /// it judges whether they meant the merge to wait, and tells them.
+    async fn wrote_since_consent(&self, id: &ConversationId, consent: &Consent) -> String {
+        let Ok(messages) = self.core.all_messages(id).await else {
+            return String::new();
         };
-        Ok(messages
+        let said: Vec<String> = messages
             .iter()
             .filter(|message| {
                 message.role == MessageRole::User
-                    && message.id != held.asked_in
-                    && message.created_at_ms >= held.consented_at_ms
+                    && message.id != consent.asked_in
+                    && message.created_at_ms > consent.at_ms
             })
-            .find_map(|message| merge_consent::takes_back(&message.text))
-            .map(|why| format!("the user wrote since they consented, and their message {why}")))
+            .map(|message| {
+                let text = message.text.trim();
+                match text.char_indices().nth(300) {
+                    Some((at, _)) => format!("\"{}…\"", &text[..at]),
+                    None => format!("\"{text}\""),
+                }
+            })
+            .collect();
+        if said.is_empty() {
+            return String::new();
+        }
+        format!(
+            " The user wrote after the consent it went on: {}. If that meant it should wait, tell them at once.",
+            said.join(", ")
+        )
     }
 
-    /// What gives consent to the session's merge: the user's click on "Merge into main" since
-    /// their latest message, or that message (the latest on the branch shown) with `user_words`
-    /// in it ([`merge_consent::check`]); either with nothing the user wrote waiting after it,
-    /// and neither used for a merge already.
+    /// What gives consent to the session's merge, as the thread names it (`consent`, #240):
+    /// the id of the user's message, card answer or "Merge into main" click it acts on, or the
+    /// user's words quoted from their message. Empty: their click since their latest message.
+    /// The thread judges whether the user consents; this only checks that it is the user's,
+    /// that nothing they wrote waits unread in the queue, and that no earlier merge used it.
     async fn fresh_consent(
         &self,
         id: &ConversationId,
-        user_words: &str,
+        consent: &str,
         branch: &str,
         base: &str,
     ) -> Result<Consent> {
         let refuse = not_consented;
+        let consent = consent.trim();
         let board = self.core.board(id).await?;
         let messages = match &board.head {
             Some((head, _)) => self.core.branch(id, head).await?,
             None => self.core.all_messages(id).await?,
         };
-        let at = messages
+        let latest = messages
             .iter()
-            .rposition(|message| message.role == MessageRole::User);
-        let latest = at.map(|at| &messages[at]);
+            .rfind(|message| message.role == MessageRole::User);
         let wrote_since = |since: i64| {
             board
                 .queue
@@ -2254,14 +2254,10 @@ impl SessionManager {
                 .iter()
                 .any(|item| item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= since)
         };
-        let used = |asked: &str| spent(&board, asked);
-        // The user's click on "Merge into main" after their latest message is consent, once
-        // (BUILD-PLAN A4). A merge card's answer never is.
-        let click = board
+        let clicks = board
             .orchestrator_steps
             .iter()
-            .rev()
-            .find_map(|step| match &step.kind {
+            .filter_map(|step| match &step.kind {
                 OrchestratorStepKind::MergeRequested {
                     id,
                     branch: b,
@@ -2269,50 +2265,77 @@ impl SessionManager {
                     ..
                 } if b == branch && a == base => Some((id.clone(), step.at_ms)),
                 _ => None,
-            })
-            .filter(|(_, at)| latest.is_none_or(|latest| *at >= latest.created_at_ms));
-        if let Some((asked, clicked)) = click {
-            // A click since the latest message that merged or was cancelled is spent, and the
-            // words before it don't count again: the user acted after writing them.
-            if used(&asked) {
-                return Err(refuse(
-                    "the user's click on \"Merge into main\" since their latest message was used or cancelled already; another merge needs their fresh click or words".into(),
-                ));
-            }
-            if wrote_since(clicked) {
-                return Err(refuse(
-                    "the user wrote again since (it waits in the queue): read it first".into(),
-                ));
-            }
-            return Ok(Consent {
-                asked_in: asked,
-                at_ms: clicked,
-                condition: crate::work::MergeCondition::Now,
             });
-        }
-        let Some(latest) = latest else {
-            return Err(refuse("the user hasn't written anything".into()));
+        // Merged since, or cancelled by the user, it can't merge again.
+        let used = |asked: &str| used(&board, asked);
+        let named = if consent.is_empty() {
+            // The user's click on "Merge into main" after their latest message (BUILD-PLAN A4).
+            let click = clicks
+                .clone()
+                .next_back()
+                .filter(|(_, at)| latest.is_none_or(|latest| *at >= latest.created_at_ms));
+            let Some((asked, at)) = click else {
+                return Err(refuse(
+                    "name the user's message, card answer or click you act on in `consent`, or quote their words".into(),
+                ));
+            };
+            (asked, at, crate::work::MergeCondition::Now)
+        } else if let Some((asked, at)) = clicks.clone().find(|(click, _)| click == consent) {
+            (asked, at, crate::work::MergeCondition::Now)
+        } else if let Some(card) = board
+            .questions
+            .values()
+            .find(|card| card.id.to_string() == consent && card.answer.is_some())
+        {
+            (
+                card.id.to_string(),
+                card.answered_at_ms.unwrap_or(card.created_at_ms),
+                crate::work::MergeCondition::Now,
+            )
+        } else {
+            let merged = board
+                .orchestrator_steps
+                .iter()
+                .filter(|step| {
+                    matches!(
+                        step.kind,
+                        OrchestratorStepKind::Merged { .. }
+                            | OrchestratorStepKind::MergeCancelled { .. }
+                    )
+                })
+                .map(|step| step.at_ms)
+                .max();
+            let message = messages.iter().rev().find(|message| {
+                message.role == MessageRole::User
+                    && (message.id == consent
+                        || (merged.is_none_or(|merged| message.created_at_ms > merged)
+                            && merge_consent::quotes(consent, &message.text)))
+            });
+            let Some(message) = message else {
+                return Err(refuse(format!(
+                    "\"{consent}\" is no message, card answer or click of the user's since the last merge; name the one you act on, or quote their words from it"
+                )));
+            };
+            (
+                message.id.clone(),
+                message.created_at_ms,
+                merge_consent::condition(&message.text),
+            )
         };
-        if wrote_since(latest.created_at_ms) {
+        let (asked, at_ms, condition) = named;
+        if used(&asked) {
+            return Err(refuse(
+                "that consent was used for a merge already, or the user cancelled it; another merge needs their fresh word".into(),
+            ));
+        }
+        if wrote_since(at_ms) {
             return Err(refuse(
                 "the user wrote again since (it waits in the queue): read it first".into(),
             ));
         }
-        if used(&latest.id) {
-            return Err(refuse(
-                "the user's latest message already asked for a merge, and it is done; another merge needs their fresh words".into(),
-            ));
-        }
-        let before = at
-            .and_then(|at| at.checked_sub(1))
-            .map(|before| &messages[before])
-            .filter(|message| message.role == MessageRole::Assistant)
-            .map(|message| message.text.as_str());
-        let condition =
-            merge_consent::check(user_words, &latest.text, before, branch, base).map_err(refuse)?;
         Ok(Consent {
-            asked_in: latest.id.clone(),
-            at_ms: latest.created_at_ms,
+            asked_in: asked,
+            at_ms,
             condition,
         })
     }
@@ -2556,11 +2579,17 @@ pub(super) fn pending_merge(board: &crate::board::Board) -> Option<PendingMerge>
         at_ms: steps[at].at_ms,
         request: steps[at].request_id.clone(),
     })
-    .filter(|held| !spent(board, &held.asked_in))
+    .filter(|held| {
+        !used(board, &held.asked_in)
+            && !steps[at + 1..]
+                .iter()
+                .any(|step| step.kind.ends_merge(&held.asked_in))
+    })
 }
 
-/// Whether the consent given in `asked` was used for a merge, cancelled, or stopped.
-pub(super) fn spent(board: &crate::board::Board, asked: &str) -> bool {
+/// Whether the consent given in `asked` was used for a merge or the user cancelled it: a stop
+/// leaves it for the thread to use again (#240).
+fn used(board: &crate::board::Board, asked: &str) -> bool {
     board
         .orchestrator_steps
         .iter()
@@ -2569,8 +2598,7 @@ pub(super) fn spent(board: &crate::board::Board, asked: &str) -> bool {
                 asked_in: Some(done),
                 ..
             } => done == asked,
-            OrchestratorStepKind::MergeCancelled { asked_in }
-            | OrchestratorStepKind::MergeStopped { asked_in, .. } => asked_in == asked,
+            OrchestratorStepKind::MergeCancelled { asked_in } => asked_in == asked,
             _ => false,
         })
 }
@@ -2734,17 +2762,17 @@ pub(super) fn reviews_since_merge(board: &crate::board::Board) -> Vec<&crate::wo
 }
 
 /// What a late `propose_merge` call hears: merge cards are retired (BUILD-PLAN A4).
-pub(super) const PROPOSE_MERGE_RETIRED: &str = "propose_merge is retired: there are no merge cards any more. When the work is ready to merge you may say so once, in plain text. Merge only on [merge] (call finish_session without user_words) or the user's own words (finish_session with user_words).";
+pub(super) const PROPOSE_MERGE_RETIRED: &str = "propose_merge is retired: there are no merge cards any more. When the work is ready to merge you may say so once, in plain text. Merge only on the user's word: [merge] (call finish_session without consent), a card answer or their message (finish_session with its consent).";
 
 fn not_consented(why: String) -> Error {
     Error::Invalid(format!(
-        "[not merged] {why}. Nothing was merged. Merge only once the user consents: [merge], or their latest message asking for it in words. You may say once, in plain text, that the work is ready."
+        "[not merged] {why}. Nothing was merged. Merge only once the user consents: [merge], or their own words asking for it. You may say once, in plain text, that the work is ready."
     ))
 }
 
 fn wrote_meanwhile() -> Error {
     Error::Invalid(
-        "[not merged] The user wrote again while the merge was being prepared: read what they said. Nothing was merged; call finish_session again only if their latest message asks for it.".into(),
+        "[not merged] The user wrote again while the merge was being prepared: read what they said. Nothing was merged; call finish_session again only if their consent still stands.".into(),
     )
 }
 
@@ -3060,6 +3088,62 @@ mod tests {
             reported_paths("- `docs/Design (draft).md` (new)"),
             ["docs/Design (draft).md"]
         );
+    }
+
+    #[test]
+    fn a_merge_held_again_on_stopped_consent_is_pending_again() {
+        let mut board = crate::board::Board::default();
+        let mut seq = 0;
+        let mut step = |board: &mut crate::board::Board, kind: OrchestratorStepKind| {
+            seq += 1;
+            let step = crate::work::OrchestratorStep {
+                request_id: None,
+                kind,
+                at_ms: seq,
+                position: 0,
+            };
+            board.apply(
+                &crate::model::DomainEvent::OrchestratorStepped { step },
+                seq,
+            );
+        };
+        let held = |tip: &str| OrchestratorStepKind::MergeHeld {
+            branch: "session".into(),
+            base: "main".into(),
+            asked_in: "m1".into(),
+            consented_at_ms: 0,
+            condition: crate::work::MergeCondition::WorkersFinish,
+            waiting: Vec::new(),
+            tip: tip.into(),
+        };
+        step(&mut board, held("a"));
+        // A later tip of the same hold stays in its place.
+        step(&mut board, held("b"));
+        assert_eq!(board.orchestrator_steps.len(), 1);
+        assert_eq!(pending_merge(&board).unwrap().tip, "b");
+        step(
+            &mut board,
+            OrchestratorStepKind::MergeStopped {
+                asked_in: "m1".into(),
+                reason: "a writer failed".into(),
+            },
+        );
+        assert!(pending_merge(&board).is_none());
+        // Held again on the same consent: a new hold, pending, after the stop.
+        step(&mut board, held("c"));
+        assert_eq!(board.orchestrator_steps.len(), 3);
+        assert_eq!(pending_merge(&board).unwrap().tip, "c");
+        step(
+            &mut board,
+            OrchestratorStepKind::MergeCancelled {
+                asked_in: "m1".into(),
+            },
+        );
+        assert!(pending_merge(&board).is_none());
+        // A tip update told late, after the Cancel, doesn't bring it back: cancelled stays
+        // spent.
+        step(&mut board, held("d"));
+        assert!(pending_merge(&board).is_none());
     }
 
     #[test]

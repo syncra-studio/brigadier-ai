@@ -54,7 +54,7 @@ pub(crate) fn date_of(at_ms: i64) -> String {
 
 /// How the thread keeps the user from guessing: what a long step is before it starts, a
 /// readiness question answered first, the user's choice on a card.
-pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: before a long step, one line on what runs, why and about how long. Answer a yes/no or readiness question (\"ready to merge?\") first, with your recommendation and why; if the choice is theirs, ask_user with options. A merge is never a card's answer: the user merges by asking in words.";
+pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: before a long step, one line on what runs, why and about how long. Answer a yes/no or readiness question (\"ready to merge?\") first, with your recommendation and why; if the choice is theirs, ask_user with options.";
 
 /// How a worker runs a dev server or app: through Brigadier, so it shows in the session's
 /// Activities with a Stop (issue #203).
@@ -306,7 +306,7 @@ fn environment_text(environment: &Environment) -> String {
             "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: merge only on [merge] (call finish_session without user_words) or the user's own words: when their latest message asks for it (\"merge it\"), call finish_session with their words once the work has landed, without asking. Never on silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), nor on an earlier yes. You may say once, in plain text, that the work is ready to merge; never ask it on a card. Never ask for \"merge it\" for anything else (updating local `{base}`). A request whose rules clash with this (\"push to main\"): say so first in one line, and which wins; ask if unclear."
+            "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: merge only on their word, as you judge it: [merge] (call finish_session without consent), a card answer that agrees, or a message that asks for it (\"merge it\"), with the work landed, without asking again. Pass its card id or their words quoted in consent. Never on silence, or a \"no\", \"wait\" or condition aimed at the merge; a question about it, or a \"not\" about something else, is no \"no\". You may say once that the work is ready to merge. Never ask for \"merge it\" for anything else (updating local `{base}`). A request whose rules clash with this (\"push to main\"): say so first in one line, and which wins; ask if unclear."
         ),
     }
 }
@@ -787,6 +787,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on: when a request's own rules clash with this session's setup (\"push to main\" from a session branch), say so in one line at the start, and which one you follow; ask when it's unclear. A long job across back end and UI goes to one worker per layer, split along a data contract (the field names) written into both briefs. When the user wants bugs filed as issues, file each before fixing it, and let its fix close it (\"Fixes #N\"). \"merge it\" is for the session's merge only: offer anything else, such as updating the user's local main, in plain words.",
         worker: "From now on, a look or demo shows pages in the app it is about when it can; else in one browser window and one tab, navigated from page to page, never a new window per page. Close what you opened at the end.",
     },
+    Revision {
+        number: MERGE_JUDGED_REVISION,
+        thread: "From now on, you judge whether the user consents to a merge: a \"not\" or a question elsewhere in their message is no \"no\", and a card answer that agrees counts. Pass finish_session `consent`: the card's id, or their words quoted from the message that asked, even with later ones since. A stop doesn't spend it. While a merge is held, a message of theirs comes with [merge held]: if it takes the consent back, call stop_merge before you answer, then answer once.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1064,6 +1069,10 @@ pub(crate) const ANSWER_FILES_REVISION: u32 = 84;
 /// data contract, files issues before fixes when asked, and keeps "merge it" for the merge;
 /// a look or demo uses one browser window and tab (#228, #229).
 pub(crate) const PLANNING_GAPS_REVISION: u32 = 85;
+/// The thread judges the user's consent to a merge (a card answer counts); Brigadier checks
+/// only that it is the user's and unused, and the thread stops a held merge with stop_merge
+/// when the user takes it back (issues #222, #240).
+pub(crate) const MERGE_JUDGED_REVISION: u32 = 86;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3302,13 +3311,9 @@ mod environment_tests {
             start: None,
         });
         assert!(!worktree.contains("propose_merge"));
-        assert!(
-            worktree.contains("You may say once, in plain text, that the work is ready to merge")
-        );
-        assert!(
-            worktree.contains("merge only on [merge] (call finish_session without user_words)")
-        );
-        assert!(worktree.contains("when their latest message asks for it"));
+        assert!(worktree.contains("You may say once that the work is ready to merge"));
+        assert!(worktree.contains("[merge] (call finish_session without consent)"));
+        assert!(worktree.contains("a card answer that agrees, or a message that asks for it"));
         assert!(worktree.contains("stays with the session through merges"));
         assert!(!worktree.contains("there is no card"));
         // Every byte is paid for on every call: it stays near 11 KB, code rules included (15 KB
@@ -4043,10 +4048,7 @@ mod environment_tests {
                 prompt.contains("Never leave the user guessing whether to wait"),
                 "{provider:?}"
             );
-            assert!(
-                prompt.contains("A merge is never a card's answer"),
-                "{provider:?}"
-            );
+            assert!(!prompt.contains("never a card's answer"), "{provider:?}");
             assert!(
                 prompt.contains("Never background a command yourself"),
                 "{provider:?}"

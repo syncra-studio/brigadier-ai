@@ -137,6 +137,16 @@ async fn conflicting_session(worker: Worker, sides: Sides) -> Flow {
             let delegated = delegated.clone();
             Box::pin(async move {
                 if turn.is_orchestrator() {
+                    // The thread reads a "wait!" as taking the held merge back (#222).
+                    if turn.input.contains("[merge held] The user's merge")
+                        && turn.input.contains("wait!")
+                    {
+                        let reply = turn
+                            .call("stop_merge", json!({"why": "they said wait"}))
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("Stopped the merge.");
+                    }
                     if turn.input.contains("Add notes") {
                         commit_in_workspace(&turn, "README.md", "# Session\n", "Add notes");
                         commit_in_workspace(&turn, "notes-2.txt", "two\n", "Add notes two");
@@ -378,20 +388,27 @@ async fn base_conflicts_resolve_and_finish_on_the_original_consent() {
     flow.stop().await;
 }
 
+/// A "wait!" between the conflict and the retry: the thread hears the merge is held with it,
+/// reads it as taking the consent back and stops the merge (#222, #240).
 #[tokio::test]
-async fn a_wait_between_conflict_and_retry_revokes_consent() {
+async fn a_wait_between_conflict_and_retry_stops_the_held_merge() {
     let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
     conflict(&flow, "merge it").await;
     flow.say("wait!").await;
     flow.settled().await;
+    assert!(
+        flow.board()
+            .await
+            .orchestrator_steps
+            .iter()
+            .any(|step| matches!(
+                &step.kind,
+                OrchestratorStepKind::MergeStopped { reason, .. }
+                    if reason == "The user took it back: they said wait."
+            ))
+    );
     resolve(&flow).await;
-    let error = flow
-        .manager
-        .finish_session(&flow.conversation, "merge it", None)
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("[not merged]"), "{error}");
+    assert!(crate::manager::landing::pending_merge(&flow.board().await).is_none());
     assert_eq!(git(&flow.repo, &["show", "main:README.md"]), "# Base");
     flow.stop().await;
 }

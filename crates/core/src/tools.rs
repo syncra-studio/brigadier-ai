@@ -841,20 +841,30 @@ pub struct WriteTabFile {
 }
 
 /// `finish_session`: merge the session branch into its base (new-worktree sessions), once the
-/// user asked for it in their own words.
+/// user consented, as the thread judges their words.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FinishSession {
-    /// The user's own words that ask for the merge, quoted exactly from their latest message
-    /// ("yes, merge it"). Leave it out when the user clicked "Merge into main" ([merge]).
-    /// On `[merge due]` (the held merge's workers landed, or its conflict-resolution task
-    /// did), retry with the same words (or none): the consent still holds unless the user has
-    /// taken it back.
+    /// What the user consented in: the id of their card answer or "Merge into main" click, or
+    /// their own words quoted exactly from the message that asks for the merge ("yes, merge
+    /// it"). Leave it out on [merge] (their click). On [merge due], pass the same again.
+    #[serde(default)]
+    pub consent: Option<String>,
+    /// The user's words, as `consent` takes them (kept for older threads).
     #[serde(default)]
     pub user_words: String,
     /// The merge commit message, when a merge commit is needed.
     #[serde(default)]
     pub message: Option<String>,
+}
+
+/// `stop_merge`: stop the held merge, because the user's words since their consent take it
+/// back or put it off.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StopMerge {
+    /// Why, in a few of the user's words ("they said wait for the demo").
+    pub why: String,
 }
 
 /// `list_sessions`: the project sessions this thread can message.
@@ -1115,6 +1125,7 @@ pub enum OrchestratorCall {
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
     FinishSession(FinishSession),
+    StopMerge(StopMerge),
     ProposeMerge(ProposeMerge),
     NoteForUser(NoteForUser),
     RecordFindings(RecordFindings),
@@ -1168,6 +1179,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "request_approval",
     "land_phase",
     "finish_session",
+    "stop_merge",
     "note_for_user",
     "record_findings",
     "ci_status",
@@ -1221,6 +1233,7 @@ impl OrchestratorCall {
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
             Self::FinishSession(_) => "finish_session",
+            Self::StopMerge(_) => "stop_merge",
             Self::ProposeMerge(_) => "propose_merge",
             Self::NoteForUser(_) => "note_for_user",
             Self::RecordFindings(_) => "record_findings",

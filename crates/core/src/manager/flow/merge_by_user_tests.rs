@@ -13,7 +13,7 @@ use super::thread_tests::{commit_in_workspace, on_main};
 use super::{Flow, Options, Reply, Script, Turn, click, git};
 use crate::manager::landing::pending_merge;
 use crate::manager::prompts::{MERGE_BY_USER_REVISION, revision_note};
-use crate::model::{CardId, DomainEvent, Environment, Lifecycle, MessageRole, Setup};
+use crate::model::{CardId, DomainEvent, Environment, Lifecycle, Setup};
 use crate::now_ms;
 use crate::work::{
     AnswerInput, MergeCondition, OrchestratorStepKind, Question, QuestionKind, RunState,
@@ -291,20 +291,22 @@ async fn a_late_propose_merge_is_refused_with_what_to_do() {
     let refused = logged(&log, "propose_merge: ");
     assert_eq!(refused.len(), 1);
     assert!(refused[0].starts_with("propose_merge: true"), "{refused:?}");
-    assert!(refused[0].contains("the user's own words"), "{refused:?}");
+    assert!(
+        refused[0].contains("Merge only on the user's word"),
+        "{refused:?}"
+    );
     assert!(board.questions.is_empty());
     assert!(!on_main(&flow, "NOTES.md"));
     flow.stop().await;
 }
 
-/// An old merge card's "Merge into main", answered live or stored before a restart, never
-/// authorises finish_session.
+/// A card's answer is the user's word (#240): the thread judges it and names the card in
+/// `consent`, and it merges once. With nothing named, the answer alone merges nothing.
 #[tokio::test]
-async fn an_old_merge_cards_answer_never_authorises_a_merge() {
-    let (mut flow, _) = session("merge-old-card").await;
+async fn a_card_answer_merges_when_the_thread_names_it() {
+    let (flow, _) = session("merge-card-answer").await;
     flow.say("Add notes.").await;
     flow.settled().await;
-    // Answered live.
     let card = plant_merge_card(&flow, None).await;
     flow.manager
         .answer_question(
@@ -323,19 +325,22 @@ async fn an_old_merge_cards_answer_never_authorises_a_merge() {
             .await
             .is_err()
     );
-    // Stored answered, then replayed at a restart.
-    plant_merge_card(&flow, Some("Merge into main")).await;
-    flow.restart().await;
-    flow.settled().await;
-    let refused = flow
+    let card = card.id.to_string();
+    let merged_on = flow
         .manager
-        .finish_session(&flow.conversation, "", None)
+        .finish_session(&flow.conversation, &card, None)
+        .await
+        .unwrap();
+    assert!(merged_on.contains("[finished]"), "{merged_on}");
+    assert!(on_main(&flow, "NOTES.md"));
+    let again = flow
+        .manager
+        .finish_session(&flow.conversation, &card, None)
         .await
         .unwrap_err()
         .to_string();
-    assert!(refused.contains("[not merged]"), "{refused}");
-    assert_eq!(merged(&flow.board().await), 0);
-    assert!(!on_main(&flow, "NOTES.md"));
+    assert!(again.contains("used for a merge already"), "{again}");
+    assert_eq!(merged(&flow.board().await), 1);
     flow.stop().await;
 }
 
@@ -355,27 +360,29 @@ async fn words_still_merge_and_close_an_old_open_card() {
     flow.stop().await;
 }
 
-/// At the upgrade, an open merge card is withdrawn and a merge held on a card's answer is
-/// cancelled, and the thread hears of it once; a merge held on the user's words stays.
+/// At the upgrade, an open merge card is withdrawn and the thread hears of it once; a merge
+/// held on a card's answer (#240) or on the user's words stays.
 #[tokio::test]
-async fn an_upgrade_closes_merge_cards_and_cancels_a_merge_held_on_one() {
+async fn an_upgrade_closes_open_merge_cards_and_keeps_a_held_merge() {
     let (mut flow, log) = session("merge-upgrade").await;
     flow.say("Add notes.").await;
     flow.settled().await;
     let (_, branch) = workspace(&flow);
     let open = plant_merge_card(&flow, None).await;
     let answered = plant_merge_card(&flow, Some("Merge into main")).await;
-    let held = |asked_in: String| OrchestratorStepKind::MergeHeld {
-        branch: branch.clone(),
-        base: "main".into(),
-        asked_in,
-        consented_at_ms: now_ms(),
-        condition: MergeCondition::WorkersFinish,
-        waiting: Vec::new(),
-        tip: String::new(),
-    };
     flow.manager
-        .orchestrator_step(&flow.conversation, held(answered.id.to_string()))
+        .orchestrator_step(
+            &flow.conversation,
+            OrchestratorStepKind::MergeHeld {
+                branch: branch.clone(),
+                base: "main".into(),
+                asked_in: answered.id.to_string(),
+                consented_at_ms: now_ms(),
+                condition: MergeCondition::WorkersFinish,
+                waiting: Vec::new(),
+                tip: String::new(),
+            },
+        )
         .await;
     flow.restart().await;
     let board = flow.settled().await;
@@ -384,8 +391,16 @@ async fn an_upgrade_closes_merge_cards_and_cancels_a_merge_held_on_one() {
         !withdrawn.is_open() && withdrawn.answer.is_none(),
         "{withdrawn:#?}"
     );
-    assert!(board.orchestrator_steps.iter().any(|step| matches!(&step.kind, OrchestratorStepKind::MergeCancelled { asked_in } if *asked_in == answered.id.to_string())));
-    assert!(pending_merge(&board).is_none());
+    assert!(
+        !board
+            .orchestrator_steps
+            .iter()
+            .any(|step| matches!(&step.kind, OrchestratorStepKind::MergeCancelled { .. }))
+    );
+    assert_eq!(
+        pending_merge(&board).map(|held| held.asked_in),
+        Some(answered.id.to_string())
+    );
     flow.say("Anything new?").await;
     // The note has no request of its own: its turn may follow the user's after that request
     // is done.
@@ -396,23 +411,9 @@ async fn an_upgrade_closes_merge_cards_and_cancels_a_merge_held_on_one() {
     .await;
     flow.settled().await;
     assert_eq!(logged(&log, "[merge cards retired]").len(), 1);
-    assert_eq!(merged(&flow.board().await), 0);
-    // A merge held on the user's words isn't the card's: it stays.
-    let words = flow
-        .core
-        .all_messages(&flow.conversation)
-        .await
-        .unwrap()
-        .into_iter()
-        .rev()
-        .find(|message| message.role == MessageRole::User)
-        .unwrap();
-    flow.manager
-        .orchestrator_step(&flow.conversation, held(words.id.clone()))
-        .await;
+    // Nothing open is left to retire: the next restart says nothing.
     flow.restart().await;
-    let board = flow.settled().await;
-    assert!(!board.orchestrator_steps.iter().any(|step| matches!(&step.kind, OrchestratorStepKind::MergeCancelled { asked_in } if *asked_in == words.id)));
+    flow.settled().await;
     assert_eq!(logged(&log, "[merge cards retired]").len(), 1);
     flow.stop().await;
 }
@@ -452,7 +453,7 @@ async fn a_session_from_before_hears_the_note_once_and_merges_on_a_click() {
     let note = revision_note(MERGE_BY_USER_REVISION - 1, false).unwrap();
     assert!(note.contains("there are no merge cards"), "{note}");
     assert_eq!(logged(&log, &note).len(), 1);
-    assert!(logged(&log, "propose_merge: true")[0].contains("the user's own words"));
+    assert!(logged(&log, "propose_merge: true")[0].contains("Merge only on the user's word"));
     flow.manager
         .merge_session(&flow.conversation, click())
         .await

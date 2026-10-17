@@ -564,7 +564,11 @@ impl SessionManager {
             }
             OrchestratorCall::FinishSession(args) => {
                 crate::heap(|| self.check_plan_mode(id)).await?;
-                crate::heap(|| self.finish_session(id, &args.user_words, args.message)).await
+                let consent = args.consent.as_deref().unwrap_or(&args.user_words);
+                crate::heap(|| self.finish_session(id, consent, args.message)).await
+            }
+            OrchestratorCall::StopMerge(args) => {
+                crate::heap(|| self.stop_merge(id, &args.why)).await
             }
             OrchestratorCall::ProposeMerge(args) => {
                 crate::heap(|| self.check_plan_mode(id)).await?;
@@ -755,6 +759,19 @@ impl SessionManager {
         request: Option<String>,
         kind: OrchestratorStepKind,
     ) {
+        // A step that ends a held merge is stored under the lock a tip update holds from its
+        // read to its write, so a landing told meanwhile can't hold the ended merge again.
+        let ends = matches!(
+            kind,
+            OrchestratorStepKind::Merged { .. }
+                | OrchestratorStepKind::MergeCancelled { .. }
+                | OrchestratorStepKind::MergeStopped { .. }
+        );
+        let conv = self.conv(id).ok().filter(|_| ends);
+        let _moves = match &conv {
+            Some(conv) => Some(conv.held_moves.lock().await),
+            None => None,
+        };
         let step = OrchestratorStep {
             request_id: request,
             kind,

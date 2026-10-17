@@ -1281,6 +1281,14 @@ pub(super) struct RequestActivity {
     pub reviews_due: bool,
 }
 
+/// What the thread hears with the user's message while a merge is held on their earlier
+/// words (#222).
+pub(super) fn held_merge_note(branch: &str, base: &str) -> String {
+    format!(
+        "[merge held] The user's merge of `{branch}` into `{base}` is held on their earlier words, until the work and the full checks are done. Their consent stands unless this message takes it back or puts it off (a \"wait\", a \"no\" or a new condition aimed at the merge): then call stop_merge before you answer. A question about the merge, or words about something else, leave it standing. Answer once."
+    )
+}
+
 impl SessionManager {
     /// Sends a user message: starts a turn, or queues it, or steers it into the running turn.
     /// With `queue_index` (and no `steer`) it queues at that slot whenever it would wait: while
@@ -3730,6 +3738,17 @@ impl SessionManager {
         }
         if conv.kind == ConversationKind::Session && self.plan_mode(&conv.id) {
             parts.push(PLAN_MODE_NOTE.into());
+        }
+        // A merge held on the user's earlier words: the thread judges whether these take it
+        // back before it answers, so it answers once (#222).
+        if conv.kind == ConversationKind::Session
+            && let Ok(board) = self.core.board(&conv.id).await
+            && let Some(held) = super::landing::pending_merge(&board)
+            && users.iter().any(|message| {
+                message.id != held.asked_in && message.created_at_ms >= held.consented_at_ms
+            })
+        {
+            parts.push(held_merge_note(&held.branch, &held.base));
         }
         parts.extend(notes.iter().cloned());
         if !parts.is_empty() {

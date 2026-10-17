@@ -160,6 +160,37 @@ async fn held(name: &str, plan: Plan) -> Held {
                 }
                 said.lock().unwrap().push(turn.input.clone());
                 let log = |text: &str| said.lock().unwrap().push(text.to_owned());
+                // A message sent while the workers write joins their work: it comes steered
+                // into this turn, with what Brigadier adds to it.
+                if let Some(rest) = turn.input.split("[follow-up ").nth(1) {
+                    let id = rest.split(']').next().unwrap();
+                    let reply = turn
+                        .call("route_follow_up", json!({"follow_up": id, "joins": true}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    let joined = turn.steered().await.unwrap_or_default();
+                    log(&joined);
+                    // The thread judges the user's words while the merge is held (#222): a
+                    // "Wait" takes it back, a question about it doesn't.
+                    if joined.contains("[merge held] The user's merge") {
+                        if joined.contains("Wait, I want to look at it first.") {
+                            let reply = turn
+                                .call(
+                                    "stop_merge",
+                                    json!({"why": "they want to look at it first"}),
+                                )
+                                .await;
+                            log(&format!("stop_merge: {}", reply.text));
+                            return Reply::text("Stopped the merge, as you asked.");
+                        }
+                        if joined.contains("Is it merged yet or not?") {
+                            return Reply::text(
+                                "Not merged yet: it merges once the workers finish.",
+                            );
+                        }
+                    }
+                    return Reply::text(super::super::prompts::QUIET);
+                }
                 if turn.input.starts_with("Add two notes") {
                     for title in ["Write note A", "Write note B"] {
                         let reply = turn
@@ -323,24 +354,35 @@ async fn a_stopped_writer_stops_the_held_merge() {
     held.flow.stop().await;
 }
 
-/// "Wait" written while the merge is held takes the consent back: it stops rather than come
-/// due, and finish_session refuses it.
+/// "Wait" written while the merge is held: the thread hears that a merge is held with the
+/// message, reads it as taking the consent back and stops it with stop_merge before it answers,
+/// once; finish_session then refuses (#222).
 #[tokio::test]
 async fn a_wait_written_while_held_stops_the_merge() {
     let held = held("held-merge-wait", Plan::default()).await;
     writing(&held).await;
     held.flow.say("Wait, I want to look at it first.").await;
+    held.flow
+        .until("the thread to stop the merge", |board| {
+            board.orchestrator_steps.iter().any(|step| {
+                matches!(&step.kind, OrchestratorStepKind::MergeStopped { reason, .. }
+                    if reason == "The user took it back: they want to look at it first.")
+            })
+        })
+        .await;
+    assert_eq!(held.logged("stop_merge: Stopped"), 1);
     held.release.store(true, Ordering::SeqCst);
-    stopped(&held).await;
-    assert_eq!(
-        held.logged(
-            "[merge stopped] The user wrote since they consented, and their message says \"wait\"."
-        ),
-        1,
-        "{:#?}",
-        held.log.lock().unwrap()
-    );
+    held.flow.settled().await;
     assert_eq!(held.logged("[merge due] The workers"), 0);
+    assert!(
+        !held
+            .log
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.starts_with("[merge stopped]")),
+        "the thread stopped it itself"
+    );
     let refused = held
         .flow
         .manager
@@ -351,6 +393,110 @@ async fn a_wait_written_while_held_stops_the_merge() {
     assert!(refused.contains("[not merged]"), "{refused}");
     assert!(!held.merged());
     held.flow.stop().await;
+}
+
+/// #222: a question about the held merge, with a "not" and a "don't" in it, leaves the consent
+/// standing. The thread hears the merge is held with the message, so it answers once, and the
+/// merge goes when the workers land.
+#[tokio::test]
+async fn a_question_about_the_held_merge_leaves_it_standing_and_gets_one_answer() {
+    let held = held("held-merge-question", Plan::default()).await;
+    writing(&held).await;
+    held.flow
+        .say("what is going on? Is it merged yet or not? I don't understand a thing what is going on...")
+        .await;
+    held.flow
+        .until(
+            "the question to reach the thread with the held merge",
+            |_| held.logged("[merge held] The user's merge of") == 1,
+        )
+        .await;
+    held.release.store(true, Ordering::SeqCst);
+    held.flow
+        .until("the merge", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+        })
+        .await;
+    held.flow.settled().await;
+    let board = held.flow.board().await;
+    assert!(
+        !board
+            .orchestrator_steps
+            .iter()
+            .any(|step| matches!(step.kind, OrchestratorStepKind::MergeStopped { .. })),
+        "{:#?}",
+        held.log.lock().unwrap()
+    );
+    assert!(
+        !held
+            .log
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.starts_with("[merge stopped]"))
+    );
+    assert_eq!(held.logged("finish_session: [finished]"), 1);
+    assert!(held.merged());
+    let messages = held
+        .flow
+        .core
+        .all_messages(&held.flow.conversation)
+        .await
+        .unwrap();
+    let answers = messages
+        .iter()
+        .filter(|message| message.text.contains("Not merged yet"))
+        .count();
+    assert_eq!(answers, 1, "one answer to the question");
+    held.flow.stop().await;
+}
+
+/// #240: a message that asks for the merge merges, whatever else it says ("not caused by this
+/// change", "Don't rerun them"): the thread judged it, and the engine checks only that the words
+/// are the user's and that no earlier merge used them.
+#[tokio::test]
+async fn a_request_to_merge_with_a_not_elsewhere_merges() {
+    let log: Arc<Mutex<Vec<(String, bool)>>> = Arc::default();
+    let said = log.clone();
+    let flow = Flow::start(
+        "held-merge-asked",
+        Options::default(),
+        script(move |turn| {
+            let said = said.clone();
+            async move {
+                if !turn.input.contains("then merge into main and push") {
+                    return Reply::text("Done.");
+                }
+                commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
+                for _ in 0..2 {
+                    let reply = turn
+                        .call(
+                            "finish_session",
+                            json!({"consent": "then merge into main and push"}),
+                        )
+                        .await;
+                    said.lock().unwrap().push((reply.text, reply.is_error));
+                }
+                Reply::text("Merged into main.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes. The test failures are not caused by this change. Don't rerun them, then merge into main and push.")
+        .await;
+    flow.until("both merge calls", |_| log.lock().unwrap().len() == 2)
+        .await;
+    flow.settled().await;
+    let log = log.lock().unwrap().clone();
+    assert!(!log[0].1 && log[0].0.contains("[finished]"), "{log:#?}");
+    // One consent, one merge.
+    assert!(log[1].1 && log[1].0.contains("[not merged]"), "{log:#?}");
+    let files = git(&flow.repo, &["ls-tree", "--name-only", "main"]);
+    assert!(files.contains("NOTES.md"), "{files}");
+    flow.stop().await;
 }
 
 #[tokio::test]

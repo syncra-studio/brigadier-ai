@@ -71,7 +71,9 @@ async fn a_peers_merge_it_gives_no_consent_and_the_merge_asks_the_receivers_user
         }
         // The words are the peer's, so they aren't in the user's latest message.
         assert!(
-            told[0].1.contains("is not in the user's latest message"),
+            told[0]
+                .1
+                .contains("is no message, card answer or click of the user's"),
             "{told:#?}"
         );
         // A late propose_merge is refused with what to do instead.

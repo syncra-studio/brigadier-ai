@@ -10,9 +10,9 @@ use brigadier_core::tools::{
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, RecordFindings,
     RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
     RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, SettleWait,
-    StartPreview, StopPreview, StopWorker, SubmitOutline, SubmitReport, SuggestFullAccess,
-    TabChatCall, TabTools, TaskRef, ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall,
-    WritePage, WriteTabFile,
+    StartPreview, StopMerge, StopPreview, StopWorker, SubmitOutline, SubmitReport,
+    SuggestFullAccess, TabChatCall, TabTools, TaskRef, ThreadRunCheck, ToolCall, WaitForReplies,
+    WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -226,14 +226,20 @@ a [checks failed …] message for you to send back. Conflicts come back to you: 
 task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
-base branch, once the user consented: you heard [merge] (their Merge click; leave user_words \
-out), or their latest message asks for it in words (\"merge it\", \
-also together with the work: then merge as soon as it has landed, without asking again). Pass \
-such words in user_words, quoted exactly from that message. Brigadier checks the consent and \
-refuses on a question, a condition, a \"no\" or a \"wait\", or consent already used for a merge; \
-\"merge it when done\" is consent. While workers write it holds the merge ([merge held]) and \
-tells you [merge due] once they land: call it again then, without asking. Never merge on \
-silence. The session keeps its worktree and branch after the merge. Returns when merged.";
+base branch on the user's word, as you judge it: [merge] (their click; leave consent out), a \
+card answer that agrees, or a message that asks for it (\"merge it\", also together with the \
+work: then merge as soon as it has landed, without asking again). A question about the merge, \
+or a \"not\" about something else, is no \"no\"; a \"wait\", a \"no\" or a condition aimed at \
+the merge is. Pass in consent the card's id, or their words quoted exactly from the message; \
+Brigadier checks only that it is the user's and no earlier merge used it. \"merge it when \
+done\" is consent. While workers write it holds the merge ([merge held]) and tells you [merge \
+due] once they land: call it again then, without asking. The session keeps its worktree and \
+branch after the merge. Returns when merged.";
+
+const STOP_MERGE: &str = "Stop the held merge when the user's words since their consent take it \
+back or put it off (\"wait\", \"don't merge yet\", a new condition on it). A question about the \
+merge or words about something else leave it standing: then don't call this. Call it before you \
+answer, then answer once, saying it stopped.";
 
 const NOTE_FOR_USER: &str = "Keep the user's session summary current: kind \"decided\" for a \
 judgement call you made on their behalf that they'd want to know, with why (\"Decided for \
@@ -580,6 +586,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             FINISH_SESSION,
             input_schema::<FinishSession>(),
         ),
+        tool("stop_merge", STOP_MERGE, input_schema::<StopMerge>()),
         tool(
             "note_for_user",
             NOTE_FOR_USER,
@@ -900,6 +907,7 @@ pub fn parse_call(
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
                 "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
+                "stop_merge" => OrchestratorCall::StopMerge(args(name, arguments)?),
                 "propose_merge" => OrchestratorCall::ProposeMerge(args(name, arguments)?),
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
                 "record_findings" => OrchestratorCall::RecordFindings(args(name, arguments)?),
