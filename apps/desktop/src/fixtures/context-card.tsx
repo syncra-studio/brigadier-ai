@@ -1,6 +1,7 @@
 /**
  * Headless exercise of a session's context card where it floats (a narrow window): its toolbar
  * button opens it over the thread, also while another tab is in front, which brings the chat back.
+ * Shown, it stays through a click on the thread and a resize, until the button closes it.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -13,6 +14,7 @@ import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { SessionTabBar } from "@/app/conversation/SessionTabBar";
 import { useSidePanel } from "@/app/conversation/SidePanel";
 import { WorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
+import { fixtureInput } from "@/fixtures/input";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, Request } from "@/ipc/generated";
@@ -41,11 +43,18 @@ mockIPC((command, payload) => {
 const toggle = () => document.querySelector<HTMLButtonElement>('header button[aria-label="Context"]')!;
 // The card where it floats: the popover, not the button nor the pinned column.
 const floating = () => [...document.querySelectorAll('[aria-label="Context"]')].some((element) => element.getAttribute("role") === "dialog" && element.getAttribute("data-state") === "open");
+// The card pinned beside the thread, where the window is wide enough.
+const beside = () => {
+  const column = document.querySelector('aside[aria-label="Context"]');
+  return !!column && column.getAttribute("data-state") === "open" && column.getAttribute("aria-hidden") !== "true";
+};
+const layout = () => document.querySelector<HTMLElement>("[data-summary]")?.dataset.summary;
 
 function Fixture() {
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const { panel, workspace } = useSidePanel(id, true, false, "project");
   const [result, setResult] = useState("");
+  const [wide, setWide] = useState(false);
   useEffect(() => {
     const seen: Record<string, unknown> = {};
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -73,6 +82,19 @@ function Fixture() {
         seen.openedOverChat = floating();
         // This session has no setup yet: its card still says something.
         seen.cardText = document.querySelector('[data-slot="summary-card"]')?.textContent ?? null;
+        // A click on the thread, away from the card.
+        void fixtureInput({ type: "click", x: 40, y: 400 }).then(() => { seen.clicked = true; });
+      } },
+      { ready: () => seen.clicked === true, act: () => {
+        seen.keptAfterClick = floating();
+        setWide(true);
+      } },
+      { ready: () => layout() !== "float", act: () => {
+        seen.keptAfterWiden = beside();
+        setWide(false);
+      } },
+      { ready: () => layout() === "float", act: () => {
+        seen.keptAfterNarrow = floating();
         setResult(JSON.stringify(seen));
       } },
     ];
@@ -96,7 +118,7 @@ function Fixture() {
     <AssistantRuntimeProvider runtime={runtime}>
       <WorkspacePaneContext.Provider value={workspace}>
         <RightSidebarContext.Provider value={panel}>
-          <main className="bg-background text-foreground w-narrowest-window flex h-screen min-w-0 flex-col">
+          <main className={`bg-background text-foreground flex h-screen min-w-0 flex-col ${wide ? "w-screen" : "w-narrowest-window"}`}>
             <SummaryFloat>
               <SessionTabBar conversation={conversation} onRename={() => {}}>
                 <ConversationToolbar kind="session" onContext={() => selectTab(id, CHAT_TAB)} />

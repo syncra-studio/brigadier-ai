@@ -497,12 +497,13 @@ export function SummaryPane({
           element.dataset.settled = "";
         });
       }
-      // Only a floating summary stays open over the thread.
-      useSummary.setState((state) =>
-        state.layout === layout
-          ? state
-          : { layout, floating: state.floating && layout === "float", automatic: state.automatic && layout === "float" },
-      );
+      // A summary the user showed stays shown as the window changes: floating where it floats,
+      // pinned beside the thread elsewhere. One that opened on its own goes with the float.
+      const state = useSummary.getState();
+      if (state.layout === layout) return;
+      if (state.layout === "float" && state.floating && !state.automatic) setPinnedSummary(true);
+      const floating = layout === "float" && (state.floating || useApp.getState().pinnedSummary);
+      useSummary.setState({ layout, floating, automatic: floating && state.automatic });
     });
     observer.observe(element);
     return () => {
@@ -679,8 +680,8 @@ export function PinnedSummary({
 
 /**
  * The summary where it floats: the same column of cards over the thread, at the pane's top end
- * under the top bar, reaching at most the window's bottom inset. The top bar's button, Escape or a
- * click elsewhere closes it.
+ * under the top bar, reaching at most the window's bottom inset. The top bar's button or Escape
+ * closes it; a click elsewhere or a resize leaves it shown.
  */
 function FloatingSummary({ conversation }: { conversation: Conversation | null }) {
   const { ref, onScroll } = useKeptScroll(`${conversation?.id ?? "draft"}/column`, true);
@@ -715,6 +716,9 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
         sideOffset={0}
         aria-label="Context"
         onScroll={onScroll}
+        // It stays over the thread while the user reads or types there: only the top bar's
+        // button or Escape closes it.
+        onInteractOutside={(event) => event.preventDefault()}
         onFocusCapture={() => { focusEntered.current = true; }}
         // Focus the summary itself, not its first button (whose tip would open with it).
         onOpenAutoFocus={(event) => {
@@ -750,7 +754,14 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
 export function SummaryFloat({ children }: { children: ReactNode }) {
   const floating = useSummary((s) => s.floating);
   return (
-    <Popover open={floating} onOpenChange={(open) => useSummary.setState({ floating: open, automatic: false })}>
+    <Popover
+      open={floating}
+      onOpenChange={(open) => {
+        // The user's show or hide holds for every window size.
+        setPinnedSummary(open);
+        useSummary.setState({ floating: open, automatic: false });
+      }}
+    >
       {children}
     </Popover>
   );

@@ -13,4 +13,7 @@ test("a session's context card opens from its toolbar where it floats, also whil
   assert.equal(seen.closed, true);
   assert.equal(seen.openedOverChat, true);
   assert.equal(seen.cardText, "Nothing here yet", "a session with no setup yet still shows its card");
+  assert.equal(seen.keptAfterClick, true, "a click on the thread leaves the card shown");
+  assert.equal(seen.keptAfterWiden, true, "widening the window keeps it shown, beside the thread");
+  assert.equal(seen.keptAfterNarrow, true, "narrowing it again keeps it shown, floating");
 });
