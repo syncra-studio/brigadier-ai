@@ -2660,8 +2660,8 @@ while True:
         let ledger = flow.manager.runtime.ledger().clone();
         let owner = preview_data_owner(&flow.conversation);
         use std::os::unix::fs::{PermissionsExt, symlink};
-        let root =
-            Temp(std::env::temp_dir().join(format!("preview-data-{}", uuid::Uuid::new_v4())));
+        // Preview data is only taken under /tmp, which macOS's temp folder is not.
+        let root = Temp(Path::new("/tmp").join(format!("preview-data-{}", uuid::Uuid::new_v4())));
         std::fs::create_dir_all(root.join("parent")).unwrap();
         std::fs::create_dir(root.join("protected")).unwrap();
         let path = root.join("parent/data");
@@ -2794,7 +2794,8 @@ while True:
         .await;
         let runtime = &flow.manager.runtime;
         let ledger = runtime.ledger();
-        let root = std::env::temp_dir().join(format!("preview-data-{}", uuid::Uuid::new_v4()));
+        // Preview data is only removed under /tmp, which macOS's temp folder is not.
+        let root = Path::new("/tmp").join(format!("preview-data-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let root = root.canonicalize().unwrap();
         let artifact = |path: &Path| {
