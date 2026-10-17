@@ -157,6 +157,25 @@ function marks(highlights: HighlightRegistry, name: string, priority: number): H
   return highlight;
 }
 
+/** Paint each text run separately: inline code has its own padding and font metrics.
+ * Button text is found and ringed, but WebKit can paint its highlight on neighbouring text. */
+function paintRanges(range: Range): Range[] {
+  const root = range.commonAncestorContainer;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const pieces: Range[] = [];
+  for (let node = root instanceof Text ? root : walker.nextNode(); node; node = walker.nextNode()) {
+    if (!(node instanceof Text) || !range.intersectsNode(node) || node.parentElement?.closest("button")) continue;
+    const start = node === range.startContainer ? range.startOffset : 0;
+    const end = node === range.endContainer ? range.endOffset : node.length;
+    if (start === end) continue;
+    const piece = document.createRange();
+    piece.setStart(node, start);
+    piece.setEnd(node, end);
+    pieces.push(piece);
+  }
+  return pieces;
+}
+
 /**
  * Marks `ranges` in `viewport`'s thread, `active` over them. WebKit paints a mark only on text
  * that can be selected, and puts one on unselectable text (a Shell box's output, a row) onto the
@@ -171,11 +190,11 @@ function paint(viewport: HTMLElement, ranges: readonly Range[], active: Range | 
   showHighlight(ACTIVE_MATCH, true);
   const all = marks(highlights, MATCHES, 0);
   all.clear();
-  for (const range of ranges) all.add(range);
+  for (const range of ranges) for (const piece of paintRanges(range)) all.add(piece);
   // Over the others where they meet.
   const current = marks(highlights, ACTIVE_MATCH, 1);
   current.clear();
-  if (active) current.add(active);
+  if (active) for (const piece of paintRanges(active)) current.add(piece);
   const ringed = active?.startContainer.parentElement?.closest("button") ?? null;
   for (const button of viewport.querySelectorAll(`[${ACTIVE_BUTTON}]`)) {
     if (button !== ringed) button.removeAttribute(ACTIVE_BUTTON);
@@ -238,6 +257,9 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   /** Stepping back past the oldest match unfolded the earlier turns: the match before this one is next. */
   const backFrom = useRef<Range | null>(null);
   const reveals = useRef(0);
+  const expanded = useRef(new Set<Element>());
+  const toggling = useRef(false);
+  const closingAnchor = useRef<{ element: HTMLElement; top: number } | null>(null);
 
   // What the listeners and reruns read: the newest, not what was there when they were made.
   const state = useRef({ open, query, result, active, history });
@@ -268,7 +290,11 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
       const live = () => seq === reveals.current && viewport.isConnected && range.startContainer.isConnected;
       const more = clippedBy(range);
       if (more) {
+        const bubble = more.closest(".aui-user-message-content");
+        if (bubble) expanded.current.add(bubble);
+        toggling.current = true;
         more.click();
+        toggling.current = false;
         for (let frames = 0; frames < 30 && live() && more.isConnected && more.getAttribute("aria-expanded") !== "true"; frames++) await nextFrame();
         await nextFrame();
         if (!live()) return;
@@ -377,11 +403,53 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     setResult(NONE);
     setActive(-1);
     unpaint(viewport);
+    if (viewport && expanded.current.size > 0) {
+      const box = viewport.getBoundingClientRect();
+      const rows = [...viewport.querySelectorAll<HTMLElement>('[data-role="user"], [data-role="assistant"]')];
+      const element = rows.find((row) => {
+        const rect = row.getBoundingClientRect();
+        return rect.top >= box.top && rect.top < box.bottom;
+      }) ?? rows.find((row) => {
+        const rect = row.getBoundingClientRect();
+        return rect.top < box.top && rect.bottom > box.top;
+      });
+      if (element) closingAnchor.current = { element, top: element.getBoundingClientRect().top };
+    }
+    toggling.current = true;
+    for (const bubble of expanded.current) {
+      if (bubble.isConnected) bubble.querySelector<HTMLButtonElement>(':scope > button[aria-expanded="true"]')?.click();
+    }
+    toggling.current = false;
+    expanded.current.clear();
     const back = before.current;
     before.current = null;
     // Where it is, without scrolling the thread there: the reader keeps their place.
     if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus({ preventScroll: true });
   }, [viewport]);
+
+  // Collapsing may shrink a message above the reader. Keep a surviving message at its old offset,
+  // and discard the scroll controller's temporary anchor on the programmatically clicked toggle.
+  useLayoutEffect(() => {
+    const anchor = closingAnchor.current;
+    if (open || !anchor || !viewport) return;
+    closingAnchor.current = null;
+    if (!anchor.element.isConnected) return;
+    scroller.release();
+    viewport.scrollBy({ top: anchor.element.getBoundingClientRect().top - anchor.top, behavior: "instant" });
+    scroller.scrolled();
+  }, [open, viewport, scroller]);
+
+  useEffect(() => {
+    if (!open || !viewport) return;
+    const clicked = (event: MouseEvent) => {
+      if (toggling.current || !(event.target instanceof Element)) return;
+      const button = event.target.closest("button");
+      const bubble = button?.closest(".aui-user-message-content");
+      if (bubble && bubble.querySelector(":scope > button") === button) expanded.current.delete(bubble);
+    };
+    viewport.addEventListener("click", clicked, true);
+    return () => viewport.removeEventListener("click", clicked, true);
+  }, [open, viewport]);
 
   /** ⌘F: opens the bar (or takes the focus back to it), with a single line selected in the thread as its text. */
   const openFind = useCallback(() => {
@@ -450,8 +518,14 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     if (open && viewport) paint(viewport, result.ranges, result.ranges[active] ?? null);
   }, [open, viewport, result, active]);
 
-  // Gone with the thread: so are its marks.
-  useEffect(() => () => unpaint(viewport), [viewport]);
+  // Gone with the thread: so are its marks and references to messages it opened.
+  useEffect(() => {
+    const opened = expanded.current;
+    return () => {
+      unpaint(viewport);
+      opened.clear();
+    };
+  }, [viewport]);
 
   if (!open) return null;
 

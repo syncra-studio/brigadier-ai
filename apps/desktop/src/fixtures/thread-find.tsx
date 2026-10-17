@@ -16,9 +16,11 @@ import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
 import { ACTIVE_BUTTON, ACTIVE_MATCH, FINDING, MATCHES } from "@/app/conversation/ThreadFind";
+import { TurnDiff } from "@/app/conversation/TurnDiff";
+import { ViewContext } from "@/app/conversation/viewContext";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { Conversation, ConversationView as View, EventEnvelope, Message, Request } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, EventEnvelope, Message, Request, UserRequest } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
 import { applyEvents, useApp } from "@/state/store";
@@ -532,6 +534,60 @@ async function drive(): Promise<void> {
       select(mode === "welcome" ? { type: "draft", kind: "chat" } : { type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
       result["padding"] = getComputedStyle(viewport().querySelector('[data-slot="aui_thread-column"]')!).paddingTop;
+    } else if (mode === "glitches") {
+      await steps.opened();
+      const host = document.createElement("div");
+      viewport().querySelector('[data-slot="aui_thread-column"]')!.append(host);
+      const changed: UserRequest = {
+        id: "find-files", conversationId: "long", preview: "Files", state: { type: "done" },
+        startedAtMs: start, endedAtMs: start + 1, steeredInto: null, steeredAfter: null,
+        undo: null, worked: [], quotaWait: false,
+        changes: { settled: true, stat: { insertions: 2, deletions: 0, files: ["otter.ts", "badger.ts"].map((path) => ({ path, insertions: 1, deletions: 0, binary: false })) } },
+      };
+      useBoard.setState(({ board }) => ({ board: board && { ...board, requests: { ...board.requests, [changed.id]: changed } } }));
+      const root = createRoot(host);
+      root.render(<ViewContext.Provider value={{ selection: { type: "conversation", id: "long" }, conversation, embedded: false }}><TurnDiff requestIds={[changed.id]} /></ViewContext.Provider>);
+      await settle(300);
+      await find("otter.ts");
+      const row = host.querySelector('[data-slot="turn-diff-file"] > button')!;
+      const style = getComputedStyle(row);
+      result["ring"] = { onRow: row.hasAttribute(ACTIVE_BUTTON), inset: parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset) <= 0 };
+      // WebKit can paint button ranges on neighbouring selectable text. They must never enter the registry.
+      result["buttonMarks"] = matches()?.size ?? 0;
+      const prose = document.createElement("p");
+      prose.innerHTML = 'before <code class="aui-md-inline-code bg-muted text-code-inline rounded-md px-1.5 py-0.5 font-mono">formatted</code> after';
+      host.append(prose);
+      await find("before formatted after");
+      result["inline"] = { singleTextNodes: [...(matches() ?? [])].every((range) => range.startContainer === range.endContainer), pieces: matches()?.size };
+      await find("solitary");
+      result["previousGone"] = [...(matches() ?? [])].every((range) => range.toString() === "solitary");
+      await find("marmalade");
+      const bubble = textHolding("marmalade")!.node.parentElement!.closest(".aui-user-message-content")!;
+      result["expanded"] = bubble.querySelector(":scope > button")?.getAttribute("aria-expanded");
+      const anchor = document.createRange();
+      anchor.selectNodeContents(textHolding("Line 1 of a long message")!.node);
+      viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+      viewport().scrollTop += anchor.getBoundingClientRect().top - viewport().getBoundingClientRect().top - 100;
+      await settle(100);
+      const beforeCollapse = anchor.getBoundingClientRect().top;
+      press(field()!, "Escape");
+      await until(() => bar() === null);
+      await settle(100);
+      result["collapseMoved"] = round(anchor.getBoundingClientRect().top - beforeCollapse);
+      result["collapsed"] = bubble.querySelector(":scope > button")?.getAttribute("aria-expanded");
+      press(document.body, "KeyF", { meta: true });
+      await until(() => bar() !== null);
+      await find("marmalade");
+      bubble.querySelector<HTMLButtonElement>(":scope > button")!.click();
+      await settle(100);
+      bubble.querySelector<HTMLButtonElement>(":scope > button")!.click();
+      await settle(100);
+      press(field()!, "Escape");
+      await until(() => bar() === null);
+      await settle(100);
+      result["manualExpanded"] = bubble.querySelector(":scope > button")?.getAttribute("aria-expanded");
+      root.unmount();
+      host.remove();
     } else if (SHORT || new URLSearchParams(location.search).get("drive") === "top") {
       select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
