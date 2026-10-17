@@ -169,7 +169,11 @@ async fn an_ended_clean_work_folder_goes_through_git_and_a_moved_branch_stays() 
     let (items, _) = scan(&flow, context()).await;
     let folder = named(&items, "Work folder of “Flow”");
     assert_eq!(folder.item.category, CleanCategory::FinishedWork);
-    assert!(folder.item.checked && folder.item.selectable);
+    assert!(
+        folder.item.checked && folder.item.selectable,
+        "{:?}",
+        folder.item
+    );
     assert!(matches!(folder.action, Action::RemoveWorktree { .. }));
     let cleaned = flow
         .manager
@@ -215,7 +219,7 @@ async fn unsaved_changes_are_kept_by_the_sweep_and_committed_before_a_removal_by
     let (items, _) = scan(&flow, context()).await;
     let folder = named(&items, "Work folder of “Flow”");
     assert!(!folder.item.checked, "a dirty folder is not in the sweep");
-    assert!(folder.item.selectable);
+    assert!(folder.item.selectable, "{:?}", folder.item);
     assert!(
         folder.item.reason.contains(&branch),
         "{}",
@@ -733,10 +737,7 @@ async fn an_idle_threads_leftover_temp_files_are_listed_and_swept() {
     use crate::manager::workers::{SessionTemp, session_temp_dir};
     let (flow, _worktree, _branch) = session("disk-thread-scratch").await;
     let tmp = session_temp_dir(&flow.conversation, SessionTemp::Thread);
-    crate::manager::flow::eventually("the request end's sweep", || {
-        std::fs::read_dir(&tmp).is_ok_and(|mut entries| entries.next().is_none())
-    })
-    .await;
+    crate::manager::flow::scratch_sweep_over(&flow, &tmp).await;
     let (items, _) = scan(&flow, context()).await;
     assert!(
         !labels(&items)
@@ -854,5 +855,47 @@ async fn the_site_icon_cache_is_listed_and_cleared() {
     assert!(cleaned.failures.is_empty(), "{cleaned:?}");
     assert!(cleaned.reclaimed >= 8 * 1024, "{cleaned:?}");
     assert_eq!(std::fs::read_dir(&icons).unwrap().count(), 0);
+    flow.stop().await;
+}
+
+/// Brigadier's own git command working in a folder doesn't keep it as busy; anything else does.
+#[tokio::test]
+async fn only_what_is_not_brigadiers_own_git_keeps_a_folder_busy() {
+    use std::process::{Command, Stdio};
+    let (flow, _, _) = session("disk-busy").await;
+    let folder = Outside::new("busy");
+    let processes = flow.manager.runtime.platform().processes();
+    assert!(!super::busy_in(processes, &folder.0));
+    // `git hash-object --stdin` waits for its input: a read of ours, still going.
+    let mut git = Command::new("git")
+        .args(["hash-object", "--stdin"])
+        .current_dir(&folder.0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    crate::manager::flow::eventually("git in the folder", || {
+        processes
+            .in_dir(&folder.0)
+            .is_ok_and(|found| found.contains(&git.id()))
+    })
+    .await;
+    assert!(!super::busy_in(processes, &folder.0));
+    let mut sleep = Command::new("sleep")
+        .arg("30")
+        .current_dir(&folder.0)
+        .spawn()
+        .unwrap();
+    crate::manager::flow::eventually("sleep in the folder", || {
+        processes
+            .in_dir(&folder.0)
+            .is_ok_and(|found| found.contains(&sleep.id()))
+    })
+    .await;
+    assert!(super::busy_in(processes, &folder.0));
+    sleep.kill().unwrap();
+    sleep.wait().unwrap();
+    drop(git.stdin.take());
+    git.wait().unwrap();
     flow.stop().await;
 }

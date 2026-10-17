@@ -1183,6 +1183,30 @@ fn unused(
     }
 }
 
+/// Whether something runs in `dir`: a process working in it, or one that can't be told. Brigadier's
+/// own git commands don't count: it reads folders as it goes (this scan, the change watch), and
+/// such a read is over in a moment. What its agents run there counts, and their own git too.
+fn busy_in(processes: &dyn brigadier_sandbox::Processes, dir: &Path) -> bool {
+    let Ok(found) = processes.in_dir(dir) else {
+        return true;
+    };
+    if found.is_empty() {
+        return false;
+    }
+    // Read after the search, so a git command of ours found in it is among them; one gone by
+    // now runs nothing.
+    let own = processes.children(std::process::id()).unwrap_or_default();
+    found.iter().any(|pid| {
+        let ours_git = own.contains(pid)
+            && processes.command_line(*pid).is_some_and(|args| {
+                args.first()
+                    .and_then(|program| Path::new(program).file_stem())
+                    .is_some_and(|stem| stem == "git")
+            });
+        !ours_git && processes.is_alive(*pid) && !processes.is_zombie(*pid)
+    })
+}
+
 fn older_than(path: &Path, age: Duration) -> bool {
     last_change(path)
         .and_then(|changed| changed.elapsed().ok())
@@ -1239,10 +1263,7 @@ impl Scanner<'_> {
     }
 
     fn busy(&self, dir: &Path) -> bool {
-        self.platform
-            .processes()
-            .in_dir(dir)
-            .map_or(true, |found| !found.is_empty())
+        busy_in(self.platform.processes(), dir)
     }
 
     fn push(&mut self, item: CleanItem, action: Action) {

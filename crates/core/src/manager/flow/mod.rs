@@ -1267,6 +1267,22 @@ where
     }
 }
 
+/// Waits until the session's thread scratch sweep after its last turn is over and left `tmp`
+/// empty. A folder that reads empty isn't enough: a sweep still at it removes what the test puts
+/// there next (#187).
+pub(crate) async fn scratch_sweep_over(flow: &Flow, tmp: &std::path::Path) {
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    eventually_async("the thread scratch sweep", || {
+        let conv = conv.clone();
+        async move {
+            !conv.scratch_used.load(std::sync::atomic::Ordering::SeqCst)
+                && conv.scratch_idle().await
+                && std::fs::read_dir(tmp).is_ok_and(|mut entries| entries.next().is_none())
+        }
+    })
+    .await;
+}
+
 // ----- what a test leaves -----------------------------------------------------------------
 
 /// How a test's folders are named: `brigadier-flow-<name>-<pid>-<uuid>`.
