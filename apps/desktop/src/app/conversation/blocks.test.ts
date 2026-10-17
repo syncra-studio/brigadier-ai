@@ -20,6 +20,7 @@ import {
   isUpdate,
   judgementCall,
   peerOf,
+  reopenedSince,
   shownBranch,
   type SequenceEntry,
   type ThreadNode,
@@ -804,4 +805,14 @@ test("a block still at work answers with the reply its CLI called the final answ
   assert.equal(answeringIndex(texts, [text(1, 3), text(0, 4)]), null);
   assert.equal(answeringIndex(texts, [text(1, 3), { kind: "steer", position: 4, text: "more", atMs: 0, attachments: [] } as SequenceEntry]), null);
   assert.equal(answeringIndex([{}], [text(0, 1)]), null);
+});
+
+test("a request that works again after its answer reads as reopened, not as still answering", () => {
+  // Answered at 5s while its span ran on (a review it waits for): still the answer's own work.
+  assert.equal(reopenedSince([{ fromMs: 1_000, toMs: null }], 5_000), false);
+  // Done at 6s, then a late full-checks result made it work again at 9s.
+  assert.equal(reopenedSince([{ fromMs: 1_000, toMs: 6_000 }, { fromMs: 9_000, toMs: null }], 5_000), true);
+  // Done, and nothing reopened it.
+  assert.equal(reopenedSince([{ fromMs: 1_000, toMs: 6_000 }], 5_000), false);
+  assert.equal(reopenedSince([{ fromMs: 9_000, toMs: null }], undefined), false);
 });

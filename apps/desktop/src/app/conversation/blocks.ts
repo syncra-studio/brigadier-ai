@@ -1110,6 +1110,15 @@ export function answeringIndex(texts: readonly { answerAtMs?: number }[], sequen
   return texts[newest.index]?.answerAtMs === undefined ? null : newest.index;
 }
 
+/**
+ * Whether a request works again since its answer started at `answerAtMs`: a late result (a
+ * failed full check, say) reopened it, so its answer is no longer what it is doing (#107).
+ */
+export function reopenedSince(worked: readonly WorkSpan[], answerAtMs: number | undefined): boolean {
+  const last = worked.at(-1);
+  return answerAtMs !== undefined && last !== undefined && last.toMs === null && last.fromMs > answerAtMs;
+}
+
 /** The update lines under a finished block's answer: the replies after it, by index. */
 export function updateIndices(texts: readonly unknown[], answer: number | null): number[] {
   return answer === null ? [] : texts.map((_, index) => index).filter((index) => index > answer);

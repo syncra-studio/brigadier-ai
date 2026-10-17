@@ -51,6 +51,7 @@ import {
   isImageStep,
   isLive,
   isRunRequest,
+  reopenedSince,
   type SequenceEntry as Entry,
   updateIndices,
   turnTime,
@@ -863,7 +864,7 @@ export const RequestBlock: FC = () => {
               </div>
             )}
             {/* Answered, it may still wait for another session's reply: that line stays under the answer. */}
-            {answering !== null && <AnsweredStatus {...status} waiting={meta.state === "waiting"} />}
+            {answering !== null && <AnsweredStatus {...status} waiting={meta.state === "waiting"} reopened={meta.state === "working" && reopenedSince(meta.worked, answerAtMs)} />}
             {/* A late event's "Update: …" line: small, under the answer, never a new answer. */}
             {updates.map((index) => (
               <div
