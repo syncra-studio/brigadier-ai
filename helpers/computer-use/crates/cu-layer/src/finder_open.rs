@@ -15,13 +15,15 @@
 //!
 //! - an element gesture reads the file from the element's row (`AXURL`);
 //! - a key or menu gesture reads the items selected in the Finder window;
-//! - a pixel double-click first clicks once with the driver's own `click`,
-//!   which should select the item under it, then reads the selection. A
-//!   background click on a Finder row isn't reliably read back this way
-//!   (live-verified: the selection stayed empty), so when nothing comes back
-//!   selected this gesture is refused with a plain answer pointing at
-//!   `element_token` addressing, rather than falling through to a raw
-//!   double-click that would silently open nothing.
+//! - a pixel double-click reads the file of the item at the point: the row
+//!   (list and column views) or icon whose frame holds it, in the window's
+//!   Accessibility tree, which also answers for a covered window or one on
+//!   another Space. A background click never selects a Finder row, so the
+//!   selection can't tell. Only when no item is there does it fall back to
+//!   clicking once with the driver's own `click` and reading the selection;
+//!   when nothing comes back selected the gesture is refused with a plain
+//!   answer pointing at `element_token` addressing, rather than falling
+//!   through to a raw double-click that would silently open nothing.
 //!
 //! [`install`] wraps the driver's tools; call it before
 //! [`crate::guard::install`], so the guard checks the target first. The
@@ -149,6 +151,33 @@ fn menu_open(path: &[&str]) -> Option<Gesture> {
     }
 }
 
+/// A plain left click with no modifier keys in the background, without a
+/// debug image: the only pixel double-click that opens the file under it.
+/// Others go to the driver's `click`, which says what it does with them.
+fn plain_click(args: &Value) -> bool {
+    let empty = |key: &str| {
+        args.get(key)
+            .is_none_or(|value| value.is_null() || value.as_array().is_some_and(Vec::is_empty))
+    };
+    let left = args
+        .get("button")
+        .and_then(Value::as_str)
+        .is_none_or(|button| button.eq_ignore_ascii_case("left"));
+    let background = args
+        .get("delivery_mode")
+        .and_then(Value::as_str)
+        .is_none_or(|mode| mode.eq_ignore_ascii_case("background"));
+    let press = args
+        .get("action")
+        .and_then(Value::as_str)
+        .is_none_or(|action| action.eq_ignore_ascii_case("press"));
+    // A debug image is drawn by the driver's click.
+    let debug = args
+        .get("debug_image_out")
+        .is_some_and(|out| !out.is_null());
+    left && background && press && !debug && empty("modifier") && empty("modifiers")
+}
+
 /// The pid a call names, also through its element token.
 pub fn target_pid(args: &Value) -> Option<i32> {
     let pid = args.get("pid").and_then(Value::as_i64).or_else(|| {
@@ -181,10 +210,78 @@ pub trait Finder: Send + Sync {
     fn element_files(&self, pid: i32, args: &Value) -> Vec<PathBuf>;
     /// The files selected in `window_id` (else Finder's focused window).
     fn selected_files(&self, pid: i32, window_id: Option<u32>) -> Vec<PathBuf>;
+    /// The file of the item at the pixel `x`, `y` of `args` in `window_id`
+    /// (see [`file_at`]).
+    fn files_at(&self, pid: i32, window_id: u32, args: &Value) -> Vec<PathBuf>;
     /// A folder Finder shows in a window (not a package such as an app).
     fn is_folder(&self, path: &Path) -> bool;
     /// The bundle id of the app Finder would open `path` in.
     fn default_app(&self, path: &Path) -> Option<String>;
+}
+
+/// One element of a window's Accessibility tree, for [`file_at`].
+pub trait Item: Sized {
+    fn role(&self) -> Option<String>;
+    /// `[x, y, width, height]` on screen.
+    fn frame(&self) -> Option<[f64; 4]>;
+    /// The local file the element itself names (its `AXURL`).
+    fn file(&self) -> Option<PathBuf>;
+    /// The elements in it; for a list, the rows it shows when it says which.
+    fn children(&self) -> Vec<Self>;
+}
+
+/// Elements looked at for one point; far more than the rows a window shows.
+const MAX_ITEMS: usize = 3000;
+/// How deep under a row the file's name field sits (row → cell → field).
+const ROW_DEPTH: usize = 3;
+
+/// The file of the item at screen `point` in `window`: the row that holds
+/// it (list and column views) or an element that names a file itself (an
+/// icon) whose frame holds it. An element whose frame doesn't hold the point
+/// is passed over with all it contains, so a row scrolled out of its list
+/// never counts; one without a frame is looked into but never taken itself.
+pub fn file_at<I: Item>(window: &I, point: (f64, f64)) -> Option<PathBuf> {
+    let mut budget = MAX_ITEMS;
+    item_file_at(window, point, &mut budget)
+}
+
+fn item_file_at<I: Item>(element: &I, (x, y): (f64, f64), budget: &mut usize) -> Option<PathBuf> {
+    if *budget == 0 {
+        return None;
+    }
+    *budget -= 1;
+    let holds = element.frame().map(|[left, top, width, height]| {
+        x >= left && y >= top && x < left + width && y < top + height
+    });
+    if holds == Some(false) {
+        return None;
+    }
+    if holds == Some(true) {
+        if element.role().as_deref() == Some("AXRow") {
+            return file_within(element, ROW_DEPTH);
+        }
+        if let Some(file) = element.file() {
+            return Some(file);
+        }
+    }
+    element
+        .children()
+        .iter()
+        .find_map(|child| item_file_at(child, (x, y), budget))
+}
+
+/// The file `element` or an element up to `depth` below it names.
+fn file_within<I: Item>(element: &I, depth: usize) -> Option<PathBuf> {
+    element.file().or_else(|| {
+        (depth > 0)
+            .then(|| {
+                element
+                    .children()
+                    .iter()
+                    .find_map(|child| file_within(child, depth - 1))
+            })
+            .flatten()
+    })
 }
 
 /// Calls the registry the tools are in (the guard included).
@@ -337,6 +434,13 @@ impl Tool for FinderOpen {
             Gesture::Element => (self.finder.element_files(pid, &args), None),
             Gesture::Selection { with } => (self.finder.selected_files(pid, window_id), with),
             Gesture::PixelDoubleClick => {
+                let at_point = window_id
+                    .filter(|_| plain_click(&args))
+                    .map(|window_id| self.finder.files_at(pid, window_id, &args))
+                    .unwrap_or_default();
+                if !at_point.is_empty() {
+                    return self.open_items(at_point, None, args).await;
+                }
                 let Some(click) = self.click.get() else {
                     return self.inner.invoke(args).await;
                 };
@@ -362,6 +466,19 @@ impl Tool for FinderOpen {
                 (items, None)
             }
         };
+        self.open_items(items, with, args).await
+    }
+}
+
+impl FinderOpen {
+    /// Opens `items` (folders stay with Finder) behind the user's work, or
+    /// hands the call to the driver when there is nothing it can open so.
+    async fn open_items(
+        &self,
+        items: Vec<PathBuf>,
+        with: Option<String>,
+        args: Value,
+    ) -> ToolResult {
         let files: Vec<PathBuf> = items
             .into_iter()
             .filter(|item| !self.finder.is_folder(item))
@@ -375,9 +492,7 @@ impl Tool for FinderOpen {
         };
         self.open(openings, args.get("session")).await
     }
-}
 
-impl FinderOpen {
     async fn open(&self, openings: Vec<Opening>, session: Option<&Value>) -> ToolResult {
         let mut texts = Vec::new();
         let mut first: Option<Value> = None;
@@ -532,6 +647,10 @@ impl Finder for System {
         unsafe { system::selected_files(pid, window_id) }
     }
 
+    fn files_at(&self, pid: i32, window_id: u32, args: &Value) -> Vec<PathBuf> {
+        system::files_at(pid, window_id, args)
+    }
+
     fn is_folder(&self, path: &Path) -> bool {
         path.is_dir() && !system::is_package(path)
     }
@@ -554,16 +673,16 @@ mod system {
     use objc2_foundation::{NSBundle, NSString, NSURL};
     use platform_macos::ax::bindings::{
         ax_get_window_id, copy_ax_windows_including, copy_children, copy_element_attr,
-        copy_url_attr, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
-        AXUIElementGetTypeID, AXUIElementRef,
+        copy_string_attr, copy_url_attr, element_screen_rect, AXUIElementCopyAttributeValue,
+        AXUIElementCreateApplication, AXUIElementGetTypeID, AXUIElementRef,
     };
     use serde_json::Value;
+
+    use super::ROW_DEPTH;
 
     /// Elements looked at for the selection; a Finder window has far fewer
     /// rows' worth of containers.
     const MAX_ELEMENTS: usize = 3000;
-    /// How deep under a row the file's name field sits (row → cell → field).
-    const ROW_DEPTH: usize = 3;
 
     pub fn element_files(pid: i32, args: &Value) -> Vec<PathBuf> {
         use cua_driver_core::element_token::ResolvedElement;
@@ -593,10 +712,12 @@ mod system {
         file.into_iter().collect()
     }
 
-    pub unsafe fn selected_files(pid: i32, window_id: Option<u32>) -> Vec<PathBuf> {
+    /// `window_id` of `pid` (else its focused window), also on another
+    /// Space, retained for the caller to release.
+    unsafe fn copy_window(pid: i32, window_id: Option<u32>) -> Option<AXUIElementRef> {
         let app = AXUIElementCreateApplication(pid);
         if app.is_null() {
-            return vec![];
+            return None;
         }
         let window = match window_id {
             Some(window_id) => {
@@ -614,7 +735,109 @@ mod system {
                 .or_else(|| copy_element_attr(app, "AXMainWindow")),
         };
         CFRelease(app as CFTypeRef);
-        let Some(window) = window else {
+        window
+    }
+
+    /// The file of the item at the call's pixel in `window_id`: the pixel
+    /// mapped to the screen as the driver's `click` maps it (the session's
+    /// screenshot or zoom of the window, then the window's frame and capture
+    /// scale), then [`super::file_at`] in the window's tree. Empty when any
+    /// step can't be proven.
+    pub fn files_at(pid: i32, window_id: u32, args: &Value) -> Vec<PathBuf> {
+        let Some(point) = screen_point(pid, window_id, args) else {
+            return vec![];
+        };
+        let Some(window) = (unsafe { copy_window(pid, Some(window_id)) }) else {
+            return vec![];
+        };
+        super::file_at(&Element(window), point)
+            .into_iter()
+            .collect()
+    }
+
+    fn screen_point(pid: i32, window_id: u32, args: &Value) -> Option<(f64, f64)> {
+        use cua_driver_core::snapshot_store::current_runtime_store;
+        use platform_macos::ax::snapshot::AxSnapshot;
+
+        let x = args.get("x").and_then(Value::as_f64)?;
+        let y = args.get("y").and_then(Value::as_f64)?;
+        // A capture-bound point is admitted by the driver's own capture check.
+        if args.get("capture_id").is_some_and(|id| !id.is_null()) {
+            return None;
+        }
+        let store = current_runtime_store::<AxSnapshot>()?;
+        let window = Some(u64::from(window_id));
+        let (x, y) = if args.get("from_zoom").and_then(Value::as_bool) == Some(true) {
+            let session = args.get("_session_id").and_then(Value::as_str);
+            store.zoom(pid, window, session).ok()?.zoom_to_window(x, y)
+        } else {
+            let ratio = store.screenshot_scale(pid, window, args).ok()?;
+            (x * ratio, y * ratio)
+        };
+        let bounds = platform_macos::windows::window_bounds_by_id(window_id)
+            .filter(|bounds| bounds.width > 0.0 && bounds.height > 0.0)?;
+        let png = platform_macos::capture::screenshot_window_bytes(window_id).ok()?;
+        let (width, height) = platform_macos::capture::png_dimensions(&png).ok()?;
+        let scale = capture_scale(
+            f64::from(width) / bounds.width,
+            f64::from(height) / bounds.height,
+        )?;
+        let (x, y) = (x / scale, y / scale);
+        (x >= 0.0 && y >= 0.0 && x <= bounds.width && y <= bounds.height)
+            .then(|| (bounds.x + x, bounds.y + y))
+    }
+
+    /// A window capture is 1× or 2× its frame; anything else is another
+    /// surface's.
+    fn capture_scale(scale_x: f64, scale_y: f64) -> Option<f64> {
+        let nearest = if (scale_x - 1.0).abs() <= (scale_x - 2.0).abs() {
+            1.0
+        } else {
+            2.0
+        };
+        ((scale_x - scale_y).abs() <= 0.03
+            && (scale_x - nearest).abs() <= 0.03
+            && (scale_y - nearest).abs() <= 0.03)
+            .then_some(nearest)
+    }
+
+    /// An element, released when dropped.
+    struct Element(AXUIElementRef);
+
+    impl Drop for Element {
+        fn drop(&mut self) {
+            unsafe { CFRelease(self.0 as CFTypeRef) };
+        }
+    }
+
+    impl super::Item for Element {
+        fn role(&self) -> Option<String> {
+            unsafe { copy_string_attr(self.0, "AXRole") }
+        }
+
+        fn frame(&self) -> Option<[f64; 4]> {
+            unsafe { element_screen_rect(self.0) }
+        }
+
+        fn file(&self) -> Option<PathBuf> {
+            unsafe { copy_url_attr(self.0) }
+                .filter(|url| url.starts_with("file://"))
+                .and_then(|url| file_path(&url))
+        }
+
+        fn children(&self) -> Vec<Self> {
+            unsafe {
+                let mut children = copy_elements_attr(self.0, "AXVisibleRows");
+                if children.is_empty() {
+                    children = copy_children(self.0);
+                }
+                children.into_iter().map(Element).collect()
+            }
+        }
+    }
+
+    pub unsafe fn selected_files(pid: i32, window_id: Option<u32>) -> Vec<PathBuf> {
+        let Some(window) = copy_window(pid, window_id) else {
             return vec![];
         };
         let mut files = Vec::new();
@@ -850,6 +1073,9 @@ mod tests {
         fn selected_files(&self, _pid: i32, _window_id: Option<u32>) -> Vec<PathBuf> {
             vec![]
         }
+        fn files_at(&self, _pid: i32, _window_id: u32, _args: &Value) -> Vec<PathBuf> {
+            vec![]
+        }
         fn is_folder(&self, _path: &Path) -> bool {
             false
         }
@@ -860,6 +1086,147 @@ mod tests {
                 _ => None,
             }
         }
+    }
+
+    /// A fake Accessibility element.
+    struct Fake {
+        role: &'static str,
+        frame: Option<[f64; 4]>,
+        file: Option<&'static str>,
+        children: Vec<Fake>,
+    }
+
+    impl Item for &Fake {
+        fn role(&self) -> Option<String> {
+            Some(self.role.to_owned())
+        }
+        fn frame(&self) -> Option<[f64; 4]> {
+            self.frame
+        }
+        fn file(&self) -> Option<PathBuf> {
+            self.file.map(PathBuf::from)
+        }
+        fn children(&self) -> Vec<Self> {
+            self.children.iter().collect()
+        }
+    }
+
+    fn el(role: &'static str, frame: [f64; 4], children: Vec<Fake>) -> Fake {
+        Fake {
+            role,
+            frame: Some(frame),
+            file: None,
+            children,
+        }
+    }
+
+    fn named(role: &'static str, frame: [f64; 4], file: &'static str) -> Fake {
+        Fake {
+            file: Some(file),
+            ..el(role, frame, vec![])
+        }
+    }
+
+    /// A list row as Finder shows it: row → cells → icon and name field (the
+    /// field names the file), then the date cell.
+    fn row(y: f64, file: &'static str) -> Fake {
+        el(
+            "AXRow",
+            [563.0, y, 761.0, 20.0],
+            vec![
+                el(
+                    "AXCell",
+                    [589.0, y, 326.0, 20.0],
+                    vec![
+                        el("AXImage", [589.0, y + 2.0, 16.0, 16.0], vec![]),
+                        named("AXTextField", [609.0, y + 1.0, 59.0, 18.0], file),
+                    ],
+                ),
+                el("AXCell", [915.0, y, 181.0, 20.0], vec![]),
+            ],
+        )
+    }
+
+    #[test]
+    fn the_item_at_a_point_is_the_row_or_icon_holding_it() {
+        let list = el(
+            "AXWindow",
+            [404.0, 180.0, 920.0, 436.0],
+            vec![
+                // The sidebar: rows without files.
+                el(
+                    "AXScrollArea",
+                    [404.0, 232.0, 159.0, 384.0],
+                    vec![el("AXRow", [404.0, 251.0, 159.0, 32.0], vec![])],
+                ),
+                el(
+                    "AXScrollArea",
+                    [563.0, 259.0, 761.0, 358.0],
+                    vec![Fake {
+                        role: "AXOutline",
+                        frame: None,
+                        file: None,
+                        children: vec![
+                            // Scrolled up under the column header.
+                            row(239.0, "/f/hidden.txt"),
+                            row(265.0, "/f/alpha.txt"),
+                            row(285.0, "/f/beta.txt"),
+                        ],
+                    }],
+                ),
+            ],
+        );
+        let at = |x, y| file_at(&&list, (x, y));
+        // On the name, or anywhere else on the row.
+        assert_eq!(at(630.0, 275.0), Some(PathBuf::from("/f/alpha.txt")));
+        assert_eq!(at(1000.0, 295.0), Some(PathBuf::from("/f/beta.txt")));
+        // Under the header, over a row scrolled out of the list.
+        assert_eq!(at(630.0, 250.0), None);
+        // Below the last row, in the sidebar, outside the window.
+        assert_eq!(at(900.0, 500.0), None);
+        assert_eq!(at(480.0, 260.0), None);
+        assert_eq!(at(100.0, 100.0), None);
+        // A row without a frame is never taken for a point on it.
+        let unframed = el(
+            "AXWindow",
+            [404.0, 180.0, 920.0, 436.0],
+            vec![Fake {
+                frame: None,
+                ..row(265.0, "/f/alpha.txt")
+            }],
+        );
+        assert_eq!(file_at(&&unframed, (1000.0, 275.0)), None);
+        // Its name field, framed, still names its file.
+        assert_eq!(
+            file_at(&&unframed, (630.0, 275.0)),
+            Some(PathBuf::from("/f/alpha.txt"))
+        );
+
+        let icons = el(
+            "AXWindow",
+            [404.0, 180.0, 920.0, 436.0],
+            vec![el(
+                "AXList",
+                [573.0, 242.0, 336.0, 112.0],
+                vec![
+                    el(
+                        "AXGroup",
+                        [597.0, 246.0, 64.0, 64.0],
+                        vec![named("AXImage", [597.0, 246.0, 64.0, 64.0], "/f/alpha.txt")],
+                    ),
+                    el(
+                        "AXGroup",
+                        [709.0, 246.0, 64.0, 64.0],
+                        vec![named("AXImage", [709.0, 246.0, 64.0, 64.0], "/f/beta.txt")],
+                    ),
+                ],
+            )],
+        );
+        assert_eq!(
+            file_at(&&icons, (740.0, 280.0)),
+            Some(PathBuf::from("/f/beta.txt"))
+        );
+        assert_eq!(file_at(&&icons, (680.0, 280.0)), None);
     }
 
     #[test]

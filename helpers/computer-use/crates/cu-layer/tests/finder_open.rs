@@ -58,6 +58,15 @@ impl Finder for FakeFinder {
     fn selected_files(&self, _pid: i32, _window_id: Option<u32>) -> Vec<PathBuf> {
         vec![PathBuf::from("/fx/a.txt"), PathBuf::from("/fx/sub")]
     }
+    /// `b.txt`'s row is at (100, 80) in window 5; nothing else is a row.
+    fn files_at(&self, _pid: i32, window_id: u32, args: &Value) -> Vec<PathBuf> {
+        let at = |key: &str| args.get(key).and_then(Value::as_f64);
+        if window_id == 5 && at("x") == Some(100.0) && at("y") == Some(80.0) {
+            vec![PathBuf::from("/fx/b.txt")]
+        } else {
+            vec![]
+        }
+    }
     fn is_folder(&self, path: &Path) -> bool {
         path.extension().is_none()
     }
@@ -255,6 +264,66 @@ async fn a_pixel_double_click_selects_then_opens_behind() {
     assert_eq!(tools, ["launch_app"]);
 }
 
+#[tokio::test]
+async fn a_pixel_double_click_on_a_row_opens_its_file_behind_without_clicking() {
+    for (tool, args) in [
+        (
+            "double_click",
+            json!({"pid": FINDER, "window_id": 5, "x": 100, "y": 80}),
+        ),
+        (
+            "click",
+            json!({"pid": FINDER, "window_id": 5, "x": 100, "y": 80, "count": 2}),
+        ),
+    ] {
+        let (registry, seen) = build(false);
+        let result = registry.invoke(tool, args).await;
+        assert_ne!(result.is_error, Some(true), "{tool}");
+        assert!(
+            seen.lock().unwrap().driver.is_empty(),
+            "{tool}: no click reaches Finder"
+        );
+        assert_eq!(
+            launches(&seen),
+            vec![json!({"bundle_id": "com.apple.TextEdit", "urls": ["/fx/b.txt"]})],
+            "{tool}"
+        );
+        assert!(
+            text_of(&result).contains("Opened b.txt in TextEdit"),
+            "{tool}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_modified_pixel_double_click_is_left_to_the_driver() {
+    for extra in [
+        json!({"modifier": ["ctrl"]}),
+        json!({"action": "hover"}),
+        json!({"button": "right"}),
+        json!({"debug_image_out": "/tmp/x.png"}),
+    ] {
+        let (registry, seen) = build(false);
+        let mut args = json!({"pid": FINDER, "window_id": 5, "x": 100, "y": 80, "count": 2});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        registry.invoke("click", args).await;
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.driver,
+            ["click"],
+            "{extra}: the driver's click checks it first"
+        );
+        let opened: Vec<_> = seen
+            .nested
+            .iter()
+            .flat_map(|(_, args)| args["urls"].as_array().cloned().unwrap_or_default())
+            .collect();
+        assert!(!opened.contains(&json!("/fx/b.txt")), "{extra}: {opened:?}");
+    }
+}
+
 /// A `selected_files` that never reports anything selected, as the real
 /// driver didn't after a background pixel click in a live probe.
 struct NothingSelectedFinder;
@@ -267,6 +336,9 @@ impl Finder for NothingSelectedFinder {
         vec![]
     }
     fn selected_files(&self, _pid: i32, _window_id: Option<u32>) -> Vec<PathBuf> {
+        vec![]
+    }
+    fn files_at(&self, _pid: i32, _window_id: u32, _args: &Value) -> Vec<PathBuf> {
         vec![]
     }
     fn is_folder(&self, path: &Path) -> bool {
