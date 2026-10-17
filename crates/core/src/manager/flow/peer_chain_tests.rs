@@ -1,9 +1,10 @@
 //! The engine's loop rules for messages between sessions (SESSION-MESSAGING-PLAN.md §5.5):
-//! every message carries the chain of the input that led to it, eight go back and forth with
-//! no one's word before the ninth is refused, and one session sends another at most twenty a
-//! minute.
+//! every message carries the chain of the input that led to it, a send after eight went back
+//! and forth with no one's word goes and says so (Q67), and one session sends another at most
+//! twenty a minute.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use brigadier_providers::ProviderKind;
 
@@ -70,12 +71,12 @@ async fn a_forwarded_message_keeps_its_chain_and_counts_hops() {
     flow.stop().await;
 }
 
-/// Two sessions that answer each other forever: eight messages go, the ninth is refused in
-/// the plan's words, and nothing more is sent but the replies: the refused turn's answer to the
-/// eighth, then each message's own reply as the requests waiting on it end, back to the first.
-/// The user's next message starts a new chain, whose first message goes again.
+/// Two sessions that would answer each other forever: eight messages go, the ninth goes too and
+/// its result says eight went with no one's input, a fact the threads judge: told it, they stop
+/// sending, and nothing more is sent but the replies, each as the request waiting on it ends,
+/// back to the first. The user's next message starts a new chain, at hop 1 with no such fact.
 #[tokio::test]
-async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() {
+async fn the_ninth_message_with_no_ones_word_goes_and_says_so() {
     let peers = Peers::new();
     // Every message waits for the next turn, so each turn takes one and sends one.
     let options = Options {
@@ -90,29 +91,36 @@ async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() 
         .add_session("API work", None, ProviderKind::Codex)
         .await;
     let all = Sent::default();
+    // Set once a send's result says how many went with no one's input.
+    let told = Arc::new(AtomicBool::new(false));
     for (from, to) in [
         (flow.conversation.clone(), api.clone()),
         (api.clone(), flow.conversation.clone()),
     ] {
-        let all = all.clone();
+        let (all, told) = (all.clone(), told.clone());
         peers.on(&from, move |turn| {
-            let (all, to) = (all.clone(), to.clone());
+            let (all, to, told) = (all.clone(), to.clone(), told.clone());
             async move {
                 // A reply only informs: the turn it starts sends nothing.
                 if is_reply(&turn.input) {
                     return Reply::text("Noted.");
                 }
+                // Told the chain ran long, the threads stop, until the user writes again.
+                if told.load(Ordering::SeqCst) && !turn.input.contains("One more question") {
+                    return Reply::text("Enough.");
+                }
                 let reply = send(&turn, &to, "What do you think?", None).await;
+                if reply.0.contains("with no one's input") {
+                    told.store(true, Ordering::SeqCst);
+                }
                 all.lock().unwrap().push(reply);
                 Reply::text("Asked.")
             }
         });
     }
     flow.say("Talk it over with the API session.").await;
-    flow.until("the ninth refused", |_| {
-        all.lock().unwrap().iter().any(|(_, failed)| *failed)
-    })
-    .await;
+    flow.until("the ninth sent", |_| all.lock().unwrap().len() == 9)
+        .await;
     // Each message is owed one reply, sent as the request waiting on the next one's reply
     // ends: they go back one by one, in turns of their own, so wait for the last on each side.
     for id in [&flow.conversation, &api] {
@@ -131,15 +139,17 @@ async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() 
     flow.settled_in(&api).await;
     let sends = all.lock().unwrap().clone();
     assert_eq!(sends.len(), 9, "{sends:#?}");
-    assert!(sends[..8].iter().all(|(_, failed)| !failed), "{sends:#?}");
+    assert!(sends.iter().all(|(_, failed)| !failed), "{sends:#?}");
+    assert!(
+        sends[..8]
+            .iter()
+            .all(|(reply, _)| !reply.contains("no one's input")),
+        "{sends:#?}"
+    );
+    let ninth: serde_json::Value = serde_json::from_str(&sends[8].0).unwrap();
     assert_eq!(
-        sends[8],
-        (
-            "Eight messages have gone back and forth with no one's input. Ask your user before \
-             sending more."
-                .to_owned(),
-            true
-        )
+        ninth["note"],
+        "8 messages went back and forth with no one's input before this one."
     );
     let (board, at_api) = (flow.board().await, flow.board_of(&api).await);
     let sent: Vec<_> = board
@@ -155,16 +165,16 @@ async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() 
         .collect();
     asked.sort_by_key(|record| record.hop);
     let hops: Vec<u32> = asked.iter().map(|record| record.hop).collect();
-    assert_eq!(hops, (1..=8).collect::<Vec<_>>());
-    // Each message gets one reply, Brigadier's, one hop on and exempt from the hop rule; a
-    // reply starts no reply of its own. The turn whose send was refused still answers the
-    // eighth message; each earlier one is answered by the turn its reply woke.
+    assert_eq!(hops, (1..=9).collect::<Vec<_>>());
+    // Each message gets one reply, Brigadier's, one hop on; a reply starts no reply of its
+    // own. The ninth is answered by the turn that took it and sent nothing more; each earlier
+    // one by the turn its reply woke.
     let replies: Vec<&PeerRecord> = sent
         .iter()
         .copied()
         .filter(|record| record.reply_to.is_some())
         .collect();
-    assert_eq!(replies.len(), 8, "{sent:#?}");
+    assert_eq!(replies.len(), 9, "{sent:#?}");
     for message in &asked {
         let reply = replies
             .iter()
@@ -172,7 +182,11 @@ async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() 
             .unwrap_or_else(|| panic!("no reply to hop {}: {sent:#?}", message.hop));
         assert!(reply.automatic, "{reply:#?}");
         assert_eq!(reply.hop, message.hop + 1, "{reply:#?}");
-        let answer = if message.hop == 8 { "Asked." } else { "Noted." };
+        let answer = if message.hop == 9 {
+            "Enough."
+        } else {
+            "Noted."
+        };
         assert_eq!(reply.text, answer, "{reply:#?}");
     }
     // The user's word: a new chain, at hop 1 again.
@@ -183,6 +197,7 @@ async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() 
     .await;
     let (reply, failed) = all.lock().unwrap()[9].clone();
     assert!(!failed, "{reply}");
+    assert!(!reply.contains("no one's input"), "{reply}");
     let id = message_id(&reply);
     let record = flow.board().await.peer_messages[&id].clone();
     assert_eq!(record.hop, 1);

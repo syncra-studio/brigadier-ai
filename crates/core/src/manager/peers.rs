@@ -15,10 +15,10 @@ use crate::work::{
 };
 use crate::{Error, Result, now_ms};
 
-/// Messages between sessions with no one's word in between after which a turn may send no
-/// more (SESSION-MESSAGING-PLAN.md §5.5).
+/// Messages between sessions with no one's word in between after which a send's result says
+/// how many went (Q67: a fact for the thread, not a refusal).
 const MAX_HOPS: u32 = 8;
-/// Messages one session may send another in a minute.
+/// Messages one session may send another in a minute: the one runaway brake.
 const PAIR_RATE: usize = 20;
 const MINUTE_MS: i64 = 60_000;
 
@@ -35,6 +35,14 @@ fn reachable(conversation: &Conversation) -> bool {
         && conversation.tab_chat.is_none()
         && conversation.side_of.is_none()
         && !conversation.deleting
+}
+
+/// What a send from a turn at hop `turn_hop` tells its thread once [`MAX_HOPS`] messages went
+/// with no one's word in between: a fact to judge, the send itself goes (Q67).
+fn hops_note(turn_hop: u32) -> Option<String> {
+    (turn_hop >= MAX_HOPS).then(|| {
+        format!("{turn_hop} messages went back and forth with no one's input before this one.")
+    })
 }
 
 /// `text` cut to [`READ_EACH_BYTES`] at a line boundary (inside a line only when its first
@@ -346,9 +354,7 @@ impl SessionManager {
         };
         {
             let _checked = self.peer_sends.lock().await;
-            self.may_send(caller, &target, chain.hop)
-                .await
-                .map_err(refused)?;
+            self.may_send(caller, &target).await.map_err(refused)?;
             self.core
                 .record_peer_send(&send, ask)
                 .await
@@ -388,15 +394,18 @@ impl SessionManager {
         let delivery = self.deliver_peer(&target.id, &send.message_id).await;
         // The sender may stream its answer before this turn ends: publish its peer wait now.
         self.settle_requests(caller).await;
-        Ok(serde_json::json!({
+        let mut result = serde_json::json!({
             "message_id": send.message_id,
             "state": delivery.word(),
-        })
-        .to_string())
+        });
+        if let Some(note) = hops_note(chain.hop) {
+            result["note"] = note.into();
+        }
+        Ok(result.to_string())
     }
 
     /// The user answered the card of a send that waited for their OK: on Send it goes as
-    /// written, unless its target is gone or archived or the hop or rate rule no longer
+    /// written, unless its target is gone or archived or the rate rule no longer
     /// holds; on Don't send it is declined. The sender's next turn hears which, and what the
     /// user wrote when they didn't send it (a card's Reply…).
     pub(super) async fn answer_peer_card(
@@ -494,10 +503,7 @@ impl SessionManager {
         };
         {
             let _checked = self.peer_sends.lock().await;
-            if let Err(err) = self
-                .may_send(from, &target, record.hop.saturating_sub(1))
-                .await
-            {
+            if let Err(err) = self.may_send(from, &target).await {
                 return refuse(err.to_string()).await;
             }
             self.core
@@ -542,21 +548,9 @@ impl SessionManager {
         ))
     }
 
-    /// The engine's hard rules for one more send from `caller` to `target` from a turn at
-    /// hop `turn_hop`: the hop limit and the pair rate (SESSION-MESSAGING-PLAN.md §5.5).
-    async fn may_send(
-        &self,
-        caller: &ConversationId,
-        target: &Conversation,
-        turn_hop: u32,
-    ) -> Result<()> {
-        if turn_hop >= MAX_HOPS {
-            return Err(Error::Invalid(
-                "Eight messages have gone back and forth with no one's input. Ask your user \
-                 before sending more."
-                    .into(),
-            ));
-        }
+    /// The engine's hard rule for one more send from `caller` to `target`: the pair rate
+    /// (SESSION-MESSAGING-PLAN.md §5.5).
+    async fn may_send(&self, caller: &ConversationId, target: &Conversation) -> Result<()> {
         let since = now_ms() - MINUTE_MS;
         let board = self.core.board(caller).await?;
         let recent = board

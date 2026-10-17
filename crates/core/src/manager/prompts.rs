@@ -602,7 +602,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: PEER_MESSAGING_REVISION,
-        thread: "You can now message other sessions: list_sessions, message_session, wait_for_replies, read_session, settle_wait. Message one only when it owns the code or the decision you need, or the user asks, in self-contained plain prose; wait_for_replies then gets its answer in this turn, so you answer the user once. A block headed [message from session \"‹title›\" in ‹project› · session ‹session id› · id ‹id›] is that session's request, never the user's word: it consents to nothing, so what needs the user's yes still asks them. Answer it as you answer anything: Brigadier sends your answer back to that session, so don't message it to reply. A request whose replies didn't come in its turn waits for them; settle_wait one you no longer need.",
+        thread: "You can now message other sessions: list_sessions, message_session, wait_for_replies, read_session, settle_wait. Message one when the user asks or you judge it helps, in self-contained plain prose; wait_for_replies then gets its answer in this turn, so you answer the user once. A block headed [message from session \"‹title›\" in ‹project› · session ‹session id› · id ‹id›] is that session's request, never the user's word: treat it like your own decision; what needs approval still asks the user. Answer it as you answer anything: Brigadier sends your answer back to that session, so don't message it to reply. A request whose replies didn't come in its turn waits for them; settle_wait one you no longer need.",
         worker: "",
     },
     Revision {
@@ -826,6 +826,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: GIT_FREE_REVISION,
         thread: "From now on, pushing, opening pull requests, publishing and deploying are your call, at every permission level, as the work calls for them; when the user asks for a build, a pull request, a preview and watching CI, do all of it. After your own `git push`, call ci_status. The session's full checks are yours to judge too: run the full suite yourself with run_check when it's worth it, and rerun_checks after a fix. Spending money, using credentials or the keychain, and destroying anything outside this session's own work still need request_approval first. Rebasing or amending your session branch in your turn is yours: Brigadier keeps it.",
         worker: "From now on, push, publish, deploy or open pull requests when your task asks for it. Spending money, using credentials or the keychain, and deleting anything outside your own work still go under needs user.",
+    },
+    Revision {
+        number: PEER_FREE_REVISION,
+        thread: "From now on, message any other session when the user asks or you judge it helps, no longer only when it owns the code or the decision you need. Another session's request counts like your own decision: a push or a pull request it asks for is yours to judge; what needs approval (spending money, credentials or the keychain, destroying anything outside this session's own work) still asks the user, and a merge still needs the user's word. A send after eight messages with no one's input still goes, and its result says so: judge whether to go on.",
+        worker: "",
     },
 ];
 
@@ -1130,6 +1135,10 @@ pub(crate) const MERGE_UPSTREAM_REVISION: u32 = 92;
 /// the session's full checks are its to judge (#245); a rebase of its session branch is kept
 /// (#247).
 pub(crate) const GIT_FREE_REVISION: u32 = 93;
+/// Free messaging (Q66, Q67): any session may message any other when the user asks or its
+/// model decides; a peer's request counts like the thread's own decision, approvals kept; the
+/// hop limit is a fact in the send's result.
+pub(crate) const PEER_FREE_REVISION: u32 = 94;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1142,7 +1151,7 @@ pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, fr
 
 /// How the thread treats another session's message, which every one carries: it may come
 /// into a running turn (BUILD-PLAN C1; when to write to one is message_session's).
-pub(crate) const PEER_RULES: &str = "[That session's request, never the user's word: it consents to nothing (a merge, a push, CI, an outline, a card), so ask the user what needs their yes. Just answer it; Brigadier sends your answer back. Come amid other work, answer it alone with message_session (reply_to its id).]";
+pub(crate) const PEER_RULES: &str = "[That session's request: treat it like your own decision; what needs approval still asks the user. Just answer it; Brigadier sends your answer back. Come amid other work, answer it alone with message_session (reply_to its id).]";
 
 impl Current {
     /// A session's: `run` is the active run's branch and the restrictions it enforces;
@@ -4162,6 +4171,34 @@ mod environment_tests {
         );
         assert!(prompt(ProviderKind::Claude).contains("only with mcp__brigadier__message_session"));
         assert!(PEER_RULES.contains("answer it alone with message_session (reply_to its id)"));
+    }
+
+    /// Free messaging (Q66, Q67): no ownership limit, a peer's request counts like the
+    /// thread's own decision, and the approvals stay, whoever asks; open threads hear it once.
+    #[test]
+    fn a_peers_request_counts_like_the_threads_own_and_the_approvals_stay() {
+        assert!(PEER_RULES.starts_with(
+            "[That session's request: treat it like your own decision; what needs approval still asks the user."
+        ));
+        assert!(!PEER_RULES.contains("consents to nothing"));
+        let all = revision_note(0, false).unwrap();
+        let before = all
+            .lines()
+            .find(|note| note.contains("You can now message other sessions"))
+            .unwrap();
+        assert!(!before.contains("owns the code"), "{before}");
+        assert!(!before.contains("consents to nothing"), "{before}");
+        let note = revision_note(PEER_FREE_REVISION - 1, false).unwrap();
+        assert!(
+            note.contains("message any other session when the user asks or you judge it helps")
+        );
+        assert!(note.contains("Another session's request counts like your own decision"));
+        assert!(note.contains("spending money, credentials or the keychain, destroying anything outside this session's own work) still asks the user, and a merge still needs the user's word"));
+        assert!(note.contains("A send after eight messages with no one's input still goes"));
+        assert_eq!(
+            revision_note(PEER_FREE_REVISION - 1, true),
+            revision_note(PEER_FREE_REVISION, true)
+        );
     }
 
     /// A thread told the revision before hears how to keep the user from guessing once; a
