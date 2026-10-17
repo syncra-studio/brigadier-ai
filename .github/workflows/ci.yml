@@ -81,7 +81,8 @@ jobs:
   app-tests:
     name: App tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # A whole run takes 11 to 15 minutes; a file failing once is run again (#85), and that must fit.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
