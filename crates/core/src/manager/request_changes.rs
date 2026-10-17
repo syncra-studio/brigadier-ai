@@ -157,6 +157,10 @@ pub(super) struct Record {
     /// What a command left in a file no snapshot saw, before a later one moved it on.
     #[serde(default)]
     unseen: BTreeMap<String, Option<Blob>>,
+    /// Ignored files of the user's a command moved, removed or changed: no record keeps them,
+    /// so the files changed with them stay as they are.
+    #[serde(default)]
+    kept_out: BTreeSet<String>,
 }
 
 pub(super) enum Refresh<'a> {
@@ -298,7 +302,9 @@ impl Record {
             .paths
             .iter()
             .filter(|(_, owned)| owned.held.is_some())
-            .map(|(path, _)| (path.clone(), path.clone()))
+            .map(|(path, _)| path)
+            .chain(&self.kept_out)
+            .map(|path| (path.clone(), path.clone()))
             .collect();
         loop {
             let mut grew = false;
@@ -746,9 +752,6 @@ impl SessionManager {
                     Step::Shell(shell, after_command) => {
                         let mut group = BTreeMap::new();
                         let mut together = BTreeSet::new();
-                        // An ignored file of the user's the command moved, removed or changed:
-                        // no record keeps it, so the command's files stay as they are with it.
-                        let mut hold_with = None;
                         for (path, before, after) in shell.changes {
                             let previous_blob = previous.get(&path).cloned().map(Blob::from);
                             let current_blob = current.get(&path).cloned().map(Blob::from);
@@ -769,7 +772,7 @@ impl SessionManager {
                                     continue;
                                 }
                                 if repo.is_ignored(&path).unwrap_or(true) {
-                                    hold_with = Some(path);
+                                    record.kept_out.insert(path);
                                 } else {
                                     record.own(
                                         &path,
@@ -799,15 +802,6 @@ impl SessionManager {
                                 after_command,
                             );
                             group.insert(path, (before, after));
-                        }
-                        if let Some(ignored) = hold_with {
-                            for path in group.keys() {
-                                if let Some(owned) = record.paths.get_mut(path)
-                                    && owned.held.is_none()
-                                {
-                                    owned.held = Some(together_reason(path, &ignored));
-                                }
-                            }
                         }
                         if together.len() > 1 {
                             record.together.push(together);
@@ -931,13 +925,14 @@ impl SessionManager {
                 }
                 let mut files = Vec::new();
                 for (path, (before, after)) in group {
+                    // Only what the row shows: a diff git can't give as text shows none.
                     let diff = repo
                         .file_diff(
                             &path,
                             before.clone().map(Into::into).as_ref(),
                             after.clone().map(Into::into).as_ref(),
                         )
-                        .map_err(git_error)?;
+                        .unwrap_or_default();
                     let kind = match (&before, &after) {
                         (None, _) => FileChangeKind::Add,
                         (_, None) => FileChangeKind::Delete,

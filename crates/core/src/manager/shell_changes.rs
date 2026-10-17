@@ -195,6 +195,7 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
                 }
             }
             '\\' => word.extend(chars.next()),
+            '~' if word.is_empty() => return None,
             '*' | '?' | '[' | '{' | '}' | '$' | '`' => return None,
             c if c.is_whitespace() || ";|&<>()".contains(c) => {
                 words.push(std::mem::take(&mut word));
@@ -212,7 +213,8 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
 /// (`cd <dir> && …`), that is a file in the checkout, or a new file's name in one of its
 /// folders (`echo x > new.md`). Folders, `.git` and places outside the checkout (a symlinked
 /// folder that leads out) are left out. None of a command the shell makes names for
-/// (`mv u*.txt all.txt`): what it changed stays the user's to keep.
+/// (`mv u*.txt all.txt`), or that names a file outside the checkout (`mv /tmp/x.txt x.txt`),
+/// which Undo couldn't put back: what it changed stays the user's to keep.
 pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String> {
     let Ok(root) = root.canonicalize() else {
         return Vec::new();
@@ -228,6 +230,16 @@ pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String>
                 dirs.push(dir);
             }
         }
+    }
+    let outside = |word: &String| {
+        dirs.iter().any(|dir| {
+            dir.join(word)
+                .canonicalize()
+                .is_ok_and(|path| path.is_file() && !path.starts_with(&root))
+        })
+    };
+    if words.iter().any(|word| !word.is_empty() && outside(word)) {
+        return Vec::new();
     }
     let split = command
         .split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}[]=,$".contains(c))
@@ -430,6 +442,9 @@ mod tests {
             uuid::Uuid::now_v7()
         ));
         std::fs::create_dir_all(root.join("src/.git")).unwrap();
+        let outside = root.with_extension("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("x.md"), "x").unwrap();
         std::fs::create_dir_all(root.join(".git")).unwrap();
         std::fs::write(root.join("notes.md"), "x").unwrap();
         std::fs::write(root.join("src/lib.rs"), "x").unwrap();
@@ -465,10 +480,14 @@ mod tests {
             "cp notes.{md,txt} .",
             "ls | xargs -I x mv x notes.md",
             "mv `cat list` notes.md",
+            "mv ~/x.md notes.md",
         ] {
             assert_eq!(named(command, &root), [] as [String; 0], "{command}");
         }
         assert!(names("echo '$x *' >> notes.md", &root, "notes.md"));
+        let away = format!("mv {} notes.md", outside.join("x.md").display());
+        assert_eq!(named(&away, &root), [] as [String; 0]);
+        assert!(names("echo x > /dev/null; cat notes.md", &root, "notes.md"));
         std::fs::write(root.join("old name.txt"), "x").unwrap();
         for command in [
             "mv 'old name.txt' new.txt",
@@ -483,6 +502,7 @@ mod tests {
             assert!(named.iter().any(|n| n == "new.txt"), "{command}: {named:?}");
         }
         std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     /// Two runs of the same command, ended out of order: each end reads its own call's files,

@@ -2179,6 +2179,21 @@ async fn request_changes_never_split_a_shell_move() {
             .await;
             shell_reported(&turn, "bash-6", move_ignored).await;
             observed(&turn, 5).await;
+            // An ignored file of the user's, moved twice, the second time where the checkout
+            // keeps it.
+            std::fs::write(workspace.join("first.tmp"), "first\n").unwrap();
+            let (to_middle, to_kept) = ("mv first.tmp middle.tmp", "mv middle.tmp kept.txt");
+            shell(&turn, "bash-7", to_middle, |dir| {
+                std::fs::rename(dir.join("first.tmp"), dir.join("middle.tmp")).unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-7", to_middle).await;
+            shell(&turn, "bash-8", to_kept, |dir| {
+                std::fs::rename(dir.join("middle.tmp"), dir.join("kept.txt")).unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-8", to_kept).await;
+            observed(&turn, 6).await;
             Reply::text("Moved the files.")
         }),
     )
@@ -2202,6 +2217,7 @@ async fn request_changes_never_split_a_shell_move() {
             "e.txt",
             "g1.txt",
             "h.txt",
+            "kept.txt",
             "moved.txt",
             "result.txt",
             "user-new.txt"
@@ -2221,5 +2237,6 @@ async fn request_changes_never_split_a_shell_move() {
     assert_eq!(read("e.txt"), Some(format!("user\n{MOVED}")));
     assert_eq!(read("moved.txt"), Some(format!("yours\n{GLOBBED}")));
     assert_eq!(read("result.txt").as_deref(), Some("scratch\n"));
+    assert_eq!(read("kept.txt").as_deref(), Some("first\n"));
     flow.stop().await;
 }
