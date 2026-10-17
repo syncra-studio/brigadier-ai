@@ -95,7 +95,15 @@ export type PlanTabState = {
   /** The plan's title as last seen, for the tab before the plan loads. */
   title: string;
 };
-export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState;
+/**
+ * A conflicted file during a merge: its conflicts marked in place (Accept Current, Incoming,
+ * Both), both sides compared whole, or the merge editor. One tab per file and view.
+ */
+export type ConflictTabState = {
+  kind: "conflict"; id: string; opener: string | null; path: string; view: ConflictView;
+};
+export type ConflictView = "conflict" | "compare" | "merge";
+export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState | ConflictTabState;
 export type NewTabKind = "newTab" | "terminal" | "browser" | "sideChat" | "page";
 
 export type SessionTabs = {
@@ -477,6 +485,15 @@ export function openPlanTab(conversationId: string, plan: PlanDocRef, title: str
   update(conversationId, (current) => current.tabs.some((tab) => tab.id === id)
     ? { ...current, active: id, tabs: current.tabs.map((tab) => tab.id === id && tab.kind === "plan" ? { ...tab, title } : tab) }
     : { tabs: insertAfterActive(current, { kind: "plan", id, opener: current.active, plan, title }), active: id });
+  return id;
+}
+
+/** Shows `path`'s conflicts in `view`: its tab when it has one, else a new one after the tab in front. */
+export function openConflictTab(conversationId: string, path: string, view: ConflictView = "conflict"): string {
+  const id = `${view}:${path}`;
+  update(conversationId, (current) => current.tabs.some((tab) => tab.id === id)
+    ? { ...current, active: id }
+    : { tabs: insertAfterActive(current, { kind: "conflict", id, opener: current.active, path, view }), active: id });
   return id;
 }
 

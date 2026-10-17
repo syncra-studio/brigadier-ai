@@ -74,6 +74,10 @@ export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "page") return tab.title || "Untitled page";
   if (tab.kind === "mockup") return "Mockup";
   if (tab.kind === "plan") return tab.title || "Plan";
+  if (tab.kind === "conflict") {
+    return tab.view === "compare" ? `${baseName(tab.path)}: Current Changes ↔ Incoming Changes`
+      : tab.view === "merge" ? `Merging: ${baseName(tab.path)}` : baseName(tab.path);
+  }
   return baseName(tab.path);
 }
 
@@ -418,7 +422,7 @@ export function SessionTabBar({
                       }}
                       className="flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm"
                     >
-                      {tab.kind === "file" ? (
+                      {tab.kind === "file" || tab.kind === "conflict" ? (
                         <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
                       ) : tab.kind === "newTab" ? <Globe className="size-icon-sm shrink-0" />
                         : tab.kind === "browser" ? <BrowserTabIcon tabId={tab.id} />
@@ -429,7 +433,7 @@ export function SessionTabBar({
                         : tab.kind === "plan" ? <Lightbulb className="size-icon-sm shrink-0" /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
                       )}
-                      <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic")}>
+                      <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic", tab.kind === "conflict" && tab.view !== "compare" && "text-destructive")}>
                         {name}
                         {tab.kind === "mockup" && <MockupTabStatus conversationId={id} />}
                       </span>
@@ -564,6 +568,7 @@ const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ defau
 const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
 const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default: module.MockupView })));
 const PlanTab = lazy(() => import("./PlanTab").then((module) => ({ default: module.PlanTab })));
+const ConflictTab = lazy(() => import("./ConflictTab").then((module) => ({ default: module.ConflictTab })));
 const PageTabView = lazy(() => import("./pages/PageTabView").then((module) => ({ default: module.PageTabView })));
 const TabWithChat = lazy(() => import("./TabChat").then((module) => ({ default: module.TabWithChat })));
 
@@ -614,6 +619,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
                 : tab.kind === "plan" ? <PlanTab plan={tab.plan} />
+                : tab.kind === "conflict" ? <ConflictTab conversationId={conversationId} tab={tab} />
                 : (
                   <TabWithChat conversationId={conversationId} tab={tab}>
                     <PageTabView conversationId={conversationId} tab={tab} active={shown} />
