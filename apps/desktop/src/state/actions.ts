@@ -920,12 +920,6 @@ export async function cancelMerge(conversationId: string): Promise<string> {
   return text;
 }
 
-/** The user's click on "Merge into main": the session branch merges into its base, once. */
-export async function mergeSession(conversationId: string): Promise<string> {
-  const { text } = await request({ method: "mergeSession", conversationId });
-  return text;
-}
-
 /** "Close workspace": removes the session's own worktree; says what went and what stayed. */
 export async function closeWorkspace(conversationId: string): Promise<string> {
   const { text } = await request({ method: "closeWorkspace", conversationId });

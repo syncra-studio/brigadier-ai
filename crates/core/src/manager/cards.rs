@@ -562,7 +562,7 @@ impl SessionManager {
             QuestionKind::Merge { branch, base, .. } => {
                 self.conv(&conversation_id)?
                     .note(format!(
-                        "[answer] The user answered an old merge card for `{branch}` into `{base}` \"{}\". Merge cards are retired and no answer on one is consent: don't merge on it. The user merges with the side panel's \"Merge into main\", or by asking in their own words.",
+                        "[answer] The user answered an old merge card for `{branch}` into `{base}` \"{}\". Merge cards are retired and no answer on one is consent: don't merge on it. The user merges by asking in their own words.",
                         answers[0]
                     ))
                     .await;
@@ -809,7 +809,7 @@ impl SessionManager {
                             label: "finish session".into(),
                             task_id: None,
                             text: format!(
-                                "[not finished] The user had not answered whether to merge `{branch}` into `{base}` when Brigadier restarted; nothing was merged. Don't ask on a card: the user merges with \"Merge into main\" or in their own words; you may say once, in plain text, that the work is ready."
+                                "[not finished] The user had not answered whether to merge `{branch}` into `{base}` when Brigadier restarted; nothing was merged. Don't ask on a card: the user merges by asking in their own words; you may say once, in plain text, that the work is ready."
                             ),
                         },
                         approval.request_id.clone(),
