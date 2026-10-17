@@ -734,7 +734,7 @@ function clickInput(event: MouseEvent): AnswerInput {
  * The card shared by questions and "Implement this plan?": numbered answers (1–9 light, ↑/↓
  * move, Enter picks the lit one; a pick shows its dot, then goes), then the free-text row
  * with Skip, which turns into Submit once something is typed (Next, before a round's last
- * question; ←/→ page through the round). Esc or × puts it aside.
+ * question; ←/→ page through the round). Esc puts it aside; ×, with `onClose`, does that.
  *
  * Enter picks the lit answer only from the focused card, never from elsewhere in the window: a
  * click in the thread and Enter answers nothing. Every answer may change code or be hard to undo
@@ -787,6 +787,7 @@ function ChoiceCard({
   onSkip,
   skipLabel = "Skip",
   onDismiss,
+  onClose,
   busy,
   error,
   footer,
@@ -821,6 +822,8 @@ function ChoiceCard({
   /** What the button reads while nothing is typed. */
   skipLabel?: string;
   onDismiss: () => void;
+  /** What × does instead of putting the card aside, and its label. */
+  onClose?: { label: string; run: () => void };
   busy: boolean;
   error: string | null;
   footer: ReactNode;
@@ -937,7 +940,15 @@ function ChoiceCard({
       onKeyDown={onKeyDown}
     >
       <div {...row(0)}>
-        <ActionCardQuestion onDismiss={onDismiss} detail={detail} aside={pager}>
+        <ActionCardQuestion
+          onDismiss={() => {
+            if (!onClose) onDismiss();
+            else if (idle) onClose.run();
+          }}
+          dismissLabel={onClose?.label}
+          detail={detail}
+          aside={pager}
+        >
           {title}
         </ActionCardQuestion>
       </div>
@@ -1063,6 +1074,9 @@ function QuestionAction({
   const setPage = (to: number) => keepQuestion(id, { page: to });
   const draft = (text: string | undefined) =>
     keepQuestion(id, { drafts: round.map((_, index) => (index === at ? text : useKept.getState().byCard[id]?.drafts[index])) });
+  // A merge card's Skip is its "Not yet": words typed there are a new request instead.
+  const skipped = (each: (typeof round)[number]) =>
+    question.kind.type === "merge" ? (each.options.at(-1)?.label ?? SKIPPED) : SKIPPED;
   const answer = (text: string, input: AnswerInput) => {
     const next = round.map((_, index) => (index === at ? text : (answers[index] ?? null)));
     keepQuestion(id, { answers: next });
@@ -1144,9 +1158,21 @@ function QuestionAction({
       onLit={(index) =>
         keepQuestion(id, { lit: round.map((_, other) => (other === at ? index : useKept.getState().byCard[id]?.lit[other])) })
       }
-      // A merge card's Skip is its "Not yet": words typed there are a new request instead.
-      onSkip={(input) => answer(question.kind.type === "merge" ? (item.options.at(-1)?.label ?? SKIPPED) : SKIPPED, input)}
+      onSkip={(input) => answer(skipped(item), input)}
       onDismiss={onDismiss}
+      // × skips what is still open in the round, so the asker hears and carries on (issue #239).
+      onClose={{
+        label: "Skip",
+        run: () =>
+          action.run(() =>
+            answerQuestion(
+              question.conversationId,
+              question.id,
+              round.map((each, index) => answers[index] ?? skipped(each)),
+              "click",
+            ).then(() => forgetQuestion(id)),
+          ),
+      }}
       busy={action.busy}
       error={action.error}
       footer={footer}

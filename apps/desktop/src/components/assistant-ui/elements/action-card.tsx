@@ -94,12 +94,15 @@ export function ActionCardQuestion({
   detail,
   aside,
   onDismiss,
+  dismissLabel = "Dismiss",
 }: {
   children: ReactNode;
   detail?: ReactNode;
   /** Beside the dismiss button (a round's pager). */
   aside?: ReactNode;
   onDismiss: () => void;
+  /** What × does, for its label: a question's × skips it. */
+  dismissLabel?: string | undefined;
 }) {
   return (
     <div className="flex items-start justify-between gap-2 ps-4 pe-3 pt-4 pb-2">
@@ -109,8 +112,8 @@ export function ActionCardQuestion({
       {aside}
       <button
         type="button"
-        aria-label="Dismiss"
-        title="Dismiss"
+        aria-label={dismissLabel}
+        title={dismissLabel}
         onClick={onDismiss}
         className="text-foreground/50 hover:bg-foreground/8 rounded-capsule size-icon-button-sm [&_svg]:size-icon-sm -mt-0.5 flex shrink-0 items-center justify-center transition-colors"
       >

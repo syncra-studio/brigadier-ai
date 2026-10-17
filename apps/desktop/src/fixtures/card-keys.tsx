@@ -42,6 +42,10 @@ const ask: Question = {
 const keep: Question = { ...ask, id: "keep" };
 // A merge card left lit and unanswered, apart from the one the other cases mount: an open card keeps what is lit.
 const mergeLeftLit: Question = { ...merge, id: "merge-left-lit" };
+// Closed with ×, and put aside with Esc.
+const closeAsk: Question = { ...ask, id: "close-ask" };
+const closeMerge: Question = { ...merge, id: "close-merge" };
+const escapeAsk: Question = { ...ask, id: "escape-ask" };
 const plan = (id: string, body: string | null): Plan => ({
   id, conversationId, requestId: null, position: 1, title: "Windows support", body,
   steps: [], state: { type: "proposed" }, createdAtMs: 0, decidedAtMs: null,
@@ -50,7 +54,7 @@ useBoard.setState({
   board: {
     ...emptyBoard(conversationId),
     loaded: true,
-    questions: { merge, ask, keep, "merge-left-lit": mergeLeftLit },
+    questions: { merge, ask, keep, "merge-left-lit": mergeLeftLit, "close-ask": closeAsk, "close-merge": closeMerge, "escape-ask": escapeAsk },
     plans: { document: plan("document", "Handle drive letters, then run the platform checks."), phases: plan("phases", null) },
   },
 });
@@ -298,6 +302,30 @@ const results = new URLSearchParams(location.search).get("case") === "kept" ? {
     const from = calls.length;
     await key("Enter");
     await until("the plan's decision", sent(from));
+  }),
+  // × on a question skips it, so the asker hears and carries on; on a merge card, × is "Not yet".
+  closeAsk: await run(async (seen) => {
+    await mountCard({ type: "question", id: "close-ask" });
+    const close = document.querySelector<HTMLButtonElement>("[data-slot=action-card] button[aria-label=Skip]");
+    seen.title = close?.title ?? null;
+    const from = calls.length;
+    await fixtureClick(close!);
+    await until("the skip", sent(from));
+    await settle();
+  }),
+  closeMerge: await run(async () => {
+    await mountCard({ type: "question", id: "close-merge" });
+    const from = calls.length;
+    await fixtureClick(document.querySelector<HTMLButtonElement>("[data-slot=action-card] button[aria-label=Skip]")!);
+    await until("Not yet", sent(from));
+    await settle();
+  }),
+  // Esc still puts a question aside, unanswered.
+  escapeAsk: await run(async () => {
+    await mountCard({ type: "question", id: "escape-ask" });
+    await key("Escape");
+    await until("Esc to put it aside", () => calls.at(-1)?.method === "dismiss");
+    await settle();
   }),
   // With nothing typed, the plan's button reads "Not now" and puts the plan off.
   notNow: await run(async (seen) => {
