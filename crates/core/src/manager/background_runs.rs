@@ -30,6 +30,9 @@ use crate::work::{BackgroundRun, BackgroundRunState, InjectionKind};
 /// How long a command of the thread's may hold its tool call before it goes to the
 /// background. Tests wait less.
 pub(crate) const FOREGROUND: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 60 });
+/// How long a stopped run's work may take to end before it is ended for it: Stop always ends
+/// the run, even when its work doesn't heed it.
+const STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// `run-<n>`'s number (0 for anything else).
 pub(crate) fn background_run_number(id: &str) -> u64 {
@@ -80,10 +83,82 @@ impl Drop for Handoff {
     }
 }
 
+/// A run whose end is being recorded: taken from the running ones into the ended ones as its
+/// end is chosen, so a Stop then is refused rather than lost and no look takes it for missed.
+/// Dropped before its end is stored (`stored`), its watcher was cut off: the end is free for
+/// the look at missed ends to take.
+struct Ending<'a> {
+    manager: &'a SessionManager,
+    key: (ConversationId, String),
+    stored: bool,
+}
+
+impl<'a> Ending<'a> {
+    fn take(manager: &'a SessionManager, key: (ConversationId, String)) -> Self {
+        let runs = &manager.background_runs;
+        let mut running = runs.running.lock().unwrap_or_else(|p| p.into_inner());
+        running.remove(&key);
+        runs.ended
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(key.clone());
+        Self {
+            manager,
+            key,
+            stored: false,
+        }
+    }
+}
+
+impl<'a> Ending<'a> {
+    /// Takes the end of a run nothing watches whose end no one recorded or took (its end was
+    /// missed): then only the caller records it (a Stop and the watchdog's look can come
+    /// together).
+    fn claim(manager: &'a SessionManager, id: &ConversationId, run: &str) -> Option<Self> {
+        let key = (id.clone(), run.to_owned());
+        let runs = &manager.background_runs;
+        let running = runs.running.lock().unwrap_or_else(|p| p.into_inner());
+        (!running.contains_key(&key)
+            && runs
+                .ended
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(key.clone()))
+        .then(|| Self {
+            manager,
+            key,
+            stored: false,
+        })
+    }
+}
+
+impl Ending<'_> {
+    /// Its end is recorded (`stored`), or free again for the look at missed ends.
+    fn finish(mut self, stored: bool) {
+        self.stored = stored;
+    }
+}
+
+impl Drop for Ending<'_> {
+    fn drop(&mut self) {
+        if !self.stored {
+            self.manager
+                .background_runs
+                .ended
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&self.key);
+        }
+    }
+}
+
 /// What ends each running background run, by conversation and id.
 #[derive(Default)]
 pub(crate) struct BackgroundRuns {
     running: std::sync::Mutex<HashMap<(ConversationId, String), CancellationToken>>,
+    /// The runs whose end this process recorded or is recording, so a look at an older board
+    /// doesn't take one for missed, nor two looks the same one. Locked after `running`.
+    ended: std::sync::Mutex<HashSet<(ConversationId, String)>>,
     /// The runs the user stopped one by one: the thread hears it.
     stopped_alone: std::sync::Mutex<HashSet<(ConversationId, String)>>,
     /// Held while a run's number is taken and its start recorded.
@@ -269,11 +344,53 @@ impl SessionManager {
     ) {
         let manager = self.arc();
         self.spawn(async move {
-            let result = handle
-                .await
-                .unwrap_or_else(|err| Err(crate::Error::Invalid(err.to_string())));
+            let mut handle = handle;
+            let stopped = async {
+                cancel.cancelled().await;
+                tokio::time::sleep(STOP_GRACE).await;
+            };
+            let joined = tokio::select! {
+                joined = &mut handle => joined,
+                () = stopped => {
+                    handle.abort();
+                    handle.await
+                }
+            };
+            let result = joined.unwrap_or_else(|err| Err(crate::Error::Invalid(err.to_string())));
             manager.background_run_ended(run, result, cancel).await;
         });
+    }
+
+    /// Ends each of session `id`'s runs its board still shows running though nothing watches
+    /// it any more (its end was missed): recorded as such, and the thread hears it, so no row
+    /// stays running for ever (#220).
+    pub(crate) async fn end_missed_runs(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        let missed: Vec<(BackgroundRun, Ending)> = board
+            .background_runs
+            .values()
+            .filter(|run| run.state == BackgroundRunState::Running)
+            .filter_map(|run| Some((run.clone(), Ending::claim(self, id, &run.id)?)))
+            .collect();
+        for (mut run, ended) in missed {
+            run.state = BackgroundRunState::Interrupted {
+                reason: "its end was missed".into(),
+            };
+            run.ended_at_ms = Some(now_ms());
+            let envelope = Envelope {
+                kind: InjectionKind::BackgroundRun,
+                label: format!("{} missed", run.id),
+                task_id: None,
+                text: format!(
+                    "[{} ended without Brigadier seeing how · {} `{}`: no result came. Run it \
+                     again if you still need it.]",
+                    run.id, run.tool, run.command
+                ),
+            };
+            ended.finish(self.end_with_message(run, envelope).await);
+        }
     }
 
     /// A background run ended: recorded, and unless the user's Stop or the session's close
@@ -284,11 +401,7 @@ impl SessionManager {
         result: Result<(String, String)>,
         cancel: CancellationToken,
     ) {
-        self.background_runs
-            .running
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&(run.conversation_id.clone(), run.id.clone()));
+        let ended = Ending::take(self, (run.conversation_id.clone(), run.id.clone()));
         self.background_command_changes(&run).await;
         // The call it started may have been linked after the handoff, on the board only.
         if run.item_id.is_none()
@@ -320,9 +433,9 @@ impl SessionManager {
                     task_id: None,
                     text: stopped_text(&run, &kept),
                 };
-                self.end_with_message(run, envelope).await;
+                ended.finish(self.end_with_message(run, envelope).await);
             } else {
-                self.store_background_run(&run).await;
+                ended.finish(self.store_background_run(&run).await);
                 self.settle_requests(&run.conversation_id).await;
             }
             return;
@@ -342,7 +455,7 @@ impl SessionManager {
                 run.id, run.tool, run.command
             ),
         };
-        self.end_with_message(run, envelope).await;
+        ended.finish(self.end_with_message(run, envelope).await);
     }
 
     /// Stores what a background run printed as its row's final output, `text` when its live
@@ -407,17 +520,19 @@ impl SessionManager {
     /// Records a background run's end with the message the thread hears of it: the message is
     /// queued first, so its request is carried by one or the other throughout and a settling
     /// in between can't end it before the message comes.
-    async fn end_with_message(&self, run: BackgroundRun, envelope: Envelope) {
+    /// Whether its end was stored.
+    async fn end_with_message(&self, run: BackgroundRun, envelope: Envelope) -> bool {
         let id = run.conversation_id.clone();
         let conv = self
             .queue_envelope(&id, envelope, run.request_id.clone())
             .await;
-        self.store_background_run(&run).await;
+        let stored = self.store_background_run(&run).await;
         // The request works again until the orchestrator has read it.
         self.settle_requests(&id).await;
         if let Some(conv) = conv {
             self.kick(&conv);
         }
+        stored
     }
 
     /// Links a call whose background reply arrived before its start row was observed.
@@ -548,20 +663,53 @@ impl SessionManager {
     /// The user's Stop of one background run (the context card's): it ends, and the thread
     /// hears it in the run's request. A run already over is refused.
     pub async fn stop_background_run(&self, id: ConversationId, run: String) -> Result<()> {
-        let running = self
+        // Marked and cancelled under the lock: its end can't be chosen in between.
+        let stopped = {
+            let running = self
+                .background_runs
+                .running
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let key = (id.clone(), run.clone());
+            running.get(&key).map(|cancel| {
+                self.background_runs
+                    .stopped_alone
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(key);
+                cancel.cancel();
+            })
+        };
+        match stopped {
+            Some(()) => Ok(()),
+            None => self.stop_missed_run(&id, &run).await,
+        }
+    }
+
+    /// The user's Stop of a run its row shows running though nothing watches it any more (its
+    /// end was missed): it is recorded stopped and the thread hears it, as for any Stop.
+    async fn stop_missed_run(&self, id: &ConversationId, run: &str) -> Result<()> {
+        let board = self.core.board(id).await?;
+        let Some((mut run, ended)) = board
             .background_runs
-            .running
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let Some(cancel) = running.get(&(id.clone(), run.clone())) else {
+            .get(run)
+            .filter(|stored| stored.state == BackgroundRunState::Running)
+            .and_then(|stored| Some((stored.clone(), Ending::claim(self, id, &stored.id)?)))
+        else {
             return Err(crate::Error::Invalid(format!("{run} isn't running")));
         };
-        self.background_runs
-            .stopped_alone
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert((id, run));
-        cancel.cancel();
+        run.ended_at_ms = Some(now_ms());
+        let (_, kept) = self
+            .retain_background_output(&run, "stopped", String::new())
+            .await;
+        run.state = BackgroundRunState::Stopped;
+        let envelope = Envelope {
+            kind: InjectionKind::BackgroundRun,
+            label: format!("{} stopped", run.id),
+            task_id: None,
+            text: stopped_text(&run, &kept),
+        };
+        ended.finish(self.end_with_message(run, envelope).await);
         Ok(())
     }
 
@@ -571,19 +719,19 @@ impl SessionManager {
         let Ok(board) = self.core.board(id).await else {
             return;
         };
-        let mut cut: Vec<BackgroundRun> = board
+        let mut cut: Vec<(BackgroundRun, Ending)> = board
             .background_runs
             .values()
             .filter(|run| run.state == BackgroundRunState::Running)
-            .cloned()
+            .filter_map(|run| Some((run.clone(), Ending::claim(self, id, &run.id)?)))
             .collect();
-        cut.sort_by_key(|run| background_run_number(&run.id));
-        for mut run in cut {
+        cut.sort_by_key(|(run, _)| background_run_number(&run.id));
+        for (mut run, ended) in cut {
             run.state = BackgroundRunState::Interrupted {
                 reason: "a restart".into(),
             };
             run.ended_at_ms = Some(now_ms());
-            self.store_background_run(&run).await;
+            ended.finish(self.store_background_run(&run).await);
             let envelope = Envelope {
                 kind: InjectionKind::BackgroundRun,
                 label: format!("{} cut off", run.id),
@@ -598,17 +746,19 @@ impl SessionManager {
         }
     }
 
-    async fn store_background_run(&self, run: &BackgroundRun) {
-        if let Err(err) = self
+    /// Whether it was stored.
+    async fn store_background_run(&self, run: &BackgroundRun) -> bool {
+        let stored = self
             .core
             .record_conversation(
                 &run.conversation_id,
                 vec![DomainEvent::BackgroundRunUpdated { run: run.clone() }],
             )
-            .await
-        {
+            .await;
+        if let Err(err) = &stored {
             tracing::warn!(run = %run.id, error = %err, "could not record a background run");
         }
+        stored.is_ok()
     }
 }
 

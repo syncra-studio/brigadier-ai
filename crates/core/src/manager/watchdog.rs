@@ -2,6 +2,8 @@
 //! replace the worker. Commands and tool calls are never interrupted for taking time.
 //! A CLI process that has gone away is recovered automatically after the plumbing grace.
 //! Unanswered cards are still listed under "Waiting on you" for overnight runs.
+//! A background run of the thread's still shown running though nothing watches it any more
+//! is ended, and the thread hears it.
 
 pub(crate) mod progress;
 
@@ -312,7 +314,8 @@ impl SessionManager {
         });
     }
 
-    /// One round: the live conversations' workers, gates and cards.
+    /// One round: the live conversations' workers, gates and cards, and their background runs
+    /// whose end was missed.
     async fn watch(&self, timing: &Timing) {
         let lives: Vec<Arc<TaskLive>> = self.tasks_lock().values().cloned().collect();
         let mut conversations: HashSet<ConversationId> =
@@ -340,6 +343,7 @@ impl SessionManager {
             }
             self.watch_cards(&conversation_id, &board, timing, now)
                 .await;
+            self.end_missed_runs(&conversation_id).await;
         }
     }
 

@@ -1221,3 +1221,131 @@ async fn a_long_turn_for_a_stopped_jobs_end_keeps_the_next_turn_owed() {
     );
     flow.stop().await;
 }
+
+/// #220: the user's Stop ends a background run even when its work doesn't heed it: the row
+/// reads stopped, and the thread hears the user stopped it.
+#[tokio::test]
+async fn the_users_stop_ends_a_run_whose_work_ignores_it() {
+    let inputs: Log = Default::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "background-stop-stubborn",
+        Options::default(),
+        script(move |turn| {
+            log.lock().unwrap().push(turn.input.clone());
+            async { Reply::text("Noted.") }
+        }),
+    )
+    .await;
+    flow.background_commands();
+    let reply = flow
+        .manager
+        .in_foreground(
+            &flow.conversation,
+            ("run", None),
+            "sleep 600",
+            tokio_util::sync::CancellationToken::new(),
+            tokio_util::sync::CancellationToken::new(),
+            std::future::pending(),
+        )
+        .await
+        .unwrap();
+    assert!(reply.starts_with("[run-1 still runs"), "{reply}");
+    flow.manager
+        .stop_background_run(flow.conversation.clone(), "run-1".into())
+        .await
+        .unwrap();
+    flow.until("the run stopped", |board| {
+        run_state(board, "run-1") == Some(BackgroundRunState::Stopped)
+    })
+    .await;
+    flow.until("the thread told", |_| {
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("[The user stopped run-1 after "))
+    })
+    .await;
+    flow.stop().await;
+}
+
+/// #220: a run its row shows running though nothing watches it any more (its end was missed)
+/// doesn't stay listed: the user's Stop ends it and tells the thread, and the watchdog's look
+/// ends one nobody stopped.
+#[tokio::test]
+async fn a_run_whose_end_was_missed_does_not_stay_running() {
+    let inputs: Log = Default::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "background-missed-end",
+        Options::default(),
+        script(move |turn| {
+            log.lock().unwrap().push(turn.input.clone());
+            async { Reply::text("Noted.") }
+        }),
+    )
+    .await;
+    for id in ["run-7", "run-8"] {
+        let run = BackgroundRun {
+            id: id.into(),
+            conversation_id: flow.conversation.clone(),
+            request_id: None,
+            tool: "run_check".into(),
+            name: None,
+            command: "cargo fmt --check".into(),
+            started_at_ms: crate::now_ms() - 14 * 60_000,
+            ended_at_ms: None,
+            state: BackgroundRunState::Running,
+            item_id: None,
+        };
+        flow.core
+            .record_conversation(
+                &flow.conversation,
+                vec![DomainEvent::BackgroundRunUpdated { run }],
+            )
+            .await
+            .unwrap();
+    }
+    flow.manager
+        .stop_background_run(flow.conversation.clone(), "run-7".into())
+        .await
+        .unwrap();
+    let board = flow
+        .until("the stopped row", |board| {
+            run_state(board, "run-7") == Some(BackgroundRunState::Stopped)
+        })
+        .await;
+    assert_eq!(
+        run_state(&board, "run-8"),
+        Some(BackgroundRunState::Running)
+    );
+    flow.manager.end_missed_runs(&flow.conversation).await;
+    flow.until("the missed run ended", |board| {
+        matches!(
+            run_state(board, "run-8"),
+            Some(BackgroundRunState::Interrupted { .. })
+        )
+    })
+    .await;
+    flow.until("the thread told of both", |_| {
+        let inputs = inputs.lock().unwrap();
+        inputs
+            .iter()
+            .any(|input| input.contains("[The user stopped run-7 after "))
+            && inputs
+                .iter()
+                .any(|input| input.contains("[run-8 ended without Brigadier seeing how"))
+    })
+    .await;
+    // Over, neither can be stopped again.
+    for id in ["run-7", "run-8"] {
+        assert!(
+            flow.manager
+                .stop_background_run(flow.conversation.clone(), id.into())
+                .await
+                .is_err()
+        );
+    }
+    flow.stop().await;
+}
