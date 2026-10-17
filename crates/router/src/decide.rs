@@ -365,12 +365,19 @@ fn assessed<'q>(query: &'q Query) -> Assessed<'q> {
     }
 
     // Reviews: another vendor when one can take it, else a different model of the same one.
+    // The user's own order decides over the other vendor: only the author's model is kept out.
     let mut notes: Vec<String> = Vec::new();
     let mut cross_vendor = None;
     if let Some(author) = &query.avoid {
-        let other_vendor = candidates
-            .iter()
-            .any(|c| c.eligible() && c.model.provider != author.provider);
+        // Only while a model of the order can take it; otherwise routing scores, adversarially.
+        let ordered = ranking.is_some()
+            && candidates
+                .iter()
+                .any(|c| c.eligible() && c.listed.is_some());
+        let other_vendor = !ordered
+            && candidates
+                .iter()
+                .any(|c| c.eligible() && c.model.provider != author.provider);
         if other_vendor {
             cross_vendor = Some(true);
             for candidate in &mut candidates {
@@ -397,11 +404,13 @@ fn assessed<'q>(query: &'q Query) -> Assessed<'q> {
                             Some(Block::Author("it wrote the change under review".to_owned()));
                     }
                 }
-                notes.push(format!(
-                    "not cross-vendor: only {} is available, so another of its models reviews",
-                    name(author.provider)
-                ));
-            } else {
+                if !ordered {
+                    notes.push(format!(
+                        "not cross-vendor: only {} is available, so another of its models reviews",
+                        name(author.provider)
+                    ));
+                }
+            } else if !ordered {
                 notes.push(format!(
                     "not cross-vendor: only {} is available, and only the author's model can \
                      review",
@@ -782,7 +791,13 @@ pub fn preview(query: &Query) -> Preview {
             effort,
             reason,
             explanation,
-            cross_vendor,
+            // As picked: the user's order may give a review to either vendor.
+            cross_vendor: cross_vendor.and(
+                query
+                    .avoid
+                    .as_ref()
+                    .map(|author| author.provider != pick.model.provider),
+            ),
             trial: pick.trial,
             tier: pick.model.tier,
         }),
@@ -2775,6 +2790,71 @@ mod tests {
             "defaultEffort":{"research":"high"}
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn a_review_goes_to_the_other_vendor_unless_the_users_order_says_otherwise() {
+        let registry = Registry::bundled();
+        let models = catalog(&registry);
+        let providers = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        });
+        let mut q = query(&registry, &models, &providers);
+        q.category = TaskCategory::Review;
+        q.floor = default_floor(TaskCategory::Review);
+        q.avoid = Some(Author {
+            provider: ProviderKind::Claude,
+            model: None,
+        });
+        // Automatic: adversarial.
+        let automatic = routed(&q);
+        assert_eq!(automatic.provider, ProviderKind::Codex);
+        assert_eq!(automatic.cross_vendor, Some(true));
+        // The user's order decides: Claude first, so Claude reviews Claude's change.
+        let rankings = [Ranking {
+            id: "review".into(),
+            category: TaskCategory::Review,
+            areas: vec![],
+            project_id: None,
+            manual: true,
+            only: false,
+            updated_at_ms: 0,
+            entries: [ProviderKind::Claude, ProviderKind::Codex]
+                .map(|provider| crate::RankedEntry {
+                    target: OverrideTarget::Vendor { provider },
+                    effort: None,
+                })
+                .to_vec(),
+        }];
+        q.rankings = &rankings;
+        let ordered = routed(&q);
+        assert_eq!(ordered.provider, ProviderKind::Claude);
+        assert_eq!(ordered.cross_vendor, Some(false));
+        // Never the author's own model.
+        q.avoid = Some(Author {
+            provider: ProviderKind::Claude,
+            model: Some(ordered.model.clone()),
+        });
+        assert_ne!(routed(&q).model, ordered.model);
+        // An order none of whose models can run leaves it adversarial.
+        let gone = [Ranking {
+            entries: vec![crate::RankedEntry {
+                target: OverrideTarget::Model {
+                    provider: ProviderKind::Claude,
+                    id: "removed-model".into(),
+                },
+                effort: None,
+            }],
+            ..rankings[0].clone()
+        }];
+        q.rankings = &gone;
+        q.avoid = Some(Author {
+            provider: ProviderKind::Claude,
+            model: None,
+        });
+        assert_eq!(routed(&q).provider, ProviderKind::Codex);
     }
 
     fn routed(query: &Query<'_>) -> Routed {

@@ -13,7 +13,7 @@ import {
 import type { ComponentType, SVGProps } from "react";
 
 import { findModel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
-import type { Factor, OverrideTarget, Ranking, RouteCandidate, TaskCategory } from "@/ipc/generated";
+import type { Factor, OverrideTarget, Ranking, RouteCandidate, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { VENDOR_LABELS } from "@/lib/routing";
 import { modelName } from "@/lib/setup";
 
@@ -175,4 +175,25 @@ export function effortRange(efforts: readonly string[]): string {
 /** A length of `steps` spacing units, for a table's column template. */
 export function spacing(steps: number): string {
   return `calc(var(--spacing) * ${steps})`;
+}
+
+/**
+ * A review's pick for each vendor's change, as Automatic reviews go to the other vendor from
+ * the author: "Claude's changes → GPT-6 · high, Codex's → Opus 5.5 · high". Null without them.
+ */
+export function authorPicks(
+  route: RoutePreview | null,
+  groups: readonly ModelGroup[],
+  { effort = true }: { effort?: boolean } = {},
+): string | null {
+  const picks = route?.byAuthor ?? [];
+  if (picks.length === 0) return null;
+  return picks
+    .map(({ author, outcome }, index) => {
+      const whose = `${VENDOR_LABELS[author]}'s${index === 0 ? " changes" : ""}`;
+      if (outcome.type === "wait") return `${whose} wait`;
+      const model = shortModelName(groups, outcome.choice.provider, outcome.choice.model ?? "");
+      return `${whose} → ${model}${effort && outcome.choice.effort ? ` · ${outcome.choice.effort}` : ""}`;
+    })
+    .join(", ");
 }

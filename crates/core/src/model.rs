@@ -1867,6 +1867,18 @@ pub struct RoutePreview {
     pub places: Vec<RankedPlace>,
     /// The next task of this kind holds a trial slot (a new model may try it).
     pub trial_slot: bool,
+    /// For a review asked without an author: what it would run on for each vendor's change,
+    /// since a review goes to the other vendor from the author when one can take it.
+    #[serde(default)]
+    pub by_author: Vec<AuthorPreview>,
+}
+
+/// What a review would run on when `author`'s vendor wrote the change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorPreview {
+    pub author: ProviderKind,
+    pub outcome: RoutePreviewOutcome,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

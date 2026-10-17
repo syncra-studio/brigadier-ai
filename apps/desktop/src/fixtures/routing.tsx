@@ -138,6 +138,7 @@ function Fixture() {
       () => {
         seen.afterReset = { manual: review()?.manual, kept: review()?.entries.length };
         seen.automatic = text(document.querySelector('[data-slot="try-order"]'));
+        seen.reviewRow = all('[data-slot="routing-kind"]').map(text).find((row) => row.startsWith("Review changes"));
         seen.ratingGroups = all('[data-slot="model-ratings"] .font-medium')
           .map(text)
           .filter((name) => ["Claude", "Codex", "Not in the registry"].includes(name));

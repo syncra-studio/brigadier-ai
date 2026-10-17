@@ -227,6 +227,19 @@ export function previewRoutes(areas: Area[], author: ProviderKind | null): Route
         resetsAtMs: null,
       })),
       trialSlot: false,
+      // Asked without an author, a review shows each vendor's change going to the other.
+      byAuthor:
+        category === "review" && author === null
+          ? (["claude", "codex"] as const).map((by) => ({
+              author: by,
+              outcome: {
+                type: "chosen" as const,
+                choice: by === "claude" ? { provider: "codex", model: "gpt-6", effort: "high" } : { provider: "claude", model: "opus", effort: "high" },
+                reason: "Top eligible score.",
+                explanation: null,
+              },
+            }))
+          : [],
     } satisfies RoutePreview;
   });
 }

@@ -51,7 +51,12 @@ test("Routing shows each kind's order, ranking, rules and the models' ratings, a
   assert.equal(seen.orderAfterRemove, "Review changes tries⠿1Opus 5.5· highAdd model");
   assert.equal(seen.waits, true);
   assert.deepEqual(seen.afterReset, { manual: false, kept: 1 });
-  assert.equal(seen.automatic, "Review changes picks automatically — now GPT-6 · highAdd modelBring back your order: Opus 5.5");
+  // Automatic reviews are adversarial: each vendor's change goes to the other, both picks shown.
+  assert.equal(
+    seen.automatic,
+    "Review changes picks automatically, adversarial: the other vendor from the author reviews — Claude's changes → GPT-6 · high, Codex's → Opus 5.5 · highAdd modelBring back your order: Opus 5.5",
+  );
+  assert.equal(seen.reviewRow, "Review changes→ Automatic · adversarial: Claude's changes → GPT-6, Codex's → Opus 5.5");
   // Ratings: per provider, then those not in the registry; Fable left out; the best unfaded score
   // of each kind marked; a row opens its profile with what it learned.
   assert.deepEqual(seen.ratingGroups, ["Claude", "Codex", "Not in the registry"]);

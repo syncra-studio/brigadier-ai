@@ -10,6 +10,7 @@ import { ruleCovers, RoutingRules } from "@/app/routing/RoutingRules";
 import { TryOrder } from "@/app/routing/TryOrder";
 import {
   areaOverrides,
+  authorPicks,
   decides,
   KIND_ICONS,
   orderSummary,
@@ -261,6 +262,8 @@ function KindItem({
     line = `→ ${orderSummary(list, groups)}`;
   } else if (category === "chat") {
     line = "→ the chat's model, then Automatic";
+  } else if (authorPicks(route, groups, { effort: false })) {
+    line = `→ Automatic · adversarial: ${authorPicks(route, groups, { effort: false })}`;
   } else if (route?.outcome.type === "chosen") {
     line = `→ Automatic · ${shortModelName(groups, route.outcome.choice.provider, route.outcome.choice.model ?? "")} now`;
   } else {

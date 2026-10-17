@@ -9,9 +9,9 @@ use super::SessionManager;
 use super::routing::{Ask, Trial};
 use crate::accounts::AccountRef;
 use crate::model::{
-    AccountActivity, AccountTokens, AccountUsage, ConversationId, ConversationTokens, ModelChoice,
-    ProjectId, ProviderUsage, RoutePreview, RoutePreviewOutcome, RoutingActivity, TokenCount,
-    UsageActivity, UsageView, WindowHistory,
+    AccountActivity, AccountTokens, AccountUsage, AuthorPreview, ConversationId,
+    ConversationTokens, ModelChoice, ProjectId, ProviderUsage, RoutePreview, RoutePreviewOutcome,
+    RoutingActivity, TokenCount, UsageActivity, UsageView, WindowHistory,
 };
 use crate::routing::TurnUsage;
 use crate::work::AttemptEnd;
@@ -251,29 +251,7 @@ impl SessionManager {
         let mut previews = Vec::new();
         for category in TaskCategory::ALL {
             let (preview, trial_slot) = self
-                .preview(&Ask {
-                    category,
-                    areas: &areas,
-                    floor: brigadier_router::default_floor(category),
-                    // An operator looks at the screen, whatever it is sent.
-                    needs: brigadier_router::Needs {
-                        image_input: category == TaskCategory::Operate,
-                        ..brigadier_router::Needs::default()
-                    },
-                    pin: None,
-                    hold_pin: false,
-                    // A review of a change goes to another vendor than its author's.
-                    avoid: author
-                        .filter(|_| category == TaskCategory::Review)
-                        .map(|provider| brigadier_router::Author {
-                            provider,
-                            model: None,
-                        }),
-                    distinct_from: Vec::new(),
-                    exclude: &[],
-                    project_id: project.as_ref(),
-                    trial: Trial::Peek,
-                })
+                .preview_one(category, &areas, project.as_ref(), author)
                 .await;
             let ranking_id = brigadier_router::ranking_for(
                 &rankings,
@@ -282,33 +260,87 @@ impl SessionManager {
                 project.as_ref().map(|id| id.0.as_str()),
             )
             .map(|ranking| ranking.id.clone());
-            let outcome = match preview.decision {
-                brigadier_router::Decision::Run(routed) => {
-                    let route = super::routing::route_from(routed);
-                    RoutePreviewOutcome::Chosen {
-                        choice: route.choice,
-                        reason: route.reason,
-                        explanation: route.explanation,
-                    }
+            // Asked without an author, a review shows each vendor's change: it goes to the
+            // other vendor when one can take it.
+            let mut by_author = Vec::new();
+            if category == TaskCategory::Review && author.is_none() {
+                for provider in ProviderKind::ALL {
+                    let (preview, _) = self
+                        .preview_one(category, &areas, project.as_ref(), Some(provider))
+                        .await;
+                    by_author.push(AuthorPreview {
+                        author: provider,
+                        outcome: preview_outcome(preview.decision),
+                    });
                 }
-                brigadier_router::Decision::Wait(waiting) => RoutePreviewOutcome::Wait {
-                    reason: waiting.reason,
-                    resets_at_ms: waiting.resets_at_ms,
-                    rule: waiting.rule,
-                    ranking: waiting.ranking,
-                },
-            };
+            }
             previews.push(RoutePreview {
                 category,
                 areas: areas.clone(),
-                outcome,
+                outcome: preview_outcome(preview.decision),
                 candidates: preview.candidates,
                 ranking_id,
                 places: preview.places,
                 trial_slot,
+                by_author,
             });
         }
         previews
+    }
+
+    /// One category's preview: the question a submitted task asks, a review as if `author`'s
+    /// vendor wrote the change.
+    async fn preview_one(
+        &self,
+        category: TaskCategory,
+        areas: &[Area],
+        project: Option<&ProjectId>,
+        author: Option<ProviderKind>,
+    ) -> (brigadier_router::Preview, bool) {
+        self.preview(&Ask {
+            category,
+            areas,
+            floor: brigadier_router::default_floor(category),
+            // An operator looks at the screen, whatever it is sent.
+            needs: brigadier_router::Needs {
+                image_input: category == TaskCategory::Operate,
+                ..brigadier_router::Needs::default()
+            },
+            pin: None,
+            hold_pin: false,
+            // A review of a change goes to another vendor than its author's.
+            avoid: author
+                .filter(|_| category == TaskCategory::Review)
+                .map(|provider| brigadier_router::Author {
+                    provider,
+                    model: None,
+                }),
+            distinct_from: Vec::new(),
+            exclude: &[],
+            project_id: project,
+            trial: Trial::Peek,
+        })
+        .await
+    }
+}
+
+/// A routing decision as the preview reports it.
+fn preview_outcome(decision: brigadier_router::Decision) -> RoutePreviewOutcome {
+    match decision {
+        brigadier_router::Decision::Run(routed) => {
+            let route = super::routing::route_from(routed);
+            RoutePreviewOutcome::Chosen {
+                choice: route.choice,
+                reason: route.reason,
+                explanation: route.explanation,
+            }
+        }
+        brigadier_router::Decision::Wait(waiting) => RoutePreviewOutcome::Wait {
+            reason: waiting.reason,
+            resets_at_ms: waiting.resets_at_ms,
+            rule: waiting.rule,
+            ranking: waiting.ranking,
+        },
     }
 }
 

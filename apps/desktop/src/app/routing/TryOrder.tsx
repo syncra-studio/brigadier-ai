@@ -2,7 +2,7 @@ import { Check, ChevronDown, Plus, X } from "@openai/apps-sdk-ui/components/Icon
 
 import { useAction } from "@/app/conversation/useAction";
 import { ChipSelect, TargetItems } from "@/app/routing/pickers";
-import { decides, orderSummary, shortModelName, shortPlaceName } from "@/app/routing/words";
+import { authorPicks, decides, orderSummary, shortModelName, shortPlaceName } from "@/app/routing/words";
 import { effortLabel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Button } from "@/components/ui/button";
@@ -204,6 +204,8 @@ export function TryOrder({
             ) : (
               <>
                 {name} picks automatically
+                {/* A stand-in takes over when the chat's model hits its limit. */}
+                {category === "chat" && ", never the chat's own model"}
                 <NowPicked route={route} groups={groups} />
               </>
             )}
@@ -228,9 +230,20 @@ export function TryOrder({
   );
 }
 
-/** " — now Opus 5.5 · high", or that the next task waits. */
+/**
+ * " — now Opus 5.5 · high", or that the next task waits; for a review, each vendor's change
+ * with the other vendor's pick.
+ */
 function NowPicked({ route, groups }: { route: RoutePreview | null; groups: readonly ModelGroup[] }) {
   if (!route) return null;
+  const picks = authorPicks(route, groups);
+  if (picks) {
+    return (
+      <span className="text-muted-foreground">
+        , adversarial: the other vendor from the author reviews — {picks}
+      </span>
+    );
+  }
   const outcome = route.outcome;
   if (outcome.type === "wait") return <span className="text-warning"> — the next task waits</span>;
   return (
