@@ -2770,6 +2770,7 @@ impl SessionManager {
         files: Vec<String>,
     ) -> Result<bool> {
         // Only one card at a time: later tasks wait for the same answer.
+        let asking = self.uncommitted_asks.lock().await;
         let board = self.core.board(conversation_id).await?;
         let open = board.questions.values().find(|q| {
             q.answer.is_none() && matches!(q.kind, QuestionKind::UncommittedChanges { .. })
@@ -2812,6 +2813,7 @@ impl SessionManager {
                 rx
             }
         };
+        drop(asking);
         rx.await.map_err(|_| {
             Error::Invalid("the question about uncommitted changes was withdrawn".into())
         })?;

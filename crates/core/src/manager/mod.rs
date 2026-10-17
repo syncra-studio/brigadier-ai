@@ -176,6 +176,9 @@ pub struct SessionManager {
     plans: tokio::sync::Mutex<()>,
     /// Held while a one-shot review is looked for and recorded, so a range is reviewed once.
     reviews: tokio::sync::Mutex<()>,
+    /// Held while an open uncommitted-changes question is looked for and one opened, so two
+    /// delegations at once open one card (#179).
+    uncommitted_asks: tokio::sync::Mutex<()>,
     /// Held while the thread's new commits are looked for and their tip recorded
     /// ([`thread`]), so a range is taken once.
     thread_scans: tokio::sync::Mutex<()>,
@@ -361,6 +364,7 @@ impl SessionManager {
             tasks: Mutex::new(HashMap::new()),
             session_worktrees: tokio::sync::Mutex::new(()),
             plans: tokio::sync::Mutex::new(()),
+            uncommitted_asks: tokio::sync::Mutex::new(()),
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             change_records: request_changes::ChangeRecords::default(),

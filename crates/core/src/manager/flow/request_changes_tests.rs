@@ -1778,6 +1778,79 @@ async fn the_uncommitted_changes_question_tells_the_threads_edits_from_the_users
     flow.stop().await;
 }
 
+/// Two delegations at once on a checkout with the user's changes open one question, and the
+/// one answer starts both workers (#179).
+#[tokio::test]
+async fn two_delegations_at_once_open_one_uncommitted_changes_question() {
+    let mut flow = Flow::start(
+        "20261017-0213-issues-run-w49-one-card",
+        options(ProviderKind::Claude),
+        script(move |turn| async move {
+            if !turn.is_orchestrator() {
+                std::future::pending::<()>().await;
+                return Reply::text("");
+            }
+            if turn.input.contains("Scout twice.") {
+                let delegate = |title: &str| {
+                    turn.call(
+                        "delegate_task",
+                        serde_json::json!({"effort": "high", "title": title, "kind": "scout", "spec": "Look around."}),
+                    )
+                };
+                let (one, two) = tokio::join!(delegate("Look here"), delegate("Look there"));
+                assert!(!one.is_error, "{}", one.text);
+                assert!(!two.is_error, "{}", two.text);
+                return Reply::text("[quiet]");
+            }
+            Reply::text("Fine.")
+        }),
+    )
+    .await;
+    local(&mut flow).await;
+    std::fs::write(flow.repo.join("a.txt"), "the user's\n").unwrap();
+    flow.say("Scout twice.").await;
+    let asked = |board: &Board| {
+        board
+            .questions
+            .values()
+            .filter(|question| {
+                matches!(
+                    question.kind,
+                    crate::work::QuestionKind::UncommittedChanges { .. }
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let board = flow
+        .until("both tasks and the question", |board| {
+            board.tasks.len() == 2 && !asked(board).is_empty()
+        })
+        .await;
+    let card = asked(&board).remove(0);
+    flow.manager
+        .answer_question(
+            flow.conversation.clone(),
+            card.id.clone(),
+            vec!["No, use the last commit".into()],
+            None,
+        )
+        .await
+        .unwrap();
+    // Both start on the one answer; a second card would hold its task back.
+    let board = flow
+        .until("both workers running, or a second question", |board| {
+            asked(board).len() > 1
+                || board
+                    .tasks
+                    .values()
+                    .all(|task| task.state == crate::work::TaskState::Running)
+        })
+        .await;
+    assert_eq!(asked(&board).len(), 1, "{:#?}", asked(&board));
+    flow.stop().await;
+}
+
 /// The thread edits a file and delegates in the same turn, before the edit's snapshot ran: the
 /// question still counts the edit as the thread's, not the user's (#88).
 #[tokio::test]
