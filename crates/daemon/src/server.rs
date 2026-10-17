@@ -212,6 +212,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         dictations: Started::new(daemon.dictation.clone()),
         page_feed: None,
         computer_feed: None,
+        checkout_saves: None,
         workspace_watch: None,
         search: None,
         searches: 0,
@@ -253,6 +254,8 @@ struct Session {
     page_feed: Option<broadcast::Receiver<PageChange>>,
     /// Computer use's news, once subscribed to the live feed.
     computer_feed: Option<broadcast::Receiver<ComputerNews>>,
+    /// The checkouts a tab chat saved a file in, once subscribed to the live feed.
+    checkout_saves: Option<broadcast::Receiver<WorkspaceTarget>>,
     /// The checkout this connection's right sidebar shows, watched while it shows.
     workspace_watch: Option<(WorkspaceTarget, WorkspaceWatch)>,
     /// The right sidebar's search running for this connection, by its id.
@@ -375,6 +378,11 @@ impl Session {
                         None => {}
                     }
                 }
+                target = next_checkout_save(&mut self.checkout_saves) => {
+                    if let Some(target) = target {
+                        self.writer.write(&ServerFrame::WorkspaceChanged { target }).await?;
+                    }
+                }
                 target = next_workspace_change(&mut self.workspace_watch) => {
                     if let Some(target) = target {
                         self.writer.write(&ServerFrame::WorkspaceChanged { target }).await?;
@@ -412,6 +420,9 @@ impl Session {
                 self.set_metrics(metrics);
                 if self.page_feed.is_none() {
                     self.page_feed = Some(self.daemon.pages.subscribe());
+                }
+                if self.checkout_saves.is_none() {
+                    self.checkout_saves = Some(self.daemon.sessions.subscribe_checkout_saves());
                 }
                 if self.computer_feed.is_none() {
                     self.computer_feed = Some(self.daemon.sessions.subscribe_computer_use());
@@ -1066,6 +1077,24 @@ async fn next_workspace_change(
             Some(()) => Some(target.clone()),
             None => {
                 *watch = None;
+                None
+            }
+        },
+        None => std::future::pending().await,
+    }
+}
+
+/// The next checkout a tab chat saved a file in; pending forever until subscribed.
+async fn next_checkout_save(
+    feed: &mut Option<broadcast::Receiver<WorkspaceTarget>>,
+) -> Option<WorkspaceTarget> {
+    match feed {
+        Some(rx) => match rx.recv().await {
+            Ok(target) => Some(target),
+            // A file tab still reads again when it comes to the front or the window gains focus.
+            Err(RecvError::Lagged(_)) => None,
+            Err(RecvError::Closed) => {
+                *feed = None;
                 None
             }
         },

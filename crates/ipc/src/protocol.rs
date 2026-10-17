@@ -1855,7 +1855,8 @@ pub enum ServerFrame {
         id: String,
         revision: Option<String>,
     },
-    /// The checkout this connection watches changed: its files, index or HEAD. Live only.
+    /// The checkout this connection watches changed: its files, index or HEAD. Also sent to
+    /// every subscribed connection when a tab chat saves a file in a session's checkout. Live only.
     WorkspaceChanged {
         target: WorkspaceTarget,
     },

@@ -248,6 +248,8 @@ pub struct SessionManager {
     pages: std::sync::OnceLock<Arc<crate::pages::Pages>>,
     /// Tabs' own chats: whether they may run yet, and what browser tabs sent them.
     tab_chats: side_chat::TabChats,
+    /// The checkouts a tab chat saved a file in, for every window ([`page_tools`]).
+    checkout_saves: tokio::sync::broadcast::Sender<crate::work::WorkspaceTarget>,
     /// Tests: the home whose CLI settings folder trust is written to. Without it, tests write
     /// none (never the real `~/.claude.json` or `~/.codex/config.toml`).
     #[cfg(test)]
@@ -391,6 +393,7 @@ impl SessionManager {
             terminal_host: std::sync::OnceLock::new(),
             pages: std::sync::OnceLock::new(),
             tab_chats: side_chat::TabChats::default(),
+            checkout_saves: tokio::sync::broadcast::channel(16).0,
             #[cfg(test)]
             trust_home: std::sync::OnceLock::new(),
             #[cfg(test)]

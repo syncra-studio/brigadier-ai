@@ -534,6 +534,8 @@ async fn a_file_tab_chat_changes_its_file_and_only_reads_the_rest() {
         },
     )
     .await;
+    // The file's tab hears of a save even while no sidebar watches the checkout.
+    let mut saves = flow.manager.subscribe_checkout_saves();
     let read = tab_call(&flow, &chat, TabChatCall::ReadFile).await;
     assert!(read.text.contains("one"), "{}", read.text);
     let revision = read
@@ -557,6 +559,13 @@ async fn a_file_tab_chat_changes_its_file_and_only_reads_the_rest() {
         std::fs::read_to_string(flow.repo.join("notes.txt")).unwrap(),
         "two\n"
     );
+    assert_eq!(
+        saves.try_recv().ok(),
+        Some(crate::work::WorkspaceTarget::Conversation {
+            conversation_id: flow.conversation.clone()
+        }),
+        "a save says the session's checkout changed"
+    );
     let stale = tab_call(
         &flow,
         &chat,
@@ -571,6 +580,7 @@ async fn a_file_tab_chat_changes_its_file_and_only_reads_the_rest() {
         std::fs::read_to_string(flow.repo.join("notes.txt")).unwrap(),
         "two\n"
     );
+    assert!(saves.try_recv().is_err(), "a refused save says nothing");
     // Its tools are its file's; a page is out of reach.
     let page = tab_call(
         &flow,

@@ -12,8 +12,10 @@ use super::SessionManager;
 use crate::model::{ConversationId, Mention, MessageRole, TabChat, TabTarget};
 use crate::pages::{PageContent, PageWriteOutcome, Pages};
 use crate::tools::{ReadPage, TabChatCall, ToolReply, WritePage, WriteTabFile};
+use crate::work::WorkspaceTarget;
 use crate::{Error, Result};
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 /// The page a user message was sent from, if any.
 pub(crate) fn page_of(mentions: &[Mention]) -> Option<(&str, &str)> {
@@ -148,6 +150,12 @@ impl SessionManager {
 }
 
 impl SessionManager {
+    /// The checkouts a tab chat saved a file in: the file's open tab reads it again, even while
+    /// no sidebar watches the checkout.
+    pub fn subscribe_checkout_saves(&self) -> broadcast::Receiver<WorkspaceTarget> {
+        self.checkout_saves.subscribe()
+    }
+
     /// A tab chat's tool call: its tab's page or file, and nothing else.
     pub(super) async fn tab_chat_call(&self, id: ConversationId, call: TabChatCall) -> ToolReply {
         let result = match call {
@@ -162,8 +170,11 @@ impl SessionManager {
         }
     }
 
-    /// The tab chat's file: its checkout and its path inside it.
-    fn tab_file(&self, id: &ConversationId) -> Result<(std::path::PathBuf, String)> {
+    /// The tab chat's file: its checkout, its path inside it and the session it is beside.
+    fn tab_file(
+        &self,
+        id: &ConversationId,
+    ) -> Result<(std::path::PathBuf, String, ConversationId)> {
         let chat = self.core.conversation(id)?;
         let (
             Some(TabChat {
@@ -177,11 +188,11 @@ impl SessionManager {
                 "this chat isn't beside a file: no file may be read or changed".into(),
             ));
         };
-        Ok((self.checkout_dir(&session)?.into(), path))
+        Ok((self.checkout_dir(&session)?.into(), path, session))
     }
 
     async fn read_tab_file(&self, id: &ConversationId) -> Result<String> {
-        let (root, path) = self.tab_file(id)?;
+        let (root, path, _) = self.tab_file(id)?;
         super::blocking(move || {
             let full = tab_file_in(&root, &path)?;
             let text = std::fs::read_to_string(&full)
@@ -195,16 +206,22 @@ impl SessionManager {
     }
 
     async fn write_tab_file(&self, id: &ConversationId, args: WriteTabFile) -> Result<String> {
-        let (root, path) = self.tab_file(id)?;
-        super::blocking(move || {
+        let (root, path, session) = self.tab_file(id)?;
+        let saved = super::blocking(move || {
             let full = tab_file_in(&root, &path)?;
             save_checked(&full, &path, &args.base_revision, args.text.as_bytes())
         })
-        .await
+        .await?;
+        // The file's tab reads it again, even with no sidebar watching the checkout.
+        let _ = self.checkout_saves.send(WorkspaceTarget::Conversation {
+            conversation_id: session,
+        });
+        Ok(saved)
     }
 }
 
-/// Saves `text` as `full` (the checkout's `path`) if it is still at `base_revision`. Saves are
+/// Saves `text` as `full` (the checkout's `path`) if it is still at `base_revision`, checked
+/// again as it goes in place, so a write that lands meanwhile is never overwritten. Saves are
 /// one at a time, so of two chats saving on the same revision, one gets a conflict.
 fn save_checked(
     full: &std::path::Path,
@@ -212,21 +229,42 @@ fn save_checked(
     base_revision: &str,
     text: &[u8],
 ) -> Result<String> {
+    save_checked_with(full, path, base_revision, text, || {})
+}
+
+/// [`save_checked`], with `interfere` run after the revision check (tests change the file there).
+fn save_checked_with(
+    full: &std::path::Path,
+    path: &str,
+    base_revision: &str,
+    text: &[u8],
+    interfere: impl FnOnce(),
+) -> Result<String> {
     // Few and quick: one lock for every tab chat's file saves.
     static SAVES: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one = SAVES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let now = std::fs::read(full)
-        .map_err(|err| Error::Invalid(format!("couldn't read {path}: {err}")))?;
+    let unreadable = |err: std::io::Error| Error::Invalid(format!("couldn't read {path}: {err}"));
+    let conflict = |current: &str| {
+        Error::Invalid(format!(
+            "not saved: {path} changed since revision {base_revision} (it is at revision {current} now). Read it again with read_tab_file and redo your change on what it holds now."
+        ))
+    };
+    let now = std::fs::read(full).map_err(unreadable)?;
     let current = file_revision(&now);
     if current != base_revision {
-        return Err(Error::Invalid(format!(
-            "not saved: {path} changed since revision {base_revision} (it is at revision {current} now). Read it again with read_tab_file and redo your change on what it holds now."
-        )));
+        return Err(conflict(&current));
     }
-    write_beside(full, text)
-        .map_err(|err| Error::Invalid(format!("couldn't save {path}: {err}")))?;
+    if let Err(reason) = super::search::replace_checked(full, &now, text, interfere) {
+        // Changed meanwhile: a conflict like any other.
+        let current = file_revision(&std::fs::read(full).map_err(unreadable)?);
+        return Err(if current == base_revision {
+            Error::Invalid(format!("couldn't save {path}: {reason}"))
+        } else {
+            conflict(&current)
+        });
+    }
     Ok(format!(
         "Saved: {path} is at revision {}. It shows in the user's open tab.",
         file_revision(text)
@@ -251,23 +289,6 @@ fn tab_file_in(root: &std::path::Path, path: &str) -> Result<std::path::PathBuf>
         )));
     }
     Ok(full)
-}
-
-/// Replaces `path`'s bytes through a file beside it, so a reader never sees half of them. The
-/// file keeps its permissions.
-fn write_beside(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let temp = path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
-    let written = std::fs::write(&temp, bytes).and_then(|()| {
-        if let Ok(metadata) = std::fs::metadata(path) {
-            std::fs::set_permissions(&temp, metadata.permissions())?;
-        }
-        std::fs::rename(&temp, path)
-    });
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    written
 }
 
 #[cfg(test)]
@@ -301,5 +322,52 @@ mod tests {
         });
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(saved, 1, "every save but one must get a conflict");
+    }
+
+    #[test]
+    fn a_save_never_overwrites_a_write_made_after_its_check() {
+        let dir = std::env::temp_dir().join(format!("brigadier-tab-save-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.md");
+        std::fs::write(&file, "first").unwrap();
+        let base = file_revision(b"first");
+        // An editor or a worker saves between the check and the save going in.
+        let saved = save_checked_with(&file, "notes.md", &base, b"from the chat", || {
+            std::fs::write(&file, "newer").unwrap();
+        });
+        let held = std::fs::read_to_string(&file).unwrap();
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = saved.expect_err("the save must be refused").to_string();
+        assert!(err.contains("changed since revision"), "{err}");
+        assert!(err.contains(&file_revision(b"newer")), "{err}");
+        assert_eq!(held, "newer", "the newer write must stay");
+        assert_eq!(
+            left,
+            vec![std::ffi::OsString::from("notes.md")],
+            "nothing left beside it"
+        );
+    }
+
+    #[test]
+    fn a_save_with_an_atomic_editor_write_meanwhile_keeps_the_editor_text() {
+        let dir = std::env::temp_dir().join(format!("brigadier-tab-save-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.md");
+        std::fs::write(&file, "first").unwrap();
+        let base = file_revision(b"first");
+        // Editors often save a new file and rename it over the old one.
+        let saved = save_checked_with(&file, "notes.md", &base, b"from the chat", || {
+            let other = dir.join("editor.tmp");
+            std::fs::write(&other, "newer").unwrap();
+            std::fs::rename(&other, &file).unwrap();
+        });
+        let held = std::fs::read_to_string(&file).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(saved.is_err(), "the save must be refused");
+        assert_eq!(held, "newer", "the editor's save must stay");
     }
 }

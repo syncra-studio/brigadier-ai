@@ -628,6 +628,47 @@ fn stage_file(
     })
 }
 
+/// Puts `bytes` in the place of the checkout file `full`, which held `was` when it was checked,
+/// the way a replace places each file: moved aside, checked once more and replaced only where
+/// nothing took its place, so a write that lands meanwhile stays and this one is refused.
+/// `interfere` runs just before it goes in place (tests change the file there).
+pub(super) fn replace_checked(
+    full: &Path,
+    was: &[u8],
+    bytes: &[u8],
+    interfere: impl FnOnce(),
+) -> std::result::Result<(), String> {
+    let mut link = |from: &Path, to: &Path| fs::hard_link(from, to);
+    let mut file = Staged {
+        path: String::new(),
+        full: full.to_owned(),
+        hash: hash(was),
+        new_hash: hash(bytes),
+        matches: 0,
+        temp: write_beside(full, bytes).map_err(|err| format!("couldn't write it: {err}"))?,
+        aside: sibling(full, "replaced"),
+        hard_links: true,
+    };
+    let placed = match probe_placement(&file, &mut link) {
+        Ok(hard_links) => {
+            file.hard_links = hard_links;
+            interfere();
+            place(&file, &mut link).or_else(|(reason, moved)| {
+                if moved {
+                    put_back(&file, &mut link)?;
+                }
+                Err(reason)
+            })
+        }
+        Err(err) => Err(format!("couldn't prepare to replace it: {err}")),
+    };
+    if placed.is_ok() {
+        let _ = fs::remove_file(&file.aside);
+    }
+    let _ = fs::remove_file(&file.temp);
+    placed
+}
+
 /// Probe each directory before moving originals. If links fail, prove that an exclusive
 /// rename works there using only the rewrite. A failed probe leaves every original untouched.
 fn probe_placement(
