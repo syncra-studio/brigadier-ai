@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import { restoreKeptWork } from "@/state/actions";
 import { useBoard } from "@/state/board";
 
-function ArtifactButtons({
+export function ArtifactButtons({
   artifacts,
   onOpen,
 }: {
@@ -27,12 +27,20 @@ function ArtifactButtons({
   return (
     <div className="flex flex-wrap gap-1.5">
       {artifacts.map((artifact) => (
-        <Button key={artifact.id} size="xs" variant="outline" onClick={() => onOpen(artifact)}>
-          {artifact.title}
-          <span className="text-muted-foreground">{artifact.kind}</span>
-        </Button>
+        <ArtifactButton key={artifact.id} artifact={artifact} onOpen={onOpen} />
       ))}
     </div>
+  );
+}
+
+function ArtifactButton({ artifact, onOpen }: { artifact: ArtifactRef; onOpen: (artifact: ArtifactRef) => void }) {
+  // "Diff of task-1" names its worker as the user knows it, as the dialog it opens does (#183).
+  const title = useWorkerText(artifact.title);
+  return (
+    <Button size="xs" variant="outline" onClick={() => onOpen(artifact)}>
+      {title}
+      <span className="text-muted-foreground">{artifact.kind}</span>
+    </Button>
   );
 }
 
