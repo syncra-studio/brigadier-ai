@@ -327,7 +327,8 @@ async function driveTurn(): Promise<object> {
   request("r1", { waitingFor: [PEER] });
   // The final answer starts: the work folds at once, the time stops there. The fold is timed from
   // the first frame that shows the answer starting, by the frames' own clock: a slow machine
-  // takes its time drawing that frame, which is not the fold's.
+  // takes its time drawing that frame, which is not the fold's. What it took past its 150ms close
+  // is counted in frames, which a loaded machine draws farther apart (#20).
   const answerAtMs = Date.now() - 1000;
   const answerText = "Fixed the rounding: `round` now rounds half-up, and the tests pass.";
   change(() => ({ streaming: { messageId: "a1", text: answerText.slice(0, 20), requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
@@ -335,14 +336,18 @@ async function driveTurn(): Promise<object> {
   const folding = Number(document.timeline.currentTime);
   out.foldFirst = one("[data-slot=request-fold]", turn() ?? document)?.getAttribute("data-fold") ?? "gone";
   let foldMs = -1;
+  let foldLate = 0;
   for (const end = performance.now() + 2000; performance.now() < end; ) {
+    const at = Number(document.timeline.currentTime) - folding;
     if (!one("[data-slot=request-fold]", turn() ?? document)) {
-      foldMs = Math.round(Number(document.timeline.currentTime) - folding);
+      foldMs = Math.round(at);
       break;
     }
+    if (at >= 150) foldLate += 1;
     await frame();
   }
   out.foldMs = foldMs;
+  out.foldLate = foldLate;
   await settle();
   out.answering = seen();
   out.announcedAnswering = text(one("[data-slot=answer-announcer]", turn() ?? document));

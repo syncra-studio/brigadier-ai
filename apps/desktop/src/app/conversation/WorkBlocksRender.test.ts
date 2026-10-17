@@ -22,7 +22,7 @@ test("a turn whose answer starts while the window is hidden folds its work at on
 
 test("a turn has one live line, folds the moment its final answer starts, and keeps that time through the end and a reload", { timeout: 120000 }, async (t) => {
   const seen = await drive<Record<"thinking" | "thought" | "question" | "approval" | "running" | "justEnded" | "ended" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
-    foldFirst: string; foldMs: number; actions: string[]; firstHeader: string | null; commentaryAtOnce: string | null;
+    foldFirst: string; foldMs: number; foldLate: number; actions: string[]; firstHeader: string | null; commentaryAtOnce: string | null;
     announcedAnswering: string | null; announcedDone: string | null; time: { text: string | null; opacity: string | null }; html: string | null;
   }>(t, "drive=turn");
   // The header is there from the turn's first frame.
@@ -63,7 +63,7 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
   // The final answer starts: the frame that shows it closes the work, gone within the 150ms
   // close and a frame or two.
   assert.equal(seen.foldFirst, "closed");
-  assert.ok(seen.foldMs >= 0 && seen.foldMs <= 250, `folded in ${seen.foldMs} ms`);
+  assert.ok(seen.foldMs >= 0 && seen.foldLate <= 2, `folded in ${seen.foldMs} ms, ${seen.foldLate} frames past its close`);
   const header = seen.answering.header;
   assert.match(header ?? "", /^Worked for \d+s$/);
   for (const state of [seen.answering, seen.answeringLater, seen.stored, seen.waiting, seen.done, seen.reloaded]) {
