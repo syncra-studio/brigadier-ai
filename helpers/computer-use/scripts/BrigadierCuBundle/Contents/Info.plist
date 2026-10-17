@@ -49,7 +49,7 @@
     <!-- Browser page actions run scripts in Safari or Chrome through Apple
          Events; without this text macOS refuses them instead of asking. -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>Brigadier's agents read and operate web pages in your browser when you ask them to.</string>
+    <string>Brigadier's agents use this when you ask them to work in an app: to read and operate web pages in your browser, save a document, or rename a file in Finder, without bringing the app to the front.</string>
     <key>NSSupportsAutomaticTermination</key>
     <true/>
 </dict>

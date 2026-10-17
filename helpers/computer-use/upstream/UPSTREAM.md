@@ -36,12 +36,12 @@ backends, the optional perception add-on and the test and tooling crates.
 | | |
 |---|---|
 | Repository | https://github.com/trycua/cua |
-| Tag | `cua-driver-rs-v0.35.2` |
-| Commit | `ad694f82aaaa12e67257e4510837fc1f6cfc9484` (2026-10-13) |
+| Tag | `cua-driver-rs-v0.35.3` |
+| Commit | `cac7d8732f1fb21d31579466d59e95bf1422e422` (2026-10-13) |
 | Path in the repository | `libs/cua-driver/rust` |
 | Crates | `cua-driver-core` `cua-driver-contract` `platform-macos` `cursor-overlay` `cua-cursor-motion` `pip-preview` |
 | Also copied | `Skills/cua-driver/` `LICENSE.md` `THIRD_PARTY_NOTICES.md` |
-| Files | 292 (sha256 of PRISTINE.sha256: `641816768fe20ea78d15e0f17ad63c15614e14299f6780c0da0de48b05de7f43`) |
+| Files | 296 (sha256 of PRISTINE.sha256: `3aedef96e1dd95133f58d328cdc9c1a3d532f623156cd9fbeace5badd78664da`) |
 
 Patches applied, in order:
 
