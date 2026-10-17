@@ -171,6 +171,15 @@ const results = new URLSearchParams(location.search).get("case") === "kept" ? {
     seen.typedBefore = field().value;
     await visitSettings(action);
     seen.typedAfter = field().value;
+    // Answered from elsewhere while Settings is open: the kept state goes with the question.
+    root.render(<p>Settings</p>);
+    await until("the card to go", () => document.querySelector("[data-slot=action-card]") === null);
+    const questions = useBoard.getState().board!.questions;
+    useBoard.setState({ board: { ...useBoard.getState().board!, questions: { ...questions, keep: { ...keep, answer: "Elsewhere", answeredAtMs: 1 } } } });
+    useBoard.setState({ board: { ...useBoard.getState().board!, questions } });
+    await mountCard(action);
+    seen.litReopened = lit();
+    seen.typedReopened = field().value;
   }),
 } : {
   mountEnter: await run(async (seen) => {
