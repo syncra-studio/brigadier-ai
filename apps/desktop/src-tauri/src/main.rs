@@ -602,8 +602,9 @@ fn main() {
         .unwrap_or(1.0);
     // Before the daemon is launched, which creates the database.
     let first_launch = !platform.paths().db_path.exists();
+    let mut context = tauri::generate_context!();
     let info = AppInfo {
-        version: env!("CARGO_PKG_VERSION").into(),
+        version: updates::version(context.config()),
         platform: platform.name().into(),
         process_start_ms,
         smoke,
@@ -615,7 +616,6 @@ fn main() {
         .map(|value| vec![(TOLERANCE_ENV.to_owned(), value)])
         .unwrap_or_default();
 
-    let mut context = tauri::generate_context!();
     // A debug build never takes the installed app's identity, even when built without
     // `pnpm tauri:dev` / `tauri:debug-app` (which give the bundle that identity too): a launch
     // would otherwise be handed to the installed app by the single-instance lock.

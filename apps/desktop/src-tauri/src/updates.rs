@@ -42,6 +42,15 @@ pub fn configured(config: &tauri::Config) -> bool {
     config.plugins.0.contains_key("updater")
 }
 
+/// The version this build carries, as About shows it: a nightly's full version
+/// ("0.1.0-nightly.202610161908", its workflow sets it), else the crate's.
+pub fn version(config: &tauri::Config) -> String {
+    config
+        .version
+        .clone()
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned())
+}
+
 /// Whether a version the feed offers is worth downloading, given the one already waiting.
 fn wanted(waiting: Option<&str>, offered: &str) -> bool {
     waiting != Some(offered)
@@ -158,6 +167,21 @@ mod tests {
         }))
         .unwrap();
         assert!(configured(&nightly));
+    }
+
+    /// About names the nightly that is installed, not only its release (#159).
+    #[test]
+    fn the_version_is_the_nightlys_full_one() {
+        let nightly: tauri::Config = serde_json::from_value(serde_json::json!({
+            "identifier": "ai.brigadier.test",
+            "version": "0.1.0-nightly.202610161908",
+        }))
+        .unwrap();
+        assert_eq!(version(&nightly), "0.1.0-nightly.202610161908");
+        let plain: tauri::Config =
+            serde_json::from_value(serde_json::json!({ "identifier": "ai.brigadier.test" }))
+                .unwrap();
+        assert_eq!(version(&plain), env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
