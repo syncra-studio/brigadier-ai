@@ -71,7 +71,8 @@ async fn a_forwarded_message_keeps_its_chain_and_counts_hops() {
 }
 
 /// Two sessions that answer each other forever: eight messages go, the ninth is refused in
-/// the plan's words, and nothing more is sent but the reply carrying the refused turn's answer.
+/// the plan's words, and nothing more is sent but the replies: the refused turn's answer to the
+/// eighth, then each message's own reply as the requests waiting on it end, back to the first.
 /// The user's next message starts a new chain, whose first message goes again.
 #[tokio::test]
 async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() {
@@ -112,6 +113,20 @@ async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() 
         all.lock().unwrap().iter().any(|(_, failed)| *failed)
     })
     .await;
+    // Each message is owed one reply, sent as the request waiting on the next one's reply
+    // ends: they go back one by one, in turns of their own, so wait for the last on each side.
+    for id in [&flow.conversation, &api] {
+        flow.until_in(id, "every message replied and every reply taken", |board| {
+            board
+                .peer_messages
+                .values()
+                .all(|record| match record.reply_to {
+                    None => record.state == PeerState::Replied,
+                    Some(_) => record.outgoing || record.state == PeerState::Seen,
+                })
+        })
+        .await;
+    }
     flow.settled().await;
     flow.settled_in(&api).await;
     let sends = all.lock().unwrap().clone();
@@ -133,21 +148,33 @@ async fn the_ninth_message_with_no_ones_word_is_refused_until_the_user_writes() 
         .chain(at_api.peer_messages.values())
         .filter(|record| record.outgoing)
         .collect();
-    let mut hops: Vec<u32> = sent
+    let mut asked: Vec<&PeerRecord> = sent
         .iter()
+        .copied()
         .filter(|record| record.reply_to.is_none())
-        .map(|record| record.hop)
         .collect();
-    hops.sort_unstable();
+    asked.sort_by_key(|record| record.hop);
+    let hops: Vec<u32> = asked.iter().map(|record| record.hop).collect();
     assert_eq!(hops, (1..=8).collect::<Vec<_>>());
-    // The turn whose send was refused still answers the eighth message: Brigadier's reply,
-    // exempt from the hop rule, and a reply starts no reply of its own.
-    assert!(
-        sent.iter()
-            .filter(|record| record.reply_to.is_some())
-            .all(|record| record.automatic && record.hop == 9),
-        "{sent:#?}"
-    );
+    // Each message gets one reply, Brigadier's, one hop on and exempt from the hop rule; a
+    // reply starts no reply of its own. The turn whose send was refused still answers the
+    // eighth message; each earlier one is answered by the turn its reply woke.
+    let replies: Vec<&PeerRecord> = sent
+        .iter()
+        .copied()
+        .filter(|record| record.reply_to.is_some())
+        .collect();
+    assert_eq!(replies.len(), 8, "{sent:#?}");
+    for message in &asked {
+        let reply = replies
+            .iter()
+            .find(|reply| reply.reply_to.as_deref() == Some(message.message_id.as_str()))
+            .unwrap_or_else(|| panic!("no reply to hop {}: {sent:#?}", message.hop));
+        assert!(reply.automatic, "{reply:#?}");
+        assert_eq!(reply.hop, message.hop + 1, "{reply:#?}");
+        let answer = if message.hop == 8 { "Asked." } else { "Noted." };
+        assert_eq!(reply.text, answer, "{reply:#?}");
+    }
     // The user's word: a new chain, at hop 1 again.
     flow.say("One more question for them.").await;
     flow.until("the new chain's first message", |_| {
