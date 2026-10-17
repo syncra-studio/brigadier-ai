@@ -547,10 +547,11 @@ impl SessionManager {
         .await
     }
 
-    /// What a worktree session's branch changed since it left its base. Absent for Chats,
-    /// local-checkout sessions (their commits are on the picked branch) and a session whose
-    /// branch or base does not exist (yet).
-    pub async fn session_diff_stat(&self, id: &ConversationId) -> Result<Option<DiffStat>> {
+    /// What a worktree session's branch changed since it left its base, and how many commits
+    /// it has that its base lacks (what "Merge into main" merges, even when they change nothing
+    /// in sum). Absent for Chats, local-checkout sessions (their commits are on the picked
+    /// branch) and a session whose branch or base does not exist (yet).
+    pub async fn session_diff_stat(&self, id: &ConversationId) -> Result<Option<(DiffStat, u32)>> {
         let conversation = self.core.conversation(id)?;
         let Some(Setup::Session {
             repo,
@@ -571,7 +572,8 @@ impl SessionManager {
             };
             let fork = repo.merge_base(&base, &tip).map_err(git_error)?;
             let stat = repo.diff_stat(&fork, &tip).map_err(git_error)?;
-            Ok(Some(landing::diff_stat_of(&stat)))
+            let commits = repo.count_commits(&base, &tip).map_err(git_error)?;
+            Ok(Some((landing::diff_stat_of(&stat), commits)))
         })
         .await
     }

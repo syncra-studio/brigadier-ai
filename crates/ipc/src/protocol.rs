@@ -1348,6 +1348,10 @@ pub enum Response {
     GetSessionDiff {
         /// Absent for Chats and local-checkout sessions.
         stat: Option<DiffStat>,
+        /// The branch's commits its base lacks: what a merge would take, even when their sum
+        /// changes nothing. 0 without a stat.
+        #[serde(default)]
+        commits: u32,
     },
     GetWorkerDiffs {
         diffs: Vec<WorkerDiff>,

@@ -102,7 +102,7 @@ const BARE = "rounded-none border-0 bg-transparent";
 function useSessionDiff(
   conversationId: string,
   worktree: boolean,
-): DiffStat | null {
+): { stat: DiffStat; commits: number } | null {
   // Landings, the thread's own requests ending (it commits too) and merges move the branch.
   const landed = useBoard(
     (s) =>
@@ -110,7 +110,7 @@ function useSessionDiff(
       Object.values(s.board?.requests ?? {}).filter((asked) => asked.state.type === "done").length +
       (s.board?.orchestratorSteps ?? []).filter((step) => step.kind.type === "merged").length,
   );
-  const [stat, setStat] = useState<DiffStat | null>(null);
+  const [stat, setStat] = useState<{ stat: DiffStat; commits: number } | null>(null);
   useEffect(() => {
     if (!worktree) return;
     let current = true;
@@ -756,9 +756,12 @@ export function SummaryFloat({ children }: { children: ReactNode }) {
   );
 }
 
-/** Whether the branch changes anything its base lacks: "Merge into ‹base›" shows only then. */
-export function hasWork(diff: DiffStat | null | undefined): boolean {
-  return (diff?.files.length ?? 0) > 0;
+/**
+ * Whether the branch has commits its base lacks: "Merge into ‹base›" shows only then, even when
+ * they change nothing in sum.
+ */
+export function hasWork(diff: { commits: number } | null | undefined): boolean {
+  return (diff?.commits ?? 0) > 0;
 }
 
 /** The branch the session's work is on, with its +N −N once known. */
@@ -862,7 +865,7 @@ function SessionSummaryContent({
   const sessionDiff = useSessionDiff(conversation.id, worktree && !run);
   const runDiff = useRunDiff(conversation.id, run?.id ?? null);
   // During and after a run the card shows the run's branch: that is where the work is.
-  const diff = run ? runDiff : sessionDiff;
+  const diff = run ? runDiff : (sessionDiff?.stat ?? null);
   const pullRequest = usePullRequest(conversation.id);
   // Before a session has its folder and branch, its card is a chat's: never an empty space.
   if (!setup) return <ChatSummaryContent conversation={conversation} active={active} />;
@@ -900,7 +903,7 @@ function SessionSummaryContent({
                       }
                     : null
                 }
-                mergeable={hasWork(diff)}
+                mergeable={hasWork(sessionDiff)}
               >
                 <BranchRow branch={setup.environment.branch} diff={diff} />
               </GitActions>

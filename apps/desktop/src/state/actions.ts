@@ -457,10 +457,13 @@ export async function rateMessage(
   await request({ method: "rateMessage", conversationId, subject, rating });
 }
 
-/** What a worktree session's branch changed against its base; null for other conversations. */
-export async function getSessionDiff(id: string): Promise<DiffStat | null> {
-  const { stat } = await request({ method: "getSessionDiff", id });
-  return stat;
+/**
+ * What a worktree session's branch changed against its base, and its commits the base lacks;
+ * null for other conversations.
+ */
+export async function getSessionDiff(id: string): Promise<{ stat: DiffStat; commits: number } | null> {
+  const { stat, commits } = await request({ method: "getSessionDiff", id });
+  return stat ? { stat, commits } : null;
 }
 
 /** Reads what each worker at work on a change changed so far into the conversation's board. */

@@ -1,21 +1,27 @@
 /**
  * The side panel's branch row with its Git actions (BUILD-PLAN A4): "Merge into ‹base›" shows only
- * for a worktree session with work to merge, and "Close workspace…" only with a workspace. Driven
+ * for a worktree session with commits to merge (even ones that change nothing in sum), and
+ * "Close workspace…" only with a workspace. Driven
  * with the browser's real clicks and keys; IPC is mocked and records the merge, no daemon.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { GitActions, type SessionWorkspace } from "@/app/conversation/GitActions";
+import { hasWork } from "@/app/conversation/PinnedSummary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { Request } from "@/ipc/generated";
 
 const workspace: SessionWorkspace = { path: "/tmp/merge-button-fixture/session", branch: "brigadier/session", base: "main" };
-const rows: { id: string; workspace: SessionWorkspace | null; mergeable: boolean }[] = [
-  { id: "with-work", workspace, mergeable: true },
-  { id: "no-work", workspace, mergeable: false },
-  { id: "no-workspace", workspace: null, mergeable: true },
+const files = [{ path: "NOTES.md", insertions: 1, deletions: 0 }];
+// The branch's diff against its base and its commits the base lacks, as the daemon reads them.
+const rows: { id: string; workspace: SessionWorkspace | null; diff: { commits: number; files: unknown[] } }[] = [
+  { id: "with-work", workspace, diff: { commits: 1, files } },
+  // A file added, then removed: two commits whose sum changes nothing.
+  { id: "net-empty", workspace, diff: { commits: 2, files: [] } },
+  { id: "no-work", workspace, diff: { commits: 0, files: [] } },
+  { id: "no-workspace", workspace: null, diff: { commits: 1, files } },
 ];
 
 const calls: unknown[] = [];
@@ -35,7 +41,7 @@ createRoot(document.getElementById("root")!).render(
     <main className="bg-background text-foreground flex min-h-screen w-96 flex-col gap-4 p-8">
       {rows.map((row) => (
         <div key={row.id} data-fixture={row.id}>
-          <GitActions conversationId={row.id} workspace={row.workspace} mergeable={row.mergeable}>
+          <GitActions conversationId={row.id} workspace={row.workspace} mergeable={hasWork(row.diff)}>
             <span className="min-w-0 flex-1 truncate">brigadier/session</span>
           </GitActions>
         </div>

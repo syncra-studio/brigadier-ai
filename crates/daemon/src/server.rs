@@ -1656,9 +1656,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.rate(&conversation_id, subject, rating)).await?;
             Response::RateMessage
         }
-        Request::GetSessionDiff { id } => Response::GetSessionDiff {
-            stat: heap(|| sessions.session_diff_stat(&id)).await?,
-        },
+        Request::GetSessionDiff { id } => {
+            let diff = heap(|| sessions.session_diff_stat(&id)).await?;
+            Response::GetSessionDiff {
+                commits: diff.as_ref().map_or(0, |(_, commits)| *commits),
+                stat: diff.map(|(stat, _)| stat),
+            }
+        }
         Request::GetWorkerDiffs { conversation_id } => Response::GetWorkerDiffs {
             diffs: heap(|| sessions.worker_diffs(&conversation_id)).await?,
         },
