@@ -28,12 +28,14 @@ Seams (each forced at least twice between the plants and the probe):
   inturn   the thread's turn is stopped mid-request and reborn at once: BRIGADIER_HARD_LINE_TOKENS
            (--hard-line-tokens, default 37500), with the briefing's cap as for size (BUILD-PLAN D2.3b)
   restart  the daemon is killed (SIGKILL) mid-request at each seam point, and started again
-  kill     the thread's CLI process is killed (SIGKILL) mid-request at each seam point
-  context  "prompt is too long" injected into the thread's turn at each seam point
+  kill     the thread's CLI process is killed (SIGKILL) mid-request at each seam point (Codex: its
+           app-server)
+  context  "prompt is too long" injected into the thread's turn at each seam point, with the briefing's
+           cap as for size
   auth     a failed sign-in injected likewise
   billing  credits run out, injected likewise
-  limit    a usage limit injected likewise (the session moves to another account when the data
-           dir has one, else waits or falls back as the product does)
+  limit    a usage limit injected likewise, resetting in LIMIT_RESET_MINUTES (the session moves to
+           another account when the data dir has one, else waits or falls back as the product does)
   none     no seam (a control)
 Models: the thread on Claude Opus or gpt-6.1-sol at high; workers on the same provider's model.
 Nothing here touches the installed app, its daemon or its data."""
@@ -67,6 +69,9 @@ DEFAULT_BRIEFING_TOKENS = 8_000
 # continued in a fresh session; the size rebirth (prepared at 300k, swapped at 375k on a 1M window
 # since A10) never comes first.
 DEFAULT_HARD_LINE_TOKENS = 37_500
+# The injected usage limit resets this soon (whole minutes, at least 1): with no other account the
+# thread waits for the reset, and an hour's wait made the limit seam impractical to run.
+LIMIT_RESET_MINUTES = 2
 
 
 # ---------------------------------------------------------------- the arm
@@ -207,20 +212,36 @@ def thread_native_ids(data, conv):
     return ids
 
 
+def thread_app_server(command):
+    """A Codex thread's `codex app-server`: its flags switch off the thread's features (goals) but
+    keep the shell, which a worker's (goals on) and a review's (shell off) don't. Its command line
+    never names the thread, which goes over JSON-RPC."""
+    args = command.split()
+    off = {args[i + 1] for i in range(len(args) - 1) if args[i] == "--disable"}
+    return "app-server" in args and "goals" in off and "shell_tool" not in off
+
+
 def kill_thread_cli(arm, conv):
     """SIGKILL to the thread's running CLI: a process under the daemon whose command line names the
-    thread's newest CLI session."""
+    thread's newest CLI session (Claude), else the thread's Codex app-server, wrapper and binary."""
     ids = thread_native_ids(arm.data, conv)
     if not ids:
         return None
     tree = set(v3run.descendants([arm.daemon.pid]))
     out = subprocess.run(["ps", "-Ao", "pid=,command="], capture_output=True, text=True).stdout
-    for line in out.splitlines():
-        pid, _, command = line.strip().partition(" ")
-        if int(pid) in tree and ids[-1] in command:
-            os.kill(int(pid), signal.SIGKILL)
-            return {"pid": int(pid), "session": ids[-1]}
-    return None
+    procs = [(int(pid), command) for pid, _, command in (line.strip().partition(" ") for line in out.splitlines())
+             if pid.isdigit() and int(pid) in tree]
+    for pid, command in procs:
+        if ids[-1] in command:
+            os.kill(pid, signal.SIGKILL)
+            return {"pid": pid, "session": ids[-1]}
+    servers = [pid for pid, command in procs if thread_app_server(command)]
+    for pid in servers:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    return {"pid": servers[0], "pids": servers, "session": ids[-1], "app_server": True} if servers else None
 
 
 def turn_started(data, conv, since_ms):
@@ -241,7 +262,7 @@ def seam(arm, kind, conv, rid, sent_ms, deadline, record):
         if kind == "limit":
             body = {"method": "debugInjectLimit", "target": {"type": "conversation", "conversationId": conv},
                     "provider": provider, "window": "five_hour" if provider == "claude" else "primary",
-                    "resetInMinutes": 60, "afterToolCalls": 1}
+                    "resetInMinutes": LIMIT_RESET_MINUTES, "afterToolCalls": 1}
         else:
             body = {"method": "debugInjectError", "target": {"type": "conversation", "conversationId": conv},
                     "provider": provider, "error": INJECTED[kind], "afterToolCalls": 1}
@@ -279,8 +300,11 @@ def one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens=DEFAULT_BRIE
     os.makedirs(run)
     shutil.copyfile(b["path"], os.path.join(run, "battery.md"))
     v3run.restore(root, "seeded")
+    # "prompt is too long" continues in a fresh session from a briefing too: at the full 20k the short
+    # battery's plants all stayed in its verbatim tail and every item was "not tested".
     debug_env = {"size": f"BRIGADIER_REBIRTH_TOKENS={rebirth_tokens} BRIGADIER_BRIEFING_TOKENS={briefing_tokens}",
                  "inturn": f"BRIGADIER_HARD_LINE_TOKENS={hard_line_tokens} BRIGADIER_BRIEFING_TOKENS={briefing_tokens}",
+                 "context": f"BRIGADIER_BRIEFING_TOKENS={briefing_tokens}",
                  }.get(seam_kind, "")
     conditions = subprocess.run(["bash", "-c", "sysctl -n vm.loadavg; claude --version; codex --version; node --version"],
                                 capture_output=True, text=True).stdout.split("\n")
