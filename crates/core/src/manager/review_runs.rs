@@ -1849,6 +1849,27 @@ impl SessionManager {
         }
     }
 
+    /// The ids in `run_check`'s `fixes` that are no finding of this session, checked before the
+    /// check runs: a commit made with an unknown id in its Fixes trailer can't be corrected by
+    /// running the check again, as nothing would be left to commit.
+    pub(crate) async fn unknown_findings(
+        &self,
+        conversation_id: &ConversationId,
+        fixes: &[String],
+    ) -> Result<Vec<String>> {
+        let board = self.core.board(conversation_id).await?;
+        Ok(fixes
+            .iter()
+            .filter(|id| {
+                !board
+                    .reviews
+                    .values()
+                    .any(|review| review.items.iter().any(|item| &item.id == *id))
+            })
+            .cloned()
+            .collect())
+    }
+
     /// `run_check`'s `fixes` (BUILD-PLAN O4): the review findings the thread's check fixes,
     /// recorded fixed and checked by that check (`command`, its output `alias`) when it passed
     /// and its commit, if it asked for one, was made (`passed`). What became of them, in one

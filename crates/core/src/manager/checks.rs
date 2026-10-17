@@ -631,6 +631,13 @@ impl SessionManager {
         fixes: Vec<String>,
     ) -> Result<String> {
         let mut caller = self.check_caller(id, task).await?;
+        let unknown = self.unknown_findings(id, &fixes).await?;
+        if !unknown.is_empty() {
+            return Err(Error::Invalid(format!(
+                "{} is no review finding of this session: nothing ran or was committed. Give `fixes` only the ids its review findings show (R1.2), or leave it out.",
+                unknown.join(", ")
+            )));
+        }
         let command = args
             .command
             .as_deref()
